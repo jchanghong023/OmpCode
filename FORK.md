@@ -20,8 +20,10 @@
 ## omp 侧依赖
 
 * 来源：本人维护的 fork `jchanghong023/oh-my-pi`（本地工作目录 `D:\code1111111111\oh-my-pi`；上游为 `can1357/oh-my-pi`）。
-* 接入形态：`omp --mode rpc` 启动的无头核心——stdio 上的 newline-delimited JSON 协议，含 ready 帧、协议版本协商、命令/响应关联、会话事件与 host 工具请求；协议行为以该仓库 `docs/rpc.md` 与对应版本源码为准。
-* 分发：使用该 fork 的 GitHub release 二进制；不依赖上游 oh-my-pi 的 npm / Homebrew / Nix / `omp.sh` 分发。
+* 接入形态：`omp --mode rpc` 启动的无头核心——stdio 上的 newline-delimited JSON 协议，含 ready 帧、协议版本协商、命令/响应关联、会话事件与 host 工具请求。
+* 接口参考与测试基线：接口与协议开发参考本地源码 `D:\code1111111111\oh-my-pi`（协议细节含该仓库 `docs/rpc.md`）；实际测试（含换核验收 E2E）使用 releases 实际内嵌的发布版本二进制执行，不以本地源码的未发布改动为测试对象。
+* 分发：随 ZCode 安装包内嵌——打包时取该 fork GitHub releases 页面（`https://github.com/jchanghong023/oh-my-pi/releases`）的最新版本二进制，内嵌进应用资源并由应用拉起；用户无需单独安装 omp。不依赖上游 oh-my-pi 的 npm / Homebrew / Nix / `omp.sh` 分发。
+* 内嵌 omp 的配置与边界：内嵌拷贝与用户已安装的 omp 使用完全相同的配置（同一配置、凭据与会话数据来源），行为与用户日常使用的 omp 保持一致；NEVER 覆盖、替换、修改或代为安装用户已安装的 omp，内嵌拷贝只存在于 ZCode 应用资源目录内。
 
 ## 差异需求（全部待实现）
 
