@@ -174,21 +174,15 @@ export function createCustomAboutDialogHtml(input: CustomAboutDialogHtmlInput): 
             <svg
               xmlns="http://www.w3.org/2000/svg"
               width="118"
-              height="100"
-              fill="none"
-              viewBox="0 0 256 218"
+              height="89"
+              viewBox="0 0 120 90"
               class="app-logo"
               focusable="false"
             >
-              <path
-                fill="currentColor"
-                d="M134.4 0.130152L116.48 25.6022C113.665 29.5699 109.054 32.0019 104.064 32.0019H6.3999V0C6.3999 0.130149 134.4 0.130152 134.4 0.130152Z"
-              />
-              <path fill="currentColor" d="M256 0.130127L102.401 217.732H0L153.599 0.130127H256Z" />
-              <path
-                fill="currentColor"
-                d="M121.601 217.732L139.65 192.134C142.465 188.166 147.076 185.734 152.067 185.734H249.604V217.736H121.601V217.732Z"
-              />
+              <rect x="10" y="8" width="100" height="12" rx="2" fill="currentColor" />
+              <rect x="25" y="20" width="12" height="62" rx="2" fill="currentColor" />
+              <rect x="75" y="20" width="12" height="45" rx="2" fill="currentColor" />
+              <rect x="71" y="55" width="20" height="16" rx="3" fill="#f97316" />
             </svg>
           </div>
           <h1 id="about-title" class="title">

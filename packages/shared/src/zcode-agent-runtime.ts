@@ -34,7 +34,9 @@ export const ZCODE_AGENT_RUNTIME: ZCodeAgentRuntimeDescriptor = {
   missingBinaryMessage:
     "[ZCode Agent] glm binary 未找到，请设置 GLM_BINARY_PATH 或先准备 GLM 运行时资源",
   resolveEntrySegments: (platform) => [resolvePlatformBinaryName("zcode-agent", platform)],
-  nodeBundleEntryFile: "zcode.cjs",
+  // omp 换核（FORK.md）：桌面 node bundle 由 @zcode/omp-agent 产出（对 host 讲 ZCode Protocol，
+  // 对内嵌 omp 二进制讲 omp RPC）。文件名保留 nodeBundle 语义。
+  nodeBundleEntryFile: "omp-agent.cjs",
   resolveNodeBundleSegments() {
     return [this.nodeBundleEntryFile];
   },

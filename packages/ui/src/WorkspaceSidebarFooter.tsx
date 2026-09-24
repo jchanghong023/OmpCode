@@ -65,7 +65,7 @@ function getSidebarProfileName(user?: UserInfo | null): string {
     return username;
   }
 
-  return "ZCode";
+  return "OmpCode";
 }
 
 function getSidebarProfileBadge(

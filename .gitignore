@@ -69,3 +69,8 @@ packages/desktop/.e2e-artifacts/
 packages/desktop/.e2e-cache/
 packages/desktop/.e2e-network-capture/
 .zcode-runtime/
+
+# omp releases 内嵌二进制下载缓存（fetch-omp-release.mjs 落盘的可复现下载产物）。
+packages/desktop/.omp-release-cache/
+# 真实 omp 二进制 E2E 的落盘沙箱（real-omp.e2e.test.ts 每次运行重建）。
+packages/omp-agent/.test-real-e2e-workspace/

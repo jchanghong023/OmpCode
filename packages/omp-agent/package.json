@@ -1,0 +1,33 @@
+{
+  "name": "@zcode/omp-agent",
+  "version": "0.1.0",
+  "description": "omp (oh-my-pi) RPC core adapter: speaks ZCode Protocol/v4 to the host, omp RPC to the embedded omp binary",
+  "type": "module",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./src/index.ts"
+    },
+    "./contract": {
+      "types": "./dist/contract.d.ts",
+      "default": "./src/contract.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "bundle": "node scripts/bundle.mjs",
+    "lint": "oxlint",
+    "test": "tsx --test \"test/*.test.ts\""
+  },
+  "dependencies": {
+    "@zcode/shared": "workspace:*",
+    "zod": "4.6.5"
+  },
+  "devDependencies": {
+    "@types/node": "^25.5.0",
+    "esbuild": "^0.25.0",
+    "tsx": "^4.20.3",
+    "typescript": "^6.0.2"
+  }
+}

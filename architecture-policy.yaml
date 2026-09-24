@@ -55,6 +55,14 @@ modules:
   - id: zcode-cli
     roots: [apps/zcode-cli]
     managed: false
+  - id: omp-agent
+    roots: [packages/omp-agent/src]
+    managed: true
+    requires: [shared]
+    publicEntrypoints: [packages/omp-agent/src/contract.ts]
+    layers: { domain: domain, app: app, adapters: adapters }
+    layerOrder: [domain, app, adapters]
+    owner: conversation
 
 global:
   maxFileLines: 400

@@ -3,6 +3,7 @@ import { loadEndpointEnv } from "./load-endpoint-env.mjs";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { chmod, cp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 
 import {
@@ -157,13 +158,15 @@ async function buildOutputs(skipBuild) {
 async function stageZCodePackage({ packageRoot, version }) {
   const webDist = resolve(root, "packages", "web", "dist");
   const serverDist = resolve(root, "packages", "server", "dist");
-  const agentBundle = resolve(root, "apps", "zcode-cli", "packages", "cli", "dist", "zcode.cjs");
+  // omp 换核（FORK.md）：agent app-server = omp-agent 适配器；TUI CLI 仍随包分发（上游功能未变）。
+  const agentBundle = resolve(root, "packages", "omp-agent", "dist", "omp-agent.cjs");
   const agentProvider = resolve(root, "apps/zcode-cli/packages/cli/dist/provider");
 
   await assertDirectory(webDist, "web dist");
   await assertDirectory(serverDist, "server dist");
   await assertFile(resolve(serverDist, "entry-http.js"), "server HTTP entry");
-  await assertFile(agentBundle, "agent app-server bundle");
+  await assertFile(agentBundle, "agent app-server bundle (omp-agent)");
+  run("node", [resolve(root, "packages", "omp-agent", "scripts", "bundle.mjs")]);
   await assertFile(resolve(agentProvider, "zcode-builtin.json"), "Agent provider config");
 
   await rm(packageRoot, {
@@ -183,14 +186,36 @@ async function stageZCodePackage({ packageRoot, version }) {
   await mkdir(resolve(packageRoot, "agent"), {
     recursive: true,
   });
-  await cp(agentBundle, resolve(packageRoot, "agent", "zcode.cjs"));
+  await cp(agentBundle, resolve(packageRoot, "agent", "omp-agent.cjs"));
   // TUI 入口通过真正的 CLI 路径定位伴随配置；只复制 JS 会在仓库外启动失败。
   await cp(agentProvider, resolve(packageRoot, "agent/provider"), { recursive: true });
   await cp(
     resolve(root, "apps/zcode-cli/packages/cli/dist/THIRD-PARTY-NOTICES.md"),
     resolve(packageRoot, "agent/THIRD-PARTY-NOTICES.md"),
   );
-  await chmod(resolve(packageRoot, "agent", "zcode.cjs"), 0o755);
+  await chmod(resolve(packageRoot, "agent", "omp-agent.cjs"), 0o755);
+  // 内嵌 omp 二进制：agent/omp/omp(.exe)（omp-agent 的解析候选之一）。
+  run("node", [
+    resolve(root, "packages", "desktop", "scripts", "fetch-omp-release.mjs"),
+  ]);
+  const ompBinaryName = process.platform === "win32" ? "omp.exe" : "omp";
+  const stagedOmp = resolve(
+    root,
+    "packages",
+    "desktop",
+    "bundled-agents",
+    `${process.platform}-${process.arch}`,
+    "glm",
+    "omp",
+    ompBinaryName,
+  );
+  if (existsSync(stagedOmp)) {
+    await mkdir(resolve(packageRoot, "agent", "omp"), { recursive: true });
+    await cp(stagedOmp, resolve(packageRoot, "agent", "omp", ompBinaryName));
+    await chmod(resolve(packageRoot, "agent", "omp", ompBinaryName), 0o755);
+  } else {
+    console.log(`[zcode][warn] 内嵌 omp 二进制缺失（${stagedOmp}），server 包 agent 核不可用`);
+  }
 
   await stageTuiRuntime(packageRoot);
   await copyRuntimeNodeModules(packageRoot);

@@ -521,30 +521,59 @@ async function stageRemoteBundledSkillPack(glmDir) {
 // 不必再为每个平台准备一份内嵌 node 的 SEA 二进制。zcode.cjs 跨平台同一份，逐平台只是放进各自的
 // glm/<platform> 组件目录，保持现有 manifest 组件结构不变。
 async function stageRemoteAgentBundles() {
-  console.log("==> Building zcode-cli bundle for remote agents");
-  // 复用桌面同款构建脚本（turbo build:desktop-agent --filter=@zcode/cli），命中缓存时几乎瞬时。
+  // omp 换核（FORK.md）：远端 agent = omp-agent.cjs 适配器 + 内嵌 omp 二进制。
+  // 官方插件/内置技能包不再随远端 glm 分发（omp 自带插件与技能体系，见 FORK.md 已知差异）。
+  console.log("==> Building omp-agent bundle for remote agents");
   runCommand(process.execPath, [join(rootDir, "scripts/build-desktop-agent-cli.mjs")], {
     cwd: rootDir,
     env: process.env,
   });
-  // browser-use runtime 的 tsc 依赖 @zcode/core/dist。远端资产也必须先构建
-  // agent CLI 依赖，避免 CI 干净检出时被开发机缓存掩盖的 TS2307。
-  buildRemoteOfficialPluginRuntimes();
-  const cliBundlePath = join(rootDir, "apps/zcode-cli/packages/cli/dist/zcode.cjs");
-  if (!existsSync(cliBundlePath)) {
-    throw new Error(`[prepare-prebuilds] expected cli bundle missing: ${cliBundlePath}`);
+  const agentBundlePath = join(rootDir, "packages/omp-agent/dist/omp-agent.cjs");
+  if (!existsSync(agentBundlePath)) {
+    throw new Error(`[prepare-prebuilds] expected omp-agent bundle missing: ${agentBundlePath}`);
   }
 
   for (const platformKey of remotePlatforms) {
     const glmDir = join(releaseDir, "glm", platformKey);
-    // 干净重建：glm 组件现在只含 zcode.cjs，清掉历史遗留的原生二进制 / 旧 meta，
-    // 避免被打进组件 tar 把远端资源撑大。
+    // 干净重建：清掉历史遗留的 zcode.cjs / 插件 seed / 旧 meta，避免撑大组件 tar。
     rmSync(glmDir, { recursive: true, force: true });
     mkdirSync(glmDir, { recursive: true });
-    copyFileSync(cliBundlePath, join(glmDir, "zcode.cjs"));
-    stageRemoteOfficialPlugins(glmDir);
-    await stageRemoteBundledSkillPack(glmDir);
-    console.log(`  [ok] mock-cdn glm/${platformKey}/zcode.cjs`);
+    copyFileSync(agentBundlePath, join(glmDir, "omp-agent.cjs"));
+    writeFileSync(
+      join(glmDir, ".node-bundle-meta.json"),
+      `${JSON.stringify({ runtime: "electron-node", entry: "omp-agent.cjs", platform: platformKey, source: "packages/omp-agent/dist/omp-agent.cjs" }, null, 2)}
+`,
+      "utf8",
+    );
+    const [targetOs, targetArch] = platformKey.split("-");
+    if (targetOs === "darwin") {
+      console.log(`  [warn] omp releases 无 darwin 资产，glm/${platformKey} 不内嵌 omp 二进制（运行时显式报错）`);
+    } else {
+      runCommand(
+        process.execPath,
+        [join(rootDir, "packages/desktop/scripts/fetch-omp-release.mjs")],
+        {
+          cwd: rootDir,
+          env: { ...process.env, ZCODE_TARGET_OS: targetOs, ZCODE_TARGET_ARCH: targetArch },
+        },
+      );
+      const stagedOmp = join(
+        rootDir,
+        "packages/desktop/bundled-agents",
+        platformKey,
+        "glm",
+        "omp",
+        targetOs === "win32" ? "omp.exe" : "omp",
+      );
+      const targetOmpDir = join(glmDir, "omp");
+      mkdirSync(targetOmpDir, { recursive: true });
+      copyFileSync(stagedOmp, join(targetOmpDir, targetOs === "win32" ? "omp.exe" : "omp"));
+      const stagedManifest = join(rootDir, "packages/desktop/bundled-agents", platformKey, "glm", "omp", "omp-release.json");
+      if (existsSync(stagedManifest)) {
+        copyFileSync(stagedManifest, join(targetOmpDir, "omp-release.json"));
+      }
+    }
+    console.log(`  [ok] mock-cdn glm/${platformKey}/omp-agent.cjs`);
   }
 }
 
@@ -798,9 +827,9 @@ function buildReusableComponentRequiredPaths(componentId, platformKey) {
     case "node-pty":
       return platformKey.startsWith("darwin-") ? ["pty.node", "spawn-helper"] : ["pty.node"];
     case "glm":
-      // GLM 现在是编译产物 zcode.cjs（跨平台同一份），远端用已部署的 node 执行它。
-      // 复用时还要确认官方插件 seed 资源完整，否则旧 release 会继续产出 0 builtin plugin 的远端资源包。
-      return ["zcode.cjs", ...remoteOfficialPluginRequiredPaths];
+      // GLM 现在是 omp-agent 适配器（跨平台同一份 JS）+ 平台专属 omp 二进制，
+      // 远端用已部署的 node 执行适配器（FORK.md 换核）。
+      return ["omp-agent.cjs"];
     case "bfs":
       return ["bfs"];
     case "ripgrep":

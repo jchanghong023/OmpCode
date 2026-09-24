@@ -353,30 +353,22 @@ async function buildZCodeAgentSpawnPreflight(
 function resolveBundledWorkspaceZCodeAgentCommand(
   context: ZCodeAgentCommandResolverContext,
 ): ZCodeAgentCommand | null {
-  const distEntrypoint = findUpward("apps/zcode-cli/packages/cli/dist/zcode.cjs");
+  // omp 换核（FORK.md）：本地 Agent 核心由 @zcode/omp-agent 适配器 + 内嵌 omp 二进制提供。
+  // dev 优先用 esbuild 单文件产物（storage worker 需要 Node 可直接加载的 JS）；源码 tsx 兜底。
+  const distEntrypoint = findUpward("packages/omp-agent/dist/omp-agent.cjs");
   if (distEntrypoint) {
-    const useBytecode =
-      process.versions.electron && process.env.ZCODE_DESKTOP_AGENT_BYTECODE === "1";
-    const entrypoint = useBytecode
-      ? join(dirname(distEntrypoint), "zcode.bytecode.cjs")
-      : distEntrypoint;
-    // 此同步 command resolver 沿用既有 existsSync 契约；显式试验不能静默回退成 JS。
-    if (useBytecode && !existsSync(entrypoint)) {
-      throw new Error("桌面 Agent 字节码入口缺失，请运行 pnpm build:desktop-agent:bytecode");
-    }
     return {
       command: process.execPath,
-      args: [entrypoint, "app-server", "--stdio"],
-      // Worker 与 Electron Node 子进程的 V8 snapshot 可不同；临时存储准备继续用 JS。
+      args: [distEntrypoint, "app-server", "--stdio"],
       storagePreparationEntry: distEntrypoint,
       cwd: context.workspacePath,
       // 桌面端 host 运行在 Electron utility process 中，process.execPath 指向 Electron Helper。
-      // 这里显式启用 Node 运行模式，避免内置 zcode-agent 被当成 Electron/Chromium 子进程启动并卡在 GPU 初始化。
+      // 这里显式启用 Node 运行模式，避免适配器被当成 Electron/Chromium 子进程启动并卡在 GPU 初始化。
       env: { ELECTRON_RUN_AS_NODE: "1" },
     };
   }
 
-  const sourceEntrypoint = findUpward("apps/zcode-cli/packages/cli/src/main.ts");
+  const sourceEntrypoint = findUpward("packages/omp-agent/src/adapters/cliMain.ts");
   const tsxEntrypoint = findUpward("node_modules/.bin/tsx");
   if (!sourceEntrypoint || !tsxEntrypoint) {
     return null;
