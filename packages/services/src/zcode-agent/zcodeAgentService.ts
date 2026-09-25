@@ -465,7 +465,7 @@ function savedWorkflowScopeParam(params: ZCodeAgentSavedWorkflowTarget): {
 }
 
 function ensurePluginManagementWorkspacePath(): string {
-  const workspacePath = join(getDataBaseDir(), ".zcode", PLUGIN_MANAGEMENT_WORKSPACE_DIR_NAME);
+  const workspacePath = join(getDataBaseDir(), ".ompcode", PLUGIN_MANAGEMENT_WORKSPACE_DIR_NAME);
   // 插件管理是控制面能力，不能复用可能因真实 workspace 被删而 EPIPE 的会话进程。
   // 这里给它固定一个内部 cwd；真实 workspace 仍通过协议参数传给 CLI 做 workspace-scope 判定。
   mkdirSync(workspacePath, { recursive: true });
@@ -474,7 +474,7 @@ function ensurePluginManagementWorkspacePath(): string {
 
 // NOTE: this counts ONLY the per-session MCP servers passed through the ZCode Protocol
 // session/create params (the app→protocol channel). It is deliberately independent of the
-// CLI/bootstrap MCP servers configured in ~/.zcode/cli/config.json (mcp.servers), which the agent
+// CLI/bootstrap MCP servers configured in ~/.ompcode/cli/config.json (mcp.servers), which the agent
 // runtime connects separately and reports via the `mcp.server.connected`/toolCount events. So a
 // createSession log line with mcpServerCount:0 is EXPECTED when zcode-cua is a CLI-config MCP server
 // (e.g. the product Helper broker path injected through the gated bootstrap env): the model still receives those
@@ -2843,41 +2843,6 @@ export function createZCodeAgentService(
     return sessionTraceIdBySessionKey.get(sessionEventKey(target));
   }
 
-  function createProviderNotReadyError(params: {
-    snapshot?: ZCodeAgentProviderReadinessSnapshot;
-    workspace: ZCodeAgentWorkspaceTarget;
-  }): Error & {
-    code: typeof ZCODE_AGENT_PROVIDER_NOT_READY_CODE;
-    data: {
-      providerCount: number;
-      reason: typeof ZCODE_AGENT_PROVIDER_NOT_READY_REASON;
-      revision: string | null;
-      workspaceKey: string;
-      workspacePath: string;
-    };
-  } {
-    const workspaceKey = resolveWorkspaceKey(params.workspace);
-    const error = new Error("当前没有可用的模型供应商和模型，请先登录或配置 API Key。") as Error & {
-      code: typeof ZCODE_AGENT_PROVIDER_NOT_READY_CODE;
-      data: {
-        providerCount: number;
-        reason: typeof ZCODE_AGENT_PROVIDER_NOT_READY_REASON;
-        revision: string | null;
-        workspaceKey: string;
-        workspacePath: string;
-      };
-    };
-    error.code = ZCODE_AGENT_PROVIDER_NOT_READY_CODE;
-    error.data = {
-      providerCount: params.snapshot?.providerCount ?? 0,
-      reason: ZCODE_AGENT_PROVIDER_NOT_READY_REASON,
-      revision: params.snapshot?.revision ?? null,
-      workspaceKey,
-      workspacePath: params.workspace.workspacePath,
-    };
-    return error;
-  }
-
   function isProviderNotReadyError(
     error: unknown,
   ): error is Error & { code: typeof ZCODE_AGENT_PROVIDER_NOT_READY_CODE } {
@@ -2885,17 +2850,6 @@ export function createZCodeAgentService(
       error instanceof Error &&
       (error as { code?: unknown }).code === ZCODE_AGENT_PROVIDER_NOT_READY_CODE
     );
-  }
-
-  async function resolveStartupReadiness(): Promise<
-    ZCodeAgentProviderReadinessSnapshot | undefined
-  > {
-    if (modelSelectionReadinessSource) {
-      return createProviderReadinessSnapshotFromSelectionView(
-        await modelSelectionReadinessSource.getView(),
-      );
-    }
-    return undefined;
   }
 
   /**
@@ -3049,45 +3003,20 @@ export function createZCodeAgentService(
     waiting.workspace = params;
     waitingWorkspaceStartups.set(workspaceKey, waiting);
 
-    const readinessSnapshot = await resolveStartupReadiness();
-    // readiness 读取可能与 workspace release 交错；release 删除 waiting identity 后，
-    // 旧 continuation 不能创建新进程。未来重新打开同一路径会获得新的 identity，互不误伤。
+    // omp 自己的模型目录是执行事实源。旧 ZCode Provider Registry 为空时仍须启动
+    // 适配器，否则连 omp 模型列表与历史会话都无法读取。release 后禁止旧启动续体复活。
     if (waiting.cancelled || waitingWorkspaceStartups.get(workspaceKey) !== waiting) {
       throw createRuntimeUnavailableError(params);
     }
-    const readiness = readinessSnapshot?.readiness;
-    if (!readinessSnapshot || !readiness?.ready) {
-      const revision = readinessSnapshot?.revision ?? "missing";
-      if (waiting.lastLoggedRevision !== revision) {
-        waiting.lastLoggedRevision = revision;
-        logger.info(
-          undefined,
-          active
-            ? "provider/model 尚未就绪，ZCode agent 保持只读"
-            : "provider/model 尚未就绪，ZCode agent 保持未启动",
-          {
-            providerCount: readinessSnapshot?.providerCount ?? 0,
-            revision: readinessSnapshot?.revision ?? null,
-            workspaceKey,
-            workspacePath: params.workspacePath,
-          },
-        );
-      }
-      throw createProviderNotReadyError({ snapshot: readinessSnapshot, workspace: params });
-    }
-
     const entry = await getOrStartReadOnlyClient(params);
-    if (waiting.cancelled) {
+    if (waiting.cancelled || waitingWorkspaceStartups.get(workspaceKey) !== waiting) {
       throw createRuntimeUnavailableError(params);
     }
     entry.modelExecutionEnabled = true;
     processManager.markReady(params, entry.client);
     entry.workspace = params;
     waitingWorkspaceStartups.delete(workspaceKey);
-    logger.info(undefined, "provider/model 就绪，允许 ZCode agent 模型执行", {
-      modelId: readiness.modelId,
-      providerId: readiness.providerId,
-      revision: readinessSnapshot.revision,
+    logger.info(undefined, "omp 适配器就绪，允许模型执行", {
       workspaceKey,
       workspacePath: params.workspacePath,
     });
@@ -3139,7 +3068,7 @@ export function createZCodeAgentService(
   // 就绪的 workspace 级方法，管理面进程正是为这种「不寄居真实项目」的控制面能力准备的，且不会因
   // 真实 workspace 生命周期被 watchdog 回收；getOrStartReadOnlyClient 反而会把这个合成 workspace
   // 塞进 activeClientsByWorkspaceKey 并跑一遍交互偏好同步，污染会话 client map。两条路径都在本机，
-  // homedir() 即用户家目录，全局根 `~/.zcode/workflows/` 因此解析到真实目录。
+  // homedir() 即用户家目录，全局根 `~/.ompcode/workflows/` 因此解析到真实目录。
   // 远程 runtime（SSH/WSL identity 或带 remoteSessionId）的 home 不是本机，绝不选它当载体。
   function isLocalActiveWorkspaceClient(workspace: ZCodeAgentWorkspaceTarget): boolean {
     return (

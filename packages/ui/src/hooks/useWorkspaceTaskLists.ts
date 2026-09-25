@@ -32,6 +32,7 @@ import {
   buildWorkspaceTaskListVersionSignature,
 } from "@/hooks/workspaceTaskListRefreshSignatures.js";
 import { shouldRefetchTaskListMembershipForWorkspaceEvent } from "@/lib/taskListRefreshPolicy.js";
+import { mergeOmpWorkspaceConfigOptions } from "@/lib/ompWorkspaceConfigOptions.js";
 import { syncTaskUnreadFromStatusWorkspaceEvent } from "@/lib/taskStatusUnreadSync.js";
 import type { ZCodeTaskMeta } from "@zcode/shared";
 import { fetchTaskListMembershipSetsForEndpointsCached } from "@/lib/taskListMembershipSets.js";
@@ -679,6 +680,31 @@ export function useWorkspaceTaskLists(params: {
             ? { workspaceIdentity: config.scope.workspaceIdentity }
             : {}),
         })((event: ZCodeWorkspaceEvent) => {
+          if (event.type === "workspace_config_options_update") {
+            // omp 换核（FORK.md）：composer 模型/思考档位目录的唯一事实源 =
+            // syncer 转发的 workspace-config topic（omp get_available_models 投影）。
+            // 目录水合 flight 只写 mode 项；这里把 omp 目录并入 store 并保留 mode 项。
+            const eventWorkspaceKey = buildTaskWorkspaceKey(
+              event.workspacePath,
+              event.workspaceIdentity,
+            );
+            if (eventWorkspaceKey !== config.workspaceKey) {
+              return;
+            }
+            const store = useZCodeSessionStore.getState();
+            if (!store) {
+              return;
+            }
+            const existing =
+              store.getWorkspaceState(event.workspacePath, event.workspaceIdentity)?.configOptions ?? [];
+            store.setConfigOptions(
+              event.workspacePath,
+              mergeOmpWorkspaceConfigOptions(existing, event.configOptions),
+              event.workspaceIdentity,
+            );
+            store.setConfigOptionsStatus(event.workspacePath, "ready", event.workspaceIdentity);
+            return;
+          }
           if (event.type !== "workspace_task_list_changed") {
             return;
           }

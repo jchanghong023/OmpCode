@@ -5,6 +5,7 @@ import { REMOTE_ASSET_INSTALL_MODES } from "./remoteAssetInstallMode.js";
 import { isKnownRemoteResourcePackageId } from "./remoteResourcePackages.js";
 import { wslUserSchema } from "./wslUserValidation.js";
 import { normalizeZCodeEndpointOrigin } from "./zcodeEndpoint.js";
+import { normalizeOmpProfileName } from "./omp-profile.js";
 import {
   DEFAULT_EMBEDDED_BROWSER_VIEWPORT_PREFERENCE,
   embeddedBrowserViewportPreferenceSchema,
@@ -31,6 +32,13 @@ const appSettingsOccupationSchema = z.enum([
 export const appSettingsOccupationEnum = appSettingsOccupationSchema;
 
 const nonEmptyStringSchema = z.string().trim().min(1);
+const ompProfileSchema = z.string().refine((value) => {
+  try {
+    return normalizeOmpProfileName(value) === value;
+  } catch {
+    return false;
+  }
+}, "Invalid omp profile");
 
 export const localeSchema = z.enum(["zh-CN", "en-US"]);
 const localePreferenceSchema = z.enum(["system", "zh-CN", "en-US"]);
@@ -444,6 +452,7 @@ const appSettingsObjectSchema = z.object({
   desktopZoomLevel: desktopZoomLevelSchema.optional(),
   desktopWindowSize: desktopWindowSizeSchema.optional(),
   desktopChromiumHardwareAccelerationEnabled: z.boolean().default(true),
+  ompProfile: ompProfileSchema.optional(),
   messageStreamShowReasoning: z.boolean().default(true),
   messageStreamShowReasoningMigrationInitialized: z.boolean().default(true),
   messageStreamShowTodos: z.boolean().default(false),
@@ -512,6 +521,7 @@ export const appSettingsPatchSchema = z.object({
   desktopZoomLevel: desktopZoomLevelSchema.optional(),
   desktopWindowSize: desktopWindowSizeSchema.optional(),
   desktopChromiumHardwareAccelerationEnabled: z.boolean().optional(),
+  ompProfile: ompProfileSchema.optional(),
   messageStreamShowReasoning: z.boolean().optional(),
   messageStreamShowReasoningMigrationInitialized: z.boolean().optional(),
   messageStreamShowTodos: z.boolean().optional(),

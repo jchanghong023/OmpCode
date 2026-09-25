@@ -8,9 +8,10 @@ import {
   type SessionSummary,
   type WorkspaceConfigState,
 } from "@zcode/shared/zcode-protocol-v4";
-import { createId, createLogEpoch, createSubscriptionId } from "../domain/ids.js";
+import { createId, createLogEpoch, createSubscriptionId, ompSessionIdOfFilePath } from "../domain/ids.js";
 import { rowsFromOmpEntries } from "../domain/coldHistory.js";
-import { ConversationEngine, deriveTitle } from "./conversationEngine.js";
+import { ConversationEngine } from "./conversationEngine.js";
+import { deriveTitle } from "../domain/titleText.js";
 import { ProtocolError } from "./errors.js";
 import type { HostGateway, OmpProcessFactory, OmpStorePort } from "./ports.js";
 
@@ -33,6 +34,8 @@ export interface RegistryDeps {
   ompFactory: OmpProcessFactory;
   store: OmpStorePort;
   gateway: HostGateway;
+  /** 会话进程的 available_commands_update（omp 命令目录热更新）上报出口。 */
+  onCommandsUpdate?: (commands: unknown) => void;
 }
 
 export class SessionRegistry {
@@ -40,14 +43,17 @@ export class SessionRegistry {
   private indexes = new Map<string, WorkspaceIndexState>();
   private configStates = new Map<string, { logEpoch: string; state: WorkspaceConfigState; seq: number; subscribers: Map<string, TopicSubscriber> }>();
   private primaryWorkspace: { id: string; path: string } | null = null;
+  private readonly frameOrdinalsBySubscriptionId = new Map<string, number>();
   private readonly ompFactory: OmpProcessFactory;
   private readonly store: OmpStorePort;
   private readonly gateway: HostGateway;
+  private readonly onCommandsUpdate: ((commands: unknown) => void) | undefined;
 
   constructor(deps: RegistryDeps) {
     this.ompFactory = deps.ompFactory;
     this.store = deps.store;
     this.gateway = deps.gateway;
+    this.onCommandsUpdate = deps.onCommandsUpdate;
   }
 
   getEngine(sessionId: string): ConversationEngine | null {
@@ -72,6 +78,7 @@ export class SessionRegistry {
       ompFactory: this.ompFactory,
       gateway: this.gateway,
       onIndexChange: (changed) => this.upsertEngineSummary(changed),
+      onCommandsUpdate: this.onCommandsUpdate,
       initialTitle: params.title,
     });
     this.engines.set(sessionId, engine);
@@ -87,6 +94,11 @@ export class SessionRegistry {
       return existing;
     }
     const cold = (await this.store.listSessions(params.workspacePath)).find((session) => session.sessionId === params.sessionId);
+    if (!cold) {
+      // 未知会话必须显式拒绝；继续创建会凭空产出幽灵引擎（订阅 conversation/undefined
+      // 实测会在侧栏多出一行永不收敛的空会话）。
+      throw new ProtocolError(-32004, `session unavailable: ${params.sessionId}`);
+    }
     const engine = new ConversationEngine({
       sessionId: params.sessionId,
       workspaceId: params.workspaceId,
@@ -94,6 +106,7 @@ export class SessionRegistry {
       ompFactory: this.ompFactory,
       gateway: this.gateway,
       onIndexChange: (changed) => this.upsertEngineSummary(changed),
+      onCommandsUpdate: this.onCommandsUpdate,
       resumeSessionPath: cold?.sessionPath,
       initialTitle: cold?.title ?? undefined,
     });
@@ -139,9 +152,16 @@ export class SessionRegistry {
     const state = engine.projection.stateSnapshot;
     const window = engine.projection.buildSnapshot().rows.window;
     const lastAssistant = [...window].reverse().find((row) => row.kind === "assistantText");
-    const createdAt = overrides?.createdAt ?? index.summaries.get(engine.sessionId)?.createdAt ?? Date.now();
+    // omp 换核：omp 会话 uuid 是跨重启的稳定身份。引擎绑定 omp 会话文件后，摘要
+    // 一律以 uuid 为 key（冷扫描同 id 去重、sqlite 种子行、下次 resume 都用它）；
+    // 旧的适配器期 id 键一并迁移，避免同一会话在列表里出现双行。
+    const stableId = ompSessionIdOfFilePath(engine.ompSessionFile) ?? engine.sessionId;
+    if (stableId !== engine.sessionId) {
+      index.summaries.delete(engine.sessionId);
+    }
+    const createdAt = overrides?.createdAt ?? index.summaries.get(stableId)?.createdAt ?? Date.now();
     const summary: SessionSummary = {
-      sessionId: engine.sessionId,
+      sessionId: stableId,
       workspaceId: engine.workspaceId,
       title: state.meta.title,
       titleSource: state.meta.titleSource,
@@ -158,7 +178,7 @@ export class SessionRegistry {
         : {}),
       createdAt,
     };
-    index.summaries.set(engine.sessionId, summary);
+    index.summaries.set(stableId, summary);
     this.emitIndexDelta(engine.workspaceId, { op: "session.upserted", session: summary });
   }
 
@@ -312,6 +332,7 @@ export class SessionRegistry {
   }
 
   unsubscribe(topic: string, subscriptionId: string): void {
+    this.frameOrdinalsBySubscriptionId.delete(subscriptionId);
     for (const index of this.indexes.values()) {
       index.subscribers.delete(subscriptionId);
     }
@@ -351,12 +372,14 @@ export class SessionRegistry {
       sentAt: Date.now(),
       payload,
     };
+    const logicalFrameOrdinal = (this.frameOrdinalsBySubscriptionId.get(subscriptionId) ?? 0) + 1;
+    this.frameOrdinalsBySubscriptionId.set(subscriptionId, logicalFrameOrdinal);
     const wires = encodeTopicWireFrames(frame, {
       deliveryKind,
       topic,
       subscriptionId,
       logicalFrameId: createId("frame"),
-      logicalFrameOrdinal: 1,
+      logicalFrameOrdinal,
       measurePhysicalFrameBytes: (wire: unknown) => utf8JsonByteLength(wire) + 1,
     });
     for (const wire of wires) {
@@ -365,6 +388,7 @@ export class SessionRegistry {
   }
 
   async dispose(): Promise<void> {
+    this.frameOrdinalsBySubscriptionId.clear();
     await Promise.all([...this.engines.values()].map((engine) => engine.dispose()));
     this.engines.clear();
   }

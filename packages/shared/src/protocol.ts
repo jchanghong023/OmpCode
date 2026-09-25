@@ -292,6 +292,8 @@ export interface AppSettings {
   };
   /** 桌面端 Chromium 硬件加速开关；只在下次启动 main 进程早期生效，Web/手机端忽略。 */
   desktopChromiumHardwareAccelerationEnabled?: boolean;
+  /** Desktop 选用的 omp profile；保存后在下一次应用启动时生效。 */
+  ompProfile?: string;
   /** 是否在消息流中展示模型思考过程 */
   messageStreamShowReasoning?: boolean;
   // TODO(settings-schema-version): 能证明所有受支持升级路径都已执行本次迁移后，改用统一 settings schema version，并一起删除此 marker、迁移函数和持久化判断。

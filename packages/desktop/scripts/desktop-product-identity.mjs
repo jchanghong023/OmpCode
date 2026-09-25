@@ -79,8 +79,11 @@ export function resolveDesktopArtifactSuffix(env = process.env) {
  * 返回 Windows Shell 使用的 AppUserModelId。
  *
  * 打包态必须复用 electron-builder 的 appId，否则快捷方式里的 AUMID、开始菜单索引
- * 和运行中的 Electron 进程会被 Windows 视为三个不同的应用。开发态继续保留旧身份，
- * 避免本地调试快捷方式和正式/Preview 安装包互相污染。
+ * 和运行中的 Electron 进程会被 Windows 视为三个不同的应用。
+ * 开发态运行时不能设置任何 AUMID：开发身份（cn.aminer.zcode）未在系统注册快捷方式，
+ * 设置后 Shell 会把任务栏图标回退成 electron.exe 的默认原子图标，盖住窗口图标；
+ * 不设置时按 exe 路径分组，天然与正式/Preview 安装包隔离。此分支仅作为保留标识存在，
+ * 运行时主进程已不再使用（见 src/main/index.ts 的 win32 启动段）。
  */
 export function resolveWindowsAppUserModelIdForFlavor(flavor, runtime = { isPackaged: true }) {
   if (runtime.isPackaged === false) {

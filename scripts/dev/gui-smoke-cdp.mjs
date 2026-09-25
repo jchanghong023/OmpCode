@@ -2,7 +2,7 @@
 // 前台短连接，每步超时 15s；只读检查，不持久化任何业务状态。
 import { writeFileSync } from "node:fs";
 
-const CDP_PORT = 9229;
+const CDP_PORT = 9230;
 const STEP_TIMEOUT_MS = 15000;
 
 function withTimeout(promise, label) {

@@ -286,6 +286,8 @@ export class ConversationProjectionStore {
   private observedModelTransitionEventId: string | null = null;
   // 订阅代际：并发 connect 只认最新一代，过期结果立即退订防服务端悬挂。
   private generation = 0;
+  /** 恢复历史会话首次订阅的偶发升级失败自动重连预算（成功 live 即清零）。 */
+  private recoveryAutoRetryCount = 0;
   // 首次订阅尚未拿到 ACK 时，runtime available 只是当前启动流程的正常完成信号；
   // 记录在途数量，避免生命周期通知再次启动 connect，制造同 topic 的订阅替换竞态。
   private connectInFlight = 0;
@@ -446,6 +448,7 @@ export class ConversationProjectionStore {
       // 会原子替换整个投影，旧恢复流已无意义；否则其迟到失败会把 live 的新订阅打成 error。
       this.discardRecovery();
       this.runtimeRecycleRetryAttempt = 0;
+      this.recoveryAutoRetryCount = 0;
       this.initialSubscribeAckAt = monotonicNow();
       this.setState({
         status: "live",
@@ -958,6 +961,20 @@ export class ConversationProjectionStore {
     const code = contentFault ? SUBSCRIPTION_CONTENT_REJECTED : reasonCode;
     this.discardRecovery();
     logger.warn(`[v4-store] ${this.topic} recovery fail-closed: ${code}`);
+    // omp 换核（FORK.md）：恢复历史会话的首次订阅存在偶发恢复升级失败
+    //（fault.subscription.recoveryFailed，用户手点「重新连接」必好）。非内容失败时
+    // 自动做至多两次强制快照重连，等效手点重连；内容确定性失败仍 fail-closed。
+    if (!contentFault && this.recoveryAutoRetryCount < 2) {
+      this.recoveryAutoRetryCount += 1;
+      logger.warn(
+        `[v4-store] ${this.topic} 自动强制快照重连 #${this.recoveryAutoRetryCount} (reason=${code})`,
+      );
+      this.awaitingInitial = null;
+      this.subscriptionHasAppliedBase = false;
+      this.setState({ status: "connecting", subscriptionId: null });
+      void this.connect({ forceSnapshot: true });
+      return;
+    }
     this.setState({ status: "error", lastError: code });
   }
 

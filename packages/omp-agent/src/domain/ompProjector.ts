@@ -52,6 +52,15 @@ export class OmpEventProjector {
       case "message_start":
       case "message_end":
         if (event.message.role === "assistant") {
+          // 供应商错误（如 401 未授权模型）记在 assistant 消息的 stopReason/errorStatus 上，
+          // 不走 notice 事件；不消费就会以「成功 + 空回复」静默收口（UI 实测缺陷）。
+          // 成功消息到达时清除粘性错误，避免 omp 自动重试成功后仍误报失败。
+          const failure = assistantErrorOf(event.message);
+          if (failure) {
+            this.projection.recordTurnError(failure);
+          } else if (event.type === "message_end") {
+            this.projection.recordTurnError(null);
+          }
           this.projection.addUsage(usageOf(event.message.usage));
           if (event.type === "message_end") {
             this.projection.closeAssistantResponse();
@@ -96,7 +105,12 @@ export class OmpEventProjector {
         });
         return;
       }
-      case "model_changed":
+      case "model_changed": {
+        // 真实 omp 的 model_changed 是裸事件（#emit 无载荷，见 agent-session.ts）；
+        // 无载荷时不在此落空标记，由引擎回读 get_state 后统一投影。fake 核带载荷时直接消费。
+        if (!event.model) {
+          return;
+        }
         this.projection.setModelConfig({
           ...(event.model?.provider !== undefined ? { provider: event.model.provider } : {}),
           ...(event.model?.id !== undefined ? { model: event.model.id } : {}),
@@ -110,6 +124,7 @@ export class OmpEventProjector {
           toThought: "",
         });
         return;
+      }
       case "thinking_level_changed":
         this.projection.setModelConfig(event.thinkingLevel !== undefined ? { thought: event.thinkingLevel } : {});
         return;
@@ -166,6 +181,17 @@ export class OmpEventProjector {
     }
     this.tools.clear();
   }
+}
+
+/** omp 把供应商失败记在 assistant 消息上（stopReason=error + errorStatus/errorMessage）。 */
+function assistantErrorOf(message: { stopReason?: string; errorStatus?: number; errorMessage?: string }): { code: string; message: string } | null {
+  if (message.stopReason !== "error") {
+    return null;
+  }
+  return {
+    code: `omp_provider_${message.errorStatus ?? "error"}`,
+    message: message.errorMessage ?? `model request failed (${message.errorStatus ?? "no status"})`,
+  };
 }
 
 function usageOf(usage: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number; inputTokens?: number; outputTokens?: number } | undefined) {

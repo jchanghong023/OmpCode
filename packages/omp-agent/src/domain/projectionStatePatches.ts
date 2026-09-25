@@ -1,10 +1,10 @@
 // A 区状态的纯 patch 构造器（键级整体替换）。从 conversationProjection 拆出
 // （架构 maxFileLines=400）；输入旧状态，输出新键值，不改状态机本身。
 
-import type { StatePatch } from "@zcode/shared/zcode-protocol-v4";
+import type { SessionConfigState, StatePatch } from "@zcode/shared/zcode-protocol-v4";
 import type { ProjectionAState, TurnOutcome } from "./projectionTypes.js";
+import type { OmpContextReport } from "./ompContextReport.js";
 
-/** 轮开始：control → running + 可停止；输入路由 → 排队。 */
 export function runningControlPatch(): StatePatch {
   return {
     control: {
@@ -67,13 +67,14 @@ export function usagePatch(
   };
 }
 
-export function contextWindowPatch(state: ProjectionAState, usedTokens: number | null, maxTokens: number | null): StatePatch {
+export function contextWindowPatch(state: ProjectionAState, usedTokens: number | null, maxTokens: number | null, report?: OmpContextReport | null): StatePatch {
   return {
     usage: {
       ...state.usage,
       contextWindow:
         usedTokens !== null && maxTokens !== null && maxTokens > 0
-          ? { usedTokens, maxTokens, autoCompactThresholdTokens: null }
+          ? { usedTokens, maxTokens, autoCompactThresholdTokens: null,
+              ...(report?.contextWindow === maxTokens ? { details: { entries: report.entries } } : {}) }
           : null,
     },
   };
@@ -81,7 +82,14 @@ export function contextWindowPatch(state: ProjectionAState, usedTokens: number |
 
 export function modelConfigPatch(
   state: ProjectionAState,
-  config: { provider?: string; model?: string; thought?: string; thoughtLevels?: string[] },
+  config: {
+    provider?: string;
+    model?: string;
+    thought?: string;
+    thoughtLevels?: string[];
+    followupMode?: SessionConfigState["followupMode"];
+    autoCompactionEnabled?: boolean;
+  },
 ): StatePatch {
   return {
     config: {
@@ -90,6 +98,8 @@ export function modelConfigPatch(
       ...(config.model !== undefined ? { model: config.model } : {}),
       ...(config.thought !== undefined ? { thought: config.thought } : {}),
       ...(config.thoughtLevels !== undefined ? { thoughtLevels: config.thoughtLevels } : {}),
+      ...(config.followupMode !== undefined ? { followupMode: config.followupMode } : {}),
+      ...(config.autoCompactionEnabled !== undefined ? { autoCompactionEnabled: config.autoCompactionEnabled } : {}),
     },
   };
 }

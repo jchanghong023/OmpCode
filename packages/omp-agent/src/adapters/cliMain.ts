@@ -71,6 +71,9 @@ export async function runCliMain(argv: string[], env: NodeJS.ProcessEnv = proces
   // OMP_RPC_ARGS_JSON：开发/测试用的附加 omp 启动参数（如 fake 核心脚本路径）。
   const ompExtraArgs = parseExtraArgs(env.OMP_RPC_ARGS_JSON);
   const ompFactory = createOmpProcessFactory(ompBinaryPath, ompExtraArgs);
+  // 目录进程的 available_commands_update → ServerApp 缓存 + workspace-config topic 推送。
+  // 构造顺序上 loader 先于 app，用 ref 解引用。
+  const appRef: { app: ServerApp | null } = { app: null };
   const app = new ServerApp({
     ompFactory,
     store: createOmpStore(env),
@@ -82,8 +85,11 @@ export async function runCliMain(argv: string[], env: NodeJS.ProcessEnv = proces
     },
     workspacePath,
     workspaceKey,
-    loadWorkspaceConfig: createWorkspaceConfigLoader(ompFactory, workspacePath),
+    loadWorkspaceConfig: createWorkspaceConfigLoader(ompFactory, workspacePath, {
+      onCommandsUpdate: (commands) => appRef.app?.updateSlashCommands(commands),
+    }),
   });
+  appRef.app = app;
   const protocolServer = new ProtocolServer({
     input: process.stdin,
     output: process.stdout,
@@ -111,7 +117,7 @@ function parseExtraArgs(raw: string | undefined): string[] {
 
 function prepareStoragePath(env: NodeJS.ProcessEnv): string {
   // host 只用它做锁/复用记账；omp 核没有该库，路径保持与旧 CLI 一致以便复用判定。
-  const home = env.PI_CONFIG_DIR?.trim() || join(homedir(), ".zcode");
+  const home = env.PI_CONFIG_DIR?.trim() || join(homedir(), ".ompcode");
   const directory = join(home, "cli", "db");
   try {
     mkdirSync(directory, { recursive: true });

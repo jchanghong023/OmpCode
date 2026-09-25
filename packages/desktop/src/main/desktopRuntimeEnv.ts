@@ -55,9 +55,8 @@ function isTruthyRuntimeEnvOverride(name: string): boolean {
   return value === "1" || value === "true" || value === "yes" || value === "on";
 }
 
-// e2e 运行的是生产构建，默认会和本机正式版 ZCode 共用 app name / userData，
-// 触发 Electron 单实例锁后只激活已有窗口，Chromedriver 无法接管测试进程。
-// 这里允许测试显式隔离运行时身份，正常桌面/远控路径保持原来的默认值。
+// 数据隔离（FORK.md）：产品名 OmpCode 决定独立 userData / 单实例锁，
+// 与本机正式版 ZCode 互不共享；e2e 仍可用该变量显式再隔离一层运行时身份。
 export const runtimeApplicationName =
   readRuntimeEnvOverride("ZCODE_DESKTOP_APPLICATION_NAME") ??
   (isLocalDevelopmentRuntime
@@ -499,7 +498,7 @@ export function buildHostProcessEnv(hostProcessLocalEnv: Record<string, string>)
             )
           ? rawInheritedEnv.ZCODE_CUA_BUNDLED_HELPER_APP_PATH?.trim() ||
             join(
-              rawInheritedEnv.ZCODE_HOME?.trim() || join(homedir(), ".zcode"),
+              rawInheritedEnv.ZCODE_HOME?.trim() || join(homedir(), ".ompcode"),
               "computer-use",
               "dev",
               DEV_HELPER_APP_NAME,

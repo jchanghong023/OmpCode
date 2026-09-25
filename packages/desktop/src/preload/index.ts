@@ -587,6 +587,11 @@ contextBridge.exposeInMainWorld("zcode", {
   openInFileManager: (path: string) => ipcRenderer.invoke(PlatformChannels.OpenInFileManager, path),
   /** 使用系统默认应用打开本地文件 */
   openExternalFile: (path: string) => ipcRenderer.invoke(PlatformChannels.OpenExternalFile, path),
+  openOmpModelConfig: () => ipcRenderer.invoke(PlatformChannels.OpenOmpModelConfig),
+  readOmpModelRoles: () => ipcRenderer.invoke(PlatformChannels.ReadOmpModelRoles),
+  listOmpProfiles: () => ipcRenderer.invoke(PlatformChannels.ListOmpProfiles),
+  writeOmpModelRoles: (roles: { role: string; value: string }[]) =>
+    ipcRenderer.invoke(PlatformChannels.WriteOmpModelRoles, { roles }),
   /** 打开 ZCode Computer Use 完整权限引导 */
   openCuaPermissionOnboarding: (options?: OpenCuaPermissionOnboardingOptions) =>
     ipcRenderer.invoke(PlatformChannels.OpenCuaPermissionOnboarding, options),
@@ -676,7 +681,7 @@ contextBridge.exposeInMainWorld("zcode", {
   /** 通过 main process 触发原生任务通知 */
   showTaskNotification: (payload: TaskNotificationPayload) =>
     ipcRenderer.send(PlatformChannels.ShowTaskNotification, payload),
-  /** 导出日志：打包 ~/.zcode/v2 及外部 agent 日志为 zip 并在 Finder 中显示 */
+  /** 导出日志：打包 ~/.ompcode/v2 及外部 agent 日志为 zip 并在 Finder 中显示 */
   exportLogs: (): Promise<{
     success: boolean;
     path?: string;

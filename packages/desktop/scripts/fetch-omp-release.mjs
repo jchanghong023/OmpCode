@@ -11,7 +11,7 @@
 // 下载缓存：packages/desktop/.omp-release-cache/<tag>/<asset>，重复构建不重复下载。
 
 import { createHash } from "node:crypto";
-import { copyFileSync, createReadStream, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { copyFileSync, createReadStream, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createWriteStream } from "node:fs";
 import { dirname, resolve } from "node:path";
 import process from "node:process";
@@ -97,8 +97,49 @@ async function downloadToFile(url, destination) {
 }
 
 async function resolveLatestTag() {
-  const release = await fetchJson(`${GITHUB_API}/latest`);
-  return release.tag_name;
+  // latest 解析失败不能直接炸掉整条打包链：重试后仍失败时回退到缓存里
+  // 最新下载过的 tag（多平台循环里逐平台调用本脚本，api.github.com 偶发
+  // 连接超时不应让已缓存的二进制也无法复用）。回退只影响网络不可达的
+  // 场景，网络正常时始终解析最新 tag。
+  const attempts = 3;
+  let lastError;
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      const release = await fetchJson(`${GITHUB_API}/latest`);
+      return String(release.tag_name);
+    } catch (error) {
+      lastError = error;
+      if (attempt < attempts) {
+        await new Promise((sleepResolve) => setTimeout(sleepResolve, attempt * 1000));
+      }
+    }
+  }
+  const fallbackTag = findNewestCachedTag();
+  if (fallbackTag) {
+    console.warn(`[fetch-omp] 解析 latest 失败（${String(lastError)}），回退缓存 tag ${fallbackTag}`);
+    return fallbackTag;
+  }
+  throw lastError instanceof Error ? lastError : new Error(String(lastError));
+}
+
+function findNewestCachedTag() {
+  if (!existsSync(cacheDir)) {
+    return null;
+  }
+  const candidates = [];
+  for (const entry of readdirSync(cacheDir, { withFileTypes: true })) {
+    if (!entry.isDirectory()) {
+      continue;
+    }
+    const tagManifest = resolve(cacheDir, entry.name, "manifest.json");
+    const tagAsset = resolve(cacheDir, entry.name, assetName);
+    if (!existsSync(tagManifest) || !existsSync(tagAsset)) {
+      continue;
+    }
+    candidates.push({ tag: entry.name, downloadedAtMs: statSync(tagManifest).mtimeMs });
+  }
+  candidates.sort((left, right) => right.downloadedAtMs - left.downloadedAtMs);
+  return candidates[0]?.tag ?? null;
 }
 
 async function fetchChecksums(tag) {

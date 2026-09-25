@@ -3,12 +3,14 @@
 // 会话完成」的桌面主链路。所有下行 v4 帧均按 @zcode/shared 的 wire schema 校验。
 
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";
+import { zcodeWorkspacePresentationSchema } from "@zcode/shared";
 import {
   conversationTopicWireFrameSchema,
   commandAckSchema,
@@ -98,15 +100,49 @@ class AdapterHarness {
           rows.set(row.rowId as number, row);
         }
       } else if (frame.payload.kind === "deltas") {
-        for (const delta of frame.payload.deltas as { op?: string; row?: Record<string, unknown> }[]) {
+        for (const delta of frame.payload.deltas as {
+          op?: string;
+          row?: Record<string, unknown>;
+          rowId?: number;
+          path?: string;
+          append?: string;
+        }[]) {
           if (delta.op === "row.appended" || delta.op === "row.upserted") {
             const row = delta.row as Record<string, unknown>;
             rows.set(row.rowId as number, row);
+          } else if (delta.op === "row.delta" && typeof delta.rowId === "number" && typeof delta.path === "string") {
+            const row = rows.get(delta.rowId);
+            if (row && typeof delta.append === "string") {
+              row[delta.path] = String(row[delta.path] ?? "") + delta.append;
+            }
           }
         }
       }
     }
     return rows;
+  }
+
+  collectState(): Record<string, unknown> {
+    // 快照携带全量 state；本地命令瞬间完成时状态只出现在订阅快照里，必须以最后一个
+    // 快照为基底再叠加后续 state.updated 增量。
+    let state: Record<string, unknown> = {};
+    for (const frame of this.conversationFrames()) {
+      if (frame.payload.kind === "snapshot") {
+        // 会话快照是扁平结构（control/meta/config 顶层字段），直接铺开作基底。
+        state = { ...((frame.payload.snapshot ?? {}) as Record<string, unknown>) };
+      } else {
+        for (const delta of frame.payload.deltas as { op?: string; patch?: Record<string, unknown> }[]) {
+          if (delta.op === "state.updated" && delta.patch) {
+            Object.assign(state, delta.patch);
+          }
+        }
+      }
+    }
+    return state;
+  }
+
+  topicFrames(topic: string): WireFrame[] {
+    return this.conversationFrames().filter((frame) => frame.topic === topic);
   }
 
   async close(): Promise<void> {
@@ -116,6 +152,20 @@ class AdapterHarness {
       setTimeout(() => this.child.kill("SIGKILL"), 3000).unref?.();
     });
   }
+}
+
+function assertFrameOrdinalsIncrease(frames: unknown[], subscriptionId: string): void {
+  const logical = new Map<string, number>();
+  for (const frame of frames) {
+    const record = frame as { method?: string; params?: { subscriptionId?: string; logicalFrameId?: string; logicalFrameOrdinal?: number } };
+    if (record.method !== "v4/conversation/frame" || record.params?.subscriptionId !== subscriptionId) continue;
+    if (record.params.logicalFrameId && record.params.logicalFrameOrdinal) {
+      logical.set(record.params.logicalFrameId, record.params.logicalFrameOrdinal);
+    }
+  }
+  const ordinals = [...logical.values()];
+  assert.ok(ordinals.length > 1, `Expected multiple logical frames for ${subscriptionId}`);
+  assert.deepEqual(ordinals, ordinals.map((_, index) => index + 1));
 }
 
 async function startAdapter(): Promise<AdapterHarness> {
@@ -145,6 +195,228 @@ async function startAdapter(): Promise<AdapterHarness> {
   );
   void stderrTail;
   return harness;
+}
+
+async function uploadFixture(
+  harness: AdapterHarness,
+  uploadId: string,
+  sessionId: string,
+  mime: string,
+  bytes: Buffer,
+): Promise<{ ref: string; fileName: string; mime: string; bytes: number }> {
+  const extension = mime === "application/pdf" ? "pdf" : mime === "image/jpeg" ? "jpg" : "png";
+  const fileName = `${uploadId}.${extension}`;
+  const common = { connectionId: "image-test", uploadId, sessionId };
+  const begun = (await harness.request("v4/attachment/begin", {
+    ...common,
+    fileName,
+    mime,
+    totalBytes: bytes.length,
+    totalChunks: 1,
+    checksum: `sha256:${createHash("sha256").update(bytes).digest("hex")}`,
+  })) as { result: { state: string } };
+  assert.equal(begun.result.state, "staging");
+  await harness.request("v4/attachment/chunk", { ...common, chunkIndex: 0, dataBase64: bytes.toString("base64") });
+  const committed = (await harness.request("v4/attachment/commit", common)) as { result: { ref: string } };
+  return { ref: committed.result.ref, fileName, mime, bytes: bytes.length };
+}
+
+test("v4 首发与后续输入把图片字节传给 omp，跳过非图片", async () => {
+  const harness = await startAdapter();
+  try {
+    const firstBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 1]);
+    const first = await uploadFixture(harness, "image-first", "draft-image-test", "image/png", firstBytes);
+    const created = (await harness.request("v4/command", {
+      commandId: "create-with-image",
+      clientId: "image-client",
+      sessionId: null,
+      type: "createSession",
+      payload: { workspaceId: "test-workspace", firstInput: { text: "/image-report first", attachments: [first] } },
+      issuedAt: Date.now(),
+    })) as { result: unknown };
+    const createAck = commandAckSchema.parse(created.result);
+    assert.equal(createAck.status, "accepted");
+    const sessionId = (createAck.result as { sessionId: string }).sessionId;
+    await harness.request("v4/conversation/subscribe", {
+      topic: `conversation/${sessionId}`,
+      connectionId: "image-test",
+      clientMode: "desktop-continuous",
+    });
+    const report = async (label: string) => {
+      const prefix = `IMAGE_REPORT:${label}:`;
+      const row = await harness.waitUntil(() =>
+        [...harness.collectRows().values()].find(
+          (candidate) => candidate.kind === "assistantText" && String(candidate.text ?? "").startsWith(prefix),
+        ),
+      ) as { text: string };
+      return JSON.parse(row.text.slice(prefix.length)) as { hasImages: boolean; images: unknown[] };
+    };
+    assert.deepEqual(await report("first"), {
+      hasImages: true,
+      images: [{ type: "image", data: firstBytes.toString("base64"), mimeType: "image/png" }],
+    });
+
+    const pdf = await uploadFixture(harness, "document", sessionId, "application/pdf", Buffer.from("%PDF-test"));
+    const secondBytes = Buffer.from([0xff, 0xd8, 0xff, 0x00]);
+    const second = await uploadFixture(harness, "image-second", sessionId, "image/jpeg", secondBytes);
+    const sent = (await harness.request("v4/command", {
+      commandId: "send-with-images",
+      clientId: "image-client",
+      sessionId,
+      type: "sendText",
+      payload: { text: "/image-report second", attachments: [second, pdf, first] },
+      issuedAt: Date.now(),
+    })) as { result: unknown };
+    assert.equal(commandAckSchema.parse(sent.result).status, "accepted");
+    assert.deepEqual(await report("second"), {
+      hasImages: true,
+      images: [
+        { type: "image", data: secondBytes.toString("base64"), mimeType: "image/jpeg" },
+        { type: "image", data: firstBytes.toString("base64"), mimeType: "image/png" },
+      ],
+    });
+
+    const plain = (await harness.request("v4/command", {
+      commandId: "send-without-images",
+      clientId: "image-client",
+      sessionId,
+      type: "sendText",
+      payload: { text: "/image-report plain" },
+      issuedAt: Date.now(),
+    })) as { result: unknown };
+    assert.equal(commandAckSchema.parse(plain.result).status, "accepted");
+    assert.deepEqual(await report("plain"), { hasImages: false, images: [] });
+  } finally {
+    await harness.close();
+  }
+});
+
+test("workspace/readPresentation 符合 Host 严格响应协议", async () => {
+  const harness = await startAdapter();
+  try {
+    const workspace = {
+      workspacePath: packageRoot,
+      workspaceIdentity: "test-workspace",
+      workspaceKey: "test-workspace",
+    };
+    const response = (await harness.request("workspace/readPresentation", { workspace })) as {
+      result: unknown;
+    };
+    const presentation = zcodeWorkspacePresentationSchema.parse(response.result);
+    assert.deepEqual(presentation.workspace, workspace);
+    assert.equal(presentation.mode, "build");
+    assert.deepEqual(presentation.slashCommands, [
+      { name: "help", description: "Show help", source: "builtin" },
+      { name: "ship", description: "Ship changes", inputHint: "target", source: "custom" },
+    ]);
+    const modelOption = presentation.configOptions?.find((option) => option.id === "model")?.options?.[0];
+    assert.equal(modelOption?.value, "mock/mock-1");
+    assert.deepEqual(modelOption?.modelThoughtLevels, ["off", "low", "high", "max"]);
+    assert.equal(modelOption?.modelDefaultThoughtLevel, "high");
+    assert.equal(presentation.configOptions?.find((option) => option.id === "thought_level")?.currentValue, "max");
+  } finally {
+    await harness.close();
+  }
+});
+
+test("自动压缩开关通过 omp RPC 更新并投影实际状态", async () => {
+  const harness = await startAdapter();
+  try {
+    const created = (await harness.request("v4/command", {
+      commandId: "create-auto-compaction",
+      clientId: "auto-compaction-client",
+      sessionId: null,
+      type: "createSession",
+      payload: { workspaceId: "test-workspace", firstInput: { text: "HOLD 自动压缩" } },
+      issuedAt: Date.now(),
+    })) as { result: unknown };
+    const createAck = commandAckSchema.parse(created.result);
+    assert.equal(createAck.status, "accepted");
+    const sessionId = (createAck.result as { sessionId: string }).sessionId;
+    const subscribed = (await harness.request("v4/conversation/subscribe", {
+      topic: `conversation/${sessionId}`,
+      connectionId: "auto-compaction-desktop",
+      clientMode: "desktop-continuous",
+    })) as { result: { ack: { logEpoch: string } } };
+    await harness.waitUntil(() =>
+      (harness.collectState().config as { autoCompactionEnabled?: boolean } | undefined)
+        ?.autoCompactionEnabled === true,
+    );
+    const initial = harness.collectState();
+    assert.equal((initial.config as { model: string }).model, "mock-1");
+    assert.equal((initial.config as { thought: string }).thought, "max");
+    assert.deepEqual((initial.usage as { contextWindow: unknown }).contextWindow, {
+      usedTokens: 512,
+      maxTokens: 200000,
+      autoCompactThresholdTokens: null,
+    });
+
+    let baseRevision = (harness.collectState().revision as number | undefined) ?? 0;
+    let accepted = false;
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const changed = (await harness.request("v4/command", {
+        commandId: `set-auto-compaction-${attempt}`,
+        clientId: "auto-compaction-client",
+        sessionId,
+        type: "setAutoCompaction",
+        payload: { enabled: false },
+        baseRevision,
+        baseLogEpoch: subscribed.result.ack.logEpoch,
+        issuedAt: Date.now(),
+      })) as { result: unknown };
+      const ack = commandAckSchema.parse(changed.result);
+      if (ack.status === "accepted") {
+        accepted = true;
+        break;
+      }
+      assert.equal(ack.status, "stale", JSON.stringify(ack));
+      baseRevision = ack.revisionAtDecision;
+    }
+    assert.equal(accepted, true);
+    await harness.waitUntil(() =>
+      (harness.collectState().config as { autoCompactionEnabled?: boolean } | undefined)
+        ?.autoCompactionEnabled === false,
+    );
+    for (const frame of harness.frames.filter(
+      (item) => (item as { method?: string }).method === "v4/conversation/frame",
+    )) {
+      const parsed = conversationTopicWireFrameSchema.safeParse((frame as { params: unknown }).params);
+      assert.ok(parsed.success, JSON.stringify(parsed.error?.issues.slice(0, 3)));
+    }
+  } finally {
+    await harness.close();
+  }
+});
+
+for (const [command, expectedOutput] of [["/help", "Fake help output"], ["/later", "Delayed output"]] as const) {
+  test(`本地斜杠命令 ${command} 输出后结束轮次`, async () => {
+    const harness = await startAdapter();
+    try {
+      const created = (await harness.request("v4/command", {
+        commandId: `create-${command}`,
+        clientId: "slash-client",
+        sessionId: null,
+        type: "createSession",
+        payload: { workspaceId: "test-workspace", firstInput: { text: command } },
+        issuedAt: Date.now(),
+      })) as { result: unknown };
+      const ack = commandAckSchema.parse(created.result);
+      assert.equal(ack.status, "accepted");
+      const sessionId = (ack.result as { sessionId: string }).sessionId;
+      await harness.request("v4/conversation/subscribe", {
+        topic: `conversation/${sessionId}`,
+        connectionId: `slash-${command}`,
+        clientMode: "desktop-continuous",
+      });
+      await harness.waitUntil(() => [...harness.collectRows().values()].some(
+        (row) => row.kind === "turnHeader" && row.state === "completedSuccess",
+      ));
+      const rows = [...harness.collectRows().values()];
+      assert.ok(rows.some((row) => row.kind === "assistantText" && String(row.text).includes(expectedOutput)));
+    } finally {
+      await harness.close();
+    }
+  });
 }
 
 test("桌面主链路：createSession → 流式 → 工具 → 权限确认 → 文件变更 → 完成", async () => {
@@ -198,6 +470,7 @@ test("桌面主链路：createSession → 流式 → 工具 → 权限确认 →
       const parsed = conversationTopicWireFrameSchema.safeParse((frame as { params: unknown }).params);
       assert.ok(parsed.success, `v4 frame 不合法: ${JSON.stringify(parsed.error?.issues.slice(0, 3))}`);
     }
+    assertFrameOrdinalsIncrease(harness.frames, subscribeResult.result.ack.subscriptionId);
 
     // 7. 投影内容正确
     const rows = harness.collectRows();
@@ -254,6 +527,13 @@ test("stop 命令与 abort 收口 + sessions-index 订阅", async () => {
       connectionId: "conn-2",
     })) as { result: { ack: { subscriptionId: string } } };
     assert.ok(indexResult.result.ack.subscriptionId.length > 0);
+    await harness.request("v4/conversation/resync", {
+      topic: "sessions-index/test-workspace",
+      subscriptionId: indexResult.result.ack.subscriptionId,
+      base: null,
+      forceSnapshot: true,
+    });
+    assertFrameOrdinalsIncrease(harness.frames, indexResult.result.ack.subscriptionId);
 
     const sessionSubscribe = (await harness.request("v4/conversation/subscribe", {
       topic: `conversation/${sessionId}`,
@@ -298,6 +578,330 @@ test("stop 命令与 abort 收口 + sessions-index 订阅", async () => {
       }
       return false;
     });
+  } finally {
+    await harness.close();
+  }
+});
+
+test("setFollowupMode guide 收敛 + 流式中输入按模式路由 steer/follow_up", async () => {
+  const harness = await startAdapter();
+  try {
+    // 1. 创建会话并进入 HOLD 流式保持态
+    const createResult = await harness.request("v4/command", {
+      commandId: "cmd-create-fm",
+      clientId: "test-client",
+      sessionId: null,
+      type: "createSession",
+      payload: { workspaceId: "test-workspace", firstInput: { text: "HOLD 保持流式" } },
+      issuedAt: Date.now(),
+    });
+    const createAck = commandAckSchema.parse((createResult as { result: unknown }).result);
+    assert.equal(createAck.status, "accepted");
+    const sessionId = (createAck.result as { sessionId: string }).sessionId;
+    const subscribeResult = (await harness.request("v4/conversation/subscribe", {
+      topic: `conversation/${sessionId}`,
+      connectionId: "conn-fm",
+      clientMode: "desktop-continuous",
+    })) as { result: { ack: { subscriptionId: string; logEpoch: string } } };
+    const logEpoch = subscribeResult.result.ack.logEpoch;
+    const holdingTextRowCount = () =>
+      [...harness.collectRows().values()].filter(
+        (row) => row.kind === "assistantText" && String(row.text ?? "").length > 0,
+      ).length;
+    await harness.waitUntil(() => (holdingTextRowCount() >= 1 ? true : undefined));
+
+    // setFollowupMode 是 CAS 命令：stale ACK 携带当前 revision，按其重试收敛（与 UI 同语义）。
+    const sendFollowupModeCas = async (mode: "guide" | "queue") => {
+      let baseRevision = 0;
+      for (let attempt = 0; attempt < 5; attempt++) {
+        const result = await harness.request("v4/command", {
+          commandId: `cmd-fm-${mode}-${attempt}`,
+          clientId: "test-client",
+          sessionId,
+          type: "setFollowupMode",
+          payload: { mode },
+          baseRevision,
+          baseLogEpoch: logEpoch,
+          issuedAt: Date.now(),
+        });
+        const ack = commandAckSchema.parse((result as { result: unknown }).result);
+        if (ack.status === "accepted") {
+          return ack;
+        }
+        assert.equal(ack.status, "stale", `setFollowupMode ${mode} ACK: ${JSON.stringify(ack)}`);
+        baseRevision = ack.revisionAtDecision;
+      }
+      throw new Error("setFollowupMode CAS 未收敛");
+    };
+
+    // 2. guide 模式必须接受（回归：此前被 unsupportedByOmpCore 拒绝，导致桌面首发失败）
+    const guideAck = await sendFollowupModeCas("guide");
+    assert.equal(guideAck.status, "accepted");
+
+    // 3. 流式中输入 → omp steer 命令，fake 核以 STEERED:<text> 收口本轮
+    const followupImageBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 2]);
+    const followupImage = await uploadFixture(harness, "followup-image", sessionId, "image/png", followupImageBytes);
+    const imageEcho = `|IMAGES:${JSON.stringify([{ type: "image", data: followupImageBytes.toString("base64"), mimeType: "image/png" }])}`;
+    const steerSend = await harness.request("v4/command", {
+      commandId: "cmd-fm-send-1",
+      clientId: "test-client",
+      sessionId,
+      type: "sendText",
+      payload: { text: "引导补充", attachments: [followupImage] },
+      issuedAt: Date.now(),
+    });
+    assert.equal(commandAckSchema.parse((steerSend as { result: unknown }).result).status, "accepted");
+    await harness.waitUntil(() => {
+      for (const row of harness.collectRows().values()) {
+        if (row.kind === "assistantText" && String(row.text ?? "").includes(`STEERED:引导补充${imageEcho}`)) {
+          return true;
+        }
+      }
+      return false;
+    });
+
+    // 4. 切回 queue：新 prompt 再次进入 HOLD 保持态，流式中输入 → omp follow_up 命令
+    await sendFollowupModeCas("queue");
+    await harness.request("v4/command", {
+      commandId: "cmd-fm-send-hold2",
+      clientId: "test-client",
+      sessionId,
+      type: "sendText",
+      payload: { text: "HOLD 第二轮" },
+      issuedAt: Date.now(),
+    });
+    await harness.waitUntil(() => (holdingTextRowCount() >= 2 ? true : undefined));
+    const queueSend = await harness.request("v4/command", {
+      commandId: "cmd-fm-send-2",
+      clientId: "test-client",
+      sessionId,
+      type: "sendText",
+      payload: { text: "队列补充", attachments: [followupImage] },
+      issuedAt: Date.now(),
+    });
+    const queueAck = commandAckSchema.parse((queueSend as { result: unknown }).result);
+    assert.equal(queueAck.status, "accepted");
+    assert.equal((queueAck.result as { delivery?: string } | undefined)?.delivery, "queue");
+    await harness.waitUntil(() => {
+      for (const row of harness.collectRows().values()) {
+        if (row.kind === "assistantText" && String(row.text ?? "").includes(`FOLLOWEDUP:队列补充${imageEcho}`)) {
+          return true;
+        }
+      }
+      return false;
+    });
+  } finally {
+    await harness.close();
+  }
+});
+
+test("临时模型：modelSelection 随提交下发，相同选择不重复 set_model", async () => {
+  const harness = await startAdapter();
+  try {
+    const selection = { providerId: "mock", modelId: "mock-2", options: { reasoningLevel: "high" } };
+    const createResult = await harness.request("v4/command", {
+      commandId: "cmd-model-create",
+      clientId: "test-client",
+      sessionId: null,
+      type: "createSession",
+      payload: { workspaceId: "test-workspace", firstInput: { text: "/help", modelSelection: selection } },
+      issuedAt: Date.now(),
+    });
+    const createAck = commandAckSchema.parse((createResult as { result: unknown }).result);
+    assert.equal(createAck.status, "accepted");
+    const sessionId = (createAck.result as { sessionId: string }).sessionId;
+    await harness.request("v4/conversation/subscribe", {
+      topic: `conversation/${sessionId}`,
+      connectionId: "conn-model",
+      clientMode: "desktop-continuous",
+    });
+    await harness.waitUntil(() => [...harness.collectRows().values()].some(
+      (row) => row.kind === "turnHeader" && row.state === "completedSuccess",
+    ));
+    const rows = [...harness.collectRows().values()];
+    const marker = rows.find((row) => row.kind === "timelineMarker" && (row as { marker?: { type?: string } }).marker?.type === "modelChange") as
+      | { marker?: { toProvider?: string; toModel?: string } }
+      | undefined;
+    assert.ok(marker, "缺少 modelChange 时间线标记");
+    assert.equal(marker!.marker!.toProvider, "mock");
+    assert.equal(marker!.marker!.toModel, "mock-2");
+    const state = harness.collectState();
+    assert.equal((state.config as { provider?: string })?.provider, "mock");
+    assert.equal((state.config as { model?: string })?.model, "mock-2");
+    assert.equal((state.config as { thought?: string })?.thought, "high");
+
+    // 相同选择的第二次提交不应再次下发 set_model（fake 核统计并经 /model-report 回报）。
+    const sendResult = await harness.request("v4/command", {
+      commandId: "cmd-model-send",
+      clientId: "test-client",
+      sessionId,
+      type: "sendText",
+      payload: { text: "/model-report", modelSelection: selection },
+      issuedAt: Date.now(),
+    });
+    assert.equal(commandAckSchema.parse((sendResult as { result: unknown }).result).status, "accepted");
+    await harness.waitUntil(() => [...harness.collectRows().values()].some(
+      (row) => row.kind === "assistantText" && String(row.text).includes("set_model calls: 1"),
+    ));
+  } finally {
+    await harness.close();
+  }
+});
+
+test("session_info_update / config_update 回投会话标题与模型状态", async () => {
+  const harness = await startAdapter();
+  try {
+    const createResult = await harness.request("v4/command", {
+      commandId: "cmd-info-create",
+      clientId: "test-client",
+      sessionId: null,
+      type: "createSession",
+      payload: { workspaceId: "test-workspace", firstInput: { text: "/title Fake Title" } },
+      issuedAt: Date.now(),
+    });
+    const createAck = commandAckSchema.parse((createResult as { result: unknown }).result);
+    const sessionId = (createAck.result as { sessionId: string }).sessionId;
+    await harness.request("v4/conversation/subscribe", {
+      topic: `conversation/${sessionId}`,
+      connectionId: "conn-info",
+      clientMode: "desktop-continuous",
+    });
+    await harness.waitUntil(() => {
+      const state = harness.collectState();
+      return (state.meta as { title?: string } | undefined)?.title === "Fake Title" ? true : undefined;
+    });
+    const sendResult = await harness.request("v4/command", {
+      commandId: "cmd-info-send",
+      clientId: "test-client",
+      sessionId,
+      type: "sendText",
+      payload: { text: "/config-new" },
+      issuedAt: Date.now(),
+    });
+    assert.equal(commandAckSchema.parse((sendResult as { result: unknown }).result).status, "accepted");
+    await harness.waitUntil(() => {
+      const state = harness.collectState();
+      const config = state.config as { model?: string; thought?: string } | undefined;
+      return config?.model === "mock-9" && config?.thought === "high" ? true : undefined;
+    });
+  } finally {
+    await harness.close();
+  }
+});
+
+test("轮次终态必达 sessions-index（侧栏 phase 不停留在 running）", async () => {
+  const harness = await startAdapter();
+  try {
+    await harness.request("v4/conversation/subscribe", {
+      topic: "sessions-index/test-workspace",
+      connectionId: "conn-idx",
+    });
+    const createResult = await harness.request("v4/command", {
+      commandId: "cmd-idx-create",
+      clientId: "test-client",
+      sessionId: null,
+      type: "createSession",
+      payload: { workspaceId: "test-workspace", firstInput: { text: "/help" } },
+      issuedAt: Date.now(),
+    });
+    const createAck = commandAckSchema.parse((createResult as { result: unknown }).result);
+    const sessionId = (createAck.result as { sessionId: string }).sessionId;
+    await harness.request("v4/conversation/subscribe", {
+      topic: `conversation/${sessionId}`,
+      connectionId: "conn-idx-conv",
+      clientMode: "desktop-continuous",
+    });
+    // /help 本地命令在毫秒级完成：终态 flush 必然落在首个 running 通知后的 500ms 节流
+    // 窗口内，是「丢弃式节流吞掉终态」的最严格回归场景。
+    await harness.waitUntil(() => [...harness.collectRows().values()].some(
+      (row) => row.kind === "turnHeader" && row.state === "completedSuccess",
+    ));
+    // 轮次已完成：sessions-index 的最后一次 session.upserted 必须是终态 phase。
+    // 丢弃式节流的回归场景：终态 flush 落在上次通知 500ms 窗口内被丢弃，索引停在 running。
+    await harness.waitUntil(() => {
+      let lastPhase: string | null = null;
+      for (const frame of harness.topicFrames("sessions-index/test-workspace")) {
+        if (frame.payload.kind !== "deltas") continue;
+        for (const delta of frame.payload.deltas as { op?: string; session?: { phase?: string } }[]) {
+          if (delta.op === "session.upserted" && delta.session?.phase) {
+            lastPhase = delta.session.phase;
+          }
+        }
+      }
+      return lastPhase === "completedSuccess" ? true : undefined;
+    }, 8000);
+  } finally {
+    await harness.close();
+  }
+});
+
+test("available_commands_update 热刷新 workspace-config 命令目录", async () => {
+  const harness = await startAdapter();
+  try {
+    const configSubscribe = (await harness.request("v4/conversation/subscribe", {
+      topic: "workspace-config/test-workspace",
+      connectionId: "conn-wc",
+    })) as { result: { ack: { subscriptionId: string } } };
+    assert.ok(configSubscribe.result.ack.subscriptionId.length > 0);
+
+    const createResult = await harness.request("v4/command", {
+      commandId: "cmd-cmds-create",
+      clientId: "test-client",
+      sessionId: null,
+      type: "createSession",
+      payload: { workspaceId: "test-workspace", firstInput: { text: "/install-ship2" } },
+      issuedAt: Date.now(),
+    });
+    const createAck = commandAckSchema.parse((createResult as { result: unknown }).result);
+    assert.equal(createAck.status, "accepted");
+    const sessionId = (createAck.result as { sessionId: string }).sessionId;
+    await harness.request("v4/conversation/subscribe", {
+      topic: `conversation/${sessionId}`,
+      connectionId: "conn-cmds",
+      clientMode: "desktop-continuous",
+    });
+    await harness.waitUntil(() => {
+      for (const frame of harness.topicFrames("workspace-config/test-workspace")) {
+        if (frame.payload.kind !== "deltas") continue;
+        for (const delta of frame.payload.deltas as { op?: string; config?: { slashCommands?: { name: string }[] } }[]) {
+          if (delta.op === "config.updated" && delta.config?.slashCommands?.some((command) => command.name === "ship2")) {
+            return true;
+          }
+        }
+      }
+      return undefined;
+    });
+  } finally {
+    await harness.close();
+  }
+});
+
+test("供应商错误（stopReason=error）以 failed 收口并携带错误事实", async () => {
+  const harness = await startAdapter();
+  try {
+    const createResult = await harness.request("v4/command", {
+      commandId: "cmd-failmodel-create",
+      clientId: "test-client",
+      sessionId: null,
+      type: "createSession",
+      payload: { workspaceId: "test-workspace", firstInput: { text: "/failmodel" } },
+      issuedAt: Date.now(),
+    });
+    const createAck = commandAckSchema.parse((createResult as { result: unknown }).result);
+    const sessionId = (createAck.result as { sessionId: string }).sessionId;
+    await harness.request("v4/conversation/subscribe", {
+      topic: `conversation/${sessionId}`,
+      connectionId: "conn-failmodel",
+      clientMode: "desktop-continuous",
+    });
+    await harness.waitUntil(() => {
+      const state = harness.collectState();
+      return (state.control as { phase?: string } | undefined)?.phase === "error" ? true : undefined;
+    });
+    const state = harness.collectState();
+    const lastError = (state.control as { lastError?: { code?: string; message?: string } | null } | undefined)?.lastError;
+    assert.equal(lastError?.code, "omp_provider_401");
+    assert.match(lastError?.message ?? "", /401 Model not supported/);
   } finally {
     await harness.close();
   }

@@ -5,6 +5,7 @@ import { createHash } from "node:crypto";
 import { basename, join, win32 } from "node:path";
 import { homedir } from "node:os";
 import { DATA_BASE_DIR_FORBIDDEN_WINDOWS_INSTALL_DIR_ERROR_CODE } from "@zcode/shared";
+import { resolveOmpProfileFromEnv } from "@zcode/shared/omp-profile";
 
 let _dataBaseDir: string | null = null;
 export const ZCODE_WINDOWS_APP_INSTALL_DIR_ENV = "ZCODE_WINDOWS_APP_INSTALL_DIR";
@@ -41,10 +42,10 @@ export function getDataBaseDir(): string {
 
 /** {dataBaseDir}/.zcode */
 export function getZCodeDataRootDir(): string {
-  return join(getDataBaseDir(), ".zcode");
+  return join(getDataBaseDir(), ".ompcode");
 }
 
-/** 非项目对话共享的真实工作目录；默认 ~/.zcode/workspace/default。 */
+/** 非项目对话共享的真实工作目录；默认 ~/.ompcode/workspace/default。 */
 export function getConversationWorkspaceDir(): string {
   return join(getZCodeDataRootDir(), "workspace", "default");
 }
@@ -182,9 +183,13 @@ export function getGitCheckpointIndexRootDir(): string {
   return join(getZCodeDataRootDir(), "git-checkpoint-index");
 }
 
-/** ~/.zcode/v2/tasks-index.sqlite */
-export function getTasksIndexDatabasePath(): string {
-  return join(getAppConfigDir(), "tasks-index.sqlite");
+/** omp 的会话按 profile 隔离；索引投影也必须隔离，避免切换后混入旧 profile 任务。 */
+export function getTasksIndexDatabasePath(
+  env: { OMP_PROFILE?: string; PI_PROFILE?: string } = process.env,
+): string {
+  const profile = resolveOmpProfileFromEnv(env);
+  const fileName = profile === "default" ? "tasks-index.sqlite" : `tasks-index-omp-${profile}.sqlite`;
+  return join(getAppConfigDir(), fileName);
 }
 
 /** workspace 级身份键：远程优先使用 workspaceIdentity，本地回退 workspacePath。 */
@@ -200,12 +205,12 @@ export function getWorkspaceHash(workspacePath: string, workspaceIdentity?: stri
     .slice(0, 12);
 }
 
-/** ~/.zcode/v2/sessions/{workspaceHash} */
+/** ~/.ompcode/v2/sessions/{workspaceHash} */
 function getTaskSessionDir(workspacePath: string, workspaceIdentity?: string): string {
   return join(getAppConfigDir(), "sessions", getWorkspaceHash(workspacePath, workspaceIdentity));
 }
 
-/** ~/.zcode/v2/sessions/{workspaceHash}/{taskId}.json */
+/** ~/.ompcode/v2/sessions/{workspaceHash}/{taskId}.json */
 export function getLegacyTaskSessionSnapshotPath(
   workspacePath: string,
   taskId: string,
@@ -214,7 +219,7 @@ export function getLegacyTaskSessionSnapshotPath(
   return join(getTaskSessionDir(workspacePath, workspaceIdentity), `${taskId}.json`);
 }
 
-/** ~/.zcode/v2/sessions/{workspaceHash}/{taskId}.deleted.json */
+/** ~/.ompcode/v2/sessions/{workspaceHash}/{taskId}.deleted.json */
 export function getLegacyDeletedTaskSessionSnapshotPath(
   workspacePath: string,
   taskId: string,
@@ -229,8 +234,8 @@ export function getLegacyDeletedTaskSessionSnapshotPath(
  * state must only live at the default homedir location.
  */
 export async function copyDataDirectory(oldBaseDir: string, newBaseDir: string): Promise<void> {
-  const oldDir = join(oldBaseDir, ".zcode", "v2");
-  const newDir = join(newBaseDir, ".zcode", "v2");
+  const oldDir = join(oldBaseDir, ".ompcode", "v2");
+  const newDir = join(newBaseDir, ".ompcode", "v2");
   await cp(oldDir, newDir, {
     recursive: true,
     force: false,

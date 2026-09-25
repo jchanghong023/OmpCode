@@ -54,6 +54,7 @@ import {
 import { runContextPanelActionWithClose } from "@/chat-input-toolbar/contextPanelAction.js";
 import { coordinateCodingPlanQuotaResetAutoPlay } from "@/chat-input-toolbar/codingPlanQuotaResetAutoPlay.js";
 import { formatCompactTokenNumber } from "@/lib/tokenNumberFormat.js";
+import { buildOmpUsageProgressSegments, OmpContextDetailsPanel, type OmpContextEntry } from "@/chat-input-toolbar/OmpContextDetails.js";
 import {
   CONTEXT_QUOTA_RESET_URGENT_SECONDS,
   ContextQuotaResetOpportunityReminderContent,
@@ -202,6 +203,7 @@ function buildContextUsageProgressSegments(segments: readonly ContextUsageBreakd
 
 export function getRenderableTaskUsage<T extends { used: number; size: number }>(
   taskUsage: T | null,
+  allowZeroUsage = false,
 ): T | null {
   if (!taskUsage) {
     return null;
@@ -212,7 +214,7 @@ export function getRenderableTaskUsage<T extends { used: number; size: number }>
   if (
     !Number.isFinite(taskUsage.used) ||
     !Number.isFinite(taskUsage.size) ||
-    taskUsage.used <= 0 ||
+    (allowZeroUsage ? taskUsage.used < 0 : taskUsage.used <= 0) ||
     taskUsage.size <= 0
   ) {
     return null;
@@ -239,6 +241,7 @@ export function ChatContextUsage({
   selectedProvider: _selectedProvider,
   intl,
   locale,
+  allowZeroUsage = false,
 }: {
   codingPlanUsageRemaining?: ChatCodingPlanUsageRemainingConfig;
   startPlanBalance?: ChatStartPlanBalanceConfig;
@@ -247,10 +250,13 @@ export function ChatContextUsage({
     size: number;
     cache?: { hitRate: number | null };
     breakdown?: ZCodeContextUsageBreakdownItem[];
+    details?: { entries: OmpContextEntry[] };
   } | null;
   selectedProvider: ZCodeProvider;
   intl: ReturnType<typeof useZCodeIntl>["intl"];
   locale: string;
+  /** omp get_state 提供明确的容量时，0 token 是有效的会话初始值。 */
+  allowZeroUsage?: boolean;
   onSendCompressionCommand?: (command: string) => void;
   compressionDisabled?: boolean;
 }) {
@@ -298,7 +304,7 @@ export function ChatContextUsage({
       setContextOpen(false);
     }
   }, []);
-  const renderableTaskUsage = getRenderableTaskUsage(taskUsage);
+  const renderableTaskUsage = getRenderableTaskUsage(taskUsage, allowZeroUsage);
   const codingPlanUsageRemainingWithClose = useMemo<
     ChatCodingPlanUsageRemainingConfig | undefined
   >(() => {
@@ -806,6 +812,10 @@ export function ChatContextUsage({
     () => buildContextUsageProgressSegments(breakdownSegments),
     [breakdownSegments],
   );
+  const ompProgressSegments = useMemo(
+    () => buildOmpUsageProgressSegments(renderableTaskUsage?.details?.entries ?? []),
+    [renderableTaskUsage?.details?.entries],
+  );
   const percentageFormatter = useMemo(
     () =>
       new Intl.NumberFormat(locale, {
@@ -928,10 +938,17 @@ export function ChatContextUsage({
               <Progress
                 className="h-2 bg-surface"
                 indicatorClassName="min-w-2"
-                segments={progressSegments}
+                segments={ompProgressSegments.length > 0 ? ompProgressSegments : progressSegments}
                 value={usagePercent * PERCENT_MAX}
               />
             </div>
+          ) : null}
+          {renderableTaskUsage?.details?.entries.length ? (
+            <OmpContextDetailsPanel
+              entries={renderableTaskUsage.details.entries}
+              maxTokens={renderableTaskUsage.size}
+              locale={locale}
+            />
           ) : null}
           {renderableTaskUsage && (breakdownSegments.length > 0 || cacheHitRateLabel) ? (
             <>

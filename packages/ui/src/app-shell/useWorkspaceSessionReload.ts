@@ -8,6 +8,7 @@ import {
 } from "@/lib/workspaceSessionReloadPlan.js";
 import { resolveWorkspaceModelConfigSyncScope } from "@/lib/modelConfigSync.js";
 import { prepareWorkspaceWithZCodeSessionService } from "@/hooks/useWorkspacePrepare.js";
+import { mergeOmpWorkspaceConfigOptions } from "@/lib/ompWorkspaceConfigOptions.js";
 import { logger } from "@/logger.js";
 import { useZCodeSessionStore } from "@/store/zcodeSessionStore.js";
 import { useTabStore } from "@/store/TabStoreProvider.js";
@@ -111,7 +112,10 @@ export function useWorkspaceSessionReload({
             if (latestAfterResolve.selectedProvider === provider) {
               zcodeSessionStore.setConfigOptions(
                 workspaceAbsPath,
-                prepareResult.configOptions ?? [],
+                mergeOmpWorkspaceConfigOptions(
+                  latestAfterResolve.configOptions ?? [],
+                  prepareResult.configOptions ?? [],
+                ),
                 workspaceIdentity,
               );
               zcodeSessionStore.setConfigOptionsStatus(

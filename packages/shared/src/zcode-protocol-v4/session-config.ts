@@ -12,6 +12,8 @@ export const sessionConfigStateSchema = z.object({
   // default 仅用于兼容旧快照；新 agent 必须从 runtime 投影实际集合。
   thoughtLevels: z.array(z.string()).default([]),
   followupMode: z.enum(["queue", "guide"]),
+  /** omp 会话 get_state 的实际自动压缩开关；旧核心/旧快照缺省时未知。 */
+  autoCompactionEnabled: z.boolean().optional(),
   // additive（冻结面演进，同 meta 的裁决口径）：agent 协作模式（core CollaborationMode）。
   // 必须带 default 才不破坏旧快照/旧发送端的解析；投影经 SessionModeChanged 事件更新。
   mode: z.string().default("build"),

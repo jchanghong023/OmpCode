@@ -38,9 +38,14 @@ async function findRepoRoot(startDir: string): Promise<string> {
   }
 }
 
-async function runCommand(command: string, args: readonly string[], cwd: string): Promise<void> {
+async function runCommand(
+  command: string,
+  args: readonly string[],
+  cwd: string,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<void> {
   await new Promise<void>((resolvePromise, rejectPromise) => {
-    const child = spawn(command, [...args], { cwd, stdio: ["ignore", "inherit", "inherit"] });
+    const child = spawn(command, [...args], { cwd, env, stdio: ["ignore", "inherit", "inherit"] });
     child.once("error", rejectPromise);
     child.once("exit", (code) => {
       if (code === 0) resolvePromise();
@@ -138,7 +143,7 @@ async function ensureNodeBinary(repoRoot: string, target: ServerTarget): Promise
 }
 
 async function ensureAgentBundle(repoRoot: string, skipBuild: boolean): Promise<string> {
-  const bundlePath = join(repoRoot, "apps/zcode-cli/packages/cli/dist/zcode.cjs");
+  const bundlePath = join(repoRoot, "packages/omp-agent/dist/omp-agent.cjs");
   if (await pathExists(bundlePath)) return bundlePath;
   if (skipBuild) {
     throw new Error(`Agent bundle missing: ${bundlePath} (remove --skip-agent-build to build it)`);
@@ -153,6 +158,26 @@ async function ensureAgentBundle(repoRoot: string, skipBuild: boolean): Promise<
     throw new Error(`Agent bundle still missing after build: ${bundlePath}`);
   }
   return bundlePath;
+}
+
+async function ensureOmpBinary(repoRoot: string, target: ServerTarget): Promise<string> {
+  const [platform, arch] = target.split("-");
+  const binaryPath = join(
+    repoRoot,
+    "packages/desktop/bundled-agents",
+    target,
+    "glm/omp",
+    platform === "win32" ? "omp.exe" : "omp",
+  );
+  if (await pathExists(binaryPath)) return binaryPath;
+  await runCommand(
+    process.execPath,
+    [join(repoRoot, "packages/desktop/scripts/fetch-omp-release.mjs")],
+    repoRoot,
+    { ...process.env, ZCODE_TARGET_OS: platform, ZCODE_TARGET_ARCH: arch },
+  );
+  if (!(await pathExists(binaryPath))) throw new Error(`Embedded omp binary missing: ${binaryPath}`);
+  return binaryPath;
 }
 
 export async function resolveNativeToolsDir(
@@ -181,7 +206,7 @@ export async function resolveNativeToolsDir(
 
 async function resolveWorkspacePackageDirs(repoRoot: string): Promise<Map<string, string>> {
   const map = new Map<string, string>();
-  for (const root of [join(repoRoot, "apps/zcode-cli/packages"), join(repoRoot, "packages")]) {
+  for (const root of [join(repoRoot, "packages")]) {
     if (!(await pathExists(root))) continue;
     for (const entry of await readdir(root, { withFileTypes: true })) {
       if (!entry.isDirectory()) continue;
@@ -236,13 +261,13 @@ async function main(): Promise<void> {
   const appVersion = (
     JSON.parse(await readFile(join(repoRoot, "package.json"), "utf8")) as { version: string }
   ).version;
-  const [agentBundlePath, nodeBinaryPath] = await Promise.all([
+  const [agentBundlePath, ompBinaryPath, nodeBinaryPath] = await Promise.all([
     ensureAgentBundle(repoRoot, argv.includes("--skip-agent-build")),
+    ensureOmpBinary(repoRoot, target),
     ensureNodeBinary(repoRoot, target),
   ]);
-  const [nativeToolsDir, officialPluginsDir, workspacePackageDirs] = await Promise.all([
+  const [nativeToolsDir, workspacePackageDirs] = await Promise.all([
     resolveNativeToolsDir(repoRoot, target),
-    Promise.resolve(join(repoRoot, "apps/zcode-cli/packages")),
     resolveWorkspacePackageDirs(repoRoot),
   ]);
 
@@ -251,6 +276,7 @@ async function main(): Promise<void> {
     appVersion,
     distDir,
     agentBundlePath,
+    ompBinaryPath,
     nodeBinaryPath,
     notices: {
       thirdParty: thirdParty.toString("utf8"),
@@ -260,7 +286,6 @@ async function main(): Promise<void> {
     workspaceNodeModulesDir: join(repoRoot, "node_modules"),
     workspacePackageDirs,
     nativeToolsDir,
-    officialPluginsDir,
     outputDir: join(packageRoot, "dist-release"),
     archive: !argv.includes("--no-archive"),
   });

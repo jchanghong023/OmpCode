@@ -297,7 +297,7 @@ function staticContentType(filePath: string): string {
 
 export function createHttpServer(
   services: ServiceCollection,
-  port = 3030,
+  port = 3033,
   options: HttpServerOptions = {},
 ) {
   const app = new Hono();

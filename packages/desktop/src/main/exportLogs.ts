@@ -33,7 +33,7 @@ function getZCodeDataDir() {
 }
 
 function getZCodeCliDir() {
-  return join(homedir(), ".zcode", "cli");
+  return join(homedir(), ".ompcode", "cli");
 }
 
 function getZCodeCliLogDir() {
@@ -46,7 +46,7 @@ function getZCodeCliLogDir() {
  * helperExitLogPathFor）。同目录下还有 `.tokens` broker 凭据，收集时必须按文件名白名单。
  */
 function getCuaHelperRunDir() {
-  return join(homedir(), ".zcode", "computer-use", "run");
+  return join(homedir(), ".ompcode", "computer-use", "run");
 }
 
 function isCuaHelperDiagnosticFileName(fileName: string): boolean {
@@ -727,14 +727,14 @@ function isExcludedRelativePath(relativePath: string): boolean {
     return true;
   }
   // debug 目录通常是模型/运行时高频轨迹，不是用户要交付的日志包材料。
-  // 过去显式收集 ~/.zcode/cli/debug 会把这类上下文带进手动导出和反馈完整日志，这里按目录段统一跳过。
+  // 过去显式收集 ~/.ompcode/cli/debug 会把这类上下文带进手动导出和反馈完整日志，这里按目录段统一跳过。
   if (isExcludedDirectoryArchivePath(normalizedRelativePath)) {
     return true;
   }
   if (isNonLogStateArchivePath(normalizedRelativePath)) {
     return true;
   }
-  // ~/.zcode/v2/dev 保存 stdio-traffic 等高频协议流，真实机器上会累计到 GB 级。
+  // ~/.ompcode/v2/dev 保存 stdio-traffic 等高频协议流，真实机器上会累计到 GB 级。
   // 远超反馈附件的大小上限，不应随诊断包带出。
   if (isHighVolumeRuntimeArchivePath(normalizedRelativePath)) {
     return true;
@@ -958,11 +958,11 @@ async function createLogArchiveArtifacts(
   await collectLogArchiveFilesFromDirectory(sourceDir, "", visitedDirs, files);
 
   const zcodeCliLogDir = getZCodeCliLogDir();
-  // GLM / zcode-cli 的运行日志写在 ~/.zcode/cli/log，不在应用主数据目录 ~/.zcode/v2 下。
+  // GLM / zcode-cli 的运行日志写在 ~/.ompcode/cli/log，不在应用主数据目录 ~/.ompcode/v2 下。
   // 如果导出日志只扫描 v2，定位 agent CLI 启动、协议或崩溃问题时会缺少最关键的原生侧日志。
   await collectLogArchiveFilesFromDirectory(
     zcodeCliLogDir,
-    posix.join(".zcode", "cli", "log"),
+    posix.join(".ompcode", "cli", "log"),
     visitedDirs,
     files,
   );
@@ -970,15 +970,15 @@ async function createLogArchiveArtifacts(
   const zcodeCliDir = getZCodeCliDir();
   // 排查 agent CLI 问题还需要它的运行配置与模型 IO 轨迹。
   // config.json 是当前生效配置；rollout 是 model-io 调用轨迹，
-  // 二者都不在 ~/.zcode/cli/log 下，需要额外收集才能完整还原现场。
+  // 二者都不在 ~/.ompcode/cli/log 下，需要额外收集才能完整还原现场。
   await collectLogArchiveFile(
     join(zcodeCliDir, "config.json"),
-    posix.join(".zcode", "cli", "config.json"),
+    posix.join(".ompcode", "cli", "config.json"),
     files,
   );
   await collectLogArchiveFilesFromDirectory(
     join(zcodeCliDir, "rollout"),
-    posix.join(".zcode", "cli", "rollout"),
+    posix.join(".ompcode", "cli", "rollout"),
     visitedDirs,
     files,
   );
@@ -986,11 +986,11 @@ async function createLogArchiveArtifacts(
   // Computer Use Helper 的结构化诊断必须进日志包：否则反馈包里
   // grep "background keyboard begin rejected" 命中 0，
   // 因为 Helper 由 LaunchServices 启动、stderr 被系统丢弃，它把诊断 tee 到
-  // ~/.zcode/computer-use/run/<socket>.exit.log，既不在 app data 也不在 ~/.zcode/cli 下。
+  // ~/.ompcode/computer-use/run/<socket>.exit.log，既不在 app data 也不在 ~/.ompcode/cli 下。
   // 同目录下有 .tokens broker 凭据，因此按文件名白名单只收 *.exit.log，不递归该目录。
   await collectLogArchiveFilesByName(
     getCuaHelperRunDir(),
-    posix.join(".zcode", "computer-use", "run"),
+    posix.join(".ompcode", "computer-use", "run"),
     isCuaHelperDiagnosticFileName,
     files,
   );

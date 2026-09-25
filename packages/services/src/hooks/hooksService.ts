@@ -56,7 +56,7 @@ function resolveUserHomeDir(): string {
 function getRootDir(source: SettingsDirectorySource, workspacePath?: string): string {
   const baseDir = workspacePath ?? resolveUserHomeDir();
   if (source === "zcode") {
-    return workspacePath ? join(baseDir, ".zcode") : join(baseDir, ".zcode", "cli");
+    return workspacePath ? join(baseDir, ".ompcode") : join(baseDir, ".ompcode", "cli");
   }
   return join(baseDir, source === "agents" ? ".agents" : ".claude");
 }
@@ -165,7 +165,7 @@ async function readPersistentWorkspaceHookTrustDigests(
       : isAbsolute(configured)
         ? resolve(configured)
         : resolve(home, configured)
-    : join(home, ".zcode");
+    : join(home, ".ompcode");
   const trustFilePath = join(storageRoot, "security", "workspace-hook-trust-v1.json");
 
   // 异步读取 + ENOENT 区分：不用 existsSync 预检——同步调用会阻塞服务
@@ -289,7 +289,7 @@ async function saveHooksImpl(params: {
   workspacePath: string;
   hooks: Hook[];
 }): Promise<void> {
-  const currentProjectConfigPath = resolve(params.workspacePath, ".zcode", "config.json");
+  const currentProjectConfigPath = resolve(params.workspacePath, ".ompcode", "config.json");
   const userHooks = params.hooks.filter(
     (hook) =>
       hook.editable !== false &&

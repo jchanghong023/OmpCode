@@ -8,8 +8,11 @@ import {
   PROTOCOL_V4_LIMITS,
   type CommandAck,
   type CommandEnvelope,
+  type CommandPayloadMap,
+  type AttachmentRef,
 } from "@zcode/shared/zcode-protocol-v4";
 import { createId } from "../domain/ids.js";
+import type { AttachmentStore } from "./attachmentStore.js";
 import { ProtocolError } from "./errors.js";
 import type { SessionRegistry } from "./sessionRegistry.js";
 import type { ConversationEngine } from "./conversationEngine.js";
@@ -22,6 +25,7 @@ export interface V4CommandContext {
   /** v4 createSession 的 workspace 归属（本进程唯一 workspace）。 */
   workspaceId: string;
   workspacePath: string;
+  attachments: AttachmentStore;
 }
 
 export class V4CommandService {
@@ -98,7 +102,15 @@ export class V4CommandService {
           workspacePath: this.context.workspacePath,
         });
         if (payload.firstInput) {
-          const delivery = await engine.sendText(payload.firstInput.text, envelope.commandId, envelope.clientId);
+          // 临时模型：首发优先 firstInput.modelSelection，回落 config.modelSelection（draft 冻结配置）。
+          const selection = engineModelSelectionOf(payload.firstInput.modelSelection ?? payload.config?.modelSelection);
+          const delivery = await engine.sendText(
+            payload.firstInput.text,
+            envelope.commandId,
+            envelope.clientId,
+            this.imagesOf(payload.firstInput.attachments),
+            selection,
+          );
           return this.ack(envelope, "accepted", {
             result: {
               type: "createSession",
@@ -114,7 +126,13 @@ export class V4CommandService {
       case "sendText": {
         const payload = envelope.payload as import("@zcode/shared/zcode-protocol-v4").CommandPayloadMap["sendText"];
         const engine = this.requireSessionEngine(envelope.sessionId);
-        const delivery = await engine.sendText(payload.text, envelope.commandId, envelope.clientId);
+        const delivery = await engine.sendText(
+          payload.text,
+          envelope.commandId,
+          envelope.clientId,
+          this.imagesOf(payload.attachments),
+          engineModelSelectionOf(payload.modelSelection),
+        );
         return this.ack(envelope, "accepted", {
           result: { type: "inputAccepted", delivery, inputId: createId("input") },
         });
@@ -129,6 +147,14 @@ export class V4CommandService {
         await engine.compact();
         return this.ack(envelope, "accepted");
       }
+      case "setAutoCompaction": {
+        const payload = envelope.payload as CommandPayloadMap["setAutoCompaction"];
+        const engine = this.requireSessionEngine(envelope.sessionId);
+        const outcome = await engine.setAutoCompaction(payload.enabled);
+        return outcome.error
+          ? this.ack(envelope, "rejected", { reasonCode: "fault.command.autoCompactionFailed", message: outcome.error })
+          : this.ack(envelope, "accepted");
+      }
       case "switchModelConfig": {
         const payload = envelope.payload as import("@zcode/shared/zcode-protocol-v4").CommandPayloadMap["switchModelConfig"];
         const engine = this.requireSessionEngine(envelope.sessionId);
@@ -139,10 +165,11 @@ export class V4CommandService {
         return this.ack(envelope, "accepted");
       }
       case "setFollowupMode": {
-        const payload = envelope.payload as import("@zcode/shared/zcode-protocol-v4").CommandPayloadMap["setFollowupMode"];
-        if (payload.mode === "guide") {
-          return this.unsupportedAck(envelope, "guide follow-up mode");
-        }
+        const payload = envelope.payload as CommandPayloadMap["setFollowupMode"];
+        // guide/queue 都接受：guide 映射 omp steer（本轮引导），queue 映射 follow_up（轮后队列）。
+        // 首发前 UI 会用该命令做 CAS 收敛，拒绝会直接炸掉首条消息（实测 GUI 发送失败根因）。
+        const engine = this.requireSessionEngine(envelope.sessionId);
+        engine.setFollowupMode(payload.mode);
         return this.ack(envelope, "accepted");
       }
       case "resolveInteraction": {
@@ -221,6 +248,12 @@ export class V4CommandService {
     }
   }
 
+  private imagesOf(attachments: readonly AttachmentRef[] | undefined) {
+    // Bug 原因：v4 曾固定传空图片数组，已提交图片虽上传成功却从未进入 omp prompt。
+    // 按 ref 从唯一的附件存储读取，非图片沿用既有规则跳过。
+    return attachments?.flatMap((attachment) => this.context.attachments.ompImagesOf(attachment.ref)) ?? [];
+  }
+
   private requireSessionId(sessionId: string | null): string {
     if (!sessionId) {
       throw new ProtocolError(-32602, "sessionId required");
@@ -249,6 +282,23 @@ function interactionAnswerOf(
     return { action: "accept", freeText: answer.freeText };
   }
   return { action: "cancel" };
+}
+
+/** UI 提交的 ModelSelection（providerId/modelId/options.reasoningLevel）→ omp set_model 参数。 */
+function engineModelSelectionOf(
+  selection: { providerId?: string; modelId?: string; options?: { reasoningLevel?: string } } | undefined | null,
+): { provider: string; model: string; thought?: string } | undefined {
+  if (!selection || typeof selection.providerId !== "string" || typeof selection.modelId !== "string") {
+    return undefined;
+  }
+  if (selection.providerId.length === 0 || selection.modelId.length === 0) {
+    return undefined;
+  }
+  const thought =
+    typeof selection.options?.reasoningLevel === "string" && selection.options.reasoningLevel.length > 0
+      ? selection.options.reasoningLevel
+      : undefined;
+  return { provider: selection.providerId, model: selection.modelId, thought };
 }
 
 export { commandPayloadSchemas };

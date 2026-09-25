@@ -95,6 +95,10 @@ export const ompAgentMessageSchema = z.object({
     .optional(),
   provider: z.string().optional(),
   model: z.string().optional(),
+  // 供应商失败事实（stopReason=error 时携带）；成功消息不带。
+  stopReason: z.string().optional(),
+  errorStatus: z.number().optional(),
+  errorMessage: z.string().optional(),
 }).passthrough();
 export type OmpAgentMessage = z.infer<typeof ompAgentMessageSchema>;
 
@@ -158,6 +162,31 @@ export const ompPromptResultFrameSchema = z.object({
   id: z.string().optional(),
   agentInvoked: z.boolean().optional(),
 });
+export type OmpPromptResultFrame = z.infer<typeof ompPromptResultFrameSchema>;
+
+// ── 内置斜杠命令侧信道（docs/rpc.md「Builtin slash-command side channels」）──
+// 本地命令（/help、/title 等）不产生 agent 生命周期事件：输出走 command_output，
+// 结果经 prompt 响应的 data.agentInvoked:false 或异步 prompt_result 收口；
+// /title、/model 等命令随后用 session_info_update / config_update 回投状态。
+export const ompCommandOutputFrameSchema = z.object({
+  type: z.literal("command_output"),
+  text: z.string(),
+});
+export type OmpCommandOutputFrame = z.infer<typeof ompCommandOutputFrameSchema>;
+
+export const ompSessionInfoUpdateFrameSchema = z.object({
+  type: z.literal("session_info_update"),
+  title: z.string().optional(),
+  sessionId: z.string().optional(),
+});
+export type OmpSessionInfoUpdateFrame = z.infer<typeof ompSessionInfoUpdateFrameSchema>;
+
+export const ompConfigUpdateFrameSchema = z.object({
+  type: z.literal("config_update"),
+  model: z.object({ provider: z.string().optional(), id: z.string().optional() }).passthrough().optional(),
+  thinkingLevel: z.string().optional(),
+});
+export type OmpConfigUpdateFrame = z.infer<typeof ompConfigUpdateFrameSchema>;
 
 export const ompAvailableCommandsFrameSchema = z.object({
   type: z.literal("available_commands_update"),
@@ -185,9 +214,11 @@ export type OmpCommandFrame =
   | { id?: string; type: "get_state" }
   | { id?: string; type: "set_model"; provider: string; modelId: string }
   | { id?: string; type: "get_available_models" }
+  | { id?: string; type: "get_available_commands" }
   | { id?: string; type: "set_thinking_level"; level: string }
   | { id?: string; type: "get_available_thinking_levels" }
   | { id?: string; type: "compact"; customInstructions?: string }
+  | { id?: string; type: "set_auto_compaction"; enabled: boolean }
   | { id?: string; type: "switch_session"; sessionPath: string }
   | { id?: string; type: "set_session_name"; name: string }
   | { id?: string; type: "abort_bash" }
@@ -199,10 +230,12 @@ export const ompStateDataSchema = z.object({
   thinkingLevel: z.string().optional(),
   isStreaming: z.boolean().optional(),
   isCompacting: z.boolean().optional(),
-  sessionFile: z.string().optional(),
+  // omp 未创建会话文件或尚未命名时返回 null；拒绝整份 get_state 会丢失模型与自动压缩状态。
+  sessionFile: z.string().nullable().optional(),
   sessionId: z.string().optional(),
-  sessionName: z.string().optional(),
+  sessionName: z.string().nullable().optional(),
   messageCount: z.number().optional(),
+  autoCompactionEnabled: z.boolean().optional(),
   contextUsage: z.object({ tokens: z.number().optional(), contextWindow: z.number().optional(), percent: z.number().optional() }).passthrough().optional(),
 }).passthrough();
 export type OmpStateData = z.infer<typeof ompStateDataSchema>;

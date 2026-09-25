@@ -250,6 +250,8 @@ interface WorkspaceIngestState {
   indexSeq: number;
   configLogEpoch: string | null;
   configSeq: number;
+  /** 当前 workspace-config 已接受投影，供晚于初帧挂载的 UI 监听者同步读取。 */
+  latestConfigEvent: Extract<ZCodeWorkspaceEvent, { type: "workspace_config_options_update" }> | null;
   /** ACK 只证明 admission；首个 logical frame 原子 apply 后才允许把 epoch/seq 当 resume base。 */
   indexHasAppliedBase: boolean;
   configHasAppliedBase: boolean;
@@ -735,6 +737,43 @@ export function createZCodeTaskIndexSyncer(
     }
   }
 
+  /** omp 换核对账（FORK.md）：omp sessions-index 快照是该工作区任务列表的唯一事实源。
+   * 首帧把不在 omp 快照里的换核前旧 ZCode 任务行（provider 同为 glm，无任何清理路径）
+   * 标记 deleted，旧任务不再穿透侧栏；只动派生索引行，绝不触碰 omp 会话文件本身。
+   * 边界：只动「sess_」（换核前旧 CLI）与「omp-session-」（适配器代际 id，跨重启后
+   * 必然不在新快照、也不可 resume）两类行；omp uuid 行是稳定身份，绝不参与对账。 */
+  async function tombstoneRowsAbsentFromOmpSnapshot(
+    state: WorkspaceIngestState,
+    visibleSessionIds: ReadonlySet<string>,
+  ): Promise<void> {
+    const rows = await taskIndexRepo.listTaskMetas({
+      ...state.target,
+      provider: ZCODE_AGENT_PROVIDER,
+    });
+    const staleTaskIds = rows
+      .filter(
+        (row) =>
+          (row.taskId.startsWith("sess_") || row.taskId.startsWith("omp-session-")) &&
+          !visibleSessionIds.has(row.taskId),
+      )
+      .map((row) => row.taskId);
+    for (const taskId of staleTaskIds) {
+      if (!isLiveState(state)) return;
+      await taskIndexRepo.updateTaskState({
+        ...state.target,
+        taskId,
+        patch: { deleted: true },
+      });
+    }
+    if (staleTaskIds.length > 0 && isLiveState(state)) {
+      logger.info(
+        undefined,
+        `omp 会话对账：标记 ${staleTaskIds.length} 条换核前旧任务行为 deleted workspace=${resolveWorkspaceKey(state.target)}`,
+      );
+      emitWorkspaceTaskListChanged(state.target, undefined, "task_meta_changed");
+    }
+  }
+
   function deliveryKindOf(event: unknown): TopicDeliveryKind {
     const deliveryKind = (event as { deliveryKind?: unknown }).deliveryKind;
     return deliveryKind === "initial" || deliveryKind === "recovery" ? deliveryKind : "online";
@@ -1018,6 +1057,13 @@ export function createZCodeTaskIndexSyncer(
         state.summaries = nextSummaries;
         state.seeded = true;
         void seedMissingRowsFromInitialSnapshot(state, nextSummaries.values());
+        void tombstoneRowsAbsentFromOmpSnapshot(state, new Set(nextSummaries.keys())).catch((error) => {
+          logger.warn(
+            undefined,
+            `omp 会话对账失败 workspace=${resolveWorkspaceKey(state.target)}`,
+            error,
+          );
+        });
         const generation = state.indexSubscriptionGeneration;
         void repairSubagentTaskIndex({
           target: state.target,
@@ -1136,15 +1182,17 @@ export function createZCodeTaskIndexSyncer(
     }
     // v4 载荷与 ZCodeConfigOption 结构对齐（shared 黄金测试背书），零映射直通，
     // 下游 workspace_config_options_update 消费面（useZCodeConfig 等）不改。
-    getWorkspaceEmitter({
-      workspacePath: state.target.workspacePath,
-      workspaceIdentity: state.target.workspaceIdentity,
-    }).fire({
+    const configEvent: Extract<ZCodeWorkspaceEvent, { type: "workspace_config_options_update" }> = {
       type: "workspace_config_options_update",
       workspacePath: state.target.workspacePath,
       workspaceIdentity: state.target.workspaceIdentity,
       configOptions: config.configOptions,
-    });
+    };
+    state.latestConfigEvent = configEvent;
+    getWorkspaceEmitter({
+      workspacePath: state.target.workspacePath,
+      workspaceIdentity: state.target.workspaceIdentity,
+    }).fire(configEvent);
     completeConfigRecoveryFrame(state, deliveryKind);
   }
 
@@ -1630,6 +1678,7 @@ export function createZCodeTaskIndexSyncer(
       indexSeq: 0,
       configLogEpoch: null,
       configSeq: 0,
+      latestConfigEvent: null,
       indexHasAppliedBase: false,
       configHasAppliedBase: false,
       indexRecovery: null,
@@ -1771,7 +1820,16 @@ export function createZCodeTaskIndexSyncer(
     onDynamicWorkspaceEvent(workspace: WorkspaceEventInput) {
       // 任务列表挂载会为所有 restored workspace 调用本入口。监听事件不代表
       // 用户使用该 workspace，禁止在这里激活 sessions-index 或启动 Agent。
-      return getWorkspaceEmitter(workspace).event;
+      const event = getWorkspaceEmitter(workspace).event;
+      return (listener) => {
+        const disposable = event(listener);
+        // 首个 snapshot 可能先于 Renderer 监听注册。同步回放当前投影，
+        // 订阅后无 await，因此不会与下一次 live fire 交错成倒序。
+        const workspaceKey = typeof workspace === "string" ? workspace : resolveWorkspaceKey(workspace);
+        const cached = workspaceIngests.get(workspaceKey)?.latestConfigEvent;
+        if (cached) listener(cached);
+        return disposable;
+      };
     },
 
     onSessionTerminalEvent: terminalEventEmitter.event,

@@ -1,14 +1,16 @@
 // ConversationEngine：一个 ZCode 会话 = 一个投影 + 一个（惰性启动的）omp 子进程。
 // 职责：omp 事件 → 投影 → 订阅者帧；v4 命令到 omp 命令的翻译入口；交互请求代理。
-// 订阅/帧发布实现在 topicPublisher.ts。
-
-import type { ConversationRow, PendingInteraction } from "@zcode/shared/zcode-protocol-v4";
+import type { ConversationRow, SessionConfigState } from "@zcode/shared/zcode-protocol-v4";
 import { ConversationProjection } from "../domain/conversationProjection.js";
 import { OmpEventProjector } from "../domain/ompProjector.js";
-import { createId, createInteractionId } from "../domain/ids.js";
+import { createId } from "../domain/ids.js";
 import type { OmpSessionEventFrame, OmpStateData } from "../domain/ompFrames.js";
-import type { HostGateway, HostUserInputAnswer, OmpProcessFactory, OmpSessionProcess, OmpUiRequest } from "./ports.js";
+import type { HostGateway, HostUserInputAnswer, OmpProcessFactory, OmpSessionProcess } from "./ports.js";
 import { ConversationTopicPublisher, type SubscribeOptions } from "./topicPublisher.js";
+import { OmpInteractionProxy } from "./ompInteractionProxy.js";
+import { applyEngineAutoCompaction, applyEngineCompaction, applyEngineModelSelection, applyEngineSetModel, applyEngineThoughtLevel, createEngineOmpProcess, readEngineContextDetails } from "./ompEngineProcess.js";
+import { TrailingThrottle } from "./trailingThrottle.js";
+import { deriveTitle, agentInvokedOf } from "../domain/titleText.js";
 
 export interface EngineInit {
   sessionId: string;
@@ -17,6 +19,8 @@ export interface EngineInit {
   ompFactory: OmpProcessFactory;
   gateway: HostGateway;
   onIndexChange: (engine: ConversationEngine) => void;
+  /** omp 命令目录热更新出口（available_commands_update 原始命令数组）。 */
+  onCommandsUpdate?: (commands: unknown) => void;
   resumeSessionPath?: string;
   initialTitle?: string;
 }
@@ -30,11 +34,14 @@ export class ConversationEngine {
   private readonly ompFactory: OmpProcessFactory;
   private readonly gateway: HostGateway;
   private readonly onIndexChange: (engine: ConversationEngine) => void;
+  private readonly onCommandsUpdate: ((commands: unknown) => void) | undefined;
   private readonly publisher: ConversationTopicPublisher;
+  private readonly interactionProxy: OmpInteractionProxy;
   private ompProcess: OmpSessionProcess | null = null;
   private ompStarting: Promise<void> | null = null;
-  private lastIndexActivity = 0;
+  private readonly indexNotify = new TrailingThrottle(500, () => this.notifyIndexChange());
   private resumeSessionPath: string | undefined;
+  private followupMode: SessionConfigState["followupMode"] = "queue";
   private titleInitialized: boolean;
 
   constructor(init: EngineInit) {
@@ -44,9 +51,17 @@ export class ConversationEngine {
     this.ompFactory = init.ompFactory;
     this.gateway = init.gateway;
     this.onIndexChange = init.onIndexChange;
+    this.onCommandsUpdate = init.onCommandsUpdate;
     this.resumeSessionPath = init.resumeSessionPath;
     this.projection = new ConversationProjection(init.sessionId);
     this.projector = new OmpEventProjector(this.projection);
+    this.interactionProxy = new OmpInteractionProxy({
+      sessionId: init.sessionId,
+      gateway: init.gateway,
+      addPendingInteraction: (interaction) => this.projection.addPendingInteraction(interaction),
+      resolvePendingInteraction: (interactionId) => this.projection.resolvePendingInteraction(interactionId),
+      scheduleFlush: () => this.scheduleFlush(),
+    });
     this.publisher = new ConversationTopicPublisher(init.sessionId, this.projection, init.gateway);
     this.titleInitialized = Boolean(init.initialTitle);
     if (init.initialTitle) {
@@ -59,29 +74,76 @@ export class ConversationEngine {
   }
 
   async ensureOmpStarted(): Promise<void> {
+    // 订阅冷会话会后台启动 omp；此时进程对象已创建但 ready/get_state 还未完成。
+    // 后续发送必须等待同一启动 promise，不能把对象存在误当成进程就绪。
+    if (this.ompStarting) {
+      await this.ompStarting;
+      return;
+    }
     if (this.ompProcess) {
       return;
     }
-    if (!this.ompStarting) {
-      this.ompStarting = this.startOmp().finally(() => {
-        this.ompStarting = null;
-      });
-    }
+    this.ompStarting = this.startOmp().finally(() => {
+      this.ompStarting = null;
+    });
     await this.ompStarting;
   }
 
   private async startOmp(): Promise<void> {
-    const process = this.ompFactory.create({
-      cwd: this.workspacePath,
-      resumeSessionPath: this.resumeSessionPath,
-      onEvent: (event) => this.handleOmpEvent(event),
-      onUiRequest: (request) => void this.handleOmpUiRequest(request),
-      onExit: (code) => this.handleOmpExit(code),
-    });
+    const process = createEngineOmpProcess(
+      this.ompFactory,
+      { cwd: this.workspacePath, resumeSessionPath: this.resumeSessionPath },
+      {
+        onEvent: (event) => this.handleOmpEvent(event),
+        onUiRequest: (request) => void this.interactionProxy.handle(request),
+        onExit: (code) => this.handleOmpExit(code),
+        onCommandOutput: ({ text }) => {
+          this.projection.appendAssistantText(text);
+          this.scheduleFlush();
+        },
+        onPromptResult: () => this.finishLocalOnlyPrompt(),
+        onSessionInfoUpdate: ({ title }) => this.applySessionTitle(title),
+        onConfigUpdate: ({ model, thinkingLevel }) => {
+          this.projection.setModelConfig({
+            ...(model?.provider !== undefined ? { provider: model.provider } : {}),
+            ...(model?.id !== undefined ? { model: model.id } : {}),
+            ...(thinkingLevel !== undefined ? { thought: thinkingLevel } : {}),
+          });
+          this.notifyIndexChange();
+          this.scheduleFlush();
+        },
+        onCommandsUpdate: (commands) => this.onCommandsUpdate?.(commands),
+      },
+    );
     this.ompProcess = process;
-    await process.start();
-    const state = await process.refreshState();
-    this.applyOmpState(state);
+    try {
+      await process.start();
+      const state = await process.refreshState();
+      this.applyOmpState(state);
+    } catch (error) {
+      // 后台读取失败不得留下伪“已启动”进程，下一次用户发送仍可重试。
+      if (this.ompProcess === process) this.ompProcess = null;
+      await process.dispose();
+      throw error;
+    }
+  }
+
+  private applySessionTitle(title: string | undefined): void {
+    if (title && title.trim().length > 0) {
+      this.titleInitialized = true;
+      this.projection.setTitle(title, "custom");
+      this.notifyIndexChange();
+      this.scheduleFlush();
+    }
+  }
+
+  /** 本地命令收口（prompt 响应 data.agentInvoked=false 或异步 prompt_result）。 */
+  private finishLocalOnlyPrompt(): void {
+    if (!this.projector.isStreaming) {
+      this.projection.closeAssistantResponse();
+      this.projection.finishTurn("success");
+      this.scheduleFlush();
+    }
   }
 
   private applyOmpState(state: OmpStateData | null): void {
@@ -92,9 +154,20 @@ export class ConversationEngine {
       ...(state.model?.provider !== undefined ? { provider: state.model.provider } : {}),
       ...(state.model?.id !== undefined ? { model: state.model.id } : {}),
       ...(state.thinkingLevel !== undefined ? { thought: state.thinkingLevel } : {}),
+      ...(state.autoCompactionEnabled !== undefined ? { autoCompactionEnabled: state.autoCompactionEnabled } : {}),
     });
     if (state.contextUsage && typeof state.contextUsage.contextWindow === "number") {
-      this.projection.setContextWindow(state.contextUsage.tokens ?? 0, state.contextUsage.contextWindow);
+      const used = state.contextUsage.tokens ?? 0;
+      const size = state.contextUsage.contextWindow;
+      this.projection.setContextWindow(used, size);
+      const process = this.ompProcess;
+      if (process && this.projection.stateSnapshot.control.phase !== "running") {
+        readEngineContextDetails(process,
+          () => this.ompProcess === process && this.projection.stateSnapshot.control.phase !== "running"
+            && this.projection.stateSnapshot.usage.contextWindow?.usedTokens === used
+            && this.projection.stateSnapshot.usage.contextWindow?.maxTokens === size,
+          (report) => { this.projection.setContextWindow(used, size, report); this.scheduleFlush(); });
+      }
     }
     if (!this.titleInitialized && state.sessionName) {
       this.titleInitialized = true;
@@ -105,8 +178,55 @@ export class ConversationEngine {
   }
 
   private handleOmpEvent(event: OmpSessionEventFrame): void {
+    // 真实 omp 的 model_changed 不带载荷（#emit({type}) 无字段）：回读 get_state 再落
+    // 配置与 modelChange 标记，避免 UI 出现空 provider/model 的占位标记。
+    if (event.type === "model_changed" && !event.model) {
+      void this.refreshModelAfterChange();
+      return;
+    }
     this.projector.handleEvent(event);
     this.scheduleFlush();
+    if (event.type === "agent_end" && event.isTerminal !== false) {
+      void this.refreshStateAfterActivity();
+    }
+  }
+
+  private async refreshStateAfterActivity(): Promise<void> {
+    const process = this.ompProcess;
+    if (!process) return;
+    const state = await process.refreshState().catch(() => null);
+    if (this.ompProcess === process) this.applyOmpState(state);
+  }
+
+  private async refreshModelAfterChange(): Promise<void> {
+    const process = this.ompProcess;
+    if (!process) {
+      return;
+    }
+    const state = await process.refreshState().catch(() => null);
+    if (!state) {
+      return;
+    }
+    const previous = this.projection.stateSnapshot.config;
+    const nextProvider = state.model?.provider ?? previous.provider;
+    const nextModel = state.model?.id ?? previous.model;
+    this.applyOmpState(state);
+    if (previous.provider !== nextProvider || previous.model !== nextModel) {
+      this.projection.addTimelineMarker({
+        type: "modelChange",
+        fromProvider: previous.provider,
+        fromModel: previous.model,
+        toProvider: nextProvider,
+        toModel: nextModel,
+        toThought: state.thinkingLevel ?? "",
+      });
+    }
+    this.scheduleFlush();
+  }
+
+  /** v4 resolveInteraction 命令入口：把 UI 应答汇入等待中的交互。 */
+  settleInteraction(interactionId: string, answer: HostUserInputAnswer): boolean {
+    return this.interactionProxy.settle(interactionId, answer);
   }
 
   private handleOmpExit(code: number | null): void {
@@ -119,98 +239,6 @@ export class ConversationEngine {
     }
   }
 
-  // ── omp 交互请求 → ZCode pendingInteraction + 宿主反向请求 ──
-  // 解析有两条汇入路径：宿主直接应答反向请求，或 UI 经 v4 resolveInteraction 命令回执；
-  // 两者汇合到同一个 deferred，先到先用；180s 兜底取消（对齐 ZCode CLI 侧交互超时口径）。
-  private interactions = new Map<
-    string,
-    {
-      ompRequestId: string;
-      resolve: (answer: HostUserInputAnswer) => void;
-      timer: NodeJS.Timeout;
-    }
-  >();
-
-  private async handleOmpUiRequest(request: OmpUiRequest): Promise<void> {
-    const method = request.frame.method;
-    if (method !== "select" && method !== "confirm" && method !== "input") {
-      // omp 的状态类 UI 事件与 open_url 在适配层没有宿主呈现面，按取消回执，不让 omp 挂起。
-      request.respond({ type: "extension_ui_response", id: request.frame.id, cancelled: true });
-      return;
-    }
-    const interactionId = createInteractionId();
-    const prompt = request.frame.message ?? request.frame.prompt ?? request.frame.title ?? "";
-    const options = request.frame.options?.map((option) => ({ optionId: option, label: option }));
-    const pending: PendingInteraction = {
-      interactionId,
-      kind: "userInput",
-      anchorRowId: null,
-      createdAt: Date.now(),
-      payload: {
-        kind: "userInput",
-        prompt,
-        freeText: method === "input",
-        ...(options ? { options } : {}),
-      },
-    };
-    this.projection.addPendingInteraction(pending);
-    this.scheduleFlush();
-    const answer = await new Promise<HostUserInputAnswer>((resolve) => {
-      const timer = setTimeout(() => {
-        this.interactions.delete(interactionId);
-        resolve({ action: "cancel" });
-      }, 180_000);
-      timer.unref?.();
-      this.interactions.set(interactionId, { ompRequestId: request.frame.id, resolve, timer });
-      this.gateway
-        .requestUserInput({
-          requestId: interactionId,
-          sessionId: this.sessionId,
-          prompt,
-          ...(options ? { options } : {}),
-        })
-        .then((hostAnswer) => this.settleInteraction(interactionId, hostAnswer))
-        .catch(() => this.settleInteraction(interactionId, { action: "cancel" }));
-    });
-    this.projection.resolvePendingInteraction(interactionId);
-    this.scheduleFlush();
-    request.respond(this.toOmpUiResponse(request, answer));
-  }
-
-  /** v4 resolveInteraction 命令入口：把 UI 应答汇入等待中的交互。 */
-  settleInteraction(interactionId: string, answer: HostUserInputAnswer): boolean {
-    const entry = this.interactions.get(interactionId);
-    if (!entry) {
-      return false;
-    }
-    this.interactions.delete(interactionId);
-    clearTimeout(entry.timer);
-    entry.resolve(answer);
-    return true;
-  }
-
-  private toOmpUiResponse(request: OmpUiRequest, answer: HostUserInputAnswer) {
-    if (answer.action === "cancel") {
-      return { type: "extension_ui_response" as const, id: request.frame.id, cancelled: true as const };
-    }
-    if (request.frame.method === "confirm") {
-      return { type: "extension_ui_response" as const, id: request.frame.id, confirmed: answer.action === "accept" };
-    }
-    if (request.frame.options && request.frame.options.length > 0) {
-      if (answer.action === "decline") {
-        const deny = request.frame.options.find((option) => /^deny$/i.test(option)) ?? request.frame.options.at(-1) ?? "Deny";
-        return { type: "extension_ui_response" as const, id: request.frame.id, value: deny };
-      }
-      const selected = answer.optionId ?? request.frame.options[0]!;
-      return { type: "extension_ui_response" as const, id: request.frame.id, value: selected };
-    }
-    return {
-      type: "extension_ui_response" as const,
-      id: request.frame.id,
-      value: answer.action === "accept" ? answer.freeText ?? "" : "",
-    };
-  }
-
   // ── 命令翻译 ──
   /** 发送用户输入；返回实际 delivery（omp 流式中转为 follow_up 队列）。图片附件直接进 omp prompt。 */
   async sendText(
@@ -218,6 +246,7 @@ export class ConversationEngine {
     sourceCommandId: string,
     clientId: string,
     images: { type: "image"; data: string; mimeType: string }[] = [],
+    modelSelection?: { provider: string; model: string; thought?: string },
   ): Promise<"startNow" | "queue"> {
     if (!this.titleInitialized && text.trim().length > 0) {
       this.titleInitialized = true;
@@ -238,14 +267,30 @@ export class ConversationEngine {
       this.failTurn("omp_unavailable", new Error("omp core failed to start"));
       return streaming ? "queue" : "startNow";
     }
+    // 临时模型（FORK.md）：提交携带 modelSelection 时先切换本 omp 会话模型再发 prompt。
+    if (modelSelection) {
+      const failure = await applyEngineModelSelection(process, modelSelection, this.projection.stateSnapshot.config);
+      if (failure) {
+        this.failTurn(failure.code, new Error(failure.message));
+        return streaming ? "queue" : "startNow";
+      }
+    }
+    // ZCode followup 模式 → omp 流式中路由：guide=steer（本轮引导，工具间生效），
+    // queue=follow_up（轮后队列）。omp 两个队列默认 one-at-a-time，与 FORK.md「每轮一条」一致。
     const outcome = await process.send(
       streaming
-        ? { type: "follow_up", message: text, ...(images.length > 0 ? { images } : {}) }
+        ? this.followupMode === "guide"
+          ? { type: "steer", message: text, ...(images.length > 0 ? { images } : {}) }
+          : { type: "follow_up", message: text, ...(images.length > 0 ? { images } : {}) }
         : { type: "prompt", message: text, ...(images.length > 0 ? { images } : {}) },
     );
     if (!outcome.success) {
       this.failTurn("omp_prompt_failed", new Error(outcome.error ?? "prompt rejected"));
       return streaming ? "queue" : "startNow";
+    }
+    // 本地命令（agentInvoked=false）：omp 已就地完成，不会再有 agent_end，必须在此收口。
+    if (!streaming && agentInvokedOf(outcome.data) === false) {
+      this.finishLocalOnlyPrompt();
     }
     return streaming ? "queue" : "startNow";
   }
@@ -271,50 +316,34 @@ export class ConversationEngine {
   async compact(): Promise<void> {
     this.projection.addTimelineMarker({ type: "compact", origin: "manual", status: "running" });
     this.scheduleFlush();
-    let success = false;
-    try {
-      await this.ensureOmpStarted();
-      const outcome = await this.ompProcess?.send({ type: "compact" });
-      success = outcome?.success === true;
-    } catch {
-      success = false;
-    }
+    const success = await applyEngineCompaction(
+      () => this.ensureOmpStarted(), () => this.ompProcess, () => this.refreshStateAfterActivity());
     this.projection.addTimelineMarker({ type: "compact", origin: "manual", status: success ? "success" : "failed" });
     this.scheduleFlush();
   }
 
+  async setAutoCompaction(enabled: boolean): Promise<{ error?: string }> {
+    return applyEngineAutoCompaction(enabled, () => this.ensureOmpStarted(), () => this.ompProcess,
+      (state) => this.applyOmpState(state));
+  }
+
   async setModel(provider: string, model: string, thought?: string): Promise<{ error?: string }> {
-    try {
-      await this.ensureOmpStarted();
-    } catch (error) {
-      return { error: error instanceof Error ? error.message : String(error) };
-    }
-    const process = this.ompProcess;
-    if (!process) {
-      return { error: "omp core failed to start" };
-    }
-    const outcome = await process.send({ type: "set_model", provider, modelId: model });
-    if (!outcome.success) {
-      return { error: outcome.error ?? "set_model failed" };
-    }
-    if (thought && thought !== "off") {
-      await process.send({ type: "set_thinking_level", level: thought });
-    }
-    return {};
+    return applyEngineSetModel({ provider, model, thought },
+      () => this.ensureOmpStarted(), () => this.ompProcess);
+  }
+
+  /**
+   * ZCode followup 模式收敛：guide/queue 均接受并如实投影。实际路由在 sendText 流式分支
+   * （guide→steer、queue→follow_up），omp 队列默认 one-at-a-time 已满足「每轮一条」，无需下发命令。
+   */
+  setFollowupMode(mode: SessionConfigState["followupMode"]): void {
+    this.followupMode = mode;
+    this.projection.setModelConfig({ followupMode: mode });
+    this.scheduleFlush();
   }
 
   async setThoughtLevel(level: string): Promise<{ error?: string }> {
-    try {
-      await this.ensureOmpStarted();
-    } catch (error) {
-      return { error: error instanceof Error ? error.message : String(error) };
-    }
-    const outcome = await this.ompSessionSend({ type: "set_thinking_level", level });
-    return outcome?.success ? {} : { error: outcome?.error ?? "set_thinking_level failed" };
-  }
-
-  private async ompSessionSend(command: Parameters<OmpSessionProcess["send"]>[0]) {
-    return this.ompProcess?.send(command) ?? { success: false, error: "omp core not running" };
+    return applyEngineThoughtLevel(level, () => this.ensureOmpStarted(), () => this.ompProcess);
   }
 
   async rename(title: string): Promise<void> {
@@ -327,12 +356,9 @@ export class ConversationEngine {
   }
 
   async dispose(): Promise<void> {
+    this.indexNotify.dispose();
     this.publisher.dispose();
-    for (const entry of this.interactions.values()) {
-      clearTimeout(entry.timer);
-      entry.resolve({ action: "cancel" });
-    }
-    this.interactions.clear();
+    this.interactionProxy.dispose();
     const process = this.ompProcess;
     this.ompProcess = null;
     await process?.dispose();
@@ -340,7 +366,10 @@ export class ConversationEngine {
 
   // ── 订阅与帧（实现在 topicPublisher）──
   subscribe(params: SubscribeOptions): { subscriptionId: string; mode: "snapshot" | "resume"; logEpoch: string } {
-    return this.publisher.subscribe(params);
+    const ack = this.publisher.subscribe(params);
+    // 冷历史先到 UI；已保存会话再后台恢复 omp，get_state 会把真实上下文和自动压缩状态投影给同一订阅。
+    if (this.resumeSessionPath) void this.ensureOmpStarted().catch(() => {});
+    return ack;
   }
 
   unsubscribe(subscriptionId: string): void {
@@ -356,13 +385,7 @@ export class ConversationEngine {
   }
 
   private scheduleFlush(): void {
-    this.publisher.scheduleFlush(() => {
-      const now = Date.now();
-      if (now - this.lastIndexActivity > 500) {
-        this.lastIndexActivity = now;
-        this.notifyIndexChange();
-      }
-    });
+    this.publisher.scheduleFlush(() => this.indexNotify.ping());
   }
 
   private notifyIndexChange(): void {
@@ -373,9 +396,4 @@ export class ConversationEngine {
   hydrateRows(rows: ConversationRow[]): void {
     this.projection.hydrateRows(rows);
   }
-}
-
-export function deriveTitle(text: string): string {
-  const normalized = text.replace(/\s+/g, " ").trim();
-  return normalized.length > 60 ? `${normalized.slice(0, 60)}…` : normalized;
 }

@@ -41,7 +41,9 @@ export function shouldShowRootStartupLoading(state: RootStartupLoadingVisibility
 }
 
 export function shouldEnableProviderAvailabilityLoginEntryGuard(): boolean {
-  return true;
+  // omp 换核（FORK.md）：agent 凭据/模型走用户 omp 配置，ZCode 账号登录入口整体移除，
+  // 启动登录门禁永久关闭。
+  return false;
 }
 
 export function shouldResolveProviderStartupState(state: ProviderStartupResolutionState): boolean {

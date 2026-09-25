@@ -13,6 +13,7 @@ import {
   type ConversationRow,
   type ConversationSnapshot,
   type PendingInteraction,
+  type SessionConfigState,
   type StatePatch,
   type TimelineMarkerPayload,
   type ToolCallRow,
@@ -20,8 +21,8 @@ import {
 import { createLogEpoch } from "./ids.js";
 import { initialAState, type ProjectionAState, type TurnOutcome } from "./projectionTypes.js";
 import { TurnFileFacts } from "./fileFacts.js";
-import { mergeDeltas, type LoggedDelta } from "./deltaMerge.js";
 import { contextWindowPatch, modelConfigPatch, runningControlPatch, terminalControlPatch, usagePatch } from "./projectionStatePatches.js";
+import { mergeDeltas, type LoggedDelta } from "./deltaMerge.js";
 import {
   createMarkerRow,
   createStreamingRow,
@@ -112,8 +113,8 @@ export class ConversationProjection {
     });
   }
 
-  /** 记录本轮错误事实（provider/运行时）；下一次 finishTurn 以 failed 收口。 */
-  recordTurnError(error: { code: string; message: string }): void {
+  /** 记录本轮错误事实（provider/运行时）；下一次 finishTurn 以 failed 收口；null 清除（omp 自动重试成功）。 */
+  recordTurnError(error: { code: string; message: string } | null): void {
     this.lastErrorValue = error;
   }
 
@@ -256,14 +257,12 @@ export class ConversationProjection {
     this.patchState(usagePatch(this.state, delta));
   }
 
-  setContextWindow(usedTokens: number | null, maxTokens: number | null): void {
-    this.patchState(contextWindowPatch(this.state, usedTokens, maxTokens));
+  setContextWindow(usedTokens: number | null, maxTokens: number | null, report?: import("./ompContextReport.js").OmpContextReport | null): void {
+    this.patchState(contextWindowPatch(this.state, usedTokens, maxTokens, report));
   }
-
-  setModelConfig(config: { provider?: string; model?: string; thought?: string; thoughtLevels?: string[] }): void {
+  setModelConfig(config: { provider?: string; model?: string; thought?: string; thoughtLevels?: string[]; followupMode?: "queue" | "guide"; autoCompactionEnabled?: boolean }): void {
     this.patchState(modelConfigPatch(this.state, config));
   }
-
   setTitle(title: string, source: "default" | "generated" | "custom"): void {
     this.patchState({ meta: { title, titleSource: source } });
   }

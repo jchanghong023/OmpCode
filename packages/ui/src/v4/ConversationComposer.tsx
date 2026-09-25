@@ -119,6 +119,7 @@ import {
 import { appendWorkspaceFileMentionToComposer } from "@/lib/workspaceFileComposer.js";
 import { resolveProviderBaseURL } from "@/lib/registryProviderView.js";
 import type { ModelSelectionView } from "@zcode/services";
+import type { GitRepositorySummary } from "@zcode/shared";
 import type { ModelSelectionState } from "@/hooks/useModelSelectionView.js";
 import type { ZCodeUiError } from "@/lib/zcodeUiError.js";
 import {
@@ -152,8 +153,8 @@ import type { CodeViewerSource } from "@/lib/codeViewer.js";
 import { useConversationSelectionReferences } from "@/v4/composer/useConversationSelectionReferences.js";
 import { ConversationBackgroundWorkTrigger } from "@/v4/composer/ConversationBackgroundWorkTrigger.js";
 import { V4ComposerCuaEntry } from "@/v4/composer/V4ComposerCuaEntry.js";
+import { OmpDesktopComposerStatus } from "@/v4/composer/OmpDesktopComposerStatus.js";
 import {
-  V4ComposerModeSwitch,
   V4ComposerModelControls,
   type ModelSelectionSource,
 } from "@/v4/composer/V4ComposerToolbar.js";
@@ -428,6 +429,13 @@ interface ConversationComposerProps {
   ) => void;
   /** 选中思考深度；同时带上用户操作时看到的模型，避免异步回流后把 thought 归到另一模型。 */
   onSelectThought: (thought: string, modelContext: { provider: string; model: string }) => void;
+  planModelActive?: boolean;
+  planModelAvailable?: boolean;
+  onTogglePlanModel?: () => Promise<{ success: boolean; error?: string }>;
+  gitSummary?: GitRepositorySummary | null;
+  gitDirtyFileCount?: number;
+  onOpenGitReview?: () => void;
+  onSetAutoCompaction?: (enabled: boolean) => Promise<{ success: boolean; error?: string }>;
   onSwitchMode: (mode: string) => void;
   /** 打开当前 session 的 Status panel，并直达 Running 明细。 */
   onOpenRunningBackgroundWorks?: () => void;
@@ -447,9 +455,6 @@ interface ConversationComposerProps {
   /** v4 会话级错误（snapshot.control.lastError），展示在输入框上方。 */
   error?: ZCodeUiError | null;
   onDismissError?: () => void;
-  /** 无可用模型横幅的恢复动作；由 SessionPane 注入壳层导航，组件不直接操作 tab。 */
-  onOpenModelSettings?: () => void;
-  onOpenModelUpgrade?: () => void;
   onOpenCodeViewer?: (source: CodeViewerSource) => void;
   /**
    * 是否监听全局「加入对话」事件（workspace file tree / 画板按钮）。
@@ -517,6 +522,13 @@ function ConversationComposerImpl({
   onStop,
   onSelectModel,
   onSelectThought,
+  planModelActive = false,
+  planModelAvailable = false,
+  onTogglePlanModel,
+  gitSummary,
+  gitDirtyFileCount,
+  onOpenGitReview,
+  onSetAutoCompaction,
   onSwitchMode,
   onOpenRunningBackgroundWorks,
   backgroundWorkOpenTarget = "panel",
@@ -525,8 +537,6 @@ function ConversationComposerImpl({
   onSendCompressionCommand,
   error,
   onDismissError,
-  onOpenModelSettings,
-  onOpenModelUpgrade,
   onOpenCodeViewer,
   listenAddToChatEvents = true,
   externalTextInsertRequest = null,
@@ -2134,21 +2144,27 @@ function ConversationComposerImpl({
     ],
   );
 
-  // 左下：模式选择 + CUA 入口 + 当前 session 后台任务入口。followupMode 由 app 设置页同步到 CLI，
+  // 左下：omp 计划模型 + CUA 入口 + 当前 session 后台任务入口。followupMode 由 app 设置页同步到 CLI，
   // 不在 composer 暴露局部开关；后台入口只消费同一 snapshot，不维护第二份任务状态。
   const leadingActionsNode = useMemo(
     () => (
       <>
-        <V4ComposerModeSwitch
-          workspacePath={workspacePath}
-          workspaceIdentity={workspaceIdentity}
-          provider={provider}
-          draftConfig={draftConfig}
-          disabled={disabled}
-          activeConfigPicker={activeConfigPicker}
-          onConfigPickerOpenChange={handleConfigPickerOpenChange}
-          onSwitchMode={onSwitchMode}
-        />
+        {/* omp 默认全权限；原权限/模式选择不适用于此 Fork，保留底层提交模式。 */}
+        {onTogglePlanModel ? (
+          <OmpDesktopComposerStatus
+            scopeKey={configPickerScopeKey}
+            gitSummary={gitSummary}
+            gitDirtyFileCount={gitDirtyFileCount}
+            sessionId={sessionId ?? null}
+            autoCompactionEnabled={snapshot?.config.autoCompactionEnabled}
+            planModelActive={planModelActive}
+            planModelAvailable={planModelAvailable}
+            onTogglePlanModel={onTogglePlanModel}
+            onCompact={onSendCompressionCommand ? () => onSendCompressionCommand("/compact") : undefined}
+            onSetAutoCompaction={onSetAutoCompaction}
+            onOpenGitReview={onOpenGitReview}
+          />
+        ) : null}
         {/* 附件画廊重构曾整段覆盖 leadingActions，误删 CUA 常驻入口。
             入口自身继续负责平台、远程与设置可见性，不在 composer 重复判定。 */}
         <V4ComposerCuaEntry
@@ -2170,14 +2186,25 @@ function ConversationComposerImpl({
       canStop,
       disabled,
       draftConfig,
+      configPickerScopeKey,
+      gitDirtyFileCount,
+      gitSummary,
       handleConfigPickerOpenChange,
       backgroundWorkOpenTarget,
       onOpenRunningBackgroundWorks,
+      onOpenGitReview,
+      onSendCompressionCommand,
+      onSetAutoCompaction,
+      onTogglePlanModel,
       onSwitchMode,
+      planModelActive,
+      planModelAvailable,
       provider,
       remoteSessionId,
       runningSubagentCount,
       snapshot?.backgroundWorks,
+      snapshot?.config.autoCompactionEnabled,
+      sessionId,
       workspaceIdentity,
       workspacePath,
     ],
@@ -2221,8 +2248,6 @@ function ConversationComposerImpl({
           <ChatErrorBanner
             error={visibleError}
             onDismiss={onDismissError}
-            onOpenModelSettings={onOpenModelSettings}
-            onOpenUpgrade={onOpenModelUpgrade}
           />
         </div>
       ) : null}

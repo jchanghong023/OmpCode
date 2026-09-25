@@ -6,7 +6,6 @@ import { withPinnedNodePath } from "./mise-toolchain-env.mjs";
 import { quoteArgsForWindowsShell } from "./spawn-command.mjs";
 
 const requestedEnv = process.argv[2]?.trim().toLowerCase();
-const agentBytecode = process.argv.slice(3).includes("--agent-bytecode");
 if (requestedEnv !== "test" && requestedEnv !== "production") {
   console.error("Usage: node scripts/dev-desktop-env.mjs <test|production> [--agent-bytecode]");
   process.exit(1);
@@ -26,7 +25,6 @@ function run(command, args) {
         {
           ...process.env,
           ZCODE_ENV: requestedEnv,
-          ZCODE_DESKTOP_AGENT_BYTECODE: agentBytecode ? "1" : "0",
         },
         process.execPath,
       ),
@@ -62,11 +60,6 @@ try {
   await run(process.platform === "win32" ? "node" : process.execPath, [
     resolve(repoRoot, "scripts/build-desktop-agent-cli.mjs"),
   ]);
-  if (agentBytecode) {
-    await run(process.platform === "win32" ? "node" : process.execPath, [
-      resolve(repoRoot, "scripts/build-desktop-agent-bytecode.mjs"),
-    ]);
-  }
   await run(pnpmCommand, ["--filter", "@zcode/desktop", "dev:runtime"]);
 } catch (error) {
   console.error(error instanceof Error ? error.message : error);

@@ -27,7 +27,6 @@ import {
 import { quotePosixPathArg } from "@zcode/server/remote/posixShell.js";
 import { checkServerBundleRequiredMarkers } from "@zcode/server/remote/serverBundleDeployCheck.js";
 import { deployRuntimeTools } from "@zcode/server/remote/runtimeToolDeploy.js";
-import { REMOTE_AGENT_OFFICIAL_PLUGIN_REQUIRED_RELATIVE_PATHS } from "@zcode/server/remote/zcodeAgentOfficialPluginAssets.js";
 import {
   ensureRemoteReleaseDirFromCdn,
   selectRemoteAssetManifestComponents,
@@ -729,10 +728,8 @@ function resolveRequiredMockReleasePaths(
         }
         break;
       case "glm":
-        requiredPaths.add(`glm/${platformArch}/zcode.cjs`);
-        for (const relativePath of REMOTE_AGENT_OFFICIAL_PLUGIN_REQUIRED_RELATIVE_PATHS) {
-          requiredPaths.add(`glm/${platformArch}/packages/${relativePath}`);
-        }
+        requiredPaths.add(`glm/${platformArch}/omp-agent.cjs`);
+        requiredPaths.add(`glm/${platformArch}/omp/omp`);
         break;
       case "bfs":
         requiredPaths.add(`tools/${platformArch}/bfs/bfs`);

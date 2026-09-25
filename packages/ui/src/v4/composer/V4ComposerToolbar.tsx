@@ -81,7 +81,6 @@ import { logger } from "@/logger.js";
 import { useCodingPlanUpgradeDialog } from "@/settings/CodingPlanUpgradeDialogProvider.js";
 import { useCodingPlanEntitlements } from "@/settings/model-provider-section/useCodingPlanEntitlements.js";
 import { decodeCustomModelValue, encodeCustomModelValue } from "@/lib/zcodeCustomModelValue.js";
-import { buildRegistryModelSelectGroups } from "@/lib/modelSelectionGroups.js";
 import {
   buildCodingPlanUsageSources,
   type CodingPlanUsageSource,
@@ -95,9 +94,15 @@ import { resolveEntitledAccountProviderAccess } from "@/lib/accountProviderAcces
 import { useEnterpriseCodingPlanProducts } from "@/settings/model-provider-section/useEnterpriseCodingPlanProducts.js";
 import {
   resolveDraftDisplayedConfig,
-  resolveDraftModelThoughtOption,
   resolveDraftThoughtCurrentValue,
 } from "@/v4/composer/draftWorkspaceDefaults.js";
+import {
+  buildOmpModelSelectGroups,
+  findOmpCatalogEntry,
+  ompThoughtOptionForEntry,
+  readOmpModelCatalog,
+} from "@/v4/composer/ompModelCatalog.js";
+import { OmpModelRolesDialog } from "@/v4/composer/OmpModelRolesDialog.js";
 
 // 拆分件再导出（模式选择移居 V4ComposerModeControls，超行数拆分）：
 // 既有消费方（ConversationComposer）继续从本模块入口 import，接口面不变。
@@ -385,12 +390,17 @@ function V4ComposerModelControlsImpl({
   const { openCodingPlanUpgrade } = useCodingPlanUpgradeDialog();
   const displayProvider = provider ?? ZCODE_AGENT_PROVIDER;
   // 配置面读取：workspace 缺省目录（taskId=null），不读旧会话态。
-  const { error: configOptionsError } = useToolbarConfigOptions(
+  const { configOptions, error: configOptionsError } = useToolbarConfigOptions(
     workspacePath,
     null,
     workspaceIdentity,
   );
   const providerSettingsRead = useProviderSettingsView();
+  // omp 换核：模型目录事实源 = workspace-config 的 omp catalog（get_available_models）。
+  const ompCatalog = useMemo(
+    () => readOmpModelCatalog(configOptions),
+    [configOptions],
+  );
   const providerSettingsView =
     providerSettingsRead.state.status === "ready" ? providerSettingsRead.state.view : null;
   const providerSourcesLoading = providerSettingsRead.state.status !== "ready";
@@ -428,7 +438,7 @@ function V4ComposerModelControlsImpl({
     [onConfigPickerOpenChange],
   );
 
-  const modelOption = modelSelectionView?.providers.some((provider) => provider.models.length > 0)
+  const modelOption = ompCatalog
     ? ({
         id: "model",
         name: "Model",
@@ -730,58 +740,33 @@ function V4ComposerModelControlsImpl({
   }, [draftMode, effectiveConfig, modelSelectionView?.revision]);
 
   const modelSelectGroups = useMemo<ModelSelectGroup[]>(() => {
-    if (!modelSelectionView) return [];
-    return buildRegistryModelSelectGroups(displayProvider, modelSelectionView, {
-      apiKeyLabel: intl.formatMessage({ id: "settings.modelProvider.apiKey" }),
-      apiKeyBadgeLabel: intl.formatMessage({
-        id: "settings.modelProvider.connectionMode.apiKeyBadge",
-      }),
-      codingPlanLabel: intl.formatMessage({
-        id: "settings.modelProvider.connectionMode.codingPlan",
-      }),
-      codingPlanBadgeLabel: intl.formatMessage({
-        id: "settings.modelProvider.connectionMode.codingPlanBadge",
-      }),
-      startPlanLabel: intl.formatMessage({
-        id: "settings.modelProvider.connectionMode.startPlan",
-      }),
-      startPlanBadgeLabel: intl.formatMessage({
-        id: "settings.modelProvider.connectionMode.startPlanBadge",
-      }),
-      teamPlanBadgeLabel: intl.formatMessage({
-        id: "settings.modelProvider.connectionMode.teamPlanBadge",
-      }),
-      teamPlanFallbackLabel: intl.formatMessage({
-        id: "settings.modelProvider.connectionMode.teamPlan",
-      }),
-    });
-  }, [displayProvider, intl, modelSelectionView]);
+    // omp 换核：分组直接来自 omp 目录；目录未就绪时不回落 ZCode GLM 目录（FORK.md）。
+    return ompCatalog ? buildOmpModelSelectGroups(ompCatalog) : [];
+  }, [ompCatalog]);
 
-  // 修复：恢复「管理模型」入口（老版 onManageModels = 打开设置页并定位模型供应商区）。
+  // omp 换核（FORK.md）：模型管理事实源在 omp 侧——「管理模型」打开 omp modelRoles 配置对话框。
+  const [modelRolesDialogOpen, setModelRolesDialogOpen] = useState(false);
   const handleOpenModelProviderSettings = useCallback(() => {
-    setPendingSettingsSectionIntent("modelProvider");
-    openSettingsTab();
-  }, [openSettingsTab]);
+    setModelRolesDialogOpen(true);
+  }, []);
   const showManageModelsAction = shouldShowManageModelsAction(handleOpenModelProviderSettings);
   const manageModelsLabel = intl.formatMessage({
     id: "chat.toolbar.model.manageModels",
   });
 
-  // 当前投影模型的编码值：provider 命中目录则按自定义模型编码，否则回落裸 model id。
+  // 当前投影模型的编码值：provider 命中 omp 目录则按自定义模型编码，否则回落裸 model id。
   const rawModelValue = useMemo(() => {
     if (!effectiveConfig || !effectiveConfig.model) return "";
-    const providerExists = modelSelectionView?.providers.some(
-      (candidate) => candidate.providerId === effectiveConfig.provider,
+    const entryInCatalog = Boolean(
+      findOmpCatalogEntry(ompCatalog, effectiveConfig.provider, effectiveConfig.model),
     );
-    if (providerExists) {
+    if (entryInCatalog) {
       return encodeCustomModelValue(effectiveConfig.provider, effectiveConfig.model);
     }
     return effectiveConfig.model;
-  }, [effectiveConfig, modelSelectionView]);
-
+  }, [effectiveConfig, ompCatalog]);
   // 触发器显示兜底——`<synthetic>`（Claude SDK 恢复合成模型）或当前模型
   // 不在可选组（失效/下线/退登）→ 回落占位/默认「选择模型」，不直显协议内部占位符或失效
-  // 模型 id。复用存活的 resolveModelSelectTriggerDisplay。
   const triggerDisplay = useMemo(
     () =>
       resolveModelSelectTriggerDisplay(
@@ -798,10 +783,9 @@ function V4ComposerModelControlsImpl({
     // 非可选值（未选 / synthetic / 不可用）：占位文案或默认「选择模型」。
     const fallbackLabel =
       triggerDisplay.placeholder ?? intl.formatMessage({ id: "chat.toolbar.model.label" });
-    const providerName =
-      modelSelectionView?.providers.find(
-        (candidate) => candidate.providerId === effectiveConfig?.provider,
-      )?.providerName ?? undefined;
+    const providerName = ompCatalog?.entries.find(
+      (entry) => entry.providerId === effectiveConfig?.provider,
+    )?.providerName;
     return resolveV4ModelTriggerDisplay({
       modelGroups: modelSelectGroups,
       normalizedValue: normalizedModelValue,
@@ -812,7 +796,7 @@ function V4ComposerModelControlsImpl({
   }, [
     effectiveConfig?.provider,
     intl,
-    modelSelectionView,
+    ompCatalog,
     modelSelectGroups,
     normalizedModelValue,
     triggerDisplay.placeholder,
@@ -889,14 +873,10 @@ function V4ComposerModelControlsImpl({
 
   const draftModelThoughtOption = useMemo(
     () =>
-      effectiveConfig
-        ? resolveDraftModelThoughtOption(
-            effectiveConfig.provider,
-            effectiveConfig.model,
-            modelSelectionView,
-          )
-        : null,
-    [effectiveConfig, modelSelectionView],
+      ompThoughtOptionForEntry(
+        findOmpCatalogEntry(ompCatalog, effectiveConfig?.provider, effectiveConfig?.model),
+      ),
+    [effectiveConfig?.model, effectiveConfig?.provider, ompCatalog],
   );
 
   // 候选档位只来自目标 Host 的 ModelSelectionView，已选档位只来自 Composer。
@@ -956,6 +936,7 @@ function V4ComposerModelControlsImpl({
       size: contextWindow.maxTokens,
       ...(contextWindow.cache ? { cache: contextWindow.cache } : {}),
       ...(contextWindow.breakdown ? { breakdown: contextWindow.breakdown } : {}),
+      ...(contextWindow.details ? { details: contextWindow.details } : {}),
     };
   }, [usage?.contextWindow]);
   // 工具条热键已转正为命令表命令：tooltip 快捷键文案读生效表，
@@ -1011,6 +992,7 @@ function V4ComposerModelControlsImpl({
         className="hidden"
       />
       <ChatContextUsage
+        allowZeroUsage
         codingPlanUsageRemaining={codingPlanUsageRemaining}
         taskUsage={taskUsage}
         startPlanBalance={contextStartPlanBalance}
@@ -1088,6 +1070,13 @@ function V4ComposerModelControlsImpl({
           restoreFocusSelector={V4_COMPOSER_INPUT_SELECTOR}
         />
       ) : null}
+      <OmpModelRolesDialog
+        open={modelRolesDialogOpen}
+        onOpenChange={setModelRolesDialogOpen}
+        catalogEntries={ompCatalog?.entries ?? []}
+        workspacePath={workspacePath}
+        workspaceIdentity={workspaceIdentity}
+      />
     </>
   );
 }

@@ -558,7 +558,7 @@ export interface IPlatformService {
   createLocalMediaPreviewUrl?(path: string): string;
 
   /**
-   * 在宿主 ~/.zcode 临时目录创建文本附件文件。
+   * 在宿主 ~/.ompcode 临时目录创建文本附件文件。
    * 手机远控必须通过 shared-host/platform proxy 写到桌面宿主，避免大文本进入 prompt payload。
    */
   createTempTextAttachment?(
@@ -656,6 +656,24 @@ export interface IPlatformService {
 
   /** 使用系统默认应用打开本地文件；普通 Web 平台返回 unsupported。 */
   openExternalFile?(path: string): Promise<{ success: boolean; error?: string }>;
+  /** omp 换核：打开用户 omp 模型配置文件（模型管理在 omp 侧）。桌面端实现；Web 端缺省。 */
+  openOmpModelConfig?(): Promise<{ success: boolean; error?: string }>;
+  /** omp 换核：读取用户 omp modelRoles（role → provider/model:level）。桌面端实现；Web 端缺省。 */
+  readOmpModelRoles?(): Promise<
+    | { success: true; roles: { role: string; value: string }[] }
+    | { success: false; error: string }
+  >;
+  /** 列出当前设备已有的 omp profile，以及本次应用启动实际使用的 profile。 */
+  listOmpProfiles?(): Promise<
+    | { success: true; profiles: string[]; activeProfile: string }
+    | { success: false; error: string }
+  >;
+  /** omp 换核：写入用户 omp modelRoles（yaml Document 级替换保留注释；写前自动备份）。桌面端实现；Web 端缺省。 */
+  writeOmpModelRoles?(roles: { role: string; value: string }[]): Promise<{
+    success: boolean;
+    error?: string;
+    backupPath?: string;
+  }>;
 
   /** 打开 ZCode Computer Use 的完整权限引导。Desktop only。 */
   openCuaPermissionOnboarding?(
@@ -838,7 +856,7 @@ export interface IPlatformService {
   /** 注册用户点击系统通知后跳转到对应任务的回调，返回 disposer */
   onTaskNotificationClick(handler: (taskId: string) => void): () => void;
 
-  /** 导出日志：打包 ~/.zcode/v2 及外部 agent 日志为 zip 并在系统文件浏览器中显示 */
+  /** 导出日志：打包 ~/.ompcode/v2 及外部 agent 日志为 zip 并在系统文件浏览器中显示 */
   exportLogs(): Promise<{ success: boolean; path?: string; error?: string }>;
 
   /** 截取当前窗口，用于错误反馈携带现场画面；Web fallback 可返回 null */

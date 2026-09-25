@@ -16,17 +16,25 @@ import type {
 } from "@zcode/shared";
 import type { SessionConfigState } from "@zcode/shared/zcode-protocol-v4";
 import type { IModelSelectionService } from "@zcode/services";
-import { completeNewModelSelection } from "@zcode/provider";
 import {
   useModelSelectionServiceView,
   type ModelSelectionRead,
 } from "@/hooks/useModelSelectionView.js";
+import { useShallow } from "zustand/react/shallow";
 import { submissionModeSchema } from "@zcode/shared/zcode-protocol-v4";
 import { prepareWorkspaceWithZCodeSessionService } from "@/hooks/useWorkspacePrepare.js";
+import { mergeOmpWorkspaceConfigOptions } from "@/lib/ompWorkspaceConfigOptions.js";
 import { useZCodeSessionService } from "@/hooks/useZCodeSessionService.js";
 import { useSettings } from "@/hooks/useSettingService.js";
 import { parseModelPickerValue } from "@/lib/zcodeSessionProjection.js";
 import { initializeNewTaskDraft } from "@/v4/composer/newTaskDraft.js";
+import {
+  findOmpCatalogEntry,
+  highestOmpThoughtLevel,
+  ompSessionConfigToSelection,
+  readOmpModelCatalog,
+  resolveOmpModelSelection,
+} from "@/v4/composer/ompModelCatalog.js";
 import {
   clearV4ComposerDraft,
   persistV4ComposerDraft,
@@ -36,7 +44,9 @@ import {
 } from "@/v4/composer/composerDraftStore.js";
 import { resolveAppFollowupMode } from "@/v4/composer/followupModeSettings.js";
 import { logger } from "@/logger.js";
-import { useZCodeSessionStore } from "@/store/zcodeSessionStore.js";
+import { useOptionalPlatform } from "@/hooks/usePlatform.js";
+import { ompRoleValueToSelection } from "@/v4/composer/ompModelRoleValue.js";
+import { selectWorkspaceZCodeState, useZCodeSessionStore } from "@/store/zcodeSessionStore.js";
 
 /** 目录水合单飞（per workspaceKey）：draft、已有 session 和严格模式双挂载共享一次 RPC。 */
 const workspaceCatalogHydrationFlights = new Map<string, Promise<void>>();
@@ -96,6 +106,9 @@ interface DraftConfigControl {
   ) => () => void;
   handleDraftSelectModel: (modelProvider: string, model: string) => void;
   handleDraftSelectThought: (thought: string) => void;
+  planModelActive: boolean;
+  planModelAvailable: boolean;
+  togglePlanModel: () => Promise<{ success: boolean; error?: string }>;
   handleDraftSwitchMode: (mode: string) => void;
 }
 
@@ -123,6 +136,7 @@ export function useDraftConfigControl(params: {
   const workspaceKey = workspaceIdentity?.trim() || workspacePath;
   const displayProvider = provider ?? ZCODE_AGENT_PROVIDER;
   const zcodeSessionService = useZCodeSessionService(workspacePath, null, workspaceIdentity);
+  const platform = useOptionalPlatform();
   const { settings: sharedSettings } = useSettings();
   const appFollowupMode = resolveAppFollowupMode(sharedSettings);
   const scopeId = sessionId ?? V4_DRAFT_SCOPE_ROOT;
@@ -140,6 +154,13 @@ export function useDraftConfigControl(params: {
   const [storedState, setStoredState] = useState(loadedScope);
   let currentState = storedState.scopeKey === scopeKey ? storedState : loadedScope;
   let draft = currentState.draft;
+  // omp 换核：模型选择事实源 = workspace-config 的 omp 目录；ZCode 账号目录不再参与草稿。
+  const configOptions = useZCodeSessionStore(
+    useShallow((state) => selectWorkspaceZCodeState(state, workspacePath, workspaceIdentity).configOptions),
+  );
+  const ompCatalog = useMemo(() => readOmpModelCatalog(configOptions), [configOptions]);
+  // 账号级 ModelSelectionView 仅服务 readiness 门禁与 custom provider 恢复面；
+  // 用户可选模型与草稿选择一律来自上面的 omp 目录（FORK.md 换核）。
   const modelSelectionRead = useModelSelectionServiceView(
     modelSelectionService,
     true,
@@ -148,22 +169,20 @@ export function useDraftConfigControl(params: {
       selection: draft.modelSelection ?? null,
     },
   );
-  const modelSelectionView =
-    modelSelectionRead.state.status === "ready" ? modelSelectionRead.state.view : null;
   const initializeAsNewTask = sessionId === null || draft.initializeFromNewTask === true;
-  if (!draft.mode && (initializeAsNewTask ? modelSelectionView !== null : sessionConfig != null)) {
+  if (!draft.mode && (initializeAsNewTask ? ompCatalog !== null : sessionConfig != null)) {
     const mode = submissionModeSchema.safeParse(sessionConfig?.mode);
     // Recent 是初始化原意图，不先按旧 Provider 是否仍在候选中删掉；下一次输入读取
-    // 由同一解析入口对应当前账号，或暂时留空。否则冷启动会绕过统一账号对应规则。
+    // 由同一解析入口对应当前 omp 目录，或暂时留空。否则冷启动会绕过统一目录对应规则。
     // mode 是已初始化标记：历史恢复给出的空选择也是确定结果，后续 Snapshot 不得填满。
     draft =
-      initializeAsNewTask && modelSelectionView
-        ? initializeNewTaskDraft(draft, workspacePath, workspaceIdentity, modelSelectionView)
+      initializeAsNewTask && ompCatalog
+        ? initializeNewTaskDraft(draft, workspacePath, workspaceIdentity, ompCatalog)
         : {
             ...draft,
             mode: mode.success && mode.data !== "plan" ? mode.data : "build",
             planEnabled: resolveExecutionState(sessionConfig ?? {}).planEnabled,
-            modelSelection: sessionConfig?.modelSelection,
+            modelSelection: ompSessionConfigToSelection(sessionConfig),
           };
   }
   if (sessionConfig) {
@@ -174,10 +193,9 @@ export function useDraftConfigControl(params: {
   if (currentState !== storedState) setStoredState(currentState);
   const stateRef = useRef(currentState);
   stateRef.current = currentState;
-  // 原因：按 revision 清草稿会把短暂不可用永久写成空选择。这里只派生当前结果，
-  // 正文/模式自动保存继续保存 draft 中的原意图；读取未就绪时保留展示，提交由 View 门禁阻断。
-  const effectiveSelection = modelSelectionView
-    ? (modelSelectionView.effectiveSelection ?? undefined)
+  // 原因：目录短暂不可用时保留草稿原意图；提交由目录门禁阻断。
+  const effectiveSelection = ompCatalog
+    ? (resolveOmpModelSelection(ompCatalog, draft.modelSelection ?? null).selection ?? undefined)
     : draft.modelSelection;
   const draftConfig = useMemo<Partial<SessionConfigState>>(
     () => ({
@@ -231,13 +249,14 @@ export function useDraftConfigControl(params: {
     [scopeKey, workspacePath, workspaceIdentity, scopeId],
   );
   const updateDraftConfig = useCallback(
-    (update: (current: Partial<SessionConfigState>) => Partial<SessionConfigState>) => {
+    (update: (current: Partial<SessionConfigState>) => Partial<SessionConfigState>, clearPlanModelToggle = false) => {
       const next = update(draftConfigRef.current);
       const mode = submissionModeSchema.safeParse(next.mode);
       updateComposerDraft((current) => ({
         ...current,
         mode: mode.success ? mode.data : current.mode,
         modelSelection: next.modelSelection,
+        ...(clearPlanModelToggle ? { planModelReturnSelection: undefined } : {}),
         // 用户已经显式改选，不能再由导入时等待的默认初始化覆盖。
         ...(current.initializeFromNewTask
           ? { mode: mode.success ? mode.data : "build", initializeFromNewTask: undefined }
@@ -368,6 +387,16 @@ export function useDraftConfigControl(params: {
     })
       .then((prepareResult) => {
         const baseOptions = prepareResult.configOptions ?? [];
+        // omp 换核：workspace-config 广播先到时 store 里已有 omp 模型/思考档位目录；
+        // 水合回写只带 mode 项，不能把已有 omp 目录冲掉。
+        const latestBeforeWrite = useZCodeSessionStore.getState();
+        if (!latestBeforeWrite) {
+          return;
+        }
+        const mergedOptions = mergeOmpWorkspaceConfigOptions(
+          latestBeforeWrite.getWorkspaceState(workspacePath, workspaceIdentity)?.configOptions ?? [],
+          baseOptions,
+        );
         logger.debug("[v4-workspace-catalog] hydration done", {
           catalogScope: isDraft ? "draft" : "known-session",
           optionCount: baseOptions.length,
@@ -379,7 +408,7 @@ export function useDraftConfigControl(params: {
           workspaceKey,
         });
         const latest = useZCodeSessionStore.getState();
-        latest.setConfigOptions(workspacePath, baseOptions, workspaceIdentity);
+        latest.setConfigOptions(workspacePath, mergedOptions, workspaceIdentity);
         latest.setConfigOptionsStatus(workspacePath, "ready", workspaceIdentity);
         latest.setSlashCommands(
           workspacePath,
@@ -406,15 +435,17 @@ export function useDraftConfigControl(params: {
     workspacePath,
     zcodeSessionService,
   ]);
-
   const handleDraftSelectModel = useCallback(
     (modelProvider: string, model: string) => {
       const modelId = modelProvider ? `${modelProvider}/${model}` : model;
       const parsedSelection = parseModelPickerValue(modelId);
-      // 用户点击模型只确定模型身份；Reasoning 没有默认值，保持为空并等待用户选择。
-      const modelSelection = modelSelectionView
-        ? (completeNewModelSelection(modelSelectionView, parsedSelection) ?? parsedSelection)
-        : parsedSelection;
+      // omp 目录：切模型时使用目标模型支持的最高思考档；之后单独选档仍由草稿保留。
+      const entry = findOmpCatalogEntry(ompCatalog, parsedSelection.providerId, parsedSelection.modelId);
+      const highestThoughtLevel = highestOmpThoughtLevel(entry);
+      const modelSelection =
+        highestThoughtLevel !== undefined
+          ? { ...parsedSelection, options: { reasoningLevel: highestThoughtLevel } }
+          : parsedSelection;
       logger.debug("[v4-draft-config] select model", {
         modelProvider,
         model,
@@ -424,9 +455,9 @@ export function useDraftConfigControl(params: {
         workspacePath,
         workspaceIdentity: workspaceIdentity ?? null,
       });
-      updateDraftConfig((current) => applyDraftModelSelection(current, modelSelection));
+      updateDraftConfig((current) => applyDraftModelSelection(current, modelSelection), true);
     },
-    [modelSelectionView, updateDraftConfig, workspaceIdentity, workspacePath],
+    [ompCatalog, updateDraftConfig, workspaceIdentity, workspacePath],
   );
 
   const handleDraftSelectThought = useCallback(
@@ -456,6 +487,48 @@ export function useDraftConfigControl(params: {
     },
     [updateDraftConfig],
   );
+
+  const togglePlanModel = useCallback(async (): Promise<{ success: boolean; error?: string }> => {
+    if (stateRef.current.scopeKey !== scopeKey) return { success: false, error: "session_changed" };
+    const previous = stateRef.current.draft.planModelReturnSelection;
+    if (previous !== undefined) {
+      updateComposerDraft((current) => ({
+        ...current,
+        modelSelection: previous ?? undefined,
+        planModelReturnSelection: undefined,
+      }));
+      return { success: true };
+    }
+    if (!platform?.readOmpModelRoles) return { success: false, error: "platform-unsupported" };
+    if (!ompCatalog) return { success: false, error: "model_catalog_unavailable" };
+    const before = draftConfigRef.current.modelSelection;
+    const result = await platform.readOmpModelRoles().catch((error: unknown) => ({
+      success: false as const,
+      error: error instanceof Error ? error.message : String(error),
+    }));
+    if (!result.success) return { success: false, error: result.error };
+    const planValue = result.roles.find((role) => role.role === "plan")?.value;
+    if (!planValue) return { success: false, error: "plan_role_missing" };
+    const planSelection = ompRoleValueToSelection(planValue, ompCatalog.entries);
+    if (!planSelection || !findOmpCatalogEntry(ompCatalog, planSelection.providerId, planSelection.modelId)) {
+      return { success: false, error: "plan_model_unavailable" };
+    }
+    const latest = draftConfigRef.current.modelSelection;
+    if (
+      stateRef.current.scopeKey !== scopeKey ||
+      latest?.providerId !== before?.providerId ||
+      latest?.modelId !== before?.modelId ||
+      latest?.options?.reasoningLevel !== before?.options?.reasoningLevel
+    ) {
+      return { success: false, error: "selection_changed" };
+    }
+    updateComposerDraft((current) => ({
+      ...current,
+      planModelReturnSelection: before ?? null,
+      modelSelection: planSelection,
+    }));
+    return { success: true };
+  }, [ompCatalog, platform, scopeKey, updateComposerDraft]);
 
   const handleDraftSwitchMode = useCallback(
     (mode: string) => {
@@ -492,6 +565,9 @@ export function useDraftConfigControl(params: {
     captureAcceptedModelSelection,
     handleDraftSelectModel,
     handleDraftSelectThought,
+    planModelActive: draft.planModelReturnSelection !== undefined,
+    planModelAvailable: Boolean(platform?.readOmpModelRoles && ompCatalog),
+    togglePlanModel,
     handleDraftSwitchMode,
   };
 }

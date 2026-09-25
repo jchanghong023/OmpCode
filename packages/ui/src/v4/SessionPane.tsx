@@ -17,7 +17,6 @@ import {
 } from "react";
 import { Hand } from "lucide-react";
 import {
-  BUILTIN_MODEL_PROVIDER_IDS,
   buildCustomSupplierKey,
   TID_CHAT_EMPTY,
   TID_V4_SESSION_PANE,
@@ -77,6 +76,7 @@ import { usePlanIdentitySnapshot } from "@/hooks/usePlanIdentitySnapshot.js";
 import { useBaseWorkspaceServices } from "@/hooks/useWorkspaceServices.js";
 import { useWorkspaceHomePath } from "@/hooks/useWorkspaceHomePath.js";
 import { prepareWorkspaceWithZCodeSessionService } from "@/hooks/useWorkspacePrepare.js";
+import { mergeOmpWorkspaceConfigOptions } from "@/lib/ompWorkspaceConfigOptions.js";
 import {
   createCodingPlanFunnelContext,
   resolveCodingPlanEntryPlanState,
@@ -93,13 +93,13 @@ import type { ModelSelectionSource } from "@/v4/composer/V4ComposerToolbar.js";
 import { formatModelChangeLabel } from "@/v4/composer/modelTriggerDisplay.js";
 import { resolveAppFollowupMode } from "@/v4/composer/followupModeSettings.js";
 import {
-  createComposerSubmissionConfig,
+  createOmpComposerSubmissionConfig,
   type ComposerSubmissionConfig,
 } from "@/v4/composer/composerSubmissionConfig.js";
+import { readOmpModelCatalog } from "@/v4/composer/ompModelCatalog.js";
 import { useDraftSessionPrewarm } from "@/v4/composer/useDraftSessionPrewarm.js";
 import { projectSessionConfigToTaskConfigOptions } from "@/v4/composer/sessionConfigTaskCache.js";
 import { useDraftRuntimeRebuildGate } from "@/v4/composer/useDraftRuntimeRebuildGate.js";
-import { useDraftModelReadinessGate } from "@/v4/composer/useDraftModelReadinessGate.js";
 import { useSettings } from "@/hooks/useSettingService.js";
 import { useZCodeStoreWithDefault } from "@/store/StoreProvider.js";
 import { useZCodeSessionStore } from "@/store/zcodeSessionStore.js";
@@ -240,8 +240,6 @@ import {
 import type { ZCodeUiError } from "@/lib/zcodeUiError.js";
 import { isProviderNotReadyError } from "@/lib/chatPrepareError.js";
 import { useOptionalCodingPlanUpgradeDialog } from "@/settings/CodingPlanUpgradeDialogProvider.js";
-import { setPendingSettingsSectionIntent } from "@/lib/settingsNavigation.js";
-import { useOptionalTabStore } from "@/store/TabStoreProvider.js";
 import type {
   OpenPlanDetailSideTabRequest,
   OpenScopedPlanDetailSideTabRequest,
@@ -1221,20 +1219,6 @@ export function SessionPane({
     taskId: null,
   });
 
-  const {
-    agentStartupAllowed: draftAgentStartupAllowed,
-    error: draftModelReadinessError,
-    dismissError: dismissDraftModelReadinessError,
-    ensureReadyForSend: ensureDraftModelReadyForSend,
-    markProviderNotReady: markDraftProviderNotReady,
-  } = useDraftModelReadinessGate({
-    workspacePath,
-    workspaceIdentity,
-    provider,
-    sessionId,
-    modelSelectionService,
-  });
-
   // Composer 保存下一次 Submission 的 renderer intent；prewarm session 仅承载草稿预热。
   const {
     composerDraft,
@@ -1244,6 +1228,9 @@ export function SessionPane({
     resolveInitialDraftConfig,
     handleDraftSelectModel,
     handleDraftSelectThought,
+    planModelActive,
+    planModelAvailable,
+    togglePlanModel,
     handleDraftSwitchMode,
     promoteComposerDraft,
     captureAcceptedModelSelection,
@@ -1255,7 +1242,7 @@ export function SessionPane({
     provider,
     sessionId,
     sessionConfig: snapshot?.sessionId === sessionId ? snapshot.config : null,
-    agentStartupAllowed: draftAgentStartupAllowed,
+    agentStartupAllowed: true,
     modelSelectionService,
   });
   const modelSelectionView =
@@ -1284,16 +1271,17 @@ export function SessionPane({
     useZCodeSessionStore.getState().invalidateDraftRuntime(workspacePath, workspaceIdentity);
   }, [draftConfigRef, modelSelectionView?.revision, sessionId, workspaceIdentity, workspacePath]);
   const recommendStartPlan = useStartPlanRecommendation(modelSelectionView);
+  // omp 换核：首发/切换的模型身份校验以 omp 目录为准（ZCode 账号目录不参与模型选择）。
+  const ompCatalog = useMemo(() => readOmpModelCatalog(workspaceConfigOptions), [workspaceConfigOptions]);
   const createSubmissionFromComposer = useCallback(
-    () => createComposerSubmissionConfig(draftConfigRef.current, modelSelectionView),
-    [draftConfigRef, modelSelectionView],
+    () => createOmpComposerSubmissionConfig(draftConfigRef.current, ompCatalog),
+    [draftConfigRef, ompCatalog],
   );
   const composerSubmissionReady = useMemo(
-    () => createComposerSubmissionConfig(draftConfig, modelSelectionView) !== null,
-    [draftConfig, modelSelectionView],
+    () => createOmpComposerSubmissionConfig(draftConfig, ompCatalog) !== null,
+    [draftConfig, ompCatalog],
   );
   const codingPlanUpgradeDialog = useOptionalCodingPlanUpgradeDialog();
-  const openSettingsTab = useOptionalTabStore((state) => state.openSettingsTab);
   const promoteGroupedDraftTask = useZCodeSessionStore((state) => state.promoteGroupedDraftTask);
   // 首发 commandId 在 accepted 时已存在，也是 completion 的 message_id；不必等回复完成。
   const reportDraftCreated = useCallback(
@@ -2279,7 +2267,7 @@ export function SessionPane({
   // pane 未绑定会话时后台建 phase=draft 会话作预热载体：配置写 CAS 直达、首发复用。
   // 对外绑定语义不变（shell activeTaskId 仍 null），预热会话只是 pane 内部 effective 订阅目标。
   const { binding: prewarmBinding } = useDraftSessionPrewarm({
-    enabled: sessionId === null && draftAgentStartupAllowed,
+    enabled: sessionId === null,
     workspaceKey,
     paneId,
     invalidationVersion: draftRuntimeInvalidationVersion,
@@ -2540,6 +2528,7 @@ export function SessionPane({
       const contextAttachmentCount = options?.contextAttachmentCount ?? 0;
       let slashCommand = parseV4VisibleSlashCommand(text, readyAttachments, {
         contextAttachmentCount,
+        cliOwnedCommandNames: cliSlashCommandNames,
       });
 
       // `/plan` 首版只消费纯文本。必须在 provider readiness 和任何 command admission 之前
@@ -2554,10 +2543,6 @@ export function SessionPane({
         handleDraftSwitchMode("plan");
         if (submission) submission = { ...submission, planEnabled: true };
         if (!slashCommand.task) return "sent" as const;
-      }
-
-      if (!(await ensureDraftModelReadyForSend())) {
-        return "blocked" as const;
       }
 
       let effectiveText = text;
@@ -2898,8 +2883,8 @@ export function SessionPane({
       recommendStartPlan,
       captureAcceptedModelSelection,
       dispatchSlashCommand,
-      ensureDraftModelReadyForSend,
       availableSelectionSideSlashCommandNames,
+      cliSlashCommandNames,
       appSlashCommands,
       appFollowupMode,
       handleDraftSessionCreated,
@@ -2930,25 +2915,14 @@ export function SessionPane({
       };
       // followupMode 仍通过 Session CAS 同步；模型和模式已封装进 Submission，不再
       // 依赖“配置命令先到、sendText 后到”的跨命令时序。
-      return configCommandBarrier.enqueue(async () => {
-        try {
-          return await dispatchSendTextAfterConfig(text, submissionOptions, createSource);
-        } catch (error) {
-          if (sessionId === null && isProviderNotReadyError(error)) {
-            // UI 预检查与 Host getClient 之间 registry 仍可能失效。竞态命中时收敛成
-            // 同一个正常等待态，不走异常发送路径，也不清空 composer。
-            markDraftProviderNotReady();
-            return "blocked" as const;
-          }
-          throw error;
-        }
-      });
+      return configCommandBarrier.enqueue(() =>
+        dispatchSendTextAfterConfig(text, submissionOptions, createSource),
+      );
     },
     [
       configCommandBarrier,
       createSubmissionFromComposer,
       dispatchSendTextAfterConfig,
-      markDraftProviderNotReady,
       sessionId,
       workspacePath,
       workspaceIdentity,
@@ -3494,7 +3468,14 @@ export function SessionPane({
           zcodeSessionService,
         });
         handleDraftSelectModel(modelSelection.providerId, modelSelection.modelId);
-        store.setConfigOptions(workspacePath, prepareResult.configOptions ?? [], workspaceIdentity);
+        store.setConfigOptions(
+          workspacePath,
+          mergeOmpWorkspaceConfigOptions(
+            store.getWorkspaceState(workspacePath, workspaceIdentity)?.configOptions ?? [],
+            prepareResult.configOptions ?? [],
+          ),
+          workspaceIdentity,
+        );
         store.setConfigOptionsStatus(workspacePath, "ready", workspaceIdentity);
         store.setSlashCommands(workspacePath, prepareResult.slashCommands ?? [], workspaceIdentity);
         logger.info("[v4-pane] configOptions error custom provider recovery done", {
@@ -3544,6 +3525,28 @@ export function SessionPane({
     },
     [dispatchSlashCommand, sessionId],
   );
+
+  const handleSetAutoCompaction = useCallback(async (enabled: boolean) => {
+    const current = snapshotRef.current;
+    if (!sessionId || !current || current.sessionId !== sessionId || current.config.autoCompactionEnabled === undefined) {
+      return { success: false, error: "auto_compaction_unavailable" };
+    }
+    try {
+      let baseRevision = current.revision;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        if (snapshotRef.current?.sessionId !== sessionId) return { success: false, error: "session_changed" };
+        const ack = await dispatchCommand("setAutoCompaction", { enabled }, sessionId, baseRevision);
+        if (ack.status === "accepted") return { success: true };
+        if (ack.status !== "stale") {
+          return { success: false, error: ack.message ?? ack.reasonCode ?? ack.status };
+        }
+        baseRevision = ack.revisionAtDecision;
+      }
+      return { success: false, error: "stale" };
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) };
+    }
+  }, [dispatchCommand, sessionId]);
 
   // 误停排障需要区分按钮与 Esc；普通 info 在生产禁用，必须走生命周期日志。
   const handleStop = useCallback(
@@ -3955,17 +3958,11 @@ export function SessionPane({
     mcpUnavailableNotice,
   });
   const composerError =
-    draftModelReadinessError ??
-    sendSubmissionError ??
-    (quotaBanner.takesOverError ? null : projectedComposerError);
+    sendSubmissionError ?? (quotaBanner.takesOverError ? null : projectedComposerError);
   useEffect(() => {
     setSendSubmissionError(null);
   }, [sessionId]);
   const handleDismissComposerError = useCallback(() => {
-    if (draftModelReadinessError) {
-      dismissDraftModelReadinessError();
-      return;
-    }
     if (sendSubmissionError) {
       setSendSubmissionError(null);
       return;
@@ -3978,22 +3975,8 @@ export function SessionPane({
     );
   }, [
     controlLastErrorKey,
-    dismissDraftModelReadinessError,
-    draftModelReadinessError,
     sendSubmissionError,
   ]);
-  const handleOpenModelSettings = useCallback(() => {
-    setPendingSettingsSectionIntent("modelProvider");
-    openSettingsTab();
-  }, [openSettingsTab]);
-  const handleOpenModelUpgrade = useCallback(() => {
-    if (!codingPlanUpgradeDialog) return;
-    const providerId =
-      sharedSettings?.providerFamilyDomain === "bigmodel"
-        ? BUILTIN_MODEL_PROVIDER_IDS.bigmodelIndividualCodingPlan
-        : BUILTIN_MODEL_PROVIDER_IDS.zaiIndividualCodingPlan;
-    codingPlanUpgradeDialog.openCodingPlanUpgrade({ providerId });
-  }, [codingPlanUpgradeDialog, sharedSettings?.providerFamilyDomain]);
   const handleOpenQuotaUpgrade = useCallback(() => {
     const providerId = quotaBanner.upgradeProviderId;
     if (!providerId || !codingPlanUpgradeDialog) return;
@@ -4413,6 +4396,13 @@ export function SessionPane({
       onStop={handleStopFromButton}
       onSelectModel={handleSelectModel}
       onSelectThought={handleSelectThought}
+      planModelActive={planModelActive}
+      planModelAvailable={planModelAvailable}
+      onTogglePlanModel={togglePlanModel}
+      gitSummary={gitSummary}
+      gitDirtyFileCount={gitDirtyFileCount}
+      onOpenGitReview={onOpenGitReview ? () => onOpenGitReview(gitWorktreeReviewSourceId ?? undefined) : undefined}
+      onSetAutoCompaction={handleSetAutoCompaction}
       onSwitchMode={handleSwitchMode}
       onOpenRunningBackgroundWorks={
         sessionId && runningBackgroundWorkCount > 0 ? handleOpenRunningBackgroundWorks : undefined
@@ -4426,8 +4416,6 @@ export function SessionPane({
       onSendCompressionCommand={handleSendCompressionCommand}
       error={composerError}
       onDismissError={handleDismissComposerError}
-      onOpenModelSettings={handleOpenModelSettings}
-      onOpenModelUpgrade={handleOpenModelUpgrade}
       onOpenCodeViewer={onOpenCodeViewer}
       suppressGoalCommands={selectionSideChat}
       appSlashCommands={appSlashCommands}
@@ -4492,6 +4480,7 @@ export function SessionPane({
     )
   ) : (
     <>
+      {/* omp 换核（FORK.md）：套餐/配额横幅属 ZCode 账号体系，已随认证移除。
       {quotaBanner.state.visible &&
       !quotaBanner.dismissed &&
       (!projectedComposerError || quotaBanner.takesOverError || quotaBanner.state.blocksSubmit) ? (
@@ -4506,7 +4495,7 @@ export function SessionPane({
           }
           onDismiss={quotaBanner.dismiss}
         />
-      ) : null}
+      ) : null} */}
       {recoverableCommand ? (
         <PendingCommandRecoveryBanner
           entry={recoverableCommand}

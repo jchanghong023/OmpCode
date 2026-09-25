@@ -12,7 +12,7 @@ function withTimeout(promise, label) {
 }
 
 async function main() {
-  const targets = await fetch("http://127.0.0.1:9229/json/list").then((r) => r.json());
+  const targets = await fetch("http://127.0.0.1:9230/json/list").then((r) => r.json());
   const page = targets.find((t) => t.type === "page");
   const ws = new WebSocket(page.webSocketDebuggerUrl);
   await withTimeout(

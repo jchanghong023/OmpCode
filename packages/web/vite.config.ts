@@ -54,7 +54,8 @@ export default defineConfig(({ mode }) => {
       },
     },
     server: {
-      port: 5173,
+      // 数据/端口隔离（FORK.md）：与上游 ZCode Web dev（5173）错开，双开互不抢占。
+      port: 5193,
       proxy: {
         // Web 登录本地调试时，OAuth token 交换必须先命中线上同源接口。
         // 该专用代理放在 `/api` 通配代理之前，避免被转发到本地 server 导致 404。
@@ -63,9 +64,9 @@ export default defineConfig(({ mode }) => {
           changeOrigin: true,
           secure: true,
         },
-        // 将 /ws 和 /api 请求代理到 server（默认 3030 端口）
-        "/ws": { target: "ws://localhost:3030", ws: true },
-        "/api": { target: "http://localhost:3030" },
+        // 将 /ws 和 /api 请求代理到 server（默认 3033 端口）
+        "/ws": { target: "ws://localhost:3033", ws: true },
+        "/api": { target: "http://localhost:3033" },
       },
     },
     optimizeDeps: {

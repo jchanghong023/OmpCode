@@ -194,6 +194,10 @@ export const sessionUsageStateSchema = z.object({
       autoCompactThresholdTokens: z.number().nullable(),
       cache: zcodeSessionContextCacheUsageSchema.optional(),
       breakdown: zcodeContextUsageBreakdownSchema.optional(),
+      /** omp /context 本地命令给出的估算分项，token 总量仍以 usedTokens 为准。 */
+      details: z.object({
+        entries: z.array(z.object({ label: z.string().min(1).max(60), tokens: z.number().finite().nonnegative() })).max(32),
+      }).optional(),
     })
     .nullable(),
   cumulative: z.object({

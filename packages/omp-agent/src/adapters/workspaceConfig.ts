@@ -3,10 +3,16 @@
 
 import type { WorkspaceConfigState } from "@zcode/shared/zcode-protocol-v4";
 import type { OmpProcessFactory } from "../app/ports.js";
+import { slashCommandsOfResponse } from "../domain/ompCommands.js";
 import { ompModelCatalogEntrySchema } from "../domain/ompFrames.js";
 import { logger } from "./logger.js";
 
-export function createWorkspaceConfigLoader(ompFactory: OmpProcessFactory, workspacePath: string) {
+export interface WorkspaceConfigLoaderOptions {
+  /** 命令目录变化推送（available_commands_update；目录进程常驻监听）；载荷为 omp 原始命令数组。 */
+  onCommandsUpdate?: (commands: unknown) => void;
+}
+
+export function createWorkspaceConfigLoader(ompFactory: OmpProcessFactory, workspacePath: string, options: WorkspaceConfigLoaderOptions = {}) {
   let catalogProcess: Awaited<ReturnType<OmpProcessFactory["create"]>> | null = null;
 
   async function ensureProcess() {
@@ -17,9 +23,12 @@ export function createWorkspaceConfigLoader(ompFactory: OmpProcessFactory, works
       cwd: workspacePath,
       onEvent: () => {},
       onUiRequest: ({ respond, frame }) => respond({ type: "extension_ui_response", id: frame.id, cancelled: true }),
-      onExit: () => {
+      onExit: (code) => {
+        logger.warn("omp 模型目录进程已退出", { code });
         catalogProcess = null;
       },
+      // 命令目录热更新（marketplace 安装、插件启停等）：立即推送，UI 补全菜单随之刷新。
+      onCommandsUpdate: (commands) => options.onCommandsUpdate?.(commands),
     });
     await processHandle.start();
     catalogProcess = processHandle;
@@ -29,15 +38,23 @@ export function createWorkspaceConfigLoader(ompFactory: OmpProcessFactory, works
   return async function loadWorkspaceConfig(): Promise<WorkspaceConfigState> {
     try {
       const processHandle = await ensureProcess();
-      const [modelsOutcome, levelsOutcome, state] = await Promise.all([
+      const [modelsOutcome, levelsOutcome, commandsOutcome, state] = await Promise.all([
         processHandle.send({ type: "get_available_models" }),
         processHandle.send({ type: "get_available_thinking_levels" }),
+        processHandle.send({ type: "get_available_commands" }).catch((error) => ({
+          success: false as const,
+          error: String(error),
+        })),
         processHandle.refreshState(),
       ]);
       const models = modelsOutcome.success
         ? parseModels(modelsOutcome.data)
         : [];
       const levels = levelsOutcome.success ? parseLevels(levelsOutcome.data) : [];
+      if (!commandsOutcome.success) {
+        logger.warn("omp 命令目录加载失败", { error: commandsOutcome.error });
+      }
+      const slashCommands = commandsOutcome.success ? slashCommandsOfResponse(commandsOutcome.data) : [];
       const currentModel = state?.model;
       const currentValue =
         currentModel?.provider && currentModel?.id ? `${currentModel.provider}/${currentModel.id}` : "";
@@ -55,7 +72,7 @@ export function createWorkspaceConfigLoader(ompFactory: OmpProcessFactory, works
               modelProviderId: model.provider,
               modelProviderName: model.provider,
               ...(model.thoughtLevels && model.thoughtLevels.length > 0
-                ? { modelThoughtLevels: model.thoughtLevels, modelDefaultThoughtLevel: model.thoughtLevels[0] }
+                ? { modelThoughtLevels: model.thoughtLevels, modelDefaultThoughtLevel: model.defaultThoughtLevel }
                 : {}),
             })),
           },
@@ -71,7 +88,7 @@ export function createWorkspaceConfigLoader(ompFactory: OmpProcessFactory, works
               ]
             : []),
         ],
-        slashCommands: [],
+        slashCommands,
       };
     } catch (error) {
       logger.warn("workspace-config 目录加载失败", { error: String(error) });
@@ -80,19 +97,28 @@ export function createWorkspaceConfigLoader(ompFactory: OmpProcessFactory, works
   };
 }
 
-function parseModels(data: unknown): { provider: string; id: string; name?: string; thoughtLevels?: string[] }[] {
+function parseModels(data: unknown): { provider: string; id: string; name?: string; thoughtLevels?: string[]; defaultThoughtLevel?: string }[] {
   const record = typeof data === "object" && data !== null ? (data as { models?: unknown }) : {};
   const models = Array.isArray(record.models) ? record.models : [];
-  const output: { provider: string; id: string; name?: string; thoughtLevels?: string[] }[] = [];
+  const output: { provider: string; id: string; name?: string; thoughtLevels?: string[]; defaultThoughtLevel?: string }[] = [];
   for (const entry of models) {
     const parsed = ompModelCatalogEntrySchema.safeParse(entry);
     if (parsed.success && parsed.data.provider && parsed.data.id) {
-      const reasoning = (entry as { reasoning?: { levels?: string[] } }).reasoning;
+      // omp Model 使用 thinking.efforts；旧 reasoning.levels 不是 RPC 模型目录字段。
+      const thinking = (entry as { thinking?: { efforts?: unknown; defaultLevel?: unknown } }).thinking;
+      const effortLevels = Array.isArray(thinking?.efforts)
+        ? thinking.efforts.filter((level): level is string => typeof level === "string")
+        : undefined;
+      const thoughtLevels = effortLevels?.length ? ["off", ...effortLevels.filter((level) => level !== "off")] : undefined;
+      const defaultThoughtLevel = typeof thinking?.defaultLevel === "string" && effortLevels?.includes(thinking.defaultLevel)
+        ? thinking.defaultLevel
+        : effortLevels?.[0];
       output.push({
         provider: parsed.data.provider,
         id: parsed.data.id,
         name: parsed.data.name,
-        thoughtLevels: Array.isArray(reasoning?.levels) ? reasoning.levels.filter((level): level is string => typeof level === "string") : undefined,
+        thoughtLevels,
+        defaultThoughtLevel,
       });
     }
   }

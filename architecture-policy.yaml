@@ -52,9 +52,6 @@ modules:
   - id: formal-proof
     roots: [packages/formal-proof/src]
     managed: false
-  - id: zcode-cli
-    roots: [apps/zcode-cli]
-    managed: false
   - id: omp-agent
     roots: [packages/omp-agent/src]
     managed: true

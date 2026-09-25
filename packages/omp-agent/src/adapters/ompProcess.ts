@@ -4,19 +4,25 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createInterface } from "node:readline";
 import { OmpFrameAssembler } from "../domain/frameAssembler.js";
+import { parseOmpContextReport, type OmpContextReport } from "../domain/ompContextReport.js";
 import {
   ompAvailableCommandsFrameSchema,
+  ompCommandOutputFrameSchema,
+  ompConfigUpdateFrameSchema,
   ompExtensionUiRequestFrameSchema,
+  ompPromptResultFrameSchema,
   ompReadyFrameSchema,
   ompResponseFrameSchema,
   ompRpcChunkFrameSchema,
   ompSessionEventFrameSchema,
+  ompSessionInfoUpdateFrameSchema,
   ompStateDataSchema,
   type OmpCommandFrame,
   type OmpExtensionUiResponseFrame,
 } from "../domain/ompFrames.js";
 import { encodeJsonlLine } from "../domain/jsonlFraming.js";
 import type { OmpCommandOutcome, OmpProcessFactory, OmpSessionProcess, OmpStateData, OmpUiRequest } from "../app/ports.js";
+import type { OmpSideChannelHandlers } from "../app/ports.js";
 import { logger } from "./logger.js";
 
 const READY_TIMEOUT_MS = 60_000;
@@ -46,6 +52,9 @@ class OmpChildProcess implements OmpSessionProcess {
   private disposed = false;
   private exitListener: ((code: number | null) => void) | null = null;
   private stateData: OmpStateData | null = null;
+  private contextRead: Promise<OmpContextReport | null> | null = null;
+  private contextOutput: string[] | null = null;
+  private contextResult: { id: string; resolve: (local: boolean) => void } | null = null;
 
   constructor(
     private readonly binaryPath: string,
@@ -56,7 +65,7 @@ class OmpChildProcess implements OmpSessionProcess {
       onEvent: (event: import("../domain/ompFrames.js").OmpSessionEventFrame) => void;
       onUiRequest: (request: OmpUiRequest) => void;
       onExit: (code: number | null) => void;
-    },
+    } & OmpSideChannelHandlers,
   ) {}
 
   async start(): Promise<void> {
@@ -163,15 +172,55 @@ class OmpChildProcess implements OmpSessionProcess {
         }
         return;
       }
-      case "prompt_result":
-      case "available_commands_update":
+      case "prompt_result": {
+        const parsed = ompPromptResultFrameSchema.safeParse(record);
+        if (parsed.success) {
+          if (parsed.data.id && parsed.data.id === this.contextResult?.id) {
+            this.contextResult.resolve(parsed.data.agentInvoked === false);
+            return;
+          }
+          this.options.onPromptResult?.(parsed.data);
+        }
+        return;
+      }
+      case "available_commands_update": {
+        const parsed = ompAvailableCommandsFrameSchema.safeParse(record);
+        if (parsed.success) {
+          this.options.onCommandsUpdate?.(parsed.data.commands);
+        } else {
+          logger.warn("invalid available_commands_update", { issues: parsed.error.issues.length });
+        }
+        return;
+      }
+      case "command_output": {
+        const parsed = ompCommandOutputFrameSchema.safeParse(record);
+        if (parsed.success) {
+          if (this.contextOutput) {
+            this.contextOutput.push(parsed.data.text);
+            return;
+          }
+          this.options.onCommandOutput?.({ text: parsed.data.text });
+        }
+        return;
+      }
+      case "session_info_update": {
+        const parsed = ompSessionInfoUpdateFrameSchema.safeParse(record);
+        if (parsed.success) {
+          this.options.onSessionInfoUpdate?.(parsed.data);
+        }
+        return;
+      }
+      case "config_update": {
+        const parsed = ompConfigUpdateFrameSchema.safeParse(record);
+        if (parsed.success) {
+          this.options.onConfigUpdate?.(parsed.data);
+        }
+        return;
+      }
       case "extension_error":
       case "subagent_lifecycle":
       case "subagent_progress":
       case "subagent_event":
-      case "command_output":
-      case "session_info_update":
-      case "config_update":
       case "host_tool_call":
       case "host_tool_cancel":
       case "host_uri_request":
@@ -198,11 +247,43 @@ class OmpChildProcess implements OmpSessionProcess {
   }
 
   async send(command: OmpCommandFrame): Promise<OmpCommandOutcome> {
+    // /context 是本地 prompt 且 command_output 没有 request id；先收口再下发其它命令。
+    if (this.contextRead) await this.contextRead;
     if (command.type === "get_state") {
       // get_state 同步命令在 omp 内部可能较慢（模型注册后台刷新），放宽超时。
       return this.request(command, 10_000);
     }
     return this.request(command);
+  }
+
+  readContextReport(): Promise<OmpContextReport | null> {
+    if (this.contextRead) return this.contextRead;
+    const output: string[] = [];
+    this.contextOutput = output;
+    const work = (async () => {
+      let timer: NodeJS.Timeout | undefined;
+      try {
+        let resolveLocal!: (local: boolean) => void;
+        const localResult = new Promise<boolean>((resolve) => { resolveLocal = resolve; });
+        const response = this.request({ type: "prompt", message: "/context" }, 5_000);
+        this.contextResult = { id: `omp-req-${this.commandCounter}`, resolve: resolveLocal };
+        timer = setTimeout(() => resolveLocal(false), 5_000);
+        timer.unref?.();
+        const outcome = await response;
+        if (!outcome.success || (outcome.data as { agentInvoked?: boolean } | undefined)?.agentInvoked === true) return null;
+        if ((outcome.data as { agentInvoked?: boolean } | undefined)?.agentInvoked !== false && !await localResult) return null;
+        return parseOmpContextReport(output.join("\n"));
+      } catch {
+        return null;
+      } finally {
+        if (timer) clearTimeout(timer);
+        this.contextOutput = null;
+        this.contextResult = null;
+        this.contextRead = null;
+      }
+    })();
+    this.contextRead = work;
+    return work;
   }
 
   private request(command: OmpCommandFrame, timeoutMs = COMMAND_TIMEOUT_MS): Promise<OmpCommandOutcome> {

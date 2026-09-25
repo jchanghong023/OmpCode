@@ -1,5 +1,7 @@
 /* eslint-disable max-lines -- 远程连接、OAuth 回调、遥测和通知 IPC 共用窗口级上下文，集中注册避免跨文件状态漂移。 */
 import { app, BrowserWindow, ipcMain, shell } from "electron";
+import { access } from "node:fs/promises";
+import { z } from "zod";
 import armsRum from "@arms/rum-electron";
 import {
   armsCustomEventPayloadSchema,
@@ -34,6 +36,9 @@ import {
   type RemoteConnectionStats,
 } from "./desktopRemoteUsageArmsTelemetry.js";
 import { openPathInDefaultApp } from "./desktopMainIpcHelpers.js";
+import { readOmpModelRolesConfig, resolveOmpModelRolesConfigPath, writeOmpModelRolesConfig } from "./ompModelRolesConfig.js";
+import { listOmpProfiles } from "./ompProfiles.js";
+import { resolveOmpProfileFromEnv } from "@zcode/shared/omp-profile";
 
 function isAllowedExternalOpenUrl(value: string): boolean {
   try {
@@ -306,6 +311,44 @@ export function registerRemoteIpcHandlers(options: {
     });
   });
 
+  // omp 换核（FORK.md）：模型管理事实源在 omp 侧。用系统编辑器打开用户 omp 模型配置；
+  // 文件不存在时显式报错，绝不代写用户 omp 配置。
+  ipcMain.handle(PlatformChannels.OpenOmpModelConfig, async () => {
+    const configPath = resolveOmpModelRolesConfigPath();
+    if (!(await access(configPath).then(() => true, () => false))) {
+      return { success: false, error: "omp_config_missing" };
+    }
+    const message = await shell.openPath(configPath);
+    return message ? { success: false, error: message } : { success: true };
+  });
+  // omp modelRoles 读取：yaml Document 解析，只取 modelRoles 映射。
+  ipcMain.handle(PlatformChannels.ReadOmpModelRoles, async () => {
+    const configPath = resolveOmpModelRolesConfigPath();
+    return readOmpModelRolesConfig(configPath);
+  });
+  ipcMain.handle(PlatformChannels.ListOmpProfiles, async () => {
+    try {
+      return {
+        success: true,
+        profiles: await listOmpProfiles(),
+        activeProfile: resolveOmpProfileFromEnv(process.env),
+      };
+    } catch {
+      return { success: false, error: "omp_profiles_load_failed" };
+    }
+  });
+  // omp modelRoles 写入：yaml Document 级替换（保留注释/键序/其余段落），
+  // 写前落一份带时间戳的备份（用户可回滚），失败不落盘。
+  ipcMain.handle(PlatformChannels.WriteOmpModelRoles, async (_event, payload: unknown) => {
+    const configPath = resolveOmpModelRolesConfigPath();
+    const parsed = z
+      .object({ roles: z.array(z.object({ role: z.string().min(1), value: z.string().min(1) })).min(1) })
+      .safeParse(payload);
+    if (!parsed.success) {
+      return { success: false, error: "invalid_roles_payload" };
+    }
+    return writeOmpModelRolesConfig(configPath, parsed.data.roles);
+  });
   ipcMain.handle(PlatformChannels.OpenExternalFile, async (_event, rawPath: string) =>
     openPathInDefaultApp(rawPath, options.logger),
   );

@@ -5,9 +5,10 @@ import {
   V4_METHODS,
   type WorkspaceConfigState,
 } from "@zcode/shared/zcode-protocol-v4";
-import { zcodeProtocolMethods } from "@zcode/shared";
 import { createLegacyHandlers } from "./legacyMethods.js";
+import { normalizeOmpSlashCommands } from "../domain/ompCommands.js";
 import { ProtocolError } from "./errors.js";
+import { UNSUPPORTED_METHODS } from "./unsupportedMethods.js";
 import { SessionRegistry } from "./sessionRegistry.js";
 import { V4CommandService } from "./v4Commands.js";
 import { AttachmentStore } from "./attachmentStore.js";
@@ -24,44 +25,6 @@ export interface ServerAppDeps {
   loadWorkspaceConfig: () => Promise<WorkspaceConfigState>;
 }
 
-const UNSUPPORTED_METHODS = new Set<string>([
-  zcodeProtocolMethods.pluginsList,
-  zcodeProtocolMethods.pluginsReferenceCatalog,
-  zcodeProtocolMethods.pluginsReferenceCatalogWithCategory,
-  zcodeProtocolMethods.skillsReferenceCatalog,
-  zcodeProtocolMethods.pluginsOverview,
-  zcodeProtocolMethods.pluginsMarketplaceAdd,
-  zcodeProtocolMethods.pluginsMarketplaceRemove,
-  zcodeProtocolMethods.pluginsMarketplaceUpdate,
-  zcodeProtocolMethods.pluginsInstall,
-  zcodeProtocolMethods.pluginsCancelOperation,
-  zcodeProtocolMethods.pluginsUninstall,
-  zcodeProtocolMethods.pluginsUpdate,
-  zcodeProtocolMethods.pluginsRestoreBuiltin,
-  zcodeProtocolMethods.pluginsConfigure,
-  zcodeProtocolMethods.pluginsResetConfig,
-  zcodeProtocolMethods.pluginsValidate,
-  zcodeProtocolMethods.pluginsDescribe,
-  zcodeProtocolMethods.pluginsSetEnabled,
-  zcodeProtocolMethods.pluginsResolveSuggestedReference,
-  zcodeProtocolMethods.workflowsList,
-  zcodeProtocolMethods.workflowsGet,
-  zcodeProtocolMethods.workflowsUpdateMeta,
-  zcodeProtocolMethods.workflowsDelete,
-  zcodeProtocolMethods.workflowsRuns,
-  zcodeProtocolMethods.workflowsMove,
-  zcodeProtocolMethods.workspaceGenerateText,
-  zcodeProtocolMethods.workspaceCancelGenerateText,
-  zcodeProtocolMethods.providerTestModelConnectivity,
-  zcodeProtocolMethods.workspaceHookTrustGrant,
-  zcodeProtocolMethods.sessionDebug,
-  zcodeProtocolMethods.sessionFork,
-  zcodeProtocolMethods.usageStats,
-  zcodeProtocolMethods.sessionUsage,
-  zcodeProtocolMethods.sessionGoal,
-  zcodeProtocolMethods.sessionCancelBackgroundTask,
-]);
-
 export class ServerApp {
   readonly registry: SessionRegistry;
   private readonly commands: V4CommandService;
@@ -69,14 +32,21 @@ export class ServerApp {
   private readonly legacy: Record<string, (params: unknown) => Promise<unknown>>;
   private readonly deps: ServerAppDeps;
   private workspaceConfigCache: WorkspaceConfigState | null = null;
+  private workspaceConfigLoading: Promise<WorkspaceConfigState> | null = null;
 
   constructor(deps: ServerAppDeps) {
     this.deps = deps;
-    this.registry = new SessionRegistry({ ompFactory: deps.ompFactory, store: deps.store, gateway: deps.gateway });
+    this.registry = new SessionRegistry({
+      ompFactory: deps.ompFactory,
+      store: deps.store,
+      gateway: deps.gateway,
+      onCommandsUpdate: (commands) => this.updateSlashCommands(commands),
+    });
     this.commands = new V4CommandService({
       registry: this.registry,
       workspaceId: deps.workspaceKey,
       workspacePath: deps.workspacePath,
+      attachments: this.attachments,
     });
     this.legacy = createLegacyHandlers({
       registry: this.registry,
@@ -85,6 +55,7 @@ export class ServerApp {
       workspaceKey: deps.workspaceKey,
       workspaceIdentity: deps.workspaceIdentity,
       deliveredAccountConfigRevision: null,
+      loadWorkspaceConfig: () => this.getWorkspaceConfig(),
     });
   }
 
@@ -225,6 +196,29 @@ export class ServerApp {
     }
   }
 
+  private async getWorkspaceConfig(): Promise<WorkspaceConfigState> {
+    if (this.workspaceConfigCache) return this.workspaceConfigCache;
+    if (!this.workspaceConfigLoading) {
+      this.workspaceConfigLoading = this.deps.loadWorkspaceConfig()
+        .then((config) => {
+          this.workspaceConfigCache = config;
+          return config;
+        })
+        .finally(() => { this.workspaceConfigLoading = null; });
+    }
+    return this.workspaceConfigLoading;
+  }
+
+  /** omp 命令目录热更新（available_commands_update）：合并进缓存并推送已订阅的 workspace-config topic。 */
+  updateSlashCommands(rawCommands: unknown): void {
+    if (!this.workspaceConfigCache) {
+      return;
+    }
+    const next = { ...this.workspaceConfigCache, slashCommands: normalizeOmpSlashCommands(rawCommands) };
+    this.workspaceConfigCache = next;
+    this.registry.updateWorkspaceConfig(this.deps.workspaceKey, next);
+  }
+
   private async subscribeConversation(params: unknown) {
     const record = asRecord(params);
     const topic = stringField(record, "topic");
@@ -238,12 +232,10 @@ export class ServerApp {
       return { ack };
     }
     if (topic.startsWith("workspace-config/")) {
-      if (!this.workspaceConfigCache) {
-        this.workspaceConfigCache = await this.deps.loadWorkspaceConfig();
-      }
+      const config = await this.getWorkspaceConfig();
       const ack = this.registry.subscribeWorkspaceConfig({
         workspaceId: topic.slice("workspace-config/".length),
-        config: this.workspaceConfigCache,
+        config,
       });
       return { ack };
     }

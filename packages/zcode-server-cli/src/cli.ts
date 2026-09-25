@@ -1,8 +1,8 @@
 /* eslint-disable max-lines -- CLI 入口集中编排子命令分发与进程管理，oxfmt 换行后略超 400 行，拆分会割裂编排流程。 */
 import { fork } from "node:child_process";
-import { access, mkdir, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, readdir, rm, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
-import { dirname, isAbsolute, join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import { ZCODE_VERSION } from "@zcode/shared";
 import {
   controlRequestSchema,
@@ -503,15 +503,7 @@ async function readControlStatus(
 }
 
 async function delegateLegacyCli(argv: readonly string[], io: CliIO): Promise<number> {
-  const candidate =
-    process.env.ZCODE_LEGACY_CLI_ENTRY?.trim() ||
-    join(dirname(fileURLToPath(import.meta.url)), "zcode.cjs");
-  try {
-    await access(candidate);
-  } catch {
-    stdout(io, argv.length ? `Unknown command: ${argv[0]}` : "ZCode TUI");
-    return argv.length ? 1 : 0;
-  }
-  const child = fork(candidate, [...argv], { stdio: "inherit" });
-  return await new Promise<number>((resolve) => child.once("exit", (code) => resolve(code ?? 1)));
+  // 原 CLI 已移除；保留服务器子命令的入口，未知命令直接报错而不再转给旧 runtime。
+  stdout(io, argv.length ? `Unknown command: ${argv[0]}` : "OmpCode Server: use serve, status, stop, or --help");
+  return argv.length ? 1 : 0;
 }

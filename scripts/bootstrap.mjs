@@ -158,8 +158,6 @@ function runBootstrapWithRemoteBuild() {
   runBootstrapDesktopBuild();
 }
 
-runGit(["submodule", "update", "--init", "--recursive", "apps/zcode-cli"]);
-
 runPnpm(withRemoteAssets ? ["install", "--config.confirmModulesPurge=false"] : ["install"]);
 
 runPnpm(["prepare:desktop-runtime"], {

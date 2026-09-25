@@ -268,26 +268,7 @@ export function createQuickPickCommands({
     run: handlers.openProductDocs,
   });
 
-  if (isLoggedIn && handlers.logout) {
-    commands.push({
-      id: "logout",
-      sectionId: "app",
-      titleId: "quickPick.command.logout",
-      icon: "logout",
-      keywords: ["disconnect", "logout", "sign out", "断开连接", "登出"],
-      run: handlers.logout,
-    });
-  } else if (!isLoggedIn && handlers.login) {
-    commands.push({
-      id: "login",
-      sectionId: "app",
-      titleId: "quickPick.command.login",
-      icon: "login",
-      // 命令面板的账号动作对用户表达为“连接/断开连接”，搜索词也要同步。
-      keywords: ["connect", "login", "sign in", "连接", "登录"],
-      run: handlers.login,
-    });
-  }
+  // omp 换核（FORK.md）：ZCode 账号体系移除，命令面板不再提供登录/登出动作。
 
   return commands.filter(
     (command) =>

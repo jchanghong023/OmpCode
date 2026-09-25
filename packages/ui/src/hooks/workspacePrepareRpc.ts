@@ -9,6 +9,7 @@ import { type ZCodeProvider, type ZCodeWorkspacePrepareResult } from "@zcode/sha
 import { getChatErrorMessage } from "@/lib/chatPrepareError.js";
 import { logger } from "@/logger.js";
 import { zcodeWorkspacePresentationToConfigOptions } from "@/lib/zcodeSessionProjection.js";
+import { mergeOmpWorkspaceConfigOptions } from "@/lib/ompWorkspaceConfigOptions.js";
 
 export async function prepareWorkspaceWithZCodeSessionService(params: {
   workspacePath: string;
@@ -41,7 +42,10 @@ export async function prepareWorkspaceWithZCodeSessionService(params: {
   }
 
   const readPresentationDurationMs = Date.now() - startedAt;
-  const configOptions = zcodeWorkspacePresentationToConfigOptions(presentation.mode);
+  const configOptions = mergeOmpWorkspaceConfigOptions(
+    presentation.configOptions ?? [],
+    zcodeWorkspacePresentationToConfigOptions(presentation.mode),
+  );
   const totalDurationMs = Date.now() - startedAt;
   logger.info("[zcode-workspace-presentation] readWorkspacePresentation done", {
     workspacePath: params.workspacePath,

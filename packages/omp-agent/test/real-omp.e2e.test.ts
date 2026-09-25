@@ -1,8 +1,9 @@
 // 真实 omp release 二进制 E2E（换核验收）：驱动「内嵌 omp.exe → omp-agent 适配器 →
 // ZCode v4 协议」全链路。
-// 模型按需求使用 commandcode 提供者的免费模型（muse-spark-1.2-contributor-free），
-// 走用户 omp 的既有凭据与配置（行为与日常 omp 一致）；审批模式用运行时 flag
-// --approval-mode write（不持久化，不改用户配置）；工作区为沙箱目录，不触碰用户文件。
+// 模型按 FORK.md 测试约定：使用用户 omp 配置的 zhipu-coding-plan/glm-5.3-flash
+// （走用户 omp 既有凭据，行为与日常 omp 一致）；
+// 审批模式用运行时 flag --approval-mode write（不持久化，不改用户配置）；
+// 工作区为沙箱目录，不触碰用户文件。
 // omp 会话文件按其自身目录规则落在用户会话库的新桶目录（与用户日常使用等效，只增不改）。
 // 未下载二进制（bundled-agents/<plat>/glm/omp/omp(.exe)）时跳过。
 
@@ -11,6 +12,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { createRequire } from "node:module";
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { zcodeWorkspacePresentationSchema } from "@zcode/shared";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";
@@ -23,7 +25,9 @@ const tsxCliPath = join(dirname(createRequire(import.meta.url).resolve("tsx/pack
 const ompBinary =
   process.env.OMP_RPC_BINARY_PATH ??
   join(repoRoot, "packages", "desktop", "bundled-agents", `${process.platform}-${process.arch}`, "glm", "omp", process.platform === "win32" ? "omp.exe" : "omp");
-const ompModelArgs = ["--provider", "commandcode", "--model", "inclusionai/ling-3.0-flash-sante:free"];
+// 真实模型统一走用户 omp 配置的 glm-5.3-flash（FORK.md 测试约定）；不依赖
+// commandcode 免费模型（每日 100 次配额，耗尽后 429 会污染验收结果）。
+const ompModelArgs = ["--provider", "zhipu-coding-plan", "--model", "glm-5.3-flash"];
 
 const hasRealBinary = process.env.OMP_AGENT_SKIP_REAL_E2E !== "1" && existsSync(ompBinary);
 
@@ -73,6 +77,23 @@ class Harness {
       await new Promise((sleep) => setTimeout(sleep, 50));
     }
   }
+  state(): Record<string, unknown> {
+    let state: Record<string, unknown> = {};
+    for (const frame of this.frames) {
+      if ((frame as { method?: string }).method !== "v4/conversation/frame") continue;
+      const wire = (frame as { params: { frame?: { topic?: string; payload: unknown } } }).params.frame;
+      if (!wire) continue;
+      const payload = wire.payload as { kind: string; snapshot?: Record<string, unknown>; deltas?: { op?: string; patch?: Record<string, unknown> }[] };
+      if (payload.kind === "snapshot") {
+        state = { ...(payload.snapshot ?? {}) };
+      } else {
+        for (const delta of payload.deltas ?? []) {
+          if (delta.op === "state.updated" && delta.patch) Object.assign(state, delta.patch);
+        }
+      }
+    }
+    return state;
+  }
   rows(): Map<number, Record<string, unknown>> {
     const rows = new Map<number, Record<string, unknown>>();
     for (const frame of this.frames) {
@@ -94,7 +115,7 @@ class Harness {
   }
 }
 
-test("真实 omp 二进制 + commandcode 免费模型：流式 → write 工具 → 审批 → 文件落盘 → 完成", { skip: hasRealBinary ? false : "内嵌 omp 二进制未下载（跳过真实 E2E）" }, async () => {
+test("真实 omp 二进制 + glm-5.3-flash：流式 → write 工具 → 审批 → 文件落盘 → 完成", { skip: hasRealBinary ? false : "内嵌 omp 二进制未下载（跳过真实 E2E）" }, async () => {
   const sandbox = join(packageRoot, ".test-real-e2e-workspace");
   rmSync(sandbox, { recursive: true, force: true });
   mkdirSync(sandbox, { recursive: true });
@@ -124,6 +145,16 @@ test("真实 omp 二进制 + commandcode 免费模型：流式 → write 工具 
           (frame as { params?: { phase?: string } }).params?.phase === "ready",
       ),
     );
+
+    const presentationResponse = (await harness.request("workspace/readPresentation", {
+      workspace: {
+        workspacePath: sandbox,
+        workspaceIdentity: "real-e2e-workspace",
+        workspaceKey: "real-e2e-workspace",
+      },
+    })) as { result: unknown };
+    const presentation = zcodeWorkspacePresentationSchema.parse(presentationResponse.result);
+    assert.ok(presentation.slashCommands.length > 0, `真实 omp 未返回命令目录\n${stderrTail}`);
 
     const createResult = (await harness.request("v4/command", {
       commandId: "real-create-1",
@@ -191,6 +222,121 @@ test("真实 omp 二进制 + commandcode 免费模型：流式 → write 工具 
     } else {
       console.log("[real-e2e] write 工具行:", toolRow?.status ?? "未调用");
     }
+  } finally {
+    child.kill();
+    await new Promise((done) => setTimeout(done, 300));
+  }
+});
+
+test("真实 omp 二进制：本地命令收口 + 临时模型切换到 glm-5.3-flash", { skip: hasRealBinary ? false : "内嵌 omp 二进制未下载（跳过真实 E2E）" }, async () => {
+  const sandbox = join(packageRoot, ".test-real-e2e-workspace-2");
+  rmSync(sandbox, { recursive: true, force: true });
+  mkdirSync(sandbox, { recursive: true });
+
+  const child = spawn(process.execPath, [tsxCliPath, adapterEntry, "app-server", "--stdio"], {
+    cwd: sandbox,
+    env: {
+      ...process.env,
+      ZCODE_WORKSPACE_IDENTITY: "real-e2e-workspace-2",
+      OMP_RPC_BINARY_PATH: ompBinary,
+      // 基座用 muse-spark（免费、与 glm 凭据无关），临时模型切换目标才是 glm-5.3-flash，
+      // 这样「模型已切换」标记与 set_model 下发才有可断言的差值。
+      OMP_RPC_ARGS_JSON: JSON.stringify(["--provider", "opencode-zen", "--model", "muse-spark-1.2-contributor-free"]),
+    },
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  let stderrTail = "";
+  child.stderr.on("data", (chunk: Buffer) => {
+    stderrTail = `${stderrTail}${chunk.toString("utf8")}`.slice(-8000);
+  });
+  const harness = new Harness(child);
+  try {
+    await harness.waitUntil(() =>
+      harness.frames.find(
+        (frame) =>
+          (frame as { method?: string; params?: { phase?: string } }).method === "startup/storageState" &&
+          (frame as { params?: { phase?: string } }).params?.phase === "ready",
+      ),
+    );
+
+    // 1. 本地命令：/rename 不触发模型轮，输出经 command_output 投影并经 session_info_update 回投标题。
+    const createResult = (await harness.request("v4/command", {
+      commandId: "real-local-create",
+      clientId: "e2e-client",
+      sessionId: null,
+      type: "createSession",
+      payload: {
+        workspaceId: "real-e2e-workspace-2",
+        firstInput: { text: "/rename omp-e2e-local-title" },
+      },
+      issuedAt: Date.now(),
+    })) as { result: unknown };
+    const createAck = commandAckSchema.parse(createResult.result);
+    assert.equal(createAck.status, "accepted", `createSession: ${JSON.stringify(createAck)}\n${stderrTail}`);
+    const sessionId = (createAck.result as { sessionId: string }).sessionId;
+    await harness.request("v4/conversation/subscribe", {
+      topic: `conversation/${sessionId}`,
+      connectionId: "real-conn-2",
+      clientMode: "desktop-continuous",
+    });
+    await harness.waitUntil(() =>
+      [...harness.rows().values()].some((row) => row.kind === "turnHeader" && row.state === "completedSuccess"),
+    );
+    await harness.waitUntil(() =>
+      (harness.state().meta as { title?: string } | undefined)?.title === "omp-e2e-local-title" ? true : undefined,
+    );
+    assert.ok(
+      [...harness.rows().values()].some((row) => row.kind === "assistantText" && String(row.text ?? "").trim().length > 0),
+      `本地命令缺少输出投影\n${stderrTail}`,
+    );
+
+    // 2. 临时模型：sendText 携带 modelSelection 从 muse-spark 切到 glm-5.3-flash（会话级，不写 omp 配置）。
+    const sendResult = (await harness.request("v4/command", {
+      commandId: "real-model-send",
+      clientId: "e2e-client",
+      sessionId,
+      type: "sendText",
+      payload: {
+        text: "只回复两个字：好的",
+        modelSelection: { providerId: "zhipu-coding-plan", modelId: "glm-5.3-flash", options: { reasoningLevel: "max" } },
+      },
+      issuedAt: Date.now(),
+    })) as { result: unknown };
+    assert.equal(commandAckSchema.parse(sendResult.result).status, "accepted");
+    await harness.waitUntil(() => {
+      const rows = [...harness.rows().values()];
+      const header = rows.filter((row) => row.kind === "turnHeader");
+      return header.length >= 2 && header[header.length - 1]!.state === "completedSuccess" ? true : undefined;
+    });
+    const rows = [...harness.rows().values()];
+    const marker = rows.find(
+      (row) => row.kind === "timelineMarker" && (row as { marker?: { type?: string } }).marker?.type === "modelChange",
+    ) as { marker?: { toProvider?: string; toModel?: string } } | undefined;
+    assert.ok(marker, `缺少 modelChange 标记\n${stderrTail}`);
+    assert.equal(marker!.marker!.toProvider, "zhipu-coding-plan");
+    assert.equal(marker!.marker!.toModel, "glm-5.3-flash");
+    assert.equal((harness.state().config as { model?: string } | undefined)?.model, "glm-5.3-flash");
+    const lastTurnText = rows
+      .filter((row) => row.kind === "assistantText")
+      .reduce((total, row) => total + String(row.text ?? "").length, 0);
+    assert.ok(lastTurnText > 0, `glm-5.3-flash 无流式输出\n${stderrTail}`);
+
+    // 3. omp 原生 /model 本地命令：config_update 回投会话模型状态（不写 omp 配置文件）。
+    const modelCmd = (await harness.request("v4/command", {
+      commandId: "real-model-cmd",
+      clientId: "e2e-client",
+      sessionId,
+      type: "sendText",
+      payload: { text: "/model opencode-zen/muse-spark-1.2-contributor-free:medium" },
+      issuedAt: Date.now(),
+    })) as { result: unknown };
+    assert.equal(commandAckSchema.parse(modelCmd.result).status, "accepted");
+    await harness.waitUntil(() =>
+      (harness.state().config as { model?: string } | undefined)?.model === "muse-spark-1.2-contributor-free" ? true : undefined,
+    );
+    await harness.waitUntil(() =>
+      [...harness.rows().values()].some((row) => row.kind === "assistantText" && /Model set to/.test(String(row.text ?? ""))),
+    );
   } finally {
     child.kill();
     await new Promise((done) => setTimeout(done, 300));

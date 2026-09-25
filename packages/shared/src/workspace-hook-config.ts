@@ -174,7 +174,7 @@ export function resolveWorkspaceHookConfiguredGates(input: {
 function buildWorkspaceHookCandidatePaths(directories: readonly string[]): string[] {
   return directories.flatMap((directory) => [
     join(directory, "zcode.json"),
-    join(directory, ".zcode", "config.json"),
+    join(directory, ".ompcode", "config.json"),
   ]);
 }
 
@@ -232,7 +232,7 @@ export function createWorkspaceHookSourceInput(input: {
   const configDirectory = dirname(canonicalPath);
   return {
     canonicalPath,
-    baseDir: basename(configDirectory) === ".zcode" ? dirname(configDirectory) : configDirectory,
+    baseDir: basename(configDirectory) === ".ompcode" ? dirname(configDirectory) : configDirectory,
     discoveryOrder: input.discoveryOrder,
     configFileKind: explicitProjectConfig
       ? "explicit"
@@ -242,7 +242,7 @@ export function createWorkspaceHookSourceInput(input: {
     explicitProjectConfig,
     editable:
       !explicitProjectConfig &&
-      canonicalPath === resolve(input.workingDirectory, ".zcode", "config.json"),
+      canonicalPath === resolve(input.workingDirectory, ".ompcode", "config.json"),
     hooks: input.hooks,
   };
 }

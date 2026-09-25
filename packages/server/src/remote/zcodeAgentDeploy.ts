@@ -23,13 +23,6 @@ import {
   isWslBackend,
 } from "@zcode/server/remote/zcodeAgentWrapperDeploy.js";
 import {
-  buildRemoteAgentOfficialPluginDir,
-  buildRemoteAgentOfficialPluginRequiredPaths,
-  buildRemoteAgentOfficialPluginSourceRelativePath,
-  REMOTE_AGENT_OFFICIAL_PLUGIN_REQUIRED_RELATIVE_PATHS,
-} from "@zcode/server/remote/zcodeAgentOfficialPluginAssets.js";
-import { repairLegacyRemoteOfficialPluginDirectoryPermissions } from "@zcode/server/remote/zcodeAgentOfficialPluginPermissionRepair.js";
-import {
   checkRemoteAssetComponentIdentity,
   writeRemoteAssetComponentMeta,
 } from "@zcode/server/remote/remoteAssetLiveIdentity.js";
@@ -57,12 +50,12 @@ async function shouldSkipZCodeAgentDeploy(params: {
   backend: IRemoteBackend;
   remoteBinaryPath: string;
   remoteBundlePath: string;
+  remoteOmpBinaryPath: string;
   runtimeResourceDir: string;
   expectedArtifactSha256: string | null;
   componentId: string;
   platformArch: string;
   force: boolean;
-  missingOfficialPluginAssetPaths: string[];
   installer: RemoteAssetInstaller;
   loggers: DeployLoggers;
 }): Promise<boolean> {
@@ -110,17 +103,16 @@ async function shouldSkipZCodeAgentDeploy(params: {
     }
   }
 
-  // wrapper 在、但 zcode.cjs 缺失（被清理 / 旧原生二进制部署残留）时也要重新部署。
+  // wrapper 在、但 omp-agent.cjs 缺失（被清理 / 旧部署残留）时也要重新部署。
   if (!(await params.backend.exists(params.remoteBundlePath))) {
     params.loggers.logWarn(
       `[remote-assets] ${params.installer.mode === "remote-download" ? "download required" : "upload required"}: component=${params.componentId} reason=remote bundle missing path=${params.remoteBundlePath}`,
     );
     return false;
   }
-
-  if (params.missingOfficialPluginAssetPaths.length > 0) {
+  if (!(await params.backend.exists(params.remoteOmpBinaryPath))) {
     params.loggers.logWarn(
-      `[remote-assets] ${params.installer.mode === "remote-download" ? "download required" : "upload required"}: component=${params.componentId} reason=official plugin assets missing paths=${params.missingOfficialPluginAssetPaths.join(",")}`,
+      `[remote-assets] ${params.installer.mode === "remote-download" ? "download required" : "upload required"}: component=${params.componentId} reason=omp binary missing path=${params.remoteOmpBinaryPath}`,
     );
     return false;
   }
@@ -129,19 +121,6 @@ async function shouldSkipZCodeAgentDeploy(params: {
     `[zcode-agent-deploy] ${ZCODE_AGENT_PROVIDER}: 制品 SHA ${params.expectedArtifactSha256} 已部署，跳过`,
   );
   return true;
-}
-
-async function findMissingRemoteOfficialPluginAssetPaths(
-  backend: IRemoteBackend,
-  remoteProviderDir: string,
-): Promise<string[]> {
-  const missingPaths: string[] = [];
-  for (const remotePath of buildRemoteAgentOfficialPluginRequiredPaths(remoteProviderDir)) {
-    if (!(await backend.exists(remotePath))) {
-      missingPaths.push(remotePath);
-    }
-  }
-  return missingPaths;
 }
 
 /**
@@ -164,7 +143,7 @@ export async function deployZCodeAgentRuntime(
   }
 
   // binaryName 指 wrapper 可执行文件名（如 zcode-agent / zcode-agent.exe）——
-  // 一个调用远端 node 执行 zcode.cjs 的壳脚本。
+  // 一个调用远端 node 执行 omp-agent.cjs 的壳脚本。
   const binaryName = runtime.resolveEntrySegments(env.platform).at(-1);
   if (!binaryName) {
     loggers.logWarn(`[zcode-agent-deploy] ${provider}: 无法解析 agent 入口名称，跳过部署`);
@@ -175,11 +154,7 @@ export async function deployZCodeAgentRuntime(
   const remoteVersionFile = `${remoteProviderDir}/.version`;
   const remoteBinaryPath = `${remoteProviderDir}/${binaryName}`;
   const remoteBundlePath = `${remoteProviderDir}/${REMOTE_AGENT_BUNDLE_NAME}`;
-  const remoteOfficialPluginDir = buildRemoteAgentOfficialPluginDir(remoteProviderDir);
-  const missingOfficialPluginAssetPaths = await findMissingRemoteOfficialPluginAssetPaths(
-    backend,
-    remoteProviderDir,
-  );
+  const remoteOmpBinaryPath = `${remoteProviderDir}/omp/omp`;
 
   if (
     await deployDevelopmentZCodeAgentRuntime(
@@ -190,6 +165,8 @@ export async function deployZCodeAgentRuntime(
         remoteProviderDir,
         remoteVersionFile,
         remoteBinaryPath,
+        remoteOmpBinaryPath,
+        platformArch: options.platformArch,
         force: Boolean(options.force),
       },
       loggers,
@@ -213,12 +190,12 @@ export async function deployZCodeAgentRuntime(
       backend,
       remoteBinaryPath,
       remoteBundlePath,
+      remoteOmpBinaryPath,
       runtimeResourceDir: runtime.bundledResourceDir,
       expectedArtifactSha256,
       componentId,
       platformArch: options.platformArch,
       force: Boolean(options.force),
-      missingOfficialPluginAssetPaths,
       installer: options.installer,
       loggers,
     })
@@ -227,46 +204,23 @@ export async function deployZCodeAgentRuntime(
   }
 
   loggers.log(`[zcode-agent-deploy] ${provider}: 开始部署 v${runtime.version}...`);
-  // 缺少远端 plugin 只表示安装不完整，不等于 App 版本变化。
-  // 同 App 版本修复 plugin 时应复用已校验的组件 cache；只有强制部署边界才重新下载制品。
   const forceRefreshRuntimeAsset = Boolean(options.force);
-  const permissionRepairSucceeded = await repairLegacyRemoteOfficialPluginDirectoryPermissions({
-    backend,
-    loggers,
-    remoteOfficialPluginDir,
+  // 二进制与适配器均就绪后才更新 wrapper 与 live marker，避免半成品被复用。
+  await options.installer.installFile({
+    componentId,
+    sourceRelativePath: `${runtime.bundledResourceDir}/${options.platformArch}/${REMOTE_AGENT_BUNDLE_NAME}`,
+    remotePath: remoteBundlePath,
+    executable: false,
+    forceRefresh: forceRefreshRuntimeAsset,
   });
-  const installBundle = () =>
-    options.installer.installFile({
-      componentId,
-      sourceRelativePath: `${runtime.bundledResourceDir}/${options.platformArch}/${REMOTE_AGENT_BUNDLE_NAME}`,
-      remotePath: remoteBundlePath,
-      executable: false,
-      forceRefresh: forceRefreshRuntimeAsset,
-    });
-  const installOfficialPluginPackages = () =>
-    options.installer.installDirectory({
-      componentId,
-      sourceRelativePath: buildRemoteAgentOfficialPluginSourceRelativePath({
-        runtimeResourceDir: runtime.bundledResourceDir,
-        platformArch: options.platformArch,
-      }),
-      remoteDir: remoteOfficialPluginDir,
-      requiredRelativePaths: [...REMOTE_AGENT_OFFICIAL_PLUGIN_REQUIRED_RELATIVE_PATHS],
-      forceRefresh: forceRefreshRuntimeAsset,
-    });
-
-  if (permissionRepairSucceeded) {
-    // 1) 正常路径保持原部署顺序，避免改变健康 SSH / Docker / WSL 的时序语义。
-    await installBundle();
-    // 2) 安装随 agent bundle 发布的官方插件源资源，供远端 agent bootstrap seed builtin plugin。
-    await installOfficialPluginPackages();
-  } else {
-    // 1) chmod 失败时先验证 packages 可替换，避免 bundle 已更新但旧 packages 删除失败。
-    await installOfficialPluginPackages();
-    // 2) packages 替换成功后再安装编译产物 zcode.cjs（跨平台同一份，glm 组件里就是它）。
-    await installBundle();
-  }
-  // 3) 写入 wrapper（即 resolver 期望的 zcode-agent），用远端已部署的 node 执行 zcode.cjs。
+  await options.installer.installFile({
+    componentId,
+    sourceRelativePath: `${runtime.bundledResourceDir}/${options.platformArch}/omp/omp`,
+    remotePath: remoteOmpBinaryPath,
+    executable: true,
+    forceRefresh: forceRefreshRuntimeAsset,
+  });
+  // resolver 期望的入口仍为 zcode-agent；wrapper 执行 omp 适配器。
   await deployRemoteAgentWrapper({
     backend,
     content: buildRemoteAgentBundleWrapper(runtime.bundledResourceDir),

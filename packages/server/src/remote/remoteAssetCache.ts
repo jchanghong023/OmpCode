@@ -873,7 +873,7 @@ async function ensureRemoteComponentDirFromCdnInternal(
   }
   if (!forceRefresh && initialMissingPaths) {
     // 旧版本只用 .ready 判断 component cache 可用。用户先部署过只含
-    // zcode.cjs 的 glm cache 后，再补传 packages 会一直复用残缺 cache。
+    // omp-agent.cjs 的 glm cache 后，再补传其他资源会一直复用残缺 cache。
     // 这里按调用方声明的关键路径校验，缺失时清掉旧 cache 并从 CDN 重下完整组件。
     loggers.logWarn(
       `[remote-assets] local component cache incomplete: component=${component.id} missing=${initialMissingPaths.join(",")}; redownloading`,

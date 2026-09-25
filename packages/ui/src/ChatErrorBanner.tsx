@@ -1,4 +1,3 @@
-import { CodingPlanEntryButton } from "@/settings/CodingPlanEntryButton.js";
 /**
  * ChatErrorBanner — 错误提示组件
  *
@@ -13,7 +12,7 @@ import {
   TID_CHAT_ERROR_BANNER,
   TID_CHAT_ERROR_HOOK_ICON,
 } from "@zcode/shared";
-import { AnchorIcon, CopyIcon, InfoIcon, RocketIcon, SettingsIcon, X } from "lucide-react";
+import { AnchorIcon, CopyIcon, InfoIcon, X } from "lucide-react";
 import { useZCodeIntl } from "./i18n/IntlProvider.js";
 import type { IntlInstance } from "./i18n/IntlProvider.js";
 import { Button } from "./components/ui/button.js";
@@ -54,28 +53,10 @@ const LOCALIZED_ERROR_CODES = new Set([
   "ZCODE_BIGMODEL_TEAM_PLAN_MEMBER_REQUIRED",
 ]);
 
-const MODEL_CONFIG_MISSING_CODES = new Set([
-  "model_config_missing",
-  "MODEL_CONFIG_MISSING",
-  "ModelConfigMissing",
-]);
-
-function isModelConfigMissingError(error: Pick<ZCodeUiError, "code" | "message">): boolean {
-  // 桌面端发送前 registry 为空时，agent 会退回 CLI config 并抛 Model config is missing。
-  // 真实原因是“当前没有可用模型”，不能把 CLI 配置路径直接暴露给桌面用户。
-  // 这里只按结构化 code 识别，避免 UNKNOWN/SEND_FAILED 等包装错误的可读 message
-  // 碰巧包含同一段文本时被误判，并连带隐藏复制、反馈等诊断入口。
-  return Boolean(error.code && MODEL_CONFIG_MISSING_CODES.has(error.code));
-}
-
 export function resolveChatErrorBannerDisplayMessage(
   error: ZCodeUiError,
   intl: IntlInstance,
 ): string {
-  if (isModelConfigMissingError(error)) {
-    return intl.formatMessage({ id: "chat.error.noAvailableModel" });
-  }
-
   const providerBusinessCode =
     resolveOffPeakTicketExpiredBusinessCode(error.code, error.message) ?? error.code;
   const providerBusinessMessageId = getProviderBusinessErrorMessageId(providerBusinessCode);
@@ -109,16 +90,12 @@ export function ChatErrorBanner({
   retryLabel,
   retryDisabled,
   onDismiss,
-  onOpenModelSettings,
-  onOpenUpgrade,
 }: {
   error: ZCodeUiError;
   onRetry?: () => void;
   retryLabel?: string;
   retryDisabled?: boolean;
   onDismiss?: () => void;
-  onOpenModelSettings?: () => void;
-  onOpenUpgrade?: () => void;
 }) {
   const { intl } = useZCodeIntl();
   const openFeedbackSubmit = useFeedbackStore((state) => state.openSubmit);
@@ -126,7 +103,6 @@ export function ChatErrorBanner({
   const actionButtonClassName = "shrink-0";
   const iconButtonClassName = "shrink-0";
   const localizedErrorMessage = resolveChatErrorBannerDisplayMessage(error, intl);
-  const modelConfigMissing = isModelConfigMissingError(error);
   const hookBlocked = error.code === "fault.runtime.hookBlocked";
   if (shouldSuppressChatErrorBanner(error)) {
     return null;
@@ -206,39 +182,7 @@ export function ChatErrorBanner({
           <div className="min-w-0 truncate font-medium">{localizedErrorMessage}</div>
         </div>
 
-        {modelConfigMissing ? (
-          <>
-            <CodingPlanEntryButton
-              type="button"
-              variant="default"
-              size="sm"
-              onClick={onOpenUpgrade}
-              className={cn(
-                actionButtonClassName,
-                "button-gradient gap-1.5 text-white hover:bg-transparent hover:opacity-90 dark:bg-[#484A58] dark:hover:bg-[#484A58]",
-              )}
-              aria-label={intl.formatMessage({
-                id: "chat.quota.action.upgrade",
-              })}
-            >
-              <RocketIcon className="size-3.5" />
-              {intl.formatMessage({ id: "chat.quota.action.upgrade" })}
-            </CodingPlanEntryButton>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={onOpenModelSettings}
-              className={cn(actionButtonClassName, "gap-1.5")}
-              aria-label={intl.formatMessage({ id: "chat.error.setModels" })}
-            >
-              <SettingsIcon className="size-3.5" />
-              {intl.formatMessage({ id: "chat.error.setModels" })}
-            </Button>
-          </>
-        ) : null}
-
-        {!modelConfigMissing && error.detail ? (
+        {error.detail ? (
           <>
             <Button
               type="button"
@@ -270,8 +214,7 @@ export function ChatErrorBanner({
           </>
         ) : null}
 
-        {!modelConfigMissing ? (
-          <Button
+        <Button
             type="button"
             variant="outline"
             size="sm"
@@ -284,12 +227,10 @@ export function ChatErrorBanner({
             <CopyIcon className="size-3.5" />
             {intl.formatMessage({ id: "chat.error.copyFull" })}
           </Button>
-        ) : null}
 
         {/* 错误横幅本身就是异常态，不能再经过 Radix Tooltip 的 Popper/Slot 状态链。
             这里改成普通 Button，避免无可用模型等错误触发横幅时发生 Maximum update depth 循环。 */}
-        {!modelConfigMissing ? (
-          <Button
+        <Button
             type="button"
             variant="outline"
             size="sm"
@@ -304,9 +245,8 @@ export function ChatErrorBanner({
           >
             {intl.formatMessage({ id: "chat.error.feedback" })}
           </Button>
-        ) : null}
 
-        {!modelConfigMissing && onRetry ? (
+        {onRetry ? (
           <Button variant="outline" size="sm" onClick={onRetry} disabled={retryDisabled}>
             {retryLabel ?? intl.formatMessage({ id: "chat.error.retry" })}
           </Button>

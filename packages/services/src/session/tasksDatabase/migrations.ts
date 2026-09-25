@@ -8,6 +8,7 @@ import {
 } from "#src/session/tasksDatabase/schema-v1.js";
 import { importLegacyAutomationSelections } from "#src/session/tasksDatabase/provider-selection-v2.js";
 import { OFFICIAL_GLM_SELECTION_MIGRATION_SQL } from "#src/session/tasksDatabase/official-glm-selection-v3.js";
+import { OMP_SWAP_LEGACY_PURGE_SQL } from "#src/session/tasksDatabase/omp-swap-purge-v4.js";
 
 // 冻结历史列声明，不能以实时 Repo/schema 代替，否则新版构建会改变已应用 checksum。
 const columns = [
@@ -64,6 +65,10 @@ const definitions = [
     id: "0003_official_glm_selection",
     checksumInput: [OFFICIAL_GLM_SELECTION_MIGRATION_SQL],
   },
+  {
+    id: "0004_omp_swap_legacy_purge",
+    checksumInput: [OMP_SWAP_LEGACY_PURGE_SQL],
+  },
 ] as const;
 
 export function runTasksDatabaseMigrations(
@@ -113,6 +118,7 @@ export function runTasksDatabaseMigrations(
       options.onProgress?.("migrating", { ...migrationFacts });
       if (migration.id === "0001_adopt_task_schema") adoptSchema(db);
       else if (migration.id === "0002_provider_selection") importLegacyAutomationSelections(db);
+      else if (migration.id === "0004_omp_swap_legacy_purge") db.exec(OMP_SWAP_LEGACY_PURGE_SQL);
       else db.exec(OFFICIAL_GLM_SELECTION_MIGRATION_SQL);
       migrationFacts.executedCount++;
       db.prepare("INSERT INTO tasks_schema_migration VALUES(?,?,?)").run(

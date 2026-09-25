@@ -1331,21 +1331,7 @@ export const WorkspaceSidebar = memo(function WorkspaceSidebarComponent({
               <CalendarClock className="size-4" />
               {intl.formatMessage({ id: "workspace.openScheduledSettings" })}
             </Button>
-            <Button
-              variant="ghost"
-              onClick={handleOpenPluginStoreMain}
-              data-icon="inline-start"
-              data-testid="plugin-store-sidebar-open"
-              size="lg"
-              aria-pressed={pluginStoreActive}
-              className={cn(
-                "w-full justify-start gap-2 text-foreground hover:bg-surface-hover hover:text-foreground",
-                pluginStoreActive && "bg-selected text-foreground",
-              )}
-            >
-              <Blocks className="size-4" />
-              {intl.formatMessage({ id: "workspace.openPluginsSettings" })}
-            </Button>
+            {/* omp 换核（FORK.md 差异 #1）：插件市场由 omp 自身插件体系承担，ZCode 市场入口隐藏。 */}
           </div>
 
           <div className="relative flex min-h-0 flex-1 flex-col">

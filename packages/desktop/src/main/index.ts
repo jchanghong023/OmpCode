@@ -251,11 +251,11 @@ import { mainMemoryDiagnosticsRegistry } from "./mainMemoryDiagnostics.js";
 registerLocalMediaPreviewScheme(protocol);
 const localMediaPreviewPathRegistry = createLocalMediaPreviewPathRegistry();
 
-// e2e 由 Chromedriver 管理远程调试端口；如果这里继续固定到 9229，
-// 会和开发态已打开的 ZCode Dev 抢端口，导致 WebDriver session 创建前白屏超时。
+// e2e 由 Chromedriver 管理远程调试端口；端口隔离（FORK.md）用 fork 专属的 9230，
+// 避免与开发态同时打开的上游 ZCode Dev（固定 9229）抢端口导致 WebDriver 白屏超时。
 // 仅本地开发运行默认开启远程调试端口，并允许 e2e 通过环境变量交给 Chromedriver 接管。
 if (!app.isPackaged && process.env.ZCODE_DISABLE_FIXED_REMOTE_DEBUGGING_PORT !== "1") {
-  app.commandLine.appendSwitch("remote-debugging-port", "9229");
+  app.commandLine.appendSwitch("remote-debugging-port", "9230");
 }
 
 app.setName(runtimeApplicationName);
@@ -529,7 +529,7 @@ async function runBrowserCommandOnView(params: {
 let currentDesktopZoomLevel = 0;
 let currentDesktopWindowSize: DesktopWindowSize | undefined;
 const preloadPath = join(import.meta.dirname, "../preload/index.cjs");
-const settingsFile = join(homedir(), ".zcode", "v2", "setting.json");
+const settingsFile = join(homedir(), ".ompcode", "v2", "setting.json");
 let activeAppShutdownPolicy = resolveAppShutdownPolicy("normal", process.platform);
 let activeAppShutdownKind: AppShutdownKind | null = null;
 const WINDOWS_AGENT_FORCE_KILL_TIMEOUT_MS = 2_000;
@@ -1938,6 +1938,10 @@ app.whenReady().then(async () => {
   let bootstrapSettings: AppSettings | undefined;
   try {
     bootstrapSettings = await mainSettingService.get();
+    // omp profile 在进程启动时固定；设置页保存后不热切换已有 Host/会话。
+    if (bootstrapSettings.ompProfile !== undefined) {
+      process.env.OMP_PROFILE = bootstrapSettings.ompProfile;
+    }
     if (bootstrapSettings.dataBaseDir) {
       setDataBaseDir(bootstrapSettings.dataBaseDir);
     }
@@ -1974,12 +1978,13 @@ app.whenReady().then(async () => {
     }
   });
 
-  if (process.platform === "win32") {
+  if (process.platform === "win32" && app.isPackaged) {
     // 打包态必须与 NSIS 快捷方式使用同一 AUMID，否则 Shell 把它们当成不同应用。
-    // 使用构建期产品身份，不依赖用户机器环境；开发态继续保持独立身份。
-    app.setAppUserModelId(
-      resolveWindowsAppUserModelIdForFlavor(ZCODE_PRODUCT_FLAVOR, { isPackaged: app.isPackaged }),
-    );
+    // 使用构建期产品身份，不依赖用户机器环境。
+    // 开发态不能设置未注册的 AUMID（如历史开发身份 cn.aminer.zcode）：本机没有对应该
+    // AUMID 的快捷方式时，任务栏会回退到 electron.exe 的默认原子图标，盖住窗口的 π 图标；
+    // 不设置 AUMID 时任务栏直接使用窗口图标。已在本机实测两种取值的表现后确定此行为。
+    app.setAppUserModelId(resolveWindowsAppUserModelIdForFlavor(ZCODE_PRODUCT_FLAVOR));
   }
 
   applyAppIcon(iconPath);

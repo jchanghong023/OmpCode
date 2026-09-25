@@ -19,6 +19,7 @@ interface Subscriber {
   connectionId: string;
   clientMode: "desktop-continuous" | "web-remote-replayable";
   lastDeliveredSeq: number;
+  logicalFrameOrdinal: number;
 }
 
 export interface SubscribeOptions {
@@ -49,6 +50,7 @@ export class ConversationTopicPublisher {
       connectionId: params.connectionId,
       clientMode: params.clientMode,
       lastDeliveredSeq: this.projection.seq,
+      logicalFrameOrdinal: 0,
     };
     this.subscribers.set(subscriptionId, subscriber);
     if (resumeDeltas && params.base) {
@@ -103,17 +105,27 @@ export class ConversationTopicPublisher {
       clearTimeout(this.flushTimer);
       this.flushTimer = null;
     }
+    this.flushCallbacks = [];
     this.subscribers.clear();
   }
 
+  // flush 窗口内注册的回调全部保留，flush 后依次执行。此前「定时器已挂起就丢弃回调」
+  // 会把轮次终态的 sessions-index 通知一起丢掉（GUI 实测缺陷：侧栏会话转圈不止）。
+  private flushCallbacks: (() => void)[] = [];
+
   scheduleFlush(onFlushed: () => void): void {
+    this.flushCallbacks.push(onFlushed);
     if (this.flushTimer) {
       return;
     }
     this.flushTimer = setTimeout(() => {
       this.flushTimer = null;
       this.flushNow();
-      onFlushed();
+      const callbacks = this.flushCallbacks;
+      this.flushCallbacks = [];
+      for (const callback of callbacks) {
+        callback();
+      }
     }, FLUSH_WINDOW_MS);
     this.flushTimer.unref?.();
   }
@@ -152,12 +164,17 @@ export class ConversationTopicPublisher {
       sentAt: Date.now(),
       payload,
     };
+    const subscriber = this.subscribers.get(subscriptionId);
+    if (!subscriber) return;
+    // 同一订阅的每个逻辑帧都要递增；恒为 1 会让客户端把后续流式帧
+    // 判为 proto.frameAssemblyOrdinalConflict，恢复快照也无法接管。
+    subscriber.logicalFrameOrdinal += 1;
     const wires = encodeTopicWireFrames(frame, {
       deliveryKind,
       topic,
       subscriptionId,
       logicalFrameId: createId("frame"),
-      logicalFrameOrdinal: 1,
+      logicalFrameOrdinal: subscriber.logicalFrameOrdinal,
       measurePhysicalFrameBytes: (wire: unknown) => utf8JsonByteLength(wire) + 1,
     });
     for (const wire of wires) {

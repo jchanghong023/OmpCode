@@ -2,6 +2,7 @@
 // 插件/工作流/automation/offPeak 族以 -32601 拒绝（FORK.md 已知差异），host 侧按既有降级路径处理。
 
 import { zcodeProtocolMethods } from "@zcode/shared";
+import type { WorkspaceConfigState } from "@zcode/shared/zcode-protocol-v4";
 import type { SessionRegistry } from "./sessionRegistry.js";
 import { ProtocolError } from "./errors.js";
 import { buildLegacySnapshot } from "./legacySnapshot.js";
@@ -16,6 +17,7 @@ export interface LegacyMethodContext {
   workspaceIdentity?: string;
   /** 最近一次 Account Config 交付回执版本（host 按 revision 回声判等）。 */
   deliveredAccountConfigRevision: string | null;
+  loadWorkspaceConfig: () => Promise<WorkspaceConfigState>;
 }
 
 export function createLegacyHandlers(context: LegacyMethodContext) {
@@ -169,9 +171,26 @@ export function createLegacyHandlers(context: LegacyMethodContext) {
         updatedSessionCount: 0,
       };
     },
-    [zcodeProtocolMethods.workspaceUpdateOffPeakToolPolicy]: async () => ({}),
-    [zcodeProtocolMethods.workspaceUpdateDynamicWorkflowPolicy]: async () => ({}),
-    [zcodeProtocolMethods.workspaceReadPresentation]: async () => ({ presentation: {} }),
+    [zcodeProtocolMethods.workspaceUpdateOffPeakToolPolicy]: async (params) => {
+      const record = asRecord(params);
+      return { workspace: record?.workspace, enabled: record?.enabled === true };
+    },
+    [zcodeProtocolMethods.workspaceUpdateDynamicWorkflowPolicy]: async (params) => {
+      const record = asRecord(params);
+      return { workspace: record?.workspace, enabled: record?.enabled === true };
+    },
+    [zcodeProtocolMethods.workspaceReadPresentation]: async (params) => {
+      // 旧适配层返回 { presentation: {} }，Host 的严格 schema 会拒绝，导致工作区
+      // 首页无法读取展示信息。omp 暂无同名展示能力，回显工作区与基本模式即可。
+      const record = asRecord(params);
+      const config = await context.loadWorkspaceConfig();
+      return {
+        workspace: record?.workspace,
+        mode: "build" as const,
+        slashCommands: config.slashCommands,
+        configOptions: config.configOptions,
+      };
+    },
     [zcodeProtocolMethods.mcpList]: async () => ({ statuses: {} }),
     [zcodeProtocolMethods.processChildProcesses]: async () => ({ processes: [] }),
   };

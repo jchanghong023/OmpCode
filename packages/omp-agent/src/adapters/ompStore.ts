@@ -1,4 +1,4 @@
-// omp 会话存储只读扫描：~/.omp/agent/sessions/<encoded-cwd>/*.jsonl。
+// omp 会话存储只读扫描：当前 profile 的 agent/sessions/<encoded-cwd>/*.jsonl。
 // 目录名编码与 oh-my-pi session-paths.ts 保持一致（home 前缀 `-`、tmp 前缀 `-tmp-`、绝对路径 `--…--`）。
 // PI_CONFIG_DIR 可整体重定位（omp 同源），生产不设置。
 
@@ -6,16 +6,23 @@ import { readdir, readFile, rm, stat } from "node:fs/promises";
 import { existsSync, realpathSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
+import { resolveOmpProfileFromEnv } from "@zcode/shared/omp-profile";
 import type { OmpStorePort, OmpStoreSessionSummary } from "../app/ports.js";
 import { titleFromOmpEntries } from "../domain/coldHistory.js";
 import { logger } from "./logger.js";
 
 function configDir(env: NodeJS.ProcessEnv): string {
-  return env.PI_CONFIG_DIR?.trim() || join(homedir(), ".omp");
+  const configured = env.PI_CONFIG_DIR?.trim();
+  // omp 把相对 PI_CONFIG_DIR 解析在用户主目录下；Node 的相对 join 原先却
+  // 解析在 workspace cwd 下，导致模型运行成功而冷会话扫描永久找不到文件。
+  return configured ? resolve(homedir(), configured) : join(homedir(), ".omp");
 }
 
 function sessionsRoot(env: NodeJS.ProcessEnv): string {
-  return join(configDir(env), "agent", "sessions");
+  const profile = resolveOmpProfileFromEnv(env);
+  return profile === "default"
+    ? join(configDir(env), "agent", "sessions")
+    : join(configDir(env), "profiles", profile, "agent", "sessions");
 }
 
 function resolveEquivalentPath(value: string): string {
@@ -139,9 +146,12 @@ export function createOmpStore(env: NodeJS.ProcessEnv = process.env): OmpStorePo
 }
 
 function sessionIdOfFileName(name: string): string | null {
-  const match = /^[0-9T:.+-]+_(.+)\.jsonl$/.exec(name);
+  // omp 会话文件名时间戳形如 2026-09-24T13-33-28-741Z（UTC Z 后缀），
+  // 字符类必须包含 Z，否则所有会话在冷扫描中被静默跳过（GUI 恢复会话 recoveryFailed 根因）。
+  const match = /^[0-9T:.+-Z]+_(.+)\.jsonl$/.exec(name);
   return match?.[1] ?? null;
 }
+
 
 /** 读标题（title_change / 首条用户消息）；失败返回原文 null。 */
 export async function readSessionTitle(sessionPath: string): Promise<string | null> {

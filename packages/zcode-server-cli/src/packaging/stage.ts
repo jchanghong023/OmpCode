@@ -152,8 +152,10 @@ interface StageOptions {
   appVersion: string;
   /** tsup 产物目录（server-cli.js / server-core.js） */
   distDir: string;
-  /** 既有 CLI/Agent bundle（zcode.cjs，自包含 CJS） */
+  /** omp 适配器（自包含 CJS）。 */
   agentBundlePath: string;
+  /** 与目标平台匹配的内嵌 omp 二进制。 */
+  ompBinaryPath: string;
   /** 已准备好的目标平台 Node 二进制 */
   nodeBinaryPath: string;
   /** 构建入口从统一合规 owner 核验后传入；组件组装不能自行拼凑许可。 */
@@ -394,7 +396,7 @@ export async function stageRelease(options: StageOptions): Promise<StagedRelease
   await writeFile(join(runtimeDir, "THIRD-PARTY-NOTICES.md"), options.notices.thirdParty);
   await writeFile(join(runtimeDir, "LICENSE.node.txt"), options.notices.node);
   await writeFile(join(runtimeDir, "NODE-SOURCES.json"), options.notices.nodeSource);
-  for (const component of ["agent", "official-plugins"]) {
+  for (const component of ["agent"]) {
     await mkdir(join(runtimeDir, "licenses", component), { recursive: true });
     await writeFile(
       join(runtimeDir, "licenses", component, "THIRD-PARTY-NOTICES.md"),
@@ -415,7 +417,12 @@ export async function stageRelease(options: StageOptions): Promise<StagedRelease
     `${JSON.stringify({ name: releaseName, private: true, type: "module" }, null, 2)}\n`,
     "utf8",
   );
-  await cp(options.agentBundlePath, join(runtimeDir, "zcode.cjs"), { dereference: true });
+  await cp(options.agentBundlePath, join(runtimeDir, "omp-agent.cjs"), { dereference: true });
+  await mkdir(join(runtimeDir, "omp"), { recursive: true });
+  const ompBinaryName = options.target.startsWith("win32-") ? "omp.exe" : "omp";
+  const stagedOmpPath = join(runtimeDir, "omp", ompBinaryName);
+  await cp(options.ompBinaryPath, stagedOmpPath, { dereference: true });
+  if (!options.target.startsWith("win32-")) await chmod(stagedOmpPath, 0o755);
   // Agent bundle 是第三个实际运行入口；只扫描 Server bundle 会漏掉外置的 TUI/Playwright。
   bundleSources.push(await readFile(options.agentBundlePath, "utf8"));
 
@@ -506,7 +513,7 @@ export async function stageRelease(options: StageOptions): Promise<StagedRelease
         "runtime/THIRD-PARTY-NOTICES.md",
       ],
     },
-    { id: "agent-runtime", paths: ["runtime/zcode.cjs", "runtime/licenses/agent"] },
+    { id: "agent-runtime", paths: ["runtime/omp-agent.cjs", "runtime/omp", "runtime/licenses/agent"] },
     ...(plugins.length > 0
       ? [
           {

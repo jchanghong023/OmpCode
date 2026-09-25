@@ -24,6 +24,8 @@ export interface V4ComposerDraft {
   lastPlanTransitionId?: string;
   lastPermissionGrantId?: string;
   modelSelection?: ModelSelection;
+  /** 「计划模型」临时切换前的选择；null 表示进入前没有模型。 */
+  planModelReturnSelection?: ModelSelection | null;
   /** 首次分享导入等待公共新任务初始化；不能由空 Session snapshot 抢先填充。 */
   initializeFromNewTask?: true;
   updatedAt: number;
@@ -105,6 +107,7 @@ function readDraft(value: unknown): V4ComposerDraft | null {
     : identity?.success
       ? identity.data
       : undefined;
+  const returnSelection = modelSelectionSchema.safeParse(value.planModelReturnSelection);
   const mention = value.mention;
   const hasMention =
     isRecord(mention) &&
@@ -133,6 +136,11 @@ function readDraft(value: unknown): V4ComposerDraft | null {
       ? { lastPlanTransitionId: value.lastPlanTransitionId }
       : {}),
     ...(modelSelection ? { modelSelection } : {}),
+    ...(value.planModelReturnSelection === null
+      ? { planModelReturnSelection: null }
+      : returnSelection.success
+        ? { planModelReturnSelection: returnSelection.data }
+        : {}),
     ...(value.initializeFromNewTask === true && !mode.success
       ? { initializeFromNewTask: true as const }
       : {}),
@@ -188,6 +196,7 @@ export function persistV4ComposerDraft(
     !draft.mention &&
     !draft.mode &&
     !draft.modelSelection &&
+    draft.planModelReturnSelection === undefined &&
     !draft.initializeFromNewTask
   ) {
     delete file.scopes[scopeId];

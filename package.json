@@ -9,7 +9,6 @@
     "dev:desktop": "pnpm run dev:desktop:prod",
     "dev:desktop:test": "node scripts/dev-desktop-env.mjs test",
     "dev:desktop:prod": "node scripts/dev-desktop-env.mjs production",
-    "dev:desktop:bytecode": "node scripts/dev-desktop-env.mjs production --agent-bytecode",
     "dev:desktop:remote-prod": "node scripts/dev-desktop-remote-prod.mjs",
     "dev:server": "pnpm --filter @zcode/server dev",
     "prepare": "husky",
@@ -18,11 +17,7 @@
     "dep:refs": "node scripts/dep-refs.mjs",
     "verify:pre-push": "pnpm run lint && pnpm run architecture:check -- --changed",
     "build": "pnpm -r build",
-    "build:desktop-agent:bytecode": "node scripts/build-desktop-agent-bytecode.mjs",
-    "build:zcode": "node scripts/build-zcode.mjs",
     "build:bootstrap": "pnpm -r --filter \"./packages/*\" --filter \"!@zcode/desktop\" build && pnpm --filter @zcode/desktop build:no-runtime-assets",
-    "build:sea": "pnpm --dir apps/zcode-cli build:sea",
-    "build:sea:all": "pnpm install && pnpm --dir apps/zcode-cli build:sea",
     "build:native-search": "node scripts/build-native-search-tools.mjs",
     "pack:native-search": "node scripts/package-native-search-tools.mjs",
     "clean": "node scripts/clean.mjs",
@@ -39,8 +34,6 @@
     "bootstrap": "node scripts/bootstrap.mjs",
     "bootstrap:with-remote": "node scripts/bootstrap.mjs --with-remote",
     "release": "release-it",
-    "release:cli": "pnpm --dir apps/zcode-cli run release",
-    "release:cli:dry": "pnpm --dir apps/zcode-cli run release:dry",
     "architecture:check": "node scripts/architecture/architecture-check.mjs check",
     "architecture:report": "node scripts/architecture/architecture-check.mjs report",
     "architecture:baseline:update": "node scripts/architecture/architecture-check.mjs baseline:update",
@@ -85,9 +78,7 @@
       "react-dom": "19.2.7"
     },
     "patchedDependencies": {
-      "@arms/rum-electron@0.0.3": "patches/@arms__rum-electron@0.0.3.patch",
-      "@ai-sdk/openai-compatible@2.0.60": "patches/@ai-sdk__openai-compatible@2.0.60.patch",
-      "@ai-sdk/anthropic@3.0.81": "patches/@ai-sdk__anthropic@3.0.81.patch"
+      "@arms/rum-electron@0.0.3": "patches/@arms__rum-electron@0.0.3.patch"
     }
   }
 }

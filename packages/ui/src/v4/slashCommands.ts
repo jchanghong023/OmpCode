@@ -34,6 +34,8 @@ export type V4VisibleSlashCommand =
 
 interface V4VisibleSlashCommandParseOptions {
   contextAttachmentCount?: number;
+  /** CLI（omp）目录已注册的命令名（小写、无斜杠）；同名时命令语义归 omp，本地不拦截。 */
+  cliOwnedCommandNames?: ReadonlySet<string>;
 }
 
 interface SelectionSideSlashCommand {
@@ -61,6 +63,18 @@ export function parseV4VisibleSlashCommand(
   if (!match) return null;
   const commandName = match[1]?.toLowerCase() ?? "";
   const args = match[2]?.trim() ?? "";
+
+  // omp 换核（FORK.md）：斜杠命令语义以 omp 目录为权威（/plan、/goal 等在 omp 有
+  // 原生实现），本地拦截会让位透传；仅 compact/compress 保留本地映射——
+  // v4 compact 的排队与时间线集成与 omp /compact 等价且体验更好。
+  if (
+    options.cliOwnedCommandNames &&
+    commandName !== "compact" &&
+    commandName !== "compress" &&
+    options.cliOwnedCommandNames.has(commandName)
+  ) {
+    return null;
+  }
 
   if (commandName === "plan") {
     const hasUnsupportedPayload =

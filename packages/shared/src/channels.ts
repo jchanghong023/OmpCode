@@ -165,7 +165,7 @@ export const PlatformChannels = {
   SelectFile: "zcode:select-file",
   /** 打开系统多文件选择框 */
   SelectFiles: "zcode:select-files",
-  /** Renderer → Main：写入宿主 ~/.zcode 临时文本附件 */
+  /** Renderer → Main：写入宿主 ~/.ompcode 临时文本附件 */
   CreateTempTextAttachment: "zcode:create-temp-text-attachment",
   /** Renderer → Main：通过原生另存为对话框保存文件 */
   SaveFile: "zcode:save-file",
@@ -284,6 +284,13 @@ export const PlatformChannels = {
   OpenInFileManager: "zcode:open-in-file-manager",
   /** Renderer → Main：使用系统默认应用打开本地文件 */
   OpenExternalFile: "zcode:open-external-file",
+  /** Renderer → Main：用系统编辑器打开用户 omp 模型配置（~/.omp/agent/config.yml） */
+  OpenOmpModelConfig: "zcode:open-omp-model-config",
+  /** Renderer → Main：读取 omp modelRoles（role → provider/model:level） */
+  ReadOmpModelRoles: "zcode:read-omp-model-roles",
+  ListOmpProfiles: "zcode:list-omp-profiles",
+  /** Renderer → Main：写入 omp modelRoles（yaml Document 级替换，保留注释与格式；写前自动备份） */
+  WriteOmpModelRoles: "zcode:write-omp-model-roles",
   /** Renderer → Main：打开 ZCode Computer Use 权限引导 */
   OpenCuaPermissionOnboarding: "zcode:open-cua-permission-onboarding",
   /** Renderer → Main：取消当前 renderer 发起的一次权限引导 participant */
@@ -341,7 +348,7 @@ export const PlatformChannels = {
   TaskNotificationSound: "zcode:task-notification-sound",
   /** Main → Preload：用户点击了系统通知，携带 taskId 让 renderer 跳转到对应任务 */
   TaskNotificationClick: "zcode:task-notification-click",
-  /** Renderer → Main：导出日志（打包 ~/.zcode/v2 及外部 agent 日志为 zip 并在 Finder 中显示） */
+  /** Renderer → Main：导出日志（打包 ~/.ompcode/v2 及外部 agent 日志为 zip 并在 Finder 中显示） */
   ExportLogs: "zcode:export-logs",
   /** Renderer → Main：截取当前窗口作为反馈附件 */
   CaptureWindowScreenshot: "zcode:capture-window-screenshot",
@@ -874,6 +881,26 @@ export interface PlatformChannelMap {
   [PlatformChannels.OpenExternalFile]: {
     request: string;
     response: { success: boolean; error?: string };
+  };
+  [PlatformChannels.OpenOmpModelConfig]: {
+    request: undefined;
+    response: { success: boolean; error?: string };
+  };
+  [PlatformChannels.ReadOmpModelRoles]: {
+    request: undefined;
+    response:
+      | { success: true; roles: { role: string; value: string }[] }
+      | { success: false; error: string };
+  };
+  [PlatformChannels.ListOmpProfiles]: {
+    request: undefined;
+    response:
+      | { success: true; profiles: string[]; activeProfile: string }
+      | { success: false; error: string };
+  };
+  [PlatformChannels.WriteOmpModelRoles]: {
+    request: { roles: { role: string; value: string }[] };
+    response: { success: boolean; error?: string; backupPath?: string };
   };
   [PlatformChannels.OpenCuaPermissionOnboarding]: {
     request: OpenCuaPermissionOnboardingOptions | undefined;

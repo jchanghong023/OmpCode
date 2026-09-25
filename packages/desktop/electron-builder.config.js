@@ -454,6 +454,9 @@ function assertPackagedNodePtyPrebuild(context) {
 /** @type {import("electron-builder").Configuration} */
 export default {
   appId: desktopProductIdentity.appId,
+  // 数据隔离（FORK.md）：electron-updater 缓存目录默认从包名派生（@zcodedesktop-updater），
+  // 会与上游 ZCode 共用 %LOCALAPPDATA% 下同一目录；显式命名避免双装互相污染更新缓存。
+  updaterCacheDirName: "ompcode-updater",
   // Linux deb 打包（fpm）会校验 package metadata 中的 homepage、author.email、maintainer。
   // CI 环境下若这些字段缺失会在产物阶段直接失败。这里统一在构建配置补齐，避免依赖外部注入。
   extraMetadata: {
@@ -624,8 +627,8 @@ export default {
       : []),
     {
       // agent 运行时资产，打包到 resources/glm。
-      // 桌面端内置的是 agent 的 JS bundle（glm/zcode.cjs，由 prepare:agent-bundle 生成），
-      // Host 进程用 app 自带的 Electron Node runtime（ELECTRON_RUN_AS_NODE）执行 `zcode.cjs app-server --stdio`，
+      // 桌面端内置 omp 适配器 JS bundle（glm/omp-agent.cjs，由 prepare:agent-bundle 生成），
+      // Host 进程用 app 自带的 Electron Node runtime（ELECTRON_RUN_AS_NODE）执行 `omp-agent.cjs app-server --stdio`，
       // 不再随包内置独立 Node 二进制。远端 SSH/WSL 仍走原生二进制（无 Electron）。
       from: `bundled-agents/${targetPlatform.key}/glm`,
       to: "glm",
@@ -693,6 +696,13 @@ export default {
   win: {
     target: ["nsis"],
     artifactName: buildDesktopArtifactName("win"),
+  },
+  // 修复依据：electron-builder 26 默认解包遗留 winCodeSign-2.6.0.7z 时用 7za -snld 还原
+  // darwin 符号链接，非管理员/未开开发者模式的 Windows 直接 EPERM 失败（rcedit 与 NSIS 全被
+  // 卡死）。toolsets.winCodeSign >= 1.0.0 改用纯 Windows 的 rcedit-windows zip，无符号链接条目，
+  // 非特权打包机可正常出包（本机已实测 win-codesign@1.1.0 资产可下载解压）。
+  toolsets: {
+    winCodeSign: "1.1.0",
   },
   linux: {
     target: ["AppImage", "deb", "rpm", "pacman"],

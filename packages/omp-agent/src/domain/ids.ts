@@ -28,3 +28,18 @@ export function createSubscriptionId(): string {
 export function createInteractionId(): string {
   return createId("omp-ui");
 }
+
+/**
+ * omp 会话文件名 → omp 会话 uuid。文件名形如
+ * `2026-09-24T13-33-28-741Z_<uuid>.jsonl`（UTC 时间戳带 Z 后缀，字符类必须含 Z）。
+ * uuid 是 omp 会话跨应用重启的稳定身份：sessions-index 摘要、sqlite 种子行与
+ * resume 都以它为准；适配器期临时 id（omp-session-*）不参与跨重启身份。
+ */
+export function ompSessionIdOfFilePath(sessionPath: string | null | undefined): string | null {
+  if (!sessionPath) {
+    return null;
+  }
+  // 直接锚定路径末尾的 <uuid>.jsonl，不引入 node:path（domain 层禁 IO 依赖）。
+  const match = /([0-9a-fA-F-]{36})\.jsonl$/.exec(sessionPath);
+  return match?.[1] ?? null;
+}

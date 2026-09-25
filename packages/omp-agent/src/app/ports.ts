@@ -2,10 +2,14 @@
 
 import type {
   OmpCommandFrame,
+  OmpConfigUpdateFrame,
   OmpExtensionUiResponseFrame,
+  OmpPromptResultFrame,
   OmpSessionEventFrame,
+  OmpSessionInfoUpdateFrame,
 } from "../domain/ompFrames.js";
 import type { OmpStateData } from "../domain/ompFrames.js";
+import type { OmpContextReport } from "../domain/ompContextReport.js";
 export type { OmpStateData };
 
 export interface OmpCommandOutcome {
@@ -22,7 +26,33 @@ export interface OmpSessionProcess {
   respondUi(response: OmpExtensionUiResponseFrame): void;
   /** 拉一次 get_state；进程未就绪或失败返回 null。 */
   refreshState(): Promise<OmpStateData | null>;
+  /** 空闲时读取 omp /context；输出由适配器消费，不进入聊天文本。 */
+  readContextReport(): Promise<OmpContextReport | null>;
   dispose(): Promise<void>;
+}
+
+/** omp 内置命令侧信道回调（全部可选；不关心的事件由适配器丢弃）。 */
+export interface OmpSideChannelHandlers {
+  /** 本地命令输出（command_output）：按助手文本投影到当前轮。 */
+  onCommandOutput?: (frame: { text: string }) => void;
+  /** prompt 异步收口：agentInvoked=false 表示本地命令完成、不会再来 agent 事件。 */
+  onPromptResult?: (frame: OmpPromptResultFrame) => void;
+  /** /title 等命令回投会话元信息。 */
+  onSessionInfoUpdate?: (frame: OmpSessionInfoUpdateFrame) => void;
+  /** /model、/thinking 等命令回投会话模型配置。 */
+  onConfigUpdate?: (frame: OmpConfigUpdateFrame) => void;
+  /** 命令目录变化（available_commands_update）。 */
+  onCommandsUpdate?: (commands: unknown) => void;
+}
+
+export interface OmpProcessFactory {
+  create(options: {
+    cwd: string;
+    resumeSessionPath?: string;
+    onEvent: (event: OmpSessionEventFrame) => void;
+    onUiRequest: (request: OmpUiRequest) => void;
+    onExit: (code: number | null) => void;
+  } & OmpSideChannelHandlers): OmpSessionProcess;
 }
 
 export interface OmpUiRequest {
@@ -38,16 +68,6 @@ export interface OmpUiRequest {
     url?: string;
   };
   respond(response: OmpExtensionUiResponseFrame): void;
-}
-
-export interface OmpProcessFactory {
-  create(options: {
-    cwd: string;
-    resumeSessionPath?: string;
-    onEvent: (event: OmpSessionEventFrame) => void;
-    onUiRequest: (request: OmpUiRequest) => void;
-    onExit: (code: number | null) => void;
-  }): OmpSessionProcess;
 }
 
 export interface OmpStoreSessionSummary {

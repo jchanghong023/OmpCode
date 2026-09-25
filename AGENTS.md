@@ -41,7 +41,7 @@
 - `packages/services`：业务服务；`packages/rpc`：RPC 框架。
 - `packages/shared`：共享协议与类型；`packages/client`：Agent 客户端 SDK。
 - `packages/omp-agent`：omp RPC 核心适配器（对 host 讲 ZCode Protocol/v4，对内嵌 omp 二进制讲 omp RPC；本 Fork 的本地 Agent 核心）。
-- `apps/zcode-cli`：上游 Agent CLI 与运行时（换核后不再作为产品核心维护，仓库内保留）。
+- `apps/zcode-cli`：上游 Agent CLI 与运行时已由 omp 替代，目录已从本 Fork 移除。
 - 换核测试：`pnpm --filter @zcode/omp-agent test`（协议级 fake-omp E2E）；真实二进制 E2E 同目录 `test/real-omp.e2e.test.ts`（需先 `pnpm --filter @zcode/desktop run prepare:agent-bundle` 下载内嵌 omp）。
 - `CONTEXT.md`：插件商店领域词汇；修改相关 UI 前阅读。
 - `DESIGN.md`：UI 设计规范；修改 UI 前阅读。

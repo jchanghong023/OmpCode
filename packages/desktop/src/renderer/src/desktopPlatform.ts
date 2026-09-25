@@ -40,6 +40,10 @@ export function createDesktopPlatform(options: {
     canOpenCommunity: (locale) => window.zcode.canOpenCommunity(locale),
     openInFileManager: (path) => window.zcode.openInFileManager(path),
     openExternalFile: (path) => window.zcode.openExternalFile(path),
+    readOmpModelRoles: () => window.zcode.readOmpModelRoles(),
+    listOmpProfiles: () => window.zcode.listOmpProfiles(),
+    writeOmpModelRoles: (roles) => window.zcode.writeOmpModelRoles(roles),
+    openOmpModelConfig: () => window.zcode.openOmpModelConfig(),
     openCuaPermissionOnboarding: window.zcode.openCuaPermissionOnboarding
       ? (permissionOptions) =>
           window.zcode.openCuaPermissionOnboarding?.(permissionOptions) ??

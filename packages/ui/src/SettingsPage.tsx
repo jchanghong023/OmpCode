@@ -41,12 +41,10 @@ import {
   consumePendingSettingsPluginOrigin,
   consumePendingSettingsPluginScopeKey,
   consumePendingSettingsPluginTab,
-  consumePendingSettingsModelProviderTarget,
   consumePendingSettingsUsageTab,
   resolveSettingsSection,
   shouldFallbackSettingsUsageTabToApp,
   writeLastSettingsSectionPreference,
-  type SettingsModelProviderTarget,
 } from "@/lib/settingsNavigation.js";
 import { readSidebarUsageCodingPlanSourcePreference } from "@/lib/sidebarUsageCodingPlanProviderPreference.js";
 import {
@@ -54,7 +52,7 @@ import {
   resolveEntitledAccountProviderAccessFingerprint,
 } from "@/lib/accountProviderAccess.js";
 import { buildUsageEntitlementCacheKey } from "@/lib/usageEntitlementCache.js";
-import { ModelProviderSection } from "@/settings/ModelProviderSection.js";
+import { OmpModelRolesSection } from "@/settings/OmpModelRolesSection.js";
 import { useCodingPlanUpgradeDialog } from "@/settings/CodingPlanUpgradeDialogProvider.js";
 import { useEnterpriseCodingPlanProducts } from "@/settings/model-provider-section/useEnterpriseCodingPlanProducts.js";
 import { UsageStatsSection, type UsageStatsSectionTab } from "@/settings/UsageStatsSection.js";
@@ -96,7 +94,6 @@ import { ServiceProvider, useServices } from "@/hooks/useServices.js";
 import { useSettings } from "@/hooks/useSettingService.js";
 import type { CreateTaskRequest } from "@/app-shell/types.js";
 import { useBaseWorkspaceServices } from "@/hooks/useWorkspaceServices.js";
-import { resolveModelProviderConnectivityWorkspacePath } from "@/lib/modelProviderConnectivityTarget.js";
 import {
   createSettingsPageConfig,
   GeneralSectionContent,
@@ -549,11 +546,7 @@ export function SettingsPage({
     checkingUsageBigmodelCodingPlanTab ||
     usageBigmodelEnterpriseProducts.loading ||
     usageZaiEnterpriseProducts.loading;
-  const [initialModelProviderTarget] = useState(() => consumePendingSettingsModelProviderTarget());
   const { openCodingPlanUpgrade } = useCodingPlanUpgradeDialog();
-  const [pendingModelProviderTarget, setPendingModelProviderTarget] = useState<
-    SettingsModelProviderTarget | undefined
-  >(() => initialModelProviderTarget);
   const handleUsageTabSelect = useCallback((tab: UsageStatsSectionTab) => {
     setUsageActiveTab(tab);
   }, []);
@@ -644,21 +637,6 @@ export function SettingsPage({
       null
     );
   });
-  const localModelProviderConnectivityWorkspacePath = useMemo(
-    () =>
-      resolveModelProviderConnectivityWorkspacePath({
-        activeWorkspacePath,
-        activeWorkspaceIdentity,
-        activeWorkspaceTab,
-        workspaceTabs,
-      }),
-    [activeWorkspaceIdentity, activeWorkspacePath, activeWorkspaceTab, workspaceTabs],
-  );
-  const isRemoteModelProviderWorkspace = Boolean(
-    activeWorkspaceIdentity?.trim() ||
-    activeWorkspaceTab?.remoteSessionId?.trim() ||
-    activeWorkspaceTab?.remoteTarget,
-  );
   const selectDirectory = useSelectDirectory();
   const services = useServices();
   const onboardingRecordService = services.onboardingRecordService;
@@ -757,11 +735,6 @@ export function SettingsPage({
           setPluginScopeKey(detail.pluginScopeKey);
         } else if (resolveSettingsSection(section) !== "plugin") {
           setPluginNavigationOrigin(undefined);
-        }
-        if (section === "modelProvider" && detail?.modelProviderId) {
-          setPendingModelProviderTarget({
-            providerId: detail.modelProviderId,
-          });
         }
       }),
     [activeSection, setActiveSettingsSection],
@@ -1807,20 +1780,12 @@ export function SettingsPage({
                         ) : activeSection === "shortcuts" ? (
                           <ShortcutSettingsSection isDesktop={Boolean(isDesktop)} />
                         ) : activeSection === "modelProvider" ? (
-                          <ServiceProvider services={localHostServices}>
-                            {/* 模型配置属于本机全局事实源；激活远端 workspace 时也不能注入远端 Host。 */}
-                            <ModelProviderSection
-                              workspacePath={activeWorkspacePath ?? captionWorkspacePath ?? ""}
-                              connectivityWorkspacePath={
-                                localModelProviderConnectivityWorkspacePath
-                              }
-                              connectivityWorkspaceRequired={isRemoteModelProviderWorkspace}
-                              pendingModelProviderTarget={pendingModelProviderTarget}
-                              onConsumePendingModelProviderTarget={() =>
-                                setPendingModelProviderTarget(undefined)
-                              }
-                            />
-                          </ServiceProvider>
+                          <OmpModelRolesSection
+                            workspacePath={activeWorkspacePath ?? captionWorkspacePath ?? ""}
+                            workspaceIdentity={activeWorkspaceIdentity}
+                            configuredProfile={sharedSettings?.ompProfile}
+                            onProfileChange={(profile) => updateSharedSettings({ ompProfile: profile })}
+                          />
                         ) : activeSection === "memory" ? (
                           <ServiceProvider services={localHostServices}>
                             {/* Memory catalog 始终使用本地 Host，避免远程 workspace 误读本机数据。 */}

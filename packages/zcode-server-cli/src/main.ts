@@ -4,7 +4,7 @@ import { runServerCli } from "./cli.js";
 import { resolveBundledAgentWiring } from "./runtime/agentWiring.js";
 
 // 自动接线只作为本次 CLI 的显式依赖传入，不能污染全局 env；candidate release 启动时
-// Supervisor 会按 candidate runtime 重新计算，避免继承旧 release 的 zcode.cjs。
+// Supervisor 会按 candidate runtime 重新计算，避免继承旧 release 的 omp-agent.cjs。
 const bundledAgentWiring = await resolveBundledAgentWiring(
   dirname(fileURLToPath(import.meta.url)),
   process.env,
