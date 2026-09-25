@@ -44,8 +44,7 @@ import {
 } from "@/v4/composer/composerDraftStore.js";
 import { resolveAppFollowupMode } from "@/v4/composer/followupModeSettings.js";
 import { logger } from "@/logger.js";
-import { useOptionalPlatform } from "@/hooks/usePlatform.js";
-import { ompRoleValueToSelection } from "@/v4/composer/ompModelRoleValue.js";
+import { useOmpPlanModelToggle } from "@/v4/composer/useOmpPlanModelToggle.js";
 import { selectWorkspaceZCodeState, useZCodeSessionStore } from "@/store/zcodeSessionStore.js";
 
 /** 目录水合单飞（per workspaceKey）：draft、已有 session 和严格模式双挂载共享一次 RPC。 */
@@ -136,7 +135,6 @@ export function useDraftConfigControl(params: {
   const workspaceKey = workspaceIdentity?.trim() || workspacePath;
   const displayProvider = provider ?? ZCODE_AGENT_PROVIDER;
   const zcodeSessionService = useZCodeSessionService(workspacePath, null, workspaceIdentity);
-  const platform = useOptionalPlatform();
   const { settings: sharedSettings } = useSettings();
   const appFollowupMode = resolveAppFollowupMode(sharedSettings);
   const scopeId = sessionId ?? V4_DRAFT_SCOPE_ROOT;
@@ -488,47 +486,13 @@ export function useDraftConfigControl(params: {
     [updateDraftConfig],
   );
 
-  const togglePlanModel = useCallback(async (): Promise<{ success: boolean; error?: string }> => {
-    if (stateRef.current.scopeKey !== scopeKey) return { success: false, error: "session_changed" };
-    const previous = stateRef.current.draft.planModelReturnSelection;
-    if (previous !== undefined) {
-      updateComposerDraft((current) => ({
-        ...current,
-        modelSelection: previous ?? undefined,
-        planModelReturnSelection: undefined,
-      }));
-      return { success: true };
-    }
-    if (!platform?.readOmpModelRoles) return { success: false, error: "platform-unsupported" };
-    if (!ompCatalog) return { success: false, error: "model_catalog_unavailable" };
-    const before = draftConfigRef.current.modelSelection;
-    const result = await platform.readOmpModelRoles().catch((error: unknown) => ({
-      success: false as const,
-      error: error instanceof Error ? error.message : String(error),
-    }));
-    if (!result.success) return { success: false, error: result.error };
-    const planValue = result.roles.find((role) => role.role === "plan")?.value;
-    if (!planValue) return { success: false, error: "plan_role_missing" };
-    const planSelection = ompRoleValueToSelection(planValue, ompCatalog.entries);
-    if (!planSelection || !findOmpCatalogEntry(ompCatalog, planSelection.providerId, planSelection.modelId)) {
-      return { success: false, error: "plan_model_unavailable" };
-    }
-    const latest = draftConfigRef.current.modelSelection;
-    if (
-      stateRef.current.scopeKey !== scopeKey ||
-      latest?.providerId !== before?.providerId ||
-      latest?.modelId !== before?.modelId ||
-      latest?.options?.reasoningLevel !== before?.options?.reasoningLevel
-    ) {
-      return { success: false, error: "selection_changed" };
-    }
-    updateComposerDraft((current) => ({
-      ...current,
-      planModelReturnSelection: before ?? null,
-      modelSelection: planSelection,
-    }));
-    return { success: true };
-  }, [ompCatalog, platform, scopeKey, updateComposerDraft]);
+  const { available: planModelAvailable, toggle: togglePlanModel } = useOmpPlanModelToggle({
+    scopeKey,
+    stateRef,
+    draftConfigRef,
+    catalog: ompCatalog,
+    updateComposerDraft,
+  });
 
   const handleDraftSwitchMode = useCallback(
     (mode: string) => {
@@ -566,7 +530,7 @@ export function useDraftConfigControl(params: {
     handleDraftSelectModel,
     handleDraftSelectThought,
     planModelActive: draft.planModelReturnSelection !== undefined,
-    planModelAvailable: Boolean(platform?.readOmpModelRoles && ompCatalog),
+    planModelAvailable,
     togglePlanModel,
     handleDraftSwitchMode,
   };

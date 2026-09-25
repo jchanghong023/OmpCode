@@ -8,10 +8,10 @@
 
 * **分支**：`zai-org/ZCode@main`
 * **版本**：`v3.14.3`
-* **Upstream commit**：`328c1a0c0ffaa5a4f65e8fa199af5e4c20706e5f`
-* **同步日期**：2026-09-23
+* **Upstream commit**：`29628c9acdb81b703bbd4080c207a0e7ce5e276e`
+* **同步日期**：2026-09-24
 
-版本以提交说明与 README 更新记录为准；根 `package.json` 的 `version` 字段（3.14.0）滞后，不作为基线依据。
+版本以提交说明与 README 更新记录为准；上游基线按最后合入的提交记录，不按本 Fork 的包版本推断。
 
 ## 本 Fork 的目的
 
@@ -73,7 +73,7 @@
 
 ### Agent 核心替换为 omp RPC 核心（已实现）
 
-目标：桌面、Web 与手机远控的全部用户界面保留，本地 Agent 核心由 `omp --mode rpc` 提供；上游 `apps/zcode-cli` 已从本 Fork 移除。
+目标：桌面、Web 与手机远控的全部用户界面保留，本地 Agent 核心由 `omp --mode rpc` 提供；上游 `apps/zcode-cli` 仅作为未接入 workspace、构建或分发的源码快照保留，不作为运行时或回退路径。
 
 实现形态：新增 `packages/omp-agent` 适配器——对 ZCode host 讲 ZCode Protocol（legacy 控制面 + v4 数据面 wire 帧），对内嵌 omp 二进制讲 omp RPC；每个 ZCode 会话对应一个惰性启动的 omp 子进程，omp 拥有会话/模型循环/工具执行/配置/凭据的全部权责。host 侧拉起链路（`resolveDefaultZCodeAgentCommand`）与桌面打包（`resources/glm/omp-agent.cjs` + `resources/glm/omp/omp.exe`）指向适配器；内嵌 omp 取 releases 最新版，`omp/omp-release.json` 记录 tag 与 SHA256。
 

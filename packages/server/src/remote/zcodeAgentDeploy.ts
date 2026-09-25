@@ -12,7 +12,7 @@ import {
 } from "@zcode/server/remote/deployShared.js";
 import type { RemoteAssetInstaller } from "@zcode/server/remote/remoteAssetInstaller.js";
 import { buildWriteLiteralFileCommand } from "@zcode/server/remote/posixShell.js";
-import { deployDevelopmentZCodeAgentRuntime } from "@zcode/server/remote/zcodeAgentDevDeploy.js";
+import { deployDevelopmentZCodeAgentRuntime } from "@zcode/server/remote/ompAgentDevDeploy.js";
 import {
   buildRemoteAgentBundleWrapper,
   isRemoteAgentBundleWrapperCurrent,
