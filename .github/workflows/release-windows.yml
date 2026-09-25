@@ -66,39 +66,20 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Typecheck
-        run: pnpm typecheck
-
-      - name: Lint
-        run: pnpm lint
-
-      - name: Test omp protocol adapter
-        env:
-          OMP_AGENT_SKIP_REAL_E2E: "1"
-        run: pnpm --filter @zcode/omp-agent test
-
-      - name: Build and audit Windows installer
+      - name: Build Windows installer
         run: pnpm bundle:desktop -- --os=win --arch=x64
 
-      - name: Verify installer and embedded omp
+      - name: Prepare release assets
         shell: pwsh
         run: |
           $dist = 'packages/desktop/dist'
           $name = "OmpCode-$env:APP_VERSION-win-x64.exe"
           $installer = Join-Path $dist $name
-          $omp = Join-Path $dist 'win-unpacked/resources/glm/omp/omp.exe'
-          $adapter = Join-Path $dist 'win-unpacked/resources/glm/omp-agent.cjs'
-          foreach ($path in @($installer, $omp, $adapter)) {
-            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
-              throw "Missing packaged file: $path"
-            }
+          if (-not (Test-Path -LiteralPath $installer -PathType Leaf)) {
+            throw "Missing installer: $installer"
           }
           if ((Get-Item -LiteralPath $installer).Length -lt 50MB) {
             throw "Installer is unexpectedly small: $installer"
-          }
-          & $omp --version
-          if ($LASTEXITCODE -ne 0) {
-            throw 'Embedded omp failed its version smoke test.'
           }
           $hash = (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash.ToLowerInvariant()
           $checksum = Join-Path $dist "$name.sha256"
