@@ -4,22 +4,23 @@
   <img src="public/logo/icons/1024x1024.png" alt="OmpCode icon" width="96" />
 </p>
 
-<h3 align="center">The best desktop experience for omp</h3>
+<h3 align="center">The best desktop experience for OMP</h3>
 
 <p align="center">
-  A ZCode-inspired interface, fully adapted to the omp core and its workflows.<br />
-  Every omp feature and slash command, brought together in one desktop workspace for AI coding.
+  The familiar feel of ChatGPT. The polished interface of ZCode. The full power of OMP.<br />
+  OmpCode brings every OMP command and feature into a friendly graphical workspace for AI coding.
 </p>
 
 <p align="center">
   <a href="README.zh-CN.md">简体中文</a> ·
   <a href="#quick-start">Quick start</a> ·
+  <a href="https://github.com/can1357/oh-my-pi/discussions/13231">OMP community discussion</a> ·
   <a href="#credits">Credits</a>
 </p>
 
 ## See OmpCode in action
 
-**The full power of omp in a desktop workspace.** Follow tasks, tool calls, file changes, and session state in one place while you focus on building.
+**A chat experience you already know, powered by the agent you want.** The ZCode-based workspace feels as approachable as ChatGPT while keeping OMP's tasks, tool calls, file changes, and session state in view.
 
 <p align="center">
   <a href="docs/images/ompcode-workspace.png">
@@ -43,7 +44,7 @@
   </a>
 </p>
 
-**Every omp slash command is within reach.** Type `/` in the composer to browse and run commands.
+**Every OMP slash command is within reach.** Type `/` in the composer to browse and run commands without leaving the conversation.
 
 <p align="center">
   <a href="docs/images/ompcode-commands.png">
@@ -53,12 +54,12 @@
 
 ## Why OmpCode
 
-- **The complete omp experience:** omp is the Agent core, and the interface, sessions, and controls are built around it. OmpCode supports all omp features.
-- **Every slash command:** The full omp command catalog is available in the composer, including `/model`, `/switch`, `/compact`, `/mcp`, `/usage`, and skill commands.
-- **Models on your terms:** Use omp Profiles, the omp model catalog, and model roles. Choose models and thinking levels per role or switch them for a session.
+- **ZCode's UI, ChatGPT-style ease:** Start with a familiar, chat-first layout and a polished coding workspace instead of learning a new terminal interface.
+- **OMP all the way through:** An embedded OMP core powers the agent, while the UI is adapted to OMP's sessions, tools, models, commands, and full feature set.
+- **Every slash command:** Browse and run the complete OMP command catalog in the composer, including `/model`, `/switch`, `/compact`, `/mcp`, `/usage`, and skill commands.
+- **Models on your terms:** Use OMP Profiles and model roles to pick models and thinking levels, or switch them for a session.
 - **A clear view of your work:** Streaming responses, tool calls, file changes, context usage, and compaction state stay visible in one workspace.
 - **Keep working across devices:** Continue with the Web interface and mobile remote access.
-- **Open source and extensible:** The interface and visual style draw from [ZCode](https://github.com/zai-org/ZCode); Agent capabilities come from [omp (oh-my-pi)](https://github.com/can1357/oh-my-pi).
 
 ## Quick start
 

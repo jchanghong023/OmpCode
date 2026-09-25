@@ -7,19 +7,20 @@
 <h3 align="center">omp 最好的桌面版本</h3>
 
 <p align="center">
-  ZCode 风格的界面，完整适配 omp 的内核与交互。<br />
-  把 omp 的全部功能和所有斜杠命令，带进一个专为 AI 编程打造的桌面工作台。
+  像 ChatGPT 一样顺手，拥有 ZCode 的精致界面和 omp 的完整能力。<br />
+  OmpCode 把 omp 的所有命令与功能，带进友好的图形化 AI 编程工作台。
 </p>
 
 <p align="center">
   <a href="README.md">English</a> ·
   <a href="#快速开始">快速开始</a> ·
+  <a href="https://github.com/can1357/oh-my-pi/discussions/13231">omp 社区讨论</a> ·
   <a href="#项目来源">项目来源</a>
 </p>
 
 ## 看看 OmpCode
 
-**在熟悉的桌面界面里，直接使用完整的 omp。** 任务、工具调用、文件改动和会话状态集中呈现，专注写代码，无需在终端与多个窗口之间来回切换。
+**用熟悉的聊天界面，驾驭完整的 omp。** 基于 ZCode 的工作区延续 ChatGPT 式对话体验，同时清晰呈现 omp 的任务、工具调用、文件改动与会话状态。
 
 <p align="center">
   <a href="docs/images/ompcode-workspace.png">
@@ -43,7 +44,7 @@
   </a>
 </p>
 
-**每条 omp 斜杠命令都触手可及。** 在输入框键入 `/`，浏览命令并直接执行。
+**每条 omp 斜杠命令都触手可及。** 在输入框键入 `/`，浏览并执行命令，不必离开对话。
 
 <p align="center">
   <a href="docs/images/ompcode-commands.png">
@@ -53,12 +54,12 @@
 
 ## 为什么选择 OmpCode
 
-- **完整的 omp 体验**：内部以 omp 为 Agent 核心，界面、会话和操作围绕 omp 设计，支持 omp 的全部功能。
-- **所有斜杠命令**：完整接入 omp 命令目录；`/model`、`/switch`、`/compact`、`/mcp`、`/usage` 与技能命令都能在对话输入框中使用。
-- **模型由你掌控**：复用 omp Profile、模型目录与配置；为各个模型角色选择模型和思考等级，也可以在会话中临时切换。
+- **ZCode 界面，ChatGPT 式上手体验**：沿用 ZCode 的界面与视觉风格，用熟悉的对话布局呈现强大的编程工作区。
+- **由 omp 驱动到底**：内嵌 omp 核心，界面围绕 omp 的会话、工具、模型、命令与全部功能设计。
+- **所有斜杠命令**：在输入框浏览并执行完整的 omp 命令目录，包括 `/model`、`/switch`、`/compact`、`/mcp`、`/usage` 与技能命令。
+- **模型由你掌控**：复用 omp Profile 与模型角色，为不同角色设置模型和思考等级，也可以在会话中临时切换。
 - **清晰的工作现场**：流式回复、工具调用、文件改动、上下文用量和压缩状态，都在同一工作区里可见。
-- **桌面之外继续工作**：保留 Web 与手机远程访问体验，在不同设备上接续同一个工作流。
-- **开源、可扩展**：界面与视觉风格参考 [ZCode](https://github.com/zai-org/ZCode)，Agent 能力来自 [omp（oh-my-pi）](https://github.com/can1357/oh-my-pi)。
+- **桌面之外继续工作**：通过 Web 与手机远程访问，在不同设备上接续同一个工作流。
 
 ## 快速开始
 
