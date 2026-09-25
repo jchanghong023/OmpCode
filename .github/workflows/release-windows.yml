@@ -43,12 +43,13 @@ jobs:
           if ($env:RELEASE_TAG -cnotmatch $pattern) {
             throw "Tag must match v$version-omp.<positive number>."
           }
-          git ls-remote --exit-code --tags origin "refs/tags/$env:RELEASE_TAG" *> $null
-          if ($LASTEXITCODE -eq 0) {
-            throw "Tag $env:RELEASE_TAG already exists."
-          }
-          if ($LASTEXITCODE -ne 2) {
+          # 修复依据：PowerShell 的 CI 外壳会把 ls-remote --exit-code 的“未找到”(2) 当作失败。
+          $existingTag = git ls-remote --tags origin "refs/tags/$env:RELEASE_TAG"
+          if ($LASTEXITCODE -ne 0) {
             throw 'Could not check existing release tags.'
+          }
+          if ($existingTag) {
+            throw "Tag $env:RELEASE_TAG already exists."
           }
           "APP_VERSION=$version" >> $env:GITHUB_ENV
 
