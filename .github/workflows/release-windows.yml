@@ -1,0 +1,166 @@
+name: Release Windows EXE
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Unique tag, for example v3.14.3-omp.1"
+        required: true
+        type: string
+      prerelease:
+        description: "Mark the GitHub Release as a prerelease"
+        required: true
+        default: false
+        type: boolean
+
+concurrency:
+  group: release-windows-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    env:
+      ZCODE_ENV: production
+      ZCODE_SKIP_REMOTE_ASSETS: "1"
+      GITHUB_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate release target
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          if ($env:GITHUB_REF -ne 'refs/heads/main') {
+            throw 'Windows releases must run from main.'
+          }
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          $pattern = '^v' + [regex]::Escape($version) + '-omp\.[1-9][0-9]*$'
+          if ($env:RELEASE_TAG -cnotmatch $pattern) {
+            throw "Tag must match v$version-omp.<positive number>."
+          }
+          git ls-remote --exit-code --tags origin "refs/tags/$env:RELEASE_TAG" *> $null
+          if ($LASTEXITCODE -eq 0) {
+            throw "Tag $env:RELEASE_TAG already exists."
+          }
+          if ($LASTEXITCODE -ne 2) {
+            throw 'Could not check existing release tags.'
+          }
+          "APP_VERSION=$version" >> $env:GITHUB_ENV
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.2
+          run_install: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.14.0
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Test omp protocol adapter
+        env:
+          OMP_AGENT_SKIP_REAL_E2E: "1"
+        run: pnpm --filter @zcode/omp-agent test
+
+      - name: Build and audit Windows installer
+        run: pnpm bundle:desktop -- --os=win --arch=x64
+
+      - name: Verify installer and embedded omp
+        shell: pwsh
+        run: |
+          $dist = 'packages/desktop/dist'
+          $name = "OmpCode-$env:APP_VERSION-win-x64.exe"
+          $installer = Join-Path $dist $name
+          $omp = Join-Path $dist 'win-unpacked/resources/glm/omp/omp.exe'
+          $adapter = Join-Path $dist 'win-unpacked/resources/glm/omp-agent.cjs'
+          foreach ($path in @($installer, $omp, $adapter)) {
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+              throw "Missing packaged file: $path"
+            }
+          }
+          if ((Get-Item -LiteralPath $installer).Length -lt 50MB) {
+            throw "Installer is unexpectedly small: $installer"
+          }
+          & $omp --version
+          if ($LASTEXITCODE -ne 0) {
+            throw 'Embedded omp failed its version smoke test.'
+          }
+          $hash = (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash.ToLowerInvariant()
+          $checksum = Join-Path $dist "$name.sha256"
+          [System.IO.File]::WriteAllText($checksum, "$hash  $name`n", [System.Text.Encoding]::ASCII)
+          Write-Output "Installer SHA256: $hash"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-release
+          path: |
+            packages/desktop/dist/OmpCode-*-win-x64.exe
+            packages/desktop/dist/OmpCode-*-win-x64.exe.sha256
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ inputs.tag }}
+      IS_PRERELEASE: ${{ inputs.prerelease }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-release
+          path: release-assets
+
+      - name: Verify downloaded assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd release-assets
+          exe=(OmpCode-*-win-x64.exe)
+          [[ ${#exe[@]} -eq 1 && -f ${exe[0]} ]]
+          sha256sum --check "${exe[0]}.sha256"
+
+      - name: Create draft release with installer
+        shell: bash
+        run: |
+          set -euo pipefail
+          assets=(release-assets/OmpCode-*-win-x64.exe)
+          [[ ${#assets[@]} -eq 1 && -f ${assets[0]} ]]
+          args=(--repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "OmpCode $RELEASE_TAG" --notes 'Windows x64 installer. This build is unsigned.' --generate-notes --draft)
+          if [[ "$IS_PRERELEASE" == 'true' ]]; then
+            args+=(--prerelease)
+          fi
+          gh release create "$RELEASE_TAG" "${assets[0]}" "${assets[0]}.sha256" "${args[@]}"
+
+      - name: Verify assets and publish release
+        shell: bash
+        run: |
+          set -euo pipefail
+          exe=(release-assets/OmpCode-*-win-x64.exe)
+          expected_size=$(stat -c %s "${exe[0]}")
+          release_json=$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets,isDraft)
+          [[ $(jq -r '.isDraft' <<< "$release_json") == 'true' ]]
+          actual_size=$(jq -r --arg name "$(basename "${exe[0]}")" '.assets[] | select(.name == $name) | .size' <<< "$release_json")
+          [[ "$actual_size" == "$expected_size" ]]
+          jq -r '.assets[].name' <<< "$release_json" | grep -Fx "$(basename "${exe[0]}.sha256")"
+          gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false
+          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft,url --jq 'select(.isDraft == false) | .url'
