@@ -422,7 +422,22 @@ function renderWebBootstrapError(error: unknown): void {
   );
 }
 
+let webBootstrapGeneration = 0;
+let webReconnectAttempts = 0;
+let webReconnectTimer: ReturnType<typeof setTimeout> | null = null;
+
+function scheduleWebReconnect(error: unknown): void {
+  renderWebBootstrapError(error);
+  if (webReconnectTimer) return;
+  const delay = Math.min(1_000 * 2 ** Math.min(webReconnectAttempts++, 5), 30_000);
+  webReconnectTimer = setTimeout(() => {
+    webReconnectTimer = null;
+    void bootstrapWebApp();
+  }, delay);
+}
+
 async function bootstrapWebApp() {
+  const generation = ++webBootstrapGeneration;
   const params = new URLSearchParams(window.location.search);
   if (isWebOAuthCallback(params)) {
     renderWebAuthCallbackPage();
@@ -438,19 +453,27 @@ async function bootstrapWebApp() {
   try {
     bootstrap = await resolveWebBootstrap();
   } catch (error) {
-    renderWebBootstrapError(error);
+    scheduleWebReconnect(error);
     return;
   }
 
   try {
+    let connected = false;
     const services = await connectViaWebSocket(bootstrap.wsUrl, {
-      onClose: () => {},
+      onClose: () => {
+        if (connected && generation === webBootstrapGeneration) {
+          scheduleWebReconnect(new Error("Connection closed. Reconnecting…"));
+        }
+      },
     });
+    if (generation !== webBootstrapGeneration) return;
+    connected = true;
+    webReconnectAttempts = 0;
     const platform = createWebPlatform();
     document.title = "OmpCode - Web + Server";
 
     root.render(
-      <AppErrorBoundary>
+      <AppErrorBoundary key={generation}>
         <ZCodeIntlProvider
           settingService={services.settingService}
           broadcastService={services.broadcastService}
@@ -471,7 +494,7 @@ async function bootstrapWebApp() {
       </AppErrorBoundary>,
     );
   } catch (error) {
-    renderWebBootstrapError(error);
+    scheduleWebReconnect(error);
   }
 }
 

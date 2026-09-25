@@ -784,6 +784,12 @@ test("setFollowupMode guide 收敛 + 流式中输入按模式路由 steer/follow
       }
       return false;
     });
+    await harness.waitUntil(() => {
+      const rows = [...harness.collectRows().values()];
+      const headers = rows.filter((row) => row.kind === "turnHeader");
+      return headers.length === 4 && headers.every((row) => row.state === "completedSuccess") ? true : undefined;
+    });
+    assert.ok([...harness.collectRows().values()].filter((row) => row.kind === "assistantText").every((row) => row.state === "complete"));
   } finally {
     await harness.close();
   }
@@ -992,6 +998,8 @@ test("供应商错误（stopReason=error）以 failed 收口并携带错误事�
       const state = harness.collectState();
       return (state.control as { phase?: string } | undefined)?.phase === "error" ? true : undefined;
     });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.equal((harness.collectState().control as { phase?: string }).phase, "error", "agentInvoked=true 的 prompt_result 不得改写失败终态");
     const state = harness.collectState();
     const lastError = (state.control as { lastError?: { code?: string; message?: string } | null } | undefined)?.lastError;
     assert.equal(lastError?.code, "omp_provider_401");

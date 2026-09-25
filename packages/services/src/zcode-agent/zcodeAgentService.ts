@@ -4734,6 +4734,8 @@ export function createZCodeAgentService(
           }
           if (!subscriptionReady) {
             pendingLiveEvents.push(event);
+            // 重连期间只保留有界 live 尾部；成功订阅的 replay 负责补齐历史缺口。
+            if (pendingLiveEvents.length > 500) pendingLiveEvents.shift();
             return;
           }
           deliverToListener(event);
@@ -4781,24 +4783,17 @@ export function createZCodeAgentService(
             if (cancelled) {
               return;
             }
-            if (attempt >= SESSION_SUBSCRIBE_MAX_ATTEMPTS - 1) {
-              // 彻底失败时打 warn 让问题可观测，而不是无声失效。
-              console.warn(
-                formatLogPrefix("zcode-agent", process.pid),
-                "session 订阅建立失败，已达最大重试次数，放弃",
-                {
+            if ((attempt + 1) % SESSION_SUBSCRIBE_MAX_ATTEMPTS === 0) {
+              // 持续失败仍保留订阅恢复能力，每八次报告一次，避免静默失活和刷屏。
+              logger.warn(undefined, "session 订阅建立持续失败，继续重试", {
                   sessionId: params.sessionId,
                   workspaceKey: resolveWorkspaceKey(params),
                   attempts: attempt + 1,
                   message: error instanceof Error ? error.message : String(error),
-                },
-              );
-              // 订阅失败后不再无限压住 live 事件；此时没有 replay 权威补洞，只能恢复 continuous 流。
-              releaseBufferedLiveEvents();
-              return;
+              });
             }
             const delay = Math.min(
-              SESSION_SUBSCRIBE_RETRY_BASE_DELAY_MS * 2 ** attempt,
+              SESSION_SUBSCRIBE_RETRY_BASE_DELAY_MS * 2 ** Math.min(attempt, 8),
               SESSION_SUBSCRIBE_RETRY_MAX_DELAY_MS,
             );
             retryTimer = setTimeout(() => {

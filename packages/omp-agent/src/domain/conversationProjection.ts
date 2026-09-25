@@ -15,7 +15,6 @@ import {
   type PendingInteraction,
   type StatePatch,
   type TimelineMarkerPayload,
-  type ToolCallRow,
 } from "@zcode/shared/zcode-protocol-v4";
 import { createLogEpoch } from "./ids.js";
 import { initialAState, type ProjectionAState, type TurnOutcome } from "./projectionTypes.js";
@@ -24,15 +23,15 @@ import { contextWindowPatch, modelConfigPatch, runningControlPatch, terminalCont
 import { mergeDeltas, type LoggedDelta } from "./deltaMerge.js";
 import { OmpSubagentProjection } from "./ompSubagentDirectory.js";
 import { readProjectionFileChanges } from "./projectionFileChanges.js";
+import { finalizeFailedQueuedTurn, finalizeTurnContexts } from "./projectionTurnFinalizer.js";
+import { applyProjectionToolCallUpdate } from "./projectionToolCallUpdate.js";
 import {
   createMarkerRow,
   createStreamingRow,
-  createToolCallRow,
   createTurnHeaderRow,
   createUserInputRow,
   buildConversationSnapshot,
   conversationRowsRange,
-  mergeToolCallRow,
   type ToolCallUpsert,
   type TurnContext,
 } from "./projectionRows.js";
@@ -42,6 +41,7 @@ export interface BeginTurnInput {
   inputId: string;
   sourceCommandId: string;
   clientId: string;
+  routing?: "startNow" | "guide" | "queue";
 }
 
 export class ConversationProjection {
@@ -56,6 +56,8 @@ export class ConversationProjection {
   private deltaLog: LoggedDelta[] = [];
   private pending: LoggedDelta[] = [];
   private turn: TurnContext | null = null;
+  private suspendedTurns: TurnContext[] = [];
+  private queuedTurns: TurnContext[] = [];
   private turnFacts = new Map<string, TurnFileFacts>();
   private lastErrorValue: { code: string; message: string } | null = null;
   private readonly subagents: OmpSubagentProjection;
@@ -101,8 +103,9 @@ export class ConversationProjection {
     this.appendRow(
       createUserInputRow({ ...init, rowId: userRowId, text: input.text, sourceCommandId: input.sourceCommandId, clientId: input.clientId }),
     );
-    this.turn = {
+    const nextTurn: TurnContext = {
       turnId,
+      sourceCommandId: input.sourceCommandId,
       productTurnId: turnId,
       headerRowId,
       fileFacts: new TurnFileFacts(),
@@ -110,9 +113,49 @@ export class ConversationProjection {
       streamingTextRow: null,
       streamingReasoningRow: null,
     };
-    this.patchState(runningControlPatch());
+    if (input.routing === "queue" && this.turn) {
+      // omp follow_up 只在当前 agent_end 之后启动；现有输出仍归原轮。
+      this.queuedTurns.push(nextTurn);
+    } else {
+      if (input.routing === "guide" && this.turn) {
+        // steer 在当前 agent 内生效；保留旧轮供同一 agent_end 收口。
+        this.closeStreamingRows("complete");
+        this.suspendedTurns.push(this.turn);
+      }
+      this.turn = nextTurn;
+      this.patchState(runningControlPatch());
+    }
   }
-
+  activateQueuedTurn(): void {
+    if (this.turn || this.queuedTurns.length === 0) return;
+    this.turn = this.queuedTurns.shift() ?? null;
+    if (this.turn) this.patchState(runningControlPatch());
+  }
+  /** 本地命令没有 agent_start；上一轮结束后由完成事实激活并收口队首。 */
+  finishQueuedLocalOnlyTurn(): boolean {
+    if (this.turn) return false;
+    this.activateQueuedTurn();
+    if (!this.turn) return false;
+    this.closeAssistantResponse();
+    this.finishTurn("success");
+    return true;
+  }
+  failCommandTurn(sourceCommandId: string, error: { code: string; message: string }): void {
+    if (finalizeFailedQueuedTurn({
+      queuedTurns: this.queuedTurns, sourceCommandId, turnFacts: this.turnFacts,
+      rowAt: (rowId) => this.rows.get(rowId), upsertRow: (row) => this.upsertRow(row),
+    })) return;
+    this.recordTurnError(error);
+    this.finishTurn("failed", error);
+  }
+  failAllTurns(error: { code: string; message: string }): void {
+    this.failCommandTurn(this.turn?.sourceCommandId ?? "", error);
+    while (this.queuedTurns.length > 0) {
+      const next = this.queuedTurns[0];
+      if (!next) break;
+      this.failCommandTurn(next.sourceCommandId, error);
+    }
+  }
   markStopRequested(): void {
     if (this.state.control.phase !== "running") {
       return;
@@ -121,51 +164,33 @@ export class ConversationProjection {
       control: { ...this.state.control, canStop: false, stopState: "stopping" },
     });
   }
-
   /** 记录本轮错误事实（provider/运行时）；下一次 finishTurn 以 failed 收口；null 清除（omp 自动重试成功）。 */
   recordTurnError(error: { code: string; message: string } | null): void {
     this.lastErrorValue = error;
   }
-
   finishTurn(outcome: TurnOutcome, error?: { code: string; message: string }): void {
     const turn = this.turn;
-    if (turn) {
-      this.closeStreamingRows(outcome === "failed" ? "failed" : outcome === "interrupted" ? "interrupted" : "complete");
-      // 保留本轮文件事实供 fileChanges 查询（有界，最近 20 轮）。
-      this.turnFacts.set(turn.turnId, turn.fileFacts);
-      if (this.turnFacts.size > 20) {
-        const oldest = this.turnFacts.keys().next().value;
-        if (oldest !== undefined) {
-          this.turnFacts.delete(oldest);
-        }
-      }
-      const header = this.rows.get(turn.headerRowId);
-      if (header && header.kind === "turnHeader") {
-        const files = turn.fileFacts.summary();
-        this.upsertRow({
-          ...header,
-          state: outcome === "success" ? "completedSuccess" : outcome === "interrupted" ? "completedInterrupted" : "failed",
-          endedAt: Date.now(),
-          fileChanges: { additions: files.additions, deletions: files.deletions, files: files.files },
-        });
-      }
-    }
+    if (!turn && this.suspendedTurns.length === 0) return;
+    finalizeTurnContexts({
+      turns: [...this.suspendedTurns, ...(turn ? [turn] : [])], outcome,
+      rowAt: (rowId) => this.rows.get(rowId), upsertRow: (row) => this.upsertRow(row),
+      closeStreamingRows: (active) => this.closeStreamingRows(outcome === "failed" ? "failed" : outcome === "interrupted" ? "interrupted" : "complete", active),
+      turnFacts: this.turnFacts,
+    });
     if (outcome === "failed") {
       this.lastErrorValue = error ?? { code: "runtime", message: "turn failed" };
     }
     this.patchState(terminalControlPatch(this.state, outcome, error));
     this.turn = null;
+    this.suspendedTurns = [];
   }
-
   // ── 流式文本与思考 ──
   appendAssistantText(delta: string): void {
     this.appendStreamDelta(delta, "assistantText");
   }
-
   appendReasoning(delta: string): void {
     this.appendStreamDelta(delta, "reasoning");
   }
-
   private appendStreamDelta(delta: string, kind: "assistantText" | "reasoning"): void {
     if (!this.turn || delta.length === 0) {
       return;
@@ -194,7 +219,6 @@ export class ConversationProjection {
     }
     this.pushPending({ op: "row.delta", rowId: anchor.rowId, path: "text", append: delta });
   }
-
   /** 模型响应结束（message_end）：关闭本响应的流式行；下一次文本增量开新行。 */
   closeAssistantResponse(): void {
     this.closeStreamingRows("complete");
@@ -204,8 +228,7 @@ export class ConversationProjection {
     }
   }
 
-  private closeStreamingRows(finalState: "complete" | "interrupted" | "failed"): void {
-    const turn = this.turn;
+  private closeStreamingRows(finalState: "complete" | "interrupted" | "failed", turn = this.turn): void {
     if (!turn) {
       return;
     }
@@ -228,37 +251,12 @@ export class ConversationProjection {
   // ── 工具调用 ──
   upsertToolCall(update: ToolCallUpsert): void {
     const turn = this.turn;
-    if (!turn) {
-      return;
-    }
-    const existing = [...this.rows.values()].find(
-      (row): row is ToolCallRow => row.kind === "toolCall" && row.toolCallId === update.toolCallId,
-    );
-    const merged = existing
-      ? mergeToolCallRow(existing, update)
-      : createToolCallRow({
-          rowId: this.nextRowId++,
-          turnId: turn.turnId,
-          productTurnId: turn.productTurnId,
-          createdAtSeq: this.sequence + 1,
-          ...update,
-        });
-    this.upsertRow(merged);
-    // 文件事实以「已结束的工具调用」为准累计，供 turnHeader 摘要与 fileChanges 查询。
-    if (update.status === "success" || update.status === "error") {
-      turn.fileFacts.recordToolResult({
-        toolName: update.toolName,
-        input: typeof merged.input === "object" && merged.input !== null ? (merged.input as Record<string, unknown>) : undefined,
-      });
-      const header = this.rows.get(turn.headerRowId);
-      if (header && header.kind === "turnHeader") {
-        const files = turn.fileFacts.summary();
-        this.upsertRow({
-          ...header,
-          fileChanges: { additions: files.additions, deletions: files.deletions, files: files.files },
-        });
-      }
-    }
+    if (!turn) return;
+    applyProjectionToolCallUpdate({
+      turn, update, createdAtSeq: this.sequence + 1, rows: this.rows.values(),
+      nextRowId: () => this.nextRowId++, rowAt: (rowId) => this.rows.get(rowId),
+      upsertRow: (row) => this.upsertRow(row),
+    });
   }
 
   // ── 状态面 ──

@@ -1951,6 +1951,9 @@ export function createZCodeTaskServiceAdapter(
 
     async enqueueTaskCommand(params): Promise<ZCodeEnqueueTaskCommandResult> {
       assertCurrentOwnerRun(params, params.ownerRunId);
+      const key = taskKey(params);
+      const existing = runtimeCommands.get(key)?.find((item) => item.commandId === params.commandId);
+      if (existing) return { accepted: true, command: existing };
       const workspaceKeyValue = workspaceKey(params);
       const command: ZCodeTaskRuntimeCommand = {
         commandId: params.commandId,
@@ -1972,7 +1975,6 @@ export function createZCodeTaskServiceAdapter(
         // 若这里丢 automationId，drain 时会按普通用户输入发送，CronCreate 会重新暴露。
         automationId: params.automationId,
       };
-      const key = taskKey(params);
       runtimeCommands.set(key, [...(runtimeCommands.get(key) ?? []), command]);
       // 手机 replayable host command 被 accepted 后，前端本地 drain 会主动跳过 hostCommand。
       // 因此 host 需要在当前 task 已空闲时自行触发消费；桌面 continuous 不调用该入口，不会受影响。

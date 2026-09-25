@@ -680,6 +680,15 @@ export function useWorkspaceTaskLists(params: {
             ? { workspaceIdentity: config.scope.workspaceIdentity }
             : {}),
         })((event: ZCodeWorkspaceEvent) => {
+          if (event.type === "workspace_slash_commands_update") {
+            const eventWorkspaceKey = buildTaskWorkspaceKey(event.workspacePath, event.workspaceIdentity);
+            if (eventWorkspaceKey === config.workspaceKey) {
+              useZCodeSessionStore.getState().setSlashCommands(
+                event.workspacePath, event.commands, event.workspaceIdentity,
+              );
+            }
+            return;
+          }
           if (event.type === "workspace_config_options_update") {
             // omp 换核（FORK.md）：composer 模型/思考档位目录的唯一事实源 =
             // syncer 转发的 workspace-config topic（omp get_available_models 投影）。

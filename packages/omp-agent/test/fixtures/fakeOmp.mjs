@@ -64,7 +64,7 @@ function runLocalCommand(message) {
   return null;
 }
 
-async function runPromptTurn(message) {
+async function runPromptTurn(message, promptId) {
   out({ type: "agent_start" });
   if (message === "SUBAGENT_REPORT") {
     const agent = { id: "fake-child-1", index: 0, agent: "scout", agentSource: "bundled", description: "Inspect project", status: "active", lastUpdate: Date.now(), parentToolCallId: "task-parent" };
@@ -90,6 +90,7 @@ async function runPromptTurn(message) {
       message: { role: "assistant", content: [], stopReason: "error", errorStatus: 401, errorMessage: "401 Model not supported" },
     });
     out({ type: "agent_end", messages: [], isTerminal: true });
+    out({ type: "prompt_result", id: promptId, agentInvoked: true });
     return;
   }
   if (typeof message === "string" && message.startsWith("HOLD")) {
@@ -100,6 +101,13 @@ async function runPromptTurn(message) {
       message: { role: "assistant", content: [] },
       assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "holding", partial: { role: "assistant", content: [] } },
     });
+    return;
+  }
+  if (typeof message === "string" && message.startsWith("FOLLOWEDUP:")) {
+    out({ type: "message_start", message: { role: "assistant", content: [] } });
+    out({ type: "message_update", message: { role: "assistant", content: [] }, assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: message } });
+    out({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: message }] } });
+    out({ type: "agent_end", messages: [], isTerminal: true });
     return;
   }
   out({ type: "message_start", message: { role: "assistant", content: [] } });
@@ -270,7 +278,7 @@ readline.on("line", (line) => {
       }
       respond(command.id, "prompt", true, { agentInvoked: true });
       setTimeout(() => {
-        void runPromptTurn(command.message);
+        void runPromptTurn(command.message, command.id);
       }, 10);
       return;
     }
@@ -291,22 +299,13 @@ readline.on("line", (line) => {
         });
         out({ type: "agent_end", messages: [], isTerminal: true });
       }
+      return;
     case "follow_up":
       if (holding) {
-        const followedText = `FOLLOWEDUP:${command.message}${command.images?.length ? `|IMAGES:${JSON.stringify(command.images)}` : ""}`;
         respond(command.id, "follow_up", true, {});
         holding = false;
-        out({ type: "message_start", message: { role: "assistant", content: [] } });
-        out({
-          type: "message_update",
-          message: { role: "assistant", content: [] },
-          assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: followedText, partial: { role: "assistant", content: [] } },
-        });
-        out({
-          type: "message_end",
-          message: { role: "assistant", content: [{ type: "text", text: followedText }] },
-        });
         out({ type: "agent_end", messages: [], isTerminal: true });
+        setTimeout(() => { void runPromptTurn(`FOLLOWEDUP:${command.message}${command.images?.length ? `|IMAGES:${JSON.stringify(command.images)}` : ""}`); }, 10);
         return;
       }
       respond(command.id, "follow_up", true, { agentInvoked: true });

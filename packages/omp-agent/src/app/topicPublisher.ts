@@ -3,7 +3,7 @@
 
 import {
   encodeTopicWireFrames,
-  utf8JsonByteLength,
+  measureTopicNotificationEnvelopeBytes,
   type ConversationDelta,
   type ConversationSnapshot,
 } from "@zcode/shared/zcode-protocol-v4";
@@ -175,7 +175,8 @@ export class ConversationTopicPublisher {
       subscriptionId,
       logicalFrameId: createId("frame"),
       logicalFrameOrdinal: subscriber.logicalFrameOrdinal,
-      measurePhysicalFrameBytes: (wire: unknown) => utf8JsonByteLength(wire) + 1,
+      // 接收端按三种承载的最大 envelope 校验；发送端必须使用同一口径预分片。
+      measurePhysicalFrameBytes: (wire) => measureTopicNotificationEnvelopeBytes(wire).maxBytes,
     });
     for (const wire of wires) {
       this.gateway.emitFrame(wire);

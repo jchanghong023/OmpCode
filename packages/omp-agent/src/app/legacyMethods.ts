@@ -94,8 +94,7 @@ export function createLegacyHandlers(context: LegacyMethodContext) {
     },
     [zcodeProtocolMethods.sessionClose]: async (params) => {
       const record = asRecord(params);
-      const engine = context.registry.getEngine(requiredString(record, "sessionId"));
-      await engine?.dispose();
+      await context.registry.closeSession(requiredString(record, "sessionId"));
       return { closed: true };
     },
     [zcodeProtocolMethods.sessionSetModel]: async (params) => {

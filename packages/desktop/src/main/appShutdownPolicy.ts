@@ -12,15 +12,15 @@ interface AppShutdownPolicySelection {
 }
 
 const STRICT_SHUTDOWN_POLICY: AppShutdownPolicy = {
-  forceKillDelayMs: 7_500,
-  waitTimeoutMs: 9_000,
+  forceKillDelayMs: 12_000,
+  waitTimeoutMs: 12_500,
 };
 
 const WINDOWS_NORMAL_SHUTDOWN_POLICY: AppShutdownPolicy = {
-  // 普通退出仍给 Host 内部 3.5 秒进程树兜底留出执行时间，
-  // 但不再承担更新前资源锁扫描所需的额外余量。
-  forceKillDelayMs: 4_000,
-  waitTimeoutMs: 4_500,
+  // Host 串行清理远端 registry 和服务最多需 6s + 3.5s；
+  // Main 强杀必须晚于这两阶段，才能由 Host 回收 Agent 子进程。
+  forceKillDelayMs: 12_000,
+  waitTimeoutMs: 12_500,
 };
 
 export function resolveAppShutdownPolicy(

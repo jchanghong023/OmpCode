@@ -17,6 +17,7 @@ import { encodeJsonlLine } from "../domain/jsonlFraming.js";
 import type { OmpCommandOutcome, OmpProcessFactory, OmpSessionProcess, OmpStateData, OmpUiRequest } from "../app/ports.js";
 import type { OmpSideChannelHandlers } from "../app/ports.js";
 import { logger } from "./logger.js";
+import { PromptResultTracker } from "../domain/promptResultTracker.js";
 
 const READY_TIMEOUT_MS = 60_000;
 const COMMAND_TIMEOUT_MS = 120_000;
@@ -41,6 +42,7 @@ class OmpChildProcess implements OmpSessionProcess {
   private child: ChildProcessWithoutNullStreams | null = null;
   private assembler = new OmpFrameAssembler();
   private pending = new Map<string, PendingCommand>();
+  private readonly promptResults = new PromptResultTracker();
   private commandCounter = 0;
   private started = false;
   private disposed = false;
@@ -126,12 +128,10 @@ class OmpChildProcess implements OmpSessionProcess {
       logger.warn("omp 子代理订阅不可用", { error: subscription.error ?? "unknown" });
     }
   }
-
   private wireStdout(child: ChildProcessWithoutNullStreams): void {
     const readline = createInterface({ input: child.stdout });
     readline.on("line", (line) => this.handleLine(line));
   }
-
   private handleLine(line: string): void {
     const frame = parseJson(line);
     if (!frame || typeof frame !== "object") {
@@ -154,7 +154,6 @@ class OmpChildProcess implements OmpSessionProcess {
     }
     this.dispatchFrame(record);
   }
-
   private dispatchFrame(frame: unknown): void {
     if (typeof frame !== "object" || frame === null) {
       return;
@@ -167,6 +166,7 @@ class OmpChildProcess implements OmpSessionProcess {
           return;
         }
         if (parsed.data.id) {
+          this.promptResults.noteResponse(parsed.data);
           this.settleCommand(parsed.data.id, parsed.data.success, parsed.data);
         }
         return;
@@ -178,7 +178,9 @@ class OmpChildProcess implements OmpSessionProcess {
             this.contextResult.resolve(parsed.data.agentInvoked === false);
             return;
           }
-          this.options.onPromptResult?.(parsed.data);
+          if (this.promptResults.shouldFinish(parsed.data)) {
+            this.options.onPromptResult?.(parsed.data);
+          }
         }
         return;
       }
@@ -249,7 +251,6 @@ class OmpChildProcess implements OmpSessionProcess {
       }
     }
   }
-
   async send(command: OmpCommandFrame): Promise<OmpCommandOutcome> {
     // /context 是本地 prompt 且 command_output 没有 request id；先收口再下发其它命令。
     if (this.contextRead) await this.contextRead;
@@ -324,11 +325,13 @@ class OmpChildProcess implements OmpSessionProcess {
     clearTimeout(pending.timer);
     pending.resolve({ success, data: data.data, error: data.error });
   }
-
   respondUi(response: OmpExtensionUiResponseFrame): void {
-    this.child?.stdin.write(encodeJsonlLine(response));
+    const child = this.child;
+    if (!child || child.killed || !child.stdin.writable) return;
+    child.stdin.write(encodeJsonlLine(response), (error) => {
+      if (error) logger.warn("omp UI 应答写入失败", { error: String(error) });
+    });
   }
-
   async refreshState(): Promise<OmpStateData | null> {
     const outcome = await this.request({ type: "get_state" }, 10_000).catch(() => null);
     if (!outcome?.success) {
@@ -344,23 +347,22 @@ class OmpChildProcess implements OmpSessionProcess {
     }
     return parsed.data;
   }
-
   get state(): OmpStateData | null {
     return this.stateData;
   }
-
   private handleExit(code: number | null): void {
     if (this.disposed) {
       return;
     }
+    this.child = null;
     for (const pending of this.pending.values()) {
       clearTimeout(pending.timer);
       pending.reject(new Error(`omp core exited (code ${code ?? "null"})`));
     }
     this.pending.clear();
+    this.promptResults.clear();
     this.options.onExit(code);
   }
-
   async dispose(): Promise<void> {
     this.disposed = true;
     const child = this.child;

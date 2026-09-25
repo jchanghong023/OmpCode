@@ -186,7 +186,9 @@ export class V4CommandService {
         const payload = envelope.payload as import("@zcode/shared/zcode-protocol-v4").CommandPayloadMap["resolveInteraction"];
         const engine = this.requireSessionEngine(envelope.sessionId);
         const answer = interactionAnswerOf(payload.answer);
-        engine.settleInteraction(payload.interactionId, answer);
+        if (!engine.settleInteraction(payload.interactionId, answer)) {
+          return this.ack(envelope, "noop", { reasonCode: "proto.alreadyResolved" });
+        }
         engine.projection.resolvePendingInteraction(payload.interactionId);
         return this.ack(envelope, "accepted", {
           result: {

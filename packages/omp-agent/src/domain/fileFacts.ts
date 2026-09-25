@@ -56,11 +56,11 @@ export class TurnFileFacts {
 
   private placeholderSummary: { files: number; additions: number; deletions: number } | null = null;
 
-  recordToolResult(input: { toolName: string; input?: Record<string, unknown> }): void {
+  recordToolResult(input: { toolName: string; input?: Record<string, unknown>; resultDetails?: unknown }): void {
     const toolName = input.toolName;
     const args = input.input;
     if (toolName === "write" || toolName === "edit" || toolName === "multiedit") {
-      this.recordWriteOrEdit(toolName, args);
+      this.recordWriteOrEdit(toolName, args, input.resultDetails);
       return;
     }
     if (toolName === "bash" || toolName === "shell") {
@@ -69,7 +69,7 @@ export class TurnFileFacts {
     }
   }
 
-  private recordWriteOrEdit(toolName: string, args: Record<string, unknown> | undefined): void {
+  private recordWriteOrEdit(toolName: string, args: Record<string, unknown> | undefined, resultDetails: unknown): void {
     if (!args) {
       return;
     }
@@ -81,6 +81,22 @@ export class TurnFileFacts {
       }
       const additions = countLines(content);
       this.accumulate(path, { additions, deletions: 0, toolName, patch: buildPatch(0, additions, content ? `-${content}` : "") });
+      return;
+    }
+    if (typeof args.input === "string") {
+      // 默认 hashline edit 把路径放在 [path#TAG] 段中，实际增删由成功结果的 diff 给出。
+      const paths = [...args.input.matchAll(/^\[([^\]\r\n]+)#[0-9A-F]{4}\]$/gm)]
+        .map((match) => normalizePath(match[1]))
+        .filter((path): path is string => path !== null);
+      const diff = asRecord(resultDetails)?.diff;
+      const changes = typeof diff === "string" ? changesFromUnifiedDiff(diff, paths[0]) : [];
+      const changedPaths = new Set(changes.map((item) => item.path));
+      for (const change of changes) {
+        this.accumulate(change.path, { ...change, toolName, patch: buildPatch(change.deletions, change.additions, change.lines) });
+      }
+      for (const path of new Set(paths)) {
+        if (!changedPaths.has(path)) this.accumulate(path, { additions: 0, deletions: 0, toolName });
+      }
       return;
     }
     // edit：replace 形态 {path, old_string, new_string}；patch 形态 {path, edits:[...]}。
@@ -153,6 +169,26 @@ export class TurnFileFacts {
     }
     return [...this.itemsByKey.values()];
   }
+}
+
+function changesFromUnifiedDiff(diff: string, fallbackPath: string | undefined): { path: string; additions: number; deletions: number; lines: string[] }[] {
+  const changes = new Map<string, { path: string; additions: number; deletions: number; lines: string[] }>();
+  let path = fallbackPath;
+  for (const line of diff.split("\n")) {
+    if (line.startsWith("+++ ")) {
+      const next = line.slice(4).replace(/^b\//, "").trim();
+      path = next === "/dev/null" ? undefined : normalizePath(next) ?? undefined;
+      continue;
+    }
+    if (!path || line.startsWith("--- ") || line.startsWith("@@")) continue;
+    if (!line.startsWith("+") && !line.startsWith("-")) continue;
+    const item = changes.get(path) ?? { path, additions: 0, deletions: 0, lines: [] };
+    if (line.startsWith("+")) item.additions += 1;
+    else item.deletions += 1;
+    item.lines.push(line);
+    changes.set(path, item);
+  }
+  return [...changes.values()];
 }
 
 function buildPatch(oldLines: number, newLines: number, lines: string | string[]): FileFactItem["patches"][number] {

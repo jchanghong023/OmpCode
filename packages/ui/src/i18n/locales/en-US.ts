@@ -4815,6 +4815,9 @@ const enUS: Record<string, string> = {
     "A task is running. Finish it before switching model providers.",
   "chat.toolbar.modelSwitch.lockedByRunningTask.short": "busy",
   "chat.goal.runningBlocked": "Set a goal after the current task finishes.",
+  "chat.goal.objectiveRequired": "Enter a goal first.",
+  "chat.goal.unsupported": "This Agent does not support the goal action: {action}.",
+  "chat.goal.commandRejected": "Goal action was not completed: {reason}.",
   "chat.goal.planModeBlocked": "Goal is unavailable in Plan mode. Switch modes to continue.",
   "chat.plan.attachmentsBlocked":
     "The /plan shortcut supports text only for now. Remove attachments or context and try again.",

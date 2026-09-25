@@ -3,7 +3,7 @@
 
 import {
   encodeTopicWireFrames,
-  utf8JsonByteLength,
+  measureTopicNotificationEnvelopeBytes,
   type ConversationRow,
   type SessionSummary,
   type WorkspaceConfigState,
@@ -11,6 +11,8 @@ import {
 import { createId, createLogEpoch, createSubscriptionId, ompSessionIdOfFilePath } from "../domain/ids.js";
 import { coldSubagentIds, rowsFromOmpEntries, transcriptFromOmpEntries } from "../domain/coldHistory.js";
 import { ConversationEngine } from "./conversationEngine.js";
+import { deleteColdSession } from "./deleteColdSession.js";
+import { buildEngineSessionSummary } from "./engineSessionSummary.js";
 import { deriveTitle } from "../domain/titleText.js";
 import { ProtocolError } from "./errors.js";
 import type { HostGateway, OmpProcessFactory, OmpStorePort } from "./ports.js";
@@ -132,47 +134,44 @@ export class SessionRegistry {
       this.emitIndexDelta(engine.workspaceId, { op: "session.removed", sessionId });
       return;
     }
-    // 冷会话删除：在 omp 存储内删除该会话文件（与用户在 omp 内删除等效），并从索引摘除。
-    if (this.primaryWorkspace) {
-      const cold = (await this.store.listSessions(this.primaryWorkspace.path)).find((session) => session.sessionId === sessionId);
-      if (cold) {
-        await this.store.deleteSession(cold.sessionPath);
-        const index = this.indexes.get(this.primaryWorkspace.id);
-        index?.summaries.delete(sessionId);
-        if (index) {
-          this.emitIndexDelta(this.primaryWorkspace.id, { op: "session.removed", sessionId });
-        }
-        return;
-      }
-    }
+    // 冷会话文件与索引同步删除；没有找到时保持明确的 unavailable 错误。
+    if (await deleteColdSession({
+      store: this.store, workspace: this.primaryWorkspace, sessionId,
+      onDeleted: (workspaceId, id) => {
+        const index = this.indexes.get(workspaceId);
+        index?.summaries.delete(id);
+        if (index) this.emitIndexDelta(workspaceId, { op: "session.removed", sessionId: id });
+      },
+    })) return;
     throw new ProtocolError(-32004, `session unavailable: ${sessionId}`);
+  }
+
+  async closeSession(sessionId: string): Promise<void> {
+    const engine = this.getEngine(sessionId);
+    if (!engine) return;
+    const persistedPath = engine.ompSessionFile;
+    engine.projection.failAllTurns({ code: "session_closed", message: "session closed" });
+    if (persistedPath) this.upsertEngineSummary(engine);
+    await engine.dispose();
+    this.engines.delete(engine.sessionId);
+    if (!persistedPath) {
+      this.indexes.get(engine.workspaceId)?.summaries.delete(engine.sessionId);
+      this.emitIndexDelta(engine.workspaceId, { op: "session.removed", sessionId: engine.sessionId });
+    }
   }
 
   upsertEngineSummary(engine: ConversationEngine, overrides?: { createdAt?: number; lastActivityAt?: number }): void {
     const index = this.ensureIndex(engine.workspaceId);
     const state = engine.projection.stateSnapshot;
-    const window = engine.projection.buildSnapshot().rows.window;
-    const lastAssistant = [...window].reverse().find((row) => row.kind === "assistantText");
     const persistedId = ompSessionIdOfFilePath(engine.ompSessionFile) ?? engine.sessionId;
     const terminal = ["completedSuccess", "completedInterrupted", "error"].includes(state.control.phase);
     // Host 自动化按创建时 task ID 监听终态；先以临时 ID 发终态，再迁移索引身份。
     const shouldRekey = persistedId !== engine.sessionId && terminal && !this.rekeyedEngineIds.has(engine.sessionId);
     const indexId = this.rekeyedEngineIds.has(engine.sessionId) ? persistedId : engine.sessionId;
     const createdAt = overrides?.createdAt ?? index.summaries.get(indexId)?.createdAt ?? Date.now();
-    const summary: SessionSummary = {
-      sessionId: indexId,
-      workspaceId: engine.workspaceId,
-      title: state.meta.title,
-      titleSource: state.meta.titleSource,
-      phase: state.control.phase,
-      sessionEnded: state.control.sessionEnded,
-      hasBackgroundWork: state.backgroundWorks.some((work) => work.status === "running"),
-      pendingInteractionSummary: { permissionCount: state.pendingInteractions.filter((item) => item.kind === "permission").length,
-        userInputCount: state.pendingInteractions.filter((item) => item.kind === "userInput").length },
-      lastActivityAt: overrides?.lastActivityAt ?? Date.now(),
-      ...(lastAssistant?.kind === "assistantText" ? { lastAssistantPreview: lastAssistant.text.slice(0, 120) } : {}),
-      createdAt,
-    };
+    const summary = buildEngineSessionSummary({
+      engine, sessionId: indexId, createdAt, lastActivityAt: overrides?.lastActivityAt,
+    });
     index.summaries.set(indexId, summary);
     this.emitIndexDelta(engine.workspaceId, { op: "session.upserted", session: summary });
     if (shouldRekey) {
@@ -383,7 +382,7 @@ export class SessionRegistry {
       subscriptionId,
       logicalFrameId: createId("frame"),
       logicalFrameOrdinal,
-      measurePhysicalFrameBytes: (wire: unknown) => utf8JsonByteLength(wire) + 1,
+      measurePhysicalFrameBytes: (wire) => measureTopicNotificationEnvelopeBytes(wire).maxBytes,
     });
     for (const wire of wires) {
       this.gateway.emitFrame(wire);

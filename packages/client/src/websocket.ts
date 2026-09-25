@@ -94,7 +94,11 @@ export function connectViaWebSocket(
       settled = true;
       options?.onOpenSocket?.(ws);
       const socket = wrapBrowserWebSocket(ws);
-      resolve(connectViaProtocol(new SocketProtocol(socket)));
+      const client = new ChannelClient(new SocketProtocol(socket));
+      // SocketProtocol 只暴露消息；浏览器 socket 关闭时主动终结 Channel，
+      // 否则已发出的 RPC Promise 会无限等待响应。
+      socket.onClose(() => client.dispose());
+      resolve(new RemoteServiceAccess(client));
     });
   });
 }

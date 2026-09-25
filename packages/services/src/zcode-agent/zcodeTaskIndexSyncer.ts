@@ -46,6 +46,7 @@ import type {
 } from "./zcodeAgent.js";
 import { ZCODE_AGENT_RUNTIME_UNAVAILABLE_CODE } from "./zcodeAgent.js";
 import { formatTaskMetaModelSelectionFromSnapshot } from "./zcodeConfigOptions.js";
+import { projectWorkspaceConfigEvents } from "./workspaceConfigEvents.js";
 
 const logger = createServiceLogger("zcode-task-index-syncer");
 
@@ -252,6 +253,7 @@ interface WorkspaceIngestState {
   configSeq: number;
   /** 当前 workspace-config 已接受投影，供晚于初帧挂载的 UI 监听者同步读取。 */
   latestConfigEvent: Extract<ZCodeWorkspaceEvent, { type: "workspace_config_options_update" }> | null;
+  latestSlashCommandsEvent: Extract<ZCodeWorkspaceEvent, { type: "workspace_slash_commands_update" }> | null;
   /** ACK 只证明 admission；首个 logical frame 原子 apply 后才允许把 epoch/seq 当 resume base。 */
   indexHasAppliedBase: boolean;
   configHasAppliedBase: boolean;
@@ -1174,20 +1176,20 @@ export function createZCodeTaskIndexSyncer(
       frame.payload.kind === "snapshot"
         ? frame.payload.snapshot.config
         : frame.payload.deltas.at(-1)?.config;
-    if (!config || config.configOptions.length === 0) {
-      // 空目录（无 live session 的订阅种子）不下发：下游 useZCodeConfig 收到空
-      // configOptions 会把聊天工具栏的模型目录清掉。
+    if (!config) {
       completeConfigRecoveryFrame(state, deliveryKind);
       return;
     }
-    // v4 载荷与 ZCodeConfigOption 结构对齐（shared 黄金测试背书），零映射直通，
-    // 下游 workspace_config_options_update 消费面（useZCodeConfig 等）不改。
-    const configEvent: Extract<ZCodeWorkspaceEvent, { type: "workspace_config_options_update" }> = {
-      type: "workspace_config_options_update",
+    const { slashEvent, configEvent } = projectWorkspaceConfigEvents(state.target, config);
+    state.latestSlashCommandsEvent = slashEvent;
+    getWorkspaceEmitter({
       workspacePath: state.target.workspacePath,
       workspaceIdentity: state.target.workspaceIdentity,
-      configOptions: config.configOptions,
-    };
+    }).fire(slashEvent);
+    if (!configEvent) {
+      completeConfigRecoveryFrame(state, deliveryKind);
+      return;
+    }
     state.latestConfigEvent = configEvent;
     getWorkspaceEmitter({
       workspacePath: state.target.workspacePath,
@@ -1679,6 +1681,7 @@ export function createZCodeTaskIndexSyncer(
       configLogEpoch: null,
       configSeq: 0,
       latestConfigEvent: null,
+      latestSlashCommandsEvent: null,
       indexHasAppliedBase: false,
       configHasAppliedBase: false,
       indexRecovery: null,
@@ -1828,6 +1831,8 @@ export function createZCodeTaskIndexSyncer(
         const workspaceKey = typeof workspace === "string" ? workspace : resolveWorkspaceKey(workspace);
         const cached = workspaceIngests.get(workspaceKey)?.latestConfigEvent;
         if (cached) listener(cached);
+        const cachedSlash = workspaceIngests.get(workspaceKey)?.latestSlashCommandsEvent;
+        if (cachedSlash) listener(cachedSlash);
         return disposable;
       };
     },

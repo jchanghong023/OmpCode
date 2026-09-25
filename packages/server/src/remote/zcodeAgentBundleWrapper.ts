@@ -7,8 +7,8 @@ export function buildRemoteAgentBundleWrapper(runtimeResourceDir: string): strin
   return [
     "#!/bin/sh",
     "set -eu",
-    'runtime_root="${ZCODE_SERVER_RUNTIME_ROOT:-$HOME/.zcode/server}"',
-    `exec "$runtime_root/node" "$HOME/.zcode/server/agents/${runtimeResourceDir}/${REMOTE_AGENT_BUNDLE_NAME}" "$@"`,
+    'runtime_root="${ZCODE_SERVER_RUNTIME_ROOT:-$HOME/.ompcode/server}"',
+    `exec "$runtime_root/node" "$runtime_root/agents/${runtimeResourceDir}/${REMOTE_AGENT_BUNDLE_NAME}" "$@"`,
     "",
   ].join("\n");
 }

@@ -30,6 +30,7 @@ export class OmpEventProjector {
   handleEvent(event: OmpSessionEventFrame): void {
     switch (event.type) {
       case "agent_start":
+        this.projection.activateQueuedTurn();
         this.streaming = true;
         this.stopRequested = false;
         return;
@@ -102,6 +103,7 @@ export class OmpEventProjector {
           outputText: text,
           error: event.isError ? { code: "tool_error", message: firstLine(text) || "tool execution failed" } : undefined,
           endedAt: Date.now(),
+          resultDetails: event.result?.details,
         });
         return;
       }

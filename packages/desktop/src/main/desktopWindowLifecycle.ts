@@ -121,8 +121,15 @@ export function createWindow(options: {
   registerMainApplicationWindow(wcId);
   let domReadyGeneration = 0;
   let cancelRuntimeProcessEnvWait: (() => void) | null = null;
+  let activeLocalHost: ElectronUtilityProcess | null = null;
+  let hostRestartTimer: ReturnType<typeof setTimeout> | null = null;
+  let hostRestartAttempts = 0;
   scheduleArmsBrowserPerfLoadNudge(win.webContents);
   win.webContents.on("dom-ready", async () => {
+    if (hostRestartTimer) {
+      clearTimeout(hostRestartTimer);
+      hostRestartTimer = null;
+    }
     cancelRuntimeProcessEnvWait?.();
     cancelRuntimeProcessEnvWait = null;
     const currentDomReadyGeneration = ++domReadyGeneration;
@@ -172,6 +179,7 @@ export function createWindow(options: {
       }
     }
     if (oldChild) {
+      if (activeLocalHost === oldChild) activeLocalHost = null;
       options.logger.info(
         `[createWindow] killing previous host process for (${label}), pid=${oldChild.pid ?? "unknown"}`,
       );
@@ -204,6 +212,18 @@ export function createWindow(options: {
         agentSpawnFallbackCwd: options.agentSpawnFallbackCwd,
       });
       options.windowHostProcessMap.set(wcId, child);
+      activeLocalHost = child;
+      child.once("exit", () => {
+        if (activeLocalHost !== child || win.isDestroyed() || options.forceQuitRef.current) return;
+        activeLocalHost = null;
+        // Host 是窗口的服务 owner；意外退出后重载 renderer，走既有 dom-ready 重建链。
+        const delay = Math.min(1_000 * 2 ** Math.min(hostRestartAttempts++, 5), 30_000);
+        options.logger.warn(`[createWindow] local host exited unexpectedly (${label}); reloading in ${delay}ms`);
+        hostRestartTimer = setTimeout(() => {
+          hostRestartTimer = null;
+          if (!win.isDestroyed()) win.webContents.reload();
+        }, delay);
+      });
       options.onHostProcessReady?.(wcId);
       options.syncAutoUpdaterStateToWindow(win);
       options.syncReadyUpdateToWindow(win);
@@ -260,6 +280,8 @@ export function createWindow(options: {
   });
 
   win.on("closed", () => {
+    activeLocalHost = null;
+    if (hostRestartTimer) clearTimeout(hostRestartTimer);
     unregisterMainApplicationWindow(wcId);
     cancelRuntimeProcessEnvWait?.();
     cancelRuntimeProcessEnvWait = null;

@@ -8,7 +8,8 @@ import type { OmpSessionEventFrame, OmpStateData } from "../domain/ompFrames.js"
 import type { HostGateway, HostUserInputAnswer, OmpProcessFactory, OmpSessionProcess } from "./ports.js";
 import { ConversationTopicPublisher, type SubscribeOptions } from "./topicPublisher.js";
 import { OmpInteractionProxy } from "./ompInteractionProxy.js";
-import { applyEngineAutoCompaction, applyEngineCompaction, applyEngineModelSelection, applyEngineSetModel, applyEngineThoughtLevel, createEngineOmpProcess, readEngineContextDetails } from "./ompEngineProcess.js";
+import { applyEngineAutoCompaction, applyEngineCompaction, applyEngineSetModel, applyEngineThoughtLevel, createEngineOmpProcess, readEngineContextDetails } from "./ompEngineProcess.js";
+import { dispatchOmpText } from "./ompPromptDispatch.js";
 import { TrailingThrottle } from "./trailingThrottle.js";
 import { deriveTitle, agentInvokedOf } from "../domain/titleText.js";
 import { OmpSubagentBridge } from "./ompSubagentBridge.js";
@@ -43,9 +44,9 @@ export class ConversationEngine {
   private readonly indexNotify = new TrailingThrottle(500, () => this.notifyIndexChange());
   private resumeSessionPath: string | undefined;
   private followupMode: SessionConfigState["followupMode"] = "queue";
+  private pendingLocalOnlyCompletions = 0;
   private titleInitialized: boolean;
   private readonly subagents: OmpSubagentBridge;
-
   constructor(init: EngineInit) {
     this.sessionId = init.sessionId;
     this.workspaceId = init.workspaceId;
@@ -71,11 +72,9 @@ export class ConversationEngine {
       this.projection.setTitle(init.initialTitle, "default");
     }
   }
-
   get ompSessionFile(): string | null {
     return this.ompProcess?.ompSessionFile ?? this.resumeSessionPath ?? null;
   }
-
   async ensureOmpStarted(): Promise<void> {
     // 订阅冷会话会后台启动 omp；此时进程对象已创建但 ready/get_state 还未完成。
     // 后续发送必须等待同一启动 promise，不能把对象存在误当成进程就绪。
@@ -92,18 +91,21 @@ export class ConversationEngine {
     await this.ompStarting;
   }
   private async startOmp(): Promise<void> {
-    const process = createEngineOmpProcess(
+    let process!: OmpSessionProcess;
+    process = createEngineOmpProcess(
       this.ompFactory,
       { cwd: this.workspacePath, resumeSessionPath: this.resumeSessionPath },
       {
         onEvent: (event) => this.handleOmpEvent(event),
         onUiRequest: (request) => void this.interactionProxy.handle(request),
-        onExit: (code) => this.handleOmpExit(code),
+        onExit: (code) => this.handleOmpExit(code, process),
         onCommandOutput: ({ text }) => {
+          if (!this.projector.isStreaming) this.projection.activateQueuedTurn();
           this.projection.appendAssistantText(text);
           this.scheduleFlush();
         },
-        onPromptResult: () => this.finishLocalOnlyPrompt(),
+        // agentInvoked=true 的完成帧紧随 agent_end，不能覆盖失败或中断终态。
+        onPromptResult: (frame) => { if (frame.agentInvoked === false) this.finishLocalOnlyPrompt(); },
         onSessionInfoUpdate: ({ title }) => this.applySessionTitle(title),
         onConfigUpdate: ({ model, thinkingLevel }) => {
           this.projection.setModelConfig({
@@ -143,11 +145,15 @@ export class ConversationEngine {
   }
   /** 本地命令收口（prompt 响应 data.agentInvoked=false 或异步 prompt_result）。 */
   private finishLocalOnlyPrompt(): void {
-    if (!this.projector.isStreaming) {
+    if (this.projector.isStreaming) {
+      this.pendingLocalOnlyCompletions += 1;
+      return;
+    }
+    if (!this.projection.finishQueuedLocalOnlyTurn()) {
       this.projection.closeAssistantResponse();
       this.projection.finishTurn("success");
-      this.scheduleFlush();
     }
+    this.scheduleFlush();
   }
   private applyOmpState(state: OmpStateData | null): void {
     if (!state) {
@@ -187,6 +193,12 @@ export class ConversationEngine {
       return;
     }
     this.projector.handleEvent(event);
+    if (event.type === "agent_end" && event.isTerminal !== false) {
+      while (this.pendingLocalOnlyCompletions > 0) {
+        this.pendingLocalOnlyCompletions -= 1;
+        this.finishLocalOnlyPrompt();
+      }
+    }
     this.scheduleFlush();
     if (event.type === "agent_end" && event.isTerminal !== false) {
       void this.refreshStateAfterActivity();
@@ -228,15 +240,14 @@ export class ConversationEngine {
   settleInteraction(interactionId: string, answer: HostUserInputAnswer): boolean {
     return this.interactionProxy.settle(interactionId, answer);
   }
-
-  private handleOmpExit(code: number | null): void {
+  private handleOmpExit(code: number | null, process: OmpSessionProcess): void {
+    if (this.ompProcess !== process) return;
     this.ompProcess = null;
-    if (this.projection.stateSnapshot.control.phase === "running") {
-      const error = { code: "omp_process_exit", message: `omp core exited unexpectedly (code ${code ?? "null"})` };
-      this.projection.recordTurnError(error);
-      this.projection.finishTurn("failed", error);
-      this.scheduleFlush();
-    }
+    this.pendingLocalOnlyCompletions = 0;
+    this.interactionProxy.dispose();
+    const error = { code: "omp_process_exit", message: `omp core exited unexpectedly (code ${code ?? "null"})` };
+    this.projection.failAllTurns(error);
+    this.scheduleFlush();
   }
 
   // ── 命令翻译 ──
@@ -253,55 +264,44 @@ export class ConversationEngine {
       this.projection.setTitle(deriveTitle(text), "generated");
     }
     const inputId = createId("input");
-    this.projection.beginUserTurn({ text, inputId, sourceCommandId, clientId });
-    this.scheduleFlush();
     const streaming = this.projector.isStreaming;
+    this.projection.beginUserTurn({ text, inputId, sourceCommandId, clientId,
+      routing: streaming ? this.followupMode : "startNow" });
+    this.scheduleFlush();
     try {
       await this.ensureOmpStarted();
     } catch (error) {
-      this.failTurn("omp_start_failed", error);
+      this.failTurn(sourceCommandId, "omp_start_failed", error);
       return streaming ? "queue" : "startNow";
     }
     const process = this.ompProcess;
     if (!process) {
-      this.failTurn("omp_unavailable", new Error("omp core failed to start"));
+      this.failTurn(sourceCommandId, "omp_unavailable", new Error("omp core failed to start"));
       return streaming ? "queue" : "startNow";
     }
-    // 临时模型（FORK.md）：提交携带 modelSelection 时先切换本 omp 会话模型再发 prompt。
-    if (modelSelection) {
-      const failure = await applyEngineModelSelection(process, modelSelection, this.projection.stateSnapshot.config);
-      if (failure) {
-        this.failTurn(failure.code, new Error(failure.message));
+    try {
+      const outcome = await dispatchOmpText({
+        process, text, images, streaming, followupMode: this.followupMode,
+        modelSelection, currentConfig: this.projection.stateSnapshot.config,
+      });
+      if (!outcome.success) {
+        this.failTurn(sourceCommandId, outcome.code ?? "omp_prompt_failed", new Error(outcome.error ?? "prompt rejected"));
         return streaming ? "queue" : "startNow";
       }
-    }
-    // ZCode followup 模式 → omp 流式中路由：guide=steer（本轮引导，工具间生效），
-    // queue=follow_up（轮后队列）。omp 两个队列默认 one-at-a-time，与 FORK.md「每轮一条」一致。
-    const outcome = await process.send(
-      streaming
-        ? this.followupMode === "guide"
-          ? { type: "steer", message: text, ...(images.length > 0 ? { images } : {}) }
-          : { type: "follow_up", message: text, ...(images.length > 0 ? { images } : {}) }
-        : { type: "prompt", message: text, ...(images.length > 0 ? { images } : {}) },
-    );
-    if (!outcome.success) {
-      this.failTurn("omp_prompt_failed", new Error(outcome.error ?? "prompt rejected"));
-      return streaming ? "queue" : "startNow";
-    }
-    // 本地命令（agentInvoked=false）：omp 已就地完成，不会再有 agent_end，必须在此收口。
-    if (!streaming && agentInvokedOf(outcome.data) === false) {
-      this.finishLocalOnlyPrompt();
+      if (agentInvokedOf(outcome.data) === false) {
+        this.finishLocalOnlyPrompt();
+      }
+    } catch (error) {
+      // omp RPC 超时或进程退出会 reject，必须结束对应轮次。
+      this.failTurn(sourceCommandId, "omp_prompt_failed", error);
     }
     return streaming ? "queue" : "startNow";
   }
-
-  private failTurn(code: string, error: unknown): void {
+  private failTurn(sourceCommandId: string, code: string, error: unknown): void {
     const message = error instanceof Error ? error.message : String(error);
-    this.projection.recordTurnError({ code, message });
-    this.projection.finishTurn("failed", { code, message });
+    this.projection.failCommandTurn(sourceCommandId, { code, message });
     this.scheduleFlush();
   }
-
   async stop(): Promise<void> {
     this.projector.noteStopRequested();
     this.scheduleFlush();

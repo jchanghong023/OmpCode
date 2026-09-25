@@ -2465,9 +2465,11 @@ export function SessionPane({
           break;
         case "emptyGoal":
           logger.warn("[v4-pane] /goal 需要目标文本");
+          toast(intl.formatMessage({ id: "chat.goal.objectiveRequired" }));
           return true;
         case "unsupportedGoal":
           logger.warn(`[v4-pane] 暂不支持 /goal ${command.action}`);
+          toast(intl.formatMessage({ id: "chat.goal.unsupported" }, { action: command.action }));
           return true;
         default:
           return false;
@@ -2495,6 +2497,8 @@ export function SessionPane({
         } else if (command.kind === "compact" && ack.reasonCode === "activeTurn") {
           // 兼容尚未升级的 CLI：旧端仍会返回 activeTurn，不能再次无声清空命令。
           toast(intl.formatMessage({ id: "chat.compact.runningBlocked" }));
+        } else if (command.kind !== "compact") {
+          toast(intl.formatMessage({ id: "chat.goal.commandRejected" }, { reason: ack.reasonCode ?? ack.status }));
         }
       } else if (command.kind === "compact" && compactExpectedToQueue) {
         toast(intl.formatMessage({ id: "chat.compact.queued" }));
@@ -3481,7 +3485,10 @@ export function SessionPane({
           workspaceIdentity,
         );
         store.setConfigOptionsStatus(workspacePath, "ready", workspaceIdentity);
-        store.setSlashCommands(workspacePath, prepareResult.slashCommands ?? [], workspaceIdentity);
+        if ((store.getWorkspaceState(workspacePath, workspaceIdentity)?.slashCommands.length ?? 0) === 0 &&
+            prepareResult.slashCommands?.length) {
+          store.setSlashCommands(workspacePath, prepareResult.slashCommands, workspaceIdentity);
+        }
         logger.info("[v4-pane] configOptions error custom provider recovery done", {
           configOptionsCount: prepareResult.configOptions?.length ?? 0,
           modelId: modelSelection.modelId,

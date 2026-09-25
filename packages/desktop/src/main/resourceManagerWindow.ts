@@ -209,7 +209,8 @@ export function registerHostProcess(label: string, child: ElectronUtilityProcess
   hostProcesses.set(label, child);
 }
 
-export function unregisterHostProcess(label: string): void {
+export function unregisterHostProcess(label: string, expected?: ElectronUtilityProcess): void {
+  if (expected && hostProcesses.get(label) !== expected) return;
   hostProcesses.delete(label);
   hostAgentProcesses.delete(label);
   forgetHostResourceUsage(label);

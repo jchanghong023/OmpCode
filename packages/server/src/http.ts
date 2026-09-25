@@ -295,6 +295,17 @@ function staticContentType(filePath: string): string {
   return staticMimeTypes[extname(filePath).toLowerCase()] ?? "application/octet-stream";
 }
 
+export function resolveHttpBindHost(host: string | undefined, authToken: string | undefined): string {
+  const bindHost = host?.trim() || "127.0.0.1";
+  const isLoopback = bindHost === "localhost" || bindHost === "::1" || bindHost === "[::1]" ||
+    /^127(?:\.\d{1,3}){3}$/.test(bindHost);
+  // 无凭据时禁止把完整 RPC 服务暴露到其他网络接口。
+  if (!isLoopback && !authToken?.trim()) {
+    throw new Error("Non-loopback HTTP binding requires an authentication token");
+  }
+  return bindHost;
+}
+
 export function createHttpServer(
   services: ServiceCollection,
   port = 3033,
@@ -305,6 +316,7 @@ export function createHttpServer(
   const hostCapabilities = createHostCapabilityStore();
 
   const authToken = options.authToken?.trim();
+  const bindHost = resolveHttpBindHost(options.host, authToken);
   if (authToken) {
     app.use("*", async (c, next) => {
       const pathname = new URL(c.req.url).pathname;
@@ -463,10 +475,10 @@ export function createHttpServer(
     });
   }
 
-  const server = serve({ fetch: app.fetch, hostname: options.host, port }, () => {
+  const server = serve({ fetch: app.fetch, hostname: bindHost, port }, () => {
     const address = server.address();
     const listenPort = typeof address === "object" && address ? address.port : port;
-    const listenHost = options.host?.trim() || "localhost";
+    const listenHost = bindHost;
     log(`http://${listenHost}:${listenPort}`);
   });
 

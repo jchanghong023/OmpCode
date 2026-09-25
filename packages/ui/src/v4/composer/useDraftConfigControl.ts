@@ -408,11 +408,10 @@ export function useDraftConfigControl(params: {
         const latest = useZCodeSessionStore.getState();
         latest.setConfigOptions(workspacePath, mergedOptions, workspaceIdentity);
         latest.setConfigOptionsStatus(workspacePath, "ready", workspaceIdentity);
-        latest.setSlashCommands(
-          workspacePath,
-          prepareResult.slashCommands ?? [],
-          workspaceIdentity,
-        );
+        if ((latest.getWorkspaceState(workspacePath, workspaceIdentity)?.slashCommands.length ?? 0) === 0 &&
+            prepareResult.slashCommands?.length) {
+          latest.setSlashCommands(workspacePath, prepareResult.slashCommands, workspaceIdentity);
+        }
       })
       .catch((error) => {
         useZCodeSessionStore

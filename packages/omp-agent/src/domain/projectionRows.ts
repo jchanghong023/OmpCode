@@ -7,6 +7,7 @@ import type { TurnFileFacts } from "./fileFacts.js";
 
 export interface TurnContext {
   turnId: string;
+  sourceCommandId: string;
   productTurnId: string;
   headerRowId: number;
   fileFacts: TurnFileFacts;
@@ -44,6 +45,7 @@ export interface ToolCallUpsert {
   error?: { code: string; message: string };
   startedAt?: number;
   endedAt?: number;
+  resultDetails?: unknown;
 }
 
 export function createTurnHeaderRow(init: RowInit & { sourceCommandId: string; historyRoundCount: number }): ConversationRow {
