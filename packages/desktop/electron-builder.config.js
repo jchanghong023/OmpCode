@@ -454,12 +454,12 @@ function assertPackagedNodePtyPrebuild(context) {
 /** @type {import("electron-builder").Configuration} */
 export default {
   appId: desktopProductIdentity.appId,
-  // 数据隔离（FORK.md）：electron-updater 缓存目录默认从包名派生（@zcodedesktop-updater），
-  // 会与上游 ZCode 共用 %LOCALAPPDATA% 下同一目录；显式命名避免双装互相污染更新缓存。
-  updaterCacheDirName: "ompcode-updater",
   // Linux deb 打包（fpm）会校验 package metadata 中的 homepage、author.email、maintainer。
   // CI 环境下若这些字段缺失会在产物阶段直接失败。这里统一在构建配置补齐，避免依赖外部注入。
   extraMetadata: {
+    // 修复依据：electron-builder 26 从打包后的 package name 派生 updater 缓存目录，
+    // 顶层 updaterCacheDirName 不符合配置 schema；按产品身份设置包名可隔离上游与 Preview。
+    name: desktopProductIdentity.flavor === "preview" ? "ompcode-preview" : "ompcode",
     version: buildMetadata.appVersion,
     zcodeProductFlavor: desktopProductIdentity.flavor,
     homepage: "https://zcode.z.ai",

@@ -87,7 +87,7 @@
 
 * 协议级 E2E（`packages/omp-agent/test/adapter.e2e.test.ts`，fake omp 核心）：新建会话 → 流式 → 工具调用 → 权限确认（双向应答路径）→ 文件变更（摘要+查询）→ 完成/中断收口，全部通过；全部 v4 帧通过共享包 wire schema 校验。
 * 真实二进制 E2E（`packages/omp-agent/test/real-omp.e2e.test.ts`，releases 实际内嵌 omp.exe + commandcode 免费模型）：createSession → 流式输出 → write 工具 → 审批确认 → 文件真实落盘 → 会话完成，通过。
-* 桌面打包产物（Windows x64，`pnpm bundle:desktop -- --os=win --arch=x64`）：`win-unpacked/OmpCode.exe` + `resources/glm/omp-agent.cjs` + `resources/glm/omp/omp.exe`（内嵌 omp v18.2.11+fork.239，SHA256 校验通过）验证在包内；asar 内品牌为 OmpCode。NSIS 安装器步骤与 exe 版本资源（rcedit）在本机因 electron-builder winCodeSign 缓存的符号链接权限（需 Windows 开发者模式/管理员）失败，属打包机环境限制而非代码问题；GUI 级自动化 E2E 待后续在可用打包环境补跑。
+* 桌面打包产物（Windows x64，`pnpm bundle:desktop -- --os=win --arch=x64`）：`win-unpacked/OmpCode.exe` + `resources/glm/omp-agent.cjs` + `resources/glm/omp/omp.exe`（内嵌 omp v18.2.11+fork.239，SHA256 校验通过）验证在包内；asar 内品牌为 OmpCode。NSIS 安装器 `OmpCode-3.14.3-win-x64.exe` 已在本机成功生成，运行时依赖闭包与体积检查通过；安装器未签名，GUI 级自动化 E2E 尚未执行。
 
 ### 产品名称更改为 OmpCode（已实现）
 
