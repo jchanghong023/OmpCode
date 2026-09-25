@@ -1,4 +1,4 @@
-// omp 子进程适配器：spawn 内嵌 omp 二进制（--mode rpc），讲 omp RPC。
+// omp 子进程适配器：spawn 内嵌 omp 二进制（--mode rpc-ui），讲 omp RPC-UI。
 // 负责 ready、协议协商（v2 分片重组）、命令关联与事件/扩展 UI 分发。
 
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
@@ -70,7 +70,7 @@ class OmpChildProcess implements OmpSessionProcess {
     const args = [
       ...this.extraArgs,
       "--mode",
-      "rpc",
+      "rpc-ui",
       ...(this.options.resumeSessionPath ? ["--resume", this.options.resumeSessionPath] : []),
     ];
     logger.info("spawn omp core", { binary: this.binaryPath, cwd: this.options.cwd, resume: this.options.resumeSessionPath ?? null });

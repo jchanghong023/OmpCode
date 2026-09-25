@@ -2,7 +2,7 @@
  * @zcode/omp-agent 公共契约。
  *
  * 本包是 Fork 的 Agent 核心适配器：对 ZCode host 冒充 agent（stdio 上的
- * ZCode Protocol 与 v4 数据面），对内嵌 omp 二进制说 omp RPC（`omp --mode rpc`）。
+ * ZCode Protocol 与 v4 数据面），对内嵌 omp 二进制说 omp RPC-UI（`omp --mode rpc-ui`）。
  * 跨模块只允许经本文件与包入口导入；实现细节见各层内部模块。
  */
 

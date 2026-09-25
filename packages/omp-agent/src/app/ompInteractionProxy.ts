@@ -1,4 +1,4 @@
-// omp 扩展 UI 请求（select/confirm/input）→ ZCode pendingInteraction + 宿主反向请求的代理。
+// omp 工具与扩展 UI 请求（select/confirm/input/editor）→ ZCode pendingInteraction + 宿主反向请求的代理。
 // 应答有两条汇入路径：宿主直接应答 interaction/requestUserInput，或 UI 经 v4 resolveInteraction
 // 命令回执；两者汇合到同一个 deferred，先到先用；180s 兜底取消（对齐 ZCode CLI 侧交互超时口径）。
 
@@ -29,7 +29,7 @@ export class OmpInteractionProxy {
 
   async handle(request: OmpUiRequest): Promise<void> {
     const method = request.frame.method;
-    if (method !== "select" && method !== "confirm" && method !== "input") {
+    if (method !== "select" && method !== "confirm" && method !== "input" && method !== "editor") {
       // omp 的状态类 UI 事件与 open_url 在适配层没有宿主呈现面，按取消回执，不让 omp 挂起。
       request.respond({ type: "extension_ui_response", id: request.frame.id, cancelled: true });
       return;
@@ -37,6 +37,7 @@ export class OmpInteractionProxy {
     const interactionId = createInteractionId();
     const prompt = request.frame.message ?? request.frame.prompt ?? request.frame.title ?? "";
     const options = request.frame.options?.map((option) => ({ optionId: option, label: option }));
+    const useElicitation = method === "select" || method === "input" || method === "editor";
     const pending: PendingInteraction = {
       interactionId,
       kind: "userInput",
@@ -45,8 +46,26 @@ export class OmpInteractionProxy {
       payload: {
         kind: "userInput",
         prompt,
-        freeText: method === "input",
+        // rpc-ui 的 ask「自定义回答」用 editor；与 input 共用宿主自由文本入口。
+        freeText: method === "input" || method === "editor",
         ...(options ? { options } : {}),
+        ...(useElicitation
+          ? {
+              answerMode: method === "select" ? ("option" as const) : ("text" as const),
+              allowCustomInput: method !== "select",
+              questions: [{
+                question: prompt,
+                header: request.frame.title ?? prompt,
+                options: (request.frame.options ?? []).map((option, index) => ({
+                  value: option,
+                  label: option,
+                  ...(request.frame.optionDetails?.[index]?.description
+                    ? { description: request.frame.optionDetails[index]!.description }
+                    : {}),
+                })),
+              }],
+            }
+          : {}),
       },
     };
     this.deps.addPendingInteraction(pending);

@@ -1,5 +1,5 @@
 // omp 换核（FORK.md）：composer 模型选择的事实源是 workspace-config topic 下发的
-// omp 模型目录（`omp --mode rpc` 的 get_available_models 投影，value = `provider/model`），
+// omp 模型目录（`omp --mode rpc-ui` 的 get_available_models 投影，value = `provider/model`），
 // 不再是 ZCode 账号侧 GLM 目录。本文件把 configOptions 的模型项解析成选择器分组与
 // 选择收敛逻辑；UI 形态与官方完全一致，仅数据源换成 omp。
 

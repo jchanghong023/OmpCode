@@ -538,6 +538,11 @@ test("桌面主链路：createSession → 流式 → 工具 → 权限确认 →
       harness.frames.find((frame) => (frame as { method?: string }).method === "interaction/requestUserInput"),
     )) as { id: string; params: { requestId: string; prompt: string } };
     assert.match(interaction.params.prompt, /greeting\.txt/);
+    const projectedQuestion = (await harness.waitUntil(() => {
+      const interactions = harness.collectState().pendingInteractions as Array<{ payload?: { questions?: unknown[]; answerMode?: string } }> | undefined;
+      return interactions?.find((item) => item.payload?.answerMode === "option");
+    })) as { payload: { questions: unknown[]; answerMode: string } };
+    assert.equal(projectedQuestion.payload.questions.length, 1, "rpc-ui 选择题须投影到已有 Ask 界面");
 
     // 4. 直接应答反向请求（host 的另一条应答路径）
     harness.respond(interaction.id, { action: "accept", content: { value: "Approve" } });

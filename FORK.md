@@ -59,7 +59,7 @@
 ## omp 侧依赖
 
 * 来源：本人维护的 fork `jchanghong023/oh-my-pi`（本地工作目录 `D:\code1111111111\oh-my-pi`；上游为 `can1357/oh-my-pi`）。
-* 接入形态：`omp --mode rpc` 启动的无头核心——stdio 上的 newline-delimited JSON 协议，含 ready 帧、协议版本协商、命令/响应关联、会话事件与 host 工具请求。
+* 接入形态：`omp --mode rpc-ui` 启动的核心——stdio 上的 newline-delimited JSON 协议，含 ready 帧、协议版本协商、命令/响应关联、会话事件、工具交互 UI 请求与 host 工具请求。
 * 接口参考与测试基线：接口与协议开发参考本地源码 `D:\code1111111111\oh-my-pi`（协议细节含该仓库 `docs/rpc.md`）；实际测试（含换核验收 E2E）使用 releases 实际内嵌的发布版本二进制执行，不以本地源码的未发布改动为测试对象。
 * 分发：随 ZCode 安装包内嵌——打包时取该 fork GitHub releases 页面（`https://github.com/jchanghong023/oh-my-pi/releases`）的最新版本二进制，内嵌进应用资源并由应用拉起；用户无需单独安装 omp。不依赖上游 oh-my-pi 的 npm / Homebrew / Nix / `omp.sh` 分发。
 * Windows x64 桌面版通过 GitHub Actions 手动发布：从 `main` 输入与当前版本匹配的唯一 OmpCode 标签，打包后将安装 EXE 与 SHA256 校验文件上传到本仓库 GitHub Release；发布流水线不单独运行测试。
@@ -71,17 +71,17 @@
 
 以下需求已实现并通过对应验证；无法等价提供的能力全部列入「已知与允许的差异」。
 
-### Agent 核心替换为 omp RPC 核心（已实现）
+### Agent 核心替换为 omp RPC-UI 核心（已实现）
 
-目标：桌面、Web 与手机远控的全部用户界面保留，本地 Agent 核心由 `omp --mode rpc` 提供；上游 `apps/zcode-cli` 仅作为未接入 workspace、构建或分发的源码快照保留，不作为运行时或回退路径。
+目标：桌面、Web 与手机远控的全部用户界面保留，本地 Agent 核心由 `omp --mode rpc-ui` 提供；omp 工具与扩展发出的选择、确认和文本输入在现有会话交互面应答。上游 `apps/zcode-cli` 仅作为未接入 workspace、构建或分发的源码快照保留，不作为运行时或回退路径。
 
-实现形态：新增 `packages/omp-agent` 适配器——对 ZCode host 讲 ZCode Protocol（legacy 控制面 + v4 数据面 wire 帧），对内嵌 omp 二进制讲 omp RPC；每个 ZCode 会话对应一个惰性启动的 omp 子进程，omp 拥有会话/模型循环/工具执行/配置/凭据的全部权责。host 侧拉起链路（`resolveDefaultZCodeAgentCommand`）与桌面打包（`resources/glm/omp-agent.cjs` + `resources/glm/omp/omp.exe`）指向适配器；内嵌 omp 取 releases 最新版，`omp/omp-release.json` 记录 tag 与 SHA256。
+实现形态：`packages/omp-agent` 适配器对 ZCode host 讲 ZCode Protocol（legacy 控制面 + v4 数据面 wire 帧），对内嵌 omp 二进制讲 omp RPC-UI；每个 ZCode 会话对应一个惰性启动的 omp 子进程，omp 拥有会话/模型循环/工具执行/配置/凭据的全部权责。工具 UI 请求由适配器映射到既有交互协议，应答按请求 id 返回。host 侧拉起链路（`resolveDefaultZCodeAgentCommand`）与桌面打包（`resources/glm/omp-agent.cjs` + `resources/glm/omp/omp.exe`）指向适配器；内嵌 omp 取 releases 最新版，`omp/omp-release.json` 记录 tag 与 SHA256。
 
 行为边界与落实：
 
 * 对话流式输出、工具调用展示、权限确认、会话管理、文件变更展示：v4 conversation 投影（rows + state patch）按上游 wire schema 产出，全部下行帧经 `conversationTopicWireFrameSchema` 校验。
 * `desktop-continuous` 实时链路与 `web-remote-replayable` 恢复链路：同一投影、按订阅 `clientMode` 区分；断线重连按水位续传（delta log 有界保留，超界回退整快照 resync），两种语义不因换核回退。
-* omp RPC 帧格式不渗入 UI：适配层内闭环（`packages/omp-agent` 独占 omp 协议词汇）。
+* omp RPC 帧格式不渗入 UI：适配层内闭环（`packages/omp-agent` 独占 omp 协议词汇）；工具 `ask` 的选择与文本输入复用 ZCode 原有的 `ElicitationDialog`，选项说明保留，「其他」由随后文本请求继续输入。
 * 无法等价提供的能力：见「已知与允许的差异」逐项。
 
 验收结果：

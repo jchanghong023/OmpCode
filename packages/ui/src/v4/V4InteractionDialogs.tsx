@@ -363,6 +363,7 @@ export function V4InteractionDialogs({
     botElicitationProgress,
   );
   if (elicitationRequest) {
+    const answerMode = pending.payload.answerMode;
     const isExitPlanMode = pending.payload.toolName?.trim().toLowerCase() === "exitplanmode";
     const isAskUserQuestion =
       pending.payload.toolName?.trim().toLowerCase() === "askuserquestion" ||
@@ -371,6 +372,7 @@ export function V4InteractionDialogs({
       <ElicitationDialog
         key={buildV4ElicitationProgressKey(elicitationRequest)}
         request={elicitationRequest}
+        allowCustomInput={pending.payload.allowCustomInput}
         initialFormDraft={
           botElicitationProgress?.requestId === elicitationRequest.requestId
             ? undefined
@@ -394,6 +396,16 @@ export function V4InteractionDialogs({
             : undefined
         }
         onRespond={(_requestId, action, content) => {
+          if (answerMode) {
+            const value = typeof content?.answer === "string" ? content.answer : undefined;
+            const answer = action === "accept" && value
+              ? answerMode === "option"
+                ? { optionId: value }
+                : { freeText: value }
+              : { action: "cancel" as const };
+            void resolveInteraction(pending.interactionId, answer);
+            return;
+          }
           void resolveInteraction(pending.interactionId, {
             action,
             ...(content ? { content } : {}),

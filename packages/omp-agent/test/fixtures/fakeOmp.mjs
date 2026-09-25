@@ -1,7 +1,11 @@
-// fake omp：讲 omp RPC 的最小假核心，供适配器集成测试使用。
+// fake omp：讲 omp RPC-UI 的最小假核心，供适配器集成测试使用。
 // 行为脚本：prompt → 流式文本 → write 工具（先 select 审批）→ 完成收口。
 
 import { createInterface } from "node:readline";
+
+if (process.argv.slice(2).join(" ") !== "--mode rpc-ui") {
+  throw new Error(`fake omp requires --mode rpc-ui, got: ${process.argv.slice(2).join(" ")}`);
+}
 
 const out = (frame) => process.stdout.write(`${JSON.stringify(frame)}\n`);
 let counter = 0;

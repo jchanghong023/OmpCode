@@ -1,4 +1,4 @@
-// omp RPC 线协议帧 schema（对端 = 内嵌 omp 二进制，`omp --mode rpc`）。
+// omp RPC-UI 线协议帧 schema（对端 = 内嵌 omp 二进制，`omp --mode rpc-ui`）。
 // 契约来源：oh-my-pi 仓库 docs/rpc.md 与 packages/coding-agent/src/modes/rpc/rpc-types.ts。
 // 事件载荷允许透传未知字段（omp 自身演进不应导致适配器拒帧），但我们消费的字段全部显式声明。
 

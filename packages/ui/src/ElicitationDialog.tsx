@@ -21,6 +21,7 @@ import { useZCodeIntl } from "./i18n/IntlProvider.js";
 
 interface ElicitationDialogProps {
   request: ZCodeElicitationRequest;
+  allowCustomInput?: boolean;
   autoResolution?: InteractionAutoResolution;
   onRespond: (
     requestId: string,
@@ -226,11 +227,11 @@ function normalizeInitialQuestionIndex(
   return Math.max(0, Math.min(index, questions.length - 1));
 }
 
-function getQuestionOptionCount(question: NormalizedElicitationQuestion | undefined) {
+function getQuestionOptionCount(question: NormalizedElicitationQuestion | undefined, allowCustomInput: boolean) {
   if (!question) {
     return 0;
   }
-  return question.options.length + 1;
+  return question.options.length + (allowCustomInput ? 1 : 0);
 }
 
 function getPreferredActiveOptionIndex(
@@ -338,6 +339,7 @@ export function ElicitationDialog(props: ElicitationDialogProps) {
 
 function ElicitationDialogContent({
   request,
+  allowCustomInput = true,
   autoResolution,
   onRespond,
   onFirstInteraction,
@@ -401,7 +403,7 @@ function ElicitationDialogContent({
   const isPlanApproval = isPlanApprovalElicitationRequest(request);
 
   useEffect(() => {
-    if (getQuestionOptionCount(currentQuestion) === 0 || activeOptionIndex < 0) {
+    if (getQuestionOptionCount(currentQuestion, allowCustomInput) === 0 || activeOptionIndex < 0) {
       return;
     }
     const frameId = requestAnimationFrame(() => {
@@ -412,7 +414,7 @@ function ElicitationDialogContent({
       customInputRef.current?.focus();
     });
     return () => cancelAnimationFrame(frameId);
-  }, [activeOptionIndex, currentQuestion]);
+  }, [activeOptionIndex, allowCustomInput, currentQuestion]);
 
   // 初始 activeOptionIndex=-1 时无按钮有焦点。卡片容器自动聚焦后
   // 可接收键盘事件，在容器层捕获 Tab/↓/↑/Enter 启动导航或推进。
@@ -585,7 +587,7 @@ function ElicitationDialogContent({
 
   const moveSelection = useCallback(
     (direction: 1 | -1) => {
-      const optionCount = getQuestionOptionCount(currentQuestion);
+      const optionCount = getQuestionOptionCount(currentQuestion, allowCustomInput);
       if (optionCount === 0) {
         return;
       }
@@ -595,7 +597,7 @@ function ElicitationDialogContent({
         return (index + direction + optionCount) % optionCount;
       });
     },
-    [currentQuestion, reportFirstInteraction],
+    [allowCustomInput, currentQuestion, reportFirstInteraction],
   );
 
   const handleOptionKeyDown = useCallback(
@@ -1082,7 +1084,9 @@ function ElicitationDialogContent({
                   {currentQuestion.options.map((option, index) =>
                     renderOption(currentQuestion, option, index),
                   )}
-                  {renderCustomInput(currentQuestion, currentQuestion.options.length)}
+                  {allowCustomInput
+                    ? renderCustomInput(currentQuestion, currentQuestion.options.length)
+                    : null}
                 </div>
               </div>
             ) : (

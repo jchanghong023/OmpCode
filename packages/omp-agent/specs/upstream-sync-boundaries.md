@@ -2,7 +2,7 @@
 
 ## 行为与目标
 
-- 桌面、Web、远控仍由 `@zcode/omp-agent` 对接内嵌 omp RPC；用户界面、模型与思考档、计划模型、压缩、上下文、Git 信息、数据目录及发布产物保持原有行为。
+- 桌面、Web、远控仍由 `@zcode/omp-agent` 对接内嵌 omp RPC-UI；工具交互走既有会话交互面，模型与思考档、计划模型、压缩、上下文、Git 信息、数据目录及发布产物保持原有行为。
 - 保留上游 `apps/zcode-cli` 源码快照以减少后续同步时的修改/删除冲突。该目录不进入根 pnpm workspace，不参与构建、运行、测试、安装包或远端部署；保留源码不表示恢复上游 Agent 功能。
 - Fork 特有的 UI、资源准备、远端部署和品牌规则尽量由自有文件承载；上游文件只保留必要的接入调用。
 
@@ -16,7 +16,7 @@
 ## 时序与失败边界
 
 ```text
-用户操作 → Composer 草稿 → Session 命令 → Host owner/lease → omp-agent → omp RPC
+用户操作 → Composer 草稿 → Session 命令 → Host owner/lease → omp-agent → omp RPC-UI
                                       └→ 既有桌面实时 / 手机可恢复投影
 构建 → omp 资产准备 → 桌面或远端分发 → 同一适配器入口
 ```

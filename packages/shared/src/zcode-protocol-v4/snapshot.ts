@@ -282,6 +282,10 @@ export const userInputRequestPayloadSchema = z.object({
   prompt: z.string(),
   freeText: z.boolean(),
   options: z.array(z.object({ optionId: z.string(), label: z.string() })).optional(),
+  /** 单值回答直接返回为选项或自由文本。 */
+  answerMode: z.enum(["option", "text"]).optional(),
+  /** 选项已含「其他」时隐藏额外的自由输入。 */
+  allowCustomInput: z.boolean().optional(),
   // true → 输入框按密码处理，客户端不入草稿/历史。
   sensitive: z.boolean().optional(),
   toolName: z.string().optional(),
