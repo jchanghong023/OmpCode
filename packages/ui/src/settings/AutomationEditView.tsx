@@ -1,7 +1,5 @@
 /* eslint-disable max-lines -- 定时任务编辑整页集中维护 Settings/History 两个 tab、cron builder、项目/模型选择器与运行历史，集中更利于交互一致。 */
-import { useStartPlanRecommendation } from "@/hooks/useStartPlanRecommendation.js";
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
-import { completeNewModelSelection } from "@zcode/provider";
 import {
   ArrowLeft,
   ArrowRight,
@@ -103,16 +101,13 @@ import { SETTINGS_FRAME_CONTENT_CLASSNAME } from "@/settings/SettingsPageParts.j
 import { resolveLocalizedAutomationCreateTitle } from "@/settings/automationEditLocalizedTitle.js";
 import { ModelConfigSelect } from "@/ModelConfigSelect.js";
 import { ThoughtLevelCycleControl } from "@/chat-input-toolbar/ThoughtLevelCycleControl.js";
-import { ConfigSelect } from "@/chat-input-toolbar/display.js";
 import { ChatEmptyWorkspacePreviewMenu, type ChatEmptyWorkspaceMenuTab } from "@/ChatEmptyState.js";
 import {
   AUTOMATION_DEFAULT_MODE,
-  buildAutomationModelSelectGroups,
-  buildAutomationModeOption,
   buildAutomationThoughtLevelOption,
   resolveAutomationModelItem,
   resolveAutomationModelTriggerLabel,
-  resolveAutomationPreferredModelValue,
+  resolveOmpAutomationSelection,
 } from "@/settings/automationAgentConfigOptions.js";
 import {
   resolveChangedAutomationEditFields,
@@ -127,8 +122,14 @@ import {
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
 import { useConfirmDialog } from "@/hooks/useConfirmDialog.js";
 import { useAutomationProjectOptions } from "@/hooks/useAutomationProjectOptions.js";
-import { useModelSelectionView } from "@/hooks/useModelSelectionView.js";
-import { resolveModelThoughtOption } from "@/lib/modelThoughtOption.js";
+import { useToolbarConfigOptions } from "@/hooks/useZCodeConfig.js";
+import {
+  buildOmpModelSelectGroups,
+  findOmpCatalogEntry,
+  highestOmpThoughtLevel,
+  ompThoughtOptionForEntry,
+  readOmpModelCatalog,
+} from "@/v4/composer/ompModelCatalog.js";
 import { decodeCustomModelValue, encodeCustomModelValue } from "@/lib/zcodeCustomModelValue.js";
 import { parseModelPickerValue } from "@/lib/zcodeSessionProjection.js";
 import { startUserAction } from "@/lib/userActionTelemetry.js";
@@ -1459,60 +1460,18 @@ export function AutomationEditView({
   // 新建态无有效项目时保留空目标，避免模型配置读取悄悄回退到 conversation/default workspace。
   const selectedWorkspacePath = selectedWorkspace?.workspacePath ?? "";
   const selectedWorkspaceIdentity = selectedWorkspace?.workspaceIdentity;
-  const originalSelection = useMemo(() => {
-    if (!model) return null;
-    const identity = parseModelPickerValue(model);
-    return identity
-      ? { ...identity, ...(thoughtLevel ? { options: { reasoningLevel: thoughtLevel } } : {}) }
-      : null;
-  }, [model, thoughtLevel]);
-  // 模型候选属于当前表单目标 Host。项目切换时立即切换订阅；远程目标未连接时
-  // useModelSelectionView 会保持 unavailable，绝不能退回当前设置页的 Local Host。
-  const modelSelectionRead = useModelSelectionView(
-    selectedWorkspacePath || null,
-    selectedWorkspace?.remoteSessionId,
-    selectedWorkspaceIdentity,
-    selectedWorkspace?.remoteTarget,
-    { selection: originalSelection },
-  );
-  const modelSelectionView =
-    modelSelectionRead.state.status === "ready" ? modelSelectionRead.state.view : null;
-  const effectiveSelection = modelSelectionView?.effectiveSelection;
+  // 换核后旧 Provider Registry 不含 omp 候选；读取与聊天工具栏同源的目录。
+  const { configOptions } = useToolbarConfigOptions(selectedWorkspacePath, null, selectedWorkspaceIdentity);
+  const ompCatalog = useMemo(() => readOmpModelCatalog(configOptions), [configOptions]);
+  const effectiveSelection = resolveOmpAutomationSelection(ompCatalog, model, thoughtLevel);
   const effectiveModelValue = effectiveSelection
     ? encodeCustomModelValue(effectiveSelection.providerId, effectiveSelection.modelId)
     : "";
   const effectiveReasoningLevel = effectiveSelection?.options?.reasoningLevel ?? "";
-  const modelSelectGroups = useMemo(() => {
-    if (!modelSelectionView) return [];
-    return buildAutomationModelSelectGroups({
-      selectedProvider: ZCODE_AGENT_PROVIDER,
-      labels: {
-        apiKeyLabel: intl.formatMessage({ id: "settings.modelProvider.apiKey" }),
-        apiKeyBadgeLabel: intl.formatMessage({
-          id: "settings.modelProvider.connectionMode.apiKeyBadge",
-        }),
-        codingPlanLabel: intl.formatMessage({
-          id: "settings.modelProvider.connectionMode.codingPlan",
-        }),
-        codingPlanBadgeLabel: intl.formatMessage({
-          id: "settings.modelProvider.connectionMode.codingPlanBadge",
-        }),
-        startPlanLabel: intl.formatMessage({
-          id: "settings.modelProvider.connectionMode.startPlan",
-        }),
-        startPlanBadgeLabel: intl.formatMessage({
-          id: "settings.modelProvider.connectionMode.startPlanBadge",
-        }),
-        teamPlanBadgeLabel: intl.formatMessage({
-          id: "settings.modelProvider.connectionMode.teamPlanBadge",
-        }),
-        teamPlanFallbackLabel: intl.formatMessage({
-          id: "settings.modelProvider.connectionMode.teamPlan",
-        }),
-      },
-      registrySelectionView: modelSelectionView,
-    });
-  }, [intl, modelSelectionView]);
+  const modelSelectGroups = useMemo(
+    () => ompCatalog ? buildOmpModelSelectGroups(ompCatalog) : [],
+    [ompCatalog],
+  );
   const isSelectedConversationWorkspace = selectedWorkspace?.workspacePurpose === "conversation";
   // automation 数据只持久化 workspaceKey/path，编辑态曾直接把 conversation
   // backing path 当项目展示成 default。匹配当前 canonical 候选恢复 purpose 后，
@@ -1545,7 +1504,7 @@ export function AutomationEditView({
   };
   const modelTriggerLabel = resolveAutomationModelTriggerLabel({
     modelGroups: modelSelectGroups,
-    modelSelectionView,
+    modelSelectionView: null,
     modelValue: effectiveModelValue,
     fallbackLabel: intl.formatMessage({ id: "chat.toolbar.model.label" }),
   });
@@ -1556,35 +1515,32 @@ export function AutomationEditView({
       thoughtManuallyChangedRef.current = false;
       modelSelection.current = value;
       setModel(value);
-      const selection =
-        value && modelSelectionView
-          ? completeNewModelSelection(modelSelectionView, parseModelPickerValue(value))
-          : undefined;
-      const level = selection?.options?.reasoningLevel ?? "";
+      const identity = parseModelPickerValue(value);
+      const level = highestOmpThoughtLevel(
+        findOmpCatalogEntry(ompCatalog, identity?.providerId, identity?.modelId),
+      ) ?? "";
       thoughtLevelRef.current = level;
       setThoughtLevel(level);
       markFieldTouched("model");
     },
-    [markFieldTouched, modelSelectionView],
+    [markFieldTouched, ompCatalog],
   );
   // 定时任务编辑页只维护表单草稿，不能为了读取选项调用 workspace 默认配置接口；
   // 否则用户仅打开后取消，也会改掉当前项目或 draft session 的模型、模式和思考强度。
-  const modeOption = useMemo(() => buildAutomationModeOption(mode), [mode]);
   const selectedModelItem = useMemo(
     () => resolveAutomationModelItem(modelSelectGroups, effectiveModelValue),
     [effectiveModelValue, modelSelectGroups],
   );
-  const preferredModelValue = useMemo(
-    () => (modelSelectionView ? resolveAutomationPreferredModelValue(modelSelectionView) : null),
-    [modelSelectionView],
-  );
+  const preferredModelValue = ompCatalog?.preferredSelection
+    ? encodeCustomModelValue(ompCatalog.preferredSelection.providerId, ompCatalog.preferredSelection.modelId)
+    : null;
   const persistedSelectionInvalid = Boolean(
-    originalSelection && modelSelectionView && modelSelectionView.selectionIssue,
+    model && ompCatalog && !resolveOmpAutomationSelection(ompCatalog, model, thoughtLevel),
   );
   const invalidSelectionNoticeKeyRef = useRef<string | null>(null);
   useEffect(() => {
-    if (!persistedSelectionInvalid || !editing || !modelSelectionView) return;
-    const noticeKey = `${editing.automationId}:${modelSelectionView.revision}`;
+    if (!persistedSelectionInvalid || !editing || !ompCatalog) return;
+    const noticeKey = `${editing.automationId}:${ompCatalog.entries.length}`;
     if (invalidSelectionNoticeKeyRef.current === noticeKey) return;
     invalidSelectionNoticeKeyRef.current = noticeKey;
     toast(intl.formatMessage({ id: "modelSelection.invalidated.reselect" }), {
@@ -1592,7 +1548,7 @@ export function AutomationEditView({
       position: "bottom-center",
       dedupeKey: `automation-model-selection-invalidated:${editing.automationId}`,
     });
-  }, [editing, intl, modelSelectionView, persistedSelectionInvalid]);
+  }, [editing, intl, ompCatalog, persistedSelectionInvalid]);
   useEffect(() => {
     if (
       editing ||
@@ -1607,25 +1563,20 @@ export function AutomationEditView({
     modelSelection.current = preferredModelValue;
     setModel(preferredModelValue);
     thoughtManuallyChangedRef.current = false;
-    const preferredReasoning =
-      modelSelectionView?.preferredSelection?.options?.reasoningLevel ?? "";
+    const preferredReasoning = ompCatalog?.preferredSelection?.options?.reasoningLevel ?? "";
     thoughtLevelRef.current = preferredReasoning;
     setThoughtLevel(preferredReasoning);
-  }, [editing, model, modelSelectionView, persistedSelectionInvalid, preferredModelValue]);
+  }, [editing, model, ompCatalog, persistedSelectionInvalid, preferredModelValue]);
   const selectedModelMetadataThoughtOption = useMemo(() => {
     if (!selectedModelItem) return null;
     const decodedModel = decodeCustomModelValue(selectedModelItem.value);
     if (!decodedModel?.modelName) return null;
     // 与会话 composer 复用同一模型静态事实，避免 workspace runtime catalog 暂未投影
     // thought_level 时，定时任务把支持推理的模型误显示成无思考档位。
-    return modelSelectionView
-      ? resolveModelThoughtOption({
-          modelSelectionView,
-          providerId: decodedModel.providerId,
-          modelId: decodedModel.modelName,
-        })
-      : null;
-  }, [modelSelectionView, selectedModelItem]);
+    return ompThoughtOptionForEntry(
+      findOmpCatalogEntry(ompCatalog, decodedModel.providerId, decodedModel.modelName),
+    );
+  }, [ompCatalog, selectedModelItem]);
   // 所选模型的 Option Specs 只来自目标 Host View；不能为预览再创建 deferred Session。
   const activeThoughtOption = selectedModelMetadataThoughtOption ?? undefined;
   const thoughtLevelOption = useMemo(
@@ -1646,10 +1597,10 @@ export function AutomationEditView({
   const submissionContextReady =
     hasValidWorkspace &&
     (Boolean(editing) || selectedWorkspace !== null) &&
-    modelSelectionRead.state.status === "ready" &&
+    ompCatalog !== null &&
     selectedModelItem !== null &&
     Boolean(effectiveReasoningLevel) &&
-    !modelSelectionView?.selectionIssue;
+    !persistedSelectionInvalid;
   const canSubmit = submissionContextReady && requiredFieldErrors.length === 0;
 
   const requestRequiredFieldValidation = useCallback(
@@ -1767,7 +1718,6 @@ export function AutomationEditView({
   // 字段才能触发未保存提示，否则仅打开已有任务再返回也会被误判为修改。
   const hasUnsavedChanges = Boolean(editing) && changedFields.length > 0;
 
-  const recommendStartPlan = useStartPlanRecommendation(modelSelectionView);
   const submitAutomation = useCallback(
     async (options: { validationSource: "save" | "run-now"; returnToList?: boolean }) => {
       if (saving) return false;
@@ -1799,11 +1749,6 @@ export function AutomationEditView({
           : null;
       // 只禁用按钮无法覆盖快捷键或异步回调；提交边界也必须拒绝无有效项目的新建。
       if (!target) return false;
-      if (input.modelSelection && (!editing || changedFields.includes("model"))) {
-        const chosen = await recommendStartPlan(input.modelSelection);
-        if (!chosen) return false;
-        input.modelSelection = chosen;
-      }
       const trace = startUserAction({
         featureId: "automation.lifecycle",
         action: editing ? "update" : "create",
@@ -1828,7 +1773,6 @@ export function AutomationEditView({
     [
       buildSubmitInput,
       changedFields,
-      recommendStartPlan,
       canSubmit,
       editing,
       onBack,
@@ -2638,28 +2582,6 @@ export function AutomationEditView({
                       </Button>
                     )}
 
-                    {/* 自动化曾复制首页权限菜单，导致图标、字号和选中态逐渐分叉。
-                        直接复用首页 ConfigSelect，只覆盖紧凑 trigger 布局。 */}
-                    <ConfigSelect
-                      option={modeOption}
-                      onValueChange={(value) => {
-                        markFieldTouched("mode");
-                        modeRef.current = value;
-                        setMode(value);
-                      }}
-                      tooltipTitle={intl.formatMessage({
-                        id: "chat.toolbar.mode.label",
-                      })}
-                      triggerVariant="ghost"
-                      triggerSize="default"
-                      triggerClassName={cn(
-                        AUTOMATION_INSTRUCTIONS_TOOLBAR_TRIGGER_CLASSNAME,
-                        "w-fit max-w-56 min-w-0 shrink justify-start gap-1 px-2",
-                      )}
-                      labelVisibilityClassName="inline-flex min-w-0 truncate text-left"
-                      provider={ZCODE_AGENT_PROVIDER}
-                      restoreFocusSelector={null}
-                    />
                   </div>
 
                   {/* 模型 / 推理强度在右侧成组，和左侧 workspace / 权限形成清晰分区。 */}
@@ -2688,18 +2610,8 @@ export function AutomationEditView({
                         "w-fit max-w-72 min-w-0 shrink @max-sm/composer:size-7 @max-sm/composer:justify-center @max-sm/composer:gap-0 @max-sm/composer:p-0",
                       )}
                       triggerIconClassName="inline-flex @sm/composer:hidden"
-                      disabled={modelSelectionRead.state.status !== "ready"}
+                      disabled={!ompCatalog}
                     />
-                    {modelSelectionRead.state.status === "error" ? (
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="xs"
-                        onClick={modelSelectionRead.reload}
-                      >
-                        {intl.formatMessage({ id: "common.retry" })}
-                      </Button>
-                    ) : null}
                     {thoughtLevelOption ? (
                       <ThoughtLevelCycleControl
                         intl={intl}

@@ -26,6 +26,8 @@ let holding = false;
 let setModelCalls = 0;
 let currentModel = { provider: "mock", id: "mock-1" };
 let autoCompactionEnabled = true;
+let subagentSubscription = "off";
+let subagents = [];
 
 function runLocalCommand(message) {
   if (message === "/model-report") {
@@ -60,6 +62,23 @@ function runLocalCommand(message) {
 
 async function runPromptTurn(message) {
   out({ type: "agent_start" });
+  if (message === "SUBAGENT_REPORT") {
+    const agent = { id: "fake-child-1", index: 0, agent: "scout", agentSource: "bundled", description: "Inspect project", status: "active", lastUpdate: Date.now(), parentToolCallId: "task-parent" };
+    subagents = [agent];
+    if (subagentSubscription !== "off") {
+      out({ type: "subagent_lifecycle", payload: { ...agent, status: "started" } });
+      out({ type: "subagent_progress", payload: { index: 0, agent: "scout", agentSource: "bundled", task: "Inspect project", parentToolCallId: "task-parent", progress: { id: agent.id, status: "running", recentOutput: ["reading files"] } } });
+    }
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    subagents = [{ ...agent, status: "completed", lastUpdate: Date.now() }];
+    if (subagentSubscription !== "off") {
+      out({ type: "subagent_lifecycle", payload: { ...agent, status: "completed" } });
+      out({ type: "subagent_lifecycle", payload: { ...agent, status: "completed" } });
+    }
+    out({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "Subagent done" }] } });
+    out({ type: "agent_end", messages: [], isTerminal: true });
+    return;
+  }
   if (message === "/failmodel") {
     out({ type: "message_start", message: { role: "assistant", content: [] } });
     out({
@@ -177,6 +196,20 @@ readline.on("line", (line) => {
         contextUsage: { tokens: 512, contextWindow: 200000, percent: 0.25 },
       });
       return;
+    case "set_subagent_subscription":
+      if (process.env.FAKE_OMP_SUBAGENT_SUBSCRIBE_FAIL === "1") {
+        respond(command.id, "set_subagent_subscription", false, { error: "subscription unavailable" });
+        return;
+      }
+      subagentSubscription = command.level;
+      respond(command.id, "set_subagent_subscription", true, { level: command.level });
+      return;
+    case "get_subagents":
+      respond(command.id, "get_subagents", true, { subagents });
+      return;
+    case "get_subagent_messages":
+      respond(command.id, "get_subagent_messages", true, { sessionFile: "fake-child.jsonl", fromByte: 0, nextByte: 1, reset: false, entries: [], messages: [{ role: "assistant", content: [{ type: "text", text: "Read README and reported findings." }] }] });
+      return;
     case "get_available_models":
       respond(command.id, "get_available_models", true, {
         models: [{ provider: "mock", id: "mock-1", name: "Mock Model", thinking: { mode: "effort", efforts: ["low", "high", "max"], defaultLevel: "high" } }],
@@ -205,6 +238,11 @@ readline.on("line", (line) => {
           type: "command_output",
           text: `IMAGE_REPORT:${label}:${JSON.stringify({ hasImages: Object.hasOwn(command, "images"), images: command.images ?? [] })}`,
         });
+        respond(command.id, "prompt", true, { agentInvoked: false });
+        return;
+      }
+      if (command.message.startsWith("/text-report ")) {
+        out({ type: "command_output", text: `TEXT_REPORT:${JSON.stringify({ message: command.message, images: command.images ?? [] })}` });
         respond(command.id, "prompt", true, { agentInvoked: false });
         return;
       }

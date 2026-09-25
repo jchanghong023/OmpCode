@@ -222,6 +222,8 @@ function pairSubagentRows(rows: readonly AssistantWorkRow[]): {
       agentToolRows.push(row);
       agentToolByTurnAndCallId.set(`${row.turnId}\0${row.toolCallId}`, row);
     } else if (row.kind === "subagent") {
+      // omp 子代理记录留在父会话行内展开；没有可订阅的 ZCode child session 时不可配对并隐藏。
+      if (!row.childSessionId) continue;
       subagentRows.push(row);
     }
   }

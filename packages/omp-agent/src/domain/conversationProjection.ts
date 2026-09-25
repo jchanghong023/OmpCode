@@ -13,7 +13,6 @@ import {
   type ConversationRow,
   type ConversationSnapshot,
   type PendingInteraction,
-  type SessionConfigState,
   type StatePatch,
   type TimelineMarkerPayload,
   type ToolCallRow,
@@ -23,6 +22,8 @@ import { initialAState, type ProjectionAState, type TurnOutcome } from "./projec
 import { TurnFileFacts } from "./fileFacts.js";
 import { contextWindowPatch, modelConfigPatch, runningControlPatch, terminalControlPatch, usagePatch } from "./projectionStatePatches.js";
 import { mergeDeltas, type LoggedDelta } from "./deltaMerge.js";
+import { OmpSubagentProjection } from "./ompSubagentDirectory.js";
+import { readProjectionFileChanges } from "./projectionFileChanges.js";
 import {
   createMarkerRow,
   createStreamingRow,
@@ -30,6 +31,7 @@ import {
   createTurnHeaderRow,
   createUserInputRow,
   buildConversationSnapshot,
+  conversationRowsRange,
   mergeToolCallRow,
   type ToolCallUpsert,
   type TurnContext,
@@ -56,28 +58,35 @@ export class ConversationProjection {
   private turn: TurnContext | null = null;
   private turnFacts = new Map<string, TurnFileFacts>();
   private lastErrorValue: { code: string; message: string } | null = null;
-
+  private readonly subagents: OmpSubagentProjection;
   constructor(sessionId: string) {
     this.sessionId = sessionId;
     this.state = initialAState({});
+    this.subagents = new OmpSubagentProjection({
+      rowAt: (id) => this.rows.get(id),
+      turnAnchor: () => {
+        const row = this.turn ?? [...this.rows.values()].reverse().find((candidate) => candidate.kind === "turnHeader");
+        return row ? { turnId: row.turnId, productTurnId: row.productTurnId ?? row.turnId } : null;
+      },
+      nextRowId: () => this.nextRowId++,
+      sequence: () => this.sequence,
+      state: () => this.state.subagents,
+      upsertRow: (row) => this.upsertRow(row),
+      patchState: (subagents) => this.patchState({ subagents }),
+    });
   }
-
   get seq(): number {
     return this.sequence;
   }
-
   get revision(): number {
     return this.revisionValue;
   }
-
   get stateSnapshot(): ProjectionAState {
     return this.state;
   }
-
   get lastError(): { code: string; message: string } | null {
     return this.lastErrorValue;
   }
-
   // ── 轮次与输入 ──
   beginUserTurn(input: BeginTurnInput): void {
     this.lastErrorValue = null;
@@ -267,6 +276,13 @@ export class ConversationProjection {
     this.patchState({ meta: { title, titleSource: source } });
   }
 
+  upsertSubagent(input: Parameters<OmpSubagentProjection["upsert"]>[0]): void {
+    this.subagents.upsert(input);
+  }
+  setSubagentAvailability(availability: "ready" | "unavailable"): void { this.subagents.setAvailability(availability); }
+  subagentDirectory(offset = 0) {
+    return this.subagents.directory(offset);
+  }
   addPendingInteraction(interaction: PendingInteraction): void {
     this.patchState({ pendingInteractions: [...this.state.pendingInteractions, interaction] });
   }
@@ -289,19 +305,7 @@ export class ConversationProjection {
   }
 
   fileChangesForTarget(targetRowId: number): { files: number; additions: number; deletions: number; items: ReturnType<TurnFileFacts["items"]> } {
-    const row = this.rows.get(targetRowId);
-    if (!row) {
-      throw new Error("row not found");
-    }
-    const header = [...this.rows.values()].find((candidate) => candidate.kind === "turnHeader" && candidate.turnId === row.turnId);
-    if (!header || header.kind !== "turnHeader") {
-      return { files: 0, additions: 0, deletions: 0, items: [] };
-    }
-    const facts =
-      this.turn && this.turn.turnId === row.turnId
-        ? this.turn.fileFacts
-        : this.turnFacts.get(row.turnId) ?? TurnFileFacts.fromSummary(header.fileChanges);
-    return { ...facts.summary(), items: facts.items() };
+    return readProjectionFileChanges(targetRowId, this.rows, this.turn, this.turnFacts);
   }
 
   // ── 读面 ──
@@ -321,13 +325,7 @@ export class ConversationProjection {
   }
 
   rowsRange(beforeRowId: number | undefined, limit: number): { rows: ConversationRow[]; hasMore: boolean } {
-    const ids = beforeRowId === undefined ? this.rowIds : this.rowIds.filter((id) => id < beforeRowId);
-    const page = ids.slice(-limit);
-    const first = page[0];
-    return {
-      rows: page.map((id) => this.rows.get(id)!),
-      hasMore: first !== undefined && ids.indexOf(first) > 0,
-    };
+    return conversationRowsRange(this.rowIds, (id) => this.rows.get(id), beforeRowId, limit);
   }
 
   /** 冷恢复：把历史行直接放入投影（无订阅者时使用；不产生 delta）。 */
@@ -338,6 +336,7 @@ export class ConversationProjection {
       this.nextRowId = Math.max(this.nextRowId, row.rowId + 1);
     }
     this.rowIds.sort((a, b) => a - b);
+    this.state = { ...this.state, subagents: this.subagents.hydrate(rows) };
   }
 
   /** pending → delta log（合并连续同构 op）；返回合并后的列表。 */
@@ -370,11 +369,14 @@ export class ConversationProjection {
   }
 
   private upsertRow(row: ConversationRow): void {
+    // Bug 根因：首次工具/子代理行误发 row.upserted，桌面增量客户端对未知 rowId
+    // 按协议忽略，导致运行态只有状态计数、没有可见记录；首次必须 append。
+    const isNew = !this.rows.has(row.rowId);
     this.rows.set(row.rowId, row);
-    if (!this.rowIds.includes(row.rowId)) {
+    if (isNew) {
       this.rowIds.push(row.rowId);
     }
-    this.pushPending({ op: "row.upserted", row });
+    this.pushPending(isNew ? { op: "row.appended", row } : { op: "row.upserted", row });
   }
 
   private patchState(patch: StatePatch): void {

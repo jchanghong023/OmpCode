@@ -39,8 +39,6 @@ import {
   clearPendingSettingsPluginScopeKey,
   consumeInitialSettingsSection,
   consumePendingSettingsPluginOrigin,
-  consumePendingSettingsPluginScopeKey,
-  consumePendingSettingsPluginTab,
   consumePendingSettingsUsageTab,
   resolveSettingsSection,
   shouldFallbackSettingsUsageTabToApp,
@@ -53,6 +51,7 @@ import {
 } from "@/lib/accountProviderAccess.js";
 import { buildUsageEntitlementCacheKey } from "@/lib/usageEntitlementCache.js";
 import { OmpModelRolesSection } from "@/settings/OmpModelRolesSection.js";
+import { OmpNativeIntegrationsSection } from "@/settings/OmpNativeIntegrationsSection.js";
 import { useCodingPlanUpgradeDialog } from "@/settings/CodingPlanUpgradeDialogProvider.js";
 import { useEnterpriseCodingPlanProducts } from "@/settings/model-provider-section/useEnterpriseCodingPlanProducts.js";
 import { UsageStatsSection, type UsageStatsSectionTab } from "@/settings/UsageStatsSection.js";
@@ -315,12 +314,8 @@ export function SettingsPage({
     writeLastSettingsSectionPreference(visibleInitialSection);
     return visibleInitialSection;
   });
-  const [pluginTab, setPluginTab] = useState(() => consumePendingSettingsPluginTab());
   const [pluginNavigationOrigin, setPluginNavigationOrigin] = useState(() =>
     consumePendingSettingsPluginOrigin(),
-  );
-  const [pluginScopeKey, setPluginScopeKey] = useState(() =>
-    consumePendingSettingsPluginScopeKey(),
   );
   const [settingsSectionNavigationVersion, setSettingsSectionNavigationVersion] = useState(0);
   useEffect(() => {
@@ -730,9 +725,7 @@ export function SettingsPage({
           setUsageActiveTab(detail.usageTab);
         }
         if (resolveSettingsSection(section) === "plugin" && detail?.pluginTab) {
-          setPluginTab(detail.pluginTab);
           setPluginNavigationOrigin(detail.pluginOrigin);
-          setPluginScopeKey(detail.pluginScopeKey);
         } else if (resolveSettingsSection(section) !== "plugin") {
           setPluginNavigationOrigin(undefined);
         }
@@ -1798,35 +1791,14 @@ export function SettingsPage({
                             />
                           </ServiceProvider>
                         ) : activeSection === "plugin" ? (
-                          <PluginsSection
-                            key={`plugin:${settingsSectionNavigationVersion}`}
-                            isDesktop={Boolean(isDesktop)}
-                            isMacDesktop={Boolean(isMacDesktop)}
-                            isWindowsDesktop={Boolean(isWindowsDesktop)}
-                            initialTab={pluginTab}
-                            initialScopeKey={pluginScopeKey}
-                            workspacePath={activeWorkspacePath}
-                            workspaceIdentity={activeWorkspaceIdentity}
-                            showMarketplaceBreadcrumb={pluginNavigationOrigin === "plugin-store"}
-                            onCreateTask={onCreateTask}
-                            onOpenPluginStore={(_returnScopeKey, intent) => {
-                              // 添加市场与浏览插件都先离开设置层，再显示商店。
-                              requestPluginStoreOpen({ returnScopeKey: "user", intent });
-                              onBack?.();
-                            }}
+                          <OmpNativeIntegrationsSection
+                            kind="extension"
+                            workspacePath={activeWorkspaceTab?.remoteSessionId ? undefined : (activeWorkspacePath ?? undefined)}
                           />
                         ) : activeSection === "mcp" ? (
-                          <PluginsSection
-                            key={`mcp:${settingsSectionNavigationVersion}`}
-                            mode="mcp"
-                            workspacePath={activeWorkspacePath}
-                            workspaceIdentity={activeWorkspaceIdentity}
-                            onCreateTask={onCreateTask}
-                            onOpenPluginStore={(_returnScopeKey, intent) => {
-                              // 添加市场与浏览插件都先离开设置层，再显示商店。
-                              requestPluginStoreOpen({ returnScopeKey: "user", intent });
-                              onBack?.();
-                            }}
+                          <OmpNativeIntegrationsSection
+                            kind="mcp"
+                            workspacePath={activeWorkspaceTab?.remoteSessionId ? undefined : (activeWorkspacePath ?? undefined)}
                           />
                         ) : activeSection === "skill" ? (
                           <PluginsSection

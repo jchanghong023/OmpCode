@@ -36,7 +36,6 @@ import {
   IClientConfigService,
   IMediaPreviewService,
   IOffPeakTaskService,
-  IModelSelectionService,
   ISettingService,
   IWindowControllerService,
   IConversationShareService,
@@ -148,7 +147,7 @@ import {
   type WindowRemoteConnectionHandle,
 } from "./windowRemoteConnectionRegistry.js";
 import { createWindowHostControllerRuntime } from "./windowHostControllerService.js";
-import { resolveAutomationSubmissionModelSelection } from "./automationModelSelection.js";
+import { resolveOmpAutomationSubmissionModelSelection } from "./automationModelSelection.js";
 import { createRemoteConnectionProgressContext } from "@zcode/server/remote/remoteConnectionProgressContext.js";
 import { startHostSelfResourceTelemetry } from "./hostSelfResourceTelemetry.js";
 type RemoteBackendHostConnection = RemoteConnection & {
@@ -857,19 +856,21 @@ async function dispatchCronRun(request: CronRunDispatchRequest): Promise<{
   if (!zcodeTaskService) {
     throw new Error("ZCode task service is not initialized.");
   }
-  const modelSelectionService = targetServices.getOptional(IModelSelectionService);
-  if (!modelSelectionService) {
-    throw new Error("目标 Host Model Selection service is not initialized.");
-  }
+  const agentService = targetServices.getOptional(IZCodeAgentService);
+  if (!agentService) throw new Error("目标 Host Agent service is not initialized.");
   // 长期配置是原意图；首次派发在目标 Host 解析后固定。已有 run 必须直接复用，
   // 不能因账号变化或本次 Registry 读取失败重新解释历史执行选择。
   const existingRun = await cronAutomationRepo.getRun(request.runId);
-  const resolvedSubmissionModelSelection = await resolveAutomationSubmissionModelSelection({
+  const resolvedSubmissionModelSelection = await resolveOmpAutomationSubmissionModelSelection({
     selection: request.modelSelection,
     fixedSelection: existingRun?.modelSelection,
-    modelSelectionService,
-    // Repo 已在读取前完成离线导入；不再为迁移绕行 Agent/账号服务。
-    // 未迁入或损坏的新值仍由此入口明确拒绝，不能当成跟随 Workspace。
+    // omp 换核后 ZCode Provider Registry 没有候选。派发时读取目标工作区的 omp 目录，
+    // 避免 GUI 可选模型在定时任务执行时被旧 Registry 错误拒绝。
+    readConfigOptions: async () =>
+      (await agentService.readWorkspacePresentation({
+        workspacePath: request.workspacePath,
+        workspaceIdentity: request.workspaceIdentity,
+      })).configOptions ?? [],
     readSelection: () =>
       cronAutomationRepo.getModelSelectionForDispatch(
         request.automationId,

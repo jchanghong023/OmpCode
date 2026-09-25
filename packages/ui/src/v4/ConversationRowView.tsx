@@ -2072,6 +2072,7 @@ const ToolCallRowView = memo(function ToolCallRowView({
 });
 
 const SubagentRowView = memo(function SubagentRowView({ row }: { row: SubagentRow }) {
+  const { intl } = useZCodeIntl();
   // subagent 行已经和 Agent/Task 工具行配对渲染；裸行只保留异常兜底摘要，
   // 避免再生成一个“子会话”卡片或第二套下钻入口。
   const summary = (
@@ -2082,7 +2083,15 @@ const SubagentRowView = memo(function SubagentRowView({ row }: { row: SubagentRo
   );
   return (
     <RowShell rowId={row.rowId}>
-      <div className="text-ui-sm text-[var(--color-foreground-subtle)]">{summary}</div>
+      <div className="text-ui-sm text-[var(--color-foreground-subtle)]">
+        <div>{summary}</div>
+        {row.transcriptText ? (
+          <details className="mt-2">
+            <summary className="cursor-pointer text-[var(--color-foreground)]">{intl.formatMessage({ id: "chat.ompSubagent.transcript" })}</summary>
+            <pre className="mt-2 max-h-80 overflow-auto whitespace-pre-wrap rounded-lg bg-[var(--color-surface)] p-3 text-ui-sm">{row.transcriptText}</pre>
+          </details>
+        ) : null}
+      </div>
     </RowShell>
   );
 });

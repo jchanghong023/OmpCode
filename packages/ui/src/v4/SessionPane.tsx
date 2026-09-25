@@ -132,6 +132,7 @@ import { WorkspaceHookPendingBanner } from "@/v4/WorkspaceHookPendingBanner.js";
 import { ConversationStatusPanel } from "@/v4/ConversationStatusPanel.js";
 import { SessionSubscriptionErrorPanel } from "@/v4/SessionSubscriptionErrorPanel.js";
 import { ConversationTimeline } from "@/v4/ConversationTimeline.js";
+import { ompAttachmentRejectionDetail, sessionSendRejectionError } from "@/v4/ompAttachmentRejection.js";
 import { ConversationShareImportNotice } from "@/v4/ConversationShareImportNotice.js";
 import { ConversationShareConfirmationDock } from "@/v4/ConversationShareConfirmationDock.js";
 import { ConversationShareSuccessDock } from "@/v4/ConversationShareSuccessDock.js";
@@ -2752,7 +2753,7 @@ export function SessionPane({
             logger.warn(
               `[v4-draft-prewarm] 预热会话首发未 accepted（${ack.reasonCode ?? ack.status}），禁止自动重发`,
             );
-            throw new Error(ack.reasonCode ?? "预热会话首发未 accepted");
+            throw sessionSendRejectionError(ack, "预热会话首发未 accepted");
           } catch (error) {
             if (isProviderNotReadyError(error)) throw error;
             if (readyAttachments.length > 0) throw error;
@@ -2790,7 +2791,7 @@ export function SessionPane({
             createSourceAtSend,
           );
           if (ack.status !== "accepted") {
-            throw new Error(ack.reasonCode ?? "createSession 被拒绝");
+            throw sessionSendRejectionError(ack, "createSession 被拒绝");
           }
           const result = ack.result;
           if (!result || result.type !== "createSession") {
@@ -2834,7 +2835,7 @@ export function SessionPane({
           options?.telemetrySeed,
         );
         if (sendAck.status !== "accepted") {
-          throw new Error(sendAck.reasonCode ?? "sendText 被拒绝");
+          throw sessionSendRejectionError(sendAck, "sendText 被拒绝");
         }
         handleDraftSessionCreated(
           newSessionId,
@@ -2872,7 +2873,7 @@ export function SessionPane({
         return "confirmationRequired" as const;
       }
       if (ack.status !== "accepted") {
-        throw new Error(ack.reasonCode ?? "sendText 被拒绝");
+        throw sessionSendRejectionError(ack, "sendText 被拒绝");
       }
       if (heldQueueDisposition === "clearQueueAndSend") {
         settleCurrentQueueInputs(sessionId);
@@ -2958,13 +2959,16 @@ export function SessionPane({
       } catch (error) {
         const detail = error instanceof Error ? error.message : String(error);
         const runtimeModelUnavailable = detail.includes("provider.notInRegistry");
+        const attachmentRejection = ompAttachmentRejectionDetail(error);
         // 首发前 switchModelConfig 失败只会抛回 Composer；Composer 为了保留草稿
         // 仅写日志，不会生成 snapshot.control.lastError，用户看到的结果就是“点击没反应”。
         // 这里把 admission 前失败收口为 pane-local 错误横幅，不改变 desktop continuous 或
         // Web remote replayable 的发送/恢复语义，草稿仍由 Composer 原路径保留。
         setSendSubmissionError({
           code: runtimeModelUnavailable ? "ZCODE_RUNTIME_MODEL_UNAVAILABLE" : "SEND_FAILED",
-          message: runtimeModelUnavailable
+          message: attachmentRejection
+            ? intl.formatMessage({ id: "chat.error.ompAttachmentRejected" }, { reason: attachmentRejection })
+            : runtimeModelUnavailable
             ? detail
             : intl.formatMessage({ id: "chat.error.sendFailed" }),
           detail,
@@ -4694,6 +4698,13 @@ export function SessionPane({
               onOpenWorkflowRunDirectory ? handleOpenWorkflowRunDirectoryFromPanel : undefined
             }
           />
+        ) : null}
+
+        {subagents.availability === "unavailable" ? (
+          <div role="status" data-testid="v4-subagent-unavailable"
+            className="mx-4 mt-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-hover)] px-3 py-2 text-ui-base text-foreground-subtle">
+            {intl.formatMessage({ id: "chat.subagents.unavailable" })}
+          </div>
         ) : null}
 
         {readOnly && controlLastError ? (

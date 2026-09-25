@@ -203,6 +203,28 @@ export const ompAvailableCommandsFrameSchema = z.object({
 });
 export type OmpAvailableCommandsFrame = z.infer<typeof ompAvailableCommandsFrameSchema>;
 
+// omp task 子代理事件；保留扩展字段，但身份与状态必须校验后才能进入会话投影。
+export const ompSubagentFrameSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("subagent_lifecycle"), payload: z.object({
+    id: z.string().min(1), agent: z.string().min(1), status: z.enum(["started", "completed", "failed", "aborted"]),
+    description: z.string().optional(), sessionFile: z.string().optional(), parentToolCallId: z.string().optional(), index: z.number().int().optional(),
+  }).passthrough() }),
+  z.object({ type: z.literal("subagent_progress"), payload: z.object({
+    agent: z.string().min(1), task: z.string().optional(), assignment: z.string().optional(),
+    parentToolCallId: z.string().optional(), sessionFile: z.string().optional(),
+    progress: z.object({ id: z.string().min(1), status: z.string().optional(), recentOutput: z.array(z.string()).optional() }).passthrough(),
+  }).passthrough() }),
+  z.object({ type: z.literal("subagent_event"), payload: z.object({ id: z.string().min(1), event: z.unknown() }).passthrough() }),
+]);
+export type OmpSubagentFrame = z.infer<typeof ompSubagentFrameSchema>;
+
+export const ompSubagentSnapshotSchema = z.object({
+  id: z.string().min(1), agent: z.string().min(1), status: z.string(),
+  description: z.string().optional(), task: z.string().optional(), assignment: z.string().optional(),
+  sessionFile: z.string().optional(), lastUpdate: z.number().optional(), parentToolCallId: z.string().optional(),
+}).passthrough();
+export type OmpSubagentSnapshot = z.infer<typeof ompSubagentSnapshotSchema>;
+
 // ── 入站命令（我们 → omp）──
 export type OmpCommandFrame =
   | { id?: string; type: "prompt"; message: string; images?: unknown[]; streamingBehavior?: "steer" | "followUp" }
@@ -222,7 +244,9 @@ export type OmpCommandFrame =
   | { id?: string; type: "switch_session"; sessionPath: string }
   | { id?: string; type: "set_session_name"; name: string }
   | { id?: string; type: "abort_bash" }
-  | { id?: string; type: "set_subagent_subscription"; level: "off" | "progress" | "events" };
+  | { id?: string; type: "set_subagent_subscription"; level: "off" | "progress" | "events" }
+  | { id?: string; type: "get_subagents" }
+  | { id?: string; type: "get_subagent_messages"; subagentId?: string; sessionFile?: string; fromByte?: number };
 
 // ── get_state 响应载荷 ──
 export const ompStateDataSchema = z.object({

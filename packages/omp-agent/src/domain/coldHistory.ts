@@ -10,8 +10,80 @@ interface ColdContext {
   turnCounter: number;
 }
 
-export function rowsFromOmpEntries(entries: unknown[]): ConversationRow[] {
+interface ColdSubagent {
+  id: string;
+  agent: string;
+  summary: string;
+  status: "running" | "success" | "failed" | "cancelled";
+  parentToolCallId: string;
+  startedAt: number;
+  endedAt?: number;
+  resultText?: string;
+}
+
+function object(value: unknown): Record<string, unknown> | null {
+  return typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : null;
+}
+
+function coldSubagents(entries: readonly unknown[]): Map<string, ColdSubagent> {
+  const agents = new Map<string, ColdSubagent>();
+  for (const entry of entries) {
+    const message = object(object(entry)?.message);
+    if (message?.role !== "toolResult") continue;
+    const details = object(message.details);
+    if (message.toolName === "task" && typeof message.toolCallId === "string") {
+      for (const raw of Array.isArray(details?.progress) ? details.progress : []) {
+        const progress = object(raw);
+        if (!progress || typeof progress.id !== "string" || !progress.id) continue;
+        agents.set(progress.id, {
+          id: progress.id,
+          agent: typeof progress.agent === "string" ? progress.agent : "task",
+          summary: (typeof progress.description === "string" ? progress.description :
+            typeof progress.assignment === "string" ? progress.assignment :
+            typeof progress.task === "string" ? progress.task : progress.id).replace(/\s+/g, " ").slice(0, 180),
+          status: "running", parentToolCallId: message.toolCallId,
+          startedAt: typeof message.timestamp === "number" ? Math.trunc(message.timestamp) : Date.now(),
+        });
+      }
+    }
+    if (message.toolName === "wait") {
+      for (const raw of Array.isArray(details?.jobs) ? details.jobs : []) {
+        const job = object(raw);
+        if (!job || typeof job.id !== "string") continue;
+        const prior = agents.get(job.id);
+        if (!prior) continue;
+        prior.status = job.status === "completed" ? "success" : job.status === "failed" ? "failed" : job.status === "aborted" ? "cancelled" : "running";
+        if (prior.status !== "running") prior.endedAt = typeof message.timestamp === "number" ? Math.trunc(message.timestamp) : Date.now();
+        if (typeof job.resultText === "string") prior.resultText = job.resultText;
+      }
+    }
+  }
+  return agents;
+}
+
+export function coldSubagentIds(entries: readonly unknown[]): string[] {
+  return [...coldSubagents(entries).keys()];
+}
+
+export function transcriptFromOmpEntries(entries: readonly unknown[]): string {
+  const parts: string[] = [];
+  for (const entry of entries) {
+    const message = object(object(entry)?.message);
+    if (!message || !["user", "assistant", "toolResult"].includes(String(message.role))) continue;
+    const content = Array.isArray(message.content) ? message.content : [];
+    for (const raw of content) {
+      const block = object(raw);
+      if (block?.type === "text" && typeof block.text === "string" && block.text) {
+        parts.push(`${message.role}: ${block.text}`);
+      }
+    }
+  }
+  return parts.join("\n\n").slice(0, 20_000);
+}
+
+export function rowsFromOmpEntries(entries: unknown[], subagentTranscripts: ReadonlyMap<string, string> = new Map()): ConversationRow[] {
   const rows: ConversationRow[] = [];
+  const agents = coldSubagents(entries);
   const context: ColdContext = { sessionId: "cold", nextRowId: 1, createdAtSeq: 1, turnCounter: 0 };
   let currentTurnId = "turn-cold-0";
   for (const entry of entries) {
@@ -78,6 +150,17 @@ export function rowsFromOmpEntries(entries: unknown[]): ConversationRow[] {
           existing.status = message.isError === true ? "error" : "success";
           existing.output = { text };
           existing.endedAt = timestamp;
+        }
+        if (message.toolName === "task") {
+          for (const agent of agents.values()) {
+            if (agent.parentToolCallId !== message.toolCallId) continue;
+            rows.push(makeRow(context, currentTurnId, `omp-subagent:${agent.id}`, {
+              kind: "subagent", parentToolCallId: agent.parentToolCallId,
+              subagentType: agent.agent, status: agent.status, summaryText: agent.summary,
+              ...(subagentTranscripts.get(agent.id) || agent.resultText ? { transcriptText: subagentTranscripts.get(agent.id) || agent.resultText } : {}),
+              startedAt: agent.startedAt, ...(agent.endedAt ? { endedAt: agent.endedAt } : {}),
+            }, timestamp));
+          }
         }
         continue;
       }

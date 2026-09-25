@@ -1,5 +1,5 @@
 // legacy（session/*）方法处理器：旧链路（task 索引、恢复兜底、附件回退）所需的最小面。
-// 插件/工作流/automation/offPeak 族以 -32601 拒绝（FORK.md 已知差异），host 侧按既有降级路径处理。
+// 旧插件商店/工作流/automation/offPeak 族以 -32601 拒绝；@ 引用目录返回空目录，避免污染文件搜索。
 
 import { zcodeProtocolMethods } from "@zcode/shared";
 import type { WorkspaceConfigState } from "@zcode/shared/zcode-protocol-v4";
@@ -124,11 +124,15 @@ export function createLegacyHandlers(context: LegacyMethodContext) {
       return {};
     },
     [zcodeProtocolMethods.sessionSetMode]: async () => ({}),
-    [zcodeProtocolMethods.sessionSubagents]: async () => ({
-      revision: 0,
-      childSessionIds: [],
-      running: [],
-      ended: { total: 0, items: [] },
+    [zcodeProtocolMethods.sessionSubagents]: async (params) => {
+      const record = asRecord(params);
+      const engine = context.registry.requireEngine(requiredString(record, "sessionId"));
+      const offset = typeof record?.cursor === "string" ? Number.parseInt(record.cursor, 10) : 0;
+      return engine.projection.subagentDirectory(Number.isFinite(offset) && offset >= 0 ? offset : 0);
+    },
+    [zcodeProtocolMethods.pluginsReferenceCatalog]: async (params) => ({
+      authority: asRecord(params)?.sessionId ? "session" as const : "workspace" as const,
+      plugins: [],
     }),
     [zcodeProtocolMethods.runtimeCapabilities]: async () => ({ independentPlanState: false }),
     [zcodeProtocolMethods.computerUseOperationEvent]: async () => ({}),

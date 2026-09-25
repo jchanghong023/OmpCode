@@ -9,7 +9,7 @@ import {
   type WorkspaceConfigState,
 } from "@zcode/shared/zcode-protocol-v4";
 import { createId, createLogEpoch, createSubscriptionId, ompSessionIdOfFilePath } from "../domain/ids.js";
-import { rowsFromOmpEntries } from "../domain/coldHistory.js";
+import { coldSubagentIds, rowsFromOmpEntries, transcriptFromOmpEntries } from "../domain/coldHistory.js";
 import { ConversationEngine } from "./conversationEngine.js";
 import { deriveTitle } from "../domain/titleText.js";
 import { ProtocolError } from "./errors.js";
@@ -44,6 +44,7 @@ export class SessionRegistry {
   private configStates = new Map<string, { logEpoch: string; state: WorkspaceConfigState; seq: number; subscribers: Map<string, TopicSubscriber> }>();
   private primaryWorkspace: { id: string; path: string } | null = null;
   private readonly frameOrdinalsBySubscriptionId = new Map<string, number>();
+  private readonly rekeyedEngineIds = new Set<string>();
   private readonly ompFactory: OmpProcessFactory;
   private readonly store: OmpStorePort;
   private readonly gateway: HostGateway;
@@ -57,11 +58,11 @@ export class SessionRegistry {
   }
 
   getEngine(sessionId: string): ConversationEngine | null {
-    return this.engines.get(sessionId) ?? null;
+    return this.engines.get(sessionId) ?? [...this.engines.values()].find((engine) =>
+      ompSessionIdOfFilePath(engine.ompSessionFile) === sessionId) ?? null;
   }
-
   requireEngine(sessionId: string): ConversationEngine {
-    const engine = this.engines.get(sessionId);
+    const engine = this.getEngine(sessionId);
     if (!engine) {
       throw new ProtocolError(-32004, `session unavailable: ${sessionId}`);
     }
@@ -89,7 +90,7 @@ export class SessionRegistry {
   /** 恢复会话：冷历史行先行入投影；omp 子进程按 --resume 启动。 */
   async resumeSession(params: { sessionId: string; workspaceId: string; workspacePath: string }): Promise<ConversationEngine> {
     this.primaryWorkspace = { id: params.workspaceId, path: params.workspacePath };
-    const existing = this.engines.get(params.sessionId);
+    const existing = this.getEngine(params.sessionId);
     if (existing) {
       return existing;
     }
@@ -107,27 +108,27 @@ export class SessionRegistry {
       gateway: this.gateway,
       onIndexChange: (changed) => this.upsertEngineSummary(changed),
       onCommandsUpdate: this.onCommandsUpdate,
-      resumeSessionPath: cold?.sessionPath,
-      initialTitle: cold?.title ?? undefined,
+      resumeSessionPath: cold.sessionPath,
+      initialTitle: cold.title ?? undefined,
     });
-    if (cold) {
-      const entries = await this.store.readSessionEntries(cold.sessionPath);
-      const rows: ConversationRow[] = rowsFromOmpEntries(entries);
-      engine.hydrateRows(rows);
-    }
+    const entries = await this.store.readSessionEntries(cold.sessionPath);
+    const transcripts = new Map(await Promise.all(coldSubagentIds(entries).slice(0, 20).map(async (id) =>
+      [id, transcriptFromOmpEntries(await this.store.readSubagentEntries(cold.sessionPath, id))] as const)));
+    const rows: ConversationRow[] = rowsFromOmpEntries(entries, transcripts);
+    engine.hydrateRows(rows);
     this.engines.set(params.sessionId, engine);
     this.upsertEngineSummary(engine, {
-      createdAt: cold?.createdAt ?? Date.now(),
-      lastActivityAt: cold?.updatedAt ?? Date.now(),
+      createdAt: cold.createdAt,
+      lastActivityAt: cold.updatedAt,
     });
     return engine;
   }
 
   async deleteSession(sessionId: string): Promise<void> {
-    const engine = this.engines.get(sessionId);
+    const engine = this.getEngine(sessionId);
     if (engine) {
       await engine.dispose();
-      this.engines.delete(sessionId);
+      this.engines.delete(engine.sessionId);
       this.emitIndexDelta(engine.workspaceId, { op: "session.removed", sessionId });
       return;
     }
@@ -152,46 +153,50 @@ export class SessionRegistry {
     const state = engine.projection.stateSnapshot;
     const window = engine.projection.buildSnapshot().rows.window;
     const lastAssistant = [...window].reverse().find((row) => row.kind === "assistantText");
-    // omp 换核：omp 会话 uuid 是跨重启的稳定身份。引擎绑定 omp 会话文件后，摘要
-    // 一律以 uuid 为 key（冷扫描同 id 去重、sqlite 种子行、下次 resume 都用它）；
-    // 旧的适配器期 id 键一并迁移，避免同一会话在列表里出现双行。
-    const stableId = ompSessionIdOfFilePath(engine.ompSessionFile) ?? engine.sessionId;
-    if (stableId !== engine.sessionId) {
-      index.summaries.delete(engine.sessionId);
-    }
-    const createdAt = overrides?.createdAt ?? index.summaries.get(stableId)?.createdAt ?? Date.now();
+    const persistedId = ompSessionIdOfFilePath(engine.ompSessionFile) ?? engine.sessionId;
+    const terminal = ["completedSuccess", "completedInterrupted", "error"].includes(state.control.phase);
+    // Host 自动化按创建时 task ID 监听终态；先以临时 ID 发终态，再迁移索引身份。
+    const shouldRekey = persistedId !== engine.sessionId && terminal && !this.rekeyedEngineIds.has(engine.sessionId);
+    const indexId = this.rekeyedEngineIds.has(engine.sessionId) ? persistedId : engine.sessionId;
+    const createdAt = overrides?.createdAt ?? index.summaries.get(indexId)?.createdAt ?? Date.now();
     const summary: SessionSummary = {
-      sessionId: stableId,
+      sessionId: indexId,
       workspaceId: engine.workspaceId,
       title: state.meta.title,
       titleSource: state.meta.titleSource,
       phase: state.control.phase,
       sessionEnded: state.control.sessionEnded,
       hasBackgroundWork: state.backgroundWorks.some((work) => work.status === "running"),
-      pendingInteractionSummary: {
-        permissionCount: state.pendingInteractions.filter((item) => item.kind === "permission").length,
-        userInputCount: state.pendingInteractions.filter((item) => item.kind === "userInput").length,
-      },
+      pendingInteractionSummary: { permissionCount: state.pendingInteractions.filter((item) => item.kind === "permission").length,
+        userInputCount: state.pendingInteractions.filter((item) => item.kind === "userInput").length },
       lastActivityAt: overrides?.lastActivityAt ?? Date.now(),
-      ...(lastAssistant && lastAssistant.kind === "assistantText"
-        ? { lastAssistantPreview: lastAssistant.text.slice(0, 120) }
-        : {}),
+      ...(lastAssistant?.kind === "assistantText" ? { lastAssistantPreview: lastAssistant.text.slice(0, 120) } : {}),
       createdAt,
     };
-    index.summaries.set(stableId, summary);
+    index.summaries.set(indexId, summary);
     this.emitIndexDelta(engine.workspaceId, { op: "session.upserted", session: summary });
+    if (shouldRekey) {
+      index.summaries.delete(engine.sessionId);
+      this.emitIndexDelta(engine.workspaceId, { op: "session.removed", sessionId: engine.sessionId });
+      this.rekeyedEngineIds.add(engine.sessionId);
+      const stableSummary = { ...summary, sessionId: persistedId };
+      index.summaries.set(persistedId, stableSummary);
+      this.emitIndexDelta(engine.workspaceId, { op: "session.upserted", session: stableSummary });
+    }
   }
-
   /** legacy session/list：冷会话 + 引擎会话合并（形状对齐 zcodeSessionInfoSchema）。 */
   async listLegacySessions(workspacePath: string, workspaceKey: string): Promise<Record<string, unknown>[]> {
     const workspace = { workspacePath, workspaceKey };
     const sessions: Record<string, unknown>[] = [];
     const seen = new Set<string>();
     for (const engine of this.engines.values()) {
+      const stableId = ompSessionIdOfFilePath(engine.ompSessionFile) ?? engine.sessionId;
+      const indexId = this.rekeyedEngineIds.has(engine.sessionId) ? stableId : engine.sessionId;
+      seen.add(stableId);
       seen.add(engine.sessionId);
       const state = engine.projection.stateSnapshot;
       sessions.push({
-        sessionId: engine.sessionId,
+        sessionId: indexId,
         workspace,
         sessionKind: "interactive",
         title: state.meta.title,
@@ -259,12 +264,11 @@ export class SessionRegistry {
     }
     return index;
   }
-
   /** sessions-index 订阅：冷会话扫描 + 引擎摘要合并成快照。 */
   async subscribeSessionsIndex(params: { workspaceId: string; workspacePath: string; connectionId: string }): Promise<{ subscriptionId: string; mode: "snapshot" | "resume"; logEpoch: string }> {
     const index = this.ensureIndex(params.workspaceId);
     for (const cold of await this.store.listSessions(params.workspacePath)) {
-      if (index.summaries.has(cold.sessionId) || this.engines.has(cold.sessionId)) {
+      if (index.summaries.has(cold.sessionId) || this.getEngine(cold.sessionId)) {
         continue;
       }
       index.summaries.set(cold.sessionId, {
@@ -296,7 +300,6 @@ export class SessionRegistry {
     // subscribeAckSchema 要求 mode ∈ snapshot|resume（GUI 链路实测踩坑）。
     return { subscriptionId, mode: "snapshot" as const, logEpoch: index.logEpoch };
   }
-
   subscribeWorkspaceConfig(params: { workspaceId: string; config: WorkspaceConfigState }): { subscriptionId: string; mode: "snapshot" | "resume"; logEpoch: string } {
     let entry = this.configStates.get(params.workspaceId);
     if (!entry) {
@@ -389,6 +392,7 @@ export class SessionRegistry {
 
   async dispose(): Promise<void> {
     this.frameOrdinalsBySubscriptionId.clear();
+    this.rekeyedEngineIds.clear();
     await Promise.all([...this.engines.values()].map((engine) => engine.dispose()));
     this.engines.clear();
   }

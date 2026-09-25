@@ -954,7 +954,7 @@ function buildRunningSubagentOpenRequest({
   rootSessionId?: string;
   subagent: ZCodeSessionRunningSubagent;
 }): OpenSubagentSideTabRequest | null {
-  if (!parentSessionId) return null;
+  if (!parentSessionId || subagent.childSessionId.startsWith("omp-subagent:")) return null;
   return {
     rootSessionId: rootSessionId ?? parentSessionId,
     parentSessionId,

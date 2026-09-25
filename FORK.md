@@ -124,20 +124,20 @@
 
 换核后以下能力无法与上游等价提供，均已以显式拒绝（JSON-RPC `-32601` / v4 ACK `fault.command.unsupportedByOmpCore` 等 guard id）或明确的替代行为交付，不静默缺失。UI 侧表现为对应入口不可用（禁用态 tooltip / 操作失败提示），主对话链路不受影响。
 
-1. **插件与技能市场**：ZCode 插件安装/市场/引用目录（`plugins/*`、`skills/referenceCatalog`）全部不可用（-32601）。替代行为：插件与技能面由 omp 自身体系（其配置与扩展目录）承担，桌面不再内嵌 ZCode 官方插件运行时与内置技能包。
+1. **插件与技能市场**：ZCode 插件安装/市场及技能目录不可用（-32601）；旧 `plugins/referenceCatalog` 在 omp 会话返回合法空目录，`@` 文件引用不显示原始 RPC 错误。设置中的扩展页展示 omp profile 与项目原生扩展目录，可打开配置目录；桌面不内嵌 ZCode 官方插件运行时与内置技能包。
 2. **工作流中枢与动态工作流**：已保存工作流 GUI（`workflows/*`）、`v4/conversation/workflowRun*` 全族、`startSavedWorkflow`/`resumeWorkflowRun`/`amendWorkflowRunSettings` 不可用。替代行为：无（omp 无等价工作流引擎）。
-3. **automation / Off-Peak**：定时任务与错峰任务面不可用（反向请求不发起；宿主侧调用按 -32601 拒绝）。替代行为：无。
+3. **automation / Off-Peak**：定时任务使用现有 Host 调度服务持久化与派发，执行仍走 omp 核心；表单模型和思考档从目标工作区的 omp 模型目录选择，运行记录关联 omp 会话。错峰任务仍不可用。
 4. **会话内编辑类操作**：fork 某轮（`forkAssistant`）、重试（`retryTurn`）、编辑已发送消息（`editUserQuery`）、工作区文件回滚（`applyFileRewind`/`fileRewindPreview`）不可用。替代行为：无（omp 会话树的 `branch` 能力未进本适配层首版）。
 5. **协作模式切换与 goal 循环**：`switchCollaborationMode`（build/edit/plan/yolo）、`sendGoalCommand`、`pauseGoal`/`resumeGoal` 不可用（v4 命令面显式拒绝）。替代行为：会话固定等效于上游 `build` 模式；omp ACP 目录分发的命令（`/model`、`/switch` 等）按 omp 语义透传执行（2026-09-25 需求），`/plan`、`/goal` 未进 omp ACP 目录，仍按本地语义处理。
 6. **输入队列编辑**：队列项编辑/重排/删除/立即发送（`editQueueItem` 等）不可用。替代行为：followup 模式等价保留——`guide` 映射 omp `steer`（本轮引导，工具间生效），`queue` 映射 omp `follow_up`（轮后队列），两个 omp 队列均为 one-at-a-time（每轮一条），与上游「每轮一条」语义一致；流式中发送即按当前模式路由。
 7. **用量统计**：app 级用量（`v4/usage/stats`）返回合法空快照；会话级 `v4/conversation/usage` 返回本会话累计值。替代行为：历史聚合统计暂缺（数据源在 omp 会话库，未做聚合）。
-8. **MCP 状态面板**：`mcp/list` 返回空。替代行为：MCP 服务器由 omp 自身配置管理，状态在 omp 侧查看。
+8. **MCP 状态面板**：`mcp/list` 无 omp 运行态状态数据。设置中的 MCP 页展示 omp profile 与项目 `.omp/mcp.json` 明确配置的服务器名和启用状态，并标记连接状态未提供；配置仍由 omp 自身管理，不展示密钥。
 9. **模型连通性测试与 commit message 生成**（`provider/testModelConnectivity`、`workspace/generateText`）：不可用（-32601）。替代行为：模型可用性以实际会话轮为准。
 10. **权限确认形态**：omp 审批仅在用户 omp 审批配置（如 `--approval-mode` 非默认值）生效时出现，以通用询问（AskUserQuestion 形态）呈现，提示文本携带工具与目标信息；默认 yolo 模式无权限确认（与用户日常 omp 行为一致）。
-11. **子代理/后台任务面板**：`session/subagents` 与 `backgroundWorks` 面返回空/未发起。替代行为：omp 子代理在 omp 内部执行，其结果体现在工具调用行与最终回复。
+11. **子代理/后台任务面板**：omp `task` 子代理生命周期、进度和结束记录投影到父会话及 `session/subagents` 目录；记录可在父会话行内展开，重启后从 omp 父/子会话文件恢复。omp 子代理 ID 不等价于 ZCode child session，目录项不提供子会话下钻；`backgroundWorks` 中的其他旧任务仍未发起。
 12. **legacy session 事件流**：`session/subscribe` 返回空事件（无 live 事件回放）。替代行为：桌面与 Web/手机主链路均走 v4 帧，不受影响；task 索引的 live 增量更新降级。
 13. **冷会话历史投影**：会话恢复/列表的冷数据来自 omp 会话文件（`~/.omp/agent/sessions/<encoded-cwd>`）的防御式解析；标题取 title/首条用户消息，行投影为尽力而为的等价结构。在 omp 会话内删除会话即从用户会话库删除对应文件（用户显式操作，非静默清理）。
 14. **macOS 打包**：omp releases 当前不提供 darwin 资产，macOS 安装包无法内嵌 omp；运行时报「内嵌 omp 二进制未找到」的显式错误。Windows/Linux 各架构正常。
 15. **`startup/storageState` 存储准备**：omp 核心无 ZCode CLI 的 SQLite 会话库，适配器按协议帧序直接报告 ready；`--prepare-storage` worker 为无操作握手（帧序完整，exit 0）。
-16. **附件**：图片附件随输入转发给 omp（ImageContent base64）；视频/PDF 附件可上传与回读，但不进入模型输入（omp prompt 仅收图片）。
+16. **附件**：图片附件随输入转发给 omp（ImageContent base64）；UTF-8 文本、JSON、XML、JavaScript 与 YAML 在大小限制内作为标明文件名的文本进入 prompt。视频/PDF 等 omp RPC 不能直接消费的附件在提交时明确拒绝；不会发生上传成功却静默忽略的情况。
 17. **与上游共享的安装级标识**：深链 scheme `zcode://`、Windows AUMID/appId（`dev.zcode.app`）、Linux 包名按「内部标识不动」约定保留，双装时 scheme 由最后注册方接管、任务栏按 appId 分组——属链接路由与安装身份冲突，非数据/端口共享；数据与端口已按 2026-09-25 隔离需求完全错开。

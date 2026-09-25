@@ -399,6 +399,7 @@ export type RunningSubagentSummary = z.infer<typeof runningSubagentSummarySchema
 
 export const subagentProjectionStateSchema = z.object({
   revision: z.number().int().nonnegative(),
+  availability: z.enum(["ready", "unavailable"]).optional(),
   childSessionIds: z.array(z.string()),
   running: z.array(runningSubagentSummarySchema),
   endedTotal: z.number().int().nonnegative(),

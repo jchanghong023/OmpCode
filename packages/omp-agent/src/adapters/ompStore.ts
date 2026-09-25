@@ -76,8 +76,10 @@ export function createOmpStore(env: NodeJS.ProcessEnv = process.env): OmpStorePo
         let createdAt = Date.now();
         try {
           const info = await stat(sessionPath);
-          updatedAt = info.mtimeMs;
-          createdAt = info.birthtimeMs || info.mtimeMs;
+          // Bug 根因：stat 的毫秒时间含小数，Host 的会话索引协议要求 safeint；
+          // 原值会让冷列表整批校验失败，重启后旧临时任务与 omp UUID 重复显示。
+          updatedAt = Math.trunc(info.mtimeMs);
+          createdAt = Math.trunc(info.birthtimeMs || info.mtimeMs);
         } catch {
           continue;
         }
@@ -130,6 +132,20 @@ export function createOmpStore(env: NodeJS.ProcessEnv = process.env): OmpStorePo
           .filter((entry): entry is unknown => entry !== null);
       } catch (error) {
         logger.warn("读取 omp 会话文件失败", { sessionPath, error: String(error) });
+        return [];
+      }
+    },
+
+    async readSubagentEntries(sessionPath: string, subagentId: string): Promise<unknown[]> {
+      // 子代理名来自父会话工具结果，不能让它逃出该会话的子目录。
+      if (!sessionPath.endsWith(".jsonl") || !/^[A-Za-z0-9_-]{1,100}$/.test(subagentId)) return [];
+      const childPath = join(sessionPath.slice(0, -6), `${subagentId}.jsonl`);
+      try {
+        const content = await readFile(childPath, "utf8");
+        return content.split("\n").slice(0, 4000).flatMap((line) => {
+          try { return [JSON.parse(line) as unknown]; } catch { return []; }
+        });
+      } catch {
         return [];
       }
     },

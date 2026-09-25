@@ -3,6 +3,7 @@
 
 import type {
   ConversationRow,
+  SubagentProjectionState,
   SessionActionAvailability,
   SessionConfigState,
   SessionControl,
@@ -24,7 +25,7 @@ export interface ProjectionAState {
   pendingInteractions: import("@zcode/shared/zcode-protocol-v4").PendingInteraction[];
   pendingCommands: import("@zcode/shared/zcode-protocol-v4").CommandStateSummary[];
   backgroundWorks: import("@zcode/shared/zcode-protocol-v4").BackgroundWorkSummary[];
-  subagents: { revision: number; childSessionIds: string[]; running: never[]; endedTotal: number };
+  subagents: SubagentProjectionState;
   goal: null;
   plan: null;
   workspaceHookAdmission: null;

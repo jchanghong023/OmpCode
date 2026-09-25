@@ -11,6 +11,7 @@
     "./process-diagnostic": "./src/process-diagnostic.ts",
     "./model-selection": "./src/model-selection.ts",
     "./omp-profile": "./src/omp-profile.ts",
+    "./omp-integrations": "./src/omp-integrations.ts",
     "./account-provider-state": "./src/account-provider-state.ts",
     "./model-config": "./src/model-config.ts",
     "./config-schema": "./src/config-schema.ts",

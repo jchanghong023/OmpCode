@@ -1,5 +1,25 @@
 /** Fork-owned OmpCode terminology and controls; layered over the upstream locale. */
 const ompEnUSOverrides: Record<string, string> = {
+  "chat.error.ompAttachmentRejected": "Cannot send attachment to omp: {reason}",
+  "chat.subagents.unavailable": "omp subagent status is unavailable; this session may have incomplete subagent records.",
+  "settings.ompNative.extensions": "OMP Extensions",
+  "settings.ompNative.mcp": "OMP MCP Servers",
+  "settings.ompNative.description": "Shows native configuration in the current omp profile and local project. Refresh after changing configuration.",
+  "settings.ompNative.runtimeUnavailable": "omp RPC does not expose extension runtime or MCP connection status. These entries show configuration only.",
+  "settings.ompNative.refresh": "Refresh",
+  "settings.ompNative.loadFailed": "Could not read omp configuration",
+  "settings.ompNative.profile": "Current Profile",
+  "settings.ompNative.project": "Current Project",
+  "settings.ompNative.openDirectory": "Open Folder",
+  "settings.ompNative.configInvalid": "Could not parse mcp.json. Check the omp configuration.",
+  "settings.ompNative.empty": "No configured entries",
+  "settings.ompNative.enabled": "Enabled",
+  "settings.ompNative.disabled": "Disabled",
+  "settings.ompNative.directoryEntry": "Directory entry",
+  "settings.ompNative.loading": "Loading…",
+  "chat.ompSubagent.transcript": "View subagent transcript",
+  "settings.dataBaseDirDescription":
+    "Root directory for app data (defaults to user home directory). Existing data will be copied to the new location. The .ompcode/v2 suffix cannot be changed.",
   "occupationOnboarding.modeDescription": "How would you like OmpCode to show its work?",
   "settings.ompModelRoles.configMissing": "No model config found for the current omp profile",
   "settings.ompModelRoles.configInvalid":

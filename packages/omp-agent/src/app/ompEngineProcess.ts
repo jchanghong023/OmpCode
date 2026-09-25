@@ -26,6 +26,7 @@ export interface EngineProcessHooks {
   onConfigUpdate: (frame: OmpConfigUpdateFrame) => void;
   /** 命令目录变化。 */
   onCommandsUpdate: (commands: unknown) => void;
+  onSubagentFrame: NonNullable<Parameters<import("./ports.js").OmpProcessFactory["create"]>[0]["onSubagentFrame"]>;
 }
 
 export function createEngineOmpProcess(
@@ -44,6 +45,7 @@ export function createEngineOmpProcess(
     onSessionInfoUpdate: hooks.onSessionInfoUpdate,
     onConfigUpdate: hooks.onConfigUpdate,
     onCommandsUpdate: hooks.onCommandsUpdate,
+    onSubagentFrame: hooks.onSubagentFrame,
   });
 }
 

@@ -15,6 +15,18 @@ export interface TurnContext {
   streamingReasoningRow: { rowId: number; entityId: string } | null;
 }
 
+export function conversationRowsRange(
+  rowIds: readonly number[],
+  rowAt: (id: number) => ConversationRow | undefined,
+  beforeRowId: number | undefined,
+  limit: number,
+): { rows: ConversationRow[]; hasMore: boolean } {
+  const ids = beforeRowId === undefined ? rowIds : rowIds.filter((id) => id < beforeRowId);
+  const page = ids.slice(-limit);
+  const first = page[0];
+  return { rows: page.map((id) => rowAt(id)!), hasMore: first !== undefined && ids.indexOf(first) > 0 };
+}
+
 export interface RowInit {
   rowId: number;
   turnId: string;

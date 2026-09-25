@@ -589,6 +589,8 @@ contextBridge.exposeInMainWorld("zcode", {
   openExternalFile: (path: string) => ipcRenderer.invoke(PlatformChannels.OpenExternalFile, path),
   openOmpModelConfig: () => ipcRenderer.invoke(PlatformChannels.OpenOmpModelConfig),
   readOmpModelRoles: () => ipcRenderer.invoke(PlatformChannels.ReadOmpModelRoles),
+  readOmpNativeIntegrations: (workspacePath?: string) =>
+    ipcRenderer.invoke(PlatformChannels.ReadOmpNativeIntegrations, { workspacePath }),
   listOmpProfiles: () => ipcRenderer.invoke(PlatformChannels.ListOmpProfiles),
   writeOmpModelRoles: (roles: { role: string; value: string }[]) =>
     ipcRenderer.invoke(PlatformChannels.WriteOmpModelRoles, { roles }),

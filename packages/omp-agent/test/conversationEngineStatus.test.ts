@@ -11,7 +11,7 @@ test("订阅冷会话先交付快照，后台状态读取与紧接的发送共�
     releaseStart = resolve;
   });
   let starts = 0;
-  let sends = 0;
+  const sentTypes: string[] = [];
   let onEvent: ((event: OmpSessionEventFrame) => void) | undefined;
   let usedTokens = 512;
   const frames: unknown[] = [];
@@ -32,8 +32,8 @@ test("订阅冷会话先交付快照，后台状态读取与紧接的发送共�
     async readContextReport() {
       return { contextWindow: 200_000, entries: [{ label: "Messages", tokens: usedTokens }] };
     },
-    async send() {
-      sends += 1;
+    async send(command) {
+      sentTypes.push(command.type);
       return { success: true, data: { agentInvoked: false } };
     },
     respondUi() {},
@@ -66,11 +66,11 @@ test("订阅冷会话先交付快照，后台状态读取与紧接的发送共�
     assert.ok(frames.length > 0);
     const send = engine.sendText("hello", "command", "client");
     assert.equal(starts, 1);
-    assert.equal(sends, 0);
+    assert.deepEqual(sentTypes, []);
     releaseStart();
     await send;
     assert.equal(starts, 1);
-    assert.equal(sends, 1);
+    assert.deepEqual(sentTypes, ["get_subagents", "prompt"]);
     assert.deepEqual(engine.projection.stateSnapshot.usage.contextWindow, {
       usedTokens: 512,
       maxTokens: 200_000,

@@ -9,13 +9,13 @@ import {
   type CommandAck,
   type CommandEnvelope,
   type CommandPayloadMap,
-  type AttachmentRef,
 } from "@zcode/shared/zcode-protocol-v4";
 import { createId } from "../domain/ids.js";
 import type { AttachmentStore } from "./attachmentStore.js";
 import { ProtocolError } from "./errors.js";
 import type { SessionRegistry } from "./sessionRegistry.js";
 import type { ConversationEngine } from "./conversationEngine.js";
+import { prepareOmpAttachmentInput } from "./ompAttachmentInput.js";
 
 const UNSUPPORTED = "fault.command.unsupportedByOmpCore";
 const CAP = PROTOCOL_V4_LIMITS.idempotencyTablePerSession;
@@ -97,6 +97,12 @@ export class V4CommandService {
     switch (envelope.type) {
       case "createSession": {
         const payload = envelope.payload as import("@zcode/shared/zcode-protocol-v4").CommandPayloadMap["createSession"];
+        const input = payload.firstInput
+          ? prepareOmpAttachmentInput(payload.firstInput.text, payload.firstInput.attachments, this.context.attachments)
+          : null;
+        if (input && !input.ok) return this.ack(envelope, "rejected", {
+          reasonCode: "fault.command.attachmentUnsupportedByOmpCore", message: input.error,
+        });
         const engine = await this.context.registry.createSession({
           workspaceId: payload.workspaceId,
           workspacePath: this.context.workspacePath,
@@ -105,10 +111,10 @@ export class V4CommandService {
           // 临时模型：首发优先 firstInput.modelSelection，回落 config.modelSelection（draft 冻结配置）。
           const selection = engineModelSelectionOf(payload.firstInput.modelSelection ?? payload.config?.modelSelection);
           const delivery = await engine.sendText(
-            payload.firstInput.text,
+            input?.text ?? payload.firstInput.text,
             envelope.commandId,
             envelope.clientId,
-            this.imagesOf(payload.firstInput.attachments),
+            input?.images ?? [],
             selection,
           );
           return this.ack(envelope, "accepted", {
@@ -125,12 +131,16 @@ export class V4CommandService {
       }
       case "sendText": {
         const payload = envelope.payload as import("@zcode/shared/zcode-protocol-v4").CommandPayloadMap["sendText"];
+        const input = prepareOmpAttachmentInput(payload.text, payload.attachments, this.context.attachments);
+        if (!input.ok) return this.ack(envelope, "rejected", {
+          reasonCode: "fault.command.attachmentUnsupportedByOmpCore", message: input.error,
+        });
         const engine = this.requireSessionEngine(envelope.sessionId);
         const delivery = await engine.sendText(
-          payload.text,
+          input.text,
           envelope.commandId,
           envelope.clientId,
-          this.imagesOf(payload.attachments),
+          input.images,
           engineModelSelectionOf(payload.modelSelection),
         );
         return this.ack(envelope, "accepted", {
@@ -246,12 +256,6 @@ export class V4CommandService {
         return this.unsupportedAck(envelope, String(exhaustive));
       }
     }
-  }
-
-  private imagesOf(attachments: readonly AttachmentRef[] | undefined) {
-    // Bug 原因：v4 曾固定传空图片数组，已提交图片虽上传成功却从未进入 omp prompt。
-    // 按 ref 从唯一的附件存储读取，非图片沿用既有规则跳过。
-    return attachments?.flatMap((attachment) => this.context.attachments.ompImagesOf(attachment.ref)) ?? [];
   }
 
   private requireSessionId(sessionId: string | null): string {

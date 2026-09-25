@@ -1,5 +1,5 @@
 // v4 附件上传事务（begin/chunk/commit/abort）的内存实现。
-// 图片随 prompt 转发给 omp（ImageContent base64）；视频/PDF 仅保留回读能力（omp prompt 只收图片）。
+// 图片作为 ImageContent，UTF-8 文本并入 prompt；omp 不能消费的格式在提交前由调用方拒绝。
 
 import { PROTOCOL_V4_LIMITS } from "@zcode/shared/zcode-protocol-v4";
 import { ProtocolError } from "./errors.js";
@@ -104,7 +104,7 @@ export class AttachmentStore {
     return Buffer.concat([...attachment.chunks.entries()].sort((a, b) => a[0] - b[0]).map(([, bytes]) => bytes));
   }
 
-  /** 图片附件 → omp prompt images（仅 image/*；其余类型 omp 不消费，调用方负责降级）。 */
+  /** 图片附件 → omp prompt images（仅 image/*；其余类型由调用方转换或拒绝）。 */
   ompImagesOf(ref: string): { type: "image"; data: string; mimeType: string }[] {
     const attachment = this.committed.get(ref);
     const bytes = this.bytesOf(ref);

@@ -8,6 +8,7 @@ import type {
   SaveCliMcpToUserDirectoryRequest,
 } from "./index.js";
 import type { OAuthStateRegistration } from "./oauth.js";
+import type { OmpNativeIntegrationSnapshot } from "./omp-integrations.js";
 import type { AppSettings, Locale } from "./protocol.js";
 import type { StorageCleanRequest, StorageCleanResult, StorageUsageSnapshot } from "./storage.js";
 import type {
@@ -288,6 +289,7 @@ export const PlatformChannels = {
   OpenOmpModelConfig: "zcode:open-omp-model-config",
   /** Renderer → Main：读取 omp modelRoles（role → provider/model:level） */
   ReadOmpModelRoles: "zcode:read-omp-model-roles",
+  ReadOmpNativeIntegrations: "zcode:read-omp-native-integrations",
   ListOmpProfiles: "zcode:list-omp-profiles",
   /** Renderer → Main：写入 omp modelRoles（yaml Document 级替换，保留注释与格式；写前自动备份） */
   WriteOmpModelRoles: "zcode:write-omp-model-roles",
@@ -890,6 +892,12 @@ export interface PlatformChannelMap {
     request: undefined;
     response:
       | { success: true; roles: { role: string; value: string }[] }
+      | { success: false; error: string };
+  };
+  [PlatformChannels.ReadOmpNativeIntegrations]: {
+    request: { workspacePath?: string };
+    response:
+      | { success: true; snapshot: OmpNativeIntegrationSnapshot }
       | { success: false; error: string };
   };
   [PlatformChannels.ListOmpProfiles]: {

@@ -256,6 +256,7 @@ export const subagentRowSchema = z.object({
   subagentType: z.string(),
   status: z.enum(["running", "success", "failed", "cancelled"]),
   summaryText: z.string(),
+  transcriptText: z.string().optional(),
   // 存在 → UI 可下钻订阅 conversation/<childSessionId>（不内嵌 child rows）。
   childSessionId: z.string().optional(),
   backgrounded: z.literal(true).optional(),

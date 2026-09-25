@@ -6,17 +6,10 @@ import { createInterface } from "node:readline";
 import { OmpFrameAssembler } from "../domain/frameAssembler.js";
 import { parseOmpContextReport, type OmpContextReport } from "../domain/ompContextReport.js";
 import {
-  ompAvailableCommandsFrameSchema,
-  ompCommandOutputFrameSchema,
-  ompConfigUpdateFrameSchema,
-  ompExtensionUiRequestFrameSchema,
-  ompPromptResultFrameSchema,
-  ompReadyFrameSchema,
-  ompResponseFrameSchema,
-  ompRpcChunkFrameSchema,
-  ompSessionEventFrameSchema,
-  ompSessionInfoUpdateFrameSchema,
-  ompStateDataSchema,
+  ompAvailableCommandsFrameSchema, ompCommandOutputFrameSchema, ompConfigUpdateFrameSchema,
+  ompExtensionUiRequestFrameSchema, ompPromptResultFrameSchema, ompReadyFrameSchema,
+  ompResponseFrameSchema, ompRpcChunkFrameSchema, ompSessionEventFrameSchema,
+  ompSessionInfoUpdateFrameSchema, ompStateDataSchema, ompSubagentFrameSchema,
   type OmpCommandFrame,
   type OmpExtensionUiResponseFrame,
 } from "../domain/ompFrames.js";
@@ -44,6 +37,7 @@ export function createOmpProcessFactory(binaryPath: string, extraArgs: string[] 
 
 class OmpChildProcess implements OmpSessionProcess {
   ompSessionFile: string | null = null;
+  subagentSubscriptionAvailable: boolean | undefined;
   private child: ChildProcessWithoutNullStreams | null = null;
   private assembler = new OmpFrameAssembler();
   private pending = new Map<string, PendingCommand>();
@@ -126,6 +120,11 @@ class OmpChildProcess implements OmpSessionProcess {
     });
     await ready;
     this.wireStdout(child);
+    const subscription = await this.request({ type: "set_subagent_subscription", level: "events" }, 10_000).catch((error) => ({ success: false, error: String(error) }));
+    this.subagentSubscriptionAvailable = subscription.success;
+    if (!subscription.success) {
+      logger.warn("omp 子代理订阅不可用", { error: subscription.error ?? "unknown" });
+    }
   }
 
   private wireStdout(child: ChildProcessWithoutNullStreams): void {
@@ -218,15 +217,20 @@ class OmpChildProcess implements OmpSessionProcess {
         return;
       }
       case "extension_error":
-      case "subagent_lifecycle":
-      case "subagent_progress":
-      case "subagent_event":
       case "host_tool_call":
       case "host_tool_cancel":
       case "host_uri_request":
       case "host_uri_cancel":
       case "ready":
         return;
+      case "subagent_lifecycle":
+      case "subagent_progress":
+      case "subagent_event": {
+        const parsed = ompSubagentFrameSchema.safeParse(record);
+        if (parsed.success) this.options.onSubagentFrame?.(parsed.data);
+        else logger.warn("invalid omp subagent frame", { issues: parsed.error.issues.length });
+        return;
+      }
       case "extension_ui_request": {
         const parsed = ompExtensionUiRequestFrameSchema.safeParse(record);
         if (!parsed.success) {

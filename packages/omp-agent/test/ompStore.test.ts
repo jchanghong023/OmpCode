@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, utimes, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join, relative, resolve, sep } from "node:path";
 import { test } from "node:test";
@@ -13,15 +13,19 @@ test("相对 PI_CONFIG_DIR 从用户主目录解析并扫描 omp 冷会话", asy
   });
   const sessionDir = join(testRoot, "agent", "sessions", "-");
   await mkdir(sessionDir, { recursive: true });
+  const sessionPath = join(sessionDir, "2026-09-24T00-00-00-000Z_test-session.jsonl");
   await writeFile(
-    join(sessionDir, "2026-09-24T00-00-00-000Z_test-session.jsonl"),
+    sessionPath,
     `${JSON.stringify({ type: "session", id: "test-session" })}\n`,
   );
+  await utimes(sessionPath, 1_000_000_000.123, 1_000_000_000.123);
 
   const store = createOmpStore({ PI_CONFIG_DIR: relative(homedir(), testRoot) });
   const sessions = await store.listSessions(homedir());
   assert.equal(sessions.length, 1);
   assert.equal(sessions[0]?.sessionId, "test-session");
+  assert.equal(Number.isSafeInteger(sessions[0]?.createdAt), true);
+  assert.equal(Number.isSafeInteger(sessions[0]?.updatedAt), true);
 });
 
 test("命名 profile 的历史与默认 profile 隔离", async (context) => {

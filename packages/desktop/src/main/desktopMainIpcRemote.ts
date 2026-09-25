@@ -1,6 +1,7 @@
 /* eslint-disable max-lines -- 远程连接、OAuth 回调、遥测和通知 IPC 共用窗口级上下文，集中注册避免跨文件状态漂移。 */
 import { app, BrowserWindow, ipcMain, shell } from "electron";
 import { access } from "node:fs/promises";
+import { dirname } from "node:path";
 import { z } from "zod";
 import armsRum from "@arms/rum-electron";
 import {
@@ -37,6 +38,7 @@ import {
 } from "./desktopRemoteUsageArmsTelemetry.js";
 import { openPathInDefaultApp } from "./desktopMainIpcHelpers.js";
 import { readOmpModelRolesConfig, resolveOmpModelRolesConfigPath, writeOmpModelRolesConfig } from "./ompModelRolesConfig.js";
+import { readOmpNativeIntegrations } from "./ompNativeIntegrations.js";
 import { listOmpProfiles } from "./ompProfiles.js";
 import { resolveOmpProfileFromEnv } from "@zcode/shared/omp-profile";
 
@@ -325,6 +327,18 @@ export function registerRemoteIpcHandlers(options: {
   ipcMain.handle(PlatformChannels.ReadOmpModelRoles, async () => {
     const configPath = resolveOmpModelRolesConfigPath();
     return readOmpModelRolesConfig(configPath);
+  });
+  ipcMain.handle(PlatformChannels.ReadOmpNativeIntegrations, async (_event, payload: unknown) => {
+    const parsed = z.object({ workspacePath: z.string().min(1).optional() }).safeParse(payload);
+    if (!parsed.success) return { success: false, error: "invalid_workspace_path" };
+    try {
+      return { success: true, snapshot: await readOmpNativeIntegrations({
+        agentDir: dirname(resolveOmpModelRolesConfigPath()),
+        workspacePath: parsed.data.workspacePath,
+      }) };
+    } catch {
+      return { success: false, error: "omp_integrations_load_failed" };
+    }
   });
   ipcMain.handle(PlatformChannels.ListOmpProfiles, async () => {
     try {

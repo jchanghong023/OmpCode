@@ -1,4 +1,4 @@
-import type { ZCodeConfigOption, ZCodeProvider } from "@zcode/shared";
+import type { ModelSelection, ZCodeConfigOption, ZCodeProvider } from "@zcode/shared";
 import type { ModelSelectionView } from "@zcode/services";
 import type { ModelSelectGroup, ModelSelectGroupItem } from "@/ModelConfigSelect.js";
 import {
@@ -7,6 +7,29 @@ import {
 } from "@/lib/modelSelectionGroups.js";
 import { decodeCustomModelValue, encodeCustomModelValue } from "@/lib/zcodeCustomModelValue.js";
 import { resolveV4ModelTriggerLabel } from "@/v4/composer/modelTriggerDisplay.js";
+import { highestOmpThoughtLevel, type OmpModelCatalog } from "@/v4/composer/ompModelCatalog.js";
+
+/** 自动化与聊天共用 omp 模型目录；表单只保存目录中有效的具体选择。 */
+export function resolveOmpAutomationSelection(
+  catalog: OmpModelCatalog | null,
+  modelValue: string,
+  thoughtLevel: string,
+): ModelSelection | null {
+  if (!catalog) return null;
+  const decoded = modelValue ? decodeCustomModelValue(modelValue) : null;
+  const value = decoded?.modelName
+    ? `${decoded.providerId}/${decoded.modelName}`
+    : modelValue || (catalog.preferredSelection
+      ? `${catalog.preferredSelection.providerId}/${catalog.preferredSelection.modelId}`
+      : "");
+  const entry = catalog.entries.find((candidate) =>
+    `${candidate.providerId}/${candidate.modelId}` === value,
+  );
+  if (!entry) return null;
+  const reasoningLevel = thoughtLevel || highestOmpThoughtLevel(entry);
+  if (!reasoningLevel || !entry.thoughtLevels?.includes(reasoningLevel)) return null;
+  return { providerId: entry.providerId, modelId: entry.modelId, options: { reasoningLevel } };
+}
 
 // 定时任务表单必须是纯本地草稿，不能借用 workspace 默认配置写接口来获取选项；
 // 否则仅打开或取消编辑也会改掉当前项目和 draft session 的运行配置。

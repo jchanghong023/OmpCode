@@ -7,6 +7,7 @@ import type {
   OmpPromptResultFrame,
   OmpSessionEventFrame,
   OmpSessionInfoUpdateFrame,
+  OmpSubagentFrame,
 } from "../domain/ompFrames.js";
 import type { OmpStateData } from "../domain/ompFrames.js";
 import type { OmpContextReport } from "../domain/ompContextReport.js";
@@ -21,6 +22,8 @@ export interface OmpCommandOutcome {
 export interface OmpSessionProcess {
   /** omp 会话文件绝对路径（omp 落盘后可用；新会话可能为 null）。 */
   readonly ompSessionFile: string | null;
+  /** ready 后 set_subagent_subscription 的事实；旧测试进程可省略。 */
+  readonly subagentSubscriptionAvailable?: boolean;
   start(): Promise<void>;
   send(command: OmpCommandFrame): Promise<OmpCommandOutcome>;
   respondUi(response: OmpExtensionUiResponseFrame): void;
@@ -43,6 +46,7 @@ export interface OmpSideChannelHandlers {
   onConfigUpdate?: (frame: OmpConfigUpdateFrame) => void;
   /** 命令目录变化（available_commands_update）。 */
   onCommandsUpdate?: (commands: unknown) => void;
+  onSubagentFrame?: (frame: OmpSubagentFrame) => void;
 }
 
 export interface OmpProcessFactory {
@@ -84,6 +88,8 @@ export interface OmpStorePort {
   listSessions(cwd: string): Promise<OmpStoreSessionSummary[]>;
   /** 读取一个会话文件的原始 JSONL 条目（标题/消息解析在 domain 层）。 */
   readSessionEntries(sessionPath: string): Promise<unknown[]>;
+  /** omp 为 task 子代理在父会话同名目录保存的独立 JSONL。 */
+  readSubagentEntries(sessionPath: string, subagentId: string): Promise<unknown[]>;
   deleteSession(sessionPath: string): Promise<boolean>;
 }
 
