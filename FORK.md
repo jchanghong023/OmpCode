@@ -64,7 +64,7 @@
 - 接口参考与测试基线：接口与协议开发参考本地源码 `D:\code1111111111\oh-my-pi`（协议细节含该仓库 `docs/rpc.md`）；实际测试（含换核验收 E2E）使用 releases 实际内嵌的发布版本二进制执行，不以本地源码的未发布改动为测试对象。
 - 分发：随 ZCode 安装包内嵌——打包时取该 fork GitHub releases 页面（`https://github.com/jchanghong023/oh-my-pi/releases`）的最新版本二进制，内嵌进应用资源并由应用拉起；用户无需单独安装 omp。不依赖上游 oh-my-pi 的 npm / Homebrew / Nix / `omp.sh` 分发。
 - Windows x64 桌面版通过 GitHub Actions 手动发布：从 `main` 输入与当前版本匹配的唯一 OmpCode 标签，打包后将安装 EXE 与 SHA256 校验文件上传到本仓库 GitHub Release；发布流水线不单独运行测试。
-- CentOS 7 x64 桌面版使用独立的 GitHub Actions 手动发布：从 `main` 输入与当前版本匹配且以 `-centos7` 结尾的唯一标签，产出独立 RPM 与 SHA256 校验文件；不占用或修改 Windows Release/安装包，流水线同样只打包、不运行测试。RPM 不升级宿主 glibc/Node，也不覆盖常规 Linux 包或用户已安装的 omp；需要可用的图形会话与 ptrace，兼容运行时不能启用 Chromium 沙箱，使用时应避免不可信工作区。
+- CentOS 7 x64 桌面版使用独立的 GitHub Actions 手动发布：从 `main` 输入与当前版本匹配且以 `-centos7` 结尾的唯一标签，产出自包含 ZIP 与 SHA256 校验文件；不占用或修改 Windows Release/安装包，流水线同样只打包、不运行测试。用户在 HOME 内解压即可运行，无需 root、网络或另外安装运行时包；ZIP 不升级宿主 glibc/Node，也不覆盖常规 Linux 包或用户已安装的 omp。需要可用的图形会话与 ptrace；原生 CentOS 7 内核须禁用 PRoot 的 seccomp 加速，兼容运行时不能启用 Chromium 沙箱，使用时应避免不可信工作区。
 - 内嵌 omp 的配置与边界：内嵌拷贝与用户已安装的 omp 使用完全相同的配置（同一配置、凭据与会话数据来源），行为与用户日常使用的 omp 保持一致；NEVER 覆盖、替换、修改或代为安装用户已安装的 omp，内嵌拷贝只存在于 ZCode 应用资源目录内。
 - 进程与端口边界：内嵌 omp 只以子进程形态经 stdio 通信，不监听任何端口；绝不探测、复用、终止或以其他方式影响用户机器上已在运行的 ZCode / omp 进程。本仓库自建的任何本地测试服务一律使用 `listen(0)` 临时端口，发生端口冲突时换临时端口重试，不占用固定端口。
 - 测试模型约定：换核验收 E2E 与 UI 验收的真实模型使用用户 omp 配置的 `zhipu-coding-plan/glm-5.3-flash`（走用户 omp 既有凭据）；协议级 fake-omp E2E 不依赖真实模型。审批等测试态一律用 omp 运行时 flag（如 `--approval-mode`）注入，不修改用户配置文件。
@@ -145,7 +145,7 @@
 11. **子代理/后台任务面板**：omp `task` 子代理生命周期、进度和结束记录投影到父会话及 `session/subagents` 目录；记录可在父会话行内展开，重启后从 omp 父/子会话文件恢复。omp 子代理 ID 不等价于 ZCode child session，目录项不提供子会话下钻；`backgroundWorks` 中的其他旧任务仍未发起。
 12. **legacy session 事件流**：`session/subscribe` 返回空事件（无 live 事件回放）。替代行为：桌面与 Web/手机主链路均走 v4 帧，不受影响；task 索引的 live 增量更新降级。
 13. **冷会话历史投影**：会话恢复/列表的冷数据来自 omp 会话文件（`~/.omp/agent/sessions/<encoded-cwd>`）的防御式解析；标题取 title/首条用户消息，行投影为尽力而为的等价结构。在 omp 会话内删除会话即从用户会话库删除对应文件（用户显式操作，非静默清理）。
-14. **macOS 与旧版 Linux 打包**：omp releases 当前不提供 darwin 资产，macOS 安装包无法内嵌 omp；运行时报「内嵌 omp 二进制未找到」的显式错误。Windows 与较新 Linux 各架构正常；CentOS 7 x64 应使用独立兼容 RPM（无 Chromium 沙箱），常规 RPM 仅支持 RHEL 8+。
+14. **macOS 与旧版 Linux 打包**：omp releases 当前不提供 darwin 资产，macOS 安装包无法内嵌 omp；运行时报「内嵌 omp 二进制未找到」的显式错误。Windows 与较新 Linux 各架构正常；CentOS 7 x64 使用可由普通用户解压运行的独立兼容 ZIP（无 Chromium 沙箱），常规 RPM 仅支持 RHEL 8+。
 15. **`startup/storageState` 存储准备**：omp 核心无 ZCode CLI 的 SQLite 会话库，适配器按协议帧序直接报告 ready；`--prepare-storage` worker 为无操作握手（帧序完整，exit 0）。
 16. **附件**：图片附件随输入转发给 omp（ImageContent base64）；UTF-8 文本、JSON、XML、JavaScript 与 YAML 在大小限制内作为标明文件名的文本进入 prompt。视频/PDF 等 omp RPC 不能直接消费的附件在提交时明确拒绝；不会发生上传成功却静默忽略的情况。
 17. **与上游共享的安装级标识**：深链 scheme `zcode://`、Windows AUMID/appId（`dev.zcode.app`）、Linux 包名按「内部标识不动」约定保留，双装时 scheme 由最后注册方接管、任务栏按 appId 分组——属链接路由与安装身份冲突，非数据/端口共享；数据与端口已按 2026-09-25 隔离需求完全错开。

@@ -88,19 +88,19 @@ pnpm bundle:desktop -- --os win --arch x64
 
 ## 手动发布
 
-在 GitHub Actions 中从 `main` 手动运行 **Release Windows EXE** 或 **Release CentOS 7 RPM**。两条流水线都只打包和发布，不运行测试。输入符合当前 `package.json` 版本且未使用过的标签，例如 Windows 用 `v3.14.3-omp.1`，CentOS 7 用 `v3.14.3-omp.1-centos7`；按需选择预发布。标签和资产相互独立，不修改 Windows 安装包。
+在 GitHub Actions 中从 `main` 手动运行 **Release Windows EXE** 或 **Release CentOS 7 ZIP**。两条流水线都只打包和发布，不运行测试。输入符合当前 `package.json` 版本且未使用过的标签，例如 Windows 用 `v3.14.3-omp.1`，CentOS 7 用 `v3.14.3-omp.2-centos7`；按需选择预发布。标签和资产相互独立，不修改 Windows 安装包。
 
-CentOS 7 流水线发布 `OmpCode-<version>-centos7-x64.rpm` 与相应的 `.sha256` 文件。下载后执行：
+CentOS 7 流水线发布一个自包含的 `OmpCode-<version>-centos7-x64.zip` 和可选的 `.sha256` 校验文件。将 ZIP 复制到离线机器，以普通用户解压运行：
 
 ```bash
-sha256sum --check OmpCode-3.14.3-centos7-x64.rpm.sha256
-sudo rpm -Uvh OmpCode-3.14.3-centos7-x64.rpm
-/opt/ompcode-centos7/bin/ompcode-centos7
+sha256sum --check OmpCode-3.14.3-centos7-x64.zip.sha256
+unzip -q OmpCode-3.14.3-centos7-x64.zip -d "$HOME"
+"$HOME/OmpCode-3.14.3-centos7-x64/bin/ompcode-centos7"
 ```
 
-此 RPM 内置独立运行环境，不升级宿主 glibc、Node 或 omp，可与适用于 RHEL 8+ 的常规安装包共存。运行需要图形会话和 `ptrace`。**兼容运行环境无法启用 Chromium 沙箱**，只在可信工作区中使用。工作区不在家目录时，从其目录启动，或设置 `OMPCODE_CENTOS7_BIND=/工作区绝对路径`。`zcode://` 协议与其他安装共享，最后启动的应用可能成为默认处理器。
+无需 root、包管理器、网络、升级宿主 glibc/Node/omp，也无需另装运行时库。ZIP 内含独立用户态、中文字体、Electron、PRoot 与 omp；宿主仍需图形会话与 `ptrace`。**兼容环境无法启用 Chromium 沙箱**，只在可信工作区中使用。工作区不在家目录时，从该目录启动，或设置 `OMPCODE_CENTOS7_BIND=/工作区绝对路径`。ZIP 不注册宿主桌面入口或 `zcode://` 处理器。
 
-按 [Electron 官方平台政策](https://github.com/electron/electron#platform-support)，已停止维护的 CentOS 7 不属于正式支持范围；本仓库的 WSL 冒烟验证尚未覆盖原生 3.10 内核。
+按 [Electron 官方平台政策](https://github.com/electron/electron#platform-support)，已停止维护的 CentOS 7 不属于正式支持范围；在原生 3.10 内核上观察到 PRoot 的 seccomp 加速崩溃，因此兼容启动器禁用该加速。
 
 ## 项目来源
 

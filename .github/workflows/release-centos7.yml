@@ -1,4 +1,4 @@
-name: Release CentOS 7 RPM
+name: Release CentOS 7 ZIP
 
 on:
   workflow_dispatch:
@@ -61,7 +61,7 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends rpm xz-utils
+          sudo apt-get install -y --no-install-recommends zip unzip
           pnpm install --frozen-lockfile
 
       - name: Build Linux desktop
@@ -97,7 +97,7 @@ jobs:
           sudo tar -xzf "$RUNNER_TEMP/centos7/downloads/ubuntu-base.tar.gz" -C "$root"
           sudo "$RUNNER_TEMP/centos7/downloads/proot" -S "$root" /usr/bin/env DEBIAN_FRONTEND=noninteractive apt-get update
           sudo "$RUNNER_TEMP/centos7/downloads/proot" -S "$root" /usr/bin/env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            ca-certificates git openssh-client curl python3 xdg-utils fonts-dejavu-core \
+            ca-certificates git openssh-client curl python3 xdg-utils fonts-dejavu-core fonts-noto-cjk \
             libasound2t64 libatk-bridge2.0-0 libcups2 libdbus-1-3 libdrm2 \
             libgbm1 libgl1 libgl1-mesa-dri libgtk-3-0 libnss3 libxss1 libxshmfence1 libsecret-1-0 \
             libnotify4 libudev1 libvulkan1
@@ -109,25 +109,25 @@ jobs:
           sudo install -m 644 "$RUNNER_TEMP/centos7/downloads/proot-source.tar.gz" "$root/usr/share/doc/proot/proot-source-901fe2f0.tar.gz"
           sudo install -m 644 "$RUNNER_TEMP/centos7/downloads/uthash-source.tar.gz" "$root/usr/share/doc/proot/uthash-source-e493aa90.tar.gz"
 
-      - name: Build RPM and checksum
+      - name: Build ZIP and checksum
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p packages/desktop/dist
-          sudo bash scripts/publish/centos7/build-rpm.sh \
+          sudo bash scripts/publish/centos7/build-zip.sh \
             packages/desktop/dist/linux-unpacked "$RUNNER_TEMP/centos7/rootfs" \
             "$RUNNER_TEMP/centos7/downloads/proot" "$APP_VERSION" packages/desktop/dist
-          rpm="packages/desktop/dist/OmpCode-$APP_VERSION-centos7-x64.rpm"
-          [[ -s "$rpm" ]]
-          rpm -qp --requires "$rpm"
-          (cd packages/desktop/dist && sha256sum "$(basename "$rpm")" > "$(basename "$rpm").sha256")
+          archive="packages/desktop/dist/OmpCode-$APP_VERSION-centos7-x64.zip"
+          [[ -s "$archive" ]]
+          unzip -tqq "$archive"
+          (cd packages/desktop/dist && sha256sum "$(basename "$archive")" > "$(basename "$archive").sha256")
 
       - uses: actions/upload-artifact@v4
         with:
           name: centos7-release
           path: |
-            packages/desktop/dist/OmpCode-*-centos7-x64.rpm
-            packages/desktop/dist/OmpCode-*-centos7-x64.rpm.sha256
+            packages/desktop/dist/OmpCode-*-centos7-x64.zip
+            packages/desktop/dist/OmpCode-*-centos7-x64.zip.sha256
           if-no-files-found: error
           compression-level: 0
           retention-days: 7
@@ -153,17 +153,17 @@ jobs:
         run: |
           set -euo pipefail
           cd release-assets
-          assets=(OmpCode-*-centos7-x64.rpm)
+          assets=(OmpCode-*-centos7-x64.zip)
           [[ ${#assets[@]} -eq 1 && -f ${assets[0]} ]]
           sha256sum --check "${assets[0]}.sha256"
 
-      - name: Create draft release with RPM
+      - name: Create draft release with ZIP
         shell: bash
         run: |
           set -euo pipefail
-          assets=(release-assets/OmpCode-*-centos7-x64.rpm)
+          assets=(release-assets/OmpCode-*-centos7-x64.zip)
           [[ ${#assets[@]} -eq 1 && -f ${assets[0]} ]]
-          args=(--repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "OmpCode $RELEASE_TAG" --notes 'CentOS 7 x64 RPM. Uses PRoot; Chromium sandbox unavailable.' --generate-notes --draft)
+          args=(--repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "OmpCode $RELEASE_TAG" --notes 'CentOS 7 x64 offline ZIP. Extract under HOME and run bin/ompcode-centos7 without root. PRoot uses ptrace; Chromium sandbox unavailable.' --generate-notes --draft)
           if [[ "$IS_PRERELEASE" == 'true' ]]; then
             args+=(--prerelease)
           fi
@@ -173,12 +173,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          rpm=(release-assets/OmpCode-*-centos7-x64.rpm)
-          expected_size=$(stat -c %s "${rpm[0]}")
+          archive=(release-assets/OmpCode-*-centos7-x64.zip)
+          expected_size=$(stat -c %s "${archive[0]}")
           release_json=$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets,isDraft)
           [[ $(jq -r '.isDraft' <<< "$release_json") == 'true' ]]
-          actual_size=$(jq -r --arg name "$(basename "${rpm[0]}")" '.assets[] | select(.name == $name) | .size' <<< "$release_json")
+          actual_size=$(jq -r --arg name "$(basename "${archive[0]}")" '.assets[] | select(.name == $name) | .size' <<< "$release_json")
           [[ "$actual_size" == "$expected_size" ]]
-          jq -r '.assets[].name' <<< "$release_json" | grep -Fx "$(basename "${rpm[0]}.sha256")"
+          jq -r '.assets[].name' <<< "$release_json" | grep -Fx "$(basename "${archive[0]}.sha256")"
           gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false
           gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft,url --jq 'select(.isDraft == false) | .url'

@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-package_root=/opt/ompcode-centos7
+package_root=$(dirname "$(dirname "$(readlink -f "$0")")")
 runtime="$package_root/runtime"
 app="$package_root/app"
 [[ -x "$package_root/proot" && -x "$app/zcode" && -x "$app/resources/glm/omp/omp" && -f "$runtime/lib64/ld-linux-x86-64.so.2" ]] || {
@@ -38,11 +38,8 @@ if [[ -n ${OMPCODE_CENTOS7_BIND:-} ]]; then
   bind+=( -b "$bind_path:$bind_path" )
 fi
 
-# 修复依据：guest 中的 /opt/ompcode/zcode 在宿主不可执行，不能让 guest 的注册覆盖宿主深链入口。
-if command -v xdg-mime >/dev/null 2>&1; then
-  xdg-mime default ompcode-centos7.desktop x-scheme-handler/zcode || true
-fi
-
+# 修复依据：原生 CentOS 7 的 3.10 内核上，PRoot seccomp 加速使最简单的 guest 程序崩溃；改用 ptrace 路径。
+export PROOT_NO_SECCOMP=1
 exec "$package_root/proot" -R "$runtime" "${bind[@]}" -w "$workdir" \
   /usr/bin/env PATH=/usr/local/bin:/usr/bin:/bin LANG=C.UTF-8 \
     XDG_CONFIG_HOME="$HOME/.config/ompcode-centos7" \
