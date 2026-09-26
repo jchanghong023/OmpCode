@@ -1,9 +1,7 @@
 // 校验恢复会话快照帧是否通过 wire schema（contentFault 假设验证）。
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
-import { createRequire } from "node:module";
-import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 
 const repo = "D:/code1111111111/forkZcode";
 const packageRoot = join(repo, "packages", "omp-agent");
@@ -49,7 +47,7 @@ const request = (method, params) => {
 await waitUntil(() =>
   frames.find((f) => f.method === "startup/storageState" && f.params?.phase === "ready"),
 );
-const idx = await request("v4/conversation/subscribe", {
+await request("v4/conversation/subscribe", {
   topic: "sessions-index/omp-gui-ws",
   connectionId: "p",
 });
@@ -71,12 +69,6 @@ await request("v4/conversation/subscribe", {
   clientMode: "desktop-continuous",
 });
 await new Promise((r) => setTimeout(r, 5000));
-const { conversationTopicWireFrameSchema } = await import(
-  join("file://", repo, "packages", "shared", "src", "zcode-protocol-v4", "snapshot.js").replace(
-    /\\/g,
-    "/",
-  )
-).catch(() => ({}));
 let schema = null;
 try {
   schema = (

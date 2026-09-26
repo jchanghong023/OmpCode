@@ -20,7 +20,6 @@ import { completeNewModelSelection } from "@zcode/provider";
 import type { OffPeakClientConfig } from "#src/coding-plan-subscription/codingPlanSubscription.js";
 import {
   ZCODE_SESSION_RUNTIME_PREFERENCES_REQUEST_TIMEOUT_MS,
-  formatLogPrefix,
   resolveWorkspaceKey,
   type TraceId,
   ZCODE_AGENT_PROVIDER,

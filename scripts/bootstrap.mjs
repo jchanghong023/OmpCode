@@ -9,7 +9,6 @@ import { runCommand } from "./spawn-command.mjs";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const rootDir = resolve(scriptDir, "..");
-const gitCommand = "git";
 const withRemoteAssets = process.argv.includes("--with-remote");
 
 function prependPathEntries(pathValue, entries) {
@@ -87,13 +86,6 @@ function resolveBootstrapWithRemoteEnv(baseEnv = process.env) {
 
 const bootstrapWithRemoteEnv = resolveBootstrapWithRemoteEnv();
 const pnpmCommand = resolvePnpmCommand();
-
-function runGit(args) {
-  runCommand(gitCommand, args, {
-    cwd: rootDir,
-    env: process.env,
-  });
-}
 
 function runPnpm(args, options = {}) {
   runCommand(pnpmCommand, args, {

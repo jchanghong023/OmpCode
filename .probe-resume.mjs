@@ -1,7 +1,6 @@
 // 只读探针：订阅 omp-gui-ws 下冷会话的 conversation topic，检查快照/恢复帧。
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
-import { join } from "node:path";
 
 const adapter = process.argv[2];
 const omp = process.argv[3];
@@ -37,11 +36,10 @@ await waitUntil(() =>
   frames.find((f) => f.method === "startup/storageState" && f.params?.phase === "ready"),
 );
 // sessions-index 快照拿冷会话 id
-const idx = await request("v4/conversation/subscribe", {
+await request("v4/conversation/subscribe", {
   topic: "sessions-index/omp-gui-ws",
   connectionId: "probe",
 });
-const ack = idx.result?.ack;
 await new Promise((r) => setTimeout(r, 3000));
 const idxFrames = frames.filter((f) => f.method === "v4/conversation/frame");
 const idxPayloads = idxFrames.map((f) => f.params?.frame?.payload ?? f.params?.payload);

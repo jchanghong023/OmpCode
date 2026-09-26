@@ -20,7 +20,6 @@ import {
   resolveDesktopArtifactSuffix,
   resolveDesktopProductIdentity,
 } from "./scripts/desktop-product-identity.mjs";
-import { verifyStagedKoffi } from "./scripts/koffi-package-assets.mjs";
 const ELECTRON_BUILDER_ARCH = {
   1: "x64",
   3: "arm64",
@@ -101,7 +100,6 @@ const requireFromConfig = createRequire(import.meta.url);
 let nsisInstallSectionPatched = false;
 let nsisInstallSectionOriginalSource = null;
 let nsisInstallSectionPath = null;
-const desktopElectronVersion = requireFromConfig("./package.json").devDependencies.electron;
 // @electron/asar 4 不再导出 package.json，CLI 也改为 asar.mjs；从公开入口定位包目录。
 const asarCliPath = resolve(
   dirname(requireFromConfig.resolve("@electron/asar")),

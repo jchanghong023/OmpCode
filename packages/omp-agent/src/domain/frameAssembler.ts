@@ -49,7 +49,7 @@ export class OmpFrameAssembler {
         chunkId: chunk.chunkId,
         count: chunk.count,
         byteLength: chunk.byteLength,
-        received: new Array<string | undefined>(chunk.count).fill(undefined),
+        received: Array<string | undefined>(chunk.count).fill(undefined),
         receivedBytes: 0,
       };
     }

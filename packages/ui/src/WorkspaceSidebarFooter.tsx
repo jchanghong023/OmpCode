@@ -1,15 +1,8 @@
 /* oxlint-disable eslint(max-lines) -- footer 聚合账户、主题、模式和快捷键菜单。 */
 import type { Locale, UserInfo } from "@zcode/shared";
 import { memo, useCallback, useEffect, useState } from "react";
-import {
-  DesktopCommandIds,
-  TID_LOGIN_MENU_ITEM,
-  TID_LOGIN_TRIGGER,
-  TID_LOGOUT_BUTTON,
-  TID_TASK_SETTINGS_BUTTON,
-} from "@zcode/shared";
+import { DesktopCommandIds, TID_TASK_SETTINGS_BUTTON } from "@zcode/shared";
 import { ControlHintTooltip } from "@/ControlHintTooltip.js";
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar.js";
 import { cn } from "@/components/lib/utils.js";
 import { Button } from "@/components/ui/button.js";
 import {
@@ -18,7 +11,6 @@ import {
   DropdownMenuItem,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
-  DropdownMenuSeparator,
   DropdownMenuShortcut,
   DropdownMenuSub,
   DropdownMenuSubContent,
@@ -28,14 +20,10 @@ import {
 import {
   PencilRuler,
   Globe,
-  Loader2,
-  LogInIcon,
-  LogOut,
   Maximize,
   Palette,
   Settings,
   SlidersHorizontal,
-  User,
   ZoomIn,
   ZoomOut,
 } from "lucide-react";
@@ -46,44 +34,10 @@ import { useZCodeStore } from "@/store/StoreProvider.js";
 import { normalizeInterfaceMode } from "@/lib/interfaceMode.js";
 import type { Theme } from "@/useTheme.js";
 import { WorkspaceWebRemoteControlTrigger } from "@/WorkspaceWebRemoteControlTrigger.js";
-import {
-  WorkspaceSidebarFooterPlanBadge,
-  WorkspaceSidebarFooterUsageSummaryContent,
-  useWorkspaceSidebarFooterUsageSummaryState,
-} from "@/WorkspaceSidebarFooterUsageSummary.js";
+import { WorkspaceSidebarFooterUsageSummaryContent } from "@/WorkspaceSidebarFooterUsageSummary.js";
 
 const DESKTOP_ZOOM_MIN_LEVEL = -3;
 const DESKTOP_ZOOM_MAX_LEVEL = 5;
-
-function getSidebarProfileName(user?: UserInfo | null): string {
-  const displayName = user?.displayName?.trim();
-  if (displayName) {
-    return displayName;
-  }
-
-  const username = user?.username?.trim();
-  if (username) {
-    return username;
-  }
-
-  return "OmpCode";
-}
-
-function getSidebarProfileBadge(
-  user: UserInfo | null | undefined,
-  formatMessage: ReturnType<typeof useZCodeIntl>["intl"]["formatMessage"],
-): string {
-  if (user) {
-    return getSidebarProfileName(user);
-  }
-
-  return formatMessage({ id: "sidebar.profile.notLoggedIn" });
-}
-
-function getAvatarFallbackText(user: UserInfo | null | undefined): string {
-  const source = user?.displayName?.trim() || user?.username?.trim() || "Z";
-  return source[0]?.toUpperCase() ?? "Z";
-}
 
 export const WorkspaceSidebarFooter = memo(function WorkspaceSidebarFooterComponent({
   theme,
@@ -91,16 +45,9 @@ export const WorkspaceSidebarFooter = memo(function WorkspaceSidebarFooterCompon
   onLocaleChange,
   onThemeChange,
   onSettingsButtonClick,
-  onUsageClick,
-  onUpgradeClick,
-  onLogin,
-  onLogout,
   settingsButtonMode = "settings",
-  user,
   workspacePath,
   workspaceIdentity,
-  workspaceRemoteSessionId,
-  activeTaskId,
   isDesktop = false,
   className,
 }: {
@@ -141,7 +88,6 @@ export const WorkspaceSidebarFooter = memo(function WorkspaceSidebarFooterCompon
     settingsButtonMode === "back"
       ? settingsButtonLabel
       : intl.formatMessage({ id: "sidebar.settings.menuTitle" });
-  const usageButtonClick = onUsageClick ?? onSettingsButtonClick;
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   const [desktopZoomLevel, setDesktopZoomLevel] = useState(0);
   const runDesktopZoomCommand = useCallback(

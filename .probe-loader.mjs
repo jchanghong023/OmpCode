@@ -4,12 +4,12 @@ import { createRequire } from "node:module";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { pathToFileURL } from "node:url";
 
 const cwd = mkdtempSync(join(tmpdir(), "omp-loader-probe-"));
 const script = `
 import { createWorkspaceConfigLoader } from "./packages/omp-agent/src/adapters/workspaceConfig.js";
 import { createOmpProcessFactory } from "./packages/omp-agent/src/adapters/ompProcess.js";
+const cwd = ${JSON.stringify(cwd)};
 const binary = process.argv[2];
 const loader = createWorkspaceConfigLoader(createOmpProcessFactory(binary), cwd);
 const state = await loader();

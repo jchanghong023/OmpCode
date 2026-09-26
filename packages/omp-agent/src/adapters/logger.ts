@@ -6,7 +6,7 @@ function emit(level: string, message: string, details?: Record<string, unknown>)
     level,
     scope: "omp-agent",
     message,
-    ...(details ?? {}),
+    ...details,
   });
   process.stderr.write(`${line}\n`);
 }

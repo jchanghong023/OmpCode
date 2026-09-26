@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 /* eslint-disable max-lines */
 
-import { access, cp, mkdir } from "node:fs/promises";
 import {
   chmodSync,
   copyFileSync,

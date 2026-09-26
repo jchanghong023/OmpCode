@@ -46,7 +46,7 @@ export default defineConfig(({ mode }) => {
         // 问题原因：packages/ui 的源码直接被 web 应用交给 Vite 打包，但 web 自己没声明 @ -> packages/ui/src，
         // 所以像 "@/components/lib/utils" 这类导入会在运行时构建阶段报找不到模块。
         // 这里把别名补到消费方 Vite 配置里，保持现有组件源码不动，影响面最小。
-        "@": resolve(__dirname, "../ui/src"),
+        "@": resolve(import.meta.dirname, "../ui/src"),
         // Recharts 依赖 d3-shape@3.x，后者需要 d3-path 的 Path 导出。
         // hoisted node_modules 可能把 d3-shape 旁边的旧 d3-path@1.x 暴露给 Vite 预构建，
         // 导致桌面/Web dev 都在依赖优化阶段失败；显式指向根部 3.x 入口以固定解析边界。

@@ -143,7 +143,7 @@ function stripViteRequestQuery(id: string) {
 export default defineConfig(({ mode }) => {
   // `.env*` 只提供链接常量；当前产品环境由启动脚本或 CI 注入 ZCODE_ENV。
   const env = { ...loadEnv(mode, "../..", ""), ...process.env };
-  const repoRoot = resolve(__dirname, "../..");
+  const repoRoot = resolve(import.meta.dirname, "../..");
   const zcodeEnv = resolveZCodeEnv(env.ZCODE_ENV);
   // 安装包身份与后端环境分轴；renderer 用它决定是否展示更新入口。
   const zcodeProductFlavor = resolveDesktopProductFlavor({
@@ -177,7 +177,7 @@ export default defineConfig(({ mode }) => {
         // 问题原因：desktop 会直接打包 packages/ui 的源码，但当前 Vite 配置不知道 @ 应该指向 packages/ui/src，
         // 导致 spinner、alert 等组件里的内部导入在构建时全部失效。
         // 这里在消费端补齐别名，比逐个改组件导入更稳，也能和 web 端保持一致。
-        "@": resolve(__dirname, "../ui/src"),
+        "@": resolve(import.meta.dirname, "../ui/src"),
         ...desktopRendererDependencyAliases,
         // Recharts 通过 d3-shape 读取 d3-path 的 Path 导出；hoisted node_modules
         // 里可能残留 d3-shape/node_modules/d3-path@1.x，Vite 预构建会优先命中旧包并报 Missing export。

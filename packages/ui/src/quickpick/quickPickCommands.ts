@@ -87,7 +87,6 @@ export function createQuickPickCommands({
   allowOpenWorkspace,
   canOpenCommunity,
   isSidebarVisible,
-  isLoggedIn,
   supportsEmbeddedBrowser = true,
   supportsTerminal = true,
   supportsReview = true,

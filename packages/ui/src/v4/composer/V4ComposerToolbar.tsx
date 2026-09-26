@@ -57,10 +57,7 @@ import {
   shouldShowManageModelsAction,
 } from "@/chat-input-toolbar/modelSelection.js";
 import { resolveV4ModelTriggerDisplay } from "@/v4/composer/modelTriggerDisplay.js";
-import {
-  setPendingSettingsSectionIntent,
-  setPendingSettingsUsageCodingPlanIntent,
-} from "@/lib/settingsNavigation.js";
+import { setPendingSettingsUsageCodingPlanIntent } from "@/lib/settingsNavigation.js";
 import { useTabStore } from "@/store/TabStoreProvider.js";
 import type { ModelSelectionView } from "@zcode/services";
 import type { ModelSelectionState } from "@/hooks/useModelSelectionView.js";
@@ -374,7 +371,6 @@ function V4ComposerModelControlsImpl({
   modelSelectionState = MODEL_SELECTION_LOADING_STATE,
   modelSelectionReload,
   provider,
-  isMobileViewport = false,
   draftMode = false,
   draftConfig,
   usage,

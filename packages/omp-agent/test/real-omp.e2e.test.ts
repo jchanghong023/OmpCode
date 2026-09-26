@@ -105,7 +105,7 @@ class Harness {
         deltas?: { op?: string; patch?: Record<string, unknown> }[];
       };
       if (payload.kind === "snapshot") {
-        state = { ...(payload.snapshot ?? {}) };
+        state = { ...payload.snapshot };
       } else {
         for (const delta of payload.deltas ?? []) {
           if (delta.op === "state.updated" && delta.patch) Object.assign(state, delta.patch);

@@ -523,7 +523,6 @@ import {
   zcodeAccountAccessSchema,
   zcodeProviderAccountAccessSchema,
   ZCODE_VERSION,
-  ZCODE_ENV,
   buildRuntimeZCodeApiUrl,
 } from "@zcode/shared";
 
@@ -1665,11 +1664,11 @@ export function createLocalServices(options: {
   const subagentsService = createSubagentsService({
     isDesktopRuntime: true,
   });
-  const commandsService = createCommandsService({ isDesktopRuntime: true });
-  const hooksService = createHooksService({
+  createCommandsService({ isDesktopRuntime: true });
+  createHooksService({
     grantWorkspaceHookTrust: (params) => zcodeAgentService.grantWorkspaceHookTrust(params),
   });
-  const memoryService = createMemoryService();
+  createMemoryService();
   // 只要当前进程已经装配 Provider Runtime，就由该 Environment 自己的 Selection View
   // 决定执行就绪状态。Desktop-attached remote 也读取远端自己的 Config/Account Facts。
   const modelSelectionReadinessSource = providerRuntime.modelSelection;
