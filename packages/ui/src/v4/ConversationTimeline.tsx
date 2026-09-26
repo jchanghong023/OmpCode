@@ -44,8 +44,9 @@ import {
 } from "@/v4/conversationLayout.js";
 import {
   buildConversationTurnRenderUnits,
-  type ConversationTurnRenderUnit,
-} from "@/v4/conversationTurnRenderUnits.js";
+  ConversationTurnRenderCache,
+} from "@/v4/conversationTurnRenderBuilder.js";
+import type { ConversationTurnRenderUnit } from "@/v4/conversationTurnRenderUnits.js";
 import {
   resolveConversationTurnNavigatorActiveQueryRowId,
   resolveConversationTurnNavigatorHydrationRetryDelayMs,
@@ -414,12 +415,22 @@ function ConversationTimelineImpl({
     return () => observer.disconnect();
   }, [hasHeaderSlot]);
   const [liveNowMs, setLiveNowMs] = useState(() => Date.now());
+  const renderCacheRef = useRef<{ sessionKey: string; cache: ConversationTurnRenderCache } | null>(
+    null,
+  );
+  if (renderCacheRef.current?.sessionKey !== sessionKey) {
+    renderCacheRef.current = { sessionKey, cache: new ConversationTurnRenderCache() };
+  }
   const renderUnits = useMemo(
     () =>
-      buildConversationTurnRenderUnits(rows, {
-        nowMs: liveNowMs,
-        sessionPhase,
-      }),
+      buildConversationTurnRenderUnits(
+        rows,
+        {
+          nowMs: liveNowMs,
+          sessionPhase,
+        },
+        renderCacheRef.current!.cache,
+      ),
     [liveNowMs, rows, sessionPhase],
   );
   const { virtualizedUnits, liveUnit, liveUnitIndex } = useMemo(

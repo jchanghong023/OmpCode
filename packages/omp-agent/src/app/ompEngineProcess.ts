@@ -82,6 +82,34 @@ export function readEngineContextDetails(
     .catch(() => {});
 }
 
+/** 状态回读是完整窗口事实；异步 /context 仅在同一进程、轮次和用量仍相符时补充。 */
+export function projectEngineContextWindow(input: {
+  state: OmpStateData;
+  projection: import("../domain/conversationProjection.js").ConversationProjection;
+  process: OmpSessionProcess | null;
+  isCurrentProcess: (process: OmpSessionProcess) => boolean;
+  onReport: () => void;
+}): void {
+  const { state, projection, process } = input;
+  if (!state.contextUsage || typeof state.contextUsage.contextWindow !== "number") return;
+  const used = state.contextUsage.tokens ?? 0;
+  const size = state.contextUsage.contextWindow;
+  projection.setContextWindow(used, size);
+  if (!process || projection.stateSnapshot.control.phase === "running") return;
+  readEngineContextDetails(
+    process,
+    () =>
+      input.isCurrentProcess(process) &&
+      projection.stateSnapshot.control.phase !== "running" &&
+      projection.stateSnapshot.usage.contextWindow?.usedTokens === used &&
+      projection.stateSnapshot.usage.contextWindow?.maxTokens === size,
+    (report) => {
+      projection.setContextWindow(used, size, report);
+      input.onReport();
+    },
+  );
+}
+
 export async function applyEngineThoughtLevel(
   level: string,
   ensureStarted: () => Promise<void>,

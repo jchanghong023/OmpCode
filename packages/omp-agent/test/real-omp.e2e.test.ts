@@ -8,7 +8,7 @@
 // 未下载二进制（bundled-agents/<plat>/glm/omp/omp(.exe)）时跳过。
 
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -16,6 +16,7 @@ import { zcodeWorkspacePresentationSchema } from "@zcode/shared";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";
+import { tmpdir } from "node:os";
 import { commandAckSchema } from "@zcode/shared/zcode-protocol-v4";
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -144,9 +145,7 @@ test(
   "真实 omp 二进制 + glm-5.3-flash：流式 → write 工具 → 审批 → 文件落盘 → 完成",
   { skip: hasRealBinary ? false : "内嵌 omp 二进制未下载（跳过真实 E2E）" },
   async () => {
-    const sandbox = join(packageRoot, ".test-real-e2e-workspace");
-    rmSync(sandbox, { recursive: true, force: true });
-    mkdirSync(sandbox, { recursive: true });
+    const sandbox = mkdtempSync(join(tmpdir(), "zcode-real-e2e-"));
     const targetFile = join(sandbox, "greeting-real.txt");
 
     const child = spawn(process.execPath, [tsxCliPath, adapterEntry, "app-server", "--stdio"], {
@@ -285,9 +284,7 @@ test(
   "真实 omp 二进制：本地命令收口 + 临时模型切换到 glm-5.3-flash",
   { skip: hasRealBinary ? false : "内嵌 omp 二进制未下载（跳过真实 E2E）" },
   async () => {
-    const sandbox = join(packageRoot, ".test-real-e2e-workspace-2");
-    rmSync(sandbox, { recursive: true, force: true });
-    mkdirSync(sandbox, { recursive: true });
+    const sandbox = mkdtempSync(join(tmpdir(), "zcode-real-e2e-model-"));
 
     const child = spawn(process.execPath, [tsxCliPath, adapterEntry, "app-server", "--stdio"], {
       cwd: sandbox,

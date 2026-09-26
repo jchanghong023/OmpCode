@@ -99,8 +99,9 @@ export async function runCliMain(
     input: process.stdin,
     output: process.stdout,
     handleRequest: (method, params) => app.handleRequest(method, params),
-    onClosed: () => {
-      void app.dispose().finally(() => process.exit(0));
+    onClosed: (error) => {
+      if (error) logger.error("Host 传输关闭", { error: error.message });
+      void app.dispose().finally(() => process.exit(error ? 1 : 0));
     },
   });
   gatewayRef.server = protocolServer;

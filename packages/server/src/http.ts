@@ -42,6 +42,8 @@ import { connectRemote, createRemoteBackend, type RemoteConnection } from "./rem
 import { createHostCapabilityStore } from "./hostCapability.js";
 
 function wrapWebSocket(ws: WebSocket): ISocket {
+  const maxBufferedBytes = 16 * 1024 * 1024;
+  const drainedBytes = 1024 * 1024;
   const onData = new Emitter<VSBuffer>();
   const onClose = new Emitter<void>();
   const onEnd = new Emitter<void>();
@@ -65,6 +67,12 @@ function wrapWebSocket(ws: WebSocket): ISocket {
     onEnd: onEnd.event,
     write(buffer: VSBuffer) {
       if (ws.readyState === ws.OPEN) {
+        // Bug 根因：ws.send 在慢客户端上持续排队且没有缓冲上限。
+        // 关闭此连接让手机通过原有快照/水位恢复，不能悄悄丢帧。
+        if (ws.bufferedAmount + buffer.byteLength > maxBufferedBytes) {
+          ws.terminate();
+          return;
+        }
         ws.send(buffer.buffer);
       }
     },
@@ -72,7 +80,14 @@ function wrapWebSocket(ws: WebSocket): ISocket {
       ws.close();
     },
     drain() {
-      return Promise.resolve();
+      return new Promise<void>((resolve, reject) => {
+        const check = () => {
+          if (ws.readyState !== ws.OPEN) return reject(new Error("WebSocket closed before drain"));
+          if (ws.bufferedAmount <= drainedBytes) return resolve();
+          setTimeout(check, 10);
+        };
+        check();
+      });
     },
     dispose() {
       ws.close();

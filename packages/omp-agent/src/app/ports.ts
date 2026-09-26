@@ -88,6 +88,8 @@ export interface OmpStoreSessionSummary {
 /** omp 会话存储只读访问（~/.omp/agent/sessions/<encoded-cwd>）。 */
 export interface OmpStorePort {
   listSessions(cwd: string): Promise<OmpStoreSessionSummary[]>;
+  /** 按稳定 ID 定位工作区历史；不受列表展示窗口限制。 */
+  findSession?(cwd: string, sessionId: string): Promise<OmpStoreSessionSummary | null>;
   /** 读取一个会话文件的原始 JSONL 条目（标题/消息解析在 domain 层）。 */
   readSessionEntries(sessionPath: string): Promise<unknown[]>;
   /** omp 为 task 子代理在父会话同名目录保存的独立 JSONL。 */

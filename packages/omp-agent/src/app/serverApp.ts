@@ -1,7 +1,7 @@
 // serverApp：ZCode Protocol（legacy + v4）方法分发的总装。
 // 由 adapters/protocolServer 驱动 IO；这里只做路由与结果组装。
 
-import { V4_METHODS, type WorkspaceConfigState } from "@zcode/shared/zcode-protocol-v4";
+import { V4_METHODS, v4ConnectionFlowParamsSchema, type WorkspaceConfigState } from "@zcode/shared/zcode-protocol-v4";
 import { zcodeProtocolMethods, zcodeSkillsReferenceCatalogParamsSchema } from "@zcode/shared";
 import { createLegacyHandlers } from "./legacyMethods.js";
 import { normalizeOmpSlashCommands } from "../domain/ompCommands.js";
@@ -72,6 +72,11 @@ export class ServerApp {
       case V4_METHODS.command:
         return this.commands.handle(params);
       case V4_METHODS.connectionFlow:
+        {
+          const parsed = v4ConnectionFlowParamsSchema.safeParse(params);
+          if (!parsed.success) throw new ProtocolError(-32602, "invalid connection flow state");
+          this.registry.setConnectionFlowState(parsed.data.connectionId, parsed.data.state);
+        }
         return {};
       case V4_METHODS.conversationSubscribe:
         return this.subscribeConversation(params);

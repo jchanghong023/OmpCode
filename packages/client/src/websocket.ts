@@ -20,7 +20,9 @@ interface WebSocketConnectionOptions {
   onOpenSocket?: (socket: WebSocket) => void;
 }
 
-function wrapBrowserWebSocket(ws: WebSocket): ISocket {
+export function wrapBrowserWebSocket(ws: WebSocket): ISocket {
+  const maxBufferedBytes = 16 * 1024 * 1024;
+  const drainedBytes = 1024 * 1024;
   const onData = new Emitter<VSBuffer>();
   const onClose = new Emitter<void>();
   const onEnd = new Emitter<void>();
@@ -44,6 +46,12 @@ function wrapBrowserWebSocket(ws: WebSocket): ISocket {
     onEnd: onEnd.event,
     write(buffer: VSBuffer) {
       if (ws.readyState === WebSocket.OPEN) {
+        // Bug 根因：慢网络下 send 不等待，浏览器队列可无限增长。
+        // 超界关闭连接后由现有 Web 恢复链路重订阅同一水位。
+        if (ws.bufferedAmount + buffer.byteLength > maxBufferedBytes) {
+          ws.close(1013, "transport buffer saturated");
+          return;
+        }
         ws.send(buffer.buffer as Uint8Array<ArrayBuffer>);
       }
     },
@@ -51,7 +59,15 @@ function wrapBrowserWebSocket(ws: WebSocket): ISocket {
       ws.close();
     },
     drain() {
-      return Promise.resolve();
+      return new Promise<void>((resolve, reject) => {
+        const check = () => {
+          if (ws.readyState !== WebSocket.OPEN)
+            return reject(new Error("WebSocket closed before drain"));
+          if (ws.bufferedAmount <= drainedBytes) return resolve();
+          setTimeout(check, 10);
+        };
+        check();
+      });
     },
     dispose() {
       ws.close();

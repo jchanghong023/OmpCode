@@ -1089,8 +1089,9 @@ async function prepareAppQuit(reason: string, kind: AppShutdownKind = "normal"):
   await appQuitPreparationInFlight;
 }
 
-function exitPreparedApp(reason: string): never | void {
+async function exitPreparedApp(reason: string): Promise<void> {
   logger.info(`[app-quit] exiting prepared app (${reason})`);
+  await logger.flush();
   if (process.env.ZCODE_E2E_RUN_ID?.trim()) {
     flushMainE2ECoverage((error) => {
       logger.warn("[e2e-coverage] main coverage flush failed", error);
@@ -2322,17 +2323,18 @@ app.on("before-quit", (event) => {
   if (!hasPreparedAppQuit) {
     localMediaPreviewPathRegistry.clear();
     event.preventDefault();
-    void prepareAppQuit("app-before-quit").finally(() => {
+    void prepareAppQuit("app-before-quit").finally(async () => {
       const remainingWindows = getApplicationWindowsExcludingCuaIndicator();
       logger.info(
         `[app-quit] preparation finished, resuming quit with windows=${remainingWindows.length}`,
       );
+      await logger.flush();
       // ChromeDriver 关闭最后一个 renderer 后才触发 app.quit 时，
       // 第一次 before-quit 会被异步 host 清理拦截；清理完成时窗口可能仍处于
       // closing 状态，此时重入 app.quit 会被 Electron 忽略，ChromeDriver 会等待
       // 约 70 秒。这里把最后一次退出绑定到真实 closed 事件，不依赖超时猜测。
       if (remainingWindows.length === 0) {
-        exitPreparedApp("no-windows-after-preparation");
+        void exitPreparedApp("no-windows-after-preparation");
         return;
       }
 
@@ -2343,7 +2345,7 @@ app.on("before-quit", (event) => {
         }
         exitRequested = true;
         logger.info("[app-quit] all windows closed after preparation, exiting app");
-        exitPreparedApp("all-windows-closed-after-preparation");
+        void exitPreparedApp("all-windows-closed-after-preparation");
       };
       for (const win of remainingWindows) {
         win.once("closed", exitAfterLastWindowClosed);

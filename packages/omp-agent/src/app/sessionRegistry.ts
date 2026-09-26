@@ -6,7 +6,9 @@ import { createId, createLogEpoch, createSubscriptionId, ompSessionIdOfFilePath 
 import { coldSubagentIds, rowsFromOmpEntries, transcriptFromOmpEntries } from "../domain/coldHistory.js";
 import { ConversationEngine } from "./conversationEngine.js";
 import { deleteColdSession } from "./deleteColdSession.js";
+import { deleteLoadedSession } from "./deleteLoadedSession.js";
 import { buildEngineSessionSummary } from "./engineSessionSummary.js";
+import { listLegacySessions } from "./legacySessionList.js";
 import { deriveTitle } from "../domain/titleText.js";
 import { ProtocolError } from "./errors.js";
 import type { HostGateway, OmpProcessFactory, OmpStorePort } from "./ports.js";
@@ -64,6 +66,10 @@ export class SessionRegistry {
     return engine;
   }
 
+  setConnectionFlowState(connectionId: string, state: "saturated" | "drained" | "closed"): void {
+    for (const engine of this.engines.values()) engine.setConnectionFlowState(connectionId, state);
+  }
+
   async createSession(params: { sessionId?: string; workspaceId: string; workspacePath: string; title?: string }): Promise<ConversationEngine> {
     this.primaryWorkspace = { id: params.workspaceId, path: params.workspacePath };
     const sessionId = params.sessionId ?? createId("omp-session");
@@ -89,7 +95,9 @@ export class SessionRegistry {
     if (existing) {
       return existing;
     }
-    const cold = (await this.store.listSessions(params.workspacePath)).find((session) => session.sessionId === params.sessionId);
+    const cold = this.store.findSession
+      ? await this.store.findSession(params.workspacePath, params.sessionId)
+      : (await this.store.listSessions(params.workspacePath)).find((session) => session.sessionId === params.sessionId);
     if (!cold) {
       // 未知会话必须显式拒绝；继续创建会凭空产出幽灵引擎（订阅 conversation/undefined
       // 实测会在侧栏多出一行永不收敛的空会话）。
@@ -124,9 +132,15 @@ export class SessionRegistry {
   async deleteSession(sessionId: string): Promise<void> {
     const engine = this.getEngine(sessionId);
     if (engine) {
-      await engine.dispose();
+      const stableId = await deleteLoadedSession(engine, this.store, sessionId);
       this.engines.delete(engine.sessionId);
-      this.emitIndexDelta(engine.workspaceId, { op: "session.removed", sessionId });
+      const index = this.indexes.get(engine.workspaceId);
+      for (const id of new Set([engine.sessionId, sessionId, stableId].filter((id): id is string => Boolean(id)))) {
+        if (index?.summaries.delete(id)) {
+          this.emitIndexDelta(engine.workspaceId, { op: "session.removed", sessionId: id });
+        }
+      }
+      this.rekeyedEngineIds.delete(engine.sessionId);
       return;
     }
     // 冷会话文件与索引同步删除；没有找到时保持明确的 unavailable 错误。
@@ -183,42 +197,7 @@ export class SessionRegistry {
   }
   /** legacy session/list：冷会话 + 引擎会话合并（形状对齐 zcodeSessionInfoSchema）。 */
   async listLegacySessions(workspacePath: string, workspaceKey: string): Promise<Record<string, unknown>[]> {
-    const workspace = { workspacePath, workspaceKey };
-    const sessions: Record<string, unknown>[] = [];
-    const seen = new Set<string>();
-    for (const engine of this.engines.values()) {
-      const stableId = ompSessionIdOfFilePath(engine.ompSessionFile) ?? engine.sessionId;
-      const indexId = this.rekeyedEngineIds.has(engine.sessionId) ? stableId : engine.sessionId;
-      seen.add(stableId);
-      seen.add(engine.sessionId);
-      const state = engine.projection.stateSnapshot;
-      sessions.push({
-        sessionId: indexId,
-        workspace,
-        sessionKind: "interactive",
-        title: state.meta.title,
-        mode: "build",
-        status: state.control.phase === "running" ? "running" : state.control.phase === "error" ? "error" : "idle",
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
-      });
-    }
-    for (const cold of await this.store.listSessions(workspacePath)) {
-      if (seen.has(cold.sessionId)) {
-        continue;
-      }
-      sessions.push({
-        sessionId: cold.sessionId,
-        workspace,
-        sessionKind: "interactive",
-        title: cold.title ?? deriveTitle(cold.firstUserText ?? ""),
-        mode: "build",
-        status: "completed",
-        createdAt: cold.createdAt,
-        updatedAt: cold.updatedAt,
-      });
-    }
-    return sessions;
+    return listLegacySessions({ engines: this.engines.values(), rekeyedEngineIds: this.rekeyedEngineIds, store: this.store, workspacePath, workspaceKey });
   }
 
   /** sessions-index / workspace-config 的 same-sub 恢复：按 subscriptionId 反查并重发快照。 */

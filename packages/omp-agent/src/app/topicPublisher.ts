@@ -32,6 +32,7 @@ export interface SubscribeOptions {
 
 export class ConversationTopicPublisher {
   private subscribers = new Map<string, Subscriber>();
+  private readonly saturatedReplayConnections = new Set<string>();
   private flushTimer: NodeJS.Timeout | null = null;
 
   constructor(
@@ -125,6 +126,22 @@ export class ConversationTopicPublisher {
     this.subscribers.delete(subscriptionId);
   }
 
+  setConnectionFlowState(connectionId: string, state: "saturated" | "drained" | "closed"): void {
+    if (state === "saturated") {
+      this.saturatedReplayConnections.add(connectionId);
+      return;
+    }
+    this.saturatedReplayConnections.delete(connectionId);
+    if (state === "closed") {
+      for (const [id, subscriber] of this.subscribers) {
+        if (subscriber.connectionId === connectionId) this.subscribers.delete(id);
+      }
+      return;
+    }
+    // 手机链路仅暂停下行；投影仍推进。drained 后按水位补齐，超界重取快照。
+    this.flushNow();
+  }
+
   dispose(): void {
     if (this.flushTimer) {
       clearTimeout(this.flushTimer);
@@ -132,6 +149,7 @@ export class ConversationTopicPublisher {
     }
     this.flushCallbacks = [];
     this.subscribers.clear();
+    this.saturatedReplayConnections.clear();
   }
 
   // flush 窗口内注册的回调全部保留，flush 后依次执行。此前「定时器已挂起就丢弃回调」
@@ -158,6 +176,11 @@ export class ConversationTopicPublisher {
   private flushNow(): void {
     this.projection.drainPendingDeltas();
     for (const subscriber of this.subscribers.values()) {
+      if (
+        subscriber.clientMode === "web-remote-replayable" &&
+        this.saturatedReplayConnections.has(subscriber.connectionId)
+      )
+        continue;
       const deltas = this.projection.deltasBetween(
         subscriber.lastDeliveredSeq,
         this.projection.seq,

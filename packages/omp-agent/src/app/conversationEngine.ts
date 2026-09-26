@@ -8,7 +8,7 @@ import type { OmpSessionEventFrame, OmpStateData } from "../domain/ompFrames.js"
 import type { HostGateway, HostUserInputAnswer, OmpProcessFactory, OmpSessionProcess } from "./ports.js";
 import { ConversationTopicPublisher, type SubscribeOptions } from "./topicPublisher.js";
 import { OmpInteractionProxy } from "./ompInteractionProxy.js";
-import { applyEngineAutoCompaction, applyEngineCompaction, applyEngineSetModel, applyEngineThoughtLevel, createEngineOmpProcess, readEngineContextDetails, readOmpSkillCommands } from "./ompEngineProcess.js";
+import { applyEngineAutoCompaction, applyEngineCompaction, applyEngineSetModel, applyEngineThoughtLevel, createEngineOmpProcess, projectEngineContextWindow, readOmpSkillCommands } from "./ompEngineProcess.js";
 import { dispatchOmpText } from "./ompPromptDispatch.js";
 import { TrailingThrottle } from "./trailingThrottle.js";
 import { deriveTitle, agentInvokedOf } from "../domain/titleText.js";
@@ -169,22 +169,7 @@ export class ConversationEngine {
       ...(state.thinkingLevel !== undefined ? { thought: state.thinkingLevel } : {}),
       ...(state.autoCompactionEnabled !== undefined ? { autoCompactionEnabled: state.autoCompactionEnabled } : {}),
     });
-    if (state.contextUsage && typeof state.contextUsage.contextWindow === "number") {
-      const used = state.contextUsage.tokens ?? 0;
-      const size = state.contextUsage.contextWindow;
-      this.projection.setContextWindow(used, size);
-      const process = this.ompProcess;
-      if (process && this.projection.stateSnapshot.control.phase !== "running") {
-        readEngineContextDetails(
-          process,
-          () => this.ompProcess === process && this.projection.stateSnapshot.control.phase !== "running" && this.projection.stateSnapshot.usage.contextWindow?.usedTokens === used && this.projection.stateSnapshot.usage.contextWindow?.maxTokens === size,
-          (report) => {
-            this.projection.setContextWindow(used, size, report);
-            this.scheduleFlush();
-          },
-        );
-      }
-    }
+    projectEngineContextWindow({ state, projection: this.projection, process: this.ompProcess, isCurrentProcess: (process) => this.ompProcess === process, onReport: () => this.scheduleFlush() });
     if (!this.titleInitialized && state.sessionName) {
       this.titleInitialized = true;
       this.projection.setTitle(state.sessionName, "generated");
@@ -368,7 +353,20 @@ export class ConversationEngine {
     await process?.dispose();
   }
 
-  // ── 订阅与帧（实现在 topicPublisher）──
+  /** 删除前仅释放文件占用；磁盘删除失败时仍可用原投影和订阅重新启动。 */
+  async preparePermanentDeletion(): Promise<string | null> {
+    await this.ompStarting?.catch(() => {});
+    const process = this.ompProcess;
+    if (!process) return this.resumeSessionPath ?? null;
+    this.resumeSessionPath = process.ompSessionFile ?? this.resumeSessionPath;
+    const persistedPath = this.resumeSessionPath ?? null;
+    this.ompProcess = null;
+    await process.dispose();
+    this.projection.failAllTurns({ code: "session_delete", message: "session stopped for deletion" });
+    this.scheduleFlush();
+    return persistedPath;
+  }
+
   subscribe(params: SubscribeOptions): { subscriptionId: string; mode: "snapshot" | "resume"; logEpoch: string } {
     const ack = this.publisher.subscribe(params);
     // 冷历史先到 UI；已保存会话再后台恢复 omp，get_state 会把真实上下文和自动压缩状态投影给同一订阅。
@@ -379,7 +377,9 @@ export class ConversationEngine {
   unsubscribe(subscriptionId: string): void {
     this.publisher.unsubscribe(subscriptionId);
   }
-
+  setConnectionFlowState(connectionId: string, state: "saturated" | "drained" | "closed"): void {
+    this.publisher.setConnectionFlowState(connectionId, state);
+  }
   resync(subscriptionId: string, base: { logEpoch: string; seq: number } | null, forceSnapshot = false): { subscriptionId: string; mode: "snapshot" | "resume"; logEpoch: string } {
     return this.publisher.resync(subscriptionId, base, forceSnapshot);
   }

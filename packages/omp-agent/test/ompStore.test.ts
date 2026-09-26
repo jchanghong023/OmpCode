@@ -49,7 +49,7 @@ test("命名 profile 的历史与默认 profile 隔离", async (context) => {
   assert.equal(named[0]?.sessionId, "named-session");
 });
 
-test("超长会话文件读取末尾 4000 行，短文件行为不变", async (context) => {
+test("超长会话文件完整读取，较早历史仍可分页", async (context) => {
   const testRoot = await mkdtemp(join(tmpdir(), "omp-store-tail-test-"));
   context.after(async () => {
     await rm(testRoot, { recursive: true, force: true });
@@ -69,18 +69,18 @@ test("超长会话文件读取末尾 4000 行，短文件行为不变", async (c
   const longPath = join(testRoot, "long.jsonl");
   await writeFile(longPath, lines.join("\n"));
   const entries = await store.readSessionEntries(longPath);
-  assert.equal(entries.length, 4000);
+  assert.equal(entries.length, total);
   const last = entries[entries.length - 1] as { message?: { content?: { text?: string }[] } };
   assert.equal(last?.message?.content?.[0]?.text, `m-${total - 1}`);
   const first = entries[0] as { message?: { content?: { text?: string }[] } };
-  assert.equal(first?.message?.content?.[0]?.text, `m-${total - 4000}`);
+  assert.equal(first?.message?.content?.[0]?.text, "m-0");
 
   // 子代理读取同样保留末尾（最新）段。
   const childDir = join(testRoot, "long");
   await mkdir(childDir, { recursive: true });
   await writeFile(join(childDir, "scout.jsonl"), lines.join("\n"));
   const childEntries = await store.readSubagentEntries(longPath, "scout");
-  assert.equal(childEntries.length, 4000);
+  assert.equal(childEntries.length, total);
   const childLast = childEntries[childEntries.length - 1] as {
     message?: { content?: { text?: string }[] };
   };
@@ -90,4 +90,29 @@ test("超长会话文件读取末尾 4000 行，短文件行为不变", async (c
   const shortPath = join(testRoot, "short.jsonl");
   await writeFile(shortPath, JSON.stringify({ type: "session", id: "s" }));
   assert.equal((await store.readSessionEntries(shortPath)).length, 1);
+});
+
+test("目录超过 100 个会话仍全部可见，旧 ID 可直接定位", async (context) => {
+  const testRoot = await mkdtemp(join(tmpdir(), "omp-store-many-test-"));
+  context.after(async () => {
+    assert.ok(resolve(testRoot).startsWith(`${resolve(tmpdir())}${sep}`));
+    await rm(testRoot, { recursive: true, force: true });
+  });
+  const directory = join(testRoot, "agent", "sessions", "-");
+  await mkdir(directory, { recursive: true });
+  await Promise.all(
+    Array.from({ length: 121 }, (_, index) =>
+      writeFile(
+        join(
+          directory,
+          `2026-09-24T00-00-00-${String(index).padStart(3, "0")}Z_session-${index}.jsonl`,
+        ),
+        `${JSON.stringify({ type: "session", id: `session-${index}` })}\n`,
+      ),
+    ),
+  );
+  const store = createOmpStore({ PI_CONFIG_DIR: relative(homedir(), testRoot) });
+  const sessions = await store.listSessions(homedir());
+  assert.equal(sessions.length, 121);
+  assert.equal((await store.findSession?.(homedir(), "session-0"))?.sessionId, "session-0");
 });

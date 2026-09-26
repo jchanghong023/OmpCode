@@ -1,4 +1,5 @@
-import { mkdirSync, appendFileSync } from "node:fs";
+import { mkdirSync } from "node:fs";
+import { appendFile } from "node:fs/promises";
 import { join } from "node:path";
 import { formatTimestamp } from "@zcode/shared";
 import { cleanupExpiredLogFiles, LOG_RETENTION_DAYS } from "./logRetention.js";
@@ -70,25 +71,83 @@ function formatDate(date: Date): string {
   return `${y}-${m}-${d}`;
 }
 
+interface PendingLogLine {
+  filePath: string;
+  line: string;
+  bytes: number;
+}
+
+const MAX_QUEUED_LOG_BYTES = 16 * 1024 * 1024;
+const pendingLines: PendingLogLine[] = [];
+let queuedBytes = 0;
+let flushScheduled = false;
+let drainTask: Promise<void> | null = null;
+let droppedLines = 0;
+
+function scheduleDrain(): void {
+  if (flushScheduled || drainTask) return;
+  flushScheduled = true;
+  queueMicrotask(() => {
+    flushScheduled = false;
+    void drainLogLines();
+  });
+}
+
+async function drainLogLines(): Promise<void> {
+  if (drainTask) return drainTask;
+  drainTask = (async () => {
+    while (pendingLines.length > 0) {
+      const first = pendingLines[0]!;
+      let batchSize = 0;
+      while (batchSize < 256 && pendingLines[batchSize]?.filePath === first.filePath)
+        batchSize += 1;
+      const batch = pendingLines.splice(0, batchSize);
+      const bytes = batch.reduce((total, entry) => total + entry.bytes, 0);
+      try {
+        maybeThrowInjectedFsFault({ operation: "appendFile", path: first.filePath });
+        await appendFile(first.filePath, batch.map((entry) => entry.line).join(""));
+      } catch (error) {
+        // 日志文件失败不影响应用；控制台仍可见错误，且不在 logger 内递归写日志。
+        safeConsoleWrite("warn", "[main-log] file append failed", error);
+      } finally {
+        queuedBytes -= bytes;
+      }
+    }
+  })().finally(() => {
+    drainTask = null;
+    if (pendingLines.length > 0) scheduleDrain();
+  });
+  return drainTask;
+}
+
 function write(level: LogLevel, source: string, ...args: unknown[]) {
   const now = new Date();
   const ts = formatTimestamp(now);
   const pid = process.pid;
   const message = args.map((a) => (typeof a === "string" ? a : JSON.stringify(a))).join(" ");
   const line = `[${ts}] [${level}] [pid:${pid}] [${source}] ${message}\n`;
-  const logDir = getLogDir();
-  mkdirSync(logDir, { recursive: true });
-  const filePath = join(logDir, `${formatDate(now)}.log`);
+  const filePath = join(LOG_DIR, `${formatDate(now)}.log`);
 
   // 同时保留 console 输出，方便开发调试；console 也加时间戳和 PID，与文件格式对齐
   safeConsoleWrite(level, `[${ts}] [pid:${pid}] [${source}]`, ...args);
 
-  try {
-    maybeThrowInjectedFsFault({ operation: "appendFile", path: filePath });
-    appendFileSync(filePath, line);
-  } catch {
-    // 日志写入失败不应影响应用运行
+  const bytes = Buffer.byteLength(line);
+  if (queuedBytes + bytes > MAX_QUEUED_LOG_BYTES) {
+    droppedLines += 1;
+    return;
   }
+  if (droppedLines > 0) {
+    const notice = `[${ts}] [warn] [pid:${pid}] [main] log buffer dropped ${droppedLines} lines\n`;
+    const noticeBytes = Buffer.byteLength(notice);
+    if (queuedBytes + bytes + noticeBytes <= MAX_QUEUED_LOG_BYTES) {
+      pendingLines.push({ filePath, line: notice, bytes: noticeBytes });
+      queuedBytes += noticeBytes;
+      droppedLines = 0;
+    }
+  }
+  pendingLines.push({ filePath, line, bytes });
+  queuedBytes += bytes;
+  scheduleDrain();
 }
 
 /**
@@ -108,4 +167,5 @@ export const logger = {
 
   /** renderer 日志通过 IPC 传入后调用此方法写入同一文件 */
   fromRenderer: (level: LogLevel, args: unknown[]) => write(level, "renderer", ...args),
+  flush: () => drainLogLines(),
 };
