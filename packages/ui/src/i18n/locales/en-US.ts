@@ -3713,11 +3713,10 @@ const enUS: Record<string, string> = {
   "settings.modelProvider.testModel.error.noEndpoint": "No endpoint configured",
   "settings.skills.title": "Skills",
   "settings.skills.description":
-    "View skills currently callable by omp and manage local skill files. Use $skill-name in chat to select a callable skill.",
+    "Skills come from the current target's omp command catalog. Select them in chat with $ or /skill:.",
   "settings.skills.ompAvailable": "Available in omp",
   "settings.skills.ompAvailableDescription":
     "Skills callable by omp in this workspace; disabled or shadowed discoveries are excluded.",
-  "settings.skills.locallyManaged": "Locally managed skills",
   "settings.skills.searchPlaceholder": "Search skills...",
   "settings.skills.refresh": "Refresh",
   "settings.skills.refreshing": "Refreshing...",

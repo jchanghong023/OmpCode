@@ -1030,7 +1030,6 @@ export function PluginsSection({
     commands: 0,
   });
   const [mcpEditorOpen, setMcpEditorOpen] = useState(false);
-  const [skillDetailOpen, setSkillDetailOpen] = useState(false);
   const [mcpFormScopeKey, setMcpFormScopeKey] = useState<string | null>(null);
   const [pluginDetailOpen, setPluginDetailOpen] = useState(false);
   const [commandEditorOpen, setCommandEditorOpen] = useState(false);
@@ -1144,11 +1143,7 @@ export function PluginsSection({
 
   return (
     <div className="space-y-6">
-      {mode === "plugin" &&
-      showMarketplaceBreadcrumb &&
-      !pluginDetailOpen &&
-      !mcpEditorOpen &&
-      !skillDetailOpen ? (
+      {mode === "plugin" && showMarketplaceBreadcrumb && !pluginDetailOpen && !mcpEditorOpen ? (
         <SettingsBreadcrumbReporter
           items={[
             {
@@ -1343,15 +1338,7 @@ export function PluginsSection({
                 workspaceIdentity={target.workspaceIdentity}
                 remoteSessionId={target.remoteSessionId}
                 remoteTarget={target.remoteTarget}
-                scopeFilter={selectedScope.kind === "user" ? "user" : "workspace"}
                 searchQuery={searchQueries.skills}
-                onCreateTask={onCreateTask}
-                onDetailOpenChange={setSkillDetailOpen}
-                onOpenPluginStore={
-                  selectedScope.kind === "user" ? openPluginStoreForSelectedScope : undefined
-                }
-                showMarketplaceBreadcrumb={showMarketplaceBreadcrumb}
-                reportDetailBreadcrumb={mode === "plugin"}
                 onVisibleCountChange={updateSkillCount}
               />
             ) : (

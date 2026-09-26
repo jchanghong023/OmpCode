@@ -5,6 +5,8 @@ import { mapSubagentsToMentionItemsForTest } from "../src/mentions/providers/sub
 import { collectSessionMentionItems } from "../src/mentions/providers/sessionsMentionProvider.js";
 import { mapSkillsToMentionItemsForTest } from "../src/mentions/providers/skillsMentionProvider.js";
 import { buildSlashApplyMentionPayload } from "../src/lib/slashApplyMentionPayload.js";
+import { buildSkillSuggestions } from "../src/slashCommandHelpers.js";
+import { filterPromptInputSuggestions } from "../src/lib/promptInputTriggers.js";
 
 test("subagent mention 来源标签随 locale 本地化", () => {
   const agents = [
@@ -110,4 +112,30 @@ test("omp 技能候选在 $ 与 / 入口都发送原生调用 token", () => {
     data: item!.data,
   });
   assert.equal(slashPayload.markdown, "/skill:agent-browser");
+});
+
+test("斜杠面板按 omp 原生命令名展示并匹配 skill: 查询", () => {
+  const suggestions = buildSkillSuggestions([
+    {
+      id: "omp:skill:architecture-governance",
+      name: "architecture-governance",
+      description: "Check architecture",
+      scope: "omp",
+      enabled: true,
+    },
+    {
+      id: "glm:legacy-skill",
+      name: "legacy-skill",
+      description: "ZCode local scan",
+      path: "C:/legacy/SKILL.md",
+      scope: "workspace",
+      enabled: true,
+    },
+  ]);
+  assert.equal(suggestions.length, 1);
+  assert.equal(suggestions[0]?.label, "/skill:architecture-governance");
+  assert.deepEqual(
+    filterPromptInputSuggestions(suggestions, "skill:arch").map((item) => item.value),
+    ["architecture-governance"],
+  );
 });

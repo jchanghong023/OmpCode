@@ -129,13 +129,16 @@ export function buildSkillSuggestions(
   skills: ZCodeSkillReferenceCatalogEntry[],
   locale?: Locale,
 ): PromptInputSuggestionItem[] {
-  return mapSkillsToMentionItemsForTest(skills, locale).map((item) => ({
+  return mapSkillsToMentionItemsForTest(
+    skills.filter((skill) => skill.scope === "omp" && skill.enabled),
+    locale,
+  ).map((item) => ({
     id: item.id,
     trigger: "/",
     value: item.value,
-    label: `$${item.value}`,
+    label: `/skill:${item.value}`,
     description: item.description,
-    keywords: [...new Set([...(item.keywords ?? []), "skill", "skills", item.value])],
+    keywords: [...new Set([...(item.keywords ?? []), "skill", "skills", `skill:${item.value}`])],
     data: item.data,
   }));
 }

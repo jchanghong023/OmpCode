@@ -28,7 +28,7 @@
 ### omp 内置命令全量支持与临时模型（2026-09-25 追加需求，已实现）
 
 - omp 当前目录中的内置斜杠命令（如 `/model`、`/switch`、`/compact`、`/rename`、`/mcp`、`/usage`）在对话输入框可用：命令目录来自 omp `get_available_commands`（含名称/描述/输入提示），目录变化（`available_commands_update`）实时推送刷新补全面板；`skill:*` 命令在技能候选分组展示。
-- GUI 聊天的 `$` 技能候选与设置页「omp 可用技能」使用同一目标工作区或会话的 omp `get_available_commands` 中 `source=skill` 的可执行目录；选中后按 omp 原生 `/skill:<name>` token 调用。TUI 扩展控制中心还显示禁用和遮蔽的发现项，不能用其总数冒充可调用数。本地导入、删除等目录管理另列，不把本地开关当作 omp 启用状态。详细规则见 `docs/specs/omp-skill-parity.md`。
+- GUI 聊天的 `$` 候选、`/` 技能命令与「设置 → 技能」均使用目标工作区或会话的 omp `get_available_commands` 中 `source=skill` 的可执行目录；选中后按 omp 原生 `/skill:<name>` token 调用。设置页不展示 ZCode 本地扫描结果或其管理操作。TUI 扩展控制中心还显示禁用和遮蔽的发现项，不能用其总数冒充可调用数。详细规则见 `docs/specs/omp-skill-parity.md`。
 - 本地型命令（不触发 agent 轮）在 UI 正常收口：命令输出投影为会话内可见文本，`agentInvoked:false`/`prompt_result` 完成收口不悬挂；`/rename`、`/model` 等的状态回投（`session_info_update`/`config_update`/`model_changed`）同步到会话标题与模型状态。
 - UI 本地拦截让位：命令名命中 omp 目录时按 omp 语义透传执行（如 `/model`、`/switch`、`/usage`）；仅 `/compact`/`/compress` 保留本地 v4 映射（与 omp `/compact` 等价且排队/时间线集成更好）。omp ACP 目录未分发的命令（`/plan`、`/goal` 等 TUI-only 命令）不受影响，仍按本地语义（差异 #5）。
 - 多角色（`modelRoles`）按上方 2026-09-24 需求在设置与会话工具栏完整适配，角色清单与 omp 内建角色（default/smol/slow/vision/plan/commit/tiny/memory/task/advisor/image/web/speech/dictation/judge）一致并随配置追加自定义角色。

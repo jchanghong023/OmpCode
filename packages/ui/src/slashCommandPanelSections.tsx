@@ -48,12 +48,12 @@ export function useSlashCommandMentionPanelSections(
         title: intl.formatMessage({ id: "chat.slash.skills.title" }),
         options: filteredSkillSuggestions.map<MentionPanelOption>((suggestion) => ({
           id: suggestion.id,
-          label: `$${suggestion.value}`,
+          label: suggestion.label,
           description: suggestion.description,
           content: (
             <span className="min-w-0 flex-1 flex items-center gap-2">
               <span className="truncate text-ui-base font-medium text-foreground max-w-[40%]">
-                {`$${suggestion.value}`}
+                {suggestion.label}
               </span>
               <span className="truncate text-ui-base text-foreground-subtlest flex-1">
                 {suggestion.description}
