@@ -1,6 +1,7 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import ts from "typescript";
+// TypeScript 7 不再提供 JS 编译器 API；源码分析仍需官方 TypeScript 6 兼容包。
+import ts from "@typescript/typescript6";
 import { parse as parseYaml } from "yaml";
 
 const SOURCE_EXTENSIONS = [".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"];

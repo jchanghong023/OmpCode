@@ -81,7 +81,7 @@ export const AgentTool = memo(({ className, tool, value, ...props }: AgentToolPr
   return (
     <AccordionItem className={cn("border-b last:border-b-0", className)} value={value} {...props}>
       <AccordionTrigger className="px-3 py-2 text-ui-base hover:no-underline">
-        {tool.description ?? "No description"}
+        {typeof tool.description === "string" ? tool.description : "No description"}
       </AccordionTrigger>
       <AccordionContent className="px-3 pb-3">
         <div className="rounded-md bg-muted/50">

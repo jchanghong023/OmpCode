@@ -229,7 +229,7 @@ async function loadBatchPreviewWithStaticProducts(
   const previewByProductId = new Map(
     previewSnapshot.productList.map((product) => [product.productId, product]),
   );
-  const productList =
+  const productList: CodingPlanProductDisplay[] =
     staticProducts.length > 0
       ? buildStaticProductDisplayList(staticProducts).map((product) =>
           mergeStaticProductWithPreview(product, previewByProductId.get(product.productId)),

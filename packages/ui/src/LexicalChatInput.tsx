@@ -651,7 +651,7 @@ function KeyboardPlugin({
 
     const unregisterBackspace = editor.registerCommand(
       KEY_BACKSPACE_COMMAND,
-      (event: KeyboardEvent | null) => {
+      (event: KeyboardEvent) => {
         const selection = $getSelection();
         if (!$isRangeSelection(selection) || !selection.isCollapsed()) {
           return false;
@@ -680,7 +680,7 @@ function KeyboardPlugin({
         // mention 插入时会自动补一个空格用于继续输入，
         // 之前 Backspace 会先删这个空格，再删 token，用户体感是“要按两次才删掉标签”。
         // 这里在“光标正好位于补位空格后”时，直接一次性删除空格 + mention token。
-        event?.preventDefault();
+        event.preventDefault();
         previousSibling.remove();
         node.remove();
         node.getParent()?.selectEnd();

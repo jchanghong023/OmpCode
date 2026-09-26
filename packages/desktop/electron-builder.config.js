@@ -102,11 +102,8 @@ let nsisInstallSectionPatched = false;
 let nsisInstallSectionOriginalSource = null;
 let nsisInstallSectionPath = null;
 const desktopElectronVersion = requireFromConfig("./package.json").devDependencies.electron;
-const asarCliPath = resolve(
-  dirname(requireFromConfig.resolve("@electron/asar/package.json")),
-  "bin",
-  "asar.js",
-);
+// @electron/asar 4 不再导出 package.json，CLI 也改为 asar.mjs；从公开入口定位包目录。
+const asarCliPath = resolve(dirname(requireFromConfig.resolve("@electron/asar")), "../bin/asar.mjs");
 const REQUIRED_ASAR_RUNTIME_MODULES = [
   "module-details-from-path",
   "@opentelemetry/api-logs",
@@ -472,10 +469,10 @@ export default {
   // 默认全量语言会产生大量 locale.pak 签名调用，显著拉长打包时长。
   // 这里仅保留当前产品必需语言，减少签名文件数并缩短 CI 总耗时。
   electronLanguages: ["en-US", "zh-CN"],
-  // pnpm workspace + semver range（如 ^41.0.3）下，electron-builder
+  // pnpm workspace 下，electron-builder
   // 有时无法从依赖树里稳定推导出 Electron 版本，导致 bundle 直接中断。
   // 显式写死当前桌面端使用的 Electron 版本，避免打包阶段再做不可靠的猜测。
-  electronVersion: "41.0.3",
+  electronVersion: "44.4.5",
   electronDownload: {
     // ELECTRON_MIRROR 是 @electron/get 的全局环境变量，会覆盖 dmg-builder 等
     // generic artifact 自己传入的 mirrorOptions，导致 builder 辅助包被错误拼到 Electron runtime 镜像目录。
@@ -730,8 +727,8 @@ export default {
   },
   rpm: {
     // 与 deb 同一约束：生产版与 Preview 必须是两个独立 rpm 包，否则 dnf 会把另一 flavor 当成升级替换。
-    // rpm 面向 RHEL 8+（glibc 2.28）分发；整包 glibc 下限由 node-pty prebuild 与 bfs/ugrep 抬到 2.28，
-    // Electron 41 主二进制只引用到 2.25，不会更高。fpm 产 rpm 需要构建机提供 rpmbuild 与 xz。
+    // 常规 rpm 面向 RHEL 8+ 分发；Electron 与原生资源升级后，不能沿用旧版 glibc 下限的结论。
+    // CentOS 7 使用独立的 Ubuntu 用户空间封装；fpm 产常规 rpm 需要构建机提供 rpmbuild 与 xz。
     packageName: desktopProductIdentity.linuxPackageName,
     // electron-builder 的 rpm 默认 Requires（gtk3/nss/libXtst 等）不包含 Electron ELF 实际
     // DT_NEEDED 的 mesa-libgbm 与 alsa-lib；rockylinux:8 最小化容器实测装完后启动报

@@ -3,7 +3,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
-import ts from "typescript";
+// TypeScript 7 不再提供 JS 编译器 API；依赖图解析仍需官方 TypeScript 6 兼容包。
+import ts from "@typescript/typescript6";
 
 const ROOT = process.cwd();
 const DEFAULT_OUTPUT = "dependency-graph.mmd";

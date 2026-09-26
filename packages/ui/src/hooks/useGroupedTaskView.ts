@@ -1053,7 +1053,7 @@ export function useGroupedTaskView(params: { workspaceTabs: WorkspaceTabState[] 
         return;
       }
       const nextView: ZCodeGroupedTaskView = {
-        nodes: view.nodes.flatMap((node) =>
+        nodes: view.nodes.flatMap<ZCodeGroupedTaskView["nodes"][number]>((node) =>
           node.type === "group" && node.group.id === groupId
             ? node.tasks.map((task) => ({ type: "task" as const, task }))
             : [node],
