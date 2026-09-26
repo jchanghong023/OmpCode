@@ -86,6 +86,22 @@ pnpm bundle:desktop -- --os win --arch x64
 
 See the root and package `package.json` files for additional commands.
 
+## Manual release packaging
+
+In GitHub Actions, run **Release Windows EXE** or **Release CentOS 7 RPM** from `main`. Both workflows only package and publish; neither runs tests. Supply a new tag matching the current `package.json` version, such as `v3.14.3-omp.1` for Windows or `v3.14.3-omp.1-centos7` for CentOS 7, and choose whether the release is a prerelease. Their distinct tags and assets leave the Windows build independent.
+
+The CentOS 7 workflow publishes `OmpCode-<version>-centos7-x64.rpm` and its `.sha256` file. After download, verify and install:
+
+```bash
+sha256sum --check OmpCode-3.14.3-centos7-x64.rpm.sha256
+sudo rpm -Uvh OmpCode-3.14.3-centos7-x64.rpm
+/opt/ompcode-centos7/bin/ompcode-centos7
+```
+
+This RPM bundles a private userspace; it does not update host glibc, Node, or omp and can coexist with the regular RHEL 8+ package. A graphical session and `ptrace` are required. **Chromium sandboxing is disabled in this compatibility build**; use only trusted workspaces. For a workspace outside your home directory, launch from that directory or set `OMPCODE_CENTOS7_BIND=/absolute/workspace/root`. The `zcode://` handler is shared with other installs; the last launched application may become its default.
+
+Electron does not officially support end-of-life CentOS 7 ([platform policy](https://github.com/electron/electron#platform-support)); the stock 3.10 kernel has not been verified by this repository's WSL-based smoke run.
+
 ## Credits
 
 OmpCode builds on [ZCode](https://github.com/zai-org/ZCode), carrying forward its desktop interface and visual style. Its Agent core is [omp (oh-my-pi)](https://github.com/can1357/oh-my-pi), connected through the [omp adapter](packages/omp-agent/). Thanks to both upstream projects and their contributors.

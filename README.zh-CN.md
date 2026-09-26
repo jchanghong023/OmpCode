@@ -86,6 +86,22 @@ pnpm bundle:desktop -- --os win --arch x64
 
 更多可用命令以根目录和目标包的 `package.json` 为准。
 
+## 手动发布
+
+在 GitHub Actions 中从 `main` 手动运行 **Release Windows EXE** 或 **Release CentOS 7 RPM**。两条流水线都只打包和发布，不运行测试。输入符合当前 `package.json` 版本且未使用过的标签，例如 Windows 用 `v3.14.3-omp.1`，CentOS 7 用 `v3.14.3-omp.1-centos7`；按需选择预发布。标签和资产相互独立，不修改 Windows 安装包。
+
+CentOS 7 流水线发布 `OmpCode-<version>-centos7-x64.rpm` 与相应的 `.sha256` 文件。下载后执行：
+
+```bash
+sha256sum --check OmpCode-3.14.3-centos7-x64.rpm.sha256
+sudo rpm -Uvh OmpCode-3.14.3-centos7-x64.rpm
+/opt/ompcode-centos7/bin/ompcode-centos7
+```
+
+此 RPM 内置独立运行环境，不升级宿主 glibc、Node 或 omp，可与适用于 RHEL 8+ 的常规安装包共存。运行需要图形会话和 `ptrace`。**兼容运行环境无法启用 Chromium 沙箱**，只在可信工作区中使用。工作区不在家目录时，从其目录启动，或设置 `OMPCODE_CENTOS7_BIND=/工作区绝对路径`。`zcode://` 协议与其他安装共享，最后启动的应用可能成为默认处理器。
+
+按 [Electron 官方平台政策](https://github.com/electron/electron#platform-support)，已停止维护的 CentOS 7 不属于正式支持范围；本仓库的 WSL 冒烟验证尚未覆盖原生 3.10 内核。
+
 ## 项目来源
 
 OmpCode 基于 [ZCode](https://github.com/zai-org/ZCode) 开发，延续其桌面界面与视觉风格；Agent 内核替换为 [omp（oh-my-pi）](https://github.com/can1357/oh-my-pi)，通过 [omp 适配器](packages/omp-agent/)接入。感谢两个上游项目及其贡献者。

@@ -1,0 +1,184 @@
+name: Release CentOS 7 RPM
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Unique tag, for example v3.14.3-omp.1-centos7"
+        required: true
+        type: string
+      prerelease:
+        description: "Mark the GitHub Release as a prerelease"
+        required: true
+        default: false
+        type: boolean
+
+concurrency:
+  group: release-centos7-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    permissions:
+      contents: read
+    env:
+      ZCODE_ENV: production
+      ZCODE_SKIP_REMOTE_ASSETS: "1"
+      ZCODE_TARGET_OS: linux
+      ZCODE_TARGET_ARCH: x64
+      GITHUB_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate release target
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REF" == refs/heads/main ]] || { echo 'CentOS 7 releases must run from main.' >&2; exit 1; }
+          version=$(node -p 'require("./package.json").version')
+          pattern="^v${version//./\\.}-omp\\.[1-9][0-9]*-centos7$"
+          [[ "$RELEASE_TAG" =~ $pattern ]] || { echo "Tag must match v$version-omp.<positive number>-centos7." >&2; exit 1; }
+          existing_tag=$(git ls-remote --tags origin "refs/tags/$RELEASE_TAG") || { echo 'Could not check existing release tags.' >&2; exit 1; }
+          [[ -z "$existing_tag" ]] || { echo "Tag $RELEASE_TAG already exists." >&2; exit 1; }
+          echo "APP_VERSION=$version" >> "$GITHUB_ENV"
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.2
+          run_install: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.14.0
+          cache: pnpm
+
+      - name: Install build dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends rpm xz-utils
+          pnpm install --frozen-lockfile
+
+      - name: Build Linux desktop
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm exec tsc -b packages/shared
+          pnpm build:bootstrap
+          pnpm prepare:desktop-runtime
+          chmod +x packages/desktop/bundled-agents/linux-x64/glm/omp/omp
+          [[ -f packages/desktop/out/renderer/index.html ]]
+          pnpm --filter @zcode/desktop exec electron-builder --config electron-builder.config.js --linux --x64 --dir --publish never
+          pnpm --filter @zcode/desktop exec node -e 'const asar = require("@electron/asar"); if (!asar.extractFile("dist/linux-unpacked/resources/app.asar", "out/renderer/index.html").length) process.exit(1)'
+
+      - name: Assemble isolated CentOS 7 runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/centos7/rootfs" "$RUNNER_TEMP/centos7/downloads"
+          curl -fL --retry 3 -o "$RUNNER_TEMP/centos7/downloads/ubuntu-base.tar.gz" \
+            https://cdimage.ubuntu.com/ubuntu-base/releases/noble/release/ubuntu-base-24.04.5-base-amd64.tar.gz
+          echo 'e77b6f10c2590cef872b33ee9f635a0e3fd1f57fb074c0e52b5c7f56147a0c86  '"$RUNNER_TEMP/centos7/downloads/ubuntu-base.tar.gz" | sha256sum --check
+          curl -fL --retry 3 -o "$RUNNER_TEMP/centos7/downloads/proot" https://proot.gitlab.io/proot/bin/proot
+          echo '3f48a11a7ae3bfdc63a61f9ccc309cda4c4e833bdc14c479e7201fc35f6f312a  '"$RUNNER_TEMP/centos7/downloads/proot" | sha256sum --check
+          curl -fL --retry 3 -o "$RUNNER_TEMP/centos7/downloads/proot-source.tar.gz" \
+            https://gitlab.com/proot/proot/-/archive/901fe2f0529084b009484329199b6ba1538a6cf6/proot-901fe2f0529084b009484329199b6ba1538a6cf6.tar.gz
+          echo 'e4d052ce7e42abb871040e6bc635a9066d926664e22b64f08b3f48d7328f8ee0  '"$RUNNER_TEMP/centos7/downloads/proot-source.tar.gz" | sha256sum --check
+          curl -fL --retry 3 -o "$RUNNER_TEMP/centos7/downloads/uthash-source.tar.gz" \
+            https://codeload.github.com/proot-me/uthash/tar.gz/e493aa90a2833b4655927598f169c31cfcdf7861
+          echo '2ddb6665e82ffd7e87a27b97081bddf8f09520b7a2cfd6ab011541e7cde991fa  '"$RUNNER_TEMP/centos7/downloads/uthash-source.tar.gz" | sha256sum --check
+          chmod +x "$RUNNER_TEMP/centos7/downloads/proot"
+          root="$RUNNER_TEMP/centos7/rootfs"
+          sudo tar -xzf "$RUNNER_TEMP/centos7/downloads/ubuntu-base.tar.gz" -C "$root"
+          sudo "$RUNNER_TEMP/centos7/downloads/proot" -S "$root" /usr/bin/env DEBIAN_FRONTEND=noninteractive apt-get update
+          sudo "$RUNNER_TEMP/centos7/downloads/proot" -S "$root" /usr/bin/env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            ca-certificates git openssh-client curl python3 xdg-utils fonts-dejavu-core \
+            libasound2t64 libatk-bridge2.0-0 libcups2 libdbus-1-3 libdrm2 \
+            libgbm1 libgl1 libgl1-mesa-dri libgtk-3-0 libnss3 libxss1 libxshmfence1 libsecret-1-0 \
+            libnotify4 libudev1 libvulkan1
+          sudo "$RUNNER_TEMP/centos7/downloads/proot" -S "$root" apt-get clean
+          sudo rm -rf "$root/var/lib/apt/lists/"*
+          sudo mkdir -p "$root/opt/ompcode"
+          sudo find "$root" -type f -perm /6000 -exec chmod a-s {} +
+          sudo install -d -m 755 "$root/usr/share/doc/proot"
+          sudo install -m 644 "$RUNNER_TEMP/centos7/downloads/proot-source.tar.gz" "$root/usr/share/doc/proot/proot-source-901fe2f0.tar.gz"
+          sudo install -m 644 "$RUNNER_TEMP/centos7/downloads/uthash-source.tar.gz" "$root/usr/share/doc/proot/uthash-source-e493aa90.tar.gz"
+
+      - name: Build RPM and checksum
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p packages/desktop/dist
+          sudo bash scripts/publish/centos7/build-rpm.sh \
+            packages/desktop/dist/linux-unpacked "$RUNNER_TEMP/centos7/rootfs" \
+            "$RUNNER_TEMP/centos7/downloads/proot" "$APP_VERSION" packages/desktop/dist
+          rpm="packages/desktop/dist/OmpCode-$APP_VERSION-centos7-x64.rpm"
+          [[ -s "$rpm" ]]
+          rpm -qp --requires "$rpm"
+          (cd packages/desktop/dist && sha256sum "$(basename "$rpm")" > "$(basename "$rpm").sha256")
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: centos7-release
+          path: |
+            packages/desktop/dist/OmpCode-*-centos7-x64.rpm
+            packages/desktop/dist/OmpCode-*-centos7-x64.rpm.sha256
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+
+  publish:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ inputs.tag }}
+      IS_PRERELEASE: ${{ inputs.prerelease }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: centos7-release
+          path: release-assets
+
+      - name: Verify downloaded assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd release-assets
+          assets=(OmpCode-*-centos7-x64.rpm)
+          [[ ${#assets[@]} -eq 1 && -f ${assets[0]} ]]
+          sha256sum --check "${assets[0]}.sha256"
+
+      - name: Create draft release with RPM
+        shell: bash
+        run: |
+          set -euo pipefail
+          assets=(release-assets/OmpCode-*-centos7-x64.rpm)
+          [[ ${#assets[@]} -eq 1 && -f ${assets[0]} ]]
+          args=(--repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "OmpCode $RELEASE_TAG" --notes 'CentOS 7 x64 RPM. Uses PRoot; Chromium sandbox unavailable.' --generate-notes --draft)
+          if [[ "$IS_PRERELEASE" == 'true' ]]; then
+            args+=(--prerelease)
+          fi
+          gh release create "$RELEASE_TAG" "${assets[0]}" "${assets[0]}.sha256" "${args[@]}"
+
+      - name: Verify assets and publish release
+        shell: bash
+        run: |
+          set -euo pipefail
+          rpm=(release-assets/OmpCode-*-centos7-x64.rpm)
+          expected_size=$(stat -c %s "${rpm[0]}")
+          release_json=$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets,isDraft)
+          [[ $(jq -r '.isDraft' <<< "$release_json") == 'true' ]]
+          actual_size=$(jq -r --arg name "$(basename "${rpm[0]}")" '.assets[] | select(.name == $name) | .size' <<< "$release_json")
+          [[ "$actual_size" == "$expected_size" ]]
+          jq -r '.assets[].name' <<< "$release_json" | grep -Fx "$(basename "${rpm[0]}.sha256")"
+          gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false
+          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft,url --jq 'select(.isDraft == false) | .url'
