@@ -20,3 +20,9 @@
 - On a native CentOS 7 x64 system with a graphical session and `ptrace`, a non-root user extracts the ZIP under HOME and starts its launcher without installing any other package or changing host libraries. The desktop UI opens and the embedded omp runs in the isolated userspace on kernel 3.10.
 - The archive preserves executable Electron, launcher, embedded omp, and runtime symlinks. Relocating the extracted directory does not break launch. The existing regular Linux OmpCode package and user's installed omp remain untouched.
 - The release workflow rejects a wrong branch/tag/version or a tag collision, checks uploaded file integrity, and never calls a test command. The existing Windows workflow stays unchanged.
+
+兼容包不能启用 Chromium 沙箱，使用时应避免不可信工作区。
+
+## 实现与验证状态
+
+需求从原有权威 FORK 与对应 spec 迁入，未因当前实现降低要求。既有实现及历史验证不等于本次验收；统一证据边界见 [需求索引](README.md#实现与验证状态)。

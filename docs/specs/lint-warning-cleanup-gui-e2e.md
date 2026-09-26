@@ -1,5 +1,7 @@
 # Lint warning cleanup and GUI acceptance
 
+This is the scoped engineering record for the lint cleanup and its GUI acceptance attempt, not an ongoing product requirement or authorization to run another acceptance session. Product requirements live in [the requirements directory](../requirements/README.md); actual results and untested boundaries are in [the GUI report](../test-reports/gui-e2e-2026-09-26.md).
+
 ## Scope and invariants
 
 - Remove the current `pnpm lint` warnings without suppressing rules or changing user-visible behavior.

@@ -1,5 +1,7 @@
 # Dependency refresh: Windows and CentOS 7
 
+This is the scoped engineering record for the completed dependency migration, not a standing instruction to upgrade packages or a second product requirements source. Version references describe that migration, not a newly verified registry state. Product compatibility and release requirements are maintained in [the requirements directory](../requirements/README.md) and [the CentOS 7 specification](../requirements/centos7-release.md).
+
 ## Product rule
 
 - Refresh direct runtime and development dependencies in the root and active `packages/*` workspace to the current stable npm `latest` versions. Keep `workspace:*` links and the retained, non-workspace `apps/zcode-cli` snapshot unchanged. A prerelease dist-tag is not treated as a stable update unless the existing declaration already opts into that prerelease family.
