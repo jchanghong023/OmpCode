@@ -14,7 +14,6 @@ import {
 import { ControlHintTooltip } from "@/ControlHintTooltip.js";
 import { Button } from "@/components/ui/button.js";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog.js";
-import { Switch } from "@/components/ui/switch.js";
 import type {
   ZCodeProvider,
   SkillDiagnostic,
@@ -29,6 +28,7 @@ import { useZCodeIntl } from "@/i18n/IntlProvider.js";
 import { toast } from "@/components/ui/toast.js";
 import { usePlatform } from "@/hooks/usePlatform.js";
 import { useZCodeSessionService } from "@/hooks/useZCodeSessionService.js";
+import { useSkills } from "@/hooks/useSkills.js";
 import {
   useBaseWorkspaceServices,
   useWorkspaceServicesResolution,
@@ -190,6 +190,16 @@ export function SkillsSection({
   const confirmDialog = useConfirmDialog();
   const activeWorkspacePath = workspacePath ?? null;
   const activeWorkspaceIdentity = workspaceIdentity;
+  const [runtimeCatalogRevision, setRuntimeCatalogRevision] = useState(0);
+  const runtimeCatalog = useSkills({
+    workspacePath: activeWorkspacePath ?? "",
+    workspaceIdentity: activeWorkspaceIdentity,
+    sessionId: null,
+    enabled: scopeFilter === "workspace" && Boolean(activeWorkspacePath),
+    preferredRemoteSessionId: remoteSessionId,
+    remoteTarget,
+    revision: runtimeCatalogRevision,
+  });
   const targetServiceResolution = useWorkspaceServicesResolution(
     activeWorkspacePath,
     remoteSessionId,
@@ -362,6 +372,7 @@ export function SkillsSection({
   }, [activeWorkspacePath, loadSkills, targetServiceResolution.rpcReady]);
 
   const refresh = useCallback(async () => {
+    setRuntimeCatalogRevision((revision) => revision + 1);
     await loadSkills(false);
   }, [loadSkills]);
 
@@ -372,47 +383,6 @@ export function SkillsSection({
       skillsService,
     });
   }, [activeWorkspaceIdentity, activeWorkspacePath, skillsService]);
-
-  const setEnabled = useCallback(
-    async (skillId: string, enabled: boolean) => {
-      if (!activeWorkspacePath) {
-        return;
-      }
-      // 移除三方来源后，技能状态统一写入 ZCode Agent 上下文，避免旧 provider 前缀带来分桶漂移。
-      const targetSkill = skills.find((skill) => skill.id === skillId);
-      const effectiveProvider: ZCodeProvider = ZCODE_AGENT_PROVIDER;
-      try {
-        await skillsService.setEnabled({
-          workspacePath: activeWorkspacePath,
-          workspaceIdentity: activeWorkspaceIdentity,
-          provider: effectiveProvider,
-          scope: targetSkill?.scope,
-          skillId,
-          enabled,
-        });
-        await invalidateDeferredDraftSessionForSkillChange({
-          zcodeSessionService,
-          workspacePath: activeWorkspacePath,
-          workspaceIdentity: activeWorkspaceIdentity,
-          reason: "settings-skill-enabled",
-        });
-        await Promise.all([loadSkills(false), refreshSharedSkillStoreForCurrentWorkspace()]);
-      } catch (setEnabledError) {
-        setError(
-          setEnabledError instanceof Error ? setEnabledError.message : String(setEnabledError),
-        );
-      }
-    },
-    [
-      activeWorkspaceIdentity,
-      activeWorkspacePath,
-      loadSkills,
-      refreshSharedSkillStoreForCurrentWorkspace,
-      skills,
-      skillsService,
-      zcodeSessionService,
-    ],
-  );
 
   // 删除本地技能：plugin 作用域技能不可单独删除（由卸载插件管理），调用方已在 UI 层屏蔽其入口。
   // 复用应用根部已挂载的确认弹窗 store（useConfirmDialog），与子智能体删除流程保持一致。
@@ -447,7 +417,7 @@ export function SkillsSection({
         if (selectedSkill?.id === skill.id) {
           setSelectedSkill(null);
         }
-        await loadSkills(false);
+        await refresh();
       } catch (deleteError) {
         setError(deleteError instanceof Error ? deleteError.message : String(deleteError));
       }
@@ -457,7 +427,7 @@ export function SkillsSection({
       activeWorkspacePath,
       confirmDialog,
       intl,
-      loadSkills,
+      refresh,
       selectedSkill,
       skillsService,
       zcodeSessionService,
@@ -498,8 +468,19 @@ export function SkillsSection({
         : workspaceLabel || intl.formatMessage({ id: "settings.scope.workspace" }),
     );
   }, [groupedSkills.local, groupedSkills.plugin, intl, scopeFilter, workspaceLabel]);
-  const filteredSkillCount = groupedSkills.local.length + groupedSkills.plugin.length;
-  const hasEmptySearchResult = Boolean(query.trim()) && filteredSkillCount === 0;
+  const runtimeSkills = runtimeCatalog.skills.filter((skill) =>
+    `${skill.name} ${skill.description}`.toLowerCase().includes(query.trim().toLowerCase()),
+  );
+  const localSkillCount = groupedSkills.local.length + groupedSkills.plugin.length;
+  const visibleSkillCount =
+    scopeFilter === "workspace" && !query.trim()
+      ? runtimeSkills.length
+      : localSkillCount + runtimeSkills.length;
+  const hasEmptySearchResult =
+    Boolean(query.trim()) &&
+    !runtimeCatalog.loading &&
+    !runtimeCatalog.error &&
+    localSkillCount + runtimeSkills.length === 0;
   const directInstalledSkillCount = scopedProviderSkills.filter(
     (skill) => skill.scope !== "plugin",
   ).length;
@@ -515,8 +496,8 @@ export function SkillsSection({
     [pluginListingById, plugins],
   );
   useEffect(() => {
-    onVisibleCountChange?.(filteredSkillCount);
-  }, [filteredSkillCount, onVisibleCountChange]);
+    onVisibleCountChange?.(visibleSkillCount);
+  }, [visibleSkillCount, onVisibleCountChange]);
   const handleCreateSkill = () => {
     if (!activeWorkspacePath || !onCreateTask) {
       return;
@@ -628,12 +609,6 @@ export function SkillsSection({
         <div className="flex shrink-0 items-center gap-2">
           {skill.scope === "plugin" ? null : (
             <>
-              <Switch
-                checked={skill.enabled}
-                onCheckedChange={(checked) => {
-                  void setEnabled(skill.id, checked);
-                }}
-              />
               <Button
                 type="button"
                 variant="ghost"
@@ -662,7 +637,9 @@ export function SkillsSection({
 
   const skillHeaderActions = (
     <SettingsResourceHeaderActions
-      onRefresh={() => void Promise.all([refresh(), refreshSharedSkillStoreForCurrentWorkspace()])}
+      onRefresh={() => {
+        void Promise.all([refresh(), refreshSharedSkillStoreForCurrentWorkspace()]);
+      }}
       onImport={() => setImportDialogOpen(true)}
       onNew={handleCreateSkill}
       importDisabled={!capability?.userScopeAvailable}
@@ -808,13 +785,44 @@ export function SkillsSection({
         />
       ) : (
         <div className="space-y-6">
+          {scopeFilter === "workspace" ? (
+            <section className="space-y-3">
+              <SettingsResourceGroupHeader
+                count={runtimeSkills.length}
+                title={intl.formatMessage({ id: "settings.skills.ompAvailable" })}
+              />
+              <p className="text-ui-sm text-foreground-subtle">
+                {intl.formatMessage({ id: "settings.skills.ompAvailableDescription" })}
+              </p>
+              {runtimeCatalog.error ? (
+                <p className="text-ui-sm text-destructive">{runtimeCatalog.error}</p>
+              ) : runtimeCatalog.loading ? (
+                <PluginLoadingState label={intl.formatMessage({ id: "common.loading" })} />
+              ) : runtimeSkills.length > 0 ? (
+                <SettingsResourceList
+                  items={runtimeSkills}
+                  getKey={(skill) => skill.id}
+                  renderItem={(skill) => (
+                    <div key={skill.id} className="px-4 py-3">
+                      <div className="text-ui-base font-medium text-foreground">{skill.name}</div>
+                      {skill.description ? (
+                        <div className="mt-0.5 text-ui-sm text-foreground-subtle">
+                          {skill.description}
+                        </div>
+                      ) : null}
+                    </div>
+                  )}
+                />
+              ) : null}
+            </section>
+          ) : null}
           <section className={hideInstalledGroup ? "hidden" : "space-y-4"}>
             <div data-skills-plugin-direct-actions="true">
               <SettingsResourceGroupHeader
                 actions={skillHeaderActions}
                 count={groupedSkills.local.length}
                 title={intl.formatMessage({
-                  id: "settings.plugin.skills.installed",
+                  id: "settings.skills.locallyManaged",
                 })}
               />
             </div>

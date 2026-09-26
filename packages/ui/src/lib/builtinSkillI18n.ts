@@ -3,8 +3,8 @@ import type { Locale, SkillScope } from "@zcode/shared";
 interface SkillDisplayCandidate {
   name: string;
   description: string;
-  path: string;
-  scope: SkillScope;
+  path?: string;
+  scope: SkillScope | "omp";
   pluginName?: string;
 }
 
@@ -167,7 +167,8 @@ const BUILTIN_SKILL_DESCRIPTIONS: Record<string, Record<Locale, string>> = {
   },
 };
 
-export function resolveSkillSourceLabel(scope: SkillScope, locale?: Locale): string {
+export function resolveSkillSourceLabel(scope: SkillScope | "omp", locale?: Locale): string {
+  if (scope === "omp") return "omp";
   if (locale === "zh-CN") {
     if (scope === "workspace") return "工作区";
     if (scope === "plugin") return "插件";
@@ -196,6 +197,6 @@ function isOfficialBuiltinSkill(skill: SkillDisplayCandidate): boolean {
   if (pluginName && OFFICIAL_BUILTIN_PLUGIN_NAMES.has(pluginName)) {
     return true;
   }
-  const normalizedPath = skill.path.replaceAll("\\", "/");
+  const normalizedPath = (skill.path ?? "").replaceAll("\\", "/");
   return OFFICIAL_PLUGIN_PATH_MARKERS.some((marker) => normalizedPath.includes(marker));
 }

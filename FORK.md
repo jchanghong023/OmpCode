@@ -27,7 +27,8 @@
 
 ### omp 内置命令全量支持与临时模型（2026-09-25 追加需求，已实现）
 
-- omp 的全部内置斜杠命令（omp ACP 目录分发的 93 条：`/model`、`/switch`、`/compact`、`/rename`、`/mcp`、`/usage`、`skill:*` 等）在对话输入框可用：命令目录来自 omp `get_available_commands`（含名称/描述/输入提示），目录变化（`available_commands_update`）实时推送刷新补全面板。
+- omp 当前目录中的内置斜杠命令（如 `/model`、`/switch`、`/compact`、`/rename`、`/mcp`、`/usage`）在对话输入框可用：命令目录来自 omp `get_available_commands`（含名称/描述/输入提示），目录变化（`available_commands_update`）实时推送刷新补全面板；`skill:*` 命令在技能候选分组展示。
+- GUI 聊天的 `$` 技能候选与设置页「omp 可用技能」使用同一目标工作区或会话的 omp `get_available_commands` 中 `source=skill` 的可执行目录；选中后按 omp 原生 `/skill:<name>` token 调用。TUI 扩展控制中心还显示禁用和遮蔽的发现项，不能用其总数冒充可调用数。本地导入、删除等目录管理另列，不把本地开关当作 omp 启用状态。详细规则见 `docs/specs/omp-skill-parity.md`。
 - 本地型命令（不触发 agent 轮）在 UI 正常收口：命令输出投影为会话内可见文本，`agentInvoked:false`/`prompt_result` 完成收口不悬挂；`/rename`、`/model` 等的状态回投（`session_info_update`/`config_update`/`model_changed`）同步到会话标题与模型状态。
 - UI 本地拦截让位：命令名命中 omp 目录时按 omp 语义透传执行（如 `/model`、`/switch`、`/usage`）；仅 `/compact`/`/compress` 保留本地 v4 映射（与 omp `/compact` 等价且排队/时间线集成更好）。omp ACP 目录未分发的命令（`/plan`、`/goal` 等 TUI-only 命令）不受影响，仍按本地语义（差异 #5）。
 - 多角色（`modelRoles`）按上方 2026-09-24 需求在设置与会话工具栏完整适配，角色清单与 omp 内建角色（default/smol/slow/vision/plan/commit/tiny/memory/task/advisor/image/web/speech/dictation/judge）一致并随配置追加自定义角色。
@@ -132,7 +133,7 @@
 
 换核后以下能力无法与上游等价提供，均已以显式拒绝（JSON-RPC `-32601` / v4 ACK `fault.command.unsupportedByOmpCore` 等 guard id）或明确的替代行为交付，不静默缺失。UI 侧表现为对应入口不可用（禁用态 tooltip / 操作失败提示），主对话链路不受影响。
 
-1. **插件与技能市场**：ZCode 插件安装/市场及技能目录不可用（-32601）；旧 `plugins/referenceCatalog` 在 omp 会话返回合法空目录，`@` 文件引用不显示原始 RPC 错误。设置中的扩展页展示 omp profile 与项目原生扩展目录，可打开配置目录；桌面不内嵌 ZCode 官方插件运行时与内置技能包。
+1. **插件与技能市场**：ZCode 插件安装/市场不可用（-32601）；技能可执行目录由 omp `source=skill` 命令投影，旧 `plugins/referenceCatalog` 在 omp 会话返回合法空目录，`@` 文件引用不显示原始 RPC 错误。设置中的扩展页展示 omp profile 与项目原生扩展目录，可打开配置目录；桌面不内嵌 ZCode 官方插件运行时与内置技能包。
 2. **工作流中枢与动态工作流**：已保存工作流 GUI（`workflows/*`）、`v4/conversation/workflowRun*` 全族、`startSavedWorkflow`/`resumeWorkflowRun`/`amendWorkflowRunSettings` 不可用。替代行为：无（omp 无等价工作流引擎）。
 3. **automation / Off-Peak**：定时任务使用现有 Host 调度服务持久化与派发，执行仍走 omp 核心；表单模型和思考档从目标工作区的 omp 模型目录选择，运行记录关联 omp 会话。错峰任务仍不可用。
 4. **会话内编辑类操作**：fork 某轮（`forkAssistant`）、重试（`retryTurn`）、编辑已发送消息（`editUserQuery`）、工作区文件回滚（`applyFileRewind`/`fileRewindPreview`）不可用。替代行为：无（omp 会话树的 `branch` 能力未进本适配层首版）。

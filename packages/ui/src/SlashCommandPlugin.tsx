@@ -41,9 +41,9 @@ import {
 import { MentionPanel } from "./mentions/components/MentionPanel.js";
 import {
   buildAppSlashCommandSuggestions,
-  buildSkillSuggestions,
   buildSubagentSuggestions,
   buildSlashSuggestions,
+  buildSkillSuggestions,
   getTextAroundCursor,
   isAppSlashCommandSuggestion,
   normalizeSlashCommandValue,

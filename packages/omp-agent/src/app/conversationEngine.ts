@@ -8,12 +8,11 @@ import type { OmpSessionEventFrame, OmpStateData } from "../domain/ompFrames.js"
 import type { HostGateway, HostUserInputAnswer, OmpProcessFactory, OmpSessionProcess } from "./ports.js";
 import { ConversationTopicPublisher, type SubscribeOptions } from "./topicPublisher.js";
 import { OmpInteractionProxy } from "./ompInteractionProxy.js";
-import { applyEngineAutoCompaction, applyEngineCompaction, applyEngineSetModel, applyEngineThoughtLevel, createEngineOmpProcess, readEngineContextDetails } from "./ompEngineProcess.js";
+import { applyEngineAutoCompaction, applyEngineCompaction, applyEngineSetModel, applyEngineThoughtLevel, createEngineOmpProcess, readEngineContextDetails, readOmpSkillCommands } from "./ompEngineProcess.js";
 import { dispatchOmpText } from "./ompPromptDispatch.js";
 import { TrailingThrottle } from "./trailingThrottle.js";
 import { deriveTitle, agentInvokedOf } from "../domain/titleText.js";
 import { OmpSubagentBridge } from "./ompSubagentBridge.js";
-
 export interface EngineInit {
   sessionId: string;
   workspaceId: string;
@@ -26,7 +25,6 @@ export interface EngineInit {
   resumeSessionPath?: string;
   initialTitle?: string;
 }
-
 export class ConversationEngine {
   readonly sessionId: string;
   readonly workspaceId: string;
@@ -93,6 +91,10 @@ export class ConversationEngine {
       this.ompStarting = null;
     });
     await this.ompStarting;
+  }
+  async loadSkillCommands(): Promise<unknown> {
+    await this.ensureOmpStarted();
+    return readOmpSkillCommands(this.ompProcess!);
   }
   private async startOmp(): Promise<void> {
     let process!: OmpSessionProcess;

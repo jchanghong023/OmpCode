@@ -3,6 +3,8 @@ import { test } from "node:test";
 import type { ZCodeTaskMeta } from "@zcode/shared";
 import { mapSubagentsToMentionItemsForTest } from "../src/mentions/providers/subagentsMentionProvider.js";
 import { collectSessionMentionItems } from "../src/mentions/providers/sessionsMentionProvider.js";
+import { mapSkillsToMentionItemsForTest } from "../src/mentions/providers/skillsMentionProvider.js";
+import { buildSlashApplyMentionPayload } from "../src/lib/slashApplyMentionPayload.js";
 
 test("subagent mention 来源标签随 locale 本地化", () => {
   const agents = [
@@ -83,4 +85,29 @@ test("session mention 非空标题保持原文", () => {
     untitledLabel: "未命名会话",
   });
   assert.equal(items[0]?.label, "修复登录 bug");
+});
+
+test("omp 技能候选在 $ 与 / 入口都发送原生调用 token", () => {
+  const [item] = mapSkillsToMentionItemsForTest(
+    [
+      {
+        id: "omp:skill:agent-browser",
+        name: "agent-browser",
+        description: "Browse",
+        scope: "omp",
+        enabled: true,
+      },
+    ],
+    "zh-CN",
+  );
+  assert.equal(item?.markdown, "/skill:agent-browser");
+  const slashPayload = buildSlashApplyMentionPayload({
+    id: item!.id,
+    trigger: "/",
+    value: item!.value,
+    label: item!.label,
+    description: item!.description,
+    data: item!.data,
+  });
+  assert.equal(slashPayload.markdown, "/skill:agent-browser");
 });

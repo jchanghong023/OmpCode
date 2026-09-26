@@ -209,6 +209,8 @@ readline.on("line", (line) => {
         commands: [
           { name: "help", source: "builtin", description: "Show help" },
           { name: "ship", source: "extension", description: "Ship changes", input: { hint: "target" } },
+          { name: "skill:agent-browser", source: "skill", description: "Browse websites" },
+          { name: "skill:architecture-governance", source: "skill", description: "Check architecture" },
         ],
       });
       return;
