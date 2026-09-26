@@ -3,7 +3,6 @@ import { zcodeProtocolMethods } from "@zcode/shared";
 export const UNSUPPORTED_METHODS = new Set<string>([
   zcodeProtocolMethods.pluginsList,
   zcodeProtocolMethods.pluginsReferenceCatalogWithCategory,
-  zcodeProtocolMethods.skillsReferenceCatalog,
   zcodeProtocolMethods.pluginsOverview,
   zcodeProtocolMethods.pluginsMarketplaceAdd,
   zcodeProtocolMethods.pluginsMarketplaceRemove,

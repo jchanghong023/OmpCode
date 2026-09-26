@@ -2658,8 +2658,9 @@ export const zcodeSkillReferenceCatalogEntrySchema = z
     id: nonEmptyString,
     name: nonEmptyString,
     description: z.string(),
-    path: nonEmptyString,
-    scope: z.enum(["workspace", "user", "plugin"]),
+    // omp 只通过 RPC 命令目录提供名称与描述，不暴露本机文件路径。
+    path: nonEmptyString.optional(),
+    scope: z.enum(["workspace", "user", "plugin", "omp"]),
     enabled: z.literal(true),
     pluginName: nonEmptyString.optional(),
   })

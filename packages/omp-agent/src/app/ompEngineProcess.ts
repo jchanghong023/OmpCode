@@ -12,6 +12,17 @@ import type {
 import type { OmpProcessFactory, OmpSessionProcess } from "./ports.js";
 import type { OmpContextReport } from "../domain/ompContextReport.js";
 
+/** 从会话自己的 omp 进程读取当前可执行命令，避免以工作区目录代替会话事实。 */
+export async function readOmpSkillCommands(process: OmpSessionProcess): Promise<unknown> {
+  const outcome = await process.send({ type: "get_available_commands" });
+  if (!outcome.success) throw new Error(outcome.error ?? "omp command catalog unavailable");
+  const record =
+    typeof outcome.data === "object" && outcome.data !== null
+      ? (outcome.data as { commands?: unknown })
+      : {};
+  return record.commands;
+}
+
 export interface EngineProcessHooks {
   onEvent: Parameters<import("./ports.js").OmpProcessFactory["create"]>[0]["onEvent"];
   onUiRequest: Parameters<import("./ports.js").OmpProcessFactory["create"]>[0]["onUiRequest"];

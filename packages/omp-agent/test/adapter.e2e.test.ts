@@ -1208,6 +1208,60 @@ test("available_commands_update 热刷新 workspace-config 命令目录", async 
   }
 });
 
+test("技能引用目录仅投影 omp 可执行技能命令，未知会话不回退工作区", async () => {
+  const harness = await startAdapter();
+  try {
+    const workspace = {
+      workspacePath: packageRoot,
+      workspaceKey: "test-workspace",
+    };
+    const draft = (await harness.request("skills/referenceCatalog", { workspace })) as {
+      result?: { authority: string; skills: { name: string; description: string }[] };
+      error?: unknown;
+    };
+    assert.equal(draft.error, undefined);
+    assert.equal(draft.result?.authority, "workspace");
+    assert.deepEqual(
+      draft.result?.skills.map((skill) => skill.name),
+      ["agent-browser", "architecture-governance"],
+    );
+
+    const create = await harness.request("v4/command", {
+      commandId: "cmd-skill-catalog-create",
+      clientId: "test-client",
+      sessionId: null,
+      type: "createSession",
+      payload: { workspaceId: "test-workspace", firstInput: { text: "/help" } },
+      issuedAt: Date.now(),
+    });
+    const createAck = commandAckSchema.parse((create as { result: unknown }).result);
+    const sessionId = (createAck.result as { sessionId: string }).sessionId;
+    const sessionCatalog = (await harness.request("skills/referenceCatalog", {
+      workspace,
+      sessionId,
+    })) as { result?: { authority: string; skills: { name: string }[] } };
+    assert.equal(sessionCatalog.result?.authority, "session");
+    assert.deepEqual(
+      sessionCatalog.result?.skills.map((skill) => skill.name),
+      ["agent-browser", "architecture-governance"],
+    );
+
+    const wrongWorkspace = (await harness.request("skills/referenceCatalog", {
+      workspace: { workspacePath: packageRoot, workspaceKey: "other-workspace" },
+      sessionId,
+    })) as { error?: unknown };
+    assert.ok(wrongWorkspace.error);
+
+    const unknown = (await harness.request("skills/referenceCatalog", {
+      workspace,
+      sessionId: "does-not-exist",
+    })) as { error?: unknown };
+    assert.ok(unknown.error);
+  } finally {
+    await harness.close();
+  }
+});
+
 test("供应商错误（stopReason=error）以 failed 收口并携带错误事实", async () => {
   const harness = await startAdapter();
   try {

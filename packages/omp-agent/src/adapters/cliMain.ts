@@ -77,6 +77,9 @@ export async function runCliMain(
   // 目录进程的 available_commands_update → ServerApp 缓存 + workspace-config topic 推送。
   // 构造顺序上 loader 先于 app，用 ref 解引用。
   const appRef: { app: ServerApp | null } = { app: null };
+  const workspaceCatalog = createWorkspaceConfigLoader(ompFactory, workspacePath, {
+    onCommandsUpdate: (commands) => appRef.app?.updateSlashCommands(commands),
+  });
   const app = new ServerApp({
     ompFactory,
     store: createOmpStore(env),
@@ -88,9 +91,8 @@ export async function runCliMain(
     },
     workspacePath,
     workspaceKey,
-    loadWorkspaceConfig: createWorkspaceConfigLoader(ompFactory, workspacePath, {
-      onCommandsUpdate: (commands) => appRef.app?.updateSlashCommands(commands),
-    }),
+    loadWorkspaceConfig: workspaceCatalog.loadWorkspaceConfig,
+    loadWorkspaceSkillCommands: workspaceCatalog.loadSkillCommands,
   });
   appRef.app = app;
   const protocolServer = new ProtocolServer({

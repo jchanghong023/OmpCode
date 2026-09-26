@@ -2,8 +2,10 @@
 // 由 adapters/protocolServer 驱动 IO；这里只做路由与结果组装。
 
 import { V4_METHODS, type WorkspaceConfigState } from "@zcode/shared/zcode-protocol-v4";
+import { zcodeProtocolMethods, zcodeSkillsReferenceCatalogParamsSchema } from "@zcode/shared";
 import { createLegacyHandlers } from "./legacyMethods.js";
 import { normalizeOmpSlashCommands } from "../domain/ompCommands.js";
+import { skillCatalogOfCommands } from "../domain/ompSkills.js";
 import { ProtocolError } from "./errors.js";
 import { UNSUPPORTED_METHODS } from "./unsupportedMethods.js";
 import { SessionRegistry } from "./sessionRegistry.js";
@@ -20,6 +22,7 @@ export interface ServerAppDeps {
   workspaceIdentity?: string;
   /** 模型目录来源（registry omp 进程的查询结果，由 adapter 层提供）。 */
   loadWorkspaceConfig: () => Promise<WorkspaceConfigState>;
+  loadWorkspaceSkillCommands: () => Promise<unknown>;
 }
 
 export class ServerApp {
@@ -52,6 +55,18 @@ export class ServerApp {
     }
     if (this.legacy[method]) {
       return this.legacy[method]!(params);
+    }
+    if (method === zcodeProtocolMethods.skillsReferenceCatalog) {
+      const parsed = zcodeSkillsReferenceCatalogParamsSchema.safeParse(params);
+      if (!parsed.success || parsed.data.workspace.workspaceKey !== this.deps.workspaceKey) {
+        throw new ProtocolError(-32602, "invalid skill catalog target");
+      }
+      const { sessionId } = parsed.data;
+      if (!sessionId) {
+        return { authority: "workspace" as const, skills: skillCatalogOfCommands(await this.deps.loadWorkspaceSkillCommands()) };
+      }
+      const engine = this.registry.getEngine(sessionId) ?? (await this.registry.resumeSession({ sessionId, workspaceId: this.deps.workspaceKey, workspacePath: this.deps.workspacePath }));
+      return { authority: "session" as const, skills: skillCatalogOfCommands(await engine.loadSkillCommands()) };
     }
     switch (method) {
       case V4_METHODS.command:

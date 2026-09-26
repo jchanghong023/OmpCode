@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import type { Locale, SkillScope, ZCodeProvider } from "@zcode/shared";
+import type { Locale, ZCodeProvider, ZCodeSkillReferenceCatalogEntry } from "@zcode/shared";
 import type { MentionCategoryResult, MentionItem } from "@/mentions/mentionTypes.js";
 import { filterMentionItemsWithOptions } from "@/mentions/mentionSearch.js";
 import { buildSkillMentionMarkdown } from "@/mentions/mentionMarkdown.js";
@@ -9,21 +9,15 @@ import { useZCodeIntl } from "@/i18n/IntlProvider.js";
 import { resolveSkillDisplayDescription, resolveSkillSourceLabel } from "@/lib/builtinSkillI18n.js";
 
 export function mapSkillsToMentionItemsForTest(
-  skills: Array<{
-    id: string;
-    name: string;
-    description: string;
-    path: string;
-    scope: SkillScope;
-    pluginName?: string;
-  }>,
+  skills: ZCodeSkillReferenceCatalogEntry[],
   locale?: Locale,
 ): MentionItem[] {
   const uniqueSkillsByName = new Map<string, (typeof skills)[number]>();
-  const scopePriority: Record<SkillScope, number> = {
-    workspace: 0,
-    plugin: 1,
-    user: 2,
+  const scopePriority: Record<ZCodeSkillReferenceCatalogEntry["scope"], number> = {
+    omp: 0,
+    workspace: 1,
+    plugin: 2,
+    user: 3,
   };
   for (const skill of skills) {
     const key = skill.name.trim().toLowerCase();
@@ -46,7 +40,11 @@ export function mapSkillsToMentionItemsForTest(
       label: skill.name,
       description: description ? `${sourceLabel} · ${description}` : sourceLabel,
       value: skill.name,
-      markdown: buildSkillMentionMarkdown(skill.name, skill.path),
+      // omp 原生 token 可位于句中；旧 Markdown 路径不会触发 omp 技能调用。
+      markdown:
+        skill.scope === "omp"
+          ? `/skill:${skill.name}`
+          : buildSkillMentionMarkdown(skill.name, skill.path),
       keywords: [...new Set([skill.name, skill.description, description, skill.scope])],
       data: {
         path: skill.path,

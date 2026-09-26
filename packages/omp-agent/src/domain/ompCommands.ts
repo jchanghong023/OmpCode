@@ -18,6 +18,8 @@ export function normalizeOmpSlashCommands(
       continue;
     }
     const command = parsed.data;
+    // omp 的 skill 命令已由技能目录投影到单独的候选区；重复放入普通命令区会显示两次。
+    if (command.source === "skill") continue;
     output.push({
       name: command.name,
       description: command.description ?? "",

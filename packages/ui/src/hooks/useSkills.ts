@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { ZCodeSkillReferenceCatalogEntry } from "@zcode/shared";
+import type { RemoteTarget, ZCodeSkillReferenceCatalogEntry } from "@zcode/shared";
 import { useWorkspaceServicesResolution } from "@/hooks/useWorkspaceServices.js";
 import { logger } from "@/logger.js";
 
@@ -33,6 +33,8 @@ interface UseSkillsOptions {
   sessionId: string | null;
   enabled: boolean;
   preferredRemoteSessionId?: string;
+  remoteTarget?: RemoteTarget;
+  revision?: number;
 }
 
 /**
@@ -46,6 +48,7 @@ export function useSkills(options: UseSkillsOptions): ConversationSkillCatalogSt
     options.workspacePath,
     options.preferredRemoteSessionId,
     options.workspaceIdentity,
+    options.remoteTarget,
   );
   const [scopedState, setScopedState] =
     useState<ScopedConversationSkillCatalogState>(EMPTY_SCOPED_STATE);
@@ -56,7 +59,7 @@ export function useSkills(options: UseSkillsOptions): ConversationSkillCatalogSt
     resolution.remoteSessionId ?? options.preferredRemoteSessionId ?? undefined;
   const services = resolution.services;
   const rpcReady = resolution.rpcReady;
-  const requestKey = `${workspaceKey}|${remoteSessionId ?? "local"}|${options.sessionId ?? "draft"}|runtime:${runtimeRevision}`;
+  const requestKey = `${workspaceKey}|${remoteSessionId ?? "local"}|${options.sessionId ?? "draft"}|runtime:${runtimeRevision}|revision:${options.revision ?? 0}`;
 
   useEffect(() => {
     if (!options.enabled || !options.sessionId || !rpcReady) return;

@@ -40,7 +40,7 @@ export function createWorkspaceConfigLoader(
     return processHandle;
   }
 
-  return async function loadWorkspaceConfig(): Promise<WorkspaceConfigState> {
+  async function loadWorkspaceConfig(): Promise<WorkspaceConfigState> {
     try {
       const processHandle = await ensureProcess();
       const [modelsOutcome, levelsOutcome, commandsOutcome, state] = await Promise.all([
@@ -108,7 +108,22 @@ export function createWorkspaceConfigLoader(
       logger.warn("workspace-config 目录加载失败", { error: String(error) });
       return { configOptions: [], slashCommands: [] };
     }
-  };
+  }
+
+  async function loadSkillCommands(): Promise<unknown> {
+    const processHandle = await ensureProcess();
+    const outcome = await processHandle.send({ type: "get_available_commands" });
+    if (!outcome.success) {
+      throw new Error(outcome.error ?? "omp command catalog unavailable");
+    }
+    const record =
+      typeof outcome.data === "object" && outcome.data !== null
+        ? (outcome.data as { commands?: unknown })
+        : {};
+    return record.commands;
+  }
+
+  return { loadWorkspaceConfig, loadSkillCommands };
 }
 
 function parseModels(data: unknown): {
