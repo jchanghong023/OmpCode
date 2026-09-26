@@ -450,6 +450,67 @@ function getLocationScope(scope: UserCommand["scope"]): SettingsDirectoryLocatio
   return scope === "project" ? "project" : "user";
 }
 
+function isPathContainedIn(root: string, targetPath: string): boolean {
+  // 判定口径与同文件 resolveInside 一致：relative 后不得以 ".." 开头，跨盘符时
+  // relative 返回绝对路径，由 isAbsolute 拒绝。
+  const relativePath = relative(root, targetPath);
+  return (
+    relativePath !== "" &&
+    !relativePath.startsWith("..") &&
+    !relativePath.includes(`..${sep}`) &&
+    !isAbsolute(relativePath)
+  );
+}
+
+/** descriptor 对应的全部用户级命令根（覆盖 zcode/agents 等 directorySource 变体）。 */
+function getDescriptorUserCommandRoots(descriptor: CommandAgentSourceDescriptor): string[] {
+  return COMMAND_DIRECTORY_SOURCE_DESCRIPTORS.filter(
+    (entry) => entry.agentSource === descriptor.agentSource,
+  ).map(getUserCommandsRootForDescriptor);
+}
+
+/** project 级命令根形如 <workspace>/<...>/workspaceDirectorySegments；校验 resolved 落在
+ * 某个该形态目录之内（取 workspaceDirectorySegments 尾段作为锚点，锚点后必须仍有文件段）。 */
+function isWithinAnyWorkspaceCommandsDirectory(
+  resolvedPath: string,
+  descriptor: CommandAgentSourceDescriptor,
+): boolean {
+  const segments = resolvedPath.split(/[\\/]+/).filter(Boolean);
+  const anchor = descriptor.workspaceDirectorySegments;
+  if (anchor.length === 0 || segments.length <= anchor.length) {
+    return false;
+  }
+  for (let start = segments.length - anchor.length - 1; start >= 0; start -= 1) {
+    const matched = anchor.every((segment, offset) => segments[start + offset] === segment);
+    if (matched) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * delete RPC 的 filePath 原样进 rm()，而 CommandDeleteParams 不携带 workspacePath，
+ * 用户级根可由 descriptor 精确重建、严格收容；project 级根缺 workspacePath 无法精确重建，
+ * 退化为目录结构收容（必须位于某个 <workspace>/<...>/commands 目录内），杜绝任意路径删除；
+ * workspace 根的精确性由 filePath 仅来自 list() 返回值这一数据流保证。
+ */
+function assertDeletableCommandPath(
+  filePath: string,
+  descriptor: CommandAgentSourceDescriptor,
+): void {
+  const resolvedPath = resolve(filePath);
+  if (
+    getDescriptorUserCommandRoots(descriptor).some((root) => isPathContainedIn(root, resolvedPath))
+  ) {
+    return;
+  }
+  if (isWithinAnyWorkspaceCommandsDirectory(resolvedPath, descriptor)) {
+    return;
+  }
+  throw new Error(`Command file path is outside command directories: ${filePath}`);
+}
+
 function buildCommandLocation(params: {
   descriptor: CommandAgentSourceDescriptor;
   commandsRoot: string;
@@ -486,10 +547,20 @@ function getCommandName(
     .join(descriptor.namespaceSeparator)}`;
 }
 
+// name 经 namespace 转换后必须整体匹配该白名单：段字符限 [A-Za-z0-9_-]，段间仅允许 "/"。
+// "." 不在白名单内，".." 段由此被显式拒绝；"\" 也不在白名单内，Windows 下无法借它当路径分隔符逃逸。
+const COMMAND_NAME_PATTERN = /^[A-Za-z0-9_-]+(?:\/[A-Za-z0-9_-]+)*$/;
+
 function getCommandFileName(config: CommandConfig, agentSource: CommandAgentSource): string {
   const descriptor = getCommandSourceDescriptor(agentSource);
   const rawName = config.name.replace(/^\//, "");
   const relativeName = descriptor.namespaceSeparator === ":" ? rawName.replace(/:/g, "/") : rawName;
+  // name 来自 RPC 调用方原样输入（legacy remote workspace 可达），过去未校验就
+  // join(commandsRoot, fileName)，name 携带 ".." 或分隔符即可逃逸 commandsRoot 造成任意路径写。
+  // 修复对齐 memoryService 的 segment 白名单先例：非法名直接抛参数错误，而不是拼出逃逸路径。
+  if (!COMMAND_NAME_PATTERN.test(relativeName)) {
+    throw new Error(`Invalid command name: ${config.name}`);
+  }
   return `${relativeName}${descriptor.fileExtension}`;
 }
 
@@ -629,6 +700,14 @@ export function createCommandsService(_options?: CommandsServiceOptions): IComma
   async function updateCommandFile(params: CommandUpdateParams): Promise<{ command: UserCommand }> {
     const agentSource = params.agentSource ?? DEFAULT_COMMAND_AGENT_SOURCE;
     const descriptor = getCommandSourceDescriptor(agentSource);
+    // F22 只给 deleteCommandFile 补了收容校验，但 updateCommandFile 的 oldFilePath 同为
+    // RPC 原样输入，会直接进 readFile()（内容经 generateCommandFileContent 回填正文 →
+    // 任意文件读）和 rm()（删除失败被吞 → 任意路径删除），暴露面与 F22 相同。
+    // 这里复用与 delete 同一个 assertDeletableCommandPath、同一 descriptor 来源，拒绝时
+    // 抛同样的参数错误；oldFilePath 为 undefined 的新建路径不受影响。
+    if (params.oldFilePath) {
+      assertDeletableCommandPath(params.oldFilePath, descriptor);
+    }
     const target = getCommandsRootForStorage({
       descriptor,
       storageLevel: params.storageLevel,
@@ -642,16 +721,9 @@ export function createCommandsService(_options?: CommandsServiceOptions): IComma
       ? await readFile(params.oldFilePath, "utf-8").catch(() => undefined)
       : undefined;
 
-    // 如果文件名变了，需要删除旧文件
-    if (params.oldFilePath && params.oldFilePath !== newFilePath) {
-      try {
-        await rm(params.oldFilePath);
-      } catch {
-        // 旧文件可能已被移除，忽略删除失败（ENOENT 属正常情况）。
-      }
-    }
-
-    // 检查新文件是否已存在（排除自己的旧路径）
+    // 先检查新文件是否已存在（排除自己的旧路径），再删除旧文件：
+    // 过去先 rm 旧文件再查重，改名撞上已存在的新名时会抛错返回，
+    // 但旧源文件已被删掉，命令内容丢失。
     if (newFilePath !== params.oldFilePath) {
       try {
         await access(newFilePath);
@@ -661,6 +733,15 @@ export function createCommandsService(_options?: CommandsServiceOptions): IComma
         if (err.code !== "ENOENT") {
           throw error;
         }
+      }
+    }
+
+    // 如果文件名变了，需要删除旧文件
+    if (params.oldFilePath && params.oldFilePath !== newFilePath) {
+      try {
+        await rm(params.oldFilePath);
+      } catch {
+        // 旧文件可能已被移除，忽略删除失败（ENOENT 属正常情况）。
       }
     }
 
@@ -715,6 +796,9 @@ export function createCommandsService(_options?: CommandsServiceOptions): IComma
   }
 
   async function deleteCommandFile(params: CommandDeleteParams): Promise<void> {
+    // 该服务暴露于 legacy remote workspace RPC，filePath 原样进 rm() 前必须先做收容校验，
+    // 拒绝 commandsRoot 之外的任意路径删除（同 memoryService segment 白名单先例）。
+    assertDeletableCommandPath(params.filePath, getCommandSourceDescriptor(params.agentSource));
     try {
       await rm(params.filePath);
     } catch (error) {

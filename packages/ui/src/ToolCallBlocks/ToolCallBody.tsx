@@ -11,6 +11,7 @@ import type {
   TextCodeViewerSource,
 } from "@/lib/codeViewer.js";
 import type { CodePreviewSettings } from "@/lib/codePreviewSettings.js";
+import { toMediaDataUrl } from "@/lib/mediaDataUrl.js";
 import type { TaskChatToolCallTreeNode } from "@/lib/toolCallTree.js";
 import type { ToolDisplayModel, ToolInlinePreview } from "@/lib/toolDisplay.js";
 import type { Theme } from "@/useTheme.js";
@@ -136,25 +137,47 @@ function InlineImageContent({ preview }: { preview: ImageCodeViewerSource }) {
   const { fileService } = useServices();
   const { intl } = useZCodeIntl();
   const [imagePreview, setImagePreview] = useState<FileMediaPreview | null>(null);
+  const [readFailed, setReadFailed] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
-    void fileService.readMediaPreview({ path: preview.path }).then((mediaPreview) => {
-      if (!cancelled) {
-        setImagePreview(mediaPreview);
-      }
-    });
+    // 修复依据：readMediaPreview 在文件被删除/超出预览大小限制时会 reject，
+    // 此前 promise 链没有 catch，会产生 unhandled rejection 且界面永远停在加载态。
+    // 这里补 catch 置错误态，渲染与加载态同样式的占位文案。
+    fileService
+      .readMediaPreview({ path: preview.path })
+      .then((mediaPreview) => {
+        if (!cancelled) {
+          setImagePreview(mediaPreview);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setReadFailed(true);
+        }
+      });
 
     return () => {
       cancelled = true;
     };
   }, [fileService, preview.path]);
 
+  if (readFailed) {
+    return <p>{intl.formatMessage({ id: "chat.toolCall.imageLoadFailed" })}</p>;
+  }
+
   if (!imagePreview) {
     return <p>{intl.formatMessage({ id: "chat.toolCall.loading" })}</p>;
   }
 
-  return <img src={imagePreview.dataBase64} alt={preview.title} />;
+  // 修复依据：dataBase64 是裸 base64（非 data URL），直接当 src 会被浏览器按
+  // 相对 URL 解析必然 404（永远破图）；必须按 mediaType 拼 data URL，见 mediaDataUrl.ts。
+  return (
+    <img
+      src={toMediaDataUrl(imagePreview.mediaType, imagePreview.dataBase64)}
+      alt={preview.title}
+    />
+  );
 }
 
 function InlinePlanResult({

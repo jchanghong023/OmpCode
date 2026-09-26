@@ -105,7 +105,10 @@ export function SlashCommandPlugin({
     );
     return [...cliSuggestions, ...appSuggestions];
   }, [appCommands, commands, excludedCommandNames]);
-  const subagentSuggestions = useMemo(() => buildSubagentSuggestions(agents), [agents]);
+  const subagentSuggestions = useMemo(
+    () => buildSubagentSuggestions(agents, locale),
+    [agents, locale],
+  );
   const skillSuggestions = useMemo(
     () =>
       buildSkillSuggestions(

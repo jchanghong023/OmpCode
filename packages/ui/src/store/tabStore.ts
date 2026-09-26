@@ -352,6 +352,10 @@ export function createTabStore(storage: StorageLike | null | undefined = undefin
 
       const closingTab = tabs[index] ?? null;
       const newTabs = tabs.filter((t) => t.id !== tabId);
+      // 修复 F8：记录被关闭的是否就是当前激活 tab。“找接替 workspace”的 fallback
+      // 只应在关闭的就是激活 tab 时生效；否则 Settings 激活时关闭后台 workspace tab
+      // 会把“最近激活 workspace”（Settings 页解析插件/Skills 依赖它）误改写为剩余列表第一项。
+      const wasActiveTab = activeTabId === tabId;
 
       // 如果关闭的是当前激活的 tab，需要切换到相邻 tab
       let newActiveTabId = activeTabId;
@@ -371,7 +375,9 @@ export function createTabStore(storage: StorageLike | null | undefined = undefin
           return nextWorkspaceTab.workspacePath;
         }
 
-        if (closingTab && isWorkspaceTab(closingTab)) {
+        // 修复 F8：仅当关闭的就是激活 tab 时才找接替 workspace；
+        // 关闭后台 tab 必须保持 stateBefore 的“最近激活 workspace”。
+        if (wasActiveTab && closingTab && isWorkspaceTab(closingTab)) {
           const replacementWorkspace = newTabs.find(isWorkspaceTab);
           return replacementWorkspace?.workspacePath ?? null;
         }
@@ -383,7 +389,8 @@ export function createTabStore(storage: StorageLike | null | undefined = undefin
           return nextWorkspaceTab.workspaceIdentity ?? null;
         }
 
-        if (closingTab && isWorkspaceTab(closingTab)) {
+        // 修复 F8：identity 与 path 同口径，只有关闭激活 tab 时才找接替。
+        if (wasActiveTab && closingTab && isWorkspaceTab(closingTab)) {
           const replacementWorkspace = newTabs.find(isWorkspaceTab);
           return replacementWorkspace?.workspaceIdentity ?? null;
         }

@@ -50,6 +50,10 @@ const remoteAssetManifestRefreshLocks = new Map<
 const remoteAssetComponentLocks = new Map<string, Promise<string>>();
 const remoteAssetReleaseMaterializeLocks = new Map<string, Promise<void>>();
 const DEFAULT_REMOTE_ASSET_MANIFEST_REQUEST_TIMEOUT_MS = 10_000;
+// 制品 tar 包体积大、慢网整体耗时长，不能沿用 manifest 的 10 秒预算；
+// 但下载挂死时 single-flight 会把后续同 key 连接绑死在同一 pending（见
+// createRemoteAssetManifestRequestSignal 注释），因此给每个候选 URL 一个较长的总预算兜底。
+const DEFAULT_REMOTE_ASSET_ARTIFACT_REQUEST_TIMEOUT_MS = 600_000;
 const REMOTE_ASSET_PROGRESS_INTERVAL_MS = 1_000;
 const REMOTE_ASSET_PROGRESS_PERCENT_STEP = 5;
 const CONTENT_ADDRESSED_COMPONENT_RELEASE_DIRS: Record<string, string> = {
@@ -142,6 +146,8 @@ export interface EnsureRemoteReleaseDirOptions {
   forceRefresh?: boolean;
   /** 单个 manifest CDN 候选请求的超时时间。 */
   manifestRequestTimeoutMs?: number;
+  /** 单个组件制品 CDN 候选请求的总超时时间；不传使用较长的默认预算。 */
+  artifactRequestTimeoutMs?: number;
   remoteAssetNetwork?: RemoteAssetNetworkPort;
 }
 
@@ -252,6 +258,7 @@ export async function ensureRemoteReleaseDirFromCdn(
       manifestRef: options.manifestRef,
       forceRefresh: options.forceRefresh,
       manifestRequestTimeoutMs: options.manifestRequestTimeoutMs,
+      artifactRequestTimeoutMs: options.artifactRequestTimeoutMs,
       remoteAssetNetwork: options.remoteAssetNetwork,
     },
     loggers,
@@ -325,6 +332,7 @@ async function ensureRemoteReleaseDirFromCdnInternal(
     manifestRef?: RemoteAssetManifestRef | null;
     forceRefresh?: boolean;
     manifestRequestTimeoutMs?: number;
+    artifactRequestTimeoutMs?: number;
     remoteAssetNetwork?: RemoteAssetNetworkPort;
   },
   loggers: RemoteAssetCacheLoggers,
@@ -373,6 +381,7 @@ async function ensureRemoteReleaseDirFromCdnInternal(
         requestedComponentIds: options.requestedComponentIds,
         requiredReleasePaths: options.requiredReleasePaths,
         forceRefresh: options.forceRefresh,
+        artifactRequestTimeoutMs: options.artifactRequestTimeoutMs,
         remoteAssetNetwork: options.remoteAssetNetwork,
       },
       options.manifestRef.manifest,
@@ -435,6 +444,7 @@ async function ensureRemoteReleaseDirFromCdnInternal(
         requestedComponentIds: options.requestedComponentIds,
         requiredReleasePaths: options.requiredReleasePaths,
         forceRefresh: options.forceRefresh,
+        artifactRequestTimeoutMs: options.artifactRequestTimeoutMs,
         remoteAssetNetwork: options.remoteAssetNetwork,
       },
       manifestFetchResult.manifest,
@@ -583,6 +593,7 @@ async function ensureRemoteReleaseDirFromManifest(
     requestedComponentIds: Set<string> | null;
     requiredReleasePaths: string[];
     forceRefresh?: boolean;
+    artifactRequestTimeoutMs?: number;
     remoteAssetNetwork?: RemoteAssetNetworkPort;
   },
   manifest: RemoteAssetManifest,
@@ -784,6 +795,7 @@ async function ensureRemoteComponentDirFromCdn(
     version: string;
     platformArch: string;
     releaseBaseCandidatesForComponents: string[];
+    artifactRequestTimeoutMs?: number;
     remoteAssetNetwork?: RemoteAssetNetworkPort;
   },
   component: RemoteAssetManifestComponent,
@@ -845,6 +857,7 @@ async function ensureRemoteComponentDirFromCdnInternal(
     version: string;
     platformArch: string;
     releaseBaseCandidatesForComponents: string[];
+    artifactRequestTimeoutMs?: number;
     remoteAssetNetwork?: RemoteAssetNetworkPort;
   },
   component: RemoteAssetManifestComponent,
@@ -943,6 +956,7 @@ async function ensureRemoteComponentDirFromCdnInternal(
       artifactUrlCandidates,
       `${component.id}@${component.version}`,
       resolveRemoteAssetFetch(options.remoteAssetNetwork),
+      options.artifactRequestTimeoutMs,
     );
     loggers.log(`[remote-assets] downloading ${artifactUrl}`);
     await writeResponseBodyToFile(artifactResponse, archivePath, loggers);
@@ -1159,23 +1173,39 @@ function resolveReleaseBaseByAssetUrl(
   return matchedReleaseBases[0] ?? null;
 }
 
+function createRemoteAssetArtifactRequestSignal(timeoutMs: number | undefined): AbortSignal {
+  // 与 manifest 请求复用同一超时信号 helper（同一 single-flight 绑定风险，见其注释）；
+  // 制品候选只把默认预算换成更长的总预算，注入语义与参数校验保持一致。
+  return createRemoteAssetManifestRequestSignal(
+    timeoutMs ?? DEFAULT_REMOTE_ASSET_ARTIFACT_REQUEST_TIMEOUT_MS,
+  );
+}
+
 async function fetchFirstAvailableUrl(
   candidates: string[],
   fileLabel: string,
   fetchImpl: typeof globalThis.fetch,
+  artifactRequestTimeoutMs?: number,
 ): Promise<{ response: Response; url: string }> {
   const errors: string[] = [];
 
   for (const candidate of candidates) {
+    // 制品下载过去对 fetchImpl(candidate) 不带任何 signal/超时：网络半开时请求永不结束，
+    // 以 componentDir 为 key 的 single-flight 锁会把后续同 key 连接绑死在同一 pending。
+    // 这里与 manifest 同口径按候选注入超时信号（覆盖响应头与 body）；任务失败后由既有
+    // .finally 把 remoteAssetComponentLocks/remoteAssetReleaseLocks 条目出队，后续请求可重新发起。
+    const signal = createRemoteAssetArtifactRequestSignal(artifactRequestTimeoutMs);
+    let response: Response;
     try {
-      const response = await fetchImpl(candidate);
-      if (response.ok) {
-        return { response, url: candidate };
-      }
-      errors.push(`${candidate} -> HTTP ${response.status}`);
+      response = await fetchImpl(candidate, { signal });
     } catch (error) {
       errors.push(`${candidate} -> ${String(error)}`);
+      continue;
     }
+    if (response.ok) {
+      return { response, url: candidate };
+    }
+    errors.push(`${candidate} -> HTTP ${response.status}`);
   }
 
   throw new Error(`[remote-assets] failed to fetch ${fileLabel}: ${errors.join("; ")}`);

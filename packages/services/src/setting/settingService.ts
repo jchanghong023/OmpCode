@@ -198,7 +198,10 @@ async function writeSettings(
   const settingsFile = getSettingsFile();
   // Windows 下测试只改了 HOME，模块顶层常量如果在导入时就把 homedir() 固化，
   // 后续读写仍会串到真实用户目录。这里改成每次按当前环境解析配置路径，保证本地和测试都稳定。
-  log("writing settings to:", settingsFile, JSON.stringify(settings));
+  // 写路径过去把完整 AppSettings JSON（含用户路径、远端 host/username）打进生产 stdout；
+  // 对齐读路径先例（readSettingsWithMeta 注释：日志暴涨且暴露路径/配置细节，已移除全量输出），
+  // 只保留开发态 debug 的文件路径，不输出任何配置内容。
+  debugLog("writing settings to:", settingsFile);
   maybeThrowInjectedFsFault({ operation: "mkdir", path: settingsDir });
   await mkdir(settingsDir, { recursive: true });
   if (!shouldCommit()) return;

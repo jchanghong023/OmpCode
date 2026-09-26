@@ -1,6 +1,5 @@
 /* oxlint-disable eslint(max-lines) -- WSL backend 同时承载探测、路径解析、兼容 UNC 与可取消流式上传。 */
 import { spawn, execFile } from "node:child_process";
-import type { ChildProcess } from "node:child_process";
 import { access, copyFile, mkdir, readFile, stat } from "node:fs/promises";
 import { createReadStream } from "node:fs";
 import { dirname, posix } from "node:path";
@@ -18,6 +17,7 @@ import {
   resolveRemotePlatform,
 } from "@zcode/server/remote/detectEnv.js";
 import { isWSLAvailable, listWSLDistros, type WSLDistro } from "@zcode/server/remote/wsl-detect.js";
+import { OwnedChildRegistry } from "@zcode/server/remote/ownedChildRegistry.js";
 import {
   buildWslHostGatewayCommand,
   buildWslProxyPortProbeCommand,
@@ -122,10 +122,9 @@ export class WSLBackend implements IRemoteBackend {
 
   private readonly options: WSLConnectOptions;
   private resolvedInfoPromise: Promise<ResolvedWSLInfo> | null = null;
-  private readonly ownedChildren = new Map<
-    ChildProcess,
-    { closed: Promise<void>; resolveClosed: () => void }
-  >();
+  // 归属子进程的追踪与 dispose 收口（end stdin → 宽限 → kill 兜底）收口到
+  // OwnedChildRegistry，与 Docker 后端共享同一实现；这里只保留 disposed 门禁与 in-flight 备忘。
+  private readonly ownedChildren = new OwnedChildRegistry();
   private disposed = false;
   private disposeInFlight: Promise<void> | null = null;
 
@@ -338,7 +337,7 @@ export class WSLBackend implements IRemoteBackend {
           windowsHide: true,
         },
       );
-      this.trackOwnedChild(child);
+      this.ownedChildren.track(child);
 
       child.once("error", reject);
       child.once("spawn", () => {
@@ -428,76 +427,16 @@ export class WSLBackend implements IRemoteBackend {
     }
     this.disposed = true;
 
-    const graceTimeoutMs = Math.max(options?.graceTimeoutMs ?? 300, 0);
-    const killWaitTimeoutMs = Math.max(options?.killWaitTimeoutMs ?? 250, 0);
-    const children = Array.from(this.ownedChildren.entries());
     // WSL 过去不记录自己 spawn 的 wsl.exe，Host 被强杀时只能寄希望于管道 EOF。
-    // 先同步关闭本 backend 子进程 stdin；宽限期后也只 kill 这些已证明归属的 child，绝不 terminate distro。
-    for (const [child] of children) {
-      this.endOwnedChildInput(child);
-    }
-    this.disposeInFlight = Promise.all(
-      children.map(async ([child, state]) => {
-        if (await this.waitForOwnedChildClose(state.closed, graceTimeoutMs)) {
-          return;
-        }
-        if (this.ownedChildren.has(child)) {
-          child.kill();
-        }
-        await this.waitForOwnedChildClose(state.closed, killWaitTimeoutMs);
-      }),
-    ).then(() => undefined);
+    // 收口逻辑在 registry 内：先同步关闭 stdin；宽限期后也只 kill 已证明归属的 child，绝不 terminate distro。
+    this.disposeInFlight = this.ownedChildren.disposeAndWait(options);
     return this.disposeInFlight;
-  }
-
-  private trackOwnedChild(child: ChildProcess): void {
-    let resolveClosed!: () => void;
-    const closed = new Promise<void>((resolve) => {
-      resolveClosed = resolve;
-    });
-    const finish = () => {
-      const state = this.ownedChildren.get(child);
-      if (!state) {
-        return;
-      }
-      this.ownedChildren.delete(child);
-      state.resolveClosed();
-    };
-    this.ownedChildren.set(child, { closed, resolveClosed });
-    child.once("error", finish);
-    child.once("exit", finish);
-    child.once("close", finish);
   }
 
   private assertNotDisposed(): void {
     if (this.disposed) {
       throw new Error("WSL backend 已释放，无法启动新命令");
     }
-  }
-
-  private endOwnedChildInput(child: ChildProcess): void {
-    if (!child.stdin || child.stdin.writableEnded) {
-      return;
-    }
-    try {
-      child.stdin.end();
-    } catch {
-      // stdin 已异常关闭时继续进入本 child 的 kill fallback。
-    }
-  }
-
-  private async waitForOwnedChildClose(closed: Promise<void>, timeoutMs: number): Promise<boolean> {
-    let timeout: ReturnType<typeof setTimeout> | undefined;
-    const result = await Promise.race([
-      closed.then(() => true),
-      new Promise<false>((resolve) => {
-        timeout = setTimeout(() => resolve(false), timeoutMs);
-      }),
-    ]);
-    if (timeout) {
-      clearTimeout(timeout);
-    }
-    return result;
   }
 
   private async ensureAvailable(): Promise<void> {
@@ -658,7 +597,7 @@ export class WSLBackend implements IRemoteBackend {
           resolve(stdoutBuffer);
         },
       );
-      this.trackOwnedChild(child);
+      this.ownedChildren.track(child);
     });
   }
 }

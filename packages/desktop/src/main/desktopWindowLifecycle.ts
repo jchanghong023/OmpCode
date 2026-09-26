@@ -21,6 +21,29 @@ import {
 
 const DEFAULT_RUNTIME_PROCESS_ENV_WAIT_TIMEOUT_MS = 4_500;
 
+/** Host 意外重启的最大退避时长；存活满该时长视为与历史崩溃无关的新故障序列。 */
+const HOST_RESTART_MAX_BACKOFF_MS = 30_000;
+
+/**
+ * 由上次 Host 存活时长与历史连续崩溃次数，计算本次重载延迟与新的退避计数。
+ *
+ * 存活 >= HOST_RESTART_MAX_BACKOFF_MS 时把计数清零后再自增：上一次崩溃序列已经
+ * 稳定运行过一轮上限时长，本次故障与历史无关；否则沿用历史计数做指数退避
+ * （1s→2s→…→30s 封顶）。注意不能"spawn 即清零"——renderer reload 同样会触发
+ * spawn，若 spawn 时清零，连续快速崩溃会在每次 reload 后被归零，退避恒为 1s，
+ * 形成崩溃热循环。
+ */
+export function nextHostRestartDelayMs(
+  aliveMs: number,
+  previousAttempts: number,
+): { delayMs: number; attempts: number } {
+  const baseAttempts = aliveMs >= HOST_RESTART_MAX_BACKOFF_MS ? 0 : previousAttempts;
+  return {
+    delayMs: Math.min(1_000 * 2 ** Math.min(baseAttempts, 5), HOST_RESTART_MAX_BACKOFF_MS),
+    attempts: baseAttempts + 1,
+  };
+}
+
 export function createWindow(options: {
   iconPath: string;
   preloadPath: string;
@@ -122,6 +145,8 @@ export function createWindow(options: {
   let domReadyGeneration = 0;
   let cancelRuntimeProcessEnvWait: (() => void) | null = null;
   let activeLocalHost: ElectronUtilityProcess | null = null;
+  // 当前 Local Host 的启动时刻，供 exit 回调计算存活时长、判定是否重置退避计数。
+  let activeLocalHostStartedAt = 0;
   let hostRestartTimer: ReturnType<typeof setTimeout> | null = null;
   let hostRestartAttempts = 0;
   scheduleArmsBrowserPerfLoadNudge(win.webContents);
@@ -213,16 +238,25 @@ export function createWindow(options: {
       });
       options.windowHostProcessMap.set(wcId, child);
       activeLocalHost = child;
+      activeLocalHostStartedAt = Date.now();
       child.once("exit", () => {
         if (activeLocalHost !== child || win.isDestroyed() || options.forceQuitRef.current) return;
         activeLocalHost = null;
         // Host 是窗口的服务 owner；意外退出后重载 renderer，走既有 dom-ready 重建链。
-        const delay = Math.min(1_000 * 2 ** Math.min(hostRestartAttempts++, 5), 30_000);
-        options.logger.warn(`[createWindow] local host exited unexpectedly (${label}); reloading in ${delay}ms`);
+        // 退避修复：历史实现只累加 hostRestartAttempts 且 dom-ready 从不重置，应用
+        // 生命周期内崩溃总次数会把重载延迟推到 30s 封顶后永不回落。现按"本次存活
+        // 时长"判定：稳定运行满 30s 后的崩溃视为新故障序列，计数先清零再自增；
+        // 不能在 spawn 时直接清零（reload 也会 spawn，会让连续快速崩溃退避失效）。
+        const { delayMs, attempts } = nextHostRestartDelayMs(
+          Date.now() - activeLocalHostStartedAt,
+          hostRestartAttempts,
+        );
+        hostRestartAttempts = attempts;
+        options.logger.warn(`[createWindow] local host exited unexpectedly (${label}); reloading in ${delayMs}ms`);
         hostRestartTimer = setTimeout(() => {
           hostRestartTimer = null;
           if (!win.isDestroyed()) win.webContents.reload();
-        }, delay);
+        }, delayMs);
       });
       options.onHostProcessReady?.(wcId);
       options.syncAutoUpdaterStateToWindow(win);

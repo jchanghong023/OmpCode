@@ -1,6 +1,6 @@
 /* eslint-disable max-lines */
 import { access, lstat, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
-import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import {
   createAgentStateId,
   createPluginAgentStateId,
@@ -732,6 +732,17 @@ export function createSubagentsService(options?: SubagentsServiceOptions): ISuba
           ? resolveWorkspaceSubagentRoot(requireWorkspacePath(params.workspacePath))
           : await resolveUserSubagentRoot(storageOptions);
       const filePath = join(agentDir, `${params.config.name.trim().toLowerCase()}.md`);
+      // F22 只给 deleteAgent 补了收容校验的思路同样适用于这里：oldFilePath 同为 RPC 原样输入，
+      // 会在下方 rm() 被删除（force 连失败都吞掉），暴露面与 deleteAgent 相同。AgentUpdateParams
+      // 携带 scope/workspacePath，可按本次更新的目标根（agentDir）精确收容，先断言再写盘，
+      // 拒绝落在目标 agent 根之外的任意路径删除。
+      if (params.oldFilePath) {
+        await assertDeletableSubagentPath(
+          params.oldFilePath,
+          { scope, workspacePath: params.workspacePath },
+          storageOptions,
+        );
+      }
       await mkdir(agentDir, { recursive: true });
 
       if (params.oldFilePath && params.oldFilePath !== filePath && (await exists(filePath))) {
@@ -746,13 +757,14 @@ export function createSubagentsService(options?: SubagentsServiceOptions): ISuba
       // 否则用户禁用的 agent 改名后会被 runtime 当成新启用 profile 重新加载。
       await migrateDisabledAgentId(params.agentId, agent.id, storageOptions);
       if (params.oldFilePath && params.oldFilePath !== filePath) {
-        await rm(params.oldFilePath, { force: true });
+        await rmSubagentFile(params.oldFilePath);
       }
       return { agent };
     },
 
     async deleteAgent(params: AgentDeleteParams): Promise<void> {
-      await rm(params.filePath, { force: true });
+      await assertDeletableSubagentPath(params.filePath, {}, storageOptions);
+      await rmSubagentFile(params.filePath);
 
       const state = await readAgentStateFile(storageOptions);
       const disabledSet = new Set(state.disabledAgentIds);
@@ -826,6 +838,89 @@ function requireWorkspacePath(workspacePath: string | undefined): string {
   const value = workspacePath?.trim();
   if (!value) throw new Error("Workspace path is required for workspace subagents");
   return value;
+}
+
+function isPathContainedIn(root: string, targetPath: string): boolean {
+  // 判定口径与 commandsService 的 F22 收容一致：relative 后不得以 ".." 开头，跨盘符时
+  // relative 返回绝对路径，由 isAbsolute 拒绝；等于根目录本身也拒绝（锚点后必须仍有文件段）。
+  const relativePath = relative(root, targetPath);
+  return (
+    relativePath !== "" &&
+    !relativePath.startsWith("..") &&
+    !relativePath.includes(`..${sep}`) &&
+    !isAbsolute(relativePath)
+  );
+}
+
+/** workspace 级 agent 根形如 <workspace>/.ompcode/agents；校验 resolved 位于某个该形态目录内
+ * （以 ".ompcode/agents" 为锚点，锚点后必须仍有文件段），锚点来自 subagentStorage 的真实目录约定。 */
+function isWithinAnyWorkspaceSubagentDirectory(resolvedPath: string): boolean {
+  const segments = resolvedPath.split(/[\\/]+/).filter(Boolean);
+  const anchor = [".ompcode", "agents"];
+  if (segments.length <= anchor.length) {
+    return false;
+  }
+  for (let start = segments.length - anchor.length - 1; start >= 0; start -= 1) {
+    if (anchor.every((segment, offset) => segments[start + offset] === segment)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * delete/update RPC 的 filePath/oldFilePath 原样进 rm()，而 ISubagentsService 与
+ * commandsService（F22/F34）同样注册在远端 workspace 服务集合（legacy remote workspace
+ * 桥/手机远控可达），删除前必须做收容判定，杜绝任意路径删除。
+ *
+ * 允许根的构成（以 subagentStorage 的真实目录约定为准）：
+ * - 用户级根 <storageRoot>/agents 可由 storageOptions 精确重建，做严格收容；
+ * - AgentDeleteParams 只携带 agentId/filePath，无 scope/workspacePath，workspace 级根
+ *   无法精确重建，退化为目录结构收容（必须位于某个 <workspace>/.ompcode/agents 目录内），
+ *   workspace 根的精确性由 filePath 仅来自 list() 返回值这一数据流保证；
+ * - AgentUpdateParams 携带 scope/workspacePath，可按本次更新的目标根精确重建，
+ *   严格收容、不做目录结构退化（context.scope 缺省时才走 delete 的退化口径）。
+ */
+async function assertDeletableSubagentPath(
+  filePath: string,
+  context: {
+    scope?: "user" | "workspace";
+    workspacePath?: string;
+  },
+  options?: SubagentStorageOptions,
+): Promise<void> {
+  const resolvedPath = resolve(filePath);
+  if (context.scope === undefined) {
+    if (isPathContainedIn(await resolveUserSubagentRoot(options), resolvedPath)) {
+      return;
+    }
+    if (isWithinAnyWorkspaceSubagentDirectory(resolvedPath)) {
+      return;
+    }
+  } else {
+    const root =
+      context.scope === "workspace"
+        ? resolveWorkspaceSubagentRoot(requireWorkspacePath(context.workspacePath))
+        : await resolveUserSubagentRoot(options);
+    if (isPathContainedIn(root, resolvedPath)) {
+      return;
+    }
+  }
+  // 拒绝时抛参数错误，与 commandsService F22/F34 同风格（RPC 面已有 toast 兼容）。
+  throw new Error(`Subagent file path is outside subagent directories: ${filePath}`);
+}
+
+/** 收容内的删除统一走这里：过去 force: true 连 ENOENT 都吞掉、删除失败无噪音；
+ * 对齐 commandsService F22 先例改为显式处理 ENOENT，其余失败如实抛出。 */
+async function rmSubagentFile(filePath: string): Promise<void> {
+  try {
+    await rm(filePath);
+  } catch (error) {
+    const err = error as NodeJS.ErrnoException;
+    if (err.code !== "ENOENT") {
+      throw error;
+    }
+  }
 }
 
 function parseSavedAgent(

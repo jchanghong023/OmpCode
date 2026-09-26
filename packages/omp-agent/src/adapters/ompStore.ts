@@ -119,9 +119,11 @@ export function createOmpStore(env: NodeJS.ProcessEnv = process.env): OmpStorePo
     async readSessionEntries(sessionPath: string): Promise<unknown[]> {
       try {
         const content = await readFile(sessionPath, "utf8");
+        // JSONL 为追加写：超长截断必须保留末尾（最新）段，取头部会让长会话
+        // 最近消息在冷恢复投影中缺失。孤儿 tool_result 行在 rowsFromOmpEntries 中被容忍。
         return content
           .split("\n")
-          .slice(0, 4000)
+          .slice(-4000)
           .map((line) => {
             try {
               return JSON.parse(line);
@@ -142,7 +144,8 @@ export function createOmpStore(env: NodeJS.ProcessEnv = process.env): OmpStorePo
       const childPath = join(sessionPath.slice(0, -6), `${subagentId}.jsonl`);
       try {
         const content = await readFile(childPath, "utf8");
-        return content.split("\n").slice(0, 4000).flatMap((line) => {
+        // 同 readSessionEntries：追加写文件截断保留末尾（最新）段。
+        return content.split("\n").slice(-4000).flatMap((line) => {
           try { return [JSON.parse(line) as unknown]; } catch { return []; }
         });
       } catch {

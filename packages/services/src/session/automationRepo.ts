@@ -29,10 +29,13 @@ import {
 } from "@zcode/shared";
 import { getTasksIndexDatabasePath } from "#src/paths.js";
 import { runTasksDatabaseMigrations } from "#src/session/tasksDatabase/migrations.js";
+import { createServiceLogger } from "#src/logger/serviceLogger.js";
 
 const require = createRequire(import.meta.url);
 const { DatabaseSync } = require("node:sqlite") as typeof import("node:sqlite");
 type DatabaseSyncInstance = InstanceType<typeof DatabaseSync>;
+
+const logger = createServiceLogger("automation-repo");
 
 /** 派发失败退避常量。 */
 export const DISPATCH_RETRY_BASE_MS = 30_000;
@@ -111,6 +114,29 @@ interface ClaimedManualAutomationRun {
   run: ZCodeAutomationRun;
 }
 
+function readAutomationScheduleRule(
+  value: string | null,
+): ZCodeAutomation["scheduleRule"] | undefined {
+  if (!value) return undefined;
+  // 与 getBotDeliveryTarget / readSerializedModelSelection 同一守卫口径：
+  // 脏 JSON 不能拖垮任务列表或 scheduler，无效规则按无规则处理。
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (
+      typeof parsed !== "object" ||
+      parsed === null ||
+      Array.isArray(parsed) ||
+      typeof (parsed as { unit?: unknown }).unit !== "string"
+    ) {
+      throw new Error("schedule_rule shape mismatch");
+    }
+    return parsed as ZCodeAutomation["scheduleRule"];
+  } catch {
+    logger.warn(undefined, "automation schedule_rule 损坏，按无规则处理:", value);
+    return undefined;
+  }
+}
+
 function rowToAutomation(row: AutomationRow): ZCodeAutomation {
   const modelSelection = readAutomationModelSelection(row);
   return {
@@ -130,9 +156,7 @@ function rowToAutomation(row: AutomationRow): ZCodeAutomation {
     recurring: row.recurring === 1,
     maxRuns: row.max_runs ?? undefined,
     endAt: row.end_at ?? undefined,
-    scheduleRule: row.schedule_rule
-      ? (JSON.parse(row.schedule_rule) as ZCodeAutomation["scheduleRule"])
-      : undefined,
+    scheduleRule: readAutomationScheduleRule(row.schedule_rule),
     ...(row.schedule_edited_by_user === 1 ? { scheduleEditedByUser: true } : {}),
     runCount: row.run_count,
     enabled: row.enabled === 1,

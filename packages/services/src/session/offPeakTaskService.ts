@@ -529,9 +529,12 @@ export class OffPeakTaskService implements IOffPeakTaskService {
     if (this.syncRunning) return;
     this.syncRunning = true;
     let nextDelay = OFF_PEAK_SYNC_MAX_INTERVAL_MS;
+    // 空任务分支置 false 后 finally 不再自排定时器；过去该分支 return 仍穿过 finally
+    // 的 ensureSyncScheduled，与"无任务不再自动重排"的注释相反，空轮询每 5 分钟自排永不停止。
+    let scheduleAgain = true;
     try {
       // 1) 核销 outbox 捎带补报（不新增计时器）。
-      await this.flushSettleOutbox();
+      const unsettledRemaining = await this.flushSettleOutbox();
       // 2) 有非终态任务才轮询。
       const nonTerminal = await this.projectModelSelectionIssues(
         await this.deps.repo.listNonTerminal(),
@@ -545,7 +548,14 @@ export class OffPeakTaskService implements IOffPeakTaskService {
       }
       if (withTickets.length === 0 && nonTerminal.length === 0) {
         // 无任务：不再自动重排，等下一次 create/continue 触发。
+        // 例外：outbox 仍有未核销终态时保留低频补报——"失败随轮询周期捎带补报"
+        // 的重试路径依赖本循环；全部清空后才真正停轮询（create/continue/startSync 会重新拉起）。
         this.consecutiveSyncFailures = 0;
+        if (unsettledRemaining === 0) {
+          scheduleAgain = false;
+        } else {
+          nextDelay = OFF_PEAK_SYNC_MAX_INTERVAL_MS;
+        }
         return;
       }
       if (withTickets.length > 0) {
@@ -584,11 +594,13 @@ export class OffPeakTaskService implements IOffPeakTaskService {
       );
     } finally {
       this.syncRunning = false;
-      const clamped = Math.min(
-        Math.max(nextDelay, OFF_PEAK_SYNC_MIN_INTERVAL_MS),
-        OFF_PEAK_SYNC_MAX_INTERVAL_MS,
-      );
-      this.ensureSyncScheduled(clamped);
+      if (scheduleAgain) {
+        const clamped = Math.min(
+          Math.max(nextDelay, OFF_PEAK_SYNC_MIN_INTERVAL_MS),
+          OFF_PEAK_SYNC_MAX_INTERVAL_MS,
+        );
+        this.ensureSyncScheduled(clamped);
+      }
     }
   }
 
@@ -645,31 +657,40 @@ export class OffPeakTaskService implements IOffPeakTaskService {
     }
   }
 
-  /** 终态未核销任务补报（幂等，永远失败也无害——服务端静默超时回收兜底）。 */
-  private async flushSettleOutbox(): Promise<void> {
+  /**
+   * 终态未核销任务补报（幂等，永远失败也无害——服务端静默超时回收兜底）。
+   * 返回本轮补报后仍未核销的数量，供空任务分支判断能否安全停轮询。
+   */
+  private async flushSettleOutbox(): Promise<number> {
     const unsettled = await this.deps.repo.listUnsettledTerminal();
+    let unsettledRemaining = 0;
     for (const task of unsettled) {
-      await this.settleOne(task);
+      const settled = await this.settleOne(task);
+      if (!settled) unsettledRemaining += 1;
     }
+    return unsettledRemaining;
   }
 
-  private async settleOne(task: ZCodeOffPeakTask): Promise<void> {
+  /** 返回是否已核销（含无票直标与 4xx 幂等 ack）；网络/5xx 保持未核销并返回 false。 */
+  private async settleOne(task: ZCodeOffPeakTask): Promise<boolean> {
     if (!task.serverTicketId) {
       // 无票（mock 先行/取号从未成功）：无可核销对象，直接标记防止 outbox 永久滞留。
       await this.deps.repo.markSettled(task.offPeakTaskId, this.now());
-      return;
+      return true;
     }
     try {
       await this.deps.client.settle(task.serverTicketId);
       await this.deps.repo.markSettled(task.offPeakTaskId, this.now());
+      return true;
     } catch (error) {
       if (error instanceof OffPeakServerError && error.httpStatus < 500) {
         // 4xx（未知票等）按幂等 ack 处理：服务端已无此票可释放。
         await this.deps.repo.markSettled(task.offPeakTaskId, this.now());
-        return;
+        return true;
       }
       // 网络/5xx：保持未核销，下个周期捎带补报（不新增计时器）。
       this.deps.logger.warn(`off-peak settle failed ticket=${task.serverTicketId}:`, error);
+      return false;
     }
   }
 }

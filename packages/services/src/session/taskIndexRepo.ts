@@ -2111,6 +2111,9 @@ export class TaskIndexRepo {
                 migration_source,
                 forked_from_task_id,
                 cron_automation_id,
+                -- 列序对照 listTaskMetas/listSessionsByAutomation 的查询；行被直接断言成
+                -- TaskIndexRow，缺列会让 rowToMeta 读到 undefined 的 offPeakTaskId。
+                off_peak_task_id,
                 created_at,
                 updated_at,
                 unread_at,
@@ -2450,6 +2453,26 @@ export class TaskIndexRepo {
             }>
           ).map((row) => `${row.workspace_key}\u0000${row.task_id}`);
 
+    // group 归属口径与 queryGroupedTaskView/Structure 一致：bootstrap 表把 group 绑到
+    // 某个 workspace，绑定为空（无行或 group_id 为 NULL）视为全局 group，任意 scope 可见。
+    const bootstrapRows = database
+      .prepare(
+        `SELECT workspace_key, group_id
+        FROM task_group_workspace_bootstraps
+        WHERE group_id IS NOT NULL`,
+      )
+      .all() as unknown as TaskGroupWorkspaceBootstrapRow[];
+    const bootstrapWorkspaceKeyByGroupId = new Map(
+      bootstrapRows
+        .filter((row) => row.group_id)
+        .map((row) => [row.group_id as string, row.workspace_key]),
+    );
+    // 本次 payload 覆盖的 group：顶层 group 节点 + groups 成员分组，二者来自同一份视图提交。
+    const payloadGroupIds = new Set<string>([
+      ...visibleTopLevelNodes.filter((node) => node.type === "group").map((node) => node.groupId),
+      ...visibleGroups.map((group) => group.groupId),
+    ]);
+
     database.exec("BEGIN IMMEDIATE");
     try {
       const markWorkspaceBootstrapDisabled = database.prepare(
@@ -2513,7 +2536,28 @@ export class TaskIndexRepo {
       }
 
       // 一次提交最终排序，避免菜单/草稿/取消分组等 grouped 视图变更留下部分写入状态。
-      database.prepare("DELETE FROM task_group_view_node_orders WHERE node_type = 'group'").run();
+      // group 排序清理必须与下方 task 侧同口径（见 task 侧注释的不变量：只清当前 scope），
+      // 过去 `DELETE ... WHERE node_type = 'group'` 无 scope 过滤，会把其他 workspace/
+      // 未展开 scope 的 group 混排位置一并误删。这里只删本次 payload 覆盖且属于当前
+      // scope 可见性（全局 group，或 bootstrap 绑定的 workspace 在当前 scope 内）的 group。
+      // R7-1：不得因 workspaceKeys 为空整体跳过清理——空 scopes 是合法输入（视图内任务
+      // 全部归档/删除只剩空分组时 UI 产出空 scopes），此时下方 insertOrder 仍会对 payload
+      // group 无 ON CONFLICT 地 INSERT，跳过清理会让已存在排序行的 group 触发
+      // UNIQUE(node_type, node_key) 异常并回滚整个事务（修复前该状态可正常保存）。
+      // 空集时内层可见性过滤自洽：全局 group（bootstrap 绑定为空）在任何 scope 可见，
+      // 照常删除重建；绑定 workspace 在 scope 外（空集下"scope 内"永假）的 group 跳过
+      // 删除、旧排序原样保留，与"只清当前 scope 可见排序"的不变量一致。
+      const deleteGroupOrder = database.prepare(
+        `DELETE FROM task_group_view_node_orders
+        WHERE node_type = 'group' AND node_key = ?`,
+      );
+      for (const groupId of payloadGroupIds) {
+        const bootstrapWorkspaceKey = bootstrapWorkspaceKeyByGroupId.get(groupId);
+        if (bootstrapWorkspaceKey && !workspaceKeys.has(bootstrapWorkspaceKey)) {
+          continue;
+        }
+        deleteGroupOrder.run(groupId);
+      }
       const deleteTaskOrder = database.prepare(
         `DELETE FROM task_group_view_node_orders
         WHERE node_type = 'task' AND (node_key = ? OR node_key = ?)`,

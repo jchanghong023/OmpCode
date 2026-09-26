@@ -56,6 +56,51 @@ async function pathExists(path: string): Promise<boolean> {
   }
 }
 
+/**
+ * 单批 git diff 的路径数上限。受影响路径可能成百上千，逐路径 spawn 一次 git 进程不可接受；
+ * 批量时受 Windows CreateProcess 单条命令行约 32k 字符上限约束，按 repo 相对路径保守
+ * 300 字符/条估算，每批 100 条留出充分余量，避免超长路径触发 spawn 失败。
+ */
+const DIFF_DIRTY_BATCH_SIZE = 100;
+
+/**
+ * 批量判定 worktree 相对某个 checkpoint commit 的 dirty 路径集合。
+ *
+ * 为什么不用哈希对比：checkpoint tree 由 `git add` 写入，而 add 的 CRLF→LF 转换受
+ * "index 内已有 CR 则不再转换"等启发式门控——autocrlf=false 建仓提交 CRLF 后翻转为
+ * autocrlf=true 的历史仓里，add 保留原始 CR，hash-object（无论是否 --no-filters）不查
+ * 该门控、无条件按当前配置转换，两种口径必然分叉。`git diff` 的 worktree 侧转换与
+ * add/status 共享同一套含启发式的决策，是 git 自身的同源判定，本机双场景探针已实证。
+ *
+ * 为什么不用 git status --porcelain：status 只回答"worktree vs index/HEAD"，而冲突判定
+ * 需要的是"worktree vs 任意 checkpoint commit"（checkpoint 是隐藏 commit，与 HEAD 无
+ * 必然关系），`git diff <commit> -- <paths>` 才是语义直接的等价判定。
+ */
+async function collectDirtyWorktreePaths(params: {
+  commandProvider: GitCommandProvider;
+  repoRoot: string;
+  commitOid: string;
+  repoRelativePaths: readonly string[];
+}): Promise<Set<string>> {
+  const dirtyPaths = new Set<string>();
+  for (let start = 0; start < params.repoRelativePaths.length; start += DIFF_DIRTY_BATCH_SIZE) {
+    const batch = params.repoRelativePaths.slice(start, start + DIFF_DIRTY_BATCH_SIZE);
+    const result = await params.commandProvider.run({
+      cwd: params.repoRoot,
+      // --no-renames 保证输出条目就是被改路径本身，集合成员判定不引入 rename 两段式格式。
+      args: ["diff", "--name-only", "-z", "--no-renames", params.commitOid, "--", ...batch],
+    });
+    ensureGitCommandSucceeded("git diff checkpoint verify", result);
+    // -z 输出以 NUL 分隔且不对路径做引号转义，按 \0 切分即可还原原始路径；末段为空串。
+    for (const entry of result.stdout.split("\0")) {
+      if (entry.length > 0) {
+        dirtyPaths.add(entry);
+      }
+    }
+  }
+  return dirtyPaths;
+}
+
 export function createGitCheckpointRepo(options?: {
   commandProvider?: GitCommandProvider;
   gitRepo?: Pick<GitCliRepo, "resolveRepository">;
@@ -150,6 +195,15 @@ export function createGitCheckpointRepo(options?: {
     ensureGitCommandSucceeded("git ls-tree checkpoint paths", treeResult);
     const treeEntries = parseLsTree(treeResult.stdout);
 
+    // ls-tree 只负责"路径在 checkpoint 里是否存在 + mode 类型检查"；内容是否偏离基线
+    // 改用 git 同源的 dirty 判定（见 collectDirtyWorktreePaths），一次性批量获取。
+    const dirtyPaths = await collectDirtyWorktreePaths({
+      commandProvider,
+      repoRoot: params.repoRoot,
+      commitOid: params.from.commitOid,
+      repoRelativePaths: params.affectedRepoPaths,
+    });
+
     const conflicts: GitCheckpointConflict[] = [];
     for (const repoRelativePath of params.affectedRepoPaths) {
       const absolutePath = toAbsolutePath(params.repoRoot, repoRelativePath);
@@ -207,26 +261,25 @@ export function createGitCheckpointRepo(options?: {
         continue;
       }
 
-      const hashResult = await commandProvider.run({
-        cwd: params.repoRoot,
-        args: ["hash-object", "--no-filters", absolutePath],
-      });
-      ensureGitCommandSucceeded("git hash-object checkpoint verify", hashResult);
-      if (hashResult.stdout.trim() === expectedEntry.objectId) {
-        continue;
-      }
-
-      // 这里不比较时间戳、大小等弱信号，而是直接比较 blob hash。
-      // 只有内容完全一致，才视为“当前磁盘仍然停留在 fromCheckpoint 基线”。
-      conflicts.push({
-        path: absolutePath,
-        repoRelativePath,
-        workspaceRelativePath: toWorkspaceRelativeGitPath(
+      if (dirtyPaths.has(repoRelativePath)) {
+        // 冲突判定不自算哈希：worktree 字节的正确"转换口径"只有 git 自己知道。
+        // `git add` 的 CRLF→LF 转换受"index 内已有 CR 则不再转换"等启发式门控，
+        // hash-object 任何口径都对不齐——场景 A（autocrlf=true 建仓）下 --no-filters
+        // 必不等；场景 B（autocrlf=false 提交 CRLF 后翻转为 true）下 add 被启发式抑制
+        // 而带 filter 的 hash-object 无条件转换，同样必不等。这里以 `git diff <commit>`
+        // 的路径级 dirty 为准（与 add/status 同源），dirty 即磁盘偏离 fromCheckpoint 基线；
+        // symlink（120000）也由 git 按链接目标字符串比较，不再有 hash-object 顺链读
+        // 目标内容造成的误判。
+        conflicts.push({
+          path: absolutePath,
           repoRelativePath,
-          params.workspaceInRepoPath,
-        ),
-        reason: "content-mismatch",
-      });
+          workspaceRelativePath: toWorkspaceRelativeGitPath(
+            repoRelativePath,
+            params.workspaceInRepoPath,
+          ),
+          reason: "content-mismatch",
+        });
+      }
     }
 
     const deduped = new Map<string, GitCheckpointConflict>();

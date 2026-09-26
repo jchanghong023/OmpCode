@@ -132,11 +132,14 @@ export const WorkflowWorkspaceCard = memo(function WorkflowWorkspaceCard({
   const persistKey = `${sessionId}:${runId}:${card.key}`;
   const [open, setOpen] = useState(() => rememberedOpen(persistKey));
   const toggle = useCallback(() => {
-    setOpen((previous) => {
-      setRememberedOpen(persistKey, !previous);
-      return !previous;
-    });
-  }, [persistKey]);
+    // F30 修复：setOpen 的 updater 必须是纯函数；旧实现把 setRememberedOpen
+    // 持久化副作用写进 updater（React StrictMode 下 updater 会被双调用，副作用
+    // 随之重复执行）。改为在事件处理器内先基于当前展开态算出 next，先写记忆
+    // 再提交 state，updater 不再有任何副作用。
+    const next = !open;
+    setRememberedOpen(persistKey, next);
+    setOpen(next);
+  }, [open, persistKey]);
   const onClick = useCallback(
     (event: MouseEvent<HTMLDivElement>) => {
       // 正文与 peek 里的点击（选文本、Copy、文件芯片）不折叠。

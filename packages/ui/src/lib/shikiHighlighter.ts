@@ -83,6 +83,17 @@ const getCodeTokensCacheKey = (code: string, language: BundledLanguage, theme: B
   const end = code.length > 100 ? code.slice(-100) : "";
   return `${theme}:${language}:${code.length}:${start}:${end}`;
 };
+// 导出仅为单测：覆盖"高亮器创建失败后必须删除缓存条目"这一决策。
+// 不删除的话，缓存里会永久驻留同一个已 reject 的 promise，该语言+主题组合
+// 整个会话都无法再获得高亮，且每次调用都重复 reject（修复依据同
+// taskListMembershipSets.ts 的 promise.catch(() => cache.delete(key)) 先例）。
+export const noteHighlighterFailure = (
+  cache: Map<string, Promise<HighlighterGeneric<BundledLanguage, BundledTheme>>>,
+  cacheKey: string,
+): void => {
+  cache.delete(cacheKey);
+};
+
 const getHighlighter = (
   language: BundledLanguage,
   theme: BundledTheme,
@@ -99,6 +110,10 @@ const getHighlighter = (
   });
 
   highlighterCache.set(cacheKey, highlighterPromise);
+  // 旁路 catch（不改变返回值语义）：创建失败时把已 reject 的 promise 从缓存移除，
+  // 下次调用重新创建；reject 仍沿原 promise 传递给 highlightCode 的 catch 记日志。
+  // 参考 taskListMembershipSets.ts 的同款失败不缓存处理。
+  highlighterPromise.catch(() => noteHighlighterFailure(highlighterCache, cacheKey));
   return highlighterPromise;
 };
 

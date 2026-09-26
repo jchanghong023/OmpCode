@@ -212,9 +212,15 @@ export function SkillsSection({
   const [error, setError] = useState<string | null>(null);
   const query = searchQuery;
   const [selectedSkill, setSelectedSkill] = useState<SkillSummary | null>(null);
+  // 缺陷 F17 修复：详情对象不再回退到旧 selectedSkill —— 当前 target 的技能列表里
+  // 找不到同 id 技能（切换 Scope target 后列表已换、技能被删或被清空）时视为 null，
+  // 弹窗与面包屑随之关闭，避免残留上一个 target 的技能并沿用旧 workspace 路径打开文件。
+  const detailSkill = selectedSkill
+    ? (skills.find((skill) => skill.id === selectedSkill.id) ?? null)
+    : null;
   useEffect(() => {
-    onDetailOpenChange?.(selectedSkill !== null);
-  }, [onDetailOpenChange, selectedSkill]);
+    onDetailOpenChange?.(detailSkill !== null);
+  }, [detailSkill, onDetailOpenChange]);
   const [diagnostics, setDiagnostics] = useState<SkillDiagnostic[]>([]);
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
   const [importDialogOpen, setImportDialogOpen] = useState(false);
@@ -337,6 +343,11 @@ export function SkillsSection({
   );
 
   useEffect(() => {
+    // 缺陷 F17 修复：首屏或切换 Scope target（含连接重置）时同步清掉上一个 target 的
+    // 详情选中，与 handleDeleteSkill 删除后清理 selectedSkill 同款；不清会导致详情
+    // 弹窗残留旧 target 技能，「打开路径」把旧 workspace 的路径传给 openInFileManager。
+    // effect 依赖 target 相关值，手动刷新/开关技能走的 loadSkills 不会触发这里。
+    setSelectedSkill(null);
     if (!targetServiceResolution.rpcReady) {
       latestRequestIdRef.current += 1;
       setLoading(false);
@@ -541,9 +552,6 @@ export function SkillsSection({
     });
   };
 
-  const detailSkill = selectedSkill
-    ? (skills.find((skill) => skill.id === selectedSkill.id) ?? selectedSkill)
-    : null;
   const selectedSkillPublishedAt = formatSkillPublishedAt(detailSkill?.metadata?.publishedAt);
   const openSkillFilePath = useCallback(
     async (path: string) => {
@@ -866,8 +874,9 @@ export function SkillsSection({
             ))}
         </div>
       )}
+      {/* F17 双保险：详情对象不在当前列表时按关闭渲染，selectedSkill 残留也不弹窗 */}
       <Dialog
-        open={selectedSkill !== null}
+        open={detailSkill !== null}
         onOpenChange={(open) => {
           if (!open) {
             setSelectedSkill(null);

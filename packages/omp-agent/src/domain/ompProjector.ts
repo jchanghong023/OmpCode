@@ -27,6 +27,20 @@ export class OmpEventProjector {
     this.projection.markStopRequested();
   }
 
+  /**
+   * omp 进程崩溃退出时调用（F42）：terminal agent_end 不会到来，streaming/stopRequested
+   * 与在途工具表只由进程生命周期持有，不复位则重启后首轮 sendText 按陈旧 isStreaming
+   * 把全新输入误路由为 follow_up（静默排队）或 steer（报错）。只复位流式运行时状态，
+   * 不动投影侧轮次——崩溃时排队的轮已由 failAllTurns 收口，两者清理语义保持一致。
+   */
+  resetForRestart(): void {
+    this.streaming = false;
+    this.stopRequested = false;
+    // 清掉崩溃进程的在途工具运行时：若残留，下一个进程首个 terminal agent_end 的
+    // failOpenToolRows 会把上一进程已收口的工具行错误改写为 cancelled。
+    this.tools.clear();
+  }
+
   handleEvent(event: OmpSessionEventFrame): void {
     switch (event.type) {
       case "agent_start":

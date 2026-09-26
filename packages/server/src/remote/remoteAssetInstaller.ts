@@ -1027,14 +1027,23 @@ function resolveReleaseBaseByAssetUrl(
   return matchedReleaseBases[0] ?? null;
 }
 
-async function resolveRemoteArtifactContentLength(
+// HEAD 探测只服务进度总量展示；部分 CDN/网络对 HEAD 不回应时过去会永久卡住
+// 组件解析（下载都还没开始）。与 manifest 请求同口径给短超时，失败静默继续
+// 下一候选的既有语义保持不变。
+const REMOTE_ARTIFACT_HEAD_TIMEOUT_MS = 10_000;
+
+export async function resolveRemoteArtifactContentLength(
   urls: string[],
   network?: RemoteAssetNetworkPort,
+  headTimeoutMs: number = REMOTE_ARTIFACT_HEAD_TIMEOUT_MS,
 ): Promise<number | null> {
   const fetchImpl = resolveRemoteAssetFetch(network);
   for (const url of urls) {
     try {
-      const response = await fetchImpl(url, { method: "HEAD" });
+      const response = await fetchImpl(url, {
+        method: "HEAD",
+        signal: AbortSignal.timeout(headTimeoutMs),
+      });
       if (!response.ok) {
         continue;
       }

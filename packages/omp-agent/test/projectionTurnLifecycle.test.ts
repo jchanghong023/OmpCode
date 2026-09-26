@@ -87,3 +87,27 @@ test("只有关联 request id 的本地 prompt_result 可以异步收口", () =>
   assert.equal(tracker.shouldFinish({ id: "local", agentInvoked: false }), true);
   assert.equal(tracker.shouldFinish({ id: "local", agentInvoked: false }), false);
 });
+
+test("turn 进行中到达的 startNow 入队等待，不覆盖活跃轮", () => {
+  const projection = new ConversationProjection("session");
+  projection.beginUserTurn(input("first"));
+  projection.appendAssistantText("before");
+  // 冷启动窗口双投递：ensureOmpStarted 未返回时第二条命令同样按非流式算成 startNow。
+  projection.beginUserTurn(input("second", "startNow"));
+  // 旧轮保持激活：后续流式文本仍归属旧轮。
+  projection.appendAssistantText("after");
+  projection.finishTurn("success");
+  projection.activateQueuedTurn();
+  projection.appendAssistantText("next");
+  projection.finishTurn("success");
+  const rows = projection.rowsRange(undefined, 100).rows;
+  const texts = rows.filter((row) => row.kind === "assistantText");
+  assert.deepEqual(
+    texts.map((row) => row.text),
+    ["beforeafter", "next"],
+  );
+  assert.deepEqual(
+    rows.filter((row) => row.kind === "turnHeader").map((row) => row.state),
+    ["completedSuccess", "completedSuccess"],
+  );
+});

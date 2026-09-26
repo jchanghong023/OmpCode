@@ -30,6 +30,9 @@ export interface V4CommandContext {
 
 export class V4CommandService {
   private idempotency = new Map<string, CommandAck>();
+  // 在飞去重表：dispatch 进行期间同 commandId 的重复投递共享同一 promise，
+  // 否则幂等表要等 dispatch 完成才 remember，重复投递会完整执行第二次。
+  private inFlight = new Map<string, Promise<CommandAck>>();
   private readonly context: V4CommandContext;
 
   constructor(context: V4CommandContext) {
@@ -47,9 +50,21 @@ export class V4CommandService {
     if (cached) {
       return cached;
     }
-    const ack = await this.dispatch(envelope);
-    this.remember(key, ack);
-    return ack;
+    const pending = this.inFlight.get(key);
+    if (pending) {
+      return pending;
+    }
+    // 失败路径：finally 先清在飞项让后续投递可重试，错误沿 promise 原样抛给所有等待者，不改写 ack。
+    const promise = this.dispatch(envelope)
+      .then((ack) => {
+        this.remember(key, ack);
+        return ack;
+      })
+      .finally(() => {
+        this.inFlight.delete(key);
+      });
+    this.inFlight.set(key, promise);
+    return promise;
   }
 
   private remember(key: string, ack: CommandAck): void {

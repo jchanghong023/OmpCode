@@ -235,21 +235,24 @@ export class ConversationEngine {
     }
     this.scheduleFlush();
   }
-
   /** v4 resolveInteraction 命令入口：把 UI 应答汇入等待中的交互。 */
   settleInteraction(interactionId: string, answer: HostUserInputAnswer): boolean {
     return this.interactionProxy.settle(interactionId, answer);
   }
   private handleOmpExit(code: number | null, process: OmpSessionProcess): void {
     if (this.ompProcess !== process) return;
+    // 崩溃时先保存 omp 进程的会话文件，供下次 --resume 使用。
+    const exitedSessionFile = process.ompSessionFile;
+    if (exitedSessionFile) this.resumeSessionPath = exitedSessionFile;
     this.ompProcess = null;
     this.pendingLocalOnlyCompletions = 0;
     this.interactionProxy.dispose();
     const error = { code: "omp_process_exit", message: `omp core exited unexpectedly (code ${code ?? "null"})` };
     this.projection.failAllTurns(error);
+    // 崩溃无 agent_end；必须在 exit 时清流式状态，避免重启前的输入误走 follow_up。
+    this.projector.resetForRestart();
     this.scheduleFlush();
   }
-
   // ── 命令翻译 ──
   /** 发送用户输入；返回实际 delivery（omp 流式中转为 follow_up 队列）。图片附件直接进 omp prompt。 */
   async sendText(
@@ -312,7 +315,6 @@ export class ConversationEngine {
       this.scheduleFlush();
     }
   }
-
   async compact(): Promise<void> {
     this.projection.addTimelineMarker({ type: "compact", origin: "manual", status: "running" });
     this.scheduleFlush();
@@ -321,12 +323,10 @@ export class ConversationEngine {
     this.projection.addTimelineMarker({ type: "compact", origin: "manual", status: success ? "success" : "failed" });
     this.scheduleFlush();
   }
-
   async setAutoCompaction(enabled: boolean): Promise<{ error?: string }> {
     return applyEngineAutoCompaction(enabled, () => this.ensureOmpStarted(), () => this.ompProcess,
       (state) => this.applyOmpState(state));
   }
-
   async setModel(provider: string, model: string, thought?: string): Promise<{ error?: string }> {
     return applyEngineSetModel({ provider, model, thought },
       () => this.ensureOmpStarted(), () => this.ompProcess);

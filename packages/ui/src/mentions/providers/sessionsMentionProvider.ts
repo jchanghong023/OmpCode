@@ -14,6 +14,7 @@ import {
   useBaseWorkspaceServices,
   useWorkspaceServicesResolution,
 } from "@/hooks/useWorkspaceServices.js";
+import { useZCodeIntl } from "@/i18n/IntlProvider.js";
 import {
   resolveWorkspaceServices,
   type WorkspaceServiceResolverState,
@@ -50,9 +51,11 @@ function compareSessionTasks(
   return left.title.localeCompare(right.title);
 }
 
-function getSessionLabel(task: ZCodeTaskMeta): string {
+function getSessionLabel(task: ZCodeTaskMeta, untitledLabel: string): string {
   const title = task.title.replace(/^#sess_[a-zA-Z0-9._-]+\s*/, "").trim();
-  return title || "Untitled session";
+  // 修复依据：空标题（含仅剩 #sess_xxx 前缀的标题）此前回退到硬编码英文 "Untitled session"，
+  // 中文环境下 mention 面板出现中英混排；改由调用方按当前 locale 传入本地化文案。
+  return title || untitledLabel;
 }
 
 function getWorkspaceLabel(task: ZCodeTaskMeta): string {
@@ -60,16 +63,21 @@ function getWorkspaceLabel(task: ZCodeTaskMeta): string {
   return raw.split(/[\\/]/).filter(Boolean).at(-1) ?? raw;
 }
 
-function mapTaskToMentionItem(task: ZCodeTaskMeta, provider: ZCodeProvider): SessionMentionItem {
+function mapTaskToMentionItem(
+  task: ZCodeTaskMeta,
+  provider: ZCodeProvider,
+  untitledLabel: string,
+): SessionMentionItem {
   const sessionId = task.taskId;
   const itemProvider = task.provider ?? provider;
+  const label = getSessionLabel(task, untitledLabel);
   return {
     id: `session:${task.taskId}`,
     category: "sessions",
-    label: getSessionLabel(task),
+    label,
     description: getWorkspaceLabel(task),
     value: sessionId,
-    markdown: buildSessionMentionMarkdown(sessionId, getSessionLabel(task)),
+    markdown: buildSessionMentionMarkdown(sessionId, label),
     keywords: [
       task.title,
       task.taskId,
@@ -82,13 +90,16 @@ function mapTaskToMentionItem(task: ZCodeTaskMeta, provider: ZCodeProvider): Ses
   };
 }
 
-function collectSessionMentionItems(
+// 导出供单测与聚合复用（见文件头说明）。
+export function collectSessionMentionItems(
   tasks: ZCodeTaskMeta[],
   provider: ZCodeProvider,
   options: {
     workspacePath?: string;
     workspaceIdentity?: string;
-  } = {},
+    /** 空标题会话的本地化回退文案（chat.mention.sessions.untitled），由调用方按当前 locale 解析。 */
+    untitledLabel: string;
+  },
 ): SessionMentionItem[] {
   const currentWorkspaceKey = options.workspacePath
     ? buildTaskWorkspaceKey(options.workspacePath, options.workspaceIdentity)
@@ -107,7 +118,7 @@ function collectSessionMentionItems(
 
   return [...taskBySessionId.values()]
     .sort((left, right) => compareSessionTasks(left, right, currentWorkspaceKey))
-    .map((task) => mapTaskToMentionItem(task, provider));
+    .map((task) => mapTaskToMentionItem(task, provider, options.untitledLabel));
 }
 
 function limitSessionMentionItemsPerWorkspace(items: SessionMentionItem[]): SessionMentionItem[] {
@@ -259,14 +270,17 @@ export function useSessionsMentionProvider(
     workspaceTabs,
   ]);
   const { items: indexMetas, hydratingEndpointKeys } = useWorkspaceSessionsIndexItems(scopes);
+  const { intl } = useZCodeIntl();
+  const untitledSessionLabel = intl.formatMessage({ id: "chat.mention.sessions.untitled" });
 
   const allItems = useMemo(
     () =>
       collectSessionMentionItems(indexMetas, provider, {
         workspacePath,
         workspaceIdentity,
+        untitledLabel: untitledSessionLabel,
       }),
-    [indexMetas, provider, workspaceIdentity, workspacePath],
+    [indexMetas, provider, untitledSessionLabel, workspaceIdentity, workspacePath],
   );
 
   const items = useMemo(() => {

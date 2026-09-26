@@ -36,6 +36,17 @@ export const EMPTY_FORM: FormState = {
   protocolVersion: "",
 };
 
+/**
+ * Scope key → 存储级归一：仅 "user" 视为用户级，其余（workspace tab key 等）
+ * 一律归一为工作区级。F28/F29 修复时抽为纯函数：这是 Scope 菜单变更唯一会写进
+ * 表单态的字段。JSON 模式下它只落在影子 form.storageLevel 上，供保存路径
+ * jsonDraftToForm(jsonDraft, form) 作为 fallback 合成；用户手编的 jsonDraft 是
+ * 权威文本，绝不据此重序列化覆盖（见 McpServerForm.update 的注释）。
+ */
+export function scopeToStorageLevel(scopeKey: string): ConfigStorageLevel {
+  return scopeKey === "user" ? "user" : "workspace";
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }

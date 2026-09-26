@@ -113,7 +113,8 @@ export class ConversationProjection {
       streamingTextRow: null,
       streamingReasoningRow: null,
     };
-    if (input.routing === "queue" && this.turn) {
+    // 冷启动双投递都可能标成 startNow；有活跃轮时须排队，避免覆盖旧 TurnContext。
+    if (this.turn && input.routing !== "guide") {
       // omp follow_up 只在当前 agent_end 之后启动；现有输出仍归原轮。
       this.queuedTurns.push(nextTurn);
     } else {

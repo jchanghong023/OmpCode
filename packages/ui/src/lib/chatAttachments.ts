@@ -139,6 +139,7 @@ export function revokeChatComposerAttachment(attachment: ChatComposerAttachment)
 
 export async function serializeChatComposerAttachment(
   attachment: ChatComposerAttachment,
+  options?: SerializeChatComposerAttachmentOptions,
 ): Promise<ZCodePromptAttachment> {
   const mimeType = normalizeComposerMimeType(
     attachment.mimeType || inferAttachmentMimeType(attachment.filename),
@@ -252,7 +253,7 @@ export async function serializeChatComposerAttachment(
 
   const textContent =
     attachment.file && isTextLikeAttachment(attachment)
-      ? await readAttachmentText(attachment.file)
+      ? await readAttachmentText(attachment.file, options?.truncatedTextMarker ?? "")
       : undefined;
   return {
     kind: "file",
@@ -292,9 +293,29 @@ export function isMediaChatComposerAttachment(attachment: ChatComposerAttachment
   return isImageChatComposerAttachment(attachment) || isVideoChatComposerAttachment(attachment);
 }
 
-async function readAttachmentText(file: File): Promise<string> {
+export interface SerializeChatComposerAttachmentOptions {
+  /**
+   * 超长文本截断时追加到正文尾部的用户可见标记。
+   * 这里是底层序列化边界，不能拼用户可见文案（与上方 OversizedInline* 的结构化错误
+   * 约定一致），标记文案由 UI 层按当前 locale 传入。
+   */
+  truncatedTextMarker?: string;
+}
+
+/**
+ * 截断标记选择"调用方传本地化文案"而不是抛结构化错误：
+ * 唯一调用方 useComposerAttachments.runUpload 对序列化错误是整体拒绝附件
+ * （标记 failed / 触发重试），抛错会把"前 64K 内容仍可用"的截断语义
+ * 变成整个附件发送失败；改为透传 locale 标记可保留截断行为本身。
+ * 分隔用的换行属于结构格式而非文案，保留在本模块。
+ */
+async function readAttachmentText(file: File, truncatedTextMarker: string): Promise<string> {
   const text = await file.text();
-  return text.length > INLINE_TEXT_ATTACHMENT_MAX_CHARS
-    ? `${text.slice(0, INLINE_TEXT_ATTACHMENT_MAX_CHARS)}\n\n[内容过长，已截断]`
-    : text;
+  if (text.length <= INLINE_TEXT_ATTACHMENT_MAX_CHARS) {
+    return text;
+  }
+  // 分隔换行属于结构格式而非文案，随标记一起追加；调用方未传标记时静默截断。
+  return truncatedTextMarker
+    ? `${text.slice(0, INLINE_TEXT_ATTACHMENT_MAX_CHARS)}\n\n${truncatedTextMarker}`
+    : text.slice(0, INLINE_TEXT_ATTACHMENT_MAX_CHARS);
 }

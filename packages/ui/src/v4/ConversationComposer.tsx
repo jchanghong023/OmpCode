@@ -1094,12 +1094,14 @@ function ConversationComposerImpl({
   }, [persistDraftNow]);
 
   // ── prompt history（per-workspace localStorage，↑/↓ 导航由 PromptHistoryPlugin 消费）──
+  // 读写统一走 workspaceIdentity 优先的身份键（与 composerRecent 同口径），
+  // 否则同一 workspacePath 的本地与远程身份会互相串输入历史。
   const [promptHistory, setPromptHistory] = useState<readonly string[]>(() =>
-    readPromptHistoryEntries(workspacePath),
+    readPromptHistoryEntries(workspacePath, workspaceIdentity),
   );
   useEffect(() => {
-    setPromptHistory(readPromptHistoryEntries(workspacePath));
-  }, [workspacePath]);
+    setPromptHistory(readPromptHistoryEntries(workspacePath, workspaceIdentity));
+  }, [workspaceIdentity, workspacePath]);
 
   const mode = snapshot?.inputRouting.mode ?? "startNow";
   const modifiedEnterSubmits = shouldEnableModifiedEnterSubmit({
@@ -1285,9 +1287,9 @@ function ConversationComposerImpl({
         if (!promptHistoryWasPersisted || !promptHistoryBeforeSend || !promptHistoryAfterAppend) {
           return;
         }
-        const currentPromptHistory = readPromptHistoryEntries(workspacePath);
+        const currentPromptHistory = readPromptHistoryEntries(workspacePath, workspaceIdentity);
         if (arePromptHistoryEntriesEqual(currentPromptHistory, promptHistoryAfterAppend)) {
-          persistPromptHistoryEntries(workspacePath, promptHistoryBeforeSend);
+          persistPromptHistoryEntries(workspacePath, promptHistoryBeforeSend, workspaceIdentity);
           setPromptHistory(promptHistoryBeforeSend);
           return;
         }
@@ -1330,14 +1332,14 @@ function ConversationComposerImpl({
             pptxElements: currentPptxElementReferences,
           }) + (submittedShareContext ? 1 : 0);
         if (trimmed) {
-          promptHistoryBeforeSend = readPromptHistoryEntries(workspacePath);
+          promptHistoryBeforeSend = readPromptHistoryEntries(workspacePath, workspaceIdentity);
           promptHistoryAfterAppend = appendPromptHistoryEntry(promptHistoryBeforeSend, trimmed);
           if (!arePromptHistoryEntriesEqual(promptHistoryBeforeSend, promptHistoryAfterAppend)) {
             // 预热首发 accepted 后，SessionPane 会立即 promote 到新 session，
             // draft composer 可能在 await 恢复前卸载；不能把写盘藏在 React state updater 里。
             // 这里继续沿用旧 UI 的 localStorage history，不接 input_history 数据库：
             // 发起真实发送前先同步写盘，若发送失败再恢复到发送前快照。
-            persistPromptHistoryEntries(workspacePath, promptHistoryAfterAppend);
+            persistPromptHistoryEntries(workspacePath, promptHistoryAfterAppend, workspaceIdentity);
             promptHistoryWasPersisted = true;
             setPromptHistory(promptHistoryAfterAppend);
           }
@@ -2160,7 +2162,9 @@ function ConversationComposerImpl({
             planModelActive={planModelActive}
             planModelAvailable={planModelAvailable}
             onTogglePlanModel={onTogglePlanModel}
-            onCompact={onSendCompressionCommand ? () => onSendCompressionCommand("/compact") : undefined}
+            onCompact={
+              onSendCompressionCommand ? () => onSendCompressionCommand("/compact") : undefined
+            }
             onSetAutoCompaction={onSetAutoCompaction}
             onOpenGitReview={onOpenGitReview}
           />
@@ -2245,10 +2249,7 @@ function ConversationComposerImpl({
         // 这里复用旧 ChatErrorBanner 壳，只接收 SessionPane 已归一化后的当前错误。
         // 错误横幅独立于输入 surface，并先于桌面和手机共用的 contextHeader。
         <div className="mb-6 w-full shrink-0">
-          <ChatErrorBanner
-            error={visibleError}
-            onDismiss={onDismissError}
-          />
+          <ChatErrorBanner error={visibleError} onDismiss={onDismissError} />
         </div>
       ) : null}
       <div

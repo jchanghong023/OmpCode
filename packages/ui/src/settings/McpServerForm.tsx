@@ -19,6 +19,7 @@ import {
   EMPTY_FORM,
   formToJsonDraft,
   jsonDraftToForm,
+  scopeToStorageLevel,
   serverToForm,
   type FormState,
   type McpEditorMode,
@@ -87,7 +88,7 @@ export function McpServerForm({
     ? serverToForm(initial)
     : {
         ...EMPTY_FORM,
-        storageLevel: scopeKey === "user" ? "user" : "workspace",
+        storageLevel: scopeToStorageLevel(scopeKey),
       };
   const [form, setForm] = useState<FormState>(initialForm);
   const [jsonDraft, setJsonDraft] = useState<string>(() => formToJsonDraft(initialForm));
@@ -134,13 +135,17 @@ export function McpServerForm({
   }, [editorMode, intl, onEditorModeChange]);
 
   function update(patch: Partial<FormState>) {
-    setForm((prev) => {
-      const next = { ...prev, ...patch };
-      if (editorMode === "json") {
-        setJsonDraft(formToJsonDraft(next));
-      }
-      return next;
-    });
+    // F28/F29/F16 修复：setForm 的 updater 必须是纯函数，不得内嵌 setJsonDraft。
+    // 旧行为在 JSON 模式下用「过期 form 快照 + 新 patch」重序列化覆盖 jsonDraft：
+    // JSON 模式下用户直接编辑 jsonDraft，form 只是过期影子，此时点 Scope 菜单会
+    // 把手编 JSON 全文抹掉且不可恢复。修复后 update 只维护表单态——基于 formRef
+    // 镜像在事件处理器层先算 next 再提交；jsonDraft 的唯一派生点是「表单 → JSON」
+    // 模式切换 effect（上方 useEffect），update 不再维护第二条写入路径。
+    // JSON 模式下 Scope 变更只需更新影子 form.storageLevel：保存目标由父组件
+    // formScopeKey 决定，表单保存合成 jsonDraftToForm(jsonDraft, form) 也以影子
+    // form 为 fallback，重序列化 jsonDraft 从来都是多余且有害的。
+    const next = { ...formRef.current, ...patch };
+    setForm(next);
   }
 
   function handleSaveClick() {
@@ -203,9 +208,12 @@ export function McpServerForm({
       scopeKey={scopeKey}
       workspaceTabs={workspaceTabs}
       onChange={(nextScopeKey) => {
-        update({
-          storageLevel: nextScopeKey === "user" ? "user" : "workspace",
-        });
+        // F28/F29：JSON 模式下该菜单仍渲染可点，Scope 变更只把存储级写进表单态
+        // 影子（form.storageLevel），供切换回表单模式及保存合成使用；手编 jsonDraft
+        // 是权威文本，绝不重序列化覆盖。不禁用菜单：保存目标由父组件 formScopeKey
+        // 决定（McpSettingsSection.handleSave 按 formScopeKey 选 projectPath），
+        // JSON 模式下切 Scope 是真实功能，禁用反而丢功能。
+        update({ storageLevel: scopeToStorageLevel(nextScopeKey) });
         onScopeKeyChange(nextScopeKey);
       }}
     />

@@ -20,6 +20,7 @@ import {
   normalizeRemotePlatform,
   resolveRemotePlatform,
 } from "@zcode/server/remote/detectEnv.js";
+import { OwnedChildRegistry } from "@zcode/server/remote/ownedChildRegistry.js";
 
 interface ResolvedDockerInfo {
   containerName: string;
@@ -45,6 +46,11 @@ export class DockerBackend implements IRemoteBackend {
   private readonly dockerCommand = resolveDockerCommand();
   private readonly options: DockerConnectOptions;
   private resolvedInfoPromise: Promise<ResolvedDockerInfo> | null = null;
+  // 过去 exec spawn 的 docker exec 子进程（含常驻远端 server）不追踪、dispose 为空，
+  // Host 释放后这些宿主进程只能寄希望于管道 EOF。对齐 WSL 后端的 ownedChildren + 宽限 kill 模式。
+  private readonly ownedChildren = new OwnedChildRegistry();
+  private disposed = false;
+  private disposeInFlight: Promise<void> | null = null;
 
   constructor(options: DockerConnectOptions) {
     this.options = options;
@@ -167,8 +173,12 @@ export class DockerBackend implements IRemoteBackend {
   }
 
   async exec(command: string): Promise<StdioStream> {
+    this.assertNotDisposed();
     await this.ensureAvailable();
     const resolvedInfo = await this.resolveInfo();
+    // 入口门禁之后的 availability/identity await 允许 dispose barrier 插入并完成；
+    // resolved info 命中缓存时，旧 continuation 会在 barrier 后继续 spawn。最终创建 child 前必须再校验。
+    this.assertNotDisposed();
 
     return new Promise((resolve, reject) => {
       const child = spawn(
@@ -179,6 +189,7 @@ export class DockerBackend implements IRemoteBackend {
           windowsHide: true,
         },
       );
+      this.ownedChildren.track(child);
 
       child.once("error", reject);
       child.once("spawn", () => {
@@ -237,7 +248,25 @@ export class DockerBackend implements IRemoteBackend {
   }
 
   dispose(): void {
-    // Docker backend 的命令都是一次性子进程，没有常驻连接需要显式清理。
+    // Docker backend 的命令虽是一次性 docker exec 子进程，但其中包含常驻远端 server；
+    // 过去 dispose 为空会把这些宿主进程留在后台。复用 WSL 后端的同步 dispose 契约：
+    // dispose() 立即返回，收口在 disposeAndWait 内完成（end stdin → 宽限 → kill 兜底）。
+    void this.disposeAndWait();
+  }
+
+  disposeAndWait(options?: { graceTimeoutMs?: number; killWaitTimeoutMs?: number }): Promise<void> {
+    if (this.disposeInFlight) {
+      return this.disposeInFlight;
+    }
+    this.disposed = true;
+    this.disposeInFlight = this.ownedChildren.disposeAndWait(options);
+    return this.disposeInFlight;
+  }
+
+  private assertNotDisposed(): void {
+    if (this.disposed) {
+      throw new Error("Docker backend 已释放，无法启动新命令");
+    }
   }
 
   private async ensureAvailable(): Promise<void> {
@@ -328,9 +357,15 @@ export class DockerBackend implements IRemoteBackend {
   }
 
   private async execDirect(commandArgs: string[]): Promise<string> {
+    this.assertNotDisposed();
     const container = await this.resolveContainer();
     return new Promise((resolve, reject) => {
-      execFile(
+      // 与 exec() 的入口门禁同口径：resolveContainer 的 await 允许 dispose barrier 插入
+      // 并完成，barrier 后旧 continuation 会继续走到 spawn。最终创建 child 前必须再校验，
+      // 否则 dispose 后仍会 spawn execFile 子进程，且晚于收口快照登记、游离在
+      // ownedChildren 之外。
+      this.assertNotDisposed();
+      const child = execFile(
         this.dockerCommand,
         buildDockerExecArgs(container.name, commandArgs),
         {
@@ -347,6 +382,8 @@ export class DockerBackend implements IRemoteBackend {
           resolve(normalizeDockerOutput(stdout));
         },
       );
+      // 与 WSL 的 execWslForBuffer 一致：一次性探测命令也登记归属，正常结束即出队。
+      this.ownedChildren.track(child);
     });
   }
 }

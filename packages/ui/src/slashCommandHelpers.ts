@@ -112,8 +112,10 @@ export function buildSubagentSuggestions(
       "id" | "name" | "description" | "path" | "scope" | "source" | "enabled" | "modelSelection"
     >
   >,
+  locale?: Locale,
 ): PromptInputSuggestionItem[] {
-  return mapSubagentsToMentionItemsForTest(agents).map((item) =>
+  // locale 透传给来源标签解析，与 buildSkillSuggestions 的 locale 感知行为对齐。
+  return mapSubagentsToMentionItemsForTest(agents, locale).map((item) =>
     mapSubagentMentionItemToSuggestion(item),
   );
 }

@@ -368,7 +368,12 @@ export function useComposerAttachments(
           return;
         }
 
-        const serialized = await serializeChatComposerAttachment(item);
+        const serialized = await serializeChatComposerAttachment(item, {
+          // 底层序列化边界不拼用户可见文案（chatAttachments 序列化边界约定），
+          // 截断标记由 UI 层按当前 locale 传入；传标记而不是让序列化抛错，
+          // 是为了保留"前 64K 内容仍可发送"的截断语义，而不是整体拒绝附件。
+          truncatedTextMarker: intl.formatMessage({ id: "chat.attachments.truncated" }),
+        });
         const ref = await uploadComposerAttachment(
           target.attachmentPut,
           target.sessionId,

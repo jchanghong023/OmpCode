@@ -204,3 +204,113 @@ test("queued local command completes after the active agent ends", async () => {
     await engine.dispose();
   }
 });
+
+test("omp 崩溃后首轮输入按全新 prompt 路由而非 follow_up", async () => {
+  const sentByProcess: string[][] = [];
+  let exit: ((code: number | null) => void) | undefined;
+  let agentEvent: ((event: { type: "agent_start" | "agent_end" }) => void) | undefined;
+  const factory: OmpProcessFactory = {
+    create(options) {
+      exit = options.onExit;
+      agentEvent = options.onEvent;
+      const commands: string[] = [];
+      sentByProcess.push(commands);
+      return {
+        ompSessionFile: null,
+        async start() {},
+        async refreshState() {
+          return null;
+        },
+        async dispose() {},
+        respondUi() {},
+        async send(command) {
+          // 只记录用户输入路由命令；get_subagents 是 startOmp 的启动握手，与路由无关。
+          if (
+            command.type === "prompt" ||
+            command.type === "follow_up" ||
+            command.type === "steer"
+          ) {
+            commands.push(command.type);
+          }
+          return { success: true, data: {} };
+        },
+      };
+    },
+  };
+  const gateway = {
+    emitFrame() {},
+    requestUserInput: async () => ({ action: "cancel" as const }),
+  } as HostGateway;
+  const engine = new ConversationEngine({
+    sessionId: "session",
+    workspaceId: "workspace",
+    workspacePath: ".",
+    ompFactory: factory,
+    gateway,
+    onIndexChange() {},
+  });
+  try {
+    await engine.sendText("first", "cmd-1", "client");
+    assert.deepEqual(sentByProcess[0], ["prompt"]);
+    // 进入流式（agent_start 置位 projector.streaming），随后进程在 agent_end 之前崩溃。
+    agentEvent?.({ type: "agent_start" });
+    exit?.(1);
+    // 崩溃恢复后的第一条输入：进程是全新且空闲的，必须按 startNow 下发 prompt，
+    // 而不是按陈旧 isStreaming 误路由为 follow_up（静默排队）或 steer（报错）。
+    await engine.sendText("second", "cmd-2", "client");
+    assert.deepEqual(sentByProcess[1], ["prompt"]);
+  } finally {
+    await engine.dispose();
+  }
+});
+
+test("omp 崩溃重启后携带运行期新建的会话文件恢复", async () => {
+  const resumeArgs: (string | undefined)[] = [];
+  let exit: ((code: number | null) => void) | undefined;
+  // 模拟 omp 首个 prompt 后才落盘会话文件（新会话启动时为 null）。
+  let sessionFile: string | null = null;
+  const factory: OmpProcessFactory = {
+    create(options) {
+      exit = options.onExit;
+      resumeArgs.push(options.resumeSessionPath);
+      return {
+        get ompSessionFile() {
+          return sessionFile;
+        },
+        async start() {},
+        async refreshState() {
+          return null;
+        },
+        async dispose() {},
+        respondUi() {},
+        async send() {
+          sessionFile ??= "D:/fake/.omp/sessions/session-1.jsonl";
+          return { success: true, data: {} };
+        },
+      };
+    },
+  };
+  const gateway = {
+    emitFrame() {},
+    requestUserInput: async () => ({ action: "cancel" as const }),
+  } as HostGateway;
+  const engine = new ConversationEngine({
+    sessionId: "session",
+    workspaceId: "workspace",
+    workspacePath: ".",
+    ompFactory: factory,
+    gateway,
+    onIndexChange() {},
+  });
+  try {
+    await engine.sendText("first", "cmd-1", "client");
+    assert.equal(engine.ompSessionFile, "D:/fake/.omp/sessions/session-1.jsonl");
+    exit?.(1);
+    // 崩溃后 ompSessionFile 仍可经 resumeSessionPath 回挂。
+    assert.equal(engine.ompSessionFile, "D:/fake/.omp/sessions/session-1.jsonl");
+    await engine.sendText("second", "cmd-2", "client");
+    assert.deepEqual(resumeArgs, [undefined, "D:/fake/.omp/sessions/session-1.jsonl"]);
+  } finally {
+    await engine.dispose();
+  }
+});

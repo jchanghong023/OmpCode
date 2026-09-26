@@ -55,6 +55,11 @@ const log = (...args: unknown[]) => console.log(formatLogPrefix("deploy", proces
 const logWarn = (...args: unknown[]) =>
   console.warn(formatLogPrefix("deploy", process.pid), ...args);
 const SERVER_BUNDLE_COMPONENT_ID = "server-bundle";
+// 远端 `node zcode-server.cjs --version` 只应输出很短一行；但容器/WSL 半开时
+// exec 可能永不结束，部署版本检查不能永久挂起。参考 remoteDeployLock 的常量风格给出有界超时。
+const REMOTE_VERSION_CHECK_TIMEOUT_MS = 15_000;
+// 版本输出极短，64KB 远超正常值；超限说明远端行为异常，按无界缓冲防护截断。
+const REMOTE_VERSION_CHECK_STDOUT_MAX_BYTES = 64 * 1024;
 
 export type DeployLockMode = "remote" | "caller-serialized";
 
@@ -746,12 +751,60 @@ function resolveRequiredMockReleasePaths(
   return [...requiredPaths];
 }
 
-function collectStdout(stream: import("./backend.js").StdioStream): Promise<string> {
-  return new Promise((resolve) => {
+export function collectStdout(
+  stream: import("./backend.js").StdioStream,
+  timeoutMs: number = REMOTE_VERSION_CHECK_TIMEOUT_MS,
+  stdoutMaxBytes: number = REMOTE_VERSION_CHECK_STDOUT_MAX_BYTES,
+): Promise<string> {
+  return new Promise((resolve, reject) => {
     let data = "";
+    let settled = false;
+    // StdioStream 接口只声明 NodeJS.ReadableStream（类型上没有 destroy）；
+    // 运行时均为可销毁流，与 docker-backend.ts upload 收口 stdin 的方式一致按可选 destroy 处理。
+    const stdout = stream.stdout as NodeJS.ReadableStream & {
+      destroy?: (error?: Error) => void;
+    };
+    const timer = setTimeout(() => {
+      finishError(new Error(`remote version check timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+    // 超时/超限都按“应部署”的保守方向处理：这里以 reject 结束，
+    // checkServerDeployDecision 的 catch 会把失败转成 shouldDeploy=true 触发重新部署，
+    // 不能把挂死的版本检查当成“版本匹配”跳过部署。
+    const finishError = (error: Error) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      stdout.destroy?.(error);
+      reject(error);
+    };
+    // destroy(error) 会在真实 child.stdout（Docker/WSL）上异步 emit 'error'，ssh2 Channel 也可能发出错误。
+    // 不挂监听时注入的超时/超限错误会逃逸为 uncaughtException，让共享 Window Host 连带退出其它 workspace
+    // （与 ssh-backend.ts dispose 吸收迟到 error 的防护同源；destroy + 自有 error 监听与 docker-backend
+    // upload 收口 stdin 的方式一致）。已 settle（即本次 destroy 注入的错误）时按 no-op 吸收；
+    // 未 settle 的真实流错误仍走 finishError 按失败方向 reject，由 checkServerDeployDecision 转成应部署。
+    stream.stdout.on("error", (error: Error) => {
+      finishError(error);
+    });
     stream.stdout.on("data", (chunk: Buffer) => {
+      if (settled) {
+        return;
+      }
+      if (Buffer.byteLength(data) + chunk.byteLength > stdoutMaxBytes) {
+        // 保留已收前缀（截断继续收的等效实现：销毁流后不再有无界缓冲），并销毁流。
+        finishError(new Error(`remote version check stdout exceeded ${stdoutMaxBytes} bytes`));
+        return;
+      }
       data += chunk.toString();
     });
-    stream.onClose(() => resolve(data));
+    stream.onClose(() => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      resolve(data);
+    });
   });
 }
