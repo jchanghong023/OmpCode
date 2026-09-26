@@ -14,6 +14,7 @@
 - Keep the repository's Node and pnpm toolchain pins unless a new dependency proves they must change; any such change must be checked in both Windows and CentOS 7 workflows before acceptance.
 - Where the latest major version violates a direct peer contract, use the newest compatible stable version and record the constraint: `@arms/rum-electron@0.0.3` requires `@babel/runtime@^7.24.5`, and `@hono/node-ws@1.3.1` requires `@hono/node-server@^1.19.11`. TypeScript 7 has no JavaScript compiler API, so scripts that parse source may use the official `@typescript/typescript6` compatibility package while `tsc` remains version 7.
 - Keep oxlint on the newest previously passing minor (`1.60.x`) for this migration: `1.85.0` newly reports `max-lines` errors across unchanged legacy files, while the existing policy requires the 400-line rule and the task forbids unrelated refactors or suppressions. Upgrade oxlint separately after those files are brought under the rule.
+- Resolve `node-abi` to a registry revision that knows Electron 44's ABI. The Linux postinstall uses `@electron/rebuild` to rebuild `node-pty`; an older transitive ABI registry fails before the CentOS 7 release can build.
 
 ## Acceptance
 

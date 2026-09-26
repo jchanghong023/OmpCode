@@ -75,6 +75,7 @@
   "packageManager": "pnpm@10.33.2",
   "pnpm": {
     "overrides": {
+      "node-abi": "4.35.0",
       "react": "19.3.0",
       "react-dom": "19.3.0"
     },
