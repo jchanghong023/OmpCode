@@ -253,6 +253,7 @@ export class ServerApp {
     }
     const base = asRecord(record?.base);
     const ack = engine.subscribe({
+      sessionId,
       connectionId: stringField(record, "connectionId"),
       clientMode: (stringField(record, "clientMode") as "desktop-continuous" | "web-remote-replayable") ?? "desktop-continuous",
       base: base ? { logEpoch: stringField(base, "logEpoch"), seq: numberField(base, "seq") } : null,

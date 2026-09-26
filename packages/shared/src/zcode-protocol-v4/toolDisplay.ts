@@ -154,6 +154,8 @@ export type ToolResultDisplay = z.infer<typeof toolResultDisplaySchema>;
 // display 是展示载荷；版本不兼容时降级为无卡片，避免同一内容导致整条订阅反复恢复失败。
 export const toolOutputSchema = z.object({
   text: z.string(),
+  // omp todo phases 的清单投影；文本摘要仍保留在 text，不把 JSON 冒充工具输出。
+  plan: z.array(z.object({ id: z.string(), title: z.string(), status: z.enum(["pending", "in_progress", "completed"]) })).max(200).optional(),
   display: toolResultDisplaySchema.optional().catch(undefined),
   truncated: z
     .object({

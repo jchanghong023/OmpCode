@@ -1485,6 +1485,51 @@ export class TaskIndexRepo {
     });
   }
 
+  /** omp 临时会话绑定 UUID：在一笔事务内迁移产品壳状态和分组引用。 */
+  async rekeyTaskId(params: {
+    workspacePath: string;
+    workspaceIdentity?: string;
+    fromTaskId: string;
+    toTaskId: string;
+  }): Promise<ZCodeTaskMeta | null> {
+    await this.ensureReady();
+    if (params.fromTaskId === params.toTaskId) return this.getTaskMeta({ ...params, taskId: params.toTaskId });
+    return this.enqueueWrite({ ...params, taskId: params.fromTaskId }, () => {
+      const database = this.getDatabase();
+      database.exec("BEGIN IMMEDIATE");
+      try {
+        const from = this.getTaskRow({ ...params, taskId: params.fromTaskId });
+        if (!from || from.deleted === 1) {
+          const existing = this.getTaskRow({ ...params, taskId: params.toTaskId });
+          database.exec("COMMIT");
+          return existing && existing.deleted !== 1 ? rowToMeta(existing) : null;
+        }
+        const oldKey = JSON.stringify([from.workspace_key, params.fromTaskId]);
+        const newKey = JSON.stringify([from.workspace_key, params.toTaskId]);
+        // UUID 基线可能抢先 seed；它没有用户归属，保留临时行的完整产品壳状态。
+        database.prepare("DELETE FROM tasks WHERE workspace_key = ? AND task_id = ?")
+          .run(from.workspace_key, params.toTaskId);
+        database.prepare("DELETE FROM task_group_members WHERE workspace_key = ? AND task_id = ?")
+          .run(from.workspace_key, params.toTaskId);
+        database.prepare("DELETE FROM task_group_view_node_orders WHERE node_type = 'task' AND node_key = ?")
+          .run(newKey);
+        const meta = { ...rowToMeta(from), taskId: params.toTaskId };
+        database.prepare("UPDATE tasks SET task_id = ?, meta_json = ? WHERE workspace_key = ? AND task_id = ?")
+          .run(params.toTaskId, serializeMetaJson(meta), from.workspace_key, params.fromTaskId);
+        database.prepare("UPDATE task_group_members SET task_id = ? WHERE workspace_key = ? AND task_id = ?")
+          .run(params.toTaskId, from.workspace_key, params.fromTaskId);
+        database.prepare("UPDATE task_group_view_node_orders SET node_key = ? WHERE node_type = 'task' AND node_key = ?")
+          .run(newKey, oldKey);
+        const migrated = this.getTaskRow({ ...params, taskId: params.toTaskId });
+        database.exec("COMMIT");
+        return migrated ? rowToMeta(migrated) : null;
+      } catch (error) {
+        database.exec("ROLLBACK");
+        throw error;
+      }
+    });
+  }
+
   async clearTaskUnreadIfMatches(params: {
     workspacePath: string;
     workspaceIdentity?: string;

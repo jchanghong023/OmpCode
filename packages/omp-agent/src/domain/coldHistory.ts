@@ -2,6 +2,7 @@
 
 import type { ConversationRow } from "@zcode/shared/zcode-protocol-v4";
 import { rowBaseFields } from "./projectionTypes.js";
+import { ompTodoPlan } from "./ompTodoPlan.js";
 
 interface ColdContext {
   sessionId: string;
@@ -99,6 +100,7 @@ export function rowsFromOmpEntries(entries: unknown[], subagentTranscripts: Read
         toolCallId?: string;
         toolName?: string;
         isError?: boolean;
+        details?: unknown;
       };
       const timestamp = typeof message.timestamp === "number" ? message.timestamp : Date.now();
       if (message.role === "user") {
@@ -148,7 +150,8 @@ export function rowsFromOmpEntries(entries: unknown[], subagentTranscripts: Read
         );
         if (existing) {
           existing.status = message.isError === true ? "error" : "success";
-          existing.output = { text };
+          const plan = message.toolName === "todo" ? ompTodoPlan(message.details) : null;
+          existing.output = { text, ...(plan ? { plan } : {}) };
           existing.endedAt = timestamp;
         }
         if (message.toolName === "task") {

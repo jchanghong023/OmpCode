@@ -16,6 +16,7 @@ const FLUSH_WINDOW_MS = 30;
 
 interface Subscriber {
   subscriptionId: string;
+  sessionId: string;
   connectionId: string;
   clientMode: "desktop-continuous" | "web-remote-replayable";
   lastDeliveredSeq: number;
@@ -23,6 +24,7 @@ interface Subscriber {
 }
 
 export interface SubscribeOptions {
+  sessionId?: string;
   connectionId: string;
   clientMode: "desktop-continuous" | "web-remote-replayable";
   base?: { logEpoch: string; seq: number } | null;
@@ -47,6 +49,7 @@ export class ConversationTopicPublisher {
         : null;
     const subscriber: Subscriber = {
       subscriptionId,
+      sessionId: params.sessionId ?? this.sessionId,
       connectionId: params.connectionId,
       clientMode: params.clientMode,
       lastDeliveredSeq: this.projection.seq,
@@ -154,18 +157,23 @@ export class ConversationTopicPublisher {
     payload: { kind: "snapshot"; snapshot: ConversationSnapshot } | { kind: "deltas"; deltas: ConversationDelta[] },
     deliveryKind: "initial" | "online" | "recovery",
   ): void {
-    const topic = `conversation/${this.sessionId}`;
-    const toSeq = payload.kind === "snapshot" ? payload.snapshot.seq : this.projection.seq;
+    const subscriber = this.subscribers.get(subscriptionId);
+    if (!subscriber) return;
+    // 临时 ID 订阅保持原 topic；UUID 新订阅必须以请求的 ID 发 topic 与 snapshot。
+    // 两者仅是同一投影的传输别名，不创建第二份可写会话状态。
+    const topic = `conversation/${subscriber.sessionId}`;
+    const deliveredPayload = payload.kind === "snapshot"
+      ? { kind: "snapshot" as const, snapshot: { ...payload.snapshot, sessionId: subscriber.sessionId } }
+      : payload;
+    const toSeq = deliveredPayload.kind === "snapshot" ? deliveredPayload.snapshot.seq : this.projection.seq;
     const frame = {
       topic,
       subscriptionId,
       fromSeq,
       toSeq,
       sentAt: Date.now(),
-      payload,
+      payload: deliveredPayload,
     };
-    const subscriber = this.subscribers.get(subscriptionId);
-    if (!subscriber) return;
     // 同一订阅的每个逻辑帧都要递增；恒为 1 会让客户端把后续流式帧
     // 判为 proto.frameAssemblyOrdinalConflict，恢复快照也无法接管。
     subscriber.logicalFrameOrdinal += 1;

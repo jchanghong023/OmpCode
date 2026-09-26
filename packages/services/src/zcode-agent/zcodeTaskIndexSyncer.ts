@@ -234,6 +234,7 @@ function buildBaselineMetaFromSummary(
 }
 
 interface WorkspaceIngestState {
+  pendingRekeyFrom: string | null;
   target: ZCodeAgentWorkspaceTarget;
   /** 当前已 attach 的 Agent runtime generation；null = dormant。 */
   runtimeGeneration: number | null;
@@ -311,6 +312,13 @@ export function createZCodeTaskIndexSyncer(
   // workspace-config topic 提供配置目录热更新；正文搜索索引在 phase 终态迁移时
   // 回源完整 snapshot 收敛（v4 命令路径不再有 op 驱动的 snapshot 同步兜底）。
   const workspaceIngests = new Map<string, WorkspaceIngestState>();
+  // 临时会话的旧读/订阅路由仍可用，但任务索引只有 UUID 一个写入身份。
+  // 完成帧附近已有在途 readSession；必须在其写库前重定向，避免 rekey 后又造回旧行。
+  const taskIdAliases = new Map<string, string>();
+  const aliasKey = (target: ZCodeAgentWorkspaceTarget, taskId: string): string =>
+    `${resolveWorkspaceKey(target)}\u0000${taskId}`;
+  const canonicalTaskId = (target: ZCodeAgentWorkspaceTarget, taskId: string): string =>
+    taskIdAliases.get(aliasKey(target, taskId)) ?? taskId;
   // 之前 workspaceEmitters 私有在 adapter 里，syncer 写完 sqlite 没有广播渠道，
   // UI 永远收不到 workspace_task_list_changed。把 emitter 上提到 syncer，adapter 改为转发，
   // 让 adapter 路径和 desktop-continuous 路径共用同一份订阅，事件不再分裂。
@@ -1043,6 +1051,7 @@ export function createZCodeTaskIndexSyncer(
       return;
     }
     if (frame.payload.kind === "snapshot") {
+      state.pendingRekeyFrom = null;
       if (deliveryKind === "online" && state.indexHasAppliedBase && frame.toSeq <= state.indexSeq) {
         return;
       }
@@ -1114,6 +1123,18 @@ export function createZCodeTaskIndexSyncer(
     }
     for (const delta of frame.payload.deltas) {
       if (delta.op === "session.upserted") {
+        const fromTaskId = state.pendingRekeyFrom;
+        state.pendingRekeyFrom = null;
+        if (fromTaskId && /^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(delta.session.sessionId)) {
+          // SessionRegistry 先发临时 ID 终态，再连续发 removed/upserted UUID。
+          // SQLite 是唯一产品壳状态所有者；迁移后列表只广播同一个稳定任务。
+          taskIdAliases.set(aliasKey(state.target, fromTaskId), delta.session.sessionId);
+          void taskIndexRepo.rekeyTaskId({ ...state.target, fromTaskId, toTaskId: delta.session.sessionId })
+            .then((meta) => {
+              if (meta && isLiveState(state)) emitWorkspaceTaskListChanged(state.target, undefined, "task_meta_changed");
+            })
+            .catch((error) => logger.warn(undefined, `omp 任务身份迁移失败 ${fromTaskId}`, error));
+        }
         processSummary(
           state,
           state.summaries.get(delta.session.sessionId),
@@ -1124,6 +1145,9 @@ export function createZCodeTaskIndexSyncer(
       }
       // session.removed：会话删除的 sqlite 收口走 task 删除操作（adapter deleteTask /
       // v4 deleteSession 命令的 host 侧收尾），这里只维护基线。
+      const removedSummary = state.summaries.get(delta.sessionId);
+      state.pendingRekeyFrom = delta.sessionId.startsWith("omp-session-") && removedSummary && isTerminalPhase(removedSummary.phase)
+        ? delta.sessionId : null;
       state.summaries.delete(delta.sessionId);
     }
     state.indexSeq = frame.toSeq;
@@ -1665,6 +1689,7 @@ export function createZCodeTaskIndexSyncer(
       return;
     }
     const state: WorkspaceIngestState = {
+      pendingRekeyFrom: null,
       target: {
         workspacePath: target.workspacePath,
         workspaceIdentity: target.workspaceIdentity,
@@ -1721,7 +1746,9 @@ export function createZCodeTaskIndexSyncer(
       broadcastReason: ZCodeWorkspaceTaskListChanged["reason"];
     },
   ): Promise<ZCodeTaskMeta> {
-    const meta = buildMetaFromSnapshot(snapshot, options);
+    const sourceMeta = buildMetaFromSnapshot(snapshot, options);
+    const taskId = canonicalTaskId(sourceMeta, sourceMeta.taskId);
+    const meta = taskId === sourceMeta.taskId ? sourceMeta : { ...sourceMeta, taskId };
     // 旧 child 标签页的显式 resume 仍会同步快照；只读详情不能重新写成主任务。
     if (snapshot.session.sessionKind === "subagent_child") return meta;
     // 同时把 snapshot.messages 里可见的聊天正文索引下去，

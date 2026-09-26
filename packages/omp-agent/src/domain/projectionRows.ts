@@ -4,6 +4,7 @@
 import type { ConversationRow, TimelineMarkerPayload, ToolCallRow } from "@zcode/shared/zcode-protocol-v4";
 import { rowBaseFields } from "./projectionTypes.js";
 import type { TurnFileFacts } from "./fileFacts.js";
+import { ompTodoPlan } from "./ompTodoPlan.js";
 
 export interface TurnContext {
   turnId: string;
@@ -87,6 +88,7 @@ export function createStreamingRow(
 }
 
 export function createToolCallRow(init: RowInit & ToolCallUpsert): ToolCallRow {
+  const plan = init.toolName === "todo" ? ompTodoPlan(init.resultDetails) : null;
   return {
     ...rowBaseFields({ ...init, entityId: `tool-${init.toolCallId}` }),
     kind: "toolCall",
@@ -95,7 +97,7 @@ export function createToolCallRow(init: RowInit & ToolCallUpsert): ToolCallRow {
     status: init.status,
     inputText: init.inputText ?? "",
     ...(init.input !== undefined ? { input: init.input } : {}),
-    ...(init.outputText !== undefined ? { output: { text: init.outputText } } : {}),
+    ...(init.outputText !== undefined ? { output: { text: init.outputText, ...(plan ? { plan } : {}) } } : {}),
     ...(init.error !== undefined ? { error: init.error } : {}),
     ...(init.startedAt !== undefined ? { startedAt: init.startedAt } : {}),
     ...(init.endedAt !== undefined ? { endedAt: init.endedAt } : {}),
@@ -103,12 +105,13 @@ export function createToolCallRow(init: RowInit & ToolCallUpsert): ToolCallRow {
 }
 
 export function mergeToolCallRow(existing: ToolCallRow, update: ToolCallUpsert): ToolCallRow {
+  const plan = update.toolName === "todo" ? ompTodoPlan(update.resultDetails) : null;
   return {
     ...existing,
     status: update.status,
     ...(update.inputText !== undefined ? { inputText: update.inputText } : {}),
     ...(update.input !== undefined ? { input: update.input } : {}),
-    ...(update.outputText !== undefined ? { output: { text: update.outputText } } : {}),
+    ...(update.outputText !== undefined ? { output: { text: update.outputText, ...(plan ? { plan } : {}) } } : {}),
     ...(update.error !== undefined ? { error: update.error } : {}),
     ...(update.startedAt !== undefined ? { startedAt: update.startedAt } : {}),
     ...(update.endedAt !== undefined ? { endedAt: update.endedAt } : {}),

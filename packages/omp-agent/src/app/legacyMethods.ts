@@ -37,7 +37,7 @@ export function createLegacyHandlers(context: LegacyMethodContext) {
       const record = asRecord(params);
       const sessionId = requiredString(record, "sessionId");
       const engine = await resumeOrReject(context.registry, sessionId, context.workspaceKey, context.workspacePath);
-      return buildLegacySnapshot({ ...context, engine });
+      return buildLegacySnapshot({ ...context, engine, sessionId });
     },
     [zcodeProtocolMethods.sessionList]: async () => {
       const cold = await context.registry.listLegacySessions(context.workspacePath, context.workspaceKey);
@@ -45,8 +45,9 @@ export function createLegacyHandlers(context: LegacyMethodContext) {
     },
     [zcodeProtocolMethods.sessionRead]: async (params) => {
       const record = asRecord(params);
-      const engine = await resumeOrReject(context.registry, requiredString(record, "sessionId"), context.workspaceKey, context.workspacePath);
-      return buildLegacySnapshot({ ...context, engine, messageLimit: optionalNumber(record, "messageLimit") ?? undefined });
+      const sessionId = requiredString(record, "sessionId");
+      const engine = await resumeOrReject(context.registry, sessionId, context.workspaceKey, context.workspacePath);
+      return buildLegacySnapshot({ ...context, engine, sessionId, messageLimit: optionalNumber(record, "messageLimit") ?? undefined });
     },
     [zcodeProtocolMethods.sessionMessages]: async (params) => {
       const record = asRecord(params);

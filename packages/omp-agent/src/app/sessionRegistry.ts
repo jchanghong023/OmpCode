@@ -230,25 +230,24 @@ export class SessionRegistry {
     _forceSnapshot = false,
   ): { subscriptionId: string; mode: "snapshot" | "resume"; logEpoch: string } {
     for (const [workspaceId, index] of this.indexes) {
-      if (index.subscribers.has(subscriptionId)) {
+      const subscriber = index.subscribers.get(subscriptionId);
+      if (subscriber) {
         this.emitTopicFrame(`sessions-index/${workspaceId}`, subscriptionId, 0, {
           kind: "snapshot",
-          snapshot: {
-            protocolVersion: 1,
-            workspaceId,
-            logEpoch: index.logEpoch,
-            sessions: [...index.summaries.values()],
-          },
-        }, "recovery");
+          snapshot: { protocolVersion: 1, workspaceId, logEpoch: index.logEpoch, sessions: [...index.summaries.values()] },
+        }, "recovery", index.seq);
+        subscriber.lastDeliveredSeq = index.seq;
         return { subscriptionId, mode: "snapshot", logEpoch: index.logEpoch };
       }
     }
     for (const [workspaceId, entry] of this.configStates) {
-      if (entry.subscribers.has(subscriptionId)) {
+      const subscriber = entry.subscribers.get(subscriptionId);
+      if (subscriber) {
         this.emitTopicFrame(`workspace-config/${workspaceId}`, subscriptionId, 0, {
           kind: "snapshot",
           snapshot: { protocolVersion: 1, workspaceId, logEpoch: entry.logEpoch, config: entry.state },
-        }, "recovery");
+        }, "recovery", entry.seq);
+        subscriber.lastDeliveredSeq = entry.seq;
         return { subscriptionId, mode: "snapshot", logEpoch: entry.logEpoch };
       }
     }

@@ -97,6 +97,7 @@ export interface V4UserInputViewModel {
   interactionId: string;
   prompt: string;
   freeText: boolean;
+  confirmation: boolean;
   sensitive?: boolean;
   options: ReadonlyArray<{ optionId: string; label: string }>;
 }
@@ -108,6 +109,8 @@ export function pendingUserInputToViewModel(
     interactionId: interaction.interactionId,
     prompt: interaction.payload.prompt,
     freeText: interaction.payload.freeText,
+    // omp confirm 没有 options/questions/freeText；这种形态必须有显式 accept/decline 入口。
+    confirmation: !interaction.payload.freeText && !interaction.payload.options?.length,
     sensitive: interaction.payload.sensitive,
     options: interaction.payload.options ?? [],
   };

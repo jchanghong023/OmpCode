@@ -1355,6 +1355,8 @@ export function refreshAutoUpdaterReleaseChannel(
 ) {
   const nextChannel: ElectronReleaseChannel = receivePreviewUpdates ? "preview" : "stable";
 
+  // 正式 Fork 没有自有 feed；设置变化也不能绕过 initAutoUpdater(false) 触发上游检查。
+  if (autoUpdaterDisabledForProductFlavor) return;
   if (!canUseAutoUpdaterInCurrentRuntime()) {
     logger.info(`[auto-update] skip ${reason}: not packaged`);
     return;

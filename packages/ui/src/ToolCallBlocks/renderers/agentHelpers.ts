@@ -106,6 +106,7 @@ function readAgentNameFromRecord(value: Record<string, unknown> | null): string 
         "agent_type",
         "subagentType",
         "subagent_type",
+        "agent",
         "name",
         "nickname",
       ])
@@ -113,7 +114,7 @@ function readAgentNameFromRecord(value: Record<string, unknown> | null): string 
 }
 
 function readAgentPrimaryDescription(value: Record<string, unknown> | null): string | undefined {
-  return value ? readStringField(value, ["description", "summary", "message"]) : undefined;
+  return value ? readStringField(value, ["description", "summary", "message", "assignment", "task"]) : undefined;
 }
 
 export function getAgentKindLabel(
@@ -205,7 +206,7 @@ export function getAgentPrimaryText(toolCall: AgentToolCall, fallbackLabel: stri
   }
 
   if (isPlainRecord(toolCall.input)) {
-    const description = readStringField(toolCall.input, ["description"]);
+    const description = readStringField(toolCall.input, ["description", "assignment", "task"]);
     if (description) {
       return description;
     }
@@ -232,7 +233,7 @@ export function getAgentPrimaryText(toolCall: AgentToolCall, fallbackLabel: stri
 
 export function getAgentPrompt(toolCall: AgentToolCall) {
   if (isPlainRecord(toolCall.input)) {
-    const prompt = readStringField(toolCall.input, ["prompt", "message", "description"]);
+    const prompt = readStringField(toolCall.input, ["prompt", "message", "description", "assignment", "task"]);
     if (prompt) {
       return prompt;
     }

@@ -19,6 +19,13 @@ const todoTextClasses: Record<ZCodePlanStep["status"], string> = {
 
 function readTodoPlan(context: ToolCallBlockRenderContext): ZCodePlanStep[] | null {
   const { toolCall } = context.toolCallNode;
+  const projected = toolCall.raw && typeof toolCall.raw === "object"
+    ? (toolCall.raw as { todoPlan?: unknown }).todoPlan : undefined;
+  if (Array.isArray(projected) && projected.every((step) =>
+    step && typeof step === "object" && typeof step.id === "string" &&
+    typeof step.title === "string" && ["pending", "in_progress", "completed"].includes(step.status))) {
+    return projected as ZCodePlanStep[];
+  }
   return (
     extractPlanStepsFromToolOutput({
       title: toolCall.title,

@@ -11,12 +11,14 @@ interface LegacyMessage {
 
 export function buildLegacySnapshot(params: {
   engine: ConversationEngine;
+  sessionId?: string;
   workspaceKey: string;
   workspacePath: string;
   workspaceIdentity?: string;
   messageLimit?: number;
 }): Record<string, unknown> {
   const { engine, workspacePath } = params;
+  const sessionId = params.sessionId ?? engine.sessionId;
   const state = engine.projection.stateSnapshot;
   const snapshot = engine.projection.buildSnapshot();
   const messages = legacyMessages(engine, params.messageLimit ?? 200);
@@ -24,7 +26,7 @@ export function buildLegacySnapshot(params: {
   return {
     protocol: { name: ZCODE_PROTOCOL_NAME, version: ZCODE_PROTOCOL_VERSION },
     session: {
-      sessionId: engine.sessionId,
+      sessionId,
       workspace: {
         workspacePath,
         ...(params.workspaceIdentity ? { workspaceIdentity: params.workspaceIdentity } : {}),
@@ -59,7 +61,7 @@ export function buildLegacySnapshot(params: {
       mode: { current: "build" },
     },
     projection: {
-      sessionId: engine.sessionId,
+      sessionId,
       status: statusOf(state.control.phase),
       mode: "build",
       turnCount: snapshot.rows.window.filter((row) => row.kind === "turnHeader").length,

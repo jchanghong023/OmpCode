@@ -1,7 +1,7 @@
 import type { ZCodePlanStep } from "./zcode-task-types-core.js";
 
 const TODO_TOOL_NAME_PATTERN =
-  /(?:^|[_\s-])(?:todo[_\s-]*(?:read|write)|update[_\s-]*plan)(?:$|[_\s-])/i;
+  /(?:^|[_\s-])(?:todo(?:[_\s-]*(?:read|write))?|update[_\s-]*plan)(?:$|[_\s-])/i;
 const PLAN_COLLECTION_KEYS = ["todos", "plan", "steps", "items"] as const;
 
 function isRecord(value: unknown): value is Record<string, unknown> {

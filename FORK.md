@@ -43,6 +43,7 @@
 
 * 本应用全部业务数据根由 `~/.zcode` 改为 `~/.ompcode`（配置 v2、日志、任务索引、会话快照、凭据、CLI 配置、skills/commands/plugins 同步目录、telemetry、computer-use 运行日志等），Electron userData（`%APPDATA%/OmpCode`）与单实例锁本就按产品名隔离；不读取、不迁移、不写入上游 ZCode 的 `~/.zcode`。workspace 内同名配置目录（`.ompcode/`）同样与 ZCode 的 `.zcode/` 错开。
 * Windows 资源管理器右键菜单注册表键、electron-updater 缓存目录（`ompcode-updater`）改为 OmpCode 专属，双装不互相覆盖。
+* 正式安装包仅从本仓库 GitHub Release 手动获取更新；本 Fork 没有专属更新 feed 时，不查询或安装上游 ZCode 的自动更新，也不受上游强制更新线阻止启动。
 * 端口隔离：本地开发远程调试端口 9230（上游 ZCode Dev 用 9229）、桌面 devServer 5194（上游 5174）、Web devServer 5193（上游 5173）、server 包默认端口 3033（上游 3030）；运行期本地服务一律 `listen(0)` 临时端口（不变）。深链 scheme `zcode://` 与 appId 仍按「内部标识不动」约定保留（见已知差异 17）。
 
 * 隔离实测：应用运行期仅写 `~/.ompcode`（v2 日志/任务索引/设置/runtime），`~/.zcode` 全程零新增写入（快照对比归因：期间写入方为本机 zcode CLI 会话与用户自装的 `C:\Program Files\ZCode\ZCode.exe`，与本应用无关）；监听端口仅 9230（dev CDP）与 5194（devServer），无 9229/5173/5174/3030 占用。
@@ -147,3 +148,4 @@
 15. **`startup/storageState` 存储准备**：omp 核心无 ZCode CLI 的 SQLite 会话库，适配器按协议帧序直接报告 ready；`--prepare-storage` worker 为无操作握手（帧序完整，exit 0）。
 16. **附件**：图片附件随输入转发给 omp（ImageContent base64）；UTF-8 文本、JSON、XML、JavaScript 与 YAML 在大小限制内作为标明文件名的文本进入 prompt。视频/PDF 等 omp RPC 不能直接消费的附件在提交时明确拒绝；不会发生上传成功却静默忽略的情况。
 17. **与上游共享的安装级标识**：深链 scheme `zcode://`、Windows AUMID/appId（`dev.zcode.app`）、Linux 包名按「内部标识不动」约定保留，双装时 scheme 由最后注册方接管、任务栏按 appId 分组——属链接路由与安装身份冲突，非数据/端口共享；数据与端口已按 2026-09-25 隔离需求完全错开。
+18. **回复反馈**：omp 无 ZCode 的赞/踩反馈持久化接口，会话中不展示无法生效的反馈入口；复制等其他回复操作保留。

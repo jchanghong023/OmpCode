@@ -110,6 +110,7 @@ export function toolCallRowToLegacyNode(row: ToolCallRow): TaskChatToolCallTreeN
       raw: {
         error: row.error,
         rawOutput: row.output?.text,
+        todoPlan: row.output?.plan,
         outputPreview: row.outputPreview,
         outputTruncated: row.output?.truncated,
         status: legacyStatus,

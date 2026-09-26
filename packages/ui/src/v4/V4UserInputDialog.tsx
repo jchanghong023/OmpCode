@@ -9,15 +9,17 @@ import { Button } from "@/components/ui/button.js";
 import { Input } from "@/components/ui/input.js";
 import type { V4UserInputViewModel } from "@/v4/pendingInteractionAdapter.js";
 import { runUserAction } from "@/lib/userActionTelemetry.js";
+import { useZCodeIntl } from "@/i18n/IntlProvider.js";
 
 interface V4UserInputDialogProps {
   model: V4UserInputViewModel;
-  onSubmit: (answer: { optionId?: string; freeText?: string }) => void;
+  onSubmit: (answer: { optionId?: string; freeText?: string; action?: "accept" | "decline" }) => void;
 }
 
 /** v4 userInput 交互最小弹窗（竖切）。 */
 export function V4UserInputDialog({ model, onSubmit }: V4UserInputDialogProps) {
   const [freeText, setFreeText] = useState("");
+  const { intl } = useZCodeIntl();
 
   const handleOption = useCallback(
     (optionId: string) => {
@@ -73,6 +75,16 @@ export function V4UserInputDialog({ model, onSubmit }: V4UserInputDialogProps) {
             />
             <Button type="button" onClick={handleFreeTextSubmit}>
               提交
+            </Button>
+          </div>
+        ) : null}
+        {model.confirmation ? (
+          <div className="flex justify-end gap-2">
+            <Button type="button" variant="outline" onClick={() => onSubmit({ action: "decline" })}>
+              {intl.formatMessage({ id: "chat.permission.deny" })}
+            </Button>
+            <Button type="button" onClick={() => onSubmit({ action: "accept" })}>
+              {intl.formatMessage({ id: "common.confirm" })}
             </Button>
           </div>
         ) : null}
