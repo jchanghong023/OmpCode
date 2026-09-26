@@ -315,7 +315,7 @@ export async function openInEditor(
     return { success: false, error: `unknown editor: ${editorId}` };
   }
 
-  const appPath = resolveEditorDefAppPath(def) ?? def.appPath;
+  const appPath = (await resolveEditorDefAppPath(def)) ?? def.appPath;
   if (options?.remoteTarget?.kind === "ssh" && isVSCodeEditor(editorId)) {
     // SSH 工作区的 workspacePath 是远端文件系统路径，不能按本机路径执行 `code /root/...`。
     // VS Code Remote-SSH 需要 folder URI 才会连接对应 SSH Host 并打开远端目录。

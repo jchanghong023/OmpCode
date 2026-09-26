@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { noteHighlighterFailure } from "../src/lib/shikiHighlighter.js";
+import { noteHighlighterFailure, rememberTokenizedCode } from "../src/lib/shikiHighlighter.js";
 
 // F38：shiki 创建失败后，已 reject 的 promise 不能驻留 highlighterCache，
 // 否则该语言+主题组合整会话命中同一失败 promise，永远无高亮。
@@ -28,4 +28,14 @@ test("失败清理对不存在的缓存键安全", () => {
   const cache = buildFakeCache();
   noteHighlighterFailure(cache as never, "github-dark:rust");
   assert.equal(cache.size, 2);
+});
+
+test("token 缓存保留最近使用的条目并淘汰最旧条目", () => {
+  const cache = new Map<string, { tokens: never[][]; fg: string; bg: string }>();
+  const value = { tokens: [], fg: "inherit", bg: "transparent" };
+  rememberTokenizedCode(cache, "a", value, 2);
+  rememberTokenizedCode(cache, "b", value, 2);
+  rememberTokenizedCode(cache, "a", value, 2);
+  rememberTokenizedCode(cache, "c", value, 2);
+  assert.deepEqual([...cache.keys()], ["a", "c"]);
 });

@@ -1,4 +1,5 @@
 import { useMemo, useRef } from "react";
+import { useShallow } from "zustand/react/shallow";
 import type { ZCodeProvider, ZCodeTaskMeta } from "@zcode/shared";
 import { useActiveTaskSnapshotMeta } from "@/hooks/useActiveTaskSnapshotMeta.js";
 import { useTaskNativeSessionLogFile } from "@/hooks/useTaskNativeSessionLogFile.js";
@@ -80,8 +81,11 @@ export function useWorkspaceActiveTaskState({
   selectedProvider,
   intl,
 }: UseWorkspaceActiveTaskStateParams) {
-  const workspaceState = useZCodeSessionStore((state) =>
-    selectWorkspaceZCodeState(state, workspaceAbsPath, workspaceIdentity),
+  const [taskListCache, optimisticTaskListByTaskId] = useZCodeSessionStore(
+    useShallow((state) => {
+      const workspace = selectWorkspaceZCodeState(state, workspaceAbsPath, workspaceIdentity);
+      return [workspace.taskListCache, workspace.optimisticTaskListByTaskId] as const;
+    }),
   );
   const activeTaskQueryMeta = useTaskQueryCacheStore((state) => {
     if (!activeTaskId) {
@@ -110,10 +114,13 @@ export function useWorkspaceActiveTaskState({
     // query cache 里保留着 titleOverridden 的手动标题。Header 必须按同一套 title authority
     // 合并两边，否则当前 task 会看起来被还原成生成标题或首条 query。
     return (
-      mergeTaskMetaCandidates(getTaskMeta(workspaceState, activeTaskId), activeTaskQueryMeta) ??
+      mergeTaskMetaCandidates(
+        getTaskMeta({ taskListCache, optimisticTaskListByTaskId }, activeTaskId),
+        activeTaskQueryMeta,
+      ) ??
       null
     );
-  }, [activeTaskId, activeTaskQueryMeta, workspaceState]);
+  }, [activeTaskId, activeTaskQueryMeta, taskListCache, optimisticTaskListByTaskId]);
 
   const activeTaskSnapshotMeta = useActiveTaskSnapshotMeta(
     workspaceAbsPath,

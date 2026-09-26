@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { z } from "zod";
 import { TopicWireFrameAssembler } from "../../shared/src/zcode-protocol-v4/wire-assembler.js";
-import { measureTopicNotificationEnvelopeBytes } from "../../shared/src/zcode-protocol-v4/wire-codec.js";
+import { encodeTopicWireFrames, measureTopicNotificationEnvelopeBytes } from "../../shared/src/zcode-protocol-v4/wire-codec.js";
 import { ConversationTopicPublisher } from "../src/app/topicPublisher.js";
 import type { ConversationProjection } from "../src/domain/conversationProjection.js";
 import type { HostGateway } from "../src/app/ports.js";
@@ -58,4 +58,37 @@ test("large topic frame uses the receiver's physical budget and reassembles", ()
     },
     deliveryKind: "initial",
   });
+});
+
+test("fragment budget measures envelope once rather than repeatedly serializing probe payloads", () => {
+  let measurements = 0;
+  const wires = encodeTopicWireFrames({ text: "x".repeat(800_000) }, {
+    deliveryKind: "initial",
+    topic: "conversation/test",
+    subscriptionId: "subscriber",
+    logicalFrameId: "frame",
+    logicalFrameOrdinal: 1,
+    measurePhysicalFrameBytes: (wire) => {
+      measurements += 1;
+      return measureTopicNotificationEnvelopeBytes(wire).maxBytes;
+    },
+  });
+  assert.ok(wires.length > 1);
+  assert.ok(measurements <= wires.length + 2, `measurements=${measurements}`);
+});
+
+test("small physical budgets and UTF-8 payloads still produce bounded frames", () => {
+  for (const budget of [2_048, 4_096, 65_536]) {
+    const wires = encodeTopicWireFrames({ text: "你好🙂".repeat(4_000) }, {
+      deliveryKind: "online",
+      topic: "conversation/test",
+      subscriptionId: "subscriber",
+      logicalFrameId: "frame",
+      logicalFrameOrdinal: 2,
+      maxPhysicalFrameBytes: budget,
+      measurePhysicalFrameBytes: (wire) => measureTopicNotificationEnvelopeBytes(wire).maxBytes,
+    });
+    assert.ok(wires.length >= 1);
+    assert.ok(wires.every((wire) => measureTopicNotificationEnvelopeBytes(wire).maxBytes <= budget));
+  }
 });

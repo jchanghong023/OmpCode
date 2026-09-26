@@ -205,14 +205,31 @@ export function createTaskSlice(set: SetFn) {
       workspaceIdentity?: string,
       provider?: ZCodeProvider,
     ) => {
-      set((state) =>
-        updateWorkspaceState(
+      set((state) => {
+        const currentTaskRuntime = getTaskRuntimeState(
+          getWorkspaceState(state, workspacePath, workspaceIdentity),
+          taskId,
+        );
+        const isRunningStatus =
+          status === "creating" || status === "restoring" || status === "streaming";
+        // 流式 chunk 会重复报告 streaming；相同事实不得反复发布 workspace 新引用。
+        // 终态仍须检查路由字段，确保首次收口时清除旧 input/turn owner。
+        if (
+          currentTaskRuntime.status === status &&
+          currentTaskRuntime.error === (error ?? null) &&
+          currentTaskRuntime.provider === (provider ?? currentTaskRuntime.provider) &&
+          (isRunningStatus ||
+            (currentTaskRuntime.activeTurnKind === undefined &&
+              currentTaskRuntime.activeInputId === undefined &&
+              currentTaskRuntime.activeInputOwnerClientId === undefined))
+        ) {
+          return state;
+        }
+        return updateWorkspaceState(
           state,
           workspacePath,
           (current) => {
             const currentTaskRuntime = getTaskRuntimeState(current, taskId);
-            const isRunningStatus =
-              status === "creating" || status === "restoring" || status === "streaming";
             const nextTaskRuntime = {
               ...currentTaskRuntime,
               status,
@@ -237,8 +254,8 @@ export function createTaskSlice(set: SetFn) {
             };
           },
           workspaceIdentity,
-        ),
-      );
+        );
+      });
     },
 
     setTaskUsage: (

@@ -58,6 +58,18 @@ const highlighterCache = new Map<
   Promise<HighlighterGeneric<BundledLanguage, BundledTheme>>
 >();
 const tokensCache = new Map<string, TokenizedCode>();
+const MAX_TOKEN_CACHE_ENTRIES = 256;
+const MAX_CACHED_CODE_LENGTH = 32_768;
+
+export function rememberTokenizedCode<T>(cache: Map<string, T>, key: string, value: T, limit: number): void {
+  cache.delete(key);
+  cache.set(key, value);
+  while (cache.size > limit) {
+    const oldest = cache.keys().next().value;
+    if (oldest === undefined) break;
+    cache.delete(oldest);
+  }
+}
 const subscribers = new Map<string, Set<(result: TokenizedCode) => void>>();
 // 内存诊断计数器：tokensCache 目前无淘汰，是审计里
 // renderer 最可疑的增长点，先把条数落到日志里。
@@ -153,6 +165,7 @@ export const highlightCode = (
 
   const cached = tokensCache.get(tokensCacheKey);
   if (cached) {
+    rememberTokenizedCode(tokensCache, tokensCacheKey, cached, MAX_TOKEN_CACHE_ENTRIES);
     // 缓存命中时也需要通知 effect，但不能同步触发 setState。
     // 历史消息恢复时大量代码块会在同一次提交后挂载；同步 callback 会把 cache-hit 变成嵌套更新，
     // 和 Streamdown 的重渲染叠在一起时容易触发 React #185。推迟到微任务后再交给幂等 setter。
@@ -188,7 +201,10 @@ export const highlightCode = (
         tokens: result.tokens,
       };
 
-      tokensCache.set(tokensCacheKey, tokenized);
+      // 完整 token 数组可远大于源码；巨型代码块不驻留，普通块只保留最近使用项。
+      if (code.length <= MAX_CACHED_CODE_LENGTH) {
+        rememberTokenizedCode(tokensCache, tokensCacheKey, tokenized, MAX_TOKEN_CACHE_ENTRIES);
+      }
 
       const subs = subscribers.get(tokensCacheKey);
       if (subs) {

@@ -139,6 +139,14 @@ export function applyConversationDeltas(
   snapshot: ConversationSnapshot,
   deltas: readonly ConversationDelta[],
 ): ConversationSnapshot {
+  if (deltas.length === 0) return snapshot;
+  if (deltas.length > 1) {
+    // 同一物理帧中的候选快照尚未发布，可只复制一次窗口并复用 rowId 索引；
+    // 单条 delta 仍走直接路径，避免为最常见的小帧额外构建 Map。
+    const accumulator = createMutableConversationSnapshotAccumulator(snapshot);
+    applyConversationDeltasMutable(accumulator, deltas);
+    return accumulator.snapshot;
+  }
   let current = snapshot;
   for (const delta of deltas) {
     current = applyConversationDelta(current, delta);

@@ -14,7 +14,7 @@ import {
   rmSync,
   statSync,
 } from "node:fs";
-import { execFileSync } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { join, win32 as pathWin32 } from "node:path";
 import { app, nativeImage } from "electron";
@@ -225,30 +225,34 @@ function createWindowsEditorDef(
   };
 }
 
-function resolveWindowsCommandPaths(command: string): string[] {
-  if (process.platform !== "win32") {
-    return [];
-  }
+const windowsCommandPathPromises = new Map<string, Promise<string[]>>();
 
-  try {
-    const output = execFileSync("where.exe", [command], {
+function resolveWindowsCommandPaths(command: string): Promise<string[]> {
+  if (process.platform !== "win32") {
+    return Promise.resolve([]);
+  }
+  const cached = windowsCommandPathPromises.get(command);
+  if (cached) return cached;
+  const pending = new Promise<string[]>((resolvePaths) => {
+    execFile("where.exe", [command], {
       encoding: "utf8",
       timeout: 1000,
       windowsHide: true,
+    }, (error, output) => {
+      resolvePaths(error ? [] : output
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter((line) => line.length > 0 && existsSync(line)));
     });
-    return output
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .filter((line) => line.length > 0 && existsSync(line));
-  } catch {
-    return [];
-  }
+  });
+  windowsCommandPathPromises.set(command, pending);
+  return pending;
 }
 
-function deriveWindowsAppPathsFromCommand(command: string, appNames: string[]): string[] {
+async function deriveWindowsAppPathsFromCommand(command: string, appNames: string[]): Promise<string[]> {
   const candidates: string[] = [];
 
-  for (const commandPath of resolveWindowsCommandPaths(command)) {
+  for (const commandPath of await resolveWindowsCommandPaths(command)) {
     const commandDir = pathWin32.dirname(commandPath);
     for (const appRoot of uniquePaths([commandDir, pathWin32.dirname(commandDir)])) {
       for (const appName of appNames) {
@@ -337,16 +341,19 @@ export function getEditorDefsForCurrentPlatform(): EditorDef[] {
 }
 
 /** 缓存检测结果，避免重复 IO */
-export function resolveEditorDefAppPath(def: EditorDef): string | null {
+export async function resolveEditorDefAppPath(def: EditorDef): Promise<string | null> {
+  const staticPath = uniquePaths([def.appPath, ...(def.appPathCandidates ?? [])])
+    .find((candidate) => existsSync(candidate));
+  if (staticPath) return staticPath;
   const commandAppPaths =
     def.command && def.windowsCommandAppNames?.length
-      ? deriveWindowsAppPathsFromCommand(def.command, def.windowsCommandAppNames)
+      ? await deriveWindowsAppPathsFromCommand(def.command, def.windowsCommandAppNames)
       : [];
   const commandPaths =
     process.platform === "win32" && def.windowsCommandAppNames?.length
       ? []
       : def.command
-        ? resolveWindowsCommandPaths(def.command)
+        ? await resolveWindowsCommandPaths(def.command)
         : [];
   const candidatePaths = uniquePaths([
     def.appPath,
@@ -639,11 +646,11 @@ export async function getInstalledEditors(): Promise<EditorInfo[]> {
     return cachedEditors;
   }
 
-  const installed = getEditorDefsForCurrentPlatform()
-    .map((def) => {
-      const appPath = resolveEditorDefAppPath(def);
+  const installed = (await Promise.all(getEditorDefsForCurrentPlatform()
+    .map(async (def) => {
+      const appPath = await resolveEditorDefAppPath(def);
       return appPath ? { def, appPath } : null;
-    })
+    })))
     .filter((entry): entry is { def: EditorDef; appPath: string } => entry !== null);
 
   const results = await Promise.all(

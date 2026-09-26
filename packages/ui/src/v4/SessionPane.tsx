@@ -36,6 +36,7 @@ import type {
   CommandEnvelope,
   CommandType,
   ConversationSnapshot,
+  ConversationRow,
   ConversationRowTarget,
   SessionErrorInfo,
   SessionModelTransition,
@@ -175,6 +176,7 @@ import {
   buildWorkflowRunByToolCallId,
   buildWorkflowRunPendingQuestionsByRunId,
   buildWorkflowGraphByToolCallId,
+  stableWorkflowSourceRows,
 } from "@/v4/workflowRunCardJoin.js";
 import { buildWorkflowDraftByToolCallId } from "@/v4/workflowDraftJoin.js";
 import {
@@ -1817,15 +1819,21 @@ export function SessionPane({
   );
   // 发起 toolCallId → 静态图：图是 run 的属性，
   // 三种来源的轮尾 run 卡都到这一张表取图。行窗口一遍建成，随窗口重建。
+  const workflowSourceRowsRef = useRef<readonly ConversationRow[] | undefined>(undefined);
+  const workflowSourceRows = useMemo(() => {
+    const next = stableWorkflowSourceRows(snapshot?.rows.window, workflowSourceRowsRef.current);
+    workflowSourceRowsRef.current = next;
+    return next;
+  }, [snapshot?.rows.window]);
   const workflowGraphByToolCallId = useMemo(
-    () => buildWorkflowGraphByToolCallId(snapshot?.rows.window),
-    [snapshot?.rows.window],
+    () => buildWorkflowGraphByToolCallId(workflowSourceRows),
+    [workflowSourceRows],
   );
   // 工作流工具行 → 草稿位置：稿号与
   // 「后面还有更新的一稿」都只能从行序读出，行窗口一遍建成，随窗口重建。
   const workflowDraftByToolCallId = useMemo(
-    () => buildWorkflowDraftByToolCallId(snapshot?.rows.window),
-    [snapshot?.rows.window],
+    () => buildWorkflowDraftByToolCallId(workflowSourceRows),
+    [workflowSourceRows],
   );
   // Workflow 通知 manifest 的升级条目 Waiting→Answered 联查表（runId → 停驻 qid 集合）。
   const workflowRunPendingQuestionsByRunId = useMemo(

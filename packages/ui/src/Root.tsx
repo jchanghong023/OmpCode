@@ -12,15 +12,13 @@ import { Button } from "@/components/ui/button.js";
 import { PlatformProvider } from "@/hooks/usePlatform.js";
 import { ServiceProvider } from "@/hooks/useServices.js";
 import { useDynamicWorkflowAvailabilityLoader } from "@/hooks/useDynamicWorkflowAvailability.js";
-import { DirectoryBrowser } from "@/DirectoryBrowser.js";
 import { useTabPersistence } from "@/hooks/useTabPersistence.js";
 import { useTokenRefresh } from "@/hooks/useTokenRefresh.js";
 import { useWorkspaceServices } from "@/hooks/useWorkspaceServices.js";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
 import { SSHDialog } from "@/SSHDialog.js";
-import { SettingsPage } from "@/SettingsPage.js";
 import { CodingPlanUpgradeDialogProvider } from "@/settings/CodingPlanUpgradeDialogProvider.js";
-import { WelcomeScreen, type LoginCompleteReason } from "@/WelcomeScreen.js";
+import type { LoginCompleteReason } from "@/WelcomeScreen.js";
 import { setDefaultFileDisplayBasePath } from "@/lib/fileDisplay.js";
 import { readRendererLaunchTimings, shouldReportLaunchToInput } from "@/lib/launchToInputReport.js";
 import { reportUiLaunchToInput } from "@/lib/uiPerfArmsTelemetry.js";
@@ -83,6 +81,16 @@ import {
   disposeConversationTelemetrySupervisors,
   reconcileConversationTelemetryWorkspaceScopes,
 } from "@/v4/telemetry/ConversationTelemetryAttachment.js";
+
+const DirectoryBrowser = lazy(() =>
+  import("@/DirectoryBrowser.js").then((module) => ({ default: module.DirectoryBrowser })),
+);
+const SettingsPage = lazy(() =>
+  import("@/SettingsPage.js").then((module) => ({ default: module.SettingsPage })),
+);
+const WelcomeScreen = lazy(() =>
+  import("@/WelcomeScreen.js").then((module) => ({ default: module.WelcomeScreen })),
+);
 
 const DEFAULT_LUCIDE_STROKE_WIDTH = 1.5;
 interface RemoteConnectionOpenPreference {
@@ -931,14 +939,16 @@ function RootInner({
       resetKeys={["directory-browser"]}
       variant="silent"
     >
-      <DirectoryBrowser
-        services={services}
-        onCancel={() => setDirectoryBrowserOpen(false)}
-        onSelect={(path) => {
-          setDirectoryBrowserOpen(false);
-          void handleSelectProject(path);
-        }}
-      />
+      <Suspense fallback={null}>
+        <DirectoryBrowser
+          services={services}
+          onCancel={() => setDirectoryBrowserOpen(false)}
+          onSelect={(path) => {
+            setDirectoryBrowserOpen(false);
+            void handleSelectProject(path);
+          }}
+        />
+      </Suspense>
     </ScopedErrorBoundary>
   ) : null;
 
@@ -985,7 +995,11 @@ function RootInner({
         {rootModelSelectionErrorNode}
         {remoteConnectionDialog}
         {directoryBrowserDialog}
-        <WelcomeScreen onComplete={handleWelcomeScreenComplete} />
+        <Suspense
+          fallback={<RootStartupLoading label={intl.formatMessage({ id: "common.loading" })} />}
+        >
+          <WelcomeScreen onComplete={handleWelcomeScreenComplete} />
+        </Suspense>
       </RootShell>
     );
   }
@@ -1027,7 +1041,11 @@ function RootInner({
               variant="panel"
               className="h-full"
             >
-              <SettingsPage {...settingsLayerProps} />
+              <Suspense
+                fallback={<RootStartupLoading label={intl.formatMessage({ id: "common.loading" })} />}
+              >
+                <SettingsPage {...settingsLayerProps} />
+              </Suspense>
             </ScopedErrorBoundary>
           ) : null
         ) : (

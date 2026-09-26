@@ -187,10 +187,9 @@ export const WorkspaceSidebarItem = memo(function WorkspaceSidebarItem({
   isDragging?: boolean;
 }) {
   const { intl } = useZCodeIntl();
-  const workspaceZCodeState = useZCodeSessionStore((state) =>
-    selectWorkspaceZCodeState(state, tab.workspacePath, tab.workspaceIdentity),
+  const activeTaskId = useZCodeSessionStore(
+    (state) => selectWorkspaceZCodeState(state, tab.workspacePath, tab.workspaceIdentity).activeTaskId,
   );
-  const activeTaskId = workspaceZCodeState.activeTaskId;
   const removeTaskState = useZCodeSessionStore((state) => state.removeTaskState);
   const upsertOptimisticTaskListItem = useZCodeSessionStore(
     (state) => state.upsertOptimisticTaskListItem,
@@ -210,8 +209,6 @@ export const WorkspaceSidebarItem = memo(function WorkspaceSidebarItem({
   const zcodeTaskService = services.zcodeTaskService;
   const taskItemsRef = useRef(taskItems);
   taskItemsRef.current = taskItems;
-  const workspaceZCodeStateRef = useRef(workspaceZCodeState);
-  workspaceZCodeStateRef.current = workspaceZCodeState;
   const findCurrentTaskItem = useCallback((taskId: string) => {
     // 流式刷新会重建 taskItems 数组，任务操作回调如果直接依赖数组，
     // 即使任务语义没变也会换引用，继续击穿 TaskListItem 的 memo。
@@ -355,7 +352,11 @@ export const WorkspaceSidebarItem = memo(function WorkspaceSidebarItem({
 
     if (
       hasRunningWorkspaceChat({
-        workspaceState: workspaceZCodeStateRef.current,
+        workspaceState: selectWorkspaceZCodeState(
+          useZCodeSessionStore.getState(),
+          tab.workspacePath,
+          tab.workspaceIdentity,
+        ),
         taskItems: taskItemsRef.current,
       })
     ) {

@@ -69,16 +69,34 @@ export function TaskFindDialog({
   const titleId = useId();
   const descriptionId = useId();
   const [query, setQuery] = useState("");
+  const [searchQuery, setSearchQuery] = useState("");
   const [scope, setScope] = useState<TaskFindScope>("conversation");
   const inputRef = useRef<HTMLInputElement | null>(null);
+  useEffect(() => {
+    if (!open || !query.trim()) {
+      setSearchQuery(open ? query : "");
+      return;
+    }
+    // 输入先回显，全文扫描/DOM 高亮/历史回源只在关键词稳定后发生。
+    const timer = window.setTimeout(() => setSearchQuery(query), 150);
+    return () => window.clearTimeout(timer);
+  }, [open, query]);
+  const effectiveSearchQuery = query === searchQuery ? searchQuery : "";
   const conversationState = useMemo(
     () =>
-      getConversationFindState(query.trim() ? conversationMatchCount : 0, conversationMatchIndex),
-    [conversationMatchCount, conversationMatchIndex, query],
+      getConversationFindState(
+        effectiveSearchQuery.trim() ? conversationMatchCount : 0,
+        conversationMatchIndex,
+      ),
+    [conversationMatchCount, conversationMatchIndex, effectiveSearchQuery],
   );
   const fileChangeState = useMemo(
-    () => getConversationFindState(query.trim() ? fileChangeMatchCount : 0, fileChangeMatchIndex),
-    [fileChangeMatchCount, fileChangeMatchIndex, query],
+    () =>
+      getConversationFindState(
+        effectiveSearchQuery.trim() ? fileChangeMatchCount : 0,
+        fileChangeMatchIndex,
+      ),
+    [fileChangeMatchCount, fileChangeMatchIndex, effectiveSearchQuery],
   );
   const activeFindState = scope === "conversation" ? conversationState : fileChangeState;
 
@@ -138,13 +156,13 @@ export function TaskFindDialog({
     }
 
     onFileChangeFindChange("", -1);
-    onConversationFindChange(query, conversationState.currentIndex);
+    onConversationFindChange(effectiveSearchQuery, conversationState.currentIndex);
   }, [
     conversationState.currentIndex,
     onConversationFindChange,
     onFileChangeFindChange,
     open,
-    query,
+    effectiveSearchQuery,
     scope,
   ]);
 
@@ -156,13 +174,13 @@ export function TaskFindDialog({
     // 切到“文件变更”范围后，旧的对话搜索高亮不应该继续留在聊天区。
     // 两个范围使用独立高亮 root，这里显式清空另一边，避免用户误以为两个范围同时生效。
     onConversationFindChange("", -1);
-    onFileChangeFindChange(query, fileChangeState.currentIndex);
+    onFileChangeFindChange(effectiveSearchQuery, fileChangeState.currentIndex);
   }, [
     fileChangeState.currentIndex,
     onConversationFindChange,
     onFileChangeFindChange,
     open,
-    query,
+    effectiveSearchQuery,
     scope,
   ]);
 
@@ -175,7 +193,7 @@ export function TaskFindDialog({
       }
 
       const selection = resolveConversationFindNavigationSelection(
-        query,
+        effectiveSearchQuery,
         activeFindState,
         direction,
       );
@@ -186,28 +204,15 @@ export function TaskFindDialog({
 
       onFileChangeFindNavigate(selection.query, selection.activeIndex);
     },
-    [activeFindState, onConversationFindNavigate, onFileChangeFindNavigate, query, scope],
+    [activeFindState, onConversationFindNavigate, onFileChangeFindNavigate, effectiveSearchQuery, scope],
   );
 
-  const handleQueryChange = useCallback(
-    (nextQuery: string) => {
-      setQuery(nextQuery);
-      const nextIndex = nextQuery.trim() ? 0 : -1;
-      if (scope === "conversation") {
-        // 输入新的查找词时应从第一个命中开始滚动。
-        // 如果沿用旧 activeIndex，新关键词也可能直接跳到第 N 个结果，和系统查找行为不一致。
-        onConversationFindChange(nextQuery, nextIndex);
-        return;
-      }
-
-      onFileChangeFindChange(nextQuery, nextIndex);
-    },
-    [onConversationFindChange, onFileChangeFindChange, scope],
-  );
+  const handleQueryChange = useCallback((nextQuery: string) => setQuery(nextQuery), []);
 
   const handleScopeChange = useCallback(
     (nextScope: TaskFindScope) => {
       setScope(nextScope);
+      setSearchQuery(query);
       if (nextScope === "changes") {
         onOpenFileChanges();
         onConversationFindChange("", -1);

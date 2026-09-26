@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { ConversationProjection } from "../src/domain/conversationProjection.js";
+import { applyConversationDelta, applyConversationDeltas } from "../../shared/src/zcode-protocol-v4/apply.js";
+import type { ConversationDelta } from "@zcode/shared/zcode-protocol-v4";
 import { TurnFileFacts } from "../src/domain/fileFacts.js";
 import { PromptResultTracker } from "../src/domain/promptResultTracker.js";
 
@@ -10,6 +12,54 @@ const input = (id: string, routing: "startNow" | "guide" | "queue" = "startNow")
   sourceCommandId: id,
   clientId: "test",
   routing,
+});
+
+test("流式增量在运行中 snapshot、分页与完成态保持一致", () => {
+  const projection = new ConversationProjection("stream-snapshot");
+  projection.beginUserTurn(input("stream"));
+  const expected = "chunk".repeat(200);
+  for (let index = 0; index < 200; index += 1) {
+    projection.appendAssistantText("chunk");
+    if (index === 99) {
+      const intermediate = projection.buildSnapshot().rows.window.find((row) => row.kind === "assistantText");
+      assert.equal(intermediate?.kind === "assistantText" && intermediate.text, "chunk".repeat(100));
+    }
+  }
+  const streaming = projection.buildSnapshot().rows.window.find((row) => row.kind === "assistantText");
+  assert.equal(streaming?.kind === "assistantText" && streaming.text, expected);
+  const paged = projection.rowsRange(undefined, 100).rows.find((row) => row.kind === "assistantText");
+  assert.equal(paged?.kind === "assistantText" && paged.text, expected);
+  projection.finishTurn("success");
+  const completed = projection.rowsRange(undefined, 100).rows.find((row) => row.kind === "assistantText");
+  assert.equal(completed?.kind === "assistantText" && completed.text, expected);
+});
+
+test("批量应用同帧 deltas 与逐条应用一致且不修改已发布快照", () => {
+  const projection = new ConversationProjection("batch-apply");
+  projection.beginUserTurn(input("batch"));
+  projection.drainPendingDeltas();
+  const previous = projection.buildSnapshot();
+  const unchanged = structuredClone(previous);
+  projection.appendAssistantText("hello");
+  projection.appendAssistantText(" world");
+  const deltas = projection.drainPendingDeltas();
+  const expected = deltas.reduce(applyConversationDelta, previous);
+  assert.deepEqual(applyConversationDeltas(previous, deltas), expected);
+  assert.deepEqual(previous, unchanged);
+});
+
+test("批量应用移除后追加行仍保持索引和状态 patch 语义", () => {
+  const projection = new ConversationProjection("batch-rewind");
+  projection.beginUserTurn(input("rewind"));
+  const previous = projection.buildSnapshot();
+  const userRow = previous.rows.window.find((row) => row.kind === "userInput");
+  assert.ok(userRow);
+  const deltas: ConversationDelta[] = [
+    { op: "row.removed", fromRowId: userRow.rowId },
+    { op: "row.appended", row: { ...userRow, rowId: userRow.rowId + 10 } },
+    { op: "state.updated", patch: { revision: previous.revision + 1 } },
+  ];
+  assert.deepEqual(applyConversationDeltas(previous, deltas), deltas.reduce(applyConversationDelta, previous));
 });
 
 test("guide 收口旧轮和新轮的流式行及文件事实", () => {

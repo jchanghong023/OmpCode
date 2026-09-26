@@ -229,16 +229,20 @@ export class ZCodeStdioTransport implements ZCodeProtocolTransport {
   };
 
   private drainStdoutFrames(): void {
-    let newlineIndex = this.stdoutBuffer.indexOf("\n");
+    let consumed = 0;
+    let newlineIndex = this.stdoutBuffer.indexOf("\n", consumed);
     while (newlineIndex >= 0) {
-      const frame = this.stdoutBuffer.slice(0, newlineIndex);
-      this.stdoutBuffer = this.stdoutBuffer.slice(newlineIndex + 1);
+      const frame = this.stdoutBuffer.slice(consumed, newlineIndex);
+      consumed = newlineIndex + 1;
       this.handleStdoutFrame(frame);
       if (this.closed) {
+        this.stdoutBuffer = "";
         return;
       }
-      newlineIndex = this.stdoutBuffer.indexOf("\n");
+      newlineIndex = this.stdoutBuffer.indexOf("\n", consumed);
     }
+    // 一个大 chunk 可含多帧；只在扫完后复制未完成的尾段一次。
+    if (consumed > 0) this.stdoutBuffer = this.stdoutBuffer.slice(consumed);
   }
 
   private handleStdoutFrame(frame: string): void {

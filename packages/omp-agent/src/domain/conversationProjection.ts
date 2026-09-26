@@ -25,6 +25,7 @@ import { OmpSubagentProjection } from "./ompSubagentDirectory.js";
 import { readProjectionFileChanges } from "./projectionFileChanges.js";
 import { finalizeFailedQueuedTurn, finalizeTurnContexts } from "./projectionTurnFinalizer.js";
 import { applyProjectionToolCallUpdate } from "./projectionToolCallUpdate.js";
+import { bufferStreamText, materializeStreamTextRow } from "./projectionStreamText.js";
 import {
   createMarkerRow,
   createStreamingRow,
@@ -50,6 +51,7 @@ export class ConversationProjection {
   private sequence = 0;
   private revisionValue = 0;
   private rows = new Map<number, ConversationRow>();
+  private pendingStreamTextByRowId = new Map<number, string[]>();
   private rowIds: number[] = [];
   private nextRowId = 1;
   private state: ProjectionAState;
@@ -213,11 +215,8 @@ export class ConversationProjection {
       this.turn[anchorKey] = { rowId, entityId: `resp-${this.turn.turnId}-${this.turn.responseCounter}-${kind === "assistantText" ? "text" : "reasoning"}` };
     }
     const anchor = this.turn[anchorKey]!;
-    // 行对象同步累积正文：snapshot/rowsRange 的读者不该被要求重放 row.delta。
-    const row = this.rows.get(anchor.rowId);
-    if (row && (row.kind === "assistantText" || row.kind === "reasoning")) {
-      this.rows.set(anchor.rowId, { ...row, text: row.text + delta });
-    }
+    // 逐 chunk 拼接整行会让长回复产生 O(n²) 拷贝；只在读快照或收口时物化。
+    bufferStreamText(this.pendingStreamTextByRowId, anchor.rowId, delta);
     this.pushPending({ op: "row.delta", rowId: anchor.rowId, path: "text", append: delta });
   }
   /** 模型响应结束（message_end）：关闭本响应的流式行；下一次文本增量开新行。 */
@@ -237,7 +236,7 @@ export class ConversationProjection {
       if (!anchor) {
         continue;
       }
-      const row = this.rows.get(anchor.rowId);
+      const row = this.materializeStreamTextRow(anchor.rowId);
       if (!row) {
         continue;
       }
@@ -317,14 +316,14 @@ export class ConversationProjection {
         revision: this.revisionValue,
         state: this.state,
         rowIds: this.rowIds,
-        rowAt: (rowId) => this.rows.get(rowId),
+        rowAt: (rowId) => this.materializeStreamTextRow(rowId),
       },
       PROTOCOL_V4_LIMITS.snapshotTailWindowRows,
     );
   }
 
   rowsRange(beforeRowId: number | undefined, limit: number): { rows: ConversationRow[]; hasMore: boolean } {
-    return conversationRowsRange(this.rowIds, (id) => this.rows.get(id), beforeRowId, limit);
+    return conversationRowsRange(this.rowIds, (id) => this.materializeStreamTextRow(id), beforeRowId, limit);
   }
 
   /** 冷恢复：把历史行直接放入投影（无订阅者时使用；不产生 delta）。 */
@@ -377,6 +376,8 @@ export class ConversationProjection {
     }
     this.pushPending(isNew ? { op: "row.appended", row } : { op: "row.upserted", row });
   }
+  private materializeStreamTextRow = (rowId: number): ConversationRow | undefined =>
+    materializeStreamTextRow(this.rows, this.pendingStreamTextByRowId, rowId);
 
   private patchState(patch: StatePatch): void {
     this.state = { ...this.state, ...patch } as ProjectionAState;

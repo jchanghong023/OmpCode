@@ -157,6 +157,23 @@ export function buildWorkflowGraphByToolCallId(
   return byToolCallId;
 }
 
+/** 仅 workflow 图/草稿的来源行参与失效；流式正文行变化不重建联接表。 */
+export function stableWorkflowSourceRows(
+  rows: readonly ConversationRow[] | undefined,
+  previous: readonly ConversationRow[] | undefined,
+): readonly ConversationRow[] {
+  const relevant = (rows ?? []).filter(
+    (row) => row.kind === "toolCall" || row.kind === "turnHeader" || row.kind === "userInput",
+  );
+  if (
+    previous?.length === relevant.length &&
+    relevant.every((row, index) => row === previous[index])
+  ) {
+    return previous;
+  }
+  return relevant;
+}
+
 /** 「配置」修订出来的 run 的发起 toolCallId 前缀（agent 铸 `settings-<uuid>`）。 */
 const WORKFLOW_SETTINGS_TOOL_CALL_PREFIX = "settings-";
 
