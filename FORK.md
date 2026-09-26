@@ -28,7 +28,7 @@
 ### omp 内置命令全量支持与临时模型（2026-09-25 追加需求，已实现）
 
 - omp 当前目录中的内置斜杠命令（如 `/model`、`/switch`、`/compact`、`/rename`、`/mcp`、`/usage`）在对话输入框可用：命令目录来自 omp `get_available_commands`（含名称/描述/输入提示），目录变化（`available_commands_update`）实时推送刷新补全面板；`skill:*` 命令在技能候选分组展示。
-- GUI 聊天的 `$` 技能候选与设置页「omp 可用技能」使用同一目标工作区或会话的 omp `get_available_commands` 中 `source=skill` 的可执行目录；选中后按 omp 原生 `/skill:<name>` token 调用。TUI 扩展控制中心还显示禁用和遮蔽的发现项，不能用其总数冒充可调用数。本地导入、删除等目录管理另列，不把本地开关当作 omp 启用状态。详细规则见 `docs/specs/omp-skill-parity.md`。
+- GUI 聊天的 `$`、`/` 技能候选与设置页技能列表均使用目标工作区或会话的 omp `get_available_commands` 中 `source=skill` 的可执行目录；选中后按 omp 原生 `/skill:<name>` token 调用。TUI 扩展控制中心还显示禁用和遮蔽的发现项，不能用其总数冒充可调用数。设置页不显示 ZCode 本地扫描技能和本地安装、删除、开关入口；只按 omp 工作区可调用技能计数、搜索。详细规则见 `docs/specs/omp-skill-parity.md`。
 - 本地型命令（不触发 agent 轮）在 UI 正常收口：命令输出投影为会话内可见文本，`agentInvoked:false`/`prompt_result` 完成收口不悬挂；`/rename`、`/model` 等的状态回投（`session_info_update`/`config_update`/`model_changed`）同步到会话标题与模型状态。
 - UI 本地拦截让位：命令名命中 omp 目录时按 omp 语义透传执行（如 `/model`、`/switch`、`/usage`）；仅 `/compact`/`/compress` 保留本地 v4 映射（与 omp `/compact` 等价且排队/时间线集成更好）。omp ACP 目录未分发的命令（`/plan`、`/goal` 等 TUI-only 命令）不受影响，仍按本地语义（差异 #5）。
 - 多角色（`modelRoles`）按上方 2026-09-24 需求在设置与会话工具栏完整适配，角色清单与 omp 内建角色（default/smol/slow/vision/plan/commit/tiny/memory/task/advisor/image/web/speech/dictation/judge）一致并随配置追加自定义角色。
@@ -65,7 +65,7 @@
 - 接口参考与测试基线：接口与协议开发参考本地源码 `D:\code1111111111\oh-my-pi`（协议细节含该仓库 `docs/rpc.md`）；实际测试（含换核验收 E2E）使用 releases 实际内嵌的发布版本二进制执行，不以本地源码的未发布改动为测试对象。
 - 分发：随 ZCode 安装包内嵌——打包时取该 fork GitHub releases 页面（`https://github.com/jchanghong023/oh-my-pi/releases`）的最新版本二进制，内嵌进应用资源并由应用拉起；用户无需单独安装 omp。不依赖上游 oh-my-pi 的 npm / Homebrew / Nix / `omp.sh` 分发。
 - Windows x64 桌面版通过 GitHub Actions 手动发布：从 `main` 输入与当前版本匹配的唯一 OmpCode 标签，打包后将安装 EXE 与 SHA256 校验文件上传到本仓库 GitHub Release；发布流水线不单独运行测试。
-- CentOS 7 x64 桌面版由长期维护、不会合入 `main` 的专有分支 `experiment/centos7-no-proot` 发布：先在 CentOS 7 虚拟机以普通用户完整验证应用、内嵌 omp 与终端，再修改独立的 GitHub Actions 手动发布流水线，从该分支输入与当前版本匹配且以 `-centos7` 结尾的唯一标签，产出自包含 ZIP 与 SHA256 校验文件。此分支专用 Electron 28、兼容 Node 18 的依赖及按 glibc 2.17 重编的原生模块；不要求维持 Windows 构建。用户在 HOME 内解压即可运行，无需 root、网络、另外安装运行时包或使用 PRoot；ZIP 不升级宿主 glibc/Node，也不覆盖用户已安装的 omp。需要可用的图形会话；Chromium 沙箱在无需 root 的解压环境下不可用，使用时应避免不可信工作区。
+- CentOS 7 x64 桌面版由长期维护、不会合入 `main` 的专有分支 `experiment/centos7-no-proot` 发布：先在 CentOS 7 虚拟机以普通用户完整验证应用、内嵌 omp 与终端，再修改独立的 GitHub Actions 手动发布流水线，从该分支输入与当前版本匹配且以 `-centos7` 结尾的唯一标签，产出自包含 ZIP 与 SHA256 校验文件。此分支专用 Electron 28、兼容 Node 18 的依赖及按 glibc 2.17 重编的原生模块；不要求维持 Windows 构建。用户在 HOME 内解压即可运行，无需 root、网络、另外安装运行时包或使用 PRoot；ZIP 内置附许可证的简体中文字库，在宿主没有中文字库时设置、菜单及会话中文也必须正常显示。ZIP 不升级宿主 glibc/Node，也不覆盖用户已安装的 omp。需要可用的图形会话；Chromium 沙箱在无需 root 的解压环境下不可用，使用时应避免不可信工作区。
 - 内嵌 omp 的配置与边界：内嵌拷贝与用户已安装的 omp 使用完全相同的配置（同一配置、凭据与会话数据来源），行为与用户日常使用的 omp 保持一致；NEVER 覆盖、替换、修改或代为安装用户已安装的 omp，内嵌拷贝只存在于 ZCode 应用资源目录内。
 - 进程与端口边界：内嵌 omp 只以子进程形态经 stdio 通信，不监听任何端口；绝不探测、复用、终止或以其他方式影响用户机器上已在运行的 ZCode / omp 进程。本仓库自建的任何本地测试服务一律使用 `listen(0)` 临时端口，发生端口冲突时换临时端口重试，不占用固定端口。
 - 测试模型约定：换核验收 E2E 与 UI 验收的真实模型使用用户 omp 配置的 `zhipu-coding-plan/glm-5.3-flash`（走用户 omp 既有凭据）；协议级 fake-omp E2E 不依赖真实模型。审批等测试态一律用 omp 运行时 flag（如 `--approval-mode`）注入，不修改用户配置文件。

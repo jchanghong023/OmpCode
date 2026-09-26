@@ -1030,7 +1030,6 @@ export function PluginsSection({
     commands: 0,
   });
   const [mcpEditorOpen, setMcpEditorOpen] = useState(false);
-  const [skillDetailOpen, setSkillDetailOpen] = useState(false);
   const [mcpFormScopeKey, setMcpFormScopeKey] = useState<string | null>(null);
   const [pluginDetailOpen, setPluginDetailOpen] = useState(false);
   const [commandEditorOpen, setCommandEditorOpen] = useState(false);
@@ -1050,6 +1049,13 @@ export function PluginsSection({
     [onOpenPluginStore, selectedScope.kind],
   );
   const target = selectedScope.kind === "workspace" ? selectedScope.tab : preferredHost;
+  // 技能只认 omp 工作区目录；旧 User 作用域不是可执行技能来源。
+  const skillTarget =
+    selectedScopeKey === "user"
+      ? preferredHost
+      : selectedScope.kind === "workspace"
+        ? selectedScope.tab
+        : null;
   const effectiveMcpScopeKey =
     mcpEditorOpen && mcpFormScopeKey ? mcpFormScopeKey : selectedScopeKey;
   const effectiveMcpWorkspace = workspaceTabs.find(
@@ -1144,11 +1150,7 @@ export function PluginsSection({
 
   return (
     <div className="space-y-6">
-      {mode === "plugin" &&
-      showMarketplaceBreadcrumb &&
-      !pluginDetailOpen &&
-      !mcpEditorOpen &&
-      !skillDetailOpen ? (
+      {mode === "plugin" && showMarketplaceBreadcrumb && !pluginDetailOpen && !mcpEditorOpen ? (
         <SettingsBreadcrumbReporter
           items={[
             {
@@ -1171,15 +1173,22 @@ export function PluginsSection({
         {!mcpEditorOpen && !pluginDetailOpen && !commandEditorOpen ? (
           <div className="flex min-w-0 flex-wrap items-center gap-3">
             <div className="flex min-w-0 flex-wrap items-center gap-3">
-              <PluginScopeMenu
-                align="start"
-                selectedScopeKey={selectedScopeKey}
-                triggerTestId="plugin-settings-scope-trigger"
-                userOptionTestId="plugin-settings-scope-user-option"
-                workspaceOptionTestIdPrefix="plugin-settings-scope-option"
-                workspaceTabs={workspaceTabs}
-                onScopeKeyChange={setPickedScopeKey}
-              />
+              {selectedTab !== "skills" || skillTarget ? (
+                <PluginScopeMenu
+                  align="start"
+                  includeUser={selectedTab !== "skills"}
+                  selectedScopeKey={
+                    selectedTab === "skills" && skillTarget
+                      ? workspaceKey(skillTarget)
+                      : selectedScopeKey
+                  }
+                  triggerTestId="plugin-settings-scope-trigger"
+                  userOptionTestId="plugin-settings-scope-user-option"
+                  workspaceOptionTestIdPrefix="plugin-settings-scope-option"
+                  workspaceTabs={workspaceTabs}
+                  onScopeKeyChange={setPickedScopeKey}
+                />
+              ) : null}
               <div className="hidden h-4 w-px bg-border sm:block" aria-hidden="true" />
               {mode === "plugin" ? (
                 <TabsList variant="line" className="h-7 max-w-full gap-1 overflow-x-auto p-0">
@@ -1337,21 +1346,13 @@ export function PluginsSection({
         ) : null}
         {mode === "plugin" || mode === "skill" ? (
           <TabsContent forceMount value="skills" className="mt-6 data-[state=inactive]:hidden">
-            {target ? (
+            {skillTarget ? (
               <SkillsSection
-                workspacePath={target.workspacePath}
-                workspaceIdentity={target.workspaceIdentity}
-                remoteSessionId={target.remoteSessionId}
-                remoteTarget={target.remoteTarget}
-                scopeFilter={selectedScope.kind === "user" ? "user" : "workspace"}
+                workspacePath={skillTarget.workspacePath}
+                workspaceIdentity={skillTarget.workspaceIdentity}
+                remoteSessionId={skillTarget.remoteSessionId}
+                remoteTarget={skillTarget.remoteTarget}
                 searchQuery={searchQueries.skills}
-                onCreateTask={onCreateTask}
-                onDetailOpenChange={setSkillDetailOpen}
-                onOpenPluginStore={
-                  selectedScope.kind === "user" ? openPluginStoreForSelectedScope : undefined
-                }
-                showMarketplaceBreadcrumb={showMarketplaceBreadcrumb}
-                reportDetailBreadcrumb={mode === "plugin"}
                 onVisibleCountChange={updateSkillCount}
               />
             ) : (

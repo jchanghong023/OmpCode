@@ -3474,11 +3474,11 @@ const zhCN: Record<string, string> = {
   "settings.modelProvider.testModel.error.noEndpoint": "未配置 endpoint",
   "settings.skills.title": "技能",
   "settings.skills.description":
-    "查看 omp 当前可调用的技能，并管理本地技能文件。聊天中可通过 $skill-name 选择可调用技能。",
+    "查看当前工作区 omp 可调用的技能；聊天中可通过 $skill-name 选择可调用技能。",
   "settings.skills.ompAvailable": "omp 可用技能",
   "settings.skills.ompAvailableDescription":
     "当前工作区中 omp 可执行的技能；禁用或被遮蔽的发现项不计入。",
-  "settings.skills.locallyManaged": "本地可管理技能",
+  "settings.skills.ompEmpty": "当前工作区没有 omp 可调用的技能。",
   "settings.skills.searchPlaceholder": "搜索技能...",
   "settings.skills.refresh": "刷新",
   "settings.skills.refreshing": "刷新中...",

@@ -1,0 +1,19 @@
+@font-face {
+  font-family: "OmpCode CJK";
+  src: url("./NotoSansCJKsc-Regular.otf") format("opentype");
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}
+
+/* CentOS 7 可能没有中文字库；保留原来的西文优先级，并在通用字体前加入随包提供的中文字形。
+   等宽文本也需要回退，否则会话中的中文仍会显示为方框。 */
+html.platform-linux-desktop {
+  --font-sans:
+    -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", "Noto Sans", Arial,
+    "OmpCode CJK", sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol",
+    "Noto Color Emoji";
+  --font-mono:
+    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New",
+    "OmpCode CJK", monospace;
+}
