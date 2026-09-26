@@ -10,7 +10,6 @@ import { replaceAppAsarFromStaging } from "../../../packages/desktop/scripts/app
 const expectedNativeAddons = [
   "node-pty/prebuilds/linux-x64/pty.node",
   "cpu-features/build/Release/cpufeatures.node",
-  "ssh2/lib/protocol/crypto/build/Release/sshcrypto.node",
   "better-sqlite3/build/Release/better_sqlite3.node",
 ];
 
@@ -94,6 +93,11 @@ try {
     await mkdir(dirname(destination), { recursive: true });
     await copyFile(source, destination);
   }
+  // 修复依据：基础 electron-builder 产物也可能带有用 OpenSSL 3 编译的 sshcrypto.node；
+  // Electron 28 实际使用 OpenSSL 1.1.1，加载该插件后 SSH 握手失败。
+  await rm(join(stagedNodeModules, "ssh2/lib/protocol/crypto/build/Release/sshcrypto.node"), {
+    force: true,
+  });
 
   await replaceAppAsarFromStaging({
     sourceDir: extractedAppDir,
@@ -106,6 +110,17 @@ try {
     const unpackedNativePath = join(`${appAsarPath}.unpacked`, "node_modules", relativePath);
     await assertRegularFile(unpackedNativePath);
     await assertElfAddon(unpackedNativePath);
+  }
+  try {
+    await lstat(
+      join(
+        `${appAsarPath}.unpacked`,
+        "node_modules/ssh2/lib/protocol/crypto/build/Release/sshcrypto.node",
+      ),
+    );
+    throw new Error("Incompatible SSH native crypto addon remains in CentOS 7 package");
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error;
   }
   console.log(
     `CentOS 7 app.asar merged; verified ${expectedNativeAddons.length} ELF addons under ${appAsarPath}.unpacked/node_modules`,

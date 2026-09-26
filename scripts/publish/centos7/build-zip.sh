@@ -17,7 +17,6 @@ repo=$(realpath "$(dirname "$0")/../../..")
 }
 [[ -f "$native/app/node_modules/better-sqlite3/build/Release/better_sqlite3.node" &&
   -f "$native/app/node_modules/node-pty/prebuilds/linux-x64/pty.node" &&
-  -f "$native/app/node_modules/ssh2/lib/protocol/crypto/build/Release/sshcrypto.node" &&
   -f "$native/app/node_modules/cpu-features/build/Release/cpufeatures.node" &&
   -x "$native/app/resources/tools/bfs/bfs" && -x "$native/app/resources/tools/ugrep/ugrep" ]] || {
   echo 'Required CentOS 7 native addons or search tools are missing.' >&2
@@ -45,6 +44,7 @@ node "$repo/scripts/publish/centos7/merge-app-asar.mjs" \
 install -m 755 "$repo/scripts/publish/centos7/launch.sh" "$stage/bin/ompcode-centos7"
 install -m 644 "$repo/LICENSE" "$repo/NOTICE.md" "$stage/"
 python3 "$repo/scripts/publish/centos7/verify-elf.py" "$stage"
+node "$repo/scripts/publish/centos7/verify-ssh.mjs" "$stage"
 (cd "$work" && zip -qry "$output_stage/$name.zip" "$name")
 [[ -s "$output_stage/$name.zip" ]] || { echo 'ZIP build produced no artifact.' >&2; exit 1; }
 mv -f "$output_stage/$name.zip" "$output/$name.zip"

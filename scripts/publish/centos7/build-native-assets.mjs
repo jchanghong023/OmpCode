@@ -126,13 +126,11 @@ const requireFromDesktop = createRequire(join(desktopRoot, "package.json"));
 const ptyEntry = requireFromDesktop.resolve("node-pty");
 const ptyRoot = packageRootFromEntry(ptyEntry, "node-pty");
 const ssh2Entry = requireFromDesktop.resolve("ssh2");
-const ssh2Root = packageRootFromEntry(ssh2Entry, "ssh2");
 const requireFromSsh2 = createRequire(ssh2Entry);
 const cpuFeaturesEntry = requireFromSsh2.resolve("cpu-features");
 const cpuFeaturesRoot = packageRootFromEntry(cpuFeaturesEntry, "cpu-features");
 const betterSqliteEntry = requireFromDesktop.resolve("better-sqlite3");
 const betterSqliteRoot = packageRootFromEntry(betterSqliteEntry, "better-sqlite3");
-const cryptoRoot = join(ssh2Root, "lib/protocol/crypto");
 assertPackageVersion(ptyRoot, "node-pty", "1.1.0");
 assertPackageVersion(cpuFeaturesRoot, "cpu-features", "0.0.10");
 assertPackageVersion(betterSqliteRoot, "better-sqlite3", "9.6.0");
@@ -195,45 +193,18 @@ run(
   { cwd: betterSqliteRoot },
 );
 run(process.execPath, [nodeGypScript, "build"], { cwd: betterSqliteRoot });
-// Electron 的 header archive 不含 OpenSSL 头；同为 OpenSSL 3 的 glibc17 Node 工具链提供头文件。
-const runtimeHeaders = join(dirname(dirname(process.execPath)), "include/node");
-if (
-  process.versions.openssl?.split(".")[0] !== "3" ||
-  !existsSync(join(runtimeHeaders, "openssl/configuration.h"))
-) {
-  throw new Error("SSH native crypto requires the Node 20 OpenSSL 3 development headers");
-}
-rmSync(join(cryptoRoot, "build"), { recursive: true, force: true });
-run(
-  process.execPath,
-  [
-    nodeGypScript,
-    "rebuild",
-    `--target=${expectedElectron}`,
-    "--dist-url=https://electronjs.org/headers",
-    "--arch=x64",
-    "--real_openssl_major=3",
-  ],
-  {
-    cwd: cryptoRoot,
-    env: {
-      ...process.env,
-      CPPFLAGS: `${process.env.CPPFLAGS ?? ""} -I${runtimeHeaders}`.trim(),
-    },
-  },
-);
 
 const ptyAddon = join(ptyRoot, "build/Release/pty.node");
 const cpuAddon = join(cpuFeaturesRoot, "build/Release/cpufeatures.node");
 const sqliteAddon = join(betterSqliteRoot, "build/Release/better_sqlite3.node");
-const sshCryptoAddon = join(cryptoRoot, "build/Release/sshcrypto.node");
 copyNativeAddon(ptyAddon, "node_modules/node-pty/prebuilds/linux-x64/pty.node");
 copyNativeAddon(cpuAddon, "node_modules/cpu-features/build/Release/cpufeatures.node");
 copyNativeAddon(sqliteAddon, "node_modules/better-sqlite3/build/Release/better_sqlite3.node");
-copyNativeAddon(
-  sshCryptoAddon,
-  "node_modules/ssh2/lib/protocol/crypto/build/Release/sshcrypto.node",
-);
+// 修复依据：Electron 28 的 OpenSSL 1.1.1 与构建工具链的 OpenSSL 3 不兼容。
+// ssh2 使用内置 crypto 完成 SSH 握手；不要把错误 ABI 的可选加速器留在复用的暂存目录。
+rmSync(join(appRoot, "node_modules/ssh2/lib/protocol/crypto/build/Release/sshcrypto.node"), {
+  force: true,
+});
 
 buildNativeSearchToolsUnix({
   platform: "linux",
