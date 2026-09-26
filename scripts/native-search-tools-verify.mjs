@@ -287,6 +287,7 @@ function verifyNativeSearchToolSet({
   toolIds,
   hostArch = process.arch,
   hostPlatform = process.platform,
+  glibcBaseline = LINUX_NATIVE_SEARCH_GLIBC_BASELINE,
 }) {
   const normalizedPlatform = normalizeNativeSearchPlatform(platform);
   const normalizedArch = normalizeNativeSearchArch(arch);
@@ -326,7 +327,7 @@ function verifyNativeSearchToolSet({
         verifyLinuxBinary(bfsPath, {
           arch: normalizedArch,
           allowedDependencies: getAllowedLinuxNativeSearchDependencies("bfs", normalizedArch),
-          glibcBaseline: LINUX_NATIVE_SEARCH_GLIBC_BASELINE,
+          glibcBaseline,
         });
         verifyBfsContract(bfsPath);
       }
@@ -335,7 +336,7 @@ function verifyNativeSearchToolSet({
         verifyLinuxBinary(ugrepPath, {
           arch: normalizedArch,
           allowedDependencies: getAllowedLinuxNativeSearchDependencies("ugrep", normalizedArch),
-          glibcBaseline: LINUX_NATIVE_SEARCH_GLIBC_BASELINE,
+          glibcBaseline,
         });
         verifyUgrepContract(ugrepPath, normalizedPlatform);
       }

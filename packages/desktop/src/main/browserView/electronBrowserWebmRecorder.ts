@@ -15,6 +15,9 @@ import type {
   BrowserWebmRecorderFactory,
   BrowserWebmRecorderSession,
 } from "./browserVideoRecorder.js";
+import { resolveImportMetaDirname } from "../../shared/moduleDirname.js";
+
+const moduleDir = resolveImportMetaDirname(import.meta);
 
 const RECORDER_PORT_CHANNEL = "zcode-browser-video-recorder:port";
 const RECORDER_START_TIMEOUT_MS = 15_000;
@@ -290,7 +293,7 @@ export async function createElectronBrowserWebmRecorder(
     height: Math.max(1, input.viewport.height),
     webPreferences: {
       session: recorderSession,
-      preload: join(import.meta.dirname, "../preload/browserVideoRecorder.cjs"),
+      preload: join(moduleDir, "../preload/browserVideoRecorder.cjs"),
       sandbox: true,
       contextIsolation: true,
       nodeIntegration: false,

@@ -8,6 +8,9 @@ import {
   type DesktopCommandId,
   type Locale,
 } from "@zcode/shared";
+import { resolveImportMetaDirname } from "../shared/moduleDirname.js";
+
+const moduleDir = resolveImportMetaDirname(import.meta);
 
 let desktopTray: Tray | null = null;
 let rebuildDesktopTrayContextMenu: (() => void) | null = null;
@@ -15,7 +18,7 @@ let rebuildDesktopTrayContextMenu: (() => void) | null = null;
 function resolveDesktopTrayIconPath() {
   return app.isPackaged
     ? join(process.resourcesPath, "tray_icon.ico")
-    : join(import.meta.dirname, "../../build/icon.ico");
+    : join(moduleDir, "../../build/icon.ico");
 }
 
 export function createWindowsDesktopTray(options: {

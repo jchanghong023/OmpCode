@@ -1,10 +1,15 @@
 /* eslint-disable max-lines -- SSH config alias 解析链路包含扫描、回退和受控执行，暂集中在同一文件。 */
 import { spawn } from "node:child_process";
+import * as fsPromises from "node:fs/promises";
 import { existsSync } from "node:fs";
-import { glob, readFile } from "node:fs/promises";
+import { lstat, readdir, readFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { delimiter, dirname, isAbsolute, join, resolve } from "node:path";
+import { delimiter, dirname, isAbsolute, join, parse, resolve } from "node:path";
 import type { SSHConfigAliasOption } from "@zcode/shared";
+
+const nativeGlob = (
+  fsPromises as typeof fsPromises & { glob?: (pattern: string) => AsyncIterable<string> }
+).glob;
 
 const CACHE_TTL_MS = 30_000;
 const MAX_ALIAS_COUNT = 200;
@@ -185,6 +190,81 @@ function expandHomeToken(rawPath: string): string {
   return withHomeVariable;
 }
 
+function compilePathSegmentPattern(segment: string): RegExp {
+  let source = "^";
+  for (let index = 0; index < segment.length; index++) {
+    const char = segment[index]!;
+    if (char === "*") source += "[^/\\\\]*";
+    else if (char === "?") source += "[^/\\\\]";
+    else if (char === "[") {
+      const close = segment.indexOf("]", index + 1);
+      if (close < 0) {
+        source += "\\[";
+        continue;
+      }
+      let content = segment.slice(index + 1, close);
+      if (content.startsWith("!")) content = `^${content.slice(1)}`;
+      source += `[${content.replaceAll("\\\\", "\\\\\\\\")}]`;
+      index = close;
+    } else {
+      source += char.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    }
+  }
+  return new RegExp(`${source}$`);
+}
+
+async function* expandPathGlob(pattern: string): AsyncGenerator<string> {
+  const { root } = parse(pattern);
+  const segments = pattern
+    .slice(root.length)
+    .split(/[\\\\/]+/)
+    .filter(Boolean);
+  async function* visit(currentPath: string, index: number): AsyncGenerator<string> {
+    if (index === segments.length) {
+      try {
+        await lstat(currentPath);
+        yield currentPath;
+      } catch {
+        return;
+      }
+      return;
+    }
+    const segment = segments[index]!;
+    if (segment === "**") {
+      yield* visit(currentPath, index + 1);
+      let entries;
+      try {
+        entries = await readdir(currentPath, { withFileTypes: true });
+      } catch {
+        return;
+      }
+      for (const entry of entries) {
+        if (entry.isDirectory() && (!entry.name.startsWith(".") || segment.startsWith("."))) {
+          yield* visit(join(currentPath, entry.name), index);
+        }
+      }
+      return;
+    }
+    if (!segment.includes("*") && !segment.includes("?") && !segment.includes("[")) {
+      yield* visit(join(currentPath, segment), index + 1);
+      return;
+    }
+    const matcher = compilePathSegmentPattern(segment);
+    let entries;
+    try {
+      entries = await readdir(currentPath, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if ((!entry.name.startsWith(".") || segment.startsWith(".")) && matcher.test(entry.name)) {
+        yield* visit(join(currentPath, entry.name), index + 1);
+      }
+    }
+  }
+  yield* visit(root, 0);
+}
+
 async function resolveIncludeTargets(includeTokens: string[], baseDir: string): Promise<string[]> {
   const results: string[] = [];
   const visited = new Set<string>();
@@ -206,7 +286,8 @@ async function resolveIncludeTargets(includeTokens: string[], baseDir: string): 
     }
 
     try {
-      for await (const match of glob(absolutePattern)) {
+      const matches = nativeGlob ? nativeGlob(absolutePattern) : expandPathGlob(absolutePattern);
+      for await (const match of matches) {
         const resolvedMatch = resolve(match);
         if (visited.has(resolvedMatch)) {
           continue;

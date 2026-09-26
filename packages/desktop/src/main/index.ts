@@ -47,6 +47,7 @@ import type { UtilityProcess as ElectronUtilityProcess } from "electron";
 import { spawn } from "node:child_process";
 import { join, resolve } from "node:path";
 import { homedir } from "node:os";
+import { resolveImportMetaDirname } from "../shared/moduleDirname.js";
 import {
   createCredentialService,
   createSettingService,
@@ -264,6 +265,7 @@ if (!shouldUseElectronDefaultUserDataPath) {
   app.setPath("sessionData", runtimeSessionDataPath);
 }
 process.title = runtimeApplicationName;
+const moduleDir = resolveImportMetaDirname(import.meta);
 
 process.on("unhandledRejection", (reason) => {
   logger.error("unhandledRejection:", reason);
@@ -273,15 +275,15 @@ const iconPath =
   process.platform === "win32"
     ? app.isPackaged
       ? join(process.resourcesPath, "icon_windows.png")
-      : join(import.meta.dirname, "../../build/icon_windows.png")
+      : join(moduleDir, "../../build/icon_windows.png")
     : app.isPackaged
       ? join(process.resourcesPath, "icon.png")
-      : join(import.meta.dirname, "../../build/icon.png");
+      : join(moduleDir, "../../build/icon.png");
 const linuxDesktopIntegrationIconPath =
   process.platform === "linux"
     ? app.isPackaged
       ? join(process.resourcesPath, "icon_512x512.png")
-      : join(import.meta.dirname, "../../build/icons/512x512.png")
+      : join(moduleDir, "../../build/icons/512x512.png")
     : iconPath;
 let currentApplicationLocale: Locale = DEFAULT_LOCALE;
 let closeToTrayOnWindows = true;
@@ -520,7 +522,7 @@ async function runBrowserCommandOnView(params: {
 }
 let currentDesktopZoomLevel = 0;
 let currentDesktopWindowSize: DesktopWindowSize | undefined;
-const preloadPath = join(import.meta.dirname, "../preload/index.cjs");
+const preloadPath = join(moduleDir, "../preload/index.cjs");
 const settingsFile = join(homedir(), ".ompcode", "v2", "setting.json");
 let activeAppShutdownPolicy = resolveAppShutdownPolicy("normal", process.platform);
 let activeAppShutdownKind: AppShutdownKind | null = null;

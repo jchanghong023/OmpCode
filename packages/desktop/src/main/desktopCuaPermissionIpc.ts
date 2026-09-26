@@ -15,8 +15,10 @@ import {
   type CuaPermissionDragPanel,
 } from "./cuaPermissionDragPanel.js";
 import { createSystemSettingsWindowWatcher } from "./cuaSystemSettingsWindowWatcher.js";
+import { resolveImportMetaDirname } from "../shared/moduleDirname.js";
 
 const execFileAsync = promisify(execFile);
+const moduleDir = resolveImportMetaDirname(import.meta);
 const MACOS_SYSTEM_SETTINGS_BUNDLE_ID = "com.apple.systempreferences";
 // 1x1 透明 PNG。startDrag 在 macOS 上要求 icon 非空（electron.d.ts: "The image must be non-empty
 // on macOS"），连随包 ZCode 图标都读不到时用它兜底 —— 否则 startDrag 抛异常，用户完全拖不动。
@@ -38,7 +40,7 @@ function resolveZCodeIcon(): Electron.NativeImage {
   if (cachedZCodeIcon && !cachedZCodeIcon.isEmpty()) return cachedZCodeIcon;
   const iconPath = app.isPackaged
     ? join(process.resourcesPath, "icon.png")
-    : join(import.meta.dirname, "..", "..", "build", "icon.png");
+    : join(moduleDir, "..", "..", "build", "icon.png");
   const image = nativeImage.createFromPath(iconPath);
   cachedZCodeIcon = image.isEmpty()
     ? nativeImage.createFromDataURL(CUA_HELPER_DRAG_ICON_DATA_URL)
@@ -267,8 +269,8 @@ function createDragPanelForSession(
     createWindow: createRealCuaPermissionPanelWindow({
       BrowserWindow,
       app,
-      preloadPath: join(import.meta.dirname, "../preload/cuaPermissionPanel.cjs"),
-      rendererDir: join(import.meta.dirname, "../renderer"),
+      preloadPath: join(moduleDir, "../preload/cuaPermissionPanel.cjs"),
+      rendererDir: join(moduleDir, "../renderer"),
       rendererDevUrl: process.env["ELECTRON_RENDERER_URL"],
     }),
     getDisplayWorkArea: () => screen.getPrimaryDisplay().workArea,
@@ -290,7 +292,7 @@ function resolveWindowBoundsBinaryPath(): string {
   const relative = join("macos-window-bounds", "zcode-window-bounds");
   return app.isPackaged
     ? join(process.resourcesPath, relative)
-    : join(import.meta.dirname, "..", "..", "resources", relative);
+    : join(moduleDir, "..", "..", "resources", relative);
 }
 
 export function registerCuaPermissionIpcHandlers(options: {

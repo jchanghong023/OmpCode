@@ -21,6 +21,13 @@ export {
   ZCODE_BUILTIN_PROVIDER_CONFIG_FILE_ENV,
 } from "@zcode/provider-node";
 
+export { backupDatabase, createDatabaseSync } from "./session/tasksDatabase/sqlite.js";
+export type {
+  SqliteDatabase,
+  SqliteDatabaseOptions,
+  SqliteRunResult,
+  SqliteStatement,
+} from "./session/tasksDatabase/sqlite.js";
 export { createFileService } from "./file/fileService.js";
 export {
   attributeHostProcessTree,

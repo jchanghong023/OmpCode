@@ -18,7 +18,8 @@ await build({
   bundle: true,
   format: "cjs",
   platform: "node",
-  target: "node22",
+  // 修复依据：内嵌 omp adapter 由 Electron 28 的 Node 18 子进程执行。
+  target: "node18",
   outfile,
   sourcemap: false,
   minify: false,

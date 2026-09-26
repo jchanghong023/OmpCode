@@ -31,6 +31,8 @@ jobs:
       GITHUB_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: experiment/centos7-no-proot
 
       - name: Validate release target
         shell: bash
@@ -38,7 +40,7 @@ jobs:
           RELEASE_TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
-          [[ "$GITHUB_REF" == refs/heads/main ]] || { echo 'CentOS 7 releases must run from main.' >&2; exit 1; }
+          [[ "$GITHUB_REF" == refs/heads/experiment/centos7-no-proot ]] || { echo 'CentOS 7 releases must run from experiment/centos7-no-proot.' >&2; exit 1; }
           version=$(node -p 'require("./package.json").version')
           pattern="^v${version//./\\.}-omp\\.[1-9][0-9]*-centos7$"
           [[ "$RELEASE_TAG" =~ $pattern ]] || { echo "Tag must match v$version-omp.<positive number>-centos7." >&2; exit 1; }
@@ -76,47 +78,74 @@ jobs:
           pnpm --filter @zcode/desktop exec electron-builder --config electron-builder.config.js --linux --x64 --dir --publish never
           pnpm --filter @zcode/desktop exec node -e 'const asar = require("@electron/asar"); if (!asar.extractFile("dist/linux-unpacked/resources/app.asar", "out/renderer/index.html").length) process.exit(1)'
 
-      - name: Assemble isolated CentOS 7 runtime
+      - name: Prepare pinned CentOS 7 native toolchain
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/centos7/rootfs" "$RUNNER_TEMP/centos7/downloads"
-          curl -fL --retry 3 -o "$RUNNER_TEMP/centos7/downloads/ubuntu-base.tar.gz" \
-            https://cdimage.ubuntu.com/ubuntu-base/releases/noble/release/ubuntu-base-24.04.5-base-amd64.tar.gz
-          echo 'e77b6f10c2590cef872b33ee9f635a0e3fd1f57fb074c0e52b5c7f56147a0c86  '"$RUNNER_TEMP/centos7/downloads/ubuntu-base.tar.gz" | sha256sum --check
-          curl -fL --retry 3 -o "$RUNNER_TEMP/centos7/downloads/proot" https://proot.gitlab.io/proot/bin/proot
-          echo '3f48a11a7ae3bfdc63a61f9ccc309cda4c4e833bdc14c479e7201fc35f6f312a  '"$RUNNER_TEMP/centos7/downloads/proot" | sha256sum --check
-          curl -fL --retry 3 -o "$RUNNER_TEMP/centos7/downloads/proot-source.tar.gz" \
-            https://gitlab.com/proot/proot/-/archive/901fe2f0529084b009484329199b6ba1538a6cf6/proot-901fe2f0529084b009484329199b6ba1538a6cf6.tar.gz
-          echo 'e4d052ce7e42abb871040e6bc635a9066d926664e22b64f08b3f48d7328f8ee0  '"$RUNNER_TEMP/centos7/downloads/proot-source.tar.gz" | sha256sum --check
-          curl -fL --retry 3 -o "$RUNNER_TEMP/centos7/downloads/uthash-source.tar.gz" \
-            https://codeload.github.com/proot-me/uthash/tar.gz/e493aa90a2833b4655927598f169c31cfcdf7861
-          echo '2ddb6665e82ffd7e87a27b97081bddf8f09520b7a2cfd6ab011541e7cde991fa  '"$RUNNER_TEMP/centos7/downloads/uthash-source.tar.gz" | sha256sum --check
-          chmod +x "$RUNNER_TEMP/centos7/downloads/proot"
-          root="$RUNNER_TEMP/centos7/rootfs"
-          sudo tar -xzf "$RUNNER_TEMP/centos7/downloads/ubuntu-base.tar.gz" -C "$root"
-          sudo "$RUNNER_TEMP/centos7/downloads/proot" -S "$root" /usr/bin/env DEBIAN_FRONTEND=noninteractive apt-get update
-          sudo "$RUNNER_TEMP/centos7/downloads/proot" -S "$root" /usr/bin/env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            ca-certificates git openssh-client curl python3 xdg-utils fonts-dejavu-core fonts-noto-cjk \
-            libasound2t64 libatk-bridge2.0-0 libcups2 libdbus-1-3 libdrm2 \
-            libgbm1 libgl1 libgl1-mesa-dri libgtk-3-0 libnss3 libxss1 libxshmfence1 libsecret-1-0 \
-            libnotify4 libudev1 libvulkan1
-          sudo "$RUNNER_TEMP/centos7/downloads/proot" -S "$root" apt-get clean
-          sudo rm -rf "$root/var/lib/apt/lists/"*
-          sudo mkdir -p "$root/opt/ompcode"
-          sudo find "$root" -type f -perm /6000 -exec chmod a-s {} +
-          sudo install -d -m 755 "$root/usr/share/doc/proot"
-          sudo install -m 644 "$RUNNER_TEMP/centos7/downloads/proot-source.tar.gz" "$root/usr/share/doc/proot/proot-source-901fe2f0.tar.gz"
-          sudo install -m 644 "$RUNNER_TEMP/centos7/downloads/uthash-source.tar.gz" "$root/usr/share/doc/proot/uthash-source-e493aa90.tar.gz"
+          tools="$RUNNER_TEMP/centos7-native-tools"
+          mkdir -p "$tools/bin"
+          curl -fL --retry 3 -o "$tools/node.tar.xz" \
+            https://unofficial-builds.nodejs.org/download/release/v20.19.0/node-v20.19.0-linux-x64-glibc-217.tar.xz
+          echo 'b06697853d80cbc2ca77408276a26234a83e9587a32a77161df2215cc3889a7f  '"$tools/node.tar.xz" | sha256sum --check
+          tar -xJf "$tools/node.tar.xz" --strip-components=1 -C "$tools"
+          npm install --prefix "$tools/pnpm" --no-save --ignore-scripts --no-audit --no-fund pnpm@10.33.2
+          cat > "$tools/bin/pnpm" <<'PNPM'
+          #!/bin/sh
+          exec /toolchain/bin/node /toolchain/pnpm/node_modules/pnpm/bin/pnpm.cjs "$@"
+          PNPM
+          chmod +x "$tools/bin/pnpm"
+
+      - name: Build glibc 2.17 native addons and search tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            --volume "$GITHUB_WORKSPACE:/workspace" \
+            --volume "$RUNNER_TEMP/centos7-native-tools:/toolchain" \
+            --workdir /workspace \
+            quay.io/pypa/manylinux2014_x86_64:latest \
+            bash -ceu '
+              cat > /etc/yum.repos.d/centos7-native-vault.repo <<EOF
+          [centos7-base]
+          name=CentOS 7 vault base
+          baseurl=https://vault.centos.org/7.9.2009/os/x86_64/
+          enabled=1
+          gpgcheck=1
+          gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-CentOS-7
+          [centos7-updates]
+          name=CentOS 7 vault updates
+          baseurl=https://vault.centos.org/7.9.2009/updates/x86_64/
+          enabled=1
+          gpgcheck=1
+          gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-CentOS-7
+          [centos7-extras]
+          name=CentOS 7 vault extras
+          baseurl=https://vault.centos.org/7.9.2009/extras/x86_64/
+          enabled=1
+          gpgcheck=1
+          gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-CentOS-7
+          [centos7-sclo-rh]
+          name=CentOS 7 vault GCC 11
+          baseurl=https://vault.centos.org/7.9.2009/sclo/x86_64/rh/
+          enabled=1
+          gpgcheck=1
+          gpgkey=https://www.centos.org/keys/RPM-GPG-KEY-CentOS-SIG-SCLo
+          EOF
+              yum --disablerepo="*" --enablerepo="centos7-*" install -y \
+                devtoolset-11-gcc devtoolset-11-gcc-c++ file make binutils
+              export PATH="/toolchain/bin:/opt/python/cp311-cp311/bin:$PATH"
+              export PYTHON=/opt/python/cp311-cp311/bin/python3.11
+              bash scripts/publish/centos7/build-native-assets.sh
+            '
 
       - name: Build ZIP and checksum
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p packages/desktop/dist
-          sudo bash scripts/publish/centos7/build-zip.sh \
-            packages/desktop/dist/linux-unpacked "$RUNNER_TEMP/centos7/rootfs" \
-            "$RUNNER_TEMP/centos7/downloads/proot" "$APP_VERSION" packages/desktop/dist
+          bash scripts/publish/centos7/build-zip.sh \
+            packages/desktop/dist/linux-unpacked packages/desktop/dist/centos7-native \
+            "$APP_VERSION" packages/desktop/dist
           archive="packages/desktop/dist/OmpCode-$APP_VERSION-centos7-x64.zip"
           [[ -s "$archive" ]]
           unzip -tqq "$archive"
@@ -163,7 +192,7 @@ jobs:
           set -euo pipefail
           assets=(release-assets/OmpCode-*-centos7-x64.zip)
           [[ ${#assets[@]} -eq 1 && -f ${assets[0]} ]]
-          args=(--repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "OmpCode $RELEASE_TAG" --notes 'CentOS 7 x64 offline ZIP. Extract under HOME and run bin/ompcode-centos7 without root. PRoot uses ptrace; Chromium sandbox unavailable.' --generate-notes --draft)
+          args=(--repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "OmpCode $RELEASE_TAG" --notes 'Native CentOS 7 x64 offline ZIP (glibc 2.17). Extract under HOME and run bin/ompcode-centos7 without root or PRoot. Chromium sandboxing is disabled.' --generate-notes --draft)
           if [[ "$IS_PRERELEASE" == 'true' ]]; then
             args+=(--prerelease)
           fi

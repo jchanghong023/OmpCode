@@ -37,7 +37,9 @@ import {
   type ResolveRemoteCdnOptions,
 } from "./remoteCdn.js";
 import { getElectronAppPath, isElectronAppPackaged } from "./desktopElectronApp.js";
+import { resolveImportMetaDirname } from "../shared/moduleDirname.js";
 
+const moduleDir = resolveImportMetaDirname(import.meta);
 const isLocalDevelopmentRuntime = !isElectronAppPackaged();
 export const desktopRuntimeEnv: ZCodeRuntimeEnv = isLocalDevelopmentRuntime
   ? "development"
@@ -82,8 +84,8 @@ export const runtimeSessionDataPath =
 // Chromedriver 会注入临时 --user-data-dir，并在该目录等待 DevToolsActivePort。
 // e2e 如果再用 app.setPath 覆盖 userData/sessionData，端口文件会被写到另一个目录，
 // 导致 Electron 已启动但 WebDriver session 一直创建失败。测试态打开该开关后保留 Chromedriver 的目录。
-export const hostModulePath = join(import.meta.dirname, "../host/index.js");
-export const schedulerModulePath = join(import.meta.dirname, "../scheduler/index.js");
+export const hostModulePath = join(moduleDir, "../host/index.js");
+export const schedulerModulePath = join(moduleDir, "../scheduler/index.js");
 export function getCredentialsDir() {
   return getAppConfigDir();
 }
@@ -148,7 +150,7 @@ function parseDotenv(content: string): Record<string, string> {
 }
 
 function resolveWorkspaceRootForEnvFiles(): string | null {
-  const workspaceRootCandidate = resolve(import.meta.dirname, "../../../..");
+  const workspaceRootCandidate = resolve(moduleDir, "../../../..");
   return existsSync(join(workspaceRootCandidate, "pnpm-workspace.yaml"))
     ? workspaceRootCandidate
     : null;
@@ -161,7 +163,7 @@ export function loadHostProcessEnvFromLocalFiles(): Record<string, string> {
     return { ZCODE_TELEMETRY_RUNTIME_DISTRIBUTION: "packaged" };
   }
 
-  const desktopRoot = resolve(import.meta.dirname, "../..");
+  const desktopRoot = resolve(moduleDir, "../..");
   const workspaceRoot = resolveWorkspaceRootForEnvFiles();
   const fileCandidates = [
     ...(workspaceRoot
@@ -204,7 +206,7 @@ export function loadHostProcessEnvFromLocalFiles(): Record<string, string> {
 }
 
 function resolveDevelopmentMockCdnDir(): string {
-  return join(import.meta.dirname, "../../mock-cdn");
+  return join(moduleDir, "../../mock-cdn");
 }
 
 function resolveAvailableDevelopmentMockCdnDir(): string | undefined {
@@ -361,7 +363,7 @@ function resolveBundledZCodeAgentBinaryPath(): string | undefined {
       ...entrySegments,
     ),
     join(
-      import.meta.dirname,
+      moduleDir,
       "../../bundled-agents",
       platformKey,
       runtime.bundledResourceDir,
@@ -382,7 +384,7 @@ function resolveBundledRuntimeToolBinaryPath(
       ? join(process.resourcesPath, "tools", toolDir, candidateBinaryName)
       : null,
     join(
-      import.meta.dirname,
+      moduleDir,
       "../../bundled-tools",
       resolvePlatformKeyForPackagedApp(),
       toolDir,

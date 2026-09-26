@@ -18,6 +18,7 @@ import {
   PlatformChannels,
 } from "@zcode/shared";
 import { loadWindow, type WindowBootstrapOptions } from "./desktopHostProcess.js";
+import { resolveImportMetaDirname } from "../shared/moduleDirname.js";
 import {
   buildWindowsTitleBarOverlayForZoomLevel,
   hasCustomWindowsControls,
@@ -37,6 +38,8 @@ import {
   resolveDesktopWindowSize,
   type DesktopWindowSize,
 } from "./desktopWindowSize.js";
+
+const moduleDir = resolveImportMetaDirname(import.meta);
 // CDP-on-guest pivot：内置浏览器改回 `<webview>` 渲染，宿主 BrowserWindow 需重新开 webviewTag，
 // 并在 will/did-attach-webview 里做 guest 硬化 + URL 白名单 + popup 路由回内部 tab。
 const ALLOWED_EMBEDDED_BROWSER_PROTOCOLS = new Set([
@@ -50,11 +53,11 @@ const ALLOWED_EMBEDDED_BROWSER_NEW_WINDOW_PROTOCOLS = new Set(["http:", "https:"
 const EXTERNAL_BROWSER_DISPOSITIONS = new Set(["background-tab"]);
 
 const embeddedBrowserJavaScriptDialogPreloadPath = join(
-  import.meta.dirname,
+  moduleDir,
   "../preload/embeddedBrowserJavaScriptDialog.cjs",
 );
 // Coding Plan 官网页专用 preload：挂 window.zcodeBridge 供官网回传购买完成信号。
-const codingPlanWebviewPreloadPath = join(import.meta.dirname, "../preload/codingPlanWebview.cjs");
+const codingPlanWebviewPreloadPath = join(moduleDir, "../preload/codingPlanWebview.cjs");
 
 /**
  * 判断 webview 是否加载 Coding Plan 官网购买页（/coding-plan?...&embedded=app）。

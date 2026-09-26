@@ -63,18 +63,11 @@ interface GuestWebContents {
   stop(): void;
   capturePage(): Promise<{ toPNG(): Buffer }>;
   executeJavaScript(script: string, userGesture?: boolean): Promise<unknown>;
-  navigationHistory: {
-    canGoBack(): boolean;
-    canGoForward(): boolean;
-    goBack(): void;
-    goForward(): void;
-    getAllEntries(): Array<{ url: string; title?: string; pageState?: string }>;
-    getActiveIndex(): number;
-    restore(options: {
-      entries: Array<{ url: string; title?: string; pageState?: string }>;
-      index: number;
-    }): Promise<void>;
-  };
+  canGoBack(): boolean;
+  canGoForward(): boolean;
+  goBack(): void;
+  goForward(): void;
+  clearHistory(): void;
   close(options?: { waitForBeforeUnload?: boolean }): void;
   isCurrentlyAudible?(): boolean;
   isBeingCaptured?(): boolean;
@@ -3587,19 +3580,19 @@ export class BrowserGuestManager {
         },
         canGoBack: () => {
           assertCurrent();
-          return guest.navigationHistory.canGoBack();
+          return guest.canGoBack();
         },
         canGoForward: () => {
           assertCurrent();
-          return guest.navigationHistory.canGoForward();
+          return guest.canGoForward();
         },
         goBack: () => {
           assertCurrent();
-          return guest.navigationHistory.goBack();
+          return guest.goBack();
         },
         goForward: () => {
           assertCurrent();
-          return guest.navigationHistory.goForward();
+          return guest.goForward();
         },
         reload: () => {
           assertCurrent();
@@ -3788,6 +3781,64 @@ export class BrowserGuestManager {
     return guest;
   }
 
+  private async getGuestNavigationHistory(
+    tab: ManagedTab,
+    guest: GuestWebContents,
+  ): Promise<{ entries: Array<{ id: number; url: string; title: string }>; currentIndex: number }> {
+    const result = (await this.sendGuestCdpCommand(tab, guest, "Page.getNavigationHistory")) as {
+      entries?: Array<{ id: number; url: string; title?: string }>;
+      currentIndex?: number;
+    };
+    if (!Array.isArray(result.entries) || typeof result.currentIndex !== "number") {
+      throw new Error("browser guest navigation history response is invalid");
+    }
+    return {
+      entries: result.entries.map((entry) => ({
+        id: entry.id,
+        url: entry.url,
+        title: entry.title ?? "",
+      })),
+      currentIndex: result.currentIndex,
+    };
+  }
+
+  private async restoreGuestNavigationHistory(
+    tab: ManagedTab,
+    guest: GuestWebContents,
+    pageState: BrowserTabPageStateRecord,
+  ): Promise<void> {
+    const entries = pageState.entries;
+    const activeIndex = Math.max(
+      0,
+      Math.min(Math.trunc(pageState.activeIndex), entries.length - 1),
+    );
+    // Electron 28 只能通过公开导航 API 重建历史：先加载首项并清除空白页历史，再按顺序导航。
+    await guest.loadURL(entries[0]!.url);
+    guest.clearHistory();
+    for (const entry of entries.slice(1)) await guest.loadURL(entry.url);
+
+    let history = await this.getGuestNavigationHistory(tab, guest);
+    const matchesSnapshot =
+      history.entries.length === entries.length &&
+      history.entries.every((entry, index) => entry.url === entries[index]?.url);
+    if (!matchesSnapshot) {
+      throw new Error(
+        `browser guest history reconstruction mismatch expected=${entries.length} actual=${history.entries.length}`,
+      );
+    }
+    const target = history.entries[activeIndex];
+    if (!target) throw new Error(`browser guest history active index is missing: ${activeIndex}`);
+    await this.sendGuestCdpCommand(tab, guest, "Page.navigateToHistoryEntry", {
+      entryId: target.id,
+    });
+    history = await this.getGuestNavigationHistory(tab, guest);
+    if (history.currentIndex !== activeIndex) {
+      throw new Error(
+        `browser guest history active index mismatch expected=${activeIndex} actual=${history.currentIndex}`,
+      );
+    }
+  }
+
   private async restoreGuestState(tab: ManagedTab, guest: GuestWebContents): Promise<boolean> {
     const pageState = await this.residencyOptions.recoveryStore?.getPageState(tab.tabId);
     if (pageState && pageState.entries.length > 0) {
@@ -3810,30 +3861,13 @@ export class BrowserGuestManager {
           this.log?.(
             `[browser-use] restore page-state start tabId=${tab.tabId} index=${pageState.activeIndex} entries=${JSON.stringify(pageState.entries.map((entry) => entry.url))}`,
           );
-          await guest.navigationHistory.restore({
-            entries: pageState.entries.map((entry) => ({ ...entry })),
-            index: pageState.activeIndex,
-          });
+          await this.restoreGuestNavigationHistory(tab, guest, pageState);
+          const restoredHistory = await this.getGuestNavigationHistory(tab, guest);
           this.log?.(
-            `[browser-use] restore page-state complete tabId=${tab.tabId} url=${safeStr(() => guest.getURL(), "")} index=${safeStr(() => String(guest.navigationHistory.getActiveIndex()), "unknown")} entries=${safeStr(() => JSON.stringify(guest.navigationHistory.getAllEntries().map((entry) => entry.url)), "unknown")}`,
+            `[browser-use] restore page-state complete tabId=${tab.tabId} url=${safeStr(() => guest.getURL(), "")} index=${restoredHistory.currentIndex} entries=${JSON.stringify(restoredHistory.entries.map((entry) => entry.url))}`,
           );
           return acceptRestoredPageState();
         } catch (error) {
-          const restoreAppliedDespiteAbort =
-            String(error).includes("ERR_ABORTED") &&
-            safeBool(() => {
-              const actualEntries = guest.navigationHistory.getAllEntries();
-              return (
-                guest.navigationHistory.getActiveIndex() === pageState.activeIndex &&
-                actualEntries.length === pageState.entries.length &&
-                actualEntries.every((entry, index) => entry.url === pageState.entries[index]?.url)
-              );
-            }, false);
-          if (restoreAppliedDespiteAbort) {
-            // Electron 41 会在完整历史已写入后，仍以 ERR_ABORTED 报告默认 about:blank 被取消。
-            // 以实际 navigationHistory 为准，避免误删有效 pageState 并发起第二次 URL 导航。
-            return acceptRestoredPageState();
-          }
           this.warn(`browser tab page-state restore failed tabId=${tab.tabId}`, error);
           await this.residencyOptions.recoveryStore?.removePageState(tab.tabId);
         }
@@ -3873,13 +3907,14 @@ export class BrowserGuestManager {
     tab.cachedTitle = safeStr(() => guest.getTitle(), tab.cachedTitle);
     await this.persistShell(tab);
     try {
-      const entries = guest.navigationHistory.getAllEntries().map((entry) => ({ ...entry }));
+      const history = await this.getGuestNavigationHistory(tab, guest);
+      const entries = history.entries.map(({ url, title }) => ({ url, title }));
       if (entries.length === 0) return;
       const pageState: BrowserTabPageStateRecord = {
         schemaVersion: 1,
         tabId: tab.tabId,
         entries,
-        activeIndex: guest.navigationHistory.getActiveIndex(),
+        activeIndex: history.currentIndex,
         updatedAt: this.now(),
       };
       await this.residencyOptions.recoveryStore?.upsertPageState(pageState);

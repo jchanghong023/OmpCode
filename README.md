@@ -88,9 +88,9 @@ See the root and package `package.json` files for additional commands.
 
 ## Manual release packaging
 
-In GitHub Actions, run **Release Windows EXE** or **Release CentOS 7 ZIP** from `main`. Both workflows only package and publish; neither runs tests. Supply a new tag matching the current `package.json` version, such as `v3.14.3-omp.1` for Windows or `v3.14.3-omp.2-centos7` for CentOS 7, and choose whether the release is a prerelease. Their distinct tags and assets leave the Windows build independent.
+In GitHub Actions, run **Release Windows EXE** from `main` or **Release CentOS 7 ZIP** from `experiment/centos7-no-proot`. The CentOS workflow refuses other refs; its branch is permanent and is not merged into `main`. Both manual workflows package and publish without running tests. Supply a unique tag matching the current `package.json` version, such as `v3.14.3-omp.1` for Windows or `v3.14.3-omp.2-centos7` for CentOS 7.
 
-The CentOS 7 workflow publishes one self-contained `OmpCode-<version>-centos7-x64.zip` and an optional `.sha256` checksum. Copy the ZIP to the offline machine and extract it as a regular user:
+The CentOS workflow publishes `OmpCode-<version>-centos7-x64.zip` and its `.sha256` checksum. Copy both files to the offline machine, then extract and launch as a regular user:
 
 ```bash
 sha256sum --check OmpCode-3.14.3-centos7-x64.zip.sha256
@@ -98,9 +98,9 @@ unzip -q OmpCode-3.14.3-centos7-x64.zip -d "$HOME"
 "$HOME/OmpCode-3.14.3-centos7-x64/bin/ompcode-centos7"
 ```
 
-No root access, package-manager installation, network, host glibc/Node/omp upgrade, or separately installed runtime library is required. The ZIP bundles its own userspace, CJK fonts, Electron, PRoot and omp; the host still needs a graphical session and `ptrace`. **Chromium sandboxing is disabled in this compatibility build**; use only trusted workspaces. For a workspace outside your home directory, launch from that directory or set `OMPCODE_CENTOS7_BIND=/absolute/workspace/root`. The ZIP does not register a host desktop entry or `zcode://` handler.
+The ZIP runs Electron 28 directly on the host's glibc 2.17, with an embedded omp and CentOS-compatible native addons and search tools. It needs no root access, PRoot, `ptrace`, bind mounts, host Node/omp upgrade, package installation or network access. A graphical session with the system's standard desktop libraries remains necessary; the VMware CentOS 7 X11 session passed, but the company Citrix X Server's XKB/GLX support has not been verified. The launcher uses private XDG paths under HOME; normal application startup may register a user-level `zcode://` desktop entry, not a system-wide installation.
 
-Electron does not officially support end-of-life CentOS 7 ([platform policy](https://github.com/electron/electron#platform-support)); the compatibility launcher disables PRoot's seccomp acceleration after a native 3.10-kernel crash was observed.
+**Chromium sandboxing is disabled** in this compatibility build. Electron 28 and CentOS 7 are end-of-life; use only trusted workspaces ([Electron platform policy](https://github.com/electron/electron#platform-support)).
 
 ## Credits
 

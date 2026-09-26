@@ -1,6 +1,6 @@
 import { databaseMigrationIdSchema, type DatabaseMigrationFacts } from "@zcode/shared";
 import { createHash } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
+import type { SqliteDatabase } from "#src/session/tasksDatabase/sqlite.js";
 import {
   AUTOMATION_SCHEMA,
   OFF_PEAK_SCHEMA,
@@ -72,7 +72,7 @@ const definitions = [
 ] as const;
 
 export function runTasksDatabaseMigrations(
-  db: DatabaseSync,
+  db: SqliteDatabase,
   options: {
     transactionOpen?: boolean;
     migration?: DatabaseMigrationFacts;
@@ -145,7 +145,7 @@ export function runTasksDatabaseMigrations(
   }
 }
 
-function adoptSchema(db: DatabaseSync): void {
+function adoptSchema(db: SqliteDatabase): void {
   db.exec(TASK_INDEX_SCHEMA + AUTOMATION_SCHEMA + OFF_PEAK_SCHEMA);
   for (const [table, column, definition] of columns) {
     const existing = db.prepare(`PRAGMA table_info(${table})`).all();
@@ -165,7 +165,7 @@ function adoptSchema(db: DatabaseSync): void {
 }
 
 /** 交接只复用已完成初始化；每个新连接仍按冻结账本确认，替换/清空文件不能假 ready。 */
-export function areTasksDatabaseMigrationsApplied(db: DatabaseSync): boolean {
+export function areTasksDatabaseMigrationsApplied(db: SqliteDatabase): boolean {
   if (
     !db
       .prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='tasks_schema_migration'")
@@ -189,7 +189,7 @@ export function areTasksDatabaseMigrationsApplied(db: DatabaseSync): boolean {
 }
 
 /** 只读账本的展示预检，不授权执行；迁移 runner 拿锁后仍复查每一项。 */
-export function inspectTasksMigrationKind(db: DatabaseSync): DatabaseMigrationFacts["kind"] {
+export function inspectTasksMigrationKind(db: SqliteDatabase): DatabaseMigrationFacts["kind"] {
   const hasLedger = db
     .prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='tasks_schema_migration'")
     .get();

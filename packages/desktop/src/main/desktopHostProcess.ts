@@ -54,6 +54,7 @@ import { ingestCliResourceSample } from "./processResourceCliSource.js";
 import { ingestHostSelfResourceSample } from "./processResourceSelfHeapSource.js";
 import { createFeedbackLogArchiveFromExportLogs } from "./exportLogs.js";
 import { buildHostE2ECoverageEnv } from "./e2eCoverage.js";
+import { resolveImportMetaDirname } from "../shared/moduleDirname.js";
 
 export interface WindowBootstrapOptions {
   restoreSession?: boolean;
@@ -99,6 +100,8 @@ interface SpawnHostProcessOptions {
   attachInitialServicePort?: boolean;
 }
 
+const moduleDir = resolveImportMetaDirname(import.meta);
+
 const exitedHostProcesses = new WeakSet<ElectronUtilityProcess>();
 const disposingHostProcesses = new Set<ElectronUtilityProcess>();
 
@@ -142,7 +145,7 @@ export function loadWindow(
     }
     return win.loadURL(url.toString());
   } else {
-    return win.loadFile(join(import.meta.dirname, `../renderer/${page}.html`), {
+    return win.loadFile(join(moduleDir, `../renderer/${page}.html`), {
       query,
     });
   }

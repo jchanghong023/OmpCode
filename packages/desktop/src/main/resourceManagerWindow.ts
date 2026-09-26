@@ -15,6 +15,7 @@ import {
   type ZCodeProvider,
 } from "@zcode/shared";
 import { logger } from "./logger.js";
+import { resolveImportMetaDirname } from "../shared/moduleDirname.js";
 import { normalizeElectronCpuToMachinePercent } from "./electronCpuNormalization.js";
 import type { ChromiumProcessRolePids } from "./processResourceRoleClassifier.js";
 import { buildAuxiliaryRendererName } from "./resourceManagerProcessNames.js";
@@ -31,7 +32,9 @@ import {
  * 历史 bug：main 里同步/异步起 ps、PowerShell 都会卡住整个 App。
  */
 
-const preloadPath = join(import.meta.dirname, "../preload/resourceManager.cjs");
+const moduleDir = resolveImportMetaDirname(import.meta);
+
+const preloadPath = join(moduleDir, "../preload/resourceManager.cjs");
 const RESOURCE_MANAGER_WINDOW_TITLE = "Resource Manager";
 const BROWSER_USE_PLUGIN_NAME = "browser-use";
 
@@ -279,7 +282,7 @@ export function openResourceManager(): void {
     const base = process.env["ELECTRON_RENDERER_URL"];
     instance.loadURL(`${base}/resource-manager.html`);
   } else {
-    instance.loadFile(join(import.meta.dirname, "../renderer/resource-manager.html"));
+    instance.loadFile(join(moduleDir, "../renderer/resource-manager.html"));
   }
 
   instance.on("closed", () => {
