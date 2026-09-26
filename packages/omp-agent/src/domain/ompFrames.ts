@@ -142,7 +142,9 @@ export const ompSessionEventFrameSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("agent_start") }),
   z.object({
     type: z.literal("agent_end"),
-    messages: z.array(ompAgentMessageSchema).optional(),
+    // 修复依据：技能注入的 custom 历史消息以字符串 content 出现在 agent_end.messages；
+    // 适配器只消费终态标记，不读取此历史数组，深度套用实时消息 schema 会丢弃整个终态帧。
+    messages: z.array(z.object({ role: z.string() }).passthrough()).optional(),
     isTerminal: z.boolean().optional(),
   }),
   z.object({ type: z.literal("turn_start") }),

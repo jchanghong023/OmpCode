@@ -25,6 +25,29 @@ test("相对 PI_CONFIG_DIR 从用户主目录解析并扫描 omp 冷会话", asy
   assert.equal(Number.isSafeInteger(sessions[0]?.updatedAt), true);
 });
 
+test(
+  "Windows 用户目录内临时工作区按 omp 临时目录编码恢复会话",
+  { skip: process.platform !== "win32" },
+  async (context) => {
+    const testRoot = await mkdtemp(join(tmpdir(), "omp-store-temp-scope-"));
+    context.after(async () => {
+      assert.ok(resolve(testRoot).startsWith(`${resolve(tmpdir())}${sep}`));
+      await rm(testRoot, { recursive: true, force: true });
+    });
+    const workspace = join(testRoot, "project");
+    await mkdir(workspace, { recursive: true });
+    const encodedWorkspace = `-tmp-${relative(tmpdir(), workspace).replace(/[/\\:]/g, "-")}`;
+    const sessionDir = join(testRoot, "profile", "agent", "sessions", encodedWorkspace);
+    await mkdir(sessionDir, { recursive: true });
+    const sessionPath = join(sessionDir, "2026-09-24T00-00-00-000Z_temp-session.jsonl");
+    await writeFile(sessionPath, `${JSON.stringify({ type: "session", id: "temp-session" })}\n`);
+
+    const store = createOmpStore({ PI_CONFIG_DIR: join(testRoot, "profile") });
+    assert.equal((await store.findSession?.(workspace, "temp-session"))?.sessionPath, sessionPath);
+    assert.equal((await store.listSessions(workspace))[0]?.sessionId, "temp-session");
+  },
+);
+
 test("命名 profile 的历史与默认 profile 隔离", async (context) => {
   const testRoot = await mkdtemp(join(tmpdir(), "omp-profile-store-test-"));
   context.after(async () => {

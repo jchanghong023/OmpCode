@@ -1,6 +1,7 @@
 // 真实 omp release 二进制 E2E（换核验收）：驱动「内嵌 omp.exe → omp-agent 适配器 →
 // ZCode v4 协议」全链路。
-// 模型按 FORK.md 测试约定：使用用户 omp 配置的 zhipu-coding-plan/glm-5.3-flash
+// 默认模型按 FORK.md 测试约定使用 zhipu-coding-plan/glm-5.3-flash；
+// OMP_E2E_MODEL_SELECTOR 可为专项验收选择用户 omp 目录中的其他模型。
 // （走用户 omp 既有凭据，行为与日常 omp 一致）；
 // 审批模式用运行时 flag --approval-mode write（不持久化，不改用户配置）；
 // 工作区为沙箱目录，不触碰用户文件。
@@ -39,9 +40,15 @@ const ompBinary =
     "omp",
     process.platform === "win32" ? "omp.exe" : "omp",
   );
-// 真实模型统一走用户 omp 配置的 glm-5.3-flash（FORK.md 测试约定）；不依赖
-// commandcode 免费模型（每日 100 次配额，耗尽后 429 会污染验收结果）。
-const ompModelArgs = ["--provider", "zhipu-coding-plan", "--model", "glm-5.3-flash"];
+// 默认不依赖 commandcode 免费模型（每日配额耗尽后 429 会污染验收结果）。
+const modelSelector = process.env.OMP_E2E_MODEL_SELECTOR ?? "zhipu-coding-plan/glm-5.3-flash";
+const modelSeparator = modelSelector.indexOf("/");
+if (modelSeparator <= 0 || modelSeparator === modelSelector.length - 1) {
+  throw new Error("OMP_E2E_MODEL_SELECTOR must be provider/model");
+}
+const modelProvider = modelSelector.slice(0, modelSeparator);
+const modelId = modelSelector.slice(modelSeparator + 1);
+const ompModelArgs = ["--provider", modelProvider, "--model", modelId];
 
 const hasRealBinary = process.env.OMP_AGENT_SKIP_REAL_E2E !== "1" && existsSync(ompBinary);
 
@@ -142,7 +149,7 @@ class Harness {
 }
 
 test(
-  "真实 omp 二进制 + glm-5.3-flash：流式 → write 工具 → 审批 → 文件落盘 → 完成",
+  `真实 omp 二进制 + ${modelSelector}：流式 → write 工具 → 审批 → 文件落盘 → 完成`,
   { skip: hasRealBinary ? false : "内嵌 omp 二进制未下载（跳过真实 E2E）" },
   async () => {
     const sandbox = mkdtempSync(join(tmpdir(), "zcode-real-e2e-"));
@@ -154,7 +161,7 @@ test(
         ...process.env,
         ZCODE_WORKSPACE_IDENTITY: "real-e2e-workspace",
         OMP_RPC_BINARY_PATH: ompBinary,
-        // 附加 omp 启动参数：固定 commandcode 免费模型；审批走运行时 flag，不写用户配置。
+        // 附加 omp 启动参数：选择验收模型；审批走运行时 flag，不写用户配置。
         OMP_RPC_ARGS_JSON: JSON.stringify([...ompModelArgs, "--approval-mode", "write"]),
       },
       stdio: ["pipe", "pipe", "pipe"],
@@ -281,7 +288,7 @@ test(
 );
 
 test(
-  "真实 omp 二进制：本地命令收口 + 临时模型切换到 glm-5.3-flash",
+  `真实 omp 二进制：本地命令收口 + 临时模型切换到 ${modelSelector}`,
   { skip: hasRealBinary ? false : "内嵌 omp 二进制未下载（跳过真实 E2E）" },
   async () => {
     const sandbox = mkdtempSync(join(tmpdir(), "zcode-real-e2e-model-"));
@@ -292,7 +299,7 @@ test(
         ...process.env,
         ZCODE_WORKSPACE_IDENTITY: "real-e2e-workspace-2",
         OMP_RPC_BINARY_PATH: ompBinary,
-        // 基座用 muse-spark（免费、与 glm 凭据无关），临时模型切换目标才是 glm-5.3-flash，
+        // 基座用 muse-spark，临时模型切换目标才是指定验收模型，
         // 这样「模型已切换」标记与 set_model 下发才有可断言的差值。
         OMP_RPC_ARGS_JSON: JSON.stringify([
           "--provider",
@@ -359,7 +366,7 @@ test(
         `本地命令缺少输出投影\n${stderrTail}`,
       );
 
-      // 2. 临时模型：sendText 携带 modelSelection 从 muse-spark 切到 glm-5.3-flash（会话级，不写 omp 配置）。
+      // 2. 临时模型：sendText 携带 modelSelection 从 muse-spark 切到指定模型（会话级，不写 omp 配置）。
       const sendResult = (await harness.request("v4/command", {
         commandId: "real-model-send",
         clientId: "e2e-client",
@@ -368,8 +375,8 @@ test(
         payload: {
           text: "只回复两个字：好的",
           modelSelection: {
-            providerId: "zhipu-coding-plan",
-            modelId: "glm-5.3-flash",
+            providerId: modelProvider,
+            modelId,
             options: { reasoningLevel: "max" },
           },
         },
@@ -390,16 +397,13 @@ test(
           (row as { marker?: { type?: string } }).marker?.type === "modelChange",
       ) as { marker?: { toProvider?: string; toModel?: string } } | undefined;
       assert.ok(marker, `缺少 modelChange 标记\n${stderrTail}`);
-      assert.equal(marker!.marker!.toProvider, "zhipu-coding-plan");
-      assert.equal(marker!.marker!.toModel, "glm-5.3-flash");
-      assert.equal(
-        (harness.state().config as { model?: string } | undefined)?.model,
-        "glm-5.3-flash",
-      );
+      assert.equal(marker!.marker!.toProvider, modelProvider);
+      assert.equal(marker!.marker!.toModel, modelId);
+      assert.equal((harness.state().config as { model?: string } | undefined)?.model, modelId);
       const lastTurnText = rows
         .filter((row) => row.kind === "assistantText")
         .reduce((total, row) => total + String(row.text ?? "").length, 0);
-      assert.ok(lastTurnText > 0, `glm-5.3-flash 无流式输出\n${stderrTail}`);
+      assert.ok(lastTurnText > 0, `${modelSelector} 无流式输出\n${stderrTail}`);
 
       // 3. omp 原生 /model 本地命令：config_update 回投会话模型状态（不写 omp 配置文件）。
       const modelCmd = (await harness.request("v4/command", {

@@ -60,6 +60,19 @@ function runLocalCommand(message) {
 
 async function runPromptTurn(message, promptId) {
   out({ type: "agent_start" });
+  if (message === "CUSTOM_TERMINAL_MESSAGE") {
+    out({ type: "message_start", message: { role: "assistant", content: [] } });
+    out({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "Skill completed" }] } });
+    out({
+      type: "agent_end",
+      messages: [
+        { role: "custom", content: "Skill invocation context" },
+        { role: "assistant", content: [{ type: "text", text: "Skill completed" }] },
+      ],
+      isTerminal: true,
+    });
+    return;
+  }
   if (message === "SUBAGENT_REPORT") {
     const agent = { id: "fake-child-1", index: 0, agent: "scout", agentSource: "bundled", description: "Inspect project", status: "active", lastUpdate: Date.now(), parentToolCallId: "task-parent" };
     subagents = [agent];

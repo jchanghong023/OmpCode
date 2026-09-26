@@ -43,12 +43,16 @@ async function encodeSessionDirName(cwd: string): Promise<string> {
   ]);
   const homeRelative = relative(canonicalHome, canonicalCwd);
   const tempRelative = relative(canonicalTemp, canonicalCwd);
-  if (homeRelative === "" || (!homeRelative.startsWith("..") && !isAbsolute(homeRelative))) {
-    return encodeRelative("-", homeRelative);
-  }
-  if (tempRelative === "" || (!tempRelative.startsWith("..") && !isAbsolute(tempRelative))) {
+  const withinHome =
+    homeRelative === "" || (!homeRelative.startsWith("..") && !isAbsolute(homeRelative));
+  const withinTemp =
+    tempRelative === "" || (!tempRelative.startsWith("..") && !isAbsolute(tempRelative));
+  // Bug 根因：Windows 的临时目录通常位于用户目录内；omp 优先使用临时目录编码，
+  // 此处原先优先匹配用户目录，导致重启后找不到真实会话文件及子代理记录。
+  if (withinTemp && (process.platform === "win32" || !withinHome)) {
     return encodeRelative("-tmp", tempRelative);
   }
+  if (withinHome) return encodeRelative("-", homeRelative);
   return `--${canonicalCwd.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-")}--`;
 }
 

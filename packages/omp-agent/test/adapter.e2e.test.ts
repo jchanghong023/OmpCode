@@ -1262,6 +1262,39 @@ test("技能引用目录仅投影 omp 可执行技能命令，未知会话不回
   }
 });
 
+test("技能自定义历史消息不吞掉 agent_end 终态", async () => {
+  const harness = await startAdapter();
+  try {
+    const createResult = await harness.request("v4/command", {
+      commandId: "cmd-custom-terminal",
+      clientId: "test-client",
+      sessionId: null,
+      type: "createSession",
+      payload: { workspaceId: "test-workspace", firstInput: { text: "CUSTOM_TERMINAL_MESSAGE" } },
+      issuedAt: Date.now(),
+    });
+    const createAck = commandAckSchema.parse((createResult as { result: unknown }).result);
+    assert.equal(createAck.status, "accepted");
+    const sessionId = (createAck.result as { sessionId: string }).sessionId;
+    await harness.request("v4/conversation/subscribe", {
+      topic: `conversation/${sessionId}`,
+      connectionId: "conn-custom-terminal",
+      clientMode: "desktop-continuous",
+    });
+    await harness.waitUntil(() =>
+      [...harness.collectRows().values()].some(
+        (row) => row.kind === "turnHeader" && row.state === "completedSuccess",
+      ),
+    );
+    assert.equal(
+      (harness.collectState().control as { phase?: string } | undefined)?.phase,
+      "completedSuccess",
+    );
+  } finally {
+    await harness.close();
+  }
+});
+
 test("供应商错误（stopReason=error）以 failed 收口并携带错误事实", async () => {
   const harness = await startAdapter();
   try {
