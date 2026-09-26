@@ -19,11 +19,12 @@ export function resolveOmpAutomationSelection(
   const decoded = modelValue ? decodeCustomModelValue(modelValue) : null;
   const value = decoded?.modelName
     ? `${decoded.providerId}/${decoded.modelName}`
-    : modelValue || (catalog.preferredSelection
-      ? `${catalog.preferredSelection.providerId}/${catalog.preferredSelection.modelId}`
-      : "");
-  const entry = catalog.entries.find((candidate) =>
-    `${candidate.providerId}/${candidate.modelId}` === value,
+    : modelValue ||
+      (catalog.preferredSelection
+        ? `${catalog.preferredSelection.providerId}/${catalog.preferredSelection.modelId}`
+        : "");
+  const entry = catalog.entries.find(
+    (candidate) => `${candidate.providerId}/${candidate.modelId}` === value,
   );
   if (!entry) return null;
   const reasoningLevel = thoughtLevel || highestOmpThoughtLevel(entry);

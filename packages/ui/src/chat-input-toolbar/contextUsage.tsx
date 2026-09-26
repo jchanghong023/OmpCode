@@ -54,7 +54,11 @@ import {
 import { runContextPanelActionWithClose } from "@/chat-input-toolbar/contextPanelAction.js";
 import { coordinateCodingPlanQuotaResetAutoPlay } from "@/chat-input-toolbar/codingPlanQuotaResetAutoPlay.js";
 import { formatCompactTokenNumber } from "@/lib/tokenNumberFormat.js";
-import { buildOmpUsageProgressSegments, OmpContextDetailsPanel, type OmpContextEntry } from "@/chat-input-toolbar/OmpContextDetails.js";
+import {
+  buildOmpUsageProgressSegments,
+  OmpContextDetailsPanel,
+  type OmpContextEntry,
+} from "@/chat-input-toolbar/OmpContextDetails.js";
 import {
   CONTEXT_QUOTA_RESET_URGENT_SECONDS,
   ContextQuotaResetOpportunityReminderContent,

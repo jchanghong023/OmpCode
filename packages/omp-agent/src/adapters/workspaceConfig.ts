@@ -12,7 +12,11 @@ export interface WorkspaceConfigLoaderOptions {
   onCommandsUpdate?: (commands: unknown) => void;
 }
 
-export function createWorkspaceConfigLoader(ompFactory: OmpProcessFactory, workspacePath: string, options: WorkspaceConfigLoaderOptions = {}) {
+export function createWorkspaceConfigLoader(
+  ompFactory: OmpProcessFactory,
+  workspacePath: string,
+  options: WorkspaceConfigLoaderOptions = {},
+) {
   let catalogProcess: Awaited<ReturnType<OmpProcessFactory["create"]>> | null = null;
 
   async function ensureProcess() {
@@ -22,7 +26,8 @@ export function createWorkspaceConfigLoader(ompFactory: OmpProcessFactory, works
     const processHandle = ompFactory.create({
       cwd: workspacePath,
       onEvent: () => {},
-      onUiRequest: ({ respond, frame }) => respond({ type: "extension_ui_response", id: frame.id, cancelled: true }),
+      onUiRequest: ({ respond, frame }) =>
+        respond({ type: "extension_ui_response", id: frame.id, cancelled: true }),
       onExit: (code) => {
         logger.warn("omp 模型目录进程已退出", { code });
         catalogProcess = null;
@@ -47,17 +52,19 @@ export function createWorkspaceConfigLoader(ompFactory: OmpProcessFactory, works
         })),
         processHandle.refreshState(),
       ]);
-      const models = modelsOutcome.success
-        ? parseModels(modelsOutcome.data)
-        : [];
+      const models = modelsOutcome.success ? parseModels(modelsOutcome.data) : [];
       const levels = levelsOutcome.success ? parseLevels(levelsOutcome.data) : [];
       if (!commandsOutcome.success) {
         logger.warn("omp 命令目录加载失败", { error: commandsOutcome.error });
       }
-      const slashCommands = commandsOutcome.success ? slashCommandsOfResponse(commandsOutcome.data) : [];
+      const slashCommands = commandsOutcome.success
+        ? slashCommandsOfResponse(commandsOutcome.data)
+        : [];
       const currentModel = state?.model;
       const currentValue =
-        currentModel?.provider && currentModel?.id ? `${currentModel.provider}/${currentModel.id}` : "";
+        currentModel?.provider && currentModel?.id
+          ? `${currentModel.provider}/${currentModel.id}`
+          : "";
       return {
         configOptions: [
           {
@@ -72,7 +79,10 @@ export function createWorkspaceConfigLoader(ompFactory: OmpProcessFactory, works
               modelProviderId: model.provider,
               modelProviderName: model.provider,
               ...(model.thoughtLevels && model.thoughtLevels.length > 0
-                ? { modelThoughtLevels: model.thoughtLevels, modelDefaultThoughtLevel: model.defaultThoughtLevel }
+                ? {
+                    modelThoughtLevels: model.thoughtLevels,
+                    modelDefaultThoughtLevel: model.defaultThoughtLevel,
+                  }
                 : {}),
             })),
           },
@@ -83,7 +93,11 @@ export function createWorkspaceConfigLoader(ompFactory: OmpProcessFactory, works
                   name: "Thinking",
                   type: "select" as const,
                   currentValue: state?.thinkingLevel ?? "off",
-                  options: levels.map((level) => ({ value: level, name: level, origin: "native" as const })),
+                  options: levels.map((level) => ({
+                    value: level,
+                    name: level,
+                    origin: "native" as const,
+                  })),
                 },
               ]
             : []),
@@ -97,22 +111,38 @@ export function createWorkspaceConfigLoader(ompFactory: OmpProcessFactory, works
   };
 }
 
-function parseModels(data: unknown): { provider: string; id: string; name?: string; thoughtLevels?: string[]; defaultThoughtLevel?: string }[] {
+function parseModels(data: unknown): {
+  provider: string;
+  id: string;
+  name?: string;
+  thoughtLevels?: string[];
+  defaultThoughtLevel?: string;
+}[] {
   const record = typeof data === "object" && data !== null ? (data as { models?: unknown }) : {};
   const models = Array.isArray(record.models) ? record.models : [];
-  const output: { provider: string; id: string; name?: string; thoughtLevels?: string[]; defaultThoughtLevel?: string }[] = [];
+  const output: {
+    provider: string;
+    id: string;
+    name?: string;
+    thoughtLevels?: string[];
+    defaultThoughtLevel?: string;
+  }[] = [];
   for (const entry of models) {
     const parsed = ompModelCatalogEntrySchema.safeParse(entry);
     if (parsed.success && parsed.data.provider && parsed.data.id) {
       // omp Model 使用 thinking.efforts；旧 reasoning.levels 不是 RPC 模型目录字段。
-      const thinking = (entry as { thinking?: { efforts?: unknown; defaultLevel?: unknown } }).thinking;
+      const thinking = (entry as { thinking?: { efforts?: unknown; defaultLevel?: unknown } })
+        .thinking;
       const effortLevels = Array.isArray(thinking?.efforts)
         ? thinking.efforts.filter((level): level is string => typeof level === "string")
         : undefined;
-      const thoughtLevels = effortLevels?.length ? ["off", ...effortLevels.filter((level) => level !== "off")] : undefined;
-      const defaultThoughtLevel = typeof thinking?.defaultLevel === "string" && effortLevels?.includes(thinking.defaultLevel)
-        ? thinking.defaultLevel
-        : effortLevels?.[0];
+      const thoughtLevels = effortLevels?.length
+        ? ["off", ...effortLevels.filter((level) => level !== "off")]
+        : undefined;
+      const defaultThoughtLevel =
+        typeof thinking?.defaultLevel === "string" && effortLevels?.includes(thinking.defaultLevel)
+          ? thinking.defaultLevel
+          : effortLevels?.[0];
       output.push({
         provider: parsed.data.provider,
         id: parsed.data.id,
@@ -127,5 +157,7 @@ function parseModels(data: unknown): { provider: string; id: string; name?: stri
 
 function parseLevels(data: unknown): string[] {
   const record = typeof data === "object" && data !== null ? (data as { levels?: unknown }) : {};
-  return Array.isArray(record.levels) ? record.levels.filter((level): level is string => typeof level === "string") : [];
+  return Array.isArray(record.levels)
+    ? record.levels.filter((level): level is string => typeof level === "string")
+    : [];
 }

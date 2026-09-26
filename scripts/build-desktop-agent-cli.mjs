@@ -24,8 +24,12 @@ stageAgentBundle({
   platformKey: `${process.platform}-${process.arch}`,
 });
 
-runCommand(process.execPath, [resolve(repoRoot, "packages/desktop/scripts/fetch-omp-release.mjs")], {
-  cwd: repoRoot,
-  env: process.env,
-  stdio: "inherit",
-});
+runCommand(
+  process.execPath,
+  [resolve(repoRoot, "packages/desktop/scripts/fetch-omp-release.mjs")],
+  {
+    cwd: repoRoot,
+    env: process.env,
+    stdio: "inherit",
+  },
+);

@@ -61,7 +61,12 @@ const tokensCache = new Map<string, TokenizedCode>();
 const MAX_TOKEN_CACHE_ENTRIES = 256;
 const MAX_CACHED_CODE_LENGTH = 32_768;
 
-export function rememberTokenizedCode<T>(cache: Map<string, T>, key: string, value: T, limit: number): void {
+export function rememberTokenizedCode<T>(
+  cache: Map<string, T>,
+  key: string,
+  value: T,
+  limit: number,
+): void {
   cache.delete(key);
   cache.set(key, value);
   while (cache.size > limit) {

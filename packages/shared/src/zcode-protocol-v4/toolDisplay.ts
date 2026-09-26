@@ -155,7 +155,16 @@ export type ToolResultDisplay = z.infer<typeof toolResultDisplaySchema>;
 export const toolOutputSchema = z.object({
   text: z.string(),
   // omp todo phases 的清单投影；文本摘要仍保留在 text，不把 JSON 冒充工具输出。
-  plan: z.array(z.object({ id: z.string(), title: z.string(), status: z.enum(["pending", "in_progress", "completed"]) })).max(200).optional(),
+  plan: z
+    .array(
+      z.object({
+        id: z.string(),
+        title: z.string(),
+        status: z.enum(["pending", "in_progress", "completed"]),
+      }),
+    )
+    .max(200)
+    .optional(),
   display: toolResultDisplaySchema.optional().catch(undefined),
   truncated: z
     .object({

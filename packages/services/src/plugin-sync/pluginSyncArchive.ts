@@ -136,9 +136,7 @@ async function gunzipWithLimit(
     });
   } catch (error) {
     throw new Error(
-      `plugin sync archive exceeds limit: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
+      `plugin sync archive exceeds limit: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
 }

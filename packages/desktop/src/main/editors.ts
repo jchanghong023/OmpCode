@@ -234,22 +234,34 @@ function resolveWindowsCommandPaths(command: string): Promise<string[]> {
   const cached = windowsCommandPathPromises.get(command);
   if (cached) return cached;
   const pending = new Promise<string[]>((resolvePaths) => {
-    execFile("where.exe", [command], {
-      encoding: "utf8",
-      timeout: 1000,
-      windowsHide: true,
-    }, (error, output) => {
-      resolvePaths(error ? [] : output
-        .split(/\r?\n/)
-        .map((line) => line.trim())
-        .filter((line) => line.length > 0 && existsSync(line)));
-    });
+    execFile(
+      "where.exe",
+      [command],
+      {
+        encoding: "utf8",
+        timeout: 1000,
+        windowsHide: true,
+      },
+      (error, output) => {
+        resolvePaths(
+          error
+            ? []
+            : output
+                .split(/\r?\n/)
+                .map((line) => line.trim())
+                .filter((line) => line.length > 0 && existsSync(line)),
+        );
+      },
+    );
   });
   windowsCommandPathPromises.set(command, pending);
   return pending;
 }
 
-async function deriveWindowsAppPathsFromCommand(command: string, appNames: string[]): Promise<string[]> {
+async function deriveWindowsAppPathsFromCommand(
+  command: string,
+  appNames: string[],
+): Promise<string[]> {
   const candidates: string[] = [];
 
   for (const commandPath of await resolveWindowsCommandPaths(command)) {
@@ -342,8 +354,9 @@ export function getEditorDefsForCurrentPlatform(): EditorDef[] {
 
 /** 缓存检测结果，避免重复 IO */
 export async function resolveEditorDefAppPath(def: EditorDef): Promise<string | null> {
-  const staticPath = uniquePaths([def.appPath, ...(def.appPathCandidates ?? [])])
-    .find((candidate) => existsSync(candidate));
+  const staticPath = uniquePaths([def.appPath, ...(def.appPathCandidates ?? [])]).find(
+    (candidate) => existsSync(candidate),
+  );
   if (staticPath) return staticPath;
   const commandAppPaths =
     def.command && def.windowsCommandAppNames?.length
@@ -646,12 +659,14 @@ export async function getInstalledEditors(): Promise<EditorInfo[]> {
     return cachedEditors;
   }
 
-  const installed = (await Promise.all(getEditorDefsForCurrentPlatform()
-    .map(async (def) => {
-      const appPath = await resolveEditorDefAppPath(def);
-      return appPath ? { def, appPath } : null;
-    })))
-    .filter((entry): entry is { def: EditorDef; appPath: string } => entry !== null);
+  const installed = (
+    await Promise.all(
+      getEditorDefsForCurrentPlatform().map(async (def) => {
+        const appPath = await resolveEditorDefAppPath(def);
+        return appPath ? { def, appPath } : null;
+      }),
+    )
+  ).filter((entry): entry is { def: EditorDef; appPath: string } => entry !== null);
 
   const results = await Promise.all(
     installed.map(async ({ def, appPath }) => {

@@ -626,7 +626,11 @@ export function useComposerAttachments(
         { id: "chat.attachments.maxFiles" },
         { count: String(MAX_CHAT_ATTACHMENTS) },
       ),
-      { variant: "warning", position: "bottom-center", dedupeKey: `attachment-limit:${scopeKey}` },
+      {
+        variant: "warning",
+        position: "bottom-center",
+        dedupeKey: `attachment-limit:${scopeKey}`,
+      },
     );
   }, [intl, scopeKey]);
 

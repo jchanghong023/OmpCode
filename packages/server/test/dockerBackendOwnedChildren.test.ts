@@ -20,7 +20,10 @@ function spawnStdinExitChild() {
   return spawn(
     process.execPath,
     ["-e", "process.stdin.once('end', () => process.exit(0)); process.stdin.resume();"],
-    { stdio: "pipe", windowsHide: true },
+    {
+      stdio: "pipe",
+      windowsHide: true,
+    },
   );
 }
 

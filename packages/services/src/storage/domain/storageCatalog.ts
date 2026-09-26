@@ -212,7 +212,10 @@ export function getStorageCleanScopes(categoryId: StorageCategoryId): StorageCle
   const recursive = [
     ...PREFIX_RULES[categoryId],
     ...(RECURSIVE_FILE_RULE_SCOPES[categoryId] ?? []),
-  ].map((prefix) => ({ prefix, recursive: true }));
+  ].map((prefix) => ({
+    prefix,
+    recursive: true,
+  }));
   const shallow = (FILE_RULE_SCOPES[categoryId] ?? []).map((prefix) => ({
     prefix,
     recursive: false,

@@ -6,10 +6,18 @@ import { createInterface } from "node:readline";
 import { OmpFrameAssembler } from "../domain/frameAssembler.js";
 import { parseOmpContextReport, type OmpContextReport } from "../domain/ompContextReport.js";
 import {
-  ompAvailableCommandsFrameSchema, ompCommandOutputFrameSchema, ompConfigUpdateFrameSchema,
-  ompExtensionUiRequestFrameSchema, ompPromptResultFrameSchema, ompReadyFrameSchema,
-  ompResponseFrameSchema, ompRpcChunkFrameSchema, ompSessionEventFrameSchema,
-  ompSessionInfoUpdateFrameSchema, ompStateDataSchema, ompSubagentFrameSchema,
+  ompAvailableCommandsFrameSchema,
+  ompCommandOutputFrameSchema,
+  ompConfigUpdateFrameSchema,
+  ompExtensionUiRequestFrameSchema,
+  ompPromptResultFrameSchema,
+  ompReadyFrameSchema,
+  ompResponseFrameSchema,
+  ompRpcChunkFrameSchema,
+  ompSessionEventFrameSchema,
+  ompSessionInfoUpdateFrameSchema,
+  ompStateDataSchema,
+  ompSubagentFrameSchema,
   type OmpCommandFrame,
   type OmpExtensionUiResponseFrame,
 } from "../domain/ompFrames.js";
@@ -55,13 +63,7 @@ class OmpChildProcess implements OmpSessionProcess {
   constructor(
     private readonly binaryPath: string,
     private readonly extraArgs: string[],
-    private readonly options: {
-      cwd: string;
-      resumeSessionPath?: string;
-      onEvent: (event: import("../domain/ompFrames.js").OmpSessionEventFrame) => void;
-      onUiRequest: (request: OmpUiRequest) => void;
-      onExit: (code: number | null) => void;
-    } & OmpSideChannelHandlers,
+    private readonly options: { cwd: string; resumeSessionPath?: string; onEvent: (event: import("../domain/ompFrames.js").OmpSessionEventFrame) => void; onUiRequest: (request: OmpUiRequest) => void; onExit: (code: number | null) => void } & OmpSideChannelHandlers,
   ) {}
 
   async start(): Promise<void> {
@@ -69,18 +71,9 @@ class OmpChildProcess implements OmpSessionProcess {
       return;
     }
     this.started = true;
-    const args = [
-      ...this.extraArgs,
-      "--mode",
-      "rpc-ui",
-      ...(this.options.resumeSessionPath ? ["--resume", this.options.resumeSessionPath] : []),
-    ];
+    const args = [...this.extraArgs, "--mode", "rpc-ui", ...(this.options.resumeSessionPath ? ["--resume", this.options.resumeSessionPath] : [])];
     logger.info("spawn omp core", { binary: this.binaryPath, cwd: this.options.cwd, resume: this.options.resumeSessionPath ?? null });
-    const child = spawn(this.binaryPath, args, {
-      cwd: this.options.cwd,
-      stdio: ["pipe", "pipe", "pipe"],
-      windowsHide: true,
-    }) as ChildProcessWithoutNullStreams;
+    const child = spawn(this.binaryPath, args, { cwd: this.options.cwd, stdio: ["pipe", "pipe", "pipe"], windowsHide: true }) as ChildProcessWithoutNullStreams;
     this.child = child;
     this.exitListener = (code) => this.handleExit(code);
     child.once("exit", this.exitListener);
@@ -269,14 +262,16 @@ class OmpChildProcess implements OmpSessionProcess {
       let timer: NodeJS.Timeout | undefined;
       try {
         let resolveLocal!: (local: boolean) => void;
-        const localResult = new Promise<boolean>((resolve) => { resolveLocal = resolve; });
+        const localResult = new Promise<boolean>((resolve) => {
+          resolveLocal = resolve;
+        });
         const response = this.request({ type: "prompt", message: "/context" }, 5_000);
         this.contextResult = { id: `omp-req-${this.commandCounter}`, resolve: resolveLocal };
         timer = setTimeout(() => resolveLocal(false), 5_000);
         timer.unref?.();
         const outcome = await response;
         if (!outcome.success || (outcome.data as { agentInvoked?: boolean } | undefined)?.agentInvoked === true) return null;
-        if ((outcome.data as { agentInvoked?: boolean } | undefined)?.agentInvoked !== false && !await localResult) return null;
+        if ((outcome.data as { agentInvoked?: boolean } | undefined)?.agentInvoked !== false && !(await localResult)) return null;
         return parseOmpContextReport(output.join("\n"));
       } catch {
         return null;

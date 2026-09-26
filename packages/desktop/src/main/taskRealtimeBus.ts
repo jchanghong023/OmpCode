@@ -535,7 +535,10 @@ export class TaskRealtimeBus {
       batch.ownerHostId,
       "stream_mirror_gap",
       undefined,
-      { runId: event.runId, opSeq: event.toSeq },
+      {
+        runId: event.runId,
+        opSeq: event.toSeq,
+      },
     );
     if (event.terminal) {
       this.streamBatches.delete(batch.batchKey);

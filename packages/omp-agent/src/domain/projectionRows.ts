@@ -1,7 +1,11 @@
 // 投影行构造器：turnHeader / userInput / 流式行 / 工具行 / marker 的纯构造与合并。
 // 从 conversationProjection 拆出（架构 maxFileLines=400）；只做行对象组装，不碰状态机。
 
-import type { ConversationRow, TimelineMarkerPayload, ToolCallRow } from "@zcode/shared/zcode-protocol-v4";
+import type {
+  ConversationRow,
+  TimelineMarkerPayload,
+  ToolCallRow,
+} from "@zcode/shared/zcode-protocol-v4";
 import { rowBaseFields } from "./projectionTypes.js";
 import type { TurnFileFacts } from "./fileFacts.js";
 import { ompTodoPlan } from "./ompTodoPlan.js";
@@ -26,7 +30,10 @@ export function conversationRowsRange(
   const ids = beforeRowId === undefined ? rowIds : rowIds.filter((id) => id < beforeRowId);
   const page = ids.slice(-limit);
   const first = page[0];
-  return { rows: page.map((id) => rowAt(id)!), hasMore: first !== undefined && ids.indexOf(first) > 0 };
+  return {
+    rows: page.map((id) => rowAt(id)!),
+    hasMore: first !== undefined && ids.indexOf(first) > 0,
+  };
 }
 
 export interface RowInit {
@@ -49,7 +56,9 @@ export interface ToolCallUpsert {
   resultDetails?: unknown;
 }
 
-export function createTurnHeaderRow(init: RowInit & { sourceCommandId: string; historyRoundCount: number }): ConversationRow {
+export function createTurnHeaderRow(
+  init: RowInit & { sourceCommandId: string; historyRoundCount: number },
+): ConversationRow {
   return {
     ...rowBaseFields({ ...init, entityId: init.turnId }),
     kind: "turnHeader",
@@ -63,7 +72,9 @@ export function createTurnHeaderRow(init: RowInit & { sourceCommandId: string; h
   };
 }
 
-export function createUserInputRow(init: RowInit & { text: string; sourceCommandId: string; clientId: string }): ConversationRow {
+export function createUserInputRow(
+  init: RowInit & { text: string; sourceCommandId: string; clientId: string },
+): ConversationRow {
   return {
     ...rowBaseFields({ ...init, entityId: `input-${init.sourceCommandId}-${init.rowId}` }),
     kind: "userInput",
@@ -97,7 +108,9 @@ export function createToolCallRow(init: RowInit & ToolCallUpsert): ToolCallRow {
     status: init.status,
     inputText: init.inputText ?? "",
     ...(init.input !== undefined ? { input: init.input } : {}),
-    ...(init.outputText !== undefined ? { output: { text: init.outputText, ...(plan ? { plan } : {}) } } : {}),
+    ...(init.outputText !== undefined
+      ? { output: { text: init.outputText, ...(plan ? { plan } : {}) } }
+      : {}),
     ...(init.error !== undefined ? { error: init.error } : {}),
     ...(init.startedAt !== undefined ? { startedAt: init.startedAt } : {}),
     ...(init.endedAt !== undefined ? { endedAt: init.endedAt } : {}),
@@ -111,14 +124,18 @@ export function mergeToolCallRow(existing: ToolCallRow, update: ToolCallUpsert):
     status: update.status,
     ...(update.inputText !== undefined ? { inputText: update.inputText } : {}),
     ...(update.input !== undefined ? { input: update.input } : {}),
-    ...(update.outputText !== undefined ? { output: { text: update.outputText, ...(plan ? { plan } : {}) } } : {}),
+    ...(update.outputText !== undefined
+      ? { output: { text: update.outputText, ...(plan ? { plan } : {}) } }
+      : {}),
     ...(update.error !== undefined ? { error: update.error } : {}),
     ...(update.startedAt !== undefined ? { startedAt: update.startedAt } : {}),
     ...(update.endedAt !== undefined ? { endedAt: update.endedAt } : {}),
   };
 }
 
-export function createMarkerRow(init: RowInit & { marker: TimelineMarkerPayload }): ConversationRow {
+export function createMarkerRow(
+  init: RowInit & { marker: TimelineMarkerPayload },
+): ConversationRow {
   return {
     ...rowBaseFields({ ...init, entityId: `marker-${init.rowId}` }),
     kind: "timelineMarker",
@@ -137,7 +154,10 @@ export interface ProjectionView {
   rowAt(rowId: number): ConversationRow | undefined;
 }
 
-export function buildConversationSnapshot(view: ProjectionView, tailWindowRows: number): import("@zcode/shared/zcode-protocol-v4").ConversationSnapshot {
+export function buildConversationSnapshot(
+  view: ProjectionView,
+  tailWindowRows: number,
+): import("@zcode/shared/zcode-protocol-v4").ConversationSnapshot {
   const window = view.rowIds.slice(-tailWindowRows).map((id) => view.rowAt(id)!);
   return {
     protocolVersion: 1,

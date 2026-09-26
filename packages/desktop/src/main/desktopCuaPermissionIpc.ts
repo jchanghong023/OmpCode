@@ -63,7 +63,10 @@ async function resolveFrontmostBundleId(): Promise<string | null> {
   const { stdout: info } = await execFileAsync(
     "/usr/bin/lsappinfo",
     ["info", "-only", "bundleid", asn],
-    { encoding: "utf8", timeout: 2_000 },
+    {
+      encoding: "utf8",
+      timeout: 2_000,
+    },
   );
   return info.match(/"CFBundleIdentifier"="([^"]+)"/)?.[1] ?? null;
 }

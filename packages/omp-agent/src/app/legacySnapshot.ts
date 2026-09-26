@@ -34,7 +34,12 @@ export function buildLegacySnapshot(params: {
       },
       sessionKind: "interactive",
       title: state.meta.title,
-      titleSource: state.meta.titleSource === "custom" ? "custom" : state.meta.titleSource === "generated" ? "generated" : "first_input",
+      titleSource:
+        state.meta.titleSource === "custom"
+          ? "custom"
+          : state.meta.titleSource === "generated"
+            ? "generated"
+            : "first_input",
       mode: "build",
       status: statusOf(state.control.phase),
       createdAt: now,
@@ -47,7 +52,9 @@ export function buildLegacySnapshot(params: {
               current: {
                 providerId: state.config.provider,
                 modelId: state.config.model,
-                ...(state.config.thought ? { options: { reasoningLevel: state.config.thought } } : {}),
+                ...(state.config.thought
+                  ? { options: { reasoningLevel: state.config.thought } }
+                  : {}),
               },
             }
           : {}),
@@ -104,7 +111,11 @@ function legacyMessages(engine: ConversationEngine, limit: number): LegacyMessag
   const messages: LegacyMessage[] = [];
   let assistantParentId = "root";
   for (const row of rows) {
-    const partBase = { partId: `part-${row.rowId}`, sessionId: engine.sessionId, messageId: `msg-${row.rowId}` };
+    const partBase = {
+      partId: `part-${row.rowId}`,
+      sessionId: engine.sessionId,
+      messageId: `msg-${row.rowId}`,
+    };
     if (row.kind === "userInput") {
       assistantParentId = `msg-${row.rowId}`;
       messages.push({
@@ -130,7 +141,9 @@ function legacyMessages(engine: ConversationEngine, limit: number): LegacyMessag
           cost: 0,
           tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
         },
-        parts: [{ ...partBase, type: row.kind === "reasoning" ? "reasoning" : "text", text: row.text }],
+        parts: [
+          { ...partBase, type: row.kind === "reasoning" ? "reasoning" : "text", text: row.text },
+        ],
       });
     } else if (row.kind === "toolCall") {
       const last = messages.at(-1);
@@ -165,7 +178,10 @@ function legacyMessages(engine: ConversationEngine, limit: number): LegacyMessag
 }
 
 function toolStateOf(status: string, input: unknown, output: string): Record<string, unknown> {
-  const jsonInput = (typeof input === "object" && input !== null ? input : {}) as Record<string, unknown>;
+  const jsonInput = (typeof input === "object" && input !== null ? input : {}) as Record<
+    string,
+    unknown
+  >;
   switch (status) {
     case "running":
       return { status: "running", input: jsonInput, startedAt: Date.now() };
@@ -173,8 +189,23 @@ function toolStateOf(status: string, input: unknown, output: string): Record<str
     case "inputStreaming":
       return { status: "pending", input: jsonInput, raw: "" };
     case "error":
-      return { status: "error" as never, input: jsonInput, output, startedAt: Date.now(), completedAt: Date.now(), error: "tool error" };
+      return {
+        status: "error" as never,
+        input: jsonInput,
+        output,
+        startedAt: Date.now(),
+        completedAt: Date.now(),
+        error: "tool error",
+      };
     default:
-      return { status: "completed", input: jsonInput, output, title: "", metadata: {}, startedAt: Date.now(), completedAt: Date.now() };
+      return {
+        status: "completed",
+        input: jsonInput,
+        output,
+        title: "",
+        metadata: {},
+        startedAt: Date.now(),
+        completedAt: Date.now(),
+      };
   }
 }

@@ -40,7 +40,9 @@ const request = (method, params) => {
   child.stdin.write(JSON.stringify({ id, method, params }) + "\n");
   return waitUntil(() => frames.find((f) => f.id === id && ("result" in f || "error" in f)));
 };
-await waitUntil(() => frames.find((f) => f.method === "startup/storageState" && f.params?.phase === "ready"));
+await waitUntil(() =>
+  frames.find((f) => f.method === "startup/storageState" && f.params?.phase === "ready"),
+);
 const sub = await request("v4/conversation/subscribe", {
   topic: "workspace-config/probe-ws",
   connectionId: "probe-conn",
@@ -56,7 +58,14 @@ if (last) {
   const snapshot = payload?.snapshot;
   const opts = snapshot?.config?.configOptions ?? [];
   const modelOption = opts.find((o) => o.id === "model" || o.category === "model");
-  console.log("configOptions count:", opts.length, "model option:", modelOption ? `id=${modelOption.id} currentValue=${modelOption.currentValue} options=${modelOption.options?.length}` : "NONE");
+  console.log(
+    "configOptions count:",
+    opts.length,
+    "model option:",
+    modelOption
+      ? `id=${modelOption.id} currentValue=${modelOption.currentValue} options=${modelOption.options?.length}`
+      : "NONE",
+  );
   if (modelOption?.options?.length) {
     for (const o of modelOption.options.slice(0, 8)) console.log("  ", o.value, "|", o.name);
     console.log("   ...", modelOption.options.length, "total");

@@ -23,9 +23,12 @@ export interface OmpModelCatalog {
 }
 
 /** omp 按由低到高返回 efforts；`off` 只在没有思考档位时才是最高可用值。 */
-export function highestOmpThoughtLevel(entry: OmpModelCatalogEntry | undefined): string | undefined {
-  return entry?.thoughtLevels?.filter((level) => level !== "off").at(-1)
-    ?? entry?.thoughtLevels?.at(-1);
+export function highestOmpThoughtLevel(
+  entry: OmpModelCatalogEntry | undefined,
+): string | undefined {
+  return (
+    entry?.thoughtLevels?.filter((level) => level !== "off").at(-1) ?? entry?.thoughtLevels?.at(-1)
+  );
 }
 
 /** 已有会话的有效模型来自该会话投影；旧核心可能只提供 provider/model/thought。 */
@@ -92,9 +95,7 @@ export function readOmpModelCatalog(
       ? {
           providerId: preferredEntry.providerId,
           modelId: preferredEntry.modelId,
-          ...(preferredThoughtLevel
-            ? { options: { reasoningLevel: preferredThoughtLevel } }
-            : {}),
+          ...(preferredThoughtLevel ? { options: { reasoningLevel: preferredThoughtLevel } } : {}),
         }
       : null,
   };

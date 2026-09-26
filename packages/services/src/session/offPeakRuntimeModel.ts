@@ -246,7 +246,10 @@ export function buildOffPeakPlanIdentityHeaders(
 export function buildOffPeakRequestAuth(params: {
   credentials: OffPeakCredentialSnapshot;
   ticketId: string;
-}): { apiKey: string; headers: Record<string, string> } {
+}): {
+  apiKey: string;
+  headers: Record<string, string>;
+} {
   return {
     // Anthropic 兼容客户端会发送 x-api-key；服务端仍以 Authorization 与计划 Key 裁决。
     apiKey: params.credentials.jwt,

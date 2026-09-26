@@ -7,6 +7,8 @@ export function createRollbackFailure(original: unknown, rollback: unknown): Err
   const rollbackMessage = updateErrorMessage(rollback);
   return new Error(
     `Update failed: ${originalMessage}; rollback pointer restore failed: ${rollbackMessage}`,
-    { cause: rollback },
+    {
+      cause: rollback,
+    },
   );
 }

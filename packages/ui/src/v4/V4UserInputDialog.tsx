@@ -13,7 +13,11 @@ import { useZCodeIntl } from "@/i18n/IntlProvider.js";
 
 interface V4UserInputDialogProps {
   model: V4UserInputViewModel;
-  onSubmit: (answer: { optionId?: string; freeText?: string; action?: "accept" | "decline" }) => void;
+  onSubmit: (answer: {
+    optionId?: string;
+    freeText?: string;
+    action?: "accept" | "decline";
+  }) => void;
 }
 
 /** v4 userInput 交互最小弹窗（竖切）。 */

@@ -660,7 +660,9 @@ export function SettingsPage({
   const [terminalInheritSystemProfile, setTerminalInheritSystemProfile] = useState(true);
   const [terminalFontFamily, setTerminalFontFamily] = useState("");
   const [integratedTerminalShell, setIntegratedTerminalShell] =
-    useState<IntegratedTerminalShellSelection>({ mode: "auto" });
+    useState<IntegratedTerminalShellSelection>({
+      mode: "auto",
+    });
   const [integratedTerminalShellOptions, setIntegratedTerminalShellOptions] = useState<
     IntegratedTerminalShellOption[]
   >([]);
@@ -1777,7 +1779,9 @@ export function SettingsPage({
                             workspacePath={activeWorkspacePath ?? captionWorkspacePath ?? ""}
                             workspaceIdentity={activeWorkspaceIdentity}
                             configuredProfile={sharedSettings?.ompProfile}
-                            onProfileChange={(profile) => updateSharedSettings({ ompProfile: profile })}
+                            onProfileChange={(profile) =>
+                              updateSharedSettings({ ompProfile: profile })
+                            }
                           />
                         ) : activeSection === "memory" ? (
                           <ServiceProvider services={localHostServices}>
@@ -1793,12 +1797,20 @@ export function SettingsPage({
                         ) : activeSection === "plugin" ? (
                           <OmpNativeIntegrationsSection
                             kind="extension"
-                            workspacePath={activeWorkspaceTab?.remoteSessionId ? undefined : (activeWorkspacePath ?? undefined)}
+                            workspacePath={
+                              activeWorkspaceTab?.remoteSessionId
+                                ? undefined
+                                : (activeWorkspacePath ?? undefined)
+                            }
                           />
                         ) : activeSection === "mcp" ? (
                           <OmpNativeIntegrationsSection
                             kind="mcp"
-                            workspacePath={activeWorkspaceTab?.remoteSessionId ? undefined : (activeWorkspacePath ?? undefined)}
+                            workspacePath={
+                              activeWorkspaceTab?.remoteSessionId
+                                ? undefined
+                                : (activeWorkspacePath ?? undefined)
+                            }
                           />
                         ) : activeSection === "skill" ? (
                           <PluginsSection

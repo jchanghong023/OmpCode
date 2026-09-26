@@ -133,7 +133,10 @@ import { WorkspaceHookPendingBanner } from "@/v4/WorkspaceHookPendingBanner.js";
 import { ConversationStatusPanel } from "@/v4/ConversationStatusPanel.js";
 import { SessionSubscriptionErrorPanel } from "@/v4/SessionSubscriptionErrorPanel.js";
 import { ConversationTimeline } from "@/v4/ConversationTimeline.js";
-import { ompAttachmentRejectionDetail, sessionSendRejectionError } from "@/v4/ompAttachmentRejection.js";
+import {
+  ompAttachmentRejectionDetail,
+  sessionSendRejectionError,
+} from "@/v4/ompAttachmentRejection.js";
 import { ConversationShareImportNotice } from "@/v4/ConversationShareImportNotice.js";
 import { ConversationShareConfirmationDock } from "@/v4/ConversationShareConfirmationDock.js";
 import { ConversationShareSuccessDock } from "@/v4/ConversationShareSuccessDock.js";
@@ -1275,7 +1278,10 @@ export function SessionPane({
   }, [draftConfigRef, modelSelectionView?.revision, sessionId, workspaceIdentity, workspacePath]);
   const recommendStartPlan = useStartPlanRecommendation(modelSelectionView);
   // omp 换核：首发/切换的模型身份校验以 omp 目录为准（ZCode 账号目录不参与模型选择）。
-  const ompCatalog = useMemo(() => readOmpModelCatalog(workspaceConfigOptions), [workspaceConfigOptions]);
+  const ompCatalog = useMemo(
+    () => readOmpModelCatalog(workspaceConfigOptions),
+    [workspaceConfigOptions],
+  );
   const createSubmissionFromComposer = useCallback(
     () => createOmpComposerSubmissionConfig(draftConfigRef.current, ompCatalog),
     [draftConfigRef, ompCatalog],
@@ -2506,7 +2512,12 @@ export function SessionPane({
           // 兼容尚未升级的 CLI：旧端仍会返回 activeTurn，不能再次无声清空命令。
           toast(intl.formatMessage({ id: "chat.compact.runningBlocked" }));
         } else if (command.kind !== "compact") {
-          toast(intl.formatMessage({ id: "chat.goal.commandRejected" }, { reason: ack.reasonCode ?? ack.status }));
+          toast(
+            intl.formatMessage(
+              { id: "chat.goal.commandRejected" },
+              { reason: ack.reasonCode ?? ack.status },
+            ),
+          );
         }
       } else if (command.kind === "compact" && compactExpectedToQueue) {
         toast(intl.formatMessage({ id: "chat.compact.queued" }));
@@ -2979,10 +2990,13 @@ export function SessionPane({
         setSendSubmissionError({
           code: runtimeModelUnavailable ? "ZCODE_RUNTIME_MODEL_UNAVAILABLE" : "SEND_FAILED",
           message: attachmentRejection
-            ? intl.formatMessage({ id: "chat.error.ompAttachmentRejected" }, { reason: attachmentRejection })
+            ? intl.formatMessage(
+                { id: "chat.error.ompAttachmentRejected" },
+                { reason: attachmentRejection },
+              )
             : runtimeModelUnavailable
-            ? detail
-            : intl.formatMessage({ id: "chat.error.sendFailed" }),
+              ? detail
+              : intl.formatMessage({ id: "chat.error.sendFailed" }),
           detail,
           ...(sessionId ? { taskId: sessionId } : {}),
         });
@@ -3470,8 +3484,11 @@ export function SessionPane({
           workspaceIdentity,
         );
         store.setConfigOptionsStatus(workspacePath, "ready", workspaceIdentity);
-        if ((store.getWorkspaceState(workspacePath, workspaceIdentity)?.slashCommands.length ?? 0) === 0 &&
-            prepareResult.slashCommands?.length) {
+        if (
+          (store.getWorkspaceState(workspacePath, workspaceIdentity)?.slashCommands.length ?? 0) ===
+            0 &&
+          prepareResult.slashCommands?.length
+        ) {
           store.setSlashCommands(workspacePath, prepareResult.slashCommands, workspaceIdentity);
         }
         logger.info("[v4-pane] configOptions error custom provider recovery done", {
@@ -3522,27 +3539,41 @@ export function SessionPane({
     [dispatchSlashCommand, sessionId],
   );
 
-  const handleSetAutoCompaction = useCallback(async (enabled: boolean) => {
-    const current = snapshotRef.current;
-    if (!sessionId || !current || current.sessionId !== sessionId || current.config.autoCompactionEnabled === undefined) {
-      return { success: false, error: "auto_compaction_unavailable" };
-    }
-    try {
-      let baseRevision = current.revision;
-      for (let attempt = 0; attempt < 3; attempt++) {
-        if (snapshotRef.current?.sessionId !== sessionId) return { success: false, error: "session_changed" };
-        const ack = await dispatchCommand("setAutoCompaction", { enabled }, sessionId, baseRevision);
-        if (ack.status === "accepted") return { success: true };
-        if (ack.status !== "stale") {
-          return { success: false, error: ack.message ?? ack.reasonCode ?? ack.status };
-        }
-        baseRevision = ack.revisionAtDecision;
+  const handleSetAutoCompaction = useCallback(
+    async (enabled: boolean) => {
+      const current = snapshotRef.current;
+      if (
+        !sessionId ||
+        !current ||
+        current.sessionId !== sessionId ||
+        current.config.autoCompactionEnabled === undefined
+      ) {
+        return { success: false, error: "auto_compaction_unavailable" };
       }
-      return { success: false, error: "stale" };
-    } catch (error) {
-      return { success: false, error: error instanceof Error ? error.message : String(error) };
-    }
-  }, [dispatchCommand, sessionId]);
+      try {
+        let baseRevision = current.revision;
+        for (let attempt = 0; attempt < 3; attempt++) {
+          if (snapshotRef.current?.sessionId !== sessionId)
+            return { success: false, error: "session_changed" };
+          const ack = await dispatchCommand(
+            "setAutoCompaction",
+            { enabled },
+            sessionId,
+            baseRevision,
+          );
+          if (ack.status === "accepted") return { success: true };
+          if (ack.status !== "stale") {
+            return { success: false, error: ack.message ?? ack.reasonCode ?? ack.status };
+          }
+          baseRevision = ack.revisionAtDecision;
+        }
+        return { success: false, error: "stale" };
+      } catch (error) {
+        return { success: false, error: error instanceof Error ? error.message : String(error) };
+      }
+    },
+    [dispatchCommand, sessionId],
+  );
 
   // 误停排障需要区分按钮与 Esc；普通 info 在生产禁用，必须走生命周期日志。
   const handleStop = useCallback(
@@ -3969,10 +4000,7 @@ export function SessionPane({
     setDismissedErrorKeys((keys) =>
       keys.includes(controlLastErrorKey) ? keys : [...keys.slice(-19), controlLastErrorKey],
     );
-  }, [
-    controlLastErrorKey,
-    sendSubmissionError,
-  ]);
+  }, [controlLastErrorKey, sendSubmissionError]);
   const handleOpenQuotaUpgrade = useCallback(() => {
     const providerId = quotaBanner.upgradeProviderId;
     if (!providerId || !codingPlanUpgradeDialog) return;
@@ -4397,7 +4425,9 @@ export function SessionPane({
       onTogglePlanModel={togglePlanModel}
       gitSummary={gitSummary}
       gitDirtyFileCount={gitDirtyFileCount}
-      onOpenGitReview={onOpenGitReview ? () => onOpenGitReview(gitWorktreeReviewSourceId ?? undefined) : undefined}
+      onOpenGitReview={
+        onOpenGitReview ? () => onOpenGitReview(gitWorktreeReviewSourceId ?? undefined) : undefined
+      }
       onSetAutoCompaction={handleSetAutoCompaction}
       onSwitchMode={handleSwitchMode}
       onOpenRunningBackgroundWorks={
@@ -4693,8 +4723,11 @@ export function SessionPane({
         ) : null}
 
         {subagents.availability === "unavailable" ? (
-          <div role="status" data-testid="v4-subagent-unavailable"
-            className="mx-4 mt-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-hover)] px-3 py-2 text-ui-base text-foreground-subtle">
+          <div
+            role="status"
+            data-testid="v4-subagent-unavailable"
+            className="mx-4 mt-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-hover)] px-3 py-2 text-ui-base text-foreground-subtle"
+          >
             {intl.formatMessage({ id: "chat.subagents.unavailable" })}
           </div>
         ) : null}

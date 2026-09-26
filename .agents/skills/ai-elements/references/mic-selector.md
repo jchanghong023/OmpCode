@@ -143,13 +143,13 @@ export default function Example() {
 
 #### Return Value
 
-| Prop            | Type                  | Default | Description                                                      |
+| Prop | Type | Default | Description |
 | --------------- | --------------------- | ------- | ---------------------------------------------------------------- | --------------------------------------- |
-| `devices`       | `MediaDeviceInfo[]`   | -       | Array of available audio input devices.                          |
-| `loading`       | `boolean`             | -       | Whether devices are currently being loaded.                      |
-| `error`         | `string               | null`   | -                                                                | Error message if device loading failed. |
-| `hasPermission` | `boolean`             | -       | Whether microphone permission has been granted.                  |
-| `loadDevices`   | `() => Promise<void>` | -       | Function to request microphone permission and load device names. |
+| `devices` | `MediaDeviceInfo[]` | - | Array of available audio input devices. |
+| `loading` | `boolean` | - | Whether devices are currently being loaded. |
+| `error` | `string               | null` | - | Error message if device loading failed. |
+| `hasPermission` | `boolean` | - | Whether microphone permission has been granted. |
+| `loadDevices` | `() => Promise<void>` | - | Function to request microphone permission and load device names. |
 
 ## Behavior
 

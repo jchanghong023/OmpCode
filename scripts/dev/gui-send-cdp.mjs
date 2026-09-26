@@ -7,7 +7,9 @@ const STEP_TIMEOUT_MS = 20000;
 function withTimeout(promise, label) {
   return Promise.race([
     promise,
-    new Promise((_, reject) => setTimeout(() => reject(new Error(`timeout: ${label}`)), STEP_TIMEOUT_MS)),
+    new Promise((_, reject) =>
+      setTimeout(() => reject(new Error(`timeout: ${label}`)), STEP_TIMEOUT_MS),
+    ),
   ]);
 }
 
@@ -35,14 +37,17 @@ async function main() {
     withTimeout(
       new Promise((resolve, reject) => {
         const id = ++seq;
-        pending.set(id, (m) => (m.error ? reject(new Error(`${method}: ${JSON.stringify(m.error)}`)) : resolve(m.result)));
+        pending.set(id, (m) =>
+          m.error ? reject(new Error(`${method}: ${JSON.stringify(m.error)}`)) : resolve(m.result),
+        );
         ws.send(JSON.stringify({ id, method, params }));
       }),
       method,
     );
   const evaluate = async (expression) => {
     const result = await call("Runtime.evaluate", { expression, returnByValue: true });
-    if (result.exceptionDetails) throw new Error(JSON.stringify(result.exceptionDetails).slice(0, 400));
+    if (result.exceptionDetails)
+      throw new Error(JSON.stringify(result.exceptionDetails).slice(0, 400));
     return result.result.value;
   };
   const screenshot = async (path) => {
@@ -59,12 +64,25 @@ async function main() {
     return { x: r.x + r.width / 2, y: r.y + Math.min(40, r.height / 2) };
   })()`);
   if (!rect) throw new Error("composer textarea not found");
-  await call("Input.dispatchMouseEvent", { type: "mousePressed", x: rect.x, y: rect.y, button: "left", clickCount: 1 });
-  await call("Input.dispatchMouseEvent", { type: "mouseReleased", x: rect.x, y: rect.y, button: "left", clickCount: 1 });
+  await call("Input.dispatchMouseEvent", {
+    type: "mousePressed",
+    x: rect.x,
+    y: rect.y,
+    button: "left",
+    clickCount: 1,
+  });
+  await call("Input.dispatchMouseEvent", {
+    type: "mouseReleased",
+    x: rect.x,
+    y: rect.y,
+    button: "left",
+    clickCount: 1,
+  });
   await new Promise((sleep) => setTimeout(sleep, 300));
 
   // 2. 输入提示词（insertText 走 IME 通道，React 受控组件可收到）
-  const prompt = "请用 write 工具创建文件 hello-gui.txt，内容写：GUI e2e via omp core。完成后简短说明。";
+  const prompt =
+    "请用 write 工具创建文件 hello-gui.txt，内容写：GUI e2e via omp core。完成后简短说明。";
   await call("Input.insertText", { text: prompt });
   await new Promise((sleep) => setTimeout(sleep, 500));
 

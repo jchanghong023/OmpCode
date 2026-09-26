@@ -253,8 +253,14 @@ interface WorkspaceIngestState {
   configLogEpoch: string | null;
   configSeq: number;
   /** 当前 workspace-config 已接受投影，供晚于初帧挂载的 UI 监听者同步读取。 */
-  latestConfigEvent: Extract<ZCodeWorkspaceEvent, { type: "workspace_config_options_update" }> | null;
-  latestSlashCommandsEvent: Extract<ZCodeWorkspaceEvent, { type: "workspace_slash_commands_update" }> | null;
+  latestConfigEvent: Extract<
+    ZCodeWorkspaceEvent,
+    { type: "workspace_config_options_update" }
+  > | null;
+  latestSlashCommandsEvent: Extract<
+    ZCodeWorkspaceEvent,
+    { type: "workspace_slash_commands_update" }
+  > | null;
   /** ACK 只证明 admission；首个 logical frame 原子 apply 后才允许把 epoch/seq 当 resume base。 */
   indexHasAppliedBase: boolean;
   configHasAppliedBase: boolean;
@@ -1068,13 +1074,15 @@ export function createZCodeTaskIndexSyncer(
         state.summaries = nextSummaries;
         state.seeded = true;
         void seedMissingRowsFromInitialSnapshot(state, nextSummaries.values());
-        void tombstoneRowsAbsentFromOmpSnapshot(state, new Set(nextSummaries.keys())).catch((error) => {
-          logger.warn(
-            undefined,
-            `omp 会话对账失败 workspace=${resolveWorkspaceKey(state.target)}`,
-            error,
-          );
-        });
+        void tombstoneRowsAbsentFromOmpSnapshot(state, new Set(nextSummaries.keys())).catch(
+          (error) => {
+            logger.warn(
+              undefined,
+              `omp 会话对账失败 workspace=${resolveWorkspaceKey(state.target)}`,
+              error,
+            );
+          },
+        );
         const generation = state.indexSubscriptionGeneration;
         void repairSubagentTaskIndex({
           target: state.target,
@@ -1129,9 +1137,11 @@ export function createZCodeTaskIndexSyncer(
           // SessionRegistry 先发临时 ID 终态，再连续发 removed/upserted UUID。
           // SQLite 是唯一产品壳状态所有者；迁移后列表只广播同一个稳定任务。
           taskIdAliases.set(aliasKey(state.target, fromTaskId), delta.session.sessionId);
-          void taskIndexRepo.rekeyTaskId({ ...state.target, fromTaskId, toTaskId: delta.session.sessionId })
+          void taskIndexRepo
+            .rekeyTaskId({ ...state.target, fromTaskId, toTaskId: delta.session.sessionId })
             .then((meta) => {
-              if (meta && isLiveState(state)) emitWorkspaceTaskListChanged(state.target, undefined, "task_meta_changed");
+              if (meta && isLiveState(state))
+                emitWorkspaceTaskListChanged(state.target, undefined, "task_meta_changed");
             })
             .catch((error) => logger.warn(undefined, `omp 任务身份迁移失败 ${fromTaskId}`, error));
         }
@@ -1146,8 +1156,12 @@ export function createZCodeTaskIndexSyncer(
       // session.removed：会话删除的 sqlite 收口走 task 删除操作（adapter deleteTask /
       // v4 deleteSession 命令的 host 侧收尾），这里只维护基线。
       const removedSummary = state.summaries.get(delta.sessionId);
-      state.pendingRekeyFrom = delta.sessionId.startsWith("omp-session-") && removedSummary && isTerminalPhase(removedSummary.phase)
-        ? delta.sessionId : null;
+      state.pendingRekeyFrom =
+        delta.sessionId.startsWith("omp-session-") &&
+        removedSummary &&
+        isTerminalPhase(removedSummary.phase)
+          ? delta.sessionId
+          : null;
       state.summaries.delete(delta.sessionId);
     }
     state.indexSeq = frame.toSeq;
@@ -1855,7 +1869,8 @@ export function createZCodeTaskIndexSyncer(
         const disposable = event(listener);
         // 首个 snapshot 可能先于 Renderer 监听注册。同步回放当前投影，
         // 订阅后无 await，因此不会与下一次 live fire 交错成倒序。
-        const workspaceKey = typeof workspace === "string" ? workspace : resolveWorkspaceKey(workspace);
+        const workspaceKey =
+          typeof workspace === "string" ? workspace : resolveWorkspaceKey(workspace);
         const cached = workspaceIngests.get(workspaceKey)?.latestConfigEvent;
         if (cached) listener(cached);
         const cachedSlash = workspaceIngests.get(workspaceKey)?.latestSlashCommandsEvent;

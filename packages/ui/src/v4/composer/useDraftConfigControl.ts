@@ -154,7 +154,9 @@ export function useDraftConfigControl(params: {
   let draft = currentState.draft;
   // omp 换核：模型选择事实源 = workspace-config 的 omp 目录；ZCode 账号目录不再参与草稿。
   const configOptions = useZCodeSessionStore(
-    useShallow((state) => selectWorkspaceZCodeState(state, workspacePath, workspaceIdentity).configOptions),
+    useShallow(
+      (state) => selectWorkspaceZCodeState(state, workspacePath, workspaceIdentity).configOptions,
+    ),
   );
   const ompCatalog = useMemo(() => readOmpModelCatalog(configOptions), [configOptions]);
   // 账号级 ModelSelectionView 仅服务 readiness 门禁与 custom provider 恢复面；
@@ -247,7 +249,10 @@ export function useDraftConfigControl(params: {
     [scopeKey, workspacePath, workspaceIdentity, scopeId],
   );
   const updateDraftConfig = useCallback(
-    (update: (current: Partial<SessionConfigState>) => Partial<SessionConfigState>, clearPlanModelToggle = false) => {
+    (
+      update: (current: Partial<SessionConfigState>) => Partial<SessionConfigState>,
+      clearPlanModelToggle = false,
+    ) => {
       const next = update(draftConfigRef.current);
       const mode = submissionModeSchema.safeParse(next.mode);
       updateComposerDraft((current) => ({
@@ -392,7 +397,8 @@ export function useDraftConfigControl(params: {
           return;
         }
         const mergedOptions = mergeOmpWorkspaceConfigOptions(
-          latestBeforeWrite.getWorkspaceState(workspacePath, workspaceIdentity)?.configOptions ?? [],
+          latestBeforeWrite.getWorkspaceState(workspacePath, workspaceIdentity)?.configOptions ??
+            [],
           baseOptions,
         );
         logger.debug("[v4-workspace-catalog] hydration done", {
@@ -408,8 +414,11 @@ export function useDraftConfigControl(params: {
         const latest = useZCodeSessionStore.getState();
         latest.setConfigOptions(workspacePath, mergedOptions, workspaceIdentity);
         latest.setConfigOptionsStatus(workspacePath, "ready", workspaceIdentity);
-        if ((latest.getWorkspaceState(workspacePath, workspaceIdentity)?.slashCommands.length ?? 0) === 0 &&
-            prepareResult.slashCommands?.length) {
+        if (
+          (latest.getWorkspaceState(workspacePath, workspaceIdentity)?.slashCommands.length ??
+            0) === 0 &&
+          prepareResult.slashCommands?.length
+        ) {
           latest.setSlashCommands(workspacePath, prepareResult.slashCommands, workspaceIdentity);
         }
       })
@@ -437,7 +446,11 @@ export function useDraftConfigControl(params: {
       const modelId = modelProvider ? `${modelProvider}/${model}` : model;
       const parsedSelection = parseModelPickerValue(modelId);
       // omp 目录：切模型时使用目标模型支持的最高思考档；之后单独选档仍由草稿保留。
-      const entry = findOmpCatalogEntry(ompCatalog, parsedSelection.providerId, parsedSelection.modelId);
+      const entry = findOmpCatalogEntry(
+        ompCatalog,
+        parsedSelection.providerId,
+        parsedSelection.modelId,
+      );
       const highestThoughtLevel = highestOmpThoughtLevel(entry);
       const modelSelection =
         highestThoughtLevel !== undefined

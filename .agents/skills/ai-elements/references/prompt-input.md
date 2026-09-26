@@ -299,10 +299,10 @@ See `scripts/prompt-input-tooltip.tsx` for this example.
 
 ### `<PromptInputButton />`
 
-| Prop       | Type                                  | Default                                           | Description                                                              |
+| Prop | Type | Default | Description |
 | ---------- | ------------------------------------- | ------------------------------------------------- | ------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------- |
-| `tooltip`  | `string                               | { content: ReactNode; shortcut?: string; side?: ` | -                                                                        | Optional tooltip to display on hover. Can be a string or an object with content, shortcut, and side properties. |
-| `...props` | `React.ComponentProps<typeof Button>` | -                                                 | Any other props are spread to the underlying shadcn/ui Button component. |
+| `tooltip` | `string                               | { content: ReactNode; shortcut?: string; side?: ` | - | Optional tooltip to display on hover. Can be a string or an object with content, shortcut, and side properties. |
+| `...props` | `React.ComponentProps<typeof Button>` | - | Any other props are spread to the underlying shadcn/ui Button component. |
 
 #### Tooltip Examples
 

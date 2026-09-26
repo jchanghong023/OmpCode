@@ -86,7 +86,11 @@ export class OmpEventProjector {
         this.handleAssistantMessageEvent(event.assistantMessageEvent);
         return;
       case "tool_execution_start":
-        this.tools.set(event.toolCallId, { toolCallId: event.toolCallId, inputJsonText: "", status: "running" });
+        this.tools.set(event.toolCallId, {
+          toolCallId: event.toolCallId,
+          inputJsonText: "",
+          status: "running",
+        });
         this.projection.upsertToolCall({
           toolCallId: event.toolCallId,
           toolName: event.toolName,
@@ -115,7 +119,9 @@ export class OmpEventProjector {
           toolName: event.toolName,
           status: event.isError ? "error" : "success",
           outputText: text,
-          error: event.isError ? { code: "tool_error", message: firstLine(text) || "tool execution failed" } : undefined,
+          error: event.isError
+            ? { code: "tool_error", message: firstLine(text) || "tool execution failed" }
+            : undefined,
           endedAt: Date.now(),
           resultDetails: event.result?.details,
         });
@@ -142,7 +148,9 @@ export class OmpEventProjector {
         return;
       }
       case "thinking_level_changed":
-        this.projection.setModelConfig(event.thinkingLevel !== undefined ? { thought: event.thinkingLevel } : {});
+        this.projection.setModelConfig(
+          event.thinkingLevel !== undefined ? { thought: event.thinkingLevel } : {},
+        );
         return;
       case "auto_compaction_start":
         this.projection.addTimelineMarker({ type: "compact", origin: "auto", status: "running" });
@@ -152,7 +160,10 @@ export class OmpEventProjector {
         return;
       case "notice":
         if (event.level === "error") {
-          this.projection.recordTurnError({ code: "provider", message: event.message ?? "provider error" });
+          this.projection.recordTurnError({
+            code: "provider",
+            message: event.message ?? "provider error",
+          });
         }
         return;
       default:
@@ -200,7 +211,11 @@ export class OmpEventProjector {
 }
 
 /** omp 把供应商失败记在 assistant 消息上（stopReason=error + errorStatus/errorMessage）。 */
-function assistantErrorOf(message: { stopReason?: string; errorStatus?: number; errorMessage?: string }): { code: string; message: string } | null {
+function assistantErrorOf(message: {
+  stopReason?: string;
+  errorStatus?: number;
+  errorMessage?: string;
+}): { code: string; message: string } | null {
   if (message.stopReason !== "error") {
     return null;
   }
@@ -210,7 +225,18 @@ function assistantErrorOf(message: { stopReason?: string; errorStatus?: number; 
   };
 }
 
-function usageOf(usage: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number; inputTokens?: number; outputTokens?: number } | undefined) {
+function usageOf(
+  usage:
+    | {
+        input?: number;
+        output?: number;
+        cacheRead?: number;
+        cacheWrite?: number;
+        inputTokens?: number;
+        outputTokens?: number;
+      }
+    | undefined,
+) {
   if (!usage) {
     return {};
   }

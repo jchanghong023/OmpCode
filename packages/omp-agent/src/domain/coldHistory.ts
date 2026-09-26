@@ -23,7 +23,9 @@ interface ColdSubagent {
 }
 
 function object(value: unknown): Record<string, unknown> | null {
-  return typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : null;
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
 }
 
 function coldSubagents(entries: readonly unknown[]): Map<string, ColdSubagent> {
@@ -39,11 +41,20 @@ function coldSubagents(entries: readonly unknown[]): Map<string, ColdSubagent> {
         agents.set(progress.id, {
           id: progress.id,
           agent: typeof progress.agent === "string" ? progress.agent : "task",
-          summary: (typeof progress.description === "string" ? progress.description :
-            typeof progress.assignment === "string" ? progress.assignment :
-            typeof progress.task === "string" ? progress.task : progress.id).replace(/\s+/g, " ").slice(0, 180),
-          status: "running", parentToolCallId: message.toolCallId,
-          startedAt: typeof message.timestamp === "number" ? Math.trunc(message.timestamp) : Date.now(),
+          summary: (typeof progress.description === "string"
+            ? progress.description
+            : typeof progress.assignment === "string"
+              ? progress.assignment
+              : typeof progress.task === "string"
+                ? progress.task
+                : progress.id
+          )
+            .replace(/\s+/g, " ")
+            .slice(0, 180),
+          status: "running",
+          parentToolCallId: message.toolCallId,
+          startedAt:
+            typeof message.timestamp === "number" ? Math.trunc(message.timestamp) : Date.now(),
         });
       }
     }
@@ -53,8 +64,17 @@ function coldSubagents(entries: readonly unknown[]): Map<string, ColdSubagent> {
         if (!job || typeof job.id !== "string") continue;
         const prior = agents.get(job.id);
         if (!prior) continue;
-        prior.status = job.status === "completed" ? "success" : job.status === "failed" ? "failed" : job.status === "aborted" ? "cancelled" : "running";
-        if (prior.status !== "running") prior.endedAt = typeof message.timestamp === "number" ? Math.trunc(message.timestamp) : Date.now();
+        prior.status =
+          job.status === "completed"
+            ? "success"
+            : job.status === "failed"
+              ? "failed"
+              : job.status === "aborted"
+                ? "cancelled"
+                : "running";
+        if (prior.status !== "running")
+          prior.endedAt =
+            typeof message.timestamp === "number" ? Math.trunc(message.timestamp) : Date.now();
         if (typeof job.resultText === "string") prior.resultText = job.resultText;
       }
     }
@@ -82,7 +102,10 @@ export function transcriptFromOmpEntries(entries: readonly unknown[]): string {
   return parts.join("\n\n").slice(0, 20_000);
 }
 
-export function rowsFromOmpEntries(entries: unknown[], subagentTranscripts: ReadonlyMap<string, string> = new Map()): ConversationRow[] {
+export function rowsFromOmpEntries(
+  entries: unknown[],
+  subagentTranscripts: ReadonlyMap<string, string> = new Map(),
+): ConversationRow[] {
   const rows: ConversationRow[] = [];
   const agents = coldSubagents(entries);
   const context: ColdContext = { sessionId: "cold", nextRowId: 1, createdAtSeq: 1, turnCounter: 0 };
@@ -92,10 +115,21 @@ export function rowsFromOmpEntries(entries: unknown[], subagentTranscripts: Read
       continue;
     }
     const record = entry as Record<string, unknown>;
-    if (record.type === "message" && typeof record.message === "object" && record.message !== null) {
+    if (
+      record.type === "message" &&
+      typeof record.message === "object" &&
+      record.message !== null
+    ) {
       const message = record.message as {
         role?: string;
-        content?: { type?: string; text?: string; thinking?: string; id?: string; name?: string; arguments?: unknown }[];
+        content?: {
+          type?: string;
+          text?: string;
+          thinking?: string;
+          id?: string;
+          name?: string;
+          arguments?: unknown;
+        }[];
         timestamp?: number;
         toolCallId?: string;
         toolName?: string;
@@ -110,15 +144,39 @@ export function rowsFromOmpEntries(entries: unknown[], subagentTranscripts: Read
           .filter((block) => block.type === "text")
           .map((block) => block.text ?? "")
           .join("\n");
-        rows.push(makeRow(context, currentTurnId, "userInput", { kind: "userInput", text, origin: "realUser" }, timestamp));
+        rows.push(
+          makeRow(
+            context,
+            currentTurnId,
+            "userInput",
+            { kind: "userInput", text, origin: "realUser" },
+            timestamp,
+          ),
+        );
         continue;
       }
       if (message.role === "assistant") {
         for (const block of message.content ?? []) {
           if (block.type === "thinking" && block.thinking) {
-            rows.push(makeRow(context, currentTurnId, "reasoning", { kind: "reasoning", text: block.thinking, state: "complete" }, timestamp));
+            rows.push(
+              makeRow(
+                context,
+                currentTurnId,
+                "reasoning",
+                { kind: "reasoning", text: block.thinking, state: "complete" },
+                timestamp,
+              ),
+            );
           } else if (block.type === "text" && block.text) {
-            rows.push(makeRow(context, currentTurnId, "assistantText", { kind: "assistantText", text: block.text, state: "complete" }, timestamp));
+            rows.push(
+              makeRow(
+                context,
+                currentTurnId,
+                "assistantText",
+                { kind: "assistantText", text: block.text, state: "complete" },
+                timestamp,
+              ),
+            );
           } else if (block.type === "toolCall" && typeof block.id === "string") {
             rows.push(
               makeRow(
@@ -146,7 +204,8 @@ export function rowsFromOmpEntries(entries: unknown[], subagentTranscripts: Read
           .map((block) => block.text ?? "")
           .join("\n");
         const existing = rows.find(
-          (row): row is Extract<ConversationRow, { kind: "toolCall" }> => row.kind === "toolCall" && row.toolCallId === message.toolCallId,
+          (row): row is Extract<ConversationRow, { kind: "toolCall" }> =>
+            row.kind === "toolCall" && row.toolCallId === message.toolCallId,
         );
         if (existing) {
           existing.status = message.isError === true ? "error" : "success";
@@ -157,12 +216,26 @@ export function rowsFromOmpEntries(entries: unknown[], subagentTranscripts: Read
         if (message.toolName === "task") {
           for (const agent of agents.values()) {
             if (agent.parentToolCallId !== message.toolCallId) continue;
-            rows.push(makeRow(context, currentTurnId, `omp-subagent:${agent.id}`, {
-              kind: "subagent", parentToolCallId: agent.parentToolCallId,
-              subagentType: agent.agent, status: agent.status, summaryText: agent.summary,
-              ...(subagentTranscripts.get(agent.id) || agent.resultText ? { transcriptText: subagentTranscripts.get(agent.id) || agent.resultText } : {}),
-              startedAt: agent.startedAt, ...(agent.endedAt ? { endedAt: agent.endedAt } : {}),
-            }, timestamp));
+            rows.push(
+              makeRow(
+                context,
+                currentTurnId,
+                `omp-subagent:${agent.id}`,
+                {
+                  kind: "subagent",
+                  parentToolCallId: agent.parentToolCallId,
+                  subagentType: agent.agent,
+                  status: agent.status,
+                  summaryText: agent.summary,
+                  ...(subagentTranscripts.get(agent.id) || agent.resultText
+                    ? { transcriptText: subagentTranscripts.get(agent.id) || agent.resultText }
+                    : {}),
+                  startedAt: agent.startedAt,
+                  ...(agent.endedAt ? { endedAt: agent.endedAt } : {}),
+                },
+                timestamp,
+              ),
+            );
           }
         }
         continue;
@@ -181,7 +254,13 @@ function makeRow(
 ): ConversationRow {
   const rowId = context.nextRowId++;
   const productTurnId = turnId;
-  const base = rowBaseFields({ rowId, turnId, entityId, productTurnId, createdAtSeq: context.createdAtSeq++ });
+  const base = rowBaseFields({
+    rowId,
+    turnId,
+    entityId,
+    productTurnId,
+    createdAtSeq: context.createdAtSeq++,
+  });
   // createdAt 使用条目时间戳（冷历史的时间线真实性优先于构造时刻）。
   return { ...base, createdAt, ...(fields as object) } as ConversationRow;
 }
@@ -209,7 +288,11 @@ export function titleFromOmpEntries(entries: unknown[]): string | null {
       continue;
     }
     const record = entry as Record<string, unknown>;
-    if (record.type === "title_change" && typeof record.title === "string" && record.title.length > 0) {
+    if (
+      record.type === "title_change" &&
+      typeof record.title === "string" &&
+      record.title.length > 0
+    ) {
       return record.title;
     }
     if (
@@ -219,7 +302,8 @@ export function titleFromOmpEntries(entries: unknown[]): string | null {
       record.message !== null &&
       (record.message as { role?: string }).role === "user"
     ) {
-      const content = (record.message as { content?: { type?: string; text?: string }[] }).content ?? [];
+      const content =
+        (record.message as { content?: { type?: string; text?: string }[] }).content ?? [];
       const text = content
         .filter((block) => block.type === "text")
         .map((block) => block.text ?? "")

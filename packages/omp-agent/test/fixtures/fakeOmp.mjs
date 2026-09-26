@@ -13,13 +13,7 @@ const nextId = () => `fake-${++counter}`;
 let sessionFile = null;
 const deniedTools = new Set();
 
-out({
-  type: "ready",
-  protocolVersion: 1,
-  supportedProtocolVersions: [1, 2],
-  maxFrameBytes: 1048576,
-  maxReassembledFrameBytes: 67108864,
-});
+out({ type: "ready", protocolVersion: 1, supportedProtocolVersions: [1, 2], maxFrameBytes: 1048576, maxReassembledFrameBytes: 67108864 });
 
 function respond(id, command, success, data) {
   out({ ...(id ? { id } : {}), type: "response", command, success, ...(data !== undefined ? { data } : {}) });
@@ -71,7 +65,17 @@ async function runPromptTurn(message, promptId) {
     subagents = [agent];
     if (subagentSubscription !== "off") {
       out({ type: "subagent_lifecycle", payload: { ...agent, status: "started" } });
-      out({ type: "subagent_progress", payload: { index: 0, agent: "scout", agentSource: "bundled", task: "Inspect project", parentToolCallId: "task-parent", progress: { id: agent.id, status: "running", recentOutput: ["reading files"] } } });
+      out({
+        type: "subagent_progress",
+        payload: {
+          index: 0,
+          agent: "scout",
+          agentSource: "bundled",
+          task: "Inspect project",
+          parentToolCallId: "task-parent",
+          progress: { id: agent.id, status: "running", recentOutput: ["reading files"] },
+        },
+      });
     }
     await new Promise((resolve) => setTimeout(resolve, 30));
     subagents = [{ ...agent, status: "completed", lastUpdate: Date.now() }];
@@ -85,10 +89,7 @@ async function runPromptTurn(message, promptId) {
   }
   if (message === "/failmodel") {
     out({ type: "message_start", message: { role: "assistant", content: [] } });
-    out({
-      type: "message_end",
-      message: { role: "assistant", content: [], stopReason: "error", errorStatus: 401, errorMessage: "401 Model not supported" },
-    });
+    out({ type: "message_end", message: { role: "assistant", content: [], stopReason: "error", errorStatus: 401, errorMessage: "401 Model not supported" } });
     out({ type: "agent_end", messages: [], isTerminal: true });
     out({ type: "prompt_result", id: promptId, agentInvoked: true });
     return;
@@ -112,50 +113,26 @@ async function runPromptTurn(message, promptId) {
   }
   out({ type: "message_start", message: { role: "assistant", content: [] } });
   for (const delta of ["Hello", " wor", "ld!"]) {
-    out({
-      type: "message_update",
-      message: { role: "assistant", content: [] },
-      assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta, partial: { role: "assistant", content: [] } },
-    });
+    out({ type: "message_update", message: { role: "assistant", content: [] }, assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta, partial: { role: "assistant", content: [] } } });
   }
   const toolCallId = `toolu-${nextId()}`;
   if (!sessionFile) {
     sessionFile = `${process.cwd()}/.fake-omp-sessions/session-1.jsonl`;
   }
-  out({
-    type: "tool_execution_start",
-    toolCallId,
-    toolName: "write",
-    args: { path: "greeting.txt", content: "line1\nline2\n" },
-  });
+  out({ type: "tool_execution_start", toolCallId, toolName: "write", args: { path: "greeting.txt", content: "line1\nline2\n" } });
   const approved = await requestApproval(toolCallId);
   if (approved) {
-    out({
-      type: "tool_execution_end",
-      toolCallId,
-      toolName: "write",
-      result: { content: [{ type: "text", text: "wrote 2 lines" }] },
-      isError: false,
-    });
+    out({ type: "tool_execution_end", toolCallId, toolName: "write", result: { content: [{ type: "text", text: "wrote 2 lines" }] }, isError: false });
     out({
       type: "message_update",
       message: { role: "assistant", content: [] },
       assistantMessageEvent: { type: "text_delta", contentIndex: 1, delta: " Done.", partial: { role: "assistant", content: [] } },
     });
   } else {
-    out({
-      type: "tool_execution_end",
-      toolCallId,
-      toolName: "write",
-      result: { content: [{ type: "text", text: "denied by user" }] },
-      isError: true,
-    });
+    out({ type: "tool_execution_end", toolCallId, toolName: "write", result: { content: [{ type: "text", text: "denied by user" }] }, isError: true });
     deniedTools.add(toolCallId);
   }
-  out({
-    type: "message_end",
-    message: { role: "assistant", content: [{ type: "text", text: "Hello world! Done." }], usage: { input: 120, output: 30 } },
-  });
+  out({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "Hello world! Done." }], usage: { input: 120, output: 30 } } });
   out({ type: "agent_end", messages: [], isTerminal: true });
 }
 
@@ -163,14 +140,7 @@ function requestApproval(toolCallId) {
   return new Promise((resolve) => {
     const id = nextId();
     pendingUi.set(id, resolve);
-    out({
-      type: "extension_ui_request",
-      id,
-      method: "select",
-      title: "Tool approval",
-      message: `Approve write to greeting.txt? (toolCallId=${toolCallId})`,
-      options: ["Approve", "Deny"],
-    });
+    out({ type: "extension_ui_request", id, method: "select", title: "Tool approval", message: `Approve write to greeting.txt? (toolCallId=${toolCallId})`, options: ["Approve", "Deny"] });
   });
 }
 
@@ -220,7 +190,14 @@ readline.on("line", (line) => {
       respond(command.id, "get_subagents", true, { subagents });
       return;
     case "get_subagent_messages":
-      respond(command.id, "get_subagent_messages", true, { sessionFile: "fake-child.jsonl", fromByte: 0, nextByte: 1, reset: false, entries: [], messages: [{ role: "assistant", content: [{ type: "text", text: "Read README and reported findings." }] }] });
+      respond(command.id, "get_subagent_messages", true, {
+        sessionFile: "fake-child.jsonl",
+        fromByte: 0,
+        nextByte: 1,
+        reset: false,
+        entries: [],
+        messages: [{ role: "assistant", content: [{ type: "text", text: "Read README and reported findings." }] }],
+      });
       return;
     case "get_available_models":
       respond(command.id, "get_available_models", true, {
@@ -240,16 +217,16 @@ readline.on("line", (line) => {
       return;
     case "prompt": {
       if (command.message === "/context") {
-        out({ type: "command_output", text: "Context window: 200000 tokens (0% used)\n  System prompt [░░░░] 0%  200 tokens\n  Messages [░░░░] 0%  312 tokens\n  Free [████] 84%  169488 tokens\n  Auto-compact buf [████] 15%  30000 tokens" });
+        out({
+          type: "command_output",
+          text: "Context window: 200000 tokens (0% used)\n  System prompt [░░░░] 0%  200 tokens\n  Messages [░░░░] 0%  312 tokens\n  Free [████] 84%  169488 tokens\n  Auto-compact buf [████] 15%  30000 tokens",
+        });
         respond(command.id, "prompt", true, { agentInvoked: false });
         return;
       }
       if (command.message.startsWith("/image-report ")) {
         const label = command.message.slice("/image-report ".length);
-        out({
-          type: "command_output",
-          text: `IMAGE_REPORT:${label}:${JSON.stringify({ hasImages: Object.hasOwn(command, "images"), images: command.images ?? [] })}`,
-        });
+        out({ type: "command_output", text: `IMAGE_REPORT:${label}:${JSON.stringify({ hasImages: Object.hasOwn(command, "images"), images: command.images ?? [] })}` });
         respond(command.id, "prompt", true, { agentInvoked: false });
         return;
       }
@@ -293,10 +270,7 @@ readline.on("line", (line) => {
           message: { role: "assistant", content: [] },
           assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: steeredText, partial: { role: "assistant", content: [] } },
         });
-        out({
-          type: "message_end",
-          message: { role: "assistant", content: [{ type: "text", text: steeredText }] },
-        });
+        out({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: steeredText }] } });
         out({ type: "agent_end", messages: [], isTerminal: true });
       }
       return;
@@ -305,7 +279,9 @@ readline.on("line", (line) => {
         respond(command.id, "follow_up", true, {});
         holding = false;
         out({ type: "agent_end", messages: [], isTerminal: true });
-        setTimeout(() => { void runPromptTurn(`FOLLOWEDUP:${command.message}${command.images?.length ? `|IMAGES:${JSON.stringify(command.images)}` : ""}`); }, 10);
+        setTimeout(() => {
+          void runPromptTurn(`FOLLOWEDUP:${command.message}${command.images?.length ? `|IMAGES:${JSON.stringify(command.images)}` : ""}`);
+        }, 10);
         return;
       }
       respond(command.id, "follow_up", true, { agentInvoked: true });

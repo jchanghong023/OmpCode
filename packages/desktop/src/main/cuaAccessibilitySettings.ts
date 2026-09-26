@@ -370,9 +370,7 @@ class CuaPermissionOnboardingCoordinator {
       canceled: true,
       sessionId: session.sessionId,
       returnedFromSettings: false,
-      error: `permission onboarding canceled: ${messageOf(
-        reason ?? new Error("origin window closed"),
-      )}`,
+      error: `permission onboarding canceled: ${messageOf(reason ?? new Error("origin window closed"))}`,
     };
   }
 

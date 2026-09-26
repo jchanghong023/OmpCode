@@ -349,7 +349,9 @@ async function stageRemoteAgentBundles() {
     );
     const [targetOs, targetArch] = platformKey.split("-");
     if (targetOs === "darwin") {
-      console.log(`  [warn] omp releases 无 darwin 资产，glm/${platformKey} 不内嵌 omp 二进制（运行时显式报错）`);
+      console.log(
+        `  [warn] omp releases 无 darwin 资产，glm/${platformKey} 不内嵌 omp 二进制（运行时显式报错）`,
+      );
     } else {
       runCommand(
         process.execPath,
@@ -370,7 +372,14 @@ async function stageRemoteAgentBundles() {
       const targetOmpDir = join(glmDir, "omp");
       mkdirSync(targetOmpDir, { recursive: true });
       copyFileSync(stagedOmp, join(targetOmpDir, targetOs === "win32" ? "omp.exe" : "omp"));
-      const stagedManifest = join(rootDir, "packages/desktop/bundled-agents", platformKey, "glm", "omp", "omp-release.json");
+      const stagedManifest = join(
+        rootDir,
+        "packages/desktop/bundled-agents",
+        platformKey,
+        "glm",
+        "omp",
+        "omp-release.json",
+      );
       if (existsSync(stagedManifest)) {
         copyFileSync(stagedManifest, join(targetOmpDir, "omp-release.json"));
       }

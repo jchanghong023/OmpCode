@@ -38,7 +38,10 @@ export function UpdateStatusButton({
     >(),
   );
   const { expandWidthClass, hideIconClass, revealTextClass } = resolveUpdateButtonResponsiveClasses(
-    { isMacDesktop, isWindowsDesktop },
+    {
+      isMacDesktop,
+      isWindowsDesktop,
+    },
   );
   const updateStatusViewModel = deriveUpdateStatusViewModel({
     legacyReadyVersion: version,

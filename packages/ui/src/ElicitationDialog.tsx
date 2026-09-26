@@ -227,7 +227,10 @@ function normalizeInitialQuestionIndex(
   return Math.max(0, Math.min(index, questions.length - 1));
 }
 
-function getQuestionOptionCount(question: NormalizedElicitationQuestion | undefined, allowCustomInput: boolean) {
+function getQuestionOptionCount(
+  question: NormalizedElicitationQuestion | undefined,
+  allowCustomInput: boolean,
+) {
   if (!question) {
     return 0;
   }

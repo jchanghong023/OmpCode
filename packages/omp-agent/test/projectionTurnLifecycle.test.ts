@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { ConversationProjection } from "../src/domain/conversationProjection.js";
-import { applyConversationDelta, applyConversationDeltas } from "../../shared/src/zcode-protocol-v4/apply.js";
+import {
+  applyConversationDelta,
+  applyConversationDeltas,
+} from "../../shared/src/zcode-protocol-v4/apply.js";
 import type { ConversationDelta } from "@zcode/shared/zcode-protocol-v4";
 import { TurnFileFacts } from "../src/domain/fileFacts.js";
 import { PromptResultTracker } from "../src/domain/promptResultTracker.js";
@@ -21,16 +24,27 @@ test("流式增量在运行中 snapshot、分页与完成态保持一致", () =>
   for (let index = 0; index < 200; index += 1) {
     projection.appendAssistantText("chunk");
     if (index === 99) {
-      const intermediate = projection.buildSnapshot().rows.window.find((row) => row.kind === "assistantText");
-      assert.equal(intermediate?.kind === "assistantText" && intermediate.text, "chunk".repeat(100));
+      const intermediate = projection
+        .buildSnapshot()
+        .rows.window.find((row) => row.kind === "assistantText");
+      assert.equal(
+        intermediate?.kind === "assistantText" && intermediate.text,
+        "chunk".repeat(100),
+      );
     }
   }
-  const streaming = projection.buildSnapshot().rows.window.find((row) => row.kind === "assistantText");
+  const streaming = projection
+    .buildSnapshot()
+    .rows.window.find((row) => row.kind === "assistantText");
   assert.equal(streaming?.kind === "assistantText" && streaming.text, expected);
-  const paged = projection.rowsRange(undefined, 100).rows.find((row) => row.kind === "assistantText");
+  const paged = projection
+    .rowsRange(undefined, 100)
+    .rows.find((row) => row.kind === "assistantText");
   assert.equal(paged?.kind === "assistantText" && paged.text, expected);
   projection.finishTurn("success");
-  const completed = projection.rowsRange(undefined, 100).rows.find((row) => row.kind === "assistantText");
+  const completed = projection
+    .rowsRange(undefined, 100)
+    .rows.find((row) => row.kind === "assistantText");
   assert.equal(completed?.kind === "assistantText" && completed.text, expected);
 });
 
@@ -59,7 +73,10 @@ test("批量应用移除后追加行仍保持索引和状态 patch 语义", () =
     { op: "row.appended", row: { ...userRow, rowId: userRow.rowId + 10 } },
     { op: "state.updated", patch: { revision: previous.revision + 1 } },
   ];
-  assert.deepEqual(applyConversationDeltas(previous, deltas), deltas.reduce(applyConversationDelta, previous));
+  assert.deepEqual(
+    applyConversationDeltas(previous, deltas),
+    deltas.reduce(applyConversationDelta, previous),
+  );
 });
 
 test("guide 收口旧轮和新轮的流式行及文件事实", () => {

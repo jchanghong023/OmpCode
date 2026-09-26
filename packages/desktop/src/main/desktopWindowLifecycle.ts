@@ -252,7 +252,9 @@ export function createWindow(options: {
           hostRestartAttempts,
         );
         hostRestartAttempts = attempts;
-        options.logger.warn(`[createWindow] local host exited unexpectedly (${label}); reloading in ${delayMs}ms`);
+        options.logger.warn(
+          `[createWindow] local host exited unexpectedly (${label}); reloading in ${delayMs}ms`,
+        );
         hostRestartTimer = setTimeout(() => {
           hostRestartTimer = null;
           if (!win.isDestroyed()) win.webContents.reload();

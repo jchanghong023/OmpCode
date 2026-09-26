@@ -1028,7 +1028,10 @@ async function prepareAppQuit(reason: string, kind: AppShutdownKind = "normal"):
   notifyStabilityAppExit(
     getStabilityLifecycleScene() === "update_install" ? "update_install" : "app_quit",
     logger,
-    { exitCode: 0, exitKind: "normal" },
+    {
+      exitCode: 0,
+      exitKind: "normal",
+    },
   );
 
   const cronSchedulerToDispose = cronScheduler;
@@ -1217,9 +1220,7 @@ function logWindowsPackagedResourceWritableProbe(stage: string) {
   );
   if (failed.length > 0) {
     logger.warn(
-      `[auto-update] Windows packaged resource dirs are not writable (${stage}): ${JSON.stringify(
-        failed,
-      )}`,
+      `[auto-update] Windows packaged resource dirs are not writable (${stage}): ${JSON.stringify(failed)}`,
     );
   }
 }

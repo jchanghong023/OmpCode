@@ -150,19 +150,19 @@ export async function POST(req: Request) {
 
 ### `<Conversation />`
 
-| Prop         | Type                                            | Default    | Description                                                    |
+| Prop | Type | Default | Description |
 | ------------ | ----------------------------------------------- | ---------- | -------------------------------------------------------------- | ----------------------------------------------------------- |
-| `contextRef` | `React.Ref<StickToBottomContext>`               | -          | Optional ref to access the StickToBottom context object.       |
-| `instance`   | `StickToBottomInstance`                         | -          | Optional instance for controlling the StickToBottom component. |
-| `children`   | `((context: StickToBottomContext) => ReactNode) | ReactNode` | -                                                              | Render prop or ReactNode for custom rendering with context. |
-| `...props`   | `Omit<React.HTMLAttributes<HTMLDivElement>, `   | -          | Any other props are spread to the root div.                    |
+| `contextRef` | `React.Ref<StickToBottomContext>` | - | Optional ref to access the StickToBottom context object. |
+| `instance` | `StickToBottomInstance` | - | Optional instance for controlling the StickToBottom component. |
+| `children` | `((context: StickToBottomContext) => ReactNode) | ReactNode` | - | Render prop or ReactNode for custom rendering with context. |
+| `...props` | `Omit<React.HTMLAttributes<HTMLDivElement>, ` | - | Any other props are spread to the root div. |
 
 ### `<ConversationContent />`
 
-| Prop       | Type                                            | Default    | Description                                 |
+| Prop | Type | Default | Description |
 | ---------- | ----------------------------------------------- | ---------- | ------------------------------------------- | ----------------------------------------------------------- |
-| `children` | `((context: StickToBottomContext) => ReactNode) | ReactNode` | -                                           | Render prop or ReactNode for custom rendering with context. |
-| `...props` | `Omit<React.HTMLAttributes<HTMLDivElement>, `   | -          | Any other props are spread to the root div. |
+| `children` | `((context: StickToBottomContext) => ReactNode) | ReactNode` | - | Render prop or ReactNode for custom rendering with context. |
+| `...props` | `Omit<React.HTMLAttributes<HTMLDivElement>, ` | - | Any other props are spread to the root div. |
 
 ### `<ConversationEmptyState />`
 

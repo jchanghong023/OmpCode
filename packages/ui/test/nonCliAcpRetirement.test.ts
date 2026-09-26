@@ -48,11 +48,15 @@ test("current question results work while Claude ACP text is no longer interpret
   const input = { question: "Choose", options: [{ label: "One" }, { label: "Two" }] };
   assert.deepEqual(
     readAskUserQuestionAnswers({ input, output: { type: "answered", selected: "One" } }),
-    { Choose: "One" },
+    {
+      Choose: "One",
+    },
   );
   assert.deepEqual(
     readAskUserQuestionAnswers({ input, output: { type: "answered_custom", text: "Custom" } }),
-    { Choose: "Custom" },
+    {
+      Choose: "Custom",
+    },
   );
   assert.deepEqual(readAskUserQuestionAnswers({ output: { answers: { Choose: "Two" } } }), {
     Choose: "Two",

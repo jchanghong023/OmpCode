@@ -397,10 +397,7 @@ function V4ComposerModelControlsImpl({
   );
   const providerSettingsRead = useProviderSettingsView();
   // omp 换核：模型目录事实源 = workspace-config 的 omp catalog（get_available_models）。
-  const ompCatalog = useMemo(
-    () => readOmpModelCatalog(configOptions),
-    [configOptions],
-  );
+  const ompCatalog = useMemo(() => readOmpModelCatalog(configOptions), [configOptions]);
   const providerSettingsView =
     providerSettingsRead.state.status === "ready" ? providerSettingsRead.state.view : null;
   const providerSourcesLoading = providerSettingsRead.state.status !== "ready";

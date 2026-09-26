@@ -2056,9 +2056,7 @@ export function createLocalServices(options: {
       } catch (error) {
         return {
           ok: false,
-          reason: `Failed to restart ZCode Computer Use: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
+          reason: `Failed to restart ZCode Computer Use: ${error instanceof Error ? error.message : String(error)}`,
         };
       }
     },

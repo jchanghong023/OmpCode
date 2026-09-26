@@ -98,7 +98,9 @@ async function defaultExecutor(command: string, args: readonly string[]): Promis
   if (result.exitCode !== 0) {
     const error = new Error(
       `${command} ${args.join(" ")} failed (${result.exitCode}): ${result.stderr}`,
-    ) as Error & { exitCode?: number };
+    ) as Error & {
+      exitCode?: number;
+    };
     error.exitCode = result.exitCode;
     throw error;
   }

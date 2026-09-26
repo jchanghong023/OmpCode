@@ -174,9 +174,14 @@ async function ensureOmpBinary(repoRoot: string, target: ServerTarget): Promise<
     process.execPath,
     [join(repoRoot, "packages/desktop/scripts/fetch-omp-release.mjs")],
     repoRoot,
-    { ...process.env, ZCODE_TARGET_OS: platform, ZCODE_TARGET_ARCH: arch },
+    {
+      ...process.env,
+      ZCODE_TARGET_OS: platform,
+      ZCODE_TARGET_ARCH: arch,
+    },
   );
-  if (!(await pathExists(binaryPath))) throw new Error(`Embedded omp binary missing: ${binaryPath}`);
+  if (!(await pathExists(binaryPath)))
+    throw new Error(`Embedded omp binary missing: ${binaryPath}`);
   return binaryPath;
 }
 

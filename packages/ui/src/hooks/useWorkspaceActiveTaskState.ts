@@ -117,8 +117,7 @@ export function useWorkspaceActiveTaskState({
       mergeTaskMetaCandidates(
         getTaskMeta({ taskListCache, optimisticTaskListByTaskId }, activeTaskId),
         activeTaskQueryMeta,
-      ) ??
-      null
+      ) ?? null
     );
   }, [activeTaskId, activeTaskQueryMeta, taskListCache, optimisticTaskListByTaskId]);
 

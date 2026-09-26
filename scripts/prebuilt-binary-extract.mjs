@@ -58,7 +58,9 @@ export function extractPrebuiltArchive({ archivePath, archiveExt, extractDir, cw
   runCommand(
     "tar",
     ["-xzf", resolveTarArchiveArg(archivePath, tarCwd), "-C", toTarPosixPath(extractDir)],
-    { cwd: tarCwd },
+    {
+      cwd: tarCwd,
+    },
   );
 }
 

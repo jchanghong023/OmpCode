@@ -113,7 +113,9 @@ function formatSelectionCommand(selection: SelectionPrompt, optionId: string): s
     return optionId;
   }
   if (selection.action === "elicitation.respond") {
-    return selection.token ? `/elicitation ${selection.token} ${optionId}` : `/elicitation ${optionId}`;
+    return selection.token
+      ? `/elicitation ${selection.token} ${optionId}`
+      : `/elicitation ${optionId}`;
   }
   if (selection.action === "model.provider.set") {
     return `/model provider ${optionId}`;
@@ -124,17 +126,11 @@ function formatSelectionCommand(selection: SelectionPrompt, optionId: string): s
   return `/${selection.action.replace(".set", "")} ${optionId}`;
 }
 
-function readElicitationAnswerValues(
-  message: BotOutboundMessage,
-  questionIndex: number,
-): string[] {
+function readElicitationAnswerValues(message: BotOutboundMessage, questionIndex: number): string[] {
   return message.elicitation?.answers?.[String(questionIndex)] ?? [];
 }
 
-function formatElicitationAnswerLabel(
-  message: BotOutboundMessage,
-  questionIndex: number,
-): string {
+function formatElicitationAnswerLabel(message: BotOutboundMessage, questionIndex: number): string {
   const question = message.elicitation?.questions[questionIndex];
   const values = readElicitationAnswerValues(message, questionIndex);
   if (!question || values.length === 0) {
@@ -177,20 +173,11 @@ function buildFeishuElicitationChoiceButton(params: {
   selectedValues: readonly string[];
 }): Record<string, unknown> {
   const selected = params.selectedValues.includes(params.option.value);
-  const marker = params.question.multiSelect
-    ? selected
-      ? "☑"
-      : "☐"
-    : selected
-      ? "●"
-      : "○";
+  const marker = params.question.multiSelect ? (selected ? "☑" : "☐") : selected ? "●" : "○";
   return buildFeishuButtonElement({
     text: `${marker} ${params.option.label}`,
     type: selected ? "primary" : "default",
-    command: buildFeishuElicitationOptionCommand(
-      params.message,
-      params.option.value,
-    ),
+    command: buildFeishuElicitationOptionCommand(params.message, params.option.value),
     originalText: params.message.text,
   });
 }
@@ -218,11 +205,7 @@ function isFeishuElicitationCustomExpanded(
   message: BotOutboundMessage,
   questionIndex: number,
 ): boolean {
-  return (
-    message.elicitation?.expandedCustomAnswerQuestionIndexes?.includes(
-      questionIndex,
-    ) ?? false
-  );
+  return message.elicitation?.expandedCustomAnswerQuestionIndexes?.includes(questionIndex) ?? false;
 }
 
 function buildFeishuElicitationCustomButton(
@@ -230,23 +213,15 @@ function buildFeishuElicitationCustomButton(
   question: NonNullable<BotOutboundMessage["elicitation"]>["questions"][number],
   questionIndex: number,
 ): Record<string, unknown> {
-  const customValues = readFeishuElicitationCustomValues(
-    message,
-    question,
-    questionIndex,
-  );
+  const customValues = readFeishuElicitationCustomValues(message, question, questionIndex);
   const expanded = isFeishuElicitationCustomExpanded(message, questionIndex);
   const selected = expanded || customValues.length > 0;
-  const marker =
-    question.multiSelect ? (selected ? "☑" : "☐") : selected ? "●" : "○";
+  const marker = question.multiSelect ? (selected ? "☑" : "☐") : selected ? "●" : "○";
   const customLabel = formatBotMessage(message.locale, "elicitationCustomOption");
   return buildFeishuButtonElement({
     text: `${marker} ${customLabel}`,
     type: selected ? "primary" : "default",
-    command: buildFeishuElicitationOptionCommand(
-      message,
-      FEISHU_ELICITATION_CUSTOM_OPTION_ID,
-    ),
+    command: buildFeishuElicitationOptionCommand(message, FEISHU_ELICITATION_CUSTOM_OPTION_ID),
     originalText: message.text,
   });
 }
@@ -260,20 +235,13 @@ function buildFeishuElicitationForm(
   if (!selection?.token) {
     return null;
   }
-  const customExpanded = isFeishuElicitationCustomExpanded(
-    message,
-    questionIndex,
-  );
+  const customExpanded = isFeishuElicitationCustomExpanded(message, questionIndex);
   const shouldShowInput = question.options.length === 0 || customExpanded;
   const shouldShowSubmit = question.multiSelect || shouldShowInput;
   if (!shouldShowSubmit) {
     return null;
   }
-  const customValues = readFeishuElicitationCustomValues(
-    message,
-    question,
-    questionIndex,
-  );
+  const customValues = readFeishuElicitationCustomValues(message, question, questionIndex);
   const formElements: Array<Record<string, unknown>> = [];
   if (shouldShowInput) {
     formElements.push({
@@ -293,9 +261,7 @@ function buildFeishuElicitationForm(
   }
   formElements.push({
     tag: "button",
-    text: formatFeishuPlainText(
-      formatBotMessage(message.locale, "elicitationSubmitOption"),
-    ),
+    text: formatFeishuPlainText(formatBotMessage(message.locale, "elicitationSubmitOption")),
     type: "primary",
     form_action_type: "submit",
     name: "submit",
@@ -326,8 +292,7 @@ function buildFeishuElicitationAnswerElements(
     return [];
   }
   const total = elicitation.questions.length;
-  const isCompleted =
-    elicitation.status === "completed" || elicitation.status === "cancelled";
+  const isCompleted = elicitation.status === "completed" || elicitation.status === "cancelled";
   const elements: Array<Record<string, unknown>> = [];
   elicitation.questions.forEach((question, index) => {
     // 修复原因：当前题的多选值只是尚未提交的草稿。如果也放进上方历史区，
@@ -342,9 +307,7 @@ function buildFeishuElicitationAnswerElements(
     elements.push(
       {
         tag: "markdown",
-        content: formatFeishuCardMarkdownContent(
-          `#### ${index + 1}/${total} ${question.question}`,
-        ),
+        content: formatFeishuCardMarkdownContent(`#### ${index + 1}/${total} ${question.question}`),
       },
       {
         tag: "markdown",
@@ -420,10 +383,7 @@ function buildFeishuElicitationCardPayload(message: BotOutboundMessage): Record<
         },
       );
     }
-    const selectedValues = readElicitationAnswerValues(
-      message,
-      elicitation.currentQuestionIndex,
-    );
+    const selectedValues = readElicitationAnswerValues(message, elicitation.currentQuestionIndex);
     for (const option of currentQuestion.options) {
       const displayOption = planApprovalContent
         ? {
@@ -601,9 +561,7 @@ function readFeishuPostText(content: Record<string, unknown> | null): string {
   }
   const postContent = readFeishuPostLocaleContent(content);
   const lines = Array.isArray(postContent)
-    ? postContent
-        .map((line) => formatFeishuPostToken(line).trim())
-        .filter(Boolean)
+    ? postContent.map((line) => formatFeishuPostToken(line).trim()).filter(Boolean)
     : [];
   const title = readFeishuPostLocaleTitle(content).trim();
   const body = lines.join("\n").trim();
@@ -662,7 +620,10 @@ function readFeishuAttachment(
   };
 }
 
-function readFeishuTextMessage(botId: string, payload: Record<string, unknown>): BotInboundMessage | null {
+function readFeishuTextMessage(
+  botId: string,
+  payload: Record<string, unknown>,
+): BotInboundMessage | null {
   const provider = readFeishuPayloadProvider(payload);
   // Bugfix: 飞书 node-sdk 的 WebSocket EventDispatcher 在不同事件/版本下可能把 event 字段摊平到顶层。
   // 之前只读 payload.event.message，长连接确实收到消息时也会解析成 0 条 inbound。
@@ -693,7 +654,9 @@ function readFeishuTextMessage(botId: string, payload: Record<string, unknown>):
   if ((!text && !attachment) || !userId) {
     return null;
   }
-  const chatType = readFeishuChatType(readString(message, "chat_type") || readString(event, "chat_type"));
+  const chatType = readFeishuChatType(
+    readString(message, "chat_type") || readString(event, "chat_type"),
+  );
   return {
     botId,
     text,
@@ -709,7 +672,10 @@ function readFeishuTextMessage(botId: string, payload: Record<string, unknown>):
   };
 }
 
-function readFeishuCardAction(botId: string, payload: Record<string, unknown>): BotInboundMessage | null {
+function readFeishuCardAction(
+  botId: string,
+  payload: Record<string, unknown>,
+): BotInboundMessage | null {
   const provider = readFeishuPayloadProvider(payload);
   const event = readFeishuCallbackEvent(payload);
   const action = isRecord(event.action) ? event.action : null;
@@ -725,10 +691,7 @@ function readFeishuCardAction(botId: string, payload: Record<string, unknown>): 
   const submittedAnswer = formValue?.[FEISHU_ELICITATION_FORM_FIELD_NAME];
   const command =
     rawCommand && rawCommand.includes(FEISHU_ELICITATION_FORM_VALUE_PREFIX)
-      ? buildFeishuElicitationFormCommand(
-          rawCommand.split(/\s+/u)[1] ?? "",
-          submittedAnswer,
-        )
+      ? buildFeishuElicitationFormCommand(rawCommand.split(/\s+/u)[1] ?? "", submittedAnswer)
       : rawCommand;
   const operator = isRecord(event.operator) ? event.operator : null;
   const operatorId = isRecord(operator?.operator_id) ? operator.operator_id : null;
@@ -740,7 +703,10 @@ function readFeishuCardAction(botId: string, payload: Record<string, unknown>): 
     readString(payload, "open_id") ||
     readString(payload, "user_id");
   const context = isRecord(event.context) ? event.context : null;
-  const contextChatType = readString(context, "chat_type") || readString(event, "chat_type") || readString(payload, "chat_type");
+  const contextChatType =
+    readString(context, "chat_type") ||
+    readString(event, "chat_type") ||
+    readString(payload, "chat_type");
   const chatId = readString(context, "open_chat_id") || readString(context, "chat_id");
   const message = isRecord(event.message) ? event.message : null;
   const header = isRecord(payload.header) ? payload.header : null;
@@ -886,9 +852,7 @@ function buildFeishuButtonElement(params: {
   };
 }
 
-function buildFeishuInteractiveCardPayload(
-  message: BotOutboundMessage,
-): Record<string, unknown> {
+function buildFeishuInteractiveCardPayload(message: BotOutboundMessage): Record<string, unknown> {
   const selection = message.selection;
   const elements: Array<Record<string, unknown>> = [
     {
@@ -911,8 +875,7 @@ function buildFeishuInteractiveCardPayload(
         : [
             buildFeishuButtonElement({
               text:
-                selection.cancelLabel ??
-                formatBotMessage(message.locale, "selectionCancelOption"),
+                selection.cancelLabel ?? formatBotMessage(message.locale, "selectionCancelOption"),
               type: "default",
               // Bugfix: 飞书走结构化选项卡，不应复用微信纯文本菜单的 0 取消语义。
               command: "/cancel",
@@ -989,7 +952,9 @@ function buildFeishuStreamingToolPanel(
   };
 }
 
-function buildFeishuStreamingCardPayload(state: BotStreamingReplyCardState): Record<string, unknown> {
+function buildFeishuStreamingCardPayload(
+  state: BotStreamingReplyCardState,
+): Record<string, unknown> {
   const elements: Array<Record<string, unknown>> = [];
   for (const block of state.blocks) {
     if (block.type === "message") {
@@ -1004,9 +969,7 @@ function buildFeishuStreamingCardPayload(state: BotStreamingReplyCardState): Rec
     }
     const toolPanel = buildFeishuStreamingToolPanel(block.summaries, {
       expanded: block.expanded ?? state.status === "running",
-      title:
-        block.title?.trim() ||
-        formatBotMessage(state.locale, "streamingToolSummaries"),
+      title: block.title?.trim() || formatBotMessage(state.locale, "streamingToolSummaries"),
     });
     if (toolPanel) {
       elements.push(toolPanel);
@@ -1039,16 +1002,13 @@ function countTaggedElements(value: unknown): number {
     return 0;
   }
   const record = value as Record<string, unknown>;
-  return (typeof record.tag === "string" ? 1 : 0) +
-    Object.values(record).reduce<number>(
-      (total, item) => total + countTaggedElements(item),
-      0,
-    );
+  return (
+    (typeof record.tag === "string" ? 1 : 0) +
+    Object.values(record).reduce<number>((total, item) => total + countTaggedElements(item), 0)
+  );
 }
 
-export function countFeishuCardTaggedElements(
-  state: BotStreamingReplyCardState,
-): number {
+export function countFeishuCardTaggedElements(state: BotStreamingReplyCardState): number {
   return countTaggedElements(buildFeishuStreamingCardPayload(state));
 }
 
@@ -1063,8 +1023,7 @@ export function splitFeishuStreamingCardStates(
     const candidateState = { ...state, blocks: candidate, status: "running" as const };
     if (
       current.length > 0 &&
-      countFeishuCardTaggedElements(candidateState) >
-        FEISHU_STREAMING_CARD_TAGGED_ELEMENT_BUDGET
+      countFeishuCardTaggedElements(candidateState) > FEISHU_STREAMING_CARD_TAGGED_ELEMENT_BUDGET
     ) {
       blockGroups.push(current);
       current = [block];
@@ -1106,15 +1065,18 @@ async function readTenantAccessToken(
   if (cached && cached.expiresAt > Date.now() + 60_000) {
     return cached.token;
   }
-  const response = await fetchBotProviderJson<FeishuAccessTokenResponse>(`${getFeishuBaseUrl(bot)}/open-apis/auth/v3/tenant_access_token/internal`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      app_id: bot.feishuAppId,
-      app_secret: appSecret,
-    }),
-    signal,
-  });
+  const response = await fetchBotProviderJson<FeishuAccessTokenResponse>(
+    `${getFeishuBaseUrl(bot)}/open-apis/auth/v3/tenant_access_token/internal`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        app_id: bot.feishuAppId,
+        app_secret: appSecret,
+      }),
+      signal,
+    },
+  );
   if (!response.ok) {
     throw new Error(`Feishu tenant_access_token failed: HTTP ${response.status}`);
   }
@@ -1270,11 +1232,14 @@ async function fetchFeishuAppDisplayName(
   token: string,
   appId: string,
 ): Promise<string | null> {
-  const response = await fetchBotProviderJson<FeishuAppInfoResponse>(`${getFeishuBaseUrl(bot)}/open-apis/application/v6/applications/${appId}?lang=zh_cn`, {
-    headers: {
-      authorization: `Bearer ${token}`,
+  const response = await fetchBotProviderJson<FeishuAppInfoResponse>(
+    `${getFeishuBaseUrl(bot)}/open-apis/application/v6/applications/${appId}?lang=zh_cn`,
+    {
+      headers: {
+        authorization: `Bearer ${token}`,
+      },
     },
-  });
+  );
   if (!response.ok) {
     throw new Error(`Feishu get application info failed app=${appId}: HTTP ${response.status}`);
   }
@@ -1285,7 +1250,10 @@ async function fetchFeishuAppDisplayName(
   return resolveFeishuAppDisplayName(payload);
 }
 
-async function readFeishuAppDisplayName(bot: BotConfig, deps: FeishuProviderDeps): Promise<string | null> {
+async function readFeishuAppDisplayName(
+  bot: BotConfig,
+  deps: FeishuProviderDeps,
+): Promise<string | null> {
   if (!bot.feishuAppId) {
     return null;
   }
@@ -1446,7 +1414,10 @@ async function deleteFeishuTypingReaction(
   typingReactionIds.delete(key);
 }
 
-async function readFeishuAppSecret(bot: BotConfig, deps: FeishuProviderDeps): Promise<string | null> {
+async function readFeishuAppSecret(
+  bot: BotConfig,
+  deps: FeishuProviderDeps,
+): Promise<string | null> {
   if (!bot.feishuAppId || !bot.credentialRef) {
     return null;
   }
@@ -1460,7 +1431,11 @@ export function createFeishuWebSocketEventHandlers(params: {
   const { bot, onPayload } = params;
   return {
     "im.message.receive_v1": async (payload: unknown) => {
-      await onPayload({ botId: bot.id, zcodeProvider: bot.provider, ...(isRecord(payload) ? payload : { payload }) });
+      await onPayload({
+        botId: bot.id,
+        zcodeProvider: bot.provider,
+        ...(isRecord(payload) ? payload : { payload }),
+      });
     },
     // Bugfix: 我们用 Typing reaction 模拟输入中状态，飞书会把自己创建的 reaction 再推回长连接。
     // 业务不需要处理这个事件，但不注册 handler 时 SDK 会持续打印 warn 干扰排查。
@@ -1574,8 +1549,7 @@ export async function startFeishuBotWebSocket(params: {
         };
       };
       const connected =
-        sdkClient.wsConfig?.getWSInstance?.()?.readyState ===
-        WEBSOCKET_OPEN_READY_STATE;
+        sdkClient.wsConfig?.getWSInstance?.()?.readyState === WEBSOCKET_OPEN_READY_STATE;
       if (!connected) {
         if (!startupSettled || clientClosed) return;
         if (!connectionUnavailable) {
@@ -1727,13 +1701,7 @@ export function createFeishuBotProvider(deps: FeishuProviderDeps): BotProviderAd
       if (!token) {
         return;
       }
-      await updateCard(
-        bot,
-        token,
-        handle,
-        buildFeishuStreamingCardPayload(state),
-        signal,
-      );
+      await updateCard(bot, token, handle, buildFeishuStreamingCardPayload(state), signal);
     },
 
     async createTransientInteractionCard(bot, message) {
@@ -1813,32 +1781,35 @@ export function createFeishuBotProvider(deps: FeishuProviderDeps): BotProviderAd
       // 非共享卡片延时更新还需要带 open_ids，否则飞书会返回 300090，旧卡片会继续留在会话里。
       // Bugfix: 用户选择后应保留原问题文案并移除按钮；仅依赖 WebSocket 回调 return 的卡片更新不稳定。
       // 因此即使按钮 value 里带了原文，也必须继续调用 card/update，只是更新文案优先使用原文。
-      const response = await fetchBotProviderJson<FeishuSendMessageResponse>(`${getFeishuBaseUrl(bot)}/open-apis/interactive/v1/card/update`, {
-        method: "POST",
-        headers: {
-          authorization: `Bearer ${token}`,
-          "content-type": "application/json",
+      const response = await fetchBotProviderJson<FeishuSendMessageResponse>(
+        `${getFeishuBaseUrl(bot)}/open-apis/interactive/v1/card/update`,
+        {
+          method: "POST",
+          headers: {
+            authorization: `Bearer ${token}`,
+            "content-type": "application/json",
+          },
+          signal,
+          body: JSON.stringify({
+            token: cardUpdateToken,
+            // Bugfix: Card JSON 2.0 根节点不接受 open_ids；把 open_ids 塞进 card 会触发
+            // “unknown property: open_ids” 并导致按钮点击后原卡片无法移除选项。
+            ...(openIds.length > 0 ? { open_ids: openIds } : {}),
+            // 修复原因：新建下一题再撤回旧卡会在飞书会话中显示明显的撤回痕迹。
+            // callback token 是本次点击对应的权威原地更新能力，问答推进和终态都复用同一张卡。
+            card: message?.elicitation
+              ? buildFeishuElicitationCardPayload(message)
+              : buildFeishuInteractiveCardPayload({
+                  botId: bot.id,
+                  provider: bot.provider,
+                  providerUserId: "",
+                  // Bugfix: 飞书按钮点击后业务结果会另发一条消息；原卡片只需要移除选项按钮。
+                  // 之前把原卡片改成结果文案，飞书侧会出现额外状态变化，也不符合用户对“选项消失”的预期。
+                  text: originalText?.trim() || (text ?? ""),
+                }),
+          }),
         },
-        signal,
-        body: JSON.stringify({
-          token: cardUpdateToken,
-          // Bugfix: Card JSON 2.0 根节点不接受 open_ids；把 open_ids 塞进 card 会触发
-          // “unknown property: open_ids” 并导致按钮点击后原卡片无法移除选项。
-          ...(openIds.length > 0 ? { open_ids: openIds } : {}),
-          // 修复原因：新建下一题再撤回旧卡会在飞书会话中显示明显的撤回痕迹。
-          // callback token 是本次点击对应的权威原地更新能力，问答推进和终态都复用同一张卡。
-          card: message?.elicitation
-            ? buildFeishuElicitationCardPayload(message)
-            : buildFeishuInteractiveCardPayload({
-                botId: bot.id,
-                provider: bot.provider,
-                providerUserId: "",
-                // Bugfix: 飞书按钮点击后业务结果会另发一条消息；原卡片只需要移除选项按钮。
-                // 之前把原卡片改成结果文案，飞书侧会出现额外状态变化，也不符合用户对“选项消失”的预期。
-                text: originalText?.trim() || (text ?? ""),
-              }),
-        }),
-      });
+      );
       if (!response.ok) {
         throw new Error(`Feishu update interactive card failed: HTTP ${response.status}`);
       }
@@ -1855,10 +1826,7 @@ export function createFeishuBotProvider(deps: FeishuProviderDeps): BotProviderAd
         return null;
       }
       const controller = new AbortController();
-      const timeout = setTimeout(
-        () => controller.abort(),
-        FEISHU_ATTACHMENT_DOWNLOAD_TIMEOUT_MS,
-      );
+      const timeout = setTimeout(() => controller.abort(), FEISHU_ATTACHMENT_DOWNLOAD_TIMEOUT_MS);
       try {
         const response = await fetch(
           `${getFeishuBaseUrl(bot)}/open-apis/im/v1/messages/${encodeURIComponent(actor.providerMessageId)}/resources/${encodeURIComponent(attachment.providerFileId)}?type=${attachment.kind === "image" ? "image" : attachment.kind === "video" ? "media" : attachment.kind}`,

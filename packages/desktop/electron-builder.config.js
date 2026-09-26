@@ -103,7 +103,10 @@ let nsisInstallSectionOriginalSource = null;
 let nsisInstallSectionPath = null;
 const desktopElectronVersion = requireFromConfig("./package.json").devDependencies.electron;
 // @electron/asar 4 不再导出 package.json，CLI 也改为 asar.mjs；从公开入口定位包目录。
-const asarCliPath = resolve(dirname(requireFromConfig.resolve("@electron/asar")), "../bin/asar.mjs");
+const asarCliPath = resolve(
+  dirname(requireFromConfig.resolve("@electron/asar")),
+  "../bin/asar.mjs",
+);
 const REQUIRED_ASAR_RUNTIME_MODULES = [
   "module-details-from-path",
   "@opentelemetry/api-logs",

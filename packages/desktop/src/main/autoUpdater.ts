@@ -490,13 +490,17 @@ function getMenuItemLabel(state: AutoUpdaterMenuState): string {
       return formatDesktopMenuMessage(
         menuLocale,
         desktopMenuMessageIds.helpUpdateAvailableVersion,
-        { version: state.version },
+        {
+          version: state.version,
+        },
       );
     case "download-progress":
       return formatDesktopMenuMessage(
         menuLocale,
         desktopMenuMessageIds.helpDownloadingUpdateProgress,
-        { progress: state.progress },
+        {
+          progress: state.progress,
+        },
       );
     case "update-downloaded":
       return formatDesktopMenuMessage(menuLocale, desktopMenuMessageIds.helpRestartToUpdate, {

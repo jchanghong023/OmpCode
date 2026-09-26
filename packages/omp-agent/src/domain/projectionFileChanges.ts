@@ -10,10 +10,14 @@ export function readProjectionFileChanges(
 ) {
   const row = rows.get(targetRowId);
   if (!row) throw new Error("row not found");
-  const header = [...rows.values()].find((candidate) => candidate.kind === "turnHeader" && candidate.turnId === row.turnId);
-  if (!header || header.kind !== "turnHeader") return { files: 0, additions: 0, deletions: 0, items: [] };
-  const facts = turn?.turnId === row.turnId
-    ? turn.fileFacts
-    : turnFacts.get(row.turnId) ?? TurnFileFacts.fromSummary(header.fileChanges);
+  const header = [...rows.values()].find(
+    (candidate) => candidate.kind === "turnHeader" && candidate.turnId === row.turnId,
+  );
+  if (!header || header.kind !== "turnHeader")
+    return { files: 0, additions: 0, deletions: 0, items: [] };
+  const facts =
+    turn?.turnId === row.turnId
+      ? turn.fileFacts
+      : (turnFacts.get(row.turnId) ?? TurnFileFacts.fromSummary(header.fileChanges));
   return { ...facts.summary(), items: facts.items() };
 }

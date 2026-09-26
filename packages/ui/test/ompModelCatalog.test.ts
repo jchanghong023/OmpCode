@@ -39,6 +39,10 @@ test("新任务优先模型支持的最高思考档，而非当前档或模型�
 test("已有会话从自身投影恢复模型和思考档位", () => {
   assert.deepEqual(
     ompSessionConfigToSelection({ provider: "mock", model: "session-model", thought: "max" }),
-    { providerId: "mock", modelId: "session-model", options: { reasoningLevel: "max" } },
+    {
+      providerId: "mock",
+      modelId: "session-model",
+      options: { reasoningLevel: "max" },
+    },
   );
 });

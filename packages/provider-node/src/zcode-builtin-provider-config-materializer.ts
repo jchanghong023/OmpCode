@@ -18,9 +18,7 @@ export interface MaterializeZCodeBuiltinProviderConfigOptions {
 export async function materializeZCodeBuiltinProviderConfig(
   options: MaterializeZCodeBuiltinProviderConfigOptions,
 ): Promise<string> {
-  const content = `${serializeZCodeBuiltinRelease(
-    decodeZCodeBuiltinRelease(JSON.parse(options.content)),
-  )}\n`;
+  const content = `${serializeZCodeBuiltinRelease(decodeZCodeBuiltinRelease(JSON.parse(options.content)))}\n`;
   const filePath = join(
     options.environmentConfigRoot,
     "runtime",

@@ -402,9 +402,7 @@ export function SavedWorkflowDetailView({
               className="overflow-hidden rounded-lg border border-border bg-surface"
             >
               <div className="flex h-8 items-center justify-between border-b border-border px-3">
-                <span className="font-mono text-ui-sm text-foreground-subtle">
-                  {`${name}.dwf.ts · TypeScript`}
-                </span>
+                <span className="font-mono text-ui-sm text-foreground-subtle">{`${name}.dwf.ts · TypeScript`}</span>
                 <Button
                   type="button"
                   variant="ghost"

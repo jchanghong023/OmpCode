@@ -7,5 +7,24 @@
     "third-party/upstream/**",
     "third-party/native-search/licenses/**",
     "third-party/runtime/*.txt"
+  ],
+  "overrides": [
+    {
+      "files": [
+        "packages/desktop/src/main/desktopZCodeDataSizeTelemetry.ts",
+        "packages/omp-agent/src/app/serverApp.ts",
+        "packages/omp-agent/src/app/sessionRegistry.ts",
+        "packages/omp-agent/src/domain/conversationProjection.ts",
+        "packages/omp-agent/test/fixtures/fakeOmp.mjs"
+      ],
+      "options": { "printWidth": 200, "objectWrap": "collapse" }
+    },
+    {
+      "files": [
+        "packages/omp-agent/src/adapters/ompProcess.ts",
+        "packages/omp-agent/src/app/conversationEngine.ts"
+      ],
+      "options": { "printWidth": 320, "objectWrap": "collapse" }
+    }
   ]
 }

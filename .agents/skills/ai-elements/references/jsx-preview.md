@@ -102,7 +102,7 @@ export const GeneratedUIWithComponents = ({ jsx }: { jsx: string }) => (
 
 ### `<JSXPreviewError />`
 
-| Prop       | Type                    | Default                        | Description                                               |
+| Prop | Type | Default | Description |
 | ---------- | ----------------------- | ------------------------------ | --------------------------------------------------------- | ------------------------------------------------------------ |
-| `children` | `ReactNode              | ((error: Error) => ReactNode)` | -                                                         | Custom error content or render function receiving the error. |
-| `...props` | `React.ComponentProps<` | -                              | Any other props are spread to the underlying div element. |
+| `children` | `ReactNode              | ((error: Error) => ReactNode)` | - | Custom error content or render function receiving the error. |
+| `...props` | `React.ComponentProps<` | - | Any other props are spread to the underlying div element. |

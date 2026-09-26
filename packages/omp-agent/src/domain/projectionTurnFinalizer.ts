@@ -43,13 +43,19 @@ export function finalizeFailedQueuedTurn(input: {
   upsertRow: (row: ConversationRow) => void;
   turnFacts: Map<string, TurnFileFacts>;
 }): boolean {
-  const index = input.queuedTurns.findIndex((turn) => turn.sourceCommandId === input.sourceCommandId);
+  const index = input.queuedTurns.findIndex(
+    (turn) => turn.sourceCommandId === input.sourceCommandId,
+  );
   if (index < 0) return false;
   const [queued] = input.queuedTurns.splice(index, 1);
   if (queued) {
     finalizeTurnContexts({
-      turns: [queued], outcome: "failed", rowAt: input.rowAt, upsertRow: input.upsertRow,
-      closeStreamingRows: () => {}, turnFacts: input.turnFacts,
+      turns: [queued],
+      outcome: "failed",
+      rowAt: input.rowAt,
+      upsertRow: input.upsertRow,
+      closeStreamingRows: () => {},
+      turnFacts: input.turnFacts,
     });
   }
   return true;

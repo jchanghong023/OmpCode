@@ -53,7 +53,10 @@ test("modelRoles 保存保留注释、其他角色和字段，重复保存不备
     if (!saved.success) return;
     assert.equal(await readFile(saved.backupPath!, "utf8"), original);
     const updated = await readFile(configPath, "utf8");
-    assert.match(updated, /default: commandcode\/inclusionai\/ling-3\.0-flash-sante:free # keep this comment/u);
+    assert.match(
+      updated,
+      /default: commandcode\/inclusionai\/ling-3\.0-flash-sante:free # keep this comment/u,
+    );
     assert.match(updated, /task: \[provider\/one, provider\/two\]/u);
     assert.match(updated, /otherSetting: true # untouched/u);
     const savedAgain = await writeOmpModelRolesConfig(configPath, [
@@ -77,7 +80,10 @@ test("无配置或无效 YAML 时不写入", async () => {
     await writeFile(configPath, "modelRoles: [\n");
     assert.deepEqual(
       await writeOmpModelRolesConfig(configPath, [{ role: "default", value: "provider/model" }]),
-      { success: false, error: "omp_config_parse_failed" },
+      {
+        success: false,
+        error: "omp_config_parse_failed",
+      },
     );
     assert.equal(await readFile(configPath, "utf8"), "modelRoles: [\n");
   } finally {

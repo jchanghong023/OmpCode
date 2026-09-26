@@ -57,7 +57,11 @@ export class ConversationEngine {
     this.onCommandsUpdate = init.onCommandsUpdate;
     this.resumeSessionPath = init.resumeSessionPath;
     this.projection = new ConversationProjection(init.sessionId);
-    this.subagents = new OmpSubagentBridge(this.projection, () => this.ompProcess, () => this.scheduleFlush());
+    this.subagents = new OmpSubagentBridge(
+      this.projection,
+      () => this.ompProcess,
+      () => this.scheduleFlush(),
+    );
     this.projector = new OmpEventProjector(this.projection);
     this.interactionProxy = new OmpInteractionProxy({
       sessionId: init.sessionId,
@@ -105,14 +109,12 @@ export class ConversationEngine {
           this.scheduleFlush();
         },
         // agentInvoked=true 的完成帧紧随 agent_end，不能覆盖失败或中断终态。
-        onPromptResult: (frame) => { if (frame.agentInvoked === false) this.finishLocalOnlyPrompt(); },
+        onPromptResult: (frame) => {
+          if (frame.agentInvoked === false) this.finishLocalOnlyPrompt();
+        },
         onSessionInfoUpdate: ({ title }) => this.applySessionTitle(title),
         onConfigUpdate: ({ model, thinkingLevel }) => {
-          this.projection.setModelConfig({
-            ...(model?.provider !== undefined ? { provider: model.provider } : {}),
-            ...(model?.id !== undefined ? { model: model.id } : {}),
-            ...(thinkingLevel !== undefined ? { thought: thinkingLevel } : {}),
-          });
+          this.projection.setModelConfig({ ...(model?.provider !== undefined ? { provider: model.provider } : {}), ...(model?.id !== undefined ? { model: model.id } : {}), ...(thinkingLevel !== undefined ? { thought: thinkingLevel } : {}) });
           this.notifyIndexChange();
           this.scheduleFlush();
         },
@@ -171,11 +173,14 @@ export class ConversationEngine {
       this.projection.setContextWindow(used, size);
       const process = this.ompProcess;
       if (process && this.projection.stateSnapshot.control.phase !== "running") {
-        readEngineContextDetails(process,
-          () => this.ompProcess === process && this.projection.stateSnapshot.control.phase !== "running"
-            && this.projection.stateSnapshot.usage.contextWindow?.usedTokens === used
-            && this.projection.stateSnapshot.usage.contextWindow?.maxTokens === size,
-          (report) => { this.projection.setContextWindow(used, size, report); this.scheduleFlush(); });
+        readEngineContextDetails(
+          process,
+          () => this.ompProcess === process && this.projection.stateSnapshot.control.phase !== "running" && this.projection.stateSnapshot.usage.contextWindow?.usedTokens === used && this.projection.stateSnapshot.usage.contextWindow?.maxTokens === size,
+          (report) => {
+            this.projection.setContextWindow(used, size, report);
+            this.scheduleFlush();
+          },
+        );
       }
     }
     if (!this.titleInitialized && state.sessionName) {
@@ -224,14 +229,7 @@ export class ConversationEngine {
     const nextModel = state.model?.id ?? previous.model;
     this.applyOmpState(state);
     if (previous.provider !== nextProvider || previous.model !== nextModel) {
-      this.projection.addTimelineMarker({
-        type: "modelChange",
-        fromProvider: previous.provider,
-        fromModel: previous.model,
-        toProvider: nextProvider,
-        toModel: nextModel,
-        toThought: state.thinkingLevel ?? "",
-      });
+      this.projection.addTimelineMarker({ type: "modelChange", fromProvider: previous.provider, fromModel: previous.model, toProvider: nextProvider, toModel: nextModel, toThought: state.thinkingLevel ?? "" });
     }
     this.scheduleFlush();
   }
@@ -255,21 +253,14 @@ export class ConversationEngine {
   }
   // ── 命令翻译 ──
   /** 发送用户输入；返回实际 delivery（omp 流式中转为 follow_up 队列）。图片附件直接进 omp prompt。 */
-  async sendText(
-    text: string,
-    sourceCommandId: string,
-    clientId: string,
-    images: { type: "image"; data: string; mimeType: string }[] = [],
-    modelSelection?: { provider: string; model: string; thought?: string },
-  ): Promise<"startNow" | "queue"> {
+  async sendText(text: string, sourceCommandId: string, clientId: string, images: { type: "image"; data: string; mimeType: string }[] = [], modelSelection?: { provider: string; model: string; thought?: string }): Promise<"startNow" | "queue"> {
     if (!this.titleInitialized && text.trim().length > 0) {
       this.titleInitialized = true;
       this.projection.setTitle(deriveTitle(text), "generated");
     }
     const inputId = createId("input");
     const streaming = this.projector.isStreaming;
-    this.projection.beginUserTurn({ text, inputId, sourceCommandId, clientId,
-      routing: streaming ? this.followupMode : "startNow" });
+    this.projection.beginUserTurn({ text, inputId, sourceCommandId, clientId, routing: streaming ? this.followupMode : "startNow" });
     this.scheduleFlush();
     try {
       await this.ensureOmpStarted();
@@ -283,10 +274,7 @@ export class ConversationEngine {
       return streaming ? "queue" : "startNow";
     }
     try {
-      const outcome = await dispatchOmpText({
-        process, text, images, streaming, followupMode: this.followupMode,
-        modelSelection, currentConfig: this.projection.stateSnapshot.config,
-      });
+      const outcome = await dispatchOmpText({ process, text, images, streaming, followupMode: this.followupMode, modelSelection, currentConfig: this.projection.stateSnapshot.config });
       if (!outcome.success) {
         this.failTurn(sourceCommandId, outcome.code ?? "omp_prompt_failed", new Error(outcome.error ?? "prompt rejected"));
         return streaming ? "queue" : "startNow";
@@ -319,17 +307,27 @@ export class ConversationEngine {
     this.projection.addTimelineMarker({ type: "compact", origin: "manual", status: "running" });
     this.scheduleFlush();
     const success = await applyEngineCompaction(
-      () => this.ensureOmpStarted(), () => this.ompProcess, () => this.refreshStateAfterActivity());
+      () => this.ensureOmpStarted(),
+      () => this.ompProcess,
+      () => this.refreshStateAfterActivity(),
+    );
     this.projection.addTimelineMarker({ type: "compact", origin: "manual", status: success ? "success" : "failed" });
     this.scheduleFlush();
   }
   async setAutoCompaction(enabled: boolean): Promise<{ error?: string }> {
-    return applyEngineAutoCompaction(enabled, () => this.ensureOmpStarted(), () => this.ompProcess,
-      (state) => this.applyOmpState(state));
+    return applyEngineAutoCompaction(
+      enabled,
+      () => this.ensureOmpStarted(),
+      () => this.ompProcess,
+      (state) => this.applyOmpState(state),
+    );
   }
   async setModel(provider: string, model: string, thought?: string): Promise<{ error?: string }> {
-    return applyEngineSetModel({ provider, model, thought },
-      () => this.ensureOmpStarted(), () => this.ompProcess);
+    return applyEngineSetModel(
+      { provider, model, thought },
+      () => this.ensureOmpStarted(),
+      () => this.ompProcess,
+    );
   }
 
   /**
@@ -343,7 +341,11 @@ export class ConversationEngine {
   }
 
   async setThoughtLevel(level: string): Promise<{ error?: string }> {
-    return applyEngineThoughtLevel(level, () => this.ensureOmpStarted(), () => this.ompProcess);
+    return applyEngineThoughtLevel(
+      level,
+      () => this.ensureOmpStarted(),
+      () => this.ompProcess,
+    );
   }
 
   async rename(title: string): Promise<void> {
@@ -376,11 +378,7 @@ export class ConversationEngine {
     this.publisher.unsubscribe(subscriptionId);
   }
 
-  resync(
-    subscriptionId: string,
-    base: { logEpoch: string; seq: number } | null,
-    forceSnapshot = false,
-  ): { subscriptionId: string; mode: "snapshot" | "resume"; logEpoch: string } {
+  resync(subscriptionId: string, base: { logEpoch: string; seq: number } | null, forceSnapshot = false): { subscriptionId: string; mode: "snapshot" | "resume"; logEpoch: string } {
     return this.publisher.resync(subscriptionId, base, forceSnapshot);
   }
 

@@ -83,7 +83,5 @@ if (failures.length > 0) {
   process.exit(1);
 }
 console.log(
-  `[freshness] 基线新鲜：${branch}${upstream ? `（与 ${upstream} 同步）` : ""}${
-    mainReport ? `，${mainReport}` : ""
-  }`,
+  `[freshness] 基线新鲜：${branch}${upstream ? `（与 ${upstream} 同步）` : ""}${mainReport ? `，${mainReport}` : ""}`,
 );

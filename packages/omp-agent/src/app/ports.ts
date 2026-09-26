@@ -50,13 +50,15 @@ export interface OmpSideChannelHandlers {
 }
 
 export interface OmpProcessFactory {
-  create(options: {
-    cwd: string;
-    resumeSessionPath?: string;
-    onEvent: (event: OmpSessionEventFrame) => void;
-    onUiRequest: (request: OmpUiRequest) => void;
-    onExit: (code: number | null) => void;
-  } & OmpSideChannelHandlers): OmpSessionProcess;
+  create(
+    options: {
+      cwd: string;
+      resumeSessionPath?: string;
+      onEvent: (event: OmpSessionEventFrame) => void;
+      onUiRequest: (request: OmpUiRequest) => void;
+      onExit: (code: number | null) => void;
+    } & OmpSideChannelHandlers,
+  ): OmpSessionProcess;
 }
 
 export interface OmpUiRequest {

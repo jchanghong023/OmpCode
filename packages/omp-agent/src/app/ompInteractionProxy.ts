@@ -53,17 +53,19 @@ export class OmpInteractionProxy {
           ? {
               answerMode: method === "select" ? ("option" as const) : ("text" as const),
               allowCustomInput: method !== "select",
-              questions: [{
-                question: prompt,
-                header: request.frame.title ?? prompt,
-                options: (request.frame.options ?? []).map((option, index) => ({
-                  value: option,
-                  label: option,
-                  ...(request.frame.optionDetails?.[index]?.description
-                    ? { description: request.frame.optionDetails[index]!.description }
-                    : {}),
-                })),
-              }],
+              questions: [
+                {
+                  question: prompt,
+                  header: request.frame.title ?? prompt,
+                  options: (request.frame.options ?? []).map((option, index) => ({
+                    value: option,
+                    label: option,
+                    ...(request.frame.optionDetails?.[index]?.description
+                      ? { description: request.frame.optionDetails[index]!.description }
+                      : {}),
+                  })),
+                },
+              ],
             }
           : {}),
       },
@@ -116,14 +118,25 @@ export class OmpInteractionProxy {
 
 function toOmpUiResponse(request: OmpUiRequest, answer: HostUserInputAnswer) {
   if (answer.action === "cancel") {
-    return { type: "extension_ui_response" as const, id: request.frame.id, cancelled: true as const };
+    return {
+      type: "extension_ui_response" as const,
+      id: request.frame.id,
+      cancelled: true as const,
+    };
   }
   if (request.frame.method === "confirm") {
-    return { type: "extension_ui_response" as const, id: request.frame.id, confirmed: answer.action === "accept" };
+    return {
+      type: "extension_ui_response" as const,
+      id: request.frame.id,
+      confirmed: answer.action === "accept",
+    };
   }
   if (request.frame.options && request.frame.options.length > 0) {
     if (answer.action === "decline") {
-      const deny = request.frame.options.find((option) => /^deny$/i.test(option)) ?? request.frame.options.at(-1) ?? "Deny";
+      const deny =
+        request.frame.options.find((option) => /^deny$/i.test(option)) ??
+        request.frame.options.at(-1) ??
+        "Deny";
       return { type: "extension_ui_response" as const, id: request.frame.id, value: deny };
     }
     const selected = answer.optionId ?? request.frame.options[0]!;
@@ -132,6 +145,6 @@ function toOmpUiResponse(request: OmpUiRequest, answer: HostUserInputAnswer) {
   return {
     type: "extension_ui_response" as const,
     id: request.frame.id,
-    value: answer.action === "accept" ? answer.freeText ?? "" : "",
+    value: answer.action === "accept" ? (answer.freeText ?? "") : "",
   };
 }

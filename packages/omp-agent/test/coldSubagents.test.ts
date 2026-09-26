@@ -1,14 +1,50 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { coldSubagentIds, rowsFromOmpEntries, transcriptFromOmpEntries } from "../src/domain/coldHistory.js";
+import {
+  coldSubagentIds,
+  rowsFromOmpEntries,
+  transcriptFromOmpEntries,
+} from "../src/domain/coldHistory.js";
 import { ConversationProjection } from "../src/domain/conversationProjection.js";
 
 test("冷恢复从 omp task/wait 条目重建子代理状态与记录", () => {
   const entries = [
-    { type: "message", message: { role: "user", content: [{ type: "text", text: "让子代理计算" }], timestamp: 1000 } },
-    { type: "message", message: { role: "assistant", content: [{ type: "toolCall", id: "task-call", name: "task", arguments: {} }], timestamp: 1001 } },
-    { type: "message", message: { role: "toolResult", toolCallId: "task-call", toolName: "task", content: [], details: { progress: [{ id: "sonic", agent: "task", status: "pending", assignment: "计算 8×9" }] }, timestamp: 1002 } },
-    { type: "message", message: { role: "toolResult", toolCallId: "wait-call", toolName: "wait", content: [], details: { jobs: [{ id: "sonic", status: "completed", resultText: "72" }] }, timestamp: 1003 } },
+    {
+      type: "message",
+      message: { role: "user", content: [{ type: "text", text: "让子代理计算" }], timestamp: 1000 },
+    },
+    {
+      type: "message",
+      message: {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "task-call", name: "task", arguments: {} }],
+        timestamp: 1001,
+      },
+    },
+    {
+      type: "message",
+      message: {
+        role: "toolResult",
+        toolCallId: "task-call",
+        toolName: "task",
+        content: [],
+        details: {
+          progress: [{ id: "sonic", agent: "task", status: "pending", assignment: "计算 8×9" }],
+        },
+        timestamp: 1002,
+      },
+    },
+    {
+      type: "message",
+      message: {
+        role: "toolResult",
+        toolCallId: "wait-call",
+        toolName: "wait",
+        content: [],
+        details: { jobs: [{ id: "sonic", status: "completed", resultText: "72" }] },
+        timestamp: 1003,
+      },
+    },
   ];
   assert.deepEqual(coldSubagentIds(entries), ["sonic"]);
   const transcript = transcriptFromOmpEntries([

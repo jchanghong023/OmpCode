@@ -24,8 +24,21 @@ import {
 
 // 当前内嵌 omp 的内建 role；用户配置的自定义 role 会在其后追加。
 const BUILTIN_OMP_ROLES = [
-  "default", "smol", "slow", "vision", "plan", "commit", "tiny", "memory",
-  "task", "advisor", "image", "web", "speech", "dictation", "judge",
+  "default",
+  "smol",
+  "slow",
+  "vision",
+  "plan",
+  "commit",
+  "tiny",
+  "memory",
+  "task",
+  "advisor",
+  "image",
+  "web",
+  "speech",
+  "dictation",
+  "judge",
 ] as const;
 
 export interface OmpModelRolesDialogProps {
@@ -40,7 +53,14 @@ export interface OmpModelRolesDialogProps {
 }
 
 export function OmpModelRolesDialog(props: OmpModelRolesDialogProps) {
-  const { open = false, onOpenChange, inline = false, catalogEntries, workspacePath: _workspacePath, workspaceIdentity: _workspaceIdentity } = props;
+  const {
+    open = false,
+    onOpenChange,
+    inline = false,
+    catalogEntries,
+    workspacePath: _workspacePath,
+    workspaceIdentity: _workspaceIdentity,
+  } = props;
   void _workspacePath;
   void _workspaceIdentity;
   const { intl } = useZCodeIntl();
@@ -142,7 +162,9 @@ export function OmpModelRolesDialog(props: OmpModelRolesDialogProps) {
       const result = await platform.writeOmpModelRoles(changedRoles);
       if (result.success) {
         setSavedAt(Date.now());
-        setOriginalRoles(new Map(roles.filter((item) => item.value).map((item) => [item.role, item.value])));
+        setOriginalRoles(
+          new Map(roles.filter((item) => item.value).map((item) => [item.role, item.value])),
+        );
         logger.info("[omp-model-roles] 已写入 omp modelRoles", {
           backupPath: result.backupPath ?? null,
           roles: changedRoles.length,
@@ -163,93 +185,94 @@ export function OmpModelRolesDialog(props: OmpModelRolesDialogProps) {
 
   const fields = (
     <>
-        {loadError ? (
-          <div className="rounded-lg border border-border bg-surface px-3 py-2 text-ui-base text-foreground-subtle">
-            {loadError === "omp_config_missing"
-              ? intl.formatMessage({ id: "settings.ompModelRoles.configMissing" })
-              : loadError === "omp_config_parse_failed" || loadError === "omp_model_roles_invalid"
-                ? intl.formatMessage({ id: "settings.ompModelRoles.configInvalid" })
+      {loadError ? (
+        <div className="rounded-lg border border-border bg-surface px-3 py-2 text-ui-base text-foreground-subtle">
+          {loadError === "omp_config_missing"
+            ? intl.formatMessage({ id: "settings.ompModelRoles.configMissing" })
+            : loadError === "omp_config_parse_failed" || loadError === "omp_model_roles_invalid"
+              ? intl.formatMessage({ id: "settings.ompModelRoles.configInvalid" })
               : loadError === "platform-unsupported"
                 ? intl.formatMessage({ id: "settings.ompModelRoles.platformUnsupported" })
                 : intl.formatMessage({ id: "settings.ompModelRoles.loadFailed" })}
-          </div>
-        ) : (
-          <div className="flex max-h-[50vh] flex-col gap-3 overflow-y-auto py-1">
-            {catalogEntries.length === 0 ? (
-              <div className="rounded-lg border border-border bg-surface px-3 py-2 text-ui-base text-foreground-subtle">
-                {intl.formatMessage({ id: "settings.ompModelRoles.catalogEmpty" })}
-              </div>
-            ) : null}
-            {roles.map((item) => {
-              const parsed = parseOmpRoleValue(item.value, catalogEntries);
-              const entry = catalogByModelPart.get(parsed.modelPart);
-              const known = Boolean(entry);
-              return (
-                <div key={item.role} className="flex items-center gap-3">
-                  <span className="w-24 shrink-0 text-ui-base font-medium text-foreground">
-                    {item.role}
-                  </span>
+        </div>
+      ) : (
+        <div className="flex max-h-[50vh] flex-col gap-3 overflow-y-auto py-1">
+          {catalogEntries.length === 0 ? (
+            <div className="rounded-lg border border-border bg-surface px-3 py-2 text-ui-base text-foreground-subtle">
+              {intl.formatMessage({ id: "settings.ompModelRoles.catalogEmpty" })}
+            </div>
+          ) : null}
+          {roles.map((item) => {
+            const parsed = parseOmpRoleValue(item.value, catalogEntries);
+            const entry = catalogByModelPart.get(parsed.modelPart);
+            const known = Boolean(entry);
+            return (
+              <div key={item.role} className="flex items-center gap-3">
+                <span className="w-24 shrink-0 text-ui-base font-medium text-foreground">
+                  {item.role}
+                </span>
+                <select
+                  aria-label={item.role}
+                  className="h-8 min-w-0 flex-1 rounded-md border border-border bg-surface px-2 text-ui-base text-foreground"
+                  value={known ? parsed.modelPart : ""}
+                  onChange={(event) => handleRoleChange(item.role, event.target.value)}
+                >
+                  {!known ? (
+                    <option value="">
+                      {item.value || intl.formatMessage({ id: "settings.ompModelRoles.unset" })}
+                    </option>
+                  ) : null}
+                  {providerGroups.map((group) => (
+                    <optgroup key={group.label} label={group.label}>
+                      {group.models.map((model) => (
+                        <option key={model.value} value={model.value}>
+                          {model.label}
+                        </option>
+                      ))}
+                    </optgroup>
+                  ))}
+                </select>
+                {entry?.thoughtLevels?.length ? (
                   <select
-                    aria-label={item.role}
-                    className="h-8 min-w-0 flex-1 rounded-md border border-border bg-surface px-2 text-ui-base text-foreground"
-                    value={known ? parsed.modelPart : ""}
-                    onChange={(event) => handleRoleChange(item.role, event.target.value)}
+                    aria-label={`${item.role} ${intl.formatMessage({ id: "settings.ompModelRoles.thinkingLevel" })}`}
+                    className="h-8 w-28 shrink-0 rounded-md border border-border bg-surface px-2 text-ui-base text-foreground"
+                    value={parsed.levelSuffix ?? ""}
+                    onChange={(event) => handleLevelChange(item.role, event.target.value)}
                   >
-                    {!known ? (
-                      <option value="">
-                        {item.value || intl.formatMessage({ id: "settings.ompModelRoles.unset" })}
+                    <option value="">
+                      {intl.formatMessage({ id: "settings.ompModelRoles.levelDefault" })}
+                    </option>
+                    {entry.thoughtLevels.map((level) => (
+                      <option key={level} value={level}>
+                        {level}
                       </option>
-                    ) : null}
-                    {providerGroups.map((group) => (
-                      <optgroup key={group.label} label={group.label}>
-                        {group.models.map((model) => (
-                          <option key={model.value} value={model.value}>
-                            {model.label}
-                          </option>
-                        ))}
-                      </optgroup>
                     ))}
                   </select>
-                  {entry?.thoughtLevels?.length ? (
-                    <select
-                      aria-label={`${item.role} ${intl.formatMessage({ id: "settings.ompModelRoles.thinkingLevel" })}`}
-                      className="h-8 w-28 shrink-0 rounded-md border border-border bg-surface px-2 text-ui-base text-foreground"
-                      value={parsed.levelSuffix ?? ""}
-                      onChange={(event) => handleLevelChange(item.role, event.target.value)}
-                    >
-                      <option value="">{intl.formatMessage({ id: "settings.ompModelRoles.levelDefault" })}</option>
-                      {entry.thoughtLevels.map((level) => (
-                        <option key={level} value={level}>{level}</option>
-                      ))}
-                    </select>
-                  ) : null}
-                </div>
-              );
-            })}
-          </div>
-        )}
-        <div className="flex items-center justify-end gap-2">
-          {saveError ? (
-            <span className="mr-auto text-ui-base text-foreground-subtle">{saveError}</span>
-          ) : savedAt ? (
-            <span className="mr-auto text-ui-base text-foreground-subtle">
-              {intl.formatMessage({ id: "settings.ompModelRoles.saved" })}
-            </span>
-          ) : null}
-          {!inline ? (
-            <Button variant="ghost" onClick={() => onOpenChange?.(false)}>
-              {intl.formatMessage({ id: "common.close" })}
-            </Button>
-          ) : null}
-          <Button
-            disabled={saving || loadError !== null || !dirty}
-            onClick={() => void handleSave()}
-          >
-            {saving
-              ? intl.formatMessage({ id: "settings.ompModelRoles.saving" })
-              : intl.formatMessage({ id: "settings.ompModelRoles.save" })}
-          </Button>
+                ) : null}
+              </div>
+            );
+          })}
         </div>
+      )}
+      <div className="flex items-center justify-end gap-2">
+        {saveError ? (
+          <span className="mr-auto text-ui-base text-foreground-subtle">{saveError}</span>
+        ) : savedAt ? (
+          <span className="mr-auto text-ui-base text-foreground-subtle">
+            {intl.formatMessage({ id: "settings.ompModelRoles.saved" })}
+          </span>
+        ) : null}
+        {!inline ? (
+          <Button variant="ghost" onClick={() => onOpenChange?.(false)}>
+            {intl.formatMessage({ id: "common.close" })}
+          </Button>
+        ) : null}
+        <Button disabled={saving || loadError !== null || !dirty} onClick={() => void handleSave()}>
+          {saving
+            ? intl.formatMessage({ id: "settings.ompModelRoles.saving" })
+            : intl.formatMessage({ id: "settings.ompModelRoles.save" })}
+        </Button>
+      </div>
     </>
   );
 

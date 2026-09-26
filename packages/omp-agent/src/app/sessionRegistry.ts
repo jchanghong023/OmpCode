@@ -1,13 +1,7 @@
 // SessionRegistry：会话引擎注册表 + sessions-index / workspace-config 两个 v4 topic 的权威状态。
 // 本适配器进程 = 一个 workspace 的 agent 端点；冷会话来自 omp 会话存储的只读扫描。
 
-import {
-  encodeTopicWireFrames,
-  measureTopicNotificationEnvelopeBytes,
-  type ConversationRow,
-  type SessionSummary,
-  type WorkspaceConfigState,
-} from "@zcode/shared/zcode-protocol-v4";
+import { encodeTopicWireFrames, measureTopicNotificationEnvelopeBytes, type ConversationRow, type SessionSummary, type WorkspaceConfigState } from "@zcode/shared/zcode-protocol-v4";
 import { createId, createLogEpoch, createSubscriptionId, ompSessionIdOfFilePath } from "../domain/ids.js";
 import { coldSubagentIds, rowsFromOmpEntries, transcriptFromOmpEntries } from "../domain/coldHistory.js";
 import { ConversationEngine } from "./conversationEngine.js";
@@ -60,8 +54,7 @@ export class SessionRegistry {
   }
 
   getEngine(sessionId: string): ConversationEngine | null {
-    return this.engines.get(sessionId) ?? [...this.engines.values()].find((engine) =>
-      ompSessionIdOfFilePath(engine.ompSessionFile) === sessionId) ?? null;
+    return this.engines.get(sessionId) ?? [...this.engines.values()].find((engine) => ompSessionIdOfFilePath(engine.ompSessionFile) === sessionId) ?? null;
   }
   requireEngine(sessionId: string): ConversationEngine {
     const engine = this.getEngine(sessionId);
@@ -114,15 +107,17 @@ export class SessionRegistry {
       initialTitle: cold.title ?? undefined,
     });
     const entries = await this.store.readSessionEntries(cold.sessionPath);
-    const transcripts = new Map(await Promise.all(coldSubagentIds(entries).slice(0, 20).map(async (id) =>
-      [id, transcriptFromOmpEntries(await this.store.readSubagentEntries(cold.sessionPath, id))] as const)));
+    const transcripts = new Map(
+      await Promise.all(
+        coldSubagentIds(entries)
+          .slice(0, 20)
+          .map(async (id) => [id, transcriptFromOmpEntries(await this.store.readSubagentEntries(cold.sessionPath, id))] as const),
+      ),
+    );
     const rows: ConversationRow[] = rowsFromOmpEntries(entries, transcripts);
     engine.hydrateRows(rows);
     this.engines.set(params.sessionId, engine);
-    this.upsertEngineSummary(engine, {
-      createdAt: cold.createdAt,
-      lastActivityAt: cold.updatedAt,
-    });
+    this.upsertEngineSummary(engine, { createdAt: cold.createdAt, lastActivityAt: cold.updatedAt });
     return engine;
   }
 
@@ -135,14 +130,19 @@ export class SessionRegistry {
       return;
     }
     // 冷会话文件与索引同步删除；没有找到时保持明确的 unavailable 错误。
-    if (await deleteColdSession({
-      store: this.store, workspace: this.primaryWorkspace, sessionId,
-      onDeleted: (workspaceId, id) => {
-        const index = this.indexes.get(workspaceId);
-        index?.summaries.delete(id);
-        if (index) this.emitIndexDelta(workspaceId, { op: "session.removed", sessionId: id });
-      },
-    })) return;
+    if (
+      await deleteColdSession({
+        store: this.store,
+        workspace: this.primaryWorkspace,
+        sessionId,
+        onDeleted: (workspaceId, id) => {
+          const index = this.indexes.get(workspaceId);
+          index?.summaries.delete(id);
+          if (index) this.emitIndexDelta(workspaceId, { op: "session.removed", sessionId: id });
+        },
+      })
+    )
+      return;
     throw new ProtocolError(-32004, `session unavailable: ${sessionId}`);
   }
 
@@ -169,9 +169,7 @@ export class SessionRegistry {
     const shouldRekey = persistedId !== engine.sessionId && terminal && !this.rekeyedEngineIds.has(engine.sessionId);
     const indexId = this.rekeyedEngineIds.has(engine.sessionId) ? persistedId : engine.sessionId;
     const createdAt = overrides?.createdAt ?? index.summaries.get(indexId)?.createdAt ?? Date.now();
-    const summary = buildEngineSessionSummary({
-      engine, sessionId: indexId, createdAt, lastActivityAt: overrides?.lastActivityAt,
-    });
+    const summary = buildEngineSessionSummary({ engine, sessionId: indexId, createdAt, lastActivityAt: overrides?.lastActivityAt });
     index.summaries.set(indexId, summary);
     this.emitIndexDelta(engine.workspaceId, { op: "session.upserted", session: summary });
     if (shouldRekey) {
@@ -224,18 +222,18 @@ export class SessionRegistry {
   }
 
   /** sessions-index / workspace-config 的 same-sub 恢复：按 subscriptionId 反查并重发快照。 */
-  resyncIndexOrConfig(
-    subscriptionId: string,
-    _base: { logEpoch: string; seq: number } | null,
-    _forceSnapshot = false,
-  ): { subscriptionId: string; mode: "snapshot" | "resume"; logEpoch: string } {
+  resyncIndexOrConfig(subscriptionId: string, _base: { logEpoch: string; seq: number } | null, _forceSnapshot = false): { subscriptionId: string; mode: "snapshot" | "resume"; logEpoch: string } {
     for (const [workspaceId, index] of this.indexes) {
       const subscriber = index.subscribers.get(subscriptionId);
       if (subscriber) {
-        this.emitTopicFrame(`sessions-index/${workspaceId}`, subscriptionId, 0, {
-          kind: "snapshot",
-          snapshot: { protocolVersion: 1, workspaceId, logEpoch: index.logEpoch, sessions: [...index.summaries.values()] },
-        }, "recovery", index.seq);
+        this.emitTopicFrame(
+          `sessions-index/${workspaceId}`,
+          subscriptionId,
+          0,
+          { kind: "snapshot", snapshot: { protocolVersion: 1, workspaceId, logEpoch: index.logEpoch, sessions: [...index.summaries.values()] } },
+          "recovery",
+          index.seq,
+        );
         subscriber.lastDeliveredSeq = index.seq;
         return { subscriptionId, mode: "snapshot", logEpoch: index.logEpoch };
       }
@@ -243,10 +241,14 @@ export class SessionRegistry {
     for (const [workspaceId, entry] of this.configStates) {
       const subscriber = entry.subscribers.get(subscriptionId);
       if (subscriber) {
-        this.emitTopicFrame(`workspace-config/${workspaceId}`, subscriptionId, 0, {
-          kind: "snapshot",
-          snapshot: { protocolVersion: 1, workspaceId, logEpoch: entry.logEpoch, config: entry.state },
-        }, "recovery", entry.seq);
+        this.emitTopicFrame(
+          `workspace-config/${workspaceId}`,
+          subscriptionId,
+          0,
+          { kind: "snapshot", snapshot: { protocolVersion: 1, workspaceId, logEpoch: entry.logEpoch, config: entry.state } },
+          "recovery",
+          entry.seq,
+        );
         subscriber.lastDeliveredSeq = entry.seq;
         return { subscriptionId, mode: "snapshot", logEpoch: entry.logEpoch };
       }
@@ -284,15 +286,14 @@ export class SessionRegistry {
     const subscriptionId = createSubscriptionId();
     index.subscribers.set(subscriptionId, { subscriptionId, topic: `sessions-index/${params.workspaceId}`, lastDeliveredSeq: index.seq });
     index.seq += 1;
-    this.emitTopicFrame(`sessions-index/${params.workspaceId}`, subscriptionId, 0, {
-      kind: "snapshot",
-      snapshot: {
-        protocolVersion: 1,
-        workspaceId: params.workspaceId,
-        logEpoch: index.logEpoch,
-        sessions: [...index.summaries.values()],
-      },
-    }, "initial", index.seq);
+    this.emitTopicFrame(
+      `sessions-index/${params.workspaceId}`,
+      subscriptionId,
+      0,
+      { kind: "snapshot", snapshot: { protocolVersion: 1, workspaceId: params.workspaceId, logEpoch: index.logEpoch, sessions: [...index.summaries.values()] } },
+      "initial",
+      index.seq,
+    );
     const subscriber = index.subscribers.get(subscriptionId)!;
     subscriber.lastDeliveredSeq = index.seq;
     // subscribeAckSchema 要求 mode ∈ snapshot|resume（GUI 链路实测踩坑）。
@@ -309,10 +310,14 @@ export class SessionRegistry {
     const topic = `workspace-config/${params.workspaceId}`;
     const subscriptionId = createSubscriptionId();
     entry.subscribers.set(subscriptionId, { subscriptionId, topic, lastDeliveredSeq: entry.seq });
-    this.emitTopicFrame(topic, subscriptionId, 0, {
-      kind: "snapshot",
-      snapshot: { protocolVersion: 1, workspaceId: params.workspaceId, logEpoch: entry.logEpoch, config: entry.state },
-    }, "initial", entry.seq);
+    this.emitTopicFrame(
+      topic,
+      subscriptionId,
+      0,
+      { kind: "snapshot", snapshot: { protocolVersion: 1, workspaceId: params.workspaceId, logEpoch: entry.logEpoch, config: entry.state } },
+      "initial",
+      entry.seq,
+    );
     return { subscriptionId, mode: "snapshot" as const, logEpoch: entry.logEpoch };
   }
 
@@ -324,10 +329,7 @@ export class SessionRegistry {
     entry.state = config;
     entry.seq += 1;
     for (const subscriber of entry.subscribers.values()) {
-      this.emitTopicFrame(subscriber.topic, subscriber.subscriptionId, subscriber.lastDeliveredSeq, {
-        kind: "deltas",
-        deltas: [{ op: "config.updated", config }],
-      }, "online", entry.seq);
+      this.emitTopicFrame(subscriber.topic, subscriber.subscriptionId, subscriber.lastDeliveredSeq, { kind: "deltas", deltas: [{ op: "config.updated", config }] }, "online", entry.seq);
       subscriber.lastDeliveredSeq = entry.seq;
     }
   }
@@ -349,10 +351,7 @@ export class SessionRegistry {
     }
     index.seq += 1;
     for (const subscriber of index.subscribers.values()) {
-      this.emitTopicFrame(subscriber.topic, subscriber.subscriptionId, subscriber.lastDeliveredSeq, {
-        kind: "deltas",
-        deltas: [delta],
-      }, "online", index.seq);
+      this.emitTopicFrame(subscriber.topic, subscriber.subscriptionId, subscriber.lastDeliveredSeq, { kind: "deltas", deltas: [delta] }, "online", index.seq);
       subscriber.lastDeliveredSeq = index.seq;
     }
   }
@@ -365,14 +364,7 @@ export class SessionRegistry {
     deliveryKind: "initial" | "online" | "recovery",
     toSeq?: number,
   ): void {
-    const frame = {
-      topic,
-      subscriptionId,
-      fromSeq,
-      toSeq: toSeq ?? fromSeq + 1,
-      sentAt: Date.now(),
-      payload,
-    };
+    const frame = { topic, subscriptionId, fromSeq, toSeq: toSeq ?? fromSeq + 1, sentAt: Date.now(), payload };
     const logicalFrameOrdinal = (this.frameOrdinalsBySubscriptionId.get(subscriptionId) ?? 0) + 1;
     this.frameOrdinalsBySubscriptionId.set(subscriptionId, logicalFrameOrdinal);
     const wires = encodeTopicWireFrames(frame, {

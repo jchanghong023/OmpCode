@@ -204,7 +204,13 @@ export function TaskFindDialog({
 
       onFileChangeFindNavigate(selection.query, selection.activeIndex);
     },
-    [activeFindState, onConversationFindNavigate, onFileChangeFindNavigate, effectiveSearchQuery, scope],
+    [
+      activeFindState,
+      onConversationFindNavigate,
+      onFileChangeFindNavigate,
+      effectiveSearchQuery,
+      scope,
+    ],
   );
 
   const handleQueryChange = useCallback((nextQuery: string) => setQuery(nextQuery), []);

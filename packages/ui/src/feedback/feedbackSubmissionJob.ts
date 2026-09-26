@@ -135,7 +135,9 @@ export function getFeedbackSubmissionJobsSnapshot(): FeedbackSubmissionJobSnapsh
 
 export function subscribeFeedbackSubmissionJobs(
   listener: (jobs: FeedbackSubmissionJobSnapshot[]) => void,
-): { dispose: () => void } {
+): {
+  dispose: () => void;
+} {
   globalListeners.add(listener);
   listener(getSubmissionJobSnapshots());
   return {

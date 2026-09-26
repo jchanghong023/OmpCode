@@ -1,11 +1,14 @@
 /** Fork-owned OmpCode terminology and controls; layered over the upstream locale. */
 const ompEnUSOverrides: Record<string, string> = {
   "chat.error.ompAttachmentRejected": "Cannot send attachment to omp: {reason}",
-  "chat.subagents.unavailable": "omp subagent status is unavailable; this session may have incomplete subagent records.",
+  "chat.subagents.unavailable":
+    "omp subagent status is unavailable; this session may have incomplete subagent records.",
   "settings.ompNative.extensions": "OMP Extensions",
   "settings.ompNative.mcp": "OMP MCP Servers",
-  "settings.ompNative.description": "Shows native configuration in the current omp profile and local project. Refresh after changing configuration.",
-  "settings.ompNative.runtimeUnavailable": "omp RPC does not expose extension runtime or MCP connection status. These entries show configuration only.",
+  "settings.ompNative.description":
+    "Shows native configuration in the current omp profile and local project. Refresh after changing configuration.",
+  "settings.ompNative.runtimeUnavailable":
+    "omp RPC does not expose extension runtime or MCP connection status. These entries show configuration only.",
   "settings.ompNative.refresh": "Refresh",
   "settings.ompNative.loadFailed": "Could not read omp configuration",
   "settings.ompNative.profile": "Current Profile",

@@ -23,7 +23,10 @@ export function mergeDeltas(entries: LoggedDelta[]): LoggedDelta[] {
       continue;
     }
     if (last && entry.delta.op === "state.updated" && last.delta.op === "state.updated") {
-      last.delta = { op: "state.updated", patch: { ...last.delta.patch, ...entry.delta.patch } as StatePatch };
+      last.delta = {
+        op: "state.updated",
+        patch: { ...last.delta.patch, ...entry.delta.patch } as StatePatch,
+      };
       last.seq = entry.seq;
       continue;
     }

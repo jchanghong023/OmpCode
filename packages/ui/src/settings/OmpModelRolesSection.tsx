@@ -34,18 +34,23 @@ export function OmpModelRolesSection({
       setProfileError("unsupported");
       return;
     }
-    void platform.listOmpProfiles().then((result) => {
-      if (cancelled) return;
-      if (result.success) {
-        setProfileInfo(result);
-        setProfileError(null);
-      } else {
-        setProfileError(result.error);
-      }
-    }).catch(() => {
-      if (!cancelled) setProfileError("load_failed");
-    });
-    return () => { cancelled = true; };
+    void platform
+      .listOmpProfiles()
+      .then((result) => {
+        if (cancelled) return;
+        if (result.success) {
+          setProfileInfo(result);
+          setProfileError(null);
+        } else {
+          setProfileError(result.error);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setProfileError("load_failed");
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [platform]);
 
   const { configOptions } = useToolbarConfigOptions(workspacePath, null, workspaceIdentity);

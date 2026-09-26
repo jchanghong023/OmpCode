@@ -143,7 +143,9 @@ export function OmpDesktopComposerStatus({
             type="button"
             variant="ghost"
             size="sm"
-            className={autoCompactionEnabled ? "size-7 p-0 text-success hover:text-success" : "size-7 p-0"}
+            className={
+              autoCompactionEnabled ? "size-7 p-0 text-success hover:text-success" : "size-7 p-0"
+            }
             aria-pressed={autoCompactionEnabled === true}
             aria-label={`${autoLabel}: ${autoStateLabel}`}
             disabled={

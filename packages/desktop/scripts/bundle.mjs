@@ -28,7 +28,10 @@ const desktopRoot = resolve(import.meta.dirname, "..");
 const workspaceRoot = resolve(desktopRoot, "../..");
 const requireFromBundle = createRequire(import.meta.url);
 // @electron/asar 4 不再导出 package.json，CLI 也改为 asar.mjs；从公开入口定位包目录。
-const asarCliPath = resolve(dirname(requireFromBundle.resolve("@electron/asar")), "../bin/asar.mjs");
+const asarCliPath = resolve(
+  dirname(requireFromBundle.resolve("@electron/asar")),
+  "../bin/asar.mjs",
+);
 const runtimeModuleLookupRoots = [
   desktopRoot,
   workspaceRoot,

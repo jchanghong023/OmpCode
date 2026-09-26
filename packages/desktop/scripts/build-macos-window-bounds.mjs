@@ -47,17 +47,23 @@ try {
   execFileSync(
     "xcrun",
     ["swiftc", "-O", "-target", "arm64-apple-macos11", sourcePath, "-o", `${outputPath}-arm64`],
-    { stdio: "inherit" },
+    {
+      stdio: "inherit",
+    },
   );
   execFileSync(
     "xcrun",
     ["swiftc", "-O", "-target", "x86_64-apple-macos11", sourcePath, "-o", `${outputPath}-x86_64`],
-    { stdio: "inherit" },
+    {
+      stdio: "inherit",
+    },
   );
   execFileSync(
     "lipo",
     ["-create", `${outputPath}-arm64`, `${outputPath}-x86_64`, "-output", outputPath],
-    { stdio: "inherit" },
+    {
+      stdio: "inherit",
+    },
   );
   execFileSync("rm", ["-f", `${outputPath}-arm64`, `${outputPath}-x86_64`]);
   console.log(`[window-bounds] 已构建 universal 二进制：${outputPath}`);

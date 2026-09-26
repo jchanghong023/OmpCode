@@ -163,7 +163,10 @@ export async function handleSelect(
   // 在页面里对该 <select> 按 values 设选中态（先 value 精确匹配、再可见文本匹配）并派发 input+change。
   const raw = (await view.webContents.executeJavaScript(
     SELECT_SCRIPT(command.ref, command.values),
-  )) as { ok?: boolean; error?: string } | null;
+  )) as {
+    ok?: boolean;
+    error?: string;
+  } | null;
   if (!raw || typeof raw !== "object")
     return done(executionError("select returned invalid result"));
   if (raw.error === "ref_not_found") return done(refNotFound(command.ref));
@@ -185,7 +188,10 @@ export async function handleCheck(
   // 设置 ref 指向的 checkbox/radio 勾选态到 checked(缺省 true)；状态需变时原生 click 派发事件。
   const raw = (await view.webContents.executeJavaScript(
     CHECK_SCRIPT(command.ref, command.checked ?? true),
-  )) as { ok?: boolean; error?: string } | null;
+  )) as {
+    ok?: boolean;
+    error?: string;
+  } | null;
   if (!raw || typeof raw !== "object") return done(executionError("check returned invalid result"));
   if (raw.error === "ref_not_found") return done(refNotFound(command.ref));
   if (raw.error === "not_checkable") {

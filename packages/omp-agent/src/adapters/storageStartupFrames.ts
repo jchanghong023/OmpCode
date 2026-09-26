@@ -50,7 +50,11 @@ export async function runPrepareStorageWorker(options: {
     const onLine = (line: string): void => {
       try {
         const message = JSON.parse(line.trim());
-        if (typeof message === "object" && message !== null && (message as { method?: unknown }).method === "startup/storagePathReady") {
+        if (
+          typeof message === "object" &&
+          message !== null &&
+          (message as { method?: unknown }).method === "startup/storagePathReady"
+        ) {
           readline.removeListener("line", onLine);
           clearTimeout(timer);
           resolve();

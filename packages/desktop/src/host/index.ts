@@ -867,10 +867,12 @@ async function dispatchCronRun(request: CronRunDispatchRequest): Promise<{
     // omp 换核后 ZCode Provider Registry 没有候选。派发时读取目标工作区的 omp 目录，
     // 避免 GUI 可选模型在定时任务执行时被旧 Registry 错误拒绝。
     readConfigOptions: async () =>
-      (await agentService.readWorkspacePresentation({
-        workspacePath: request.workspacePath,
-        workspaceIdentity: request.workspaceIdentity,
-      })).configOptions ?? [],
+      (
+        await agentService.readWorkspacePresentation({
+          workspacePath: request.workspacePath,
+          workspaceIdentity: request.workspaceIdentity,
+        })
+      ).configOptions ?? [],
     readSelection: () =>
       cronAutomationRepo.getModelSelectionForDispatch(
         request.automationId,

@@ -167,9 +167,7 @@ export async function copyBigModelTeamPlanProjectApiKeySecret(params: {
 }): Promise<string | null> {
   const copyPayload = await readApiJson<BigModelBizEnvelope<BigModelTeamPlanApiKeySecret>>(
     params.apiClient,
-    `${buildBigModelTeamPlanApiKeysUrl(params.host, params.teamContext)}/copy/${encodeURIComponent(
-      params.apiKey,
-    )}`,
+    `${buildBigModelTeamPlanApiKeysUrl(params.host, params.teamContext)}/copy/${encodeURIComponent(params.apiKey)}`,
     {
       method: "GET",
       timeoutMs: params.timeoutMs,

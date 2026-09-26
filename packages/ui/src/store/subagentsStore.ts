@@ -213,7 +213,9 @@ export const useSubagentsStore = create<SubagentsStoreState>((set, get) => ({
         provider,
         subagentsService,
         workspaceIdentityFromState,
-        { bypassCache: true },
+        {
+          bypassCache: true,
+        },
       );
       if (!isLatestAgentLoadRequest(requestId)) {
         return;

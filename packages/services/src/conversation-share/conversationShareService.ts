@@ -1278,7 +1278,9 @@ export class ConversationShareService implements IConversationShareService {
         throw new ConversationShareServiceError(
           "network",
           "Conversation artifact download failed",
-          { issues: [artifactIssue("unknown")] },
+          {
+            issues: [artifactIssue("unknown")],
+          },
         );
       }
       const declaredBytes = Number(response.headers.get("content-length"));
@@ -1960,7 +1962,9 @@ export class ConversationShareService implements IConversationShareService {
       throw new ConversationShareServiceError(
         structureKind,
         "Selected conversation contains unsupported structure",
-        { issues: structureIssues },
+        {
+          issues: structureIssues,
+        },
       );
     }
     // 本地运行投影包含 subagent 详情与写入态 ID，后端 V1 会以 3205 拒绝；

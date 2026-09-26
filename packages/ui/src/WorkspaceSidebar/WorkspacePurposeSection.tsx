@@ -35,7 +35,9 @@ export function WorkspacePurposeSection({
     transform,
     transition,
     isDragging,
-  } = useSortable({ id: sortableId });
+  } = useSortable({
+    id: sortableId,
+  });
   const style: CSSProperties = {
     transform: transform
       ? CSS.Transform.toString({ ...transform, scaleX: 1, scaleY: 1 })

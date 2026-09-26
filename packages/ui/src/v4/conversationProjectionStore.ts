@@ -329,7 +329,9 @@ export class ConversationProjectionStore {
     | (Extract<
         ConversationTurnNavigatorHydrationResult,
         { status: "hydrated" | "not-enough-queries" }
-      > & { directoryRevision: number })
+      > & {
+        directoryRevision: number;
+      })
     | null = null;
   private closed = false;
 

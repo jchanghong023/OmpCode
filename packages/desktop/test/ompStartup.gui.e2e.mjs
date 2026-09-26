@@ -6,9 +6,10 @@ assert.ok(endpoint, "Set OMP_E2E_CDP_URL to an isolated OmpCode Electron CDP end
 
 const browser = await chromium.connectOverCDP(endpoint);
 try {
-  const page = browser.contexts()[0]?.pages().find((candidate) =>
-    candidate.url().startsWith("http://127.0.0.1:"),
-  );
+  const page = browser
+    .contexts()[0]
+    ?.pages()
+    .find((candidate) => candidate.url().startsWith("http://127.0.0.1:"));
   assert.ok(page, "Expected an isolated OmpCode renderer page");
 
   // 旧 Provider Registry 为空也要加载 omp；不能再显示 ZCode 套餐/供应商横幅。
@@ -28,8 +29,11 @@ try {
     await page.getByRole("button", { name: "模型设置" }).click();
   }
   await section.waitFor({ state: "visible" });
-  await page.waitForFunction(() =>
-    (document.querySelector('[data-testid="omp-model-roles-section"] select[aria-label="default"]')?.options.length ?? 0) > 1,
+  await page.waitForFunction(
+    () =>
+      (document.querySelector(
+        '[data-testid="omp-model-roles-section"] select[aria-label="default"]',
+      )?.options.length ?? 0) > 1,
   );
   // 已配置的 role 可以引用当前目录外的模型；原值仍需可见，供用户换到已有模型。
   assert.match(await section.innerText(), /commandcode\/inclusionai\/ling-3\.0-flash-sante:free/u);

@@ -41,7 +41,8 @@ export function createDesktopPlatform(options: {
     openInFileManager: (path) => window.zcode.openInFileManager(path),
     openExternalFile: (path) => window.zcode.openExternalFile(path),
     readOmpModelRoles: () => window.zcode.readOmpModelRoles(),
-    readOmpNativeIntegrations: (workspacePath) => window.zcode.readOmpNativeIntegrations(workspacePath),
+    readOmpNativeIntegrations: (workspacePath) =>
+      window.zcode.readOmpNativeIntegrations(workspacePath),
     listOmpProfiles: () => window.zcode.listOmpProfiles(),
     writeOmpModelRoles: (roles) => window.zcode.writeOmpModelRoles(roles),
     openOmpModelConfig: () => window.zcode.openOmpModelConfig(),

@@ -1,10 +1,7 @@
 // serverApp：ZCode Protocol（legacy + v4）方法分发的总装。
 // 由 adapters/protocolServer 驱动 IO；这里只做路由与结果组装。
 
-import {
-  V4_METHODS,
-  type WorkspaceConfigState,
-} from "@zcode/shared/zcode-protocol-v4";
+import { V4_METHODS, type WorkspaceConfigState } from "@zcode/shared/zcode-protocol-v4";
 import { createLegacyHandlers } from "./legacyMethods.js";
 import { normalizeOmpSlashCommands } from "../domain/ompCommands.js";
 import { ProtocolError } from "./errors.js";
@@ -36,18 +33,8 @@ export class ServerApp {
 
   constructor(deps: ServerAppDeps) {
     this.deps = deps;
-    this.registry = new SessionRegistry({
-      ompFactory: deps.ompFactory,
-      store: deps.store,
-      gateway: deps.gateway,
-      onCommandsUpdate: (commands) => this.updateSlashCommands(commands),
-    });
-    this.commands = new V4CommandService({
-      registry: this.registry,
-      workspaceId: deps.workspaceKey,
-      workspacePath: deps.workspacePath,
-      attachments: this.attachments,
-    });
+    this.registry = new SessionRegistry({ ompFactory: deps.ompFactory, store: deps.store, gateway: deps.gateway, onCommandsUpdate: (commands) => this.updateSlashCommands(commands) });
+    this.commands = new V4CommandService({ registry: this.registry, workspaceId: deps.workspaceKey, workspacePath: deps.workspacePath, attachments: this.attachments });
     this.legacy = createLegacyHandlers({
       registry: this.registry,
       attachments: this.attachments,
@@ -138,12 +125,7 @@ export class ServerApp {
       case V4_METHODS.commandsQuery: {
         const record = asRecord(params);
         const commands = Array.isArray(record?.commands) ? record.commands : [];
-        return {
-          results: commands.map((key) => ({
-            key: isRecord(key) ? key : { sessionId: null, commandId: String(key) },
-            result: "unknown" as const,
-          })),
-        };
+        return { results: commands.map((key) => ({ key: isRecord(key) ? key : { sessionId: null, commandId: String(key) }, result: "unknown" as const })) };
       }
       case V4_METHODS.attachmentBegin: {
         const record = asRecord(params);
@@ -161,11 +143,7 @@ export class ServerApp {
           : { uploadId: result.uploadId, state: result.state, nextChunkIndex: result.nextChunkIndex };
       }
       case V4_METHODS.attachmentChunk:
-        return this.attachments.chunk({
-          uploadId: stringField(params, "uploadId"),
-          chunkIndex: numberField(params, "chunkIndex"),
-          dataBase64: stringField(params, "dataBase64"),
-        });
+        return this.attachments.chunk({ uploadId: stringField(params, "uploadId"), chunkIndex: numberField(params, "chunkIndex"), dataBase64: stringField(params, "dataBase64") });
       case V4_METHODS.attachmentCommit:
         return this.attachments.commit({ uploadId: stringField(params, "uploadId") });
       case V4_METHODS.attachmentAbort:
@@ -199,12 +177,15 @@ export class ServerApp {
   private async getWorkspaceConfig(): Promise<WorkspaceConfigState> {
     if (this.workspaceConfigCache) return this.workspaceConfigCache;
     if (!this.workspaceConfigLoading) {
-      this.workspaceConfigLoading = this.deps.loadWorkspaceConfig()
+      this.workspaceConfigLoading = this.deps
+        .loadWorkspaceConfig()
         .then((config) => {
           this.workspaceConfigCache = config;
           return config;
         })
-        .finally(() => { this.workspaceConfigLoading = null; });
+        .finally(() => {
+          this.workspaceConfigLoading = null;
+        });
     }
     return this.workspaceConfigLoading;
   }
@@ -233,10 +214,7 @@ export class ServerApp {
     }
     if (topic.startsWith("workspace-config/")) {
       const config = await this.getWorkspaceConfig();
-      const ack = this.registry.subscribeWorkspaceConfig({
-        workspaceId: topic.slice("workspace-config/".length),
-        config,
-      });
+      const ack = this.registry.subscribeWorkspaceConfig({ workspaceId: topic.slice("workspace-config/".length), config });
       return { ack };
     }
     const sessionId = topic.startsWith("conversation/") ? topic.slice("conversation/".length) : null;
@@ -245,11 +223,7 @@ export class ServerApp {
     }
     let engine = this.registry.getEngine(sessionId);
     if (!engine) {
-      engine = await this.registry.resumeSession({
-        sessionId,
-        workspaceId: this.deps.workspaceKey,
-        workspacePath: this.deps.workspacePath,
-      });
+      engine = await this.registry.resumeSession({ sessionId, workspaceId: this.deps.workspaceKey, workspacePath: this.deps.workspacePath });
     }
     const base = asRecord(record?.base);
     const ack = engine.subscribe({
@@ -298,13 +272,7 @@ export class ServerApp {
     const beforeRowId = numberFieldOrNull(record, "beforeRowId");
     const limit = numberField(record, "limit");
     const page = engine.projection.rowsRange(beforeRowId === null ? undefined : beforeRowId, limit);
-    return {
-      rows: page.rows,
-      atSeq: engine.projection.seq,
-      atRevision: engine.projection.revision,
-      atLogEpoch: engine.projection.logEpoch,
-      hasMore: page.hasMore,
-    };
+    return { rows: page.rows, atSeq: engine.projection.seq, atRevision: engine.projection.revision, atLogEpoch: engine.projection.logEpoch, hasMore: page.hasMore };
   }
 
   private fileChanges(params: unknown) {
@@ -316,14 +284,7 @@ export class ServerApp {
       files: facts.files,
       additions: facts.additions,
       deletions: facts.deletions,
-      items: facts.items.map((item) => ({
-        path: item.path,
-        additions: item.additions,
-        deletions: item.deletions,
-        writeCount: item.writeCount,
-        toolNames: item.toolNames,
-        patches: item.patches,
-      })),
+      items: facts.items.map((item) => ({ path: item.path, additions: item.additions, deletions: item.deletions, writeCount: item.writeCount, toolNames: item.toolNames, patches: item.patches })),
     };
   }
 
@@ -338,12 +299,7 @@ export class ServerApp {
     const slice = bytes.subarray(offset, offset + limit);
     const attachment = this.attachments.lookup(stringField(record, "ref"))!;
     const nextOffset = offset + slice.byteLength;
-    return {
-      dataBase64: slice.toString("base64"),
-      mediaType: attachment.mime,
-      totalBytes: bytes.byteLength,
-      nextOffset: nextOffset < bytes.byteLength ? nextOffset : null,
-    };
+    return { dataBase64: slice.toString("base64"), mediaType: attachment.mime, totalBytes: bytes.byteLength, nextOffset: nextOffset < bytes.byteLength ? nextOffset : null };
   }
 
   async dispose(): Promise<void> {

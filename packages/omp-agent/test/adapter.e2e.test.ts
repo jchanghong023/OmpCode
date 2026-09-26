@@ -20,11 +20,19 @@ const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const adapterEntry = join(packageRoot, "src", "adapters", "cliMain.ts");
 const fakeOmpPath = join(packageRoot, "test", "fixtures", "fakeOmp.mjs");
 // tsx 以真实 node + cli.mjs 拉起（避免 Windows .cmd shim 在 spawn 下的路径问题）。
-const tsxCliPath = join(dirname(createRequire(import.meta.url).resolve("tsx/package.json")), "dist", "cli.mjs");
+const tsxCliPath = join(
+  dirname(createRequire(import.meta.url).resolve("tsx/package.json")),
+  "dist",
+  "cli.mjs",
+);
 
 interface WireFrame {
   topic: string;
-  payload: { kind: "snapshot" | "deltas"; snapshot?: { rows?: { window?: unknown[] } }; deltas?: unknown[] };
+  payload: {
+    kind: "snapshot" | "deltas";
+    snapshot?: { rows?: { window?: unknown[] } };
+    deltas?: unknown[];
+  };
 }
 
 class AdapterHarness {
@@ -54,7 +62,9 @@ class AdapterHarness {
       this.child.stdin.write(`${JSON.stringify({ id, method, params })}\n`);
       this.waitUntil(() => {
         const match = this.frames.find(
-          (frame) => (frame as { id?: number }).id === id && ("result" in (frame as object) || "error" in (frame as object)),
+          (frame) =>
+            (frame as { id?: number }).id === id &&
+            ("result" in (frame as object) || "error" in (frame as object)),
         );
         return match;
       })
@@ -96,7 +106,10 @@ class AdapterHarness {
     const rows = new Map<number, Record<string, unknown>>();
     for (const frame of this.conversationFrames()) {
       if (frame.payload.kind === "snapshot") {
-        for (const row of (frame.payload.snapshot?.rows?.window ?? []) as Record<string, unknown>[]) {
+        for (const row of (frame.payload.snapshot?.rows?.window ?? []) as Record<
+          string,
+          unknown
+        >[]) {
           rows.set(row.rowId as number, row);
         }
       } else if (frame.payload.kind === "deltas") {
@@ -110,7 +123,11 @@ class AdapterHarness {
           if (delta.op === "row.appended" || delta.op === "row.upserted") {
             const row = delta.row as Record<string, unknown>;
             rows.set(row.rowId as number, row);
-          } else if (delta.op === "row.delta" && typeof delta.rowId === "number" && typeof delta.path === "string") {
+          } else if (
+            delta.op === "row.delta" &&
+            typeof delta.rowId === "number" &&
+            typeof delta.path === "string"
+          ) {
             const row = rows.get(delta.rowId);
             if (row && typeof delta.append === "string") {
               row[delta.path] = String(row[delta.path] ?? "") + delta.append;
@@ -131,7 +148,10 @@ class AdapterHarness {
         // 会话快照是扁平结构（control/meta/config 顶层字段），直接铺开作基底。
         state = { ...((frame.payload.snapshot ?? {}) as Record<string, unknown>) };
       } else {
-        for (const delta of frame.payload.deltas as { op?: string; patch?: Record<string, unknown> }[]) {
+        for (const delta of frame.payload.deltas as {
+          op?: string;
+          patch?: Record<string, unknown>;
+        }[]) {
           if (delta.op === "state.updated" && delta.patch) {
             Object.assign(state, delta.patch);
           }
@@ -157,15 +177,25 @@ class AdapterHarness {
 function assertFrameOrdinalsIncrease(frames: unknown[], subscriptionId: string): void {
   const logical = new Map<string, number>();
   for (const frame of frames) {
-    const record = frame as { method?: string; params?: { subscriptionId?: string; logicalFrameId?: string; logicalFrameOrdinal?: number } };
-    if (record.method !== "v4/conversation/frame" || record.params?.subscriptionId !== subscriptionId) continue;
+    const record = frame as {
+      method?: string;
+      params?: { subscriptionId?: string; logicalFrameId?: string; logicalFrameOrdinal?: number };
+    };
+    if (
+      record.method !== "v4/conversation/frame" ||
+      record.params?.subscriptionId !== subscriptionId
+    )
+      continue;
     if (record.params.logicalFrameId && record.params.logicalFrameOrdinal) {
       logical.set(record.params.logicalFrameId, record.params.logicalFrameOrdinal);
     }
   }
   const ordinals = [...logical.values()];
   assert.ok(ordinals.length > 1, `Expected multiple logical frames for ${subscriptionId}`);
-  assert.deepEqual(ordinals, ordinals.map((_, index) => index + 1));
+  assert.deepEqual(
+    ordinals,
+    ordinals.map((_, index) => index + 1),
+  );
 }
 
 async function startAdapter(extraEnv: Record<string, string> = {}): Promise<AdapterHarness> {
@@ -190,7 +220,8 @@ async function startAdapter(extraEnv: Record<string, string> = {}): Promise<Adap
   await harness.waitUntil(() =>
     harness.frames.find(
       (frame) =>
-        (frame as { method?: string; params?: { phase?: string } }).method === "startup/storageState" &&
+        (frame as { method?: string; params?: { phase?: string } }).method ===
+          "startup/storageState" &&
         (frame as { params?: { phase?: string } }).params?.phase === "ready",
     ),
   );
@@ -205,7 +236,14 @@ async function uploadFixture(
   mime: string,
   bytes: Buffer,
 ): Promise<{ ref: string; fileName: string; mime: string; bytes: number }> {
-  const extension = mime === "application/pdf" ? "pdf" : mime === "text/plain" ? "txt" : mime === "image/jpeg" ? "jpg" : "png";
+  const extension =
+    mime === "application/pdf"
+      ? "pdf"
+      : mime === "text/plain"
+        ? "txt"
+        : mime === "image/jpeg"
+          ? "jpg"
+          : "png";
   const fileName = `${uploadId}.${extension}`;
   const common = { connectionId: "image-test", uploadId, sessionId };
   const begun = (await harness.request("v4/attachment/begin", {
@@ -217,8 +255,14 @@ async function uploadFixture(
     checksum: `sha256:${createHash("sha256").update(bytes).digest("hex")}`,
   })) as { result: { state: string } };
   assert.equal(begun.result.state, "staging");
-  await harness.request("v4/attachment/chunk", { ...common, chunkIndex: 0, dataBase64: bytes.toString("base64") });
-  const committed = (await harness.request("v4/attachment/commit", common)) as { result: { ref: string } };
+  await harness.request("v4/attachment/chunk", {
+    ...common,
+    chunkIndex: 0,
+    dataBase64: bytes.toString("base64"),
+  });
+  const committed = (await harness.request("v4/attachment/commit", common)) as {
+    result: { ref: string };
+  };
   return { ref: committed.result.ref, fileName, mime, bytes: bytes.length };
 }
 
@@ -226,13 +270,22 @@ test("v4 图片和文本进入 omp，不能消费的 PDF 在提交前拒绝", as
   const harness = await startAdapter();
   try {
     const firstBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 1]);
-    const first = await uploadFixture(harness, "image-first", "draft-image-test", "image/png", firstBytes);
+    const first = await uploadFixture(
+      harness,
+      "image-first",
+      "draft-image-test",
+      "image/png",
+      firstBytes,
+    );
     const created = (await harness.request("v4/command", {
       commandId: "create-with-image",
       clientId: "image-client",
       sessionId: null,
       type: "createSession",
-      payload: { workspaceId: "test-workspace", firstInput: { text: "/image-report first", attachments: [first] } },
+      payload: {
+        workspaceId: "test-workspace",
+        firstInput: { text: "/image-report first", attachments: [first] },
+      },
       issuedAt: Date.now(),
     })) as { result: unknown };
     const createAck = commandAckSchema.parse(created.result);
@@ -245,11 +298,12 @@ test("v4 图片和文本进入 omp，不能消费的 PDF 在提交前拒绝", as
     });
     const report = async (label: string) => {
       const prefix = `IMAGE_REPORT:${label}:`;
-      const row = await harness.waitUntil(() =>
+      const row = (await harness.waitUntil(() =>
         [...harness.collectRows().values()].find(
-          (candidate) => candidate.kind === "assistantText" && String(candidate.text ?? "").startsWith(prefix),
+          (candidate) =>
+            candidate.kind === "assistantText" && String(candidate.text ?? "").startsWith(prefix),
         ),
-      ) as { text: string };
+      )) as { text: string };
       return JSON.parse(row.text.slice(prefix.length)) as { hasImages: boolean; images: unknown[] };
     };
     assert.deepEqual(await report("first"), {
@@ -257,9 +311,21 @@ test("v4 图片和文本进入 omp，不能消费的 PDF 在提交前拒绝", as
       images: [{ type: "image", data: firstBytes.toString("base64"), mimeType: "image/png" }],
     });
 
-    const pdf = await uploadFixture(harness, "document", sessionId, "application/pdf", Buffer.from("%PDF-test"));
+    const pdf = await uploadFixture(
+      harness,
+      "document",
+      sessionId,
+      "application/pdf",
+      Buffer.from("%PDF-test"),
+    );
     const secondBytes = Buffer.from([0xff, 0xd8, 0xff, 0x00]);
-    const second = await uploadFixture(harness, "image-second", sessionId, "image/jpeg", secondBytes);
+    const second = await uploadFixture(
+      harness,
+      "image-second",
+      sessionId,
+      "image/jpeg",
+      secondBytes,
+    );
     const sent = (await harness.request("v4/command", {
       commandId: "send-with-images",
       clientId: "image-client",
@@ -278,23 +344,45 @@ test("v4 图片和文本进入 omp，不能消费的 PDF 在提交前拒绝", as
     });
 
     const unsupported = (await harness.request("v4/command", {
-      commandId: "send-with-pdf", clientId: "image-client", sessionId,
-      type: "sendText", payload: { text: "请读 PDF", attachments: [pdf] }, issuedAt: Date.now(),
+      commandId: "send-with-pdf",
+      clientId: "image-client",
+      sessionId,
+      type: "sendText",
+      payload: { text: "请读 PDF", attachments: [pdf] },
+      issuedAt: Date.now(),
     })) as { result: unknown };
     const unsupportedAck = commandAckSchema.parse(unsupported.result);
     assert.equal(unsupportedAck.status, "rejected");
-    assert.match(unsupportedAck.message ?? "", /document\.pdf: unsupported attachment type application\/pdf/u);
+    assert.match(
+      unsupportedAck.message ?? "",
+      /document\.pdf: unsupported attachment type application\/pdf/u,
+    );
 
-    const text = await uploadFixture(harness, "note", sessionId, "text/plain", Buffer.from("TEXT_ATTACHMENT_OK", "utf8"));
+    const text = await uploadFixture(
+      harness,
+      "note",
+      sessionId,
+      "text/plain",
+      Buffer.from("TEXT_ATTACHMENT_OK", "utf8"),
+    );
     const withText = (await harness.request("v4/command", {
-      commandId: "send-with-text", clientId: "image-client", sessionId,
-      type: "sendText", payload: { text: "/text-report note", attachments: [text] }, issuedAt: Date.now(),
+      commandId: "send-with-text",
+      clientId: "image-client",
+      sessionId,
+      type: "sendText",
+      payload: { text: "/text-report note", attachments: [text] },
+      issuedAt: Date.now(),
     })) as { result: unknown };
     assert.equal(commandAckSchema.parse(withText.result).status, "accepted");
-    const textRow = await harness.waitUntil(() => [...harness.collectRows().values()].find(
-      (row) => row.kind === "assistantText" && String(row.text ?? "").startsWith("TEXT_REPORT:"),
+    const textRow = (await harness.waitUntil(() =>
+      [...harness.collectRows().values()].find(
+        (row) => row.kind === "assistantText" && String(row.text ?? "").startsWith("TEXT_REPORT:"),
+      ),
     )) as { text: string };
-    const textReport = JSON.parse(textRow.text.slice("TEXT_REPORT:".length)) as { message: string; images: unknown[] };
+    const textReport = JSON.parse(textRow.text.slice("TEXT_REPORT:".length)) as {
+      message: string;
+      images: unknown[];
+    };
     assert.match(textReport.message, /note\.txt/u);
     assert.match(textReport.message, /TEXT_ATTACHMENT_OK/u);
     assert.deepEqual(textReport.images, []);
@@ -317,7 +405,9 @@ test("v4 图片和文本进入 omp，不能消费的 PDF 在提交前拒绝", as
 test("omp 的 @ 引用目录不暴露旧插件 RPC 错误", async () => {
   const harness = await startAdapter();
   try {
-    const response = await harness.request("plugins/referenceCatalog", { workspace: { workspacePath: packageRoot } }) as {
+    const response = (await harness.request("plugins/referenceCatalog", {
+      workspace: { workspacePath: packageRoot },
+    })) as {
       result?: { authority: string; plugins: unknown[] };
       error?: unknown;
     };
@@ -331,30 +421,68 @@ test("omp 的 @ 引用目录不暴露旧插件 RPC 错误", async () => {
 test("omp 子代理事件投影为父会话的状态与可见记录，重复结束幂等", async () => {
   const harness = await startAdapter();
   try {
-    const created = await harness.request("v4/command", {
-      commandId: "subagent-test", clientId: "subagent-client", sessionId: null,
-      type: "createSession", payload: { workspaceId: "test-workspace", firstInput: { text: "SUBAGENT_REPORT" } }, issuedAt: Date.now(),
-    }) as { result: unknown };
+    const created = (await harness.request("v4/command", {
+      commandId: "subagent-test",
+      clientId: "subagent-client",
+      sessionId: null,
+      type: "createSession",
+      payload: { workspaceId: "test-workspace", firstInput: { text: "SUBAGENT_REPORT" } },
+      issuedAt: Date.now(),
+    })) as { result: unknown };
     const ack = commandAckSchema.parse(created.result);
     assert.equal(ack.status, "accepted");
     const sessionId = (ack.result as { sessionId: string }).sessionId;
-    await harness.request("v4/conversation/subscribe", { topic: `conversation/${sessionId}`, connectionId: "subagent-test", clientMode: "desktop-continuous" });
-    await harness.waitUntil(() => [...harness.collectRows().values()].some((row) => row.kind === "subagent" && row.status === "success"));
+    await harness.request("v4/conversation/subscribe", {
+      topic: `conversation/${sessionId}`,
+      connectionId: "subagent-test",
+      clientMode: "desktop-continuous",
+    });
+    await harness.waitUntil(() =>
+      [...harness.collectRows().values()].some(
+        (row) => row.kind === "subagent" && row.status === "success",
+      ),
+    );
     const rows = [...harness.collectRows().values()].filter((row) => row.kind === "subagent");
     assert.equal(rows.length, 1);
     assert.equal(rows[0]?.subagentType, "scout");
-    const subagentDeltas = harness.conversationFrames().flatMap((frame) => frame.payload.kind === "deltas" ? frame.payload.deltas ?? [] : [])
-      .filter((delta): delta is { op: string; row?: { kind?: string } } => typeof delta === "object" && delta !== null)
+    const subagentDeltas = harness
+      .conversationFrames()
+      .flatMap((frame) => (frame.payload.kind === "deltas" ? (frame.payload.deltas ?? []) : []))
+      .filter(
+        (delta): delta is { op: string; row?: { kind?: string } } =>
+          typeof delta === "object" && delta !== null,
+      )
       .filter((delta) => delta.row?.kind === "subagent");
-    const initialSubagent = harness.conversationFrames().some((frame) =>
-      frame.payload.kind === "snapshot" && frame.payload.snapshot?.rows?.window?.some((row: { kind?: string }) => row.kind === "subagent"));
+    const initialSubagent = harness
+      .conversationFrames()
+      .some(
+        (frame) =>
+          frame.payload.kind === "snapshot" &&
+          frame.payload.snapshot?.rows?.window?.some(
+            (row: { kind?: string }) => row.kind === "subagent",
+          ),
+      );
     if (!initialSubagent) {
-      assert.equal(subagentDeltas[0]?.op, "row.appended", "new subagent rows must be delivered to live desktop consumers");
+      assert.equal(
+        subagentDeltas[0]?.op,
+        "row.appended",
+        "new subagent rows must be delivered to live desktop consumers",
+      );
     }
-    await harness.waitUntil(() => (harness.collectState().subagents as { endedTotal?: number } | undefined)?.endedTotal === 1);
+    await harness.waitUntil(
+      () =>
+        (harness.collectState().subagents as { endedTotal?: number } | undefined)?.endedTotal === 1,
+    );
     assert.equal((harness.collectState().subagents as { endedTotal: number }).endedTotal, 1);
-    await harness.waitUntil(() => [...harness.collectRows().values()].some((row) => row.kind === "subagent" && String(row.transcriptText ?? "").includes("Read README")));
-    const directory = await harness.request("session/subagents", { sessionId }) as { result: { ended: { total: number; items: unknown[] } } };
+    await harness.waitUntil(() =>
+      [...harness.collectRows().values()].some(
+        (row) =>
+          row.kind === "subagent" && String(row.transcriptText ?? "").includes("Read README"),
+      ),
+    );
+    const directory = (await harness.request("session/subagents", { sessionId })) as {
+      result: { ended: { total: number; items: unknown[] } };
+    };
     assert.equal(directory.result.ended.total, 1);
     assert.equal(directory.result.ended.items.length, 1);
   } finally {
@@ -365,16 +493,32 @@ test("omp 子代理事件投影为父会话的状态与可见记录，重复结�
 test("omp 子代理订阅失败时投影明确不可用，普通会话仍可发送", async () => {
   const harness = await startAdapter({ FAKE_OMP_SUBAGENT_SUBSCRIBE_FAIL: "1" });
   try {
-    const created = await harness.request("v4/command", {
-      commandId: "subagent-unavailable", clientId: "subagent-client", sessionId: null,
-      type: "createSession", payload: { workspaceId: "test-workspace", firstInput: { text: "/help" } }, issuedAt: Date.now(),
-    }) as { result: unknown };
+    const created = (await harness.request("v4/command", {
+      commandId: "subagent-unavailable",
+      clientId: "subagent-client",
+      sessionId: null,
+      type: "createSession",
+      payload: { workspaceId: "test-workspace", firstInput: { text: "/help" } },
+      issuedAt: Date.now(),
+    })) as { result: unknown };
     const ack = commandAckSchema.parse(created.result);
     assert.equal(ack.status, "accepted");
     const sessionId = (ack.result as { sessionId: string }).sessionId;
-    await harness.request("v4/conversation/subscribe", { topic: `conversation/${sessionId}`, connectionId: "subagent-unavailable", clientMode: "desktop-continuous" });
-    await harness.waitUntil(() => (harness.collectState().subagents as { availability?: string } | undefined)?.availability === "unavailable");
-    assert.ok([...harness.collectRows().values()].some((row) => row.kind === "assistantText" && String(row.text).includes("Fake help output")));
+    await harness.request("v4/conversation/subscribe", {
+      topic: `conversation/${sessionId}`,
+      connectionId: "subagent-unavailable",
+      clientMode: "desktop-continuous",
+    });
+    await harness.waitUntil(
+      () =>
+        (harness.collectState().subagents as { availability?: string } | undefined)
+          ?.availability === "unavailable",
+    );
+    assert.ok(
+      [...harness.collectRows().values()].some(
+        (row) => row.kind === "assistantText" && String(row.text).includes("Fake help output"),
+      ),
+    );
   } finally {
     await harness.close();
   }
@@ -398,11 +542,15 @@ test("workspace/readPresentation 符合 Host 严格响应协议", async () => {
       { name: "help", description: "Show help", source: "builtin" },
       { name: "ship", description: "Ship changes", inputHint: "target", source: "custom" },
     ]);
-    const modelOption = presentation.configOptions?.find((option) => option.id === "model")?.options?.[0];
+    const modelOption = presentation.configOptions?.find((option) => option.id === "model")
+      ?.options?.[0];
     assert.equal(modelOption?.value, "mock/mock-1");
     assert.deepEqual(modelOption?.modelThoughtLevels, ["off", "low", "high", "max"]);
     assert.equal(modelOption?.modelDefaultThoughtLevel, "high");
-    assert.equal(presentation.configOptions?.find((option) => option.id === "thought_level")?.currentValue, "max");
+    assert.equal(
+      presentation.configOptions?.find((option) => option.id === "thought_level")?.currentValue,
+      "max",
+    );
   } finally {
     await harness.close();
   }
@@ -427,9 +575,10 @@ test("自动压缩开关通过 omp RPC 更新并投影实际状态", async () =>
       connectionId: "auto-compaction-desktop",
       clientMode: "desktop-continuous",
     })) as { result: { ack: { logEpoch: string } } };
-    await harness.waitUntil(() =>
-      (harness.collectState().config as { autoCompactionEnabled?: boolean } | undefined)
-        ?.autoCompactionEnabled === true,
+    await harness.waitUntil(
+      () =>
+        (harness.collectState().config as { autoCompactionEnabled?: boolean } | undefined)
+          ?.autoCompactionEnabled === true,
     );
     const initial = harness.collectState();
     assert.equal((initial.config as { model: string }).model, "mock-1");
@@ -462,14 +611,17 @@ test("自动压缩开关通过 omp RPC 更新并投影实际状态", async () =>
       baseRevision = ack.revisionAtDecision;
     }
     assert.equal(accepted, true);
-    await harness.waitUntil(() =>
-      (harness.collectState().config as { autoCompactionEnabled?: boolean } | undefined)
-        ?.autoCompactionEnabled === false,
+    await harness.waitUntil(
+      () =>
+        (harness.collectState().config as { autoCompactionEnabled?: boolean } | undefined)
+          ?.autoCompactionEnabled === false,
     );
     for (const frame of harness.frames.filter(
       (item) => (item as { method?: string }).method === "v4/conversation/frame",
     )) {
-      const parsed = conversationTopicWireFrameSchema.safeParse((frame as { params: unknown }).params);
+      const parsed = conversationTopicWireFrameSchema.safeParse(
+        (frame as { params: unknown }).params,
+      );
       assert.ok(parsed.success, JSON.stringify(parsed.error?.issues.slice(0, 3)));
     }
   } finally {
@@ -477,7 +629,10 @@ test("自动压缩开关通过 omp RPC 更新并投影实际状态", async () =>
   }
 });
 
-for (const [command, expectedOutput] of [["/help", "Fake help output"], ["/later", "Delayed output"]] as const) {
+for (const [command, expectedOutput] of [
+  ["/help", "Fake help output"],
+  ["/later", "Delayed output"],
+] as const) {
   test(`本地斜杠命令 ${command} 输出后结束轮次`, async () => {
     const harness = await startAdapter();
     try {
@@ -497,11 +652,17 @@ for (const [command, expectedOutput] of [["/help", "Fake help output"], ["/later
         connectionId: `slash-${command}`,
         clientMode: "desktop-continuous",
       });
-      await harness.waitUntil(() => [...harness.collectRows().values()].some(
-        (row) => row.kind === "turnHeader" && row.state === "completedSuccess",
-      ));
+      await harness.waitUntil(() =>
+        [...harness.collectRows().values()].some(
+          (row) => row.kind === "turnHeader" && row.state === "completedSuccess",
+        ),
+      );
       const rows = [...harness.collectRows().values()];
-      assert.ok(rows.some((row) => row.kind === "assistantText" && String(row.text).includes(expectedOutput)));
+      assert.ok(
+        rows.some(
+          (row) => row.kind === "assistantText" && String(row.text).includes(expectedOutput),
+        ),
+      );
     } finally {
       await harness.close();
     }
@@ -535,14 +696,22 @@ test("桌面主链路：createSession → 流式 → 工具 → 权限确认 →
 
     // 3. 等待交互请求（omp select 审批 → interaction/requestUserInput 反向请求）
     const interaction = (await harness.waitUntil(() =>
-      harness.frames.find((frame) => (frame as { method?: string }).method === "interaction/requestUserInput"),
+      harness.frames.find(
+        (frame) => (frame as { method?: string }).method === "interaction/requestUserInput",
+      ),
     )) as { id: string; params: { requestId: string; prompt: string } };
     assert.match(interaction.params.prompt, /greeting\.txt/);
     const projectedQuestion = (await harness.waitUntil(() => {
-      const interactions = harness.collectState().pendingInteractions as Array<{ payload?: { questions?: unknown[]; answerMode?: string } }> | undefined;
+      const interactions = harness.collectState().pendingInteractions as
+        | Array<{ payload?: { questions?: unknown[]; answerMode?: string } }>
+        | undefined;
       return interactions?.find((item) => item.payload?.answerMode === "option");
     })) as { payload: { questions: unknown[]; answerMode: string } };
-    assert.equal(projectedQuestion.payload.questions.length, 1, "rpc-ui 选择题须投影到已有 Ask 界面");
+    assert.equal(
+      projectedQuestion.payload.questions.length,
+      1,
+      "rpc-ui 选择题须投影到已有 Ask 界面",
+    );
 
     // 4. 直接应答反向请求（host 的另一条应答路径）
     harness.respond(interaction.id, { action: "accept", content: { value: "Approve" } });
@@ -561,8 +730,13 @@ test("桌面主链路：createSession → 流式 → 工具 → 权限确认 →
     for (const frame of harness.frames.filter(
       (item) => (item as { method?: string }).method === "v4/conversation/frame",
     )) {
-      const parsed = conversationTopicWireFrameSchema.safeParse((frame as { params: unknown }).params);
-      assert.ok(parsed.success, `v4 frame 不合法: ${JSON.stringify(parsed.error?.issues.slice(0, 3))}`);
+      const parsed = conversationTopicWireFrameSchema.safeParse(
+        (frame as { params: unknown }).params,
+      );
+      assert.ok(
+        parsed.success,
+        `v4 frame 不合法: ${JSON.stringify(parsed.error?.issues.slice(0, 3))}`,
+      );
     }
     assertFrameOrdinalsIncrease(harness.frames, subscribeResult.result.ack.subscriptionId);
 
@@ -649,7 +823,9 @@ test("stop 命令与 abort 收口 + sessions-index 订阅", async () => {
 
     // 拒绝审批 → stop → abort → 会话以 interrupted 收口
     const interaction = (await harness.waitUntil(() =>
-      harness.frames.find((frame) => (frame as { method?: string }).method === "interaction/requestUserInput"),
+      harness.frames.find(
+        (frame) => (frame as { method?: string }).method === "interaction/requestUserInput",
+      ),
     )) as { id: string; params: { requestId: string } };
     harness.respond(interaction.id, { action: "decline" });
 
@@ -666,7 +842,10 @@ test("stop 命令与 abort 收口 + sessions-index 订阅", async () => {
 
     await harness.waitUntil(() => {
       for (const row of harness.collectRows().values()) {
-        if (row.kind === "turnHeader" && (row.state === "completedInterrupted" || row.state === "completedSuccess")) {
+        if (
+          row.kind === "turnHeader" &&
+          (row.state === "completedInterrupted" || row.state === "completedSuccess")
+        ) {
           return true;
         }
       }
@@ -734,7 +913,13 @@ test("setFollowupMode guide 收敛 + 流式中输入按模式路由 steer/follow
 
     // 3. 流式中输入 → omp steer 命令，fake 核以 STEERED:<text> 收口本轮
     const followupImageBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 2]);
-    const followupImage = await uploadFixture(harness, "followup-image", sessionId, "image/png", followupImageBytes);
+    const followupImage = await uploadFixture(
+      harness,
+      "followup-image",
+      sessionId,
+      "image/png",
+      followupImageBytes,
+    );
     const imageEcho = `|IMAGES:${JSON.stringify([{ type: "image", data: followupImageBytes.toString("base64"), mimeType: "image/png" }])}`;
     const steerSend = await harness.request("v4/command", {
       commandId: "cmd-fm-send-1",
@@ -744,10 +929,16 @@ test("setFollowupMode guide 收敛 + 流式中输入按模式路由 steer/follow
       payload: { text: "引导补充", attachments: [followupImage] },
       issuedAt: Date.now(),
     });
-    assert.equal(commandAckSchema.parse((steerSend as { result: unknown }).result).status, "accepted");
+    assert.equal(
+      commandAckSchema.parse((steerSend as { result: unknown }).result).status,
+      "accepted",
+    );
     await harness.waitUntil(() => {
       for (const row of harness.collectRows().values()) {
-        if (row.kind === "assistantText" && String(row.text ?? "").includes(`STEERED:引导补充${imageEcho}`)) {
+        if (
+          row.kind === "assistantText" &&
+          String(row.text ?? "").includes(`STEERED:引导补充${imageEcho}`)
+        ) {
           return true;
         }
       }
@@ -778,7 +969,10 @@ test("setFollowupMode guide 收敛 + 流式中输入按模式路由 steer/follow
     assert.equal((queueAck.result as { delivery?: string } | undefined)?.delivery, "queue");
     await harness.waitUntil(() => {
       for (const row of harness.collectRows().values()) {
-        if (row.kind === "assistantText" && String(row.text ?? "").includes(`FOLLOWEDUP:队列补充${imageEcho}`)) {
+        if (
+          row.kind === "assistantText" &&
+          String(row.text ?? "").includes(`FOLLOWEDUP:队列补充${imageEcho}`)
+        ) {
           return true;
         }
       }
@@ -787,9 +981,15 @@ test("setFollowupMode guide 收敛 + 流式中输入按模式路由 steer/follow
     await harness.waitUntil(() => {
       const rows = [...harness.collectRows().values()];
       const headers = rows.filter((row) => row.kind === "turnHeader");
-      return headers.length === 4 && headers.every((row) => row.state === "completedSuccess") ? true : undefined;
+      return headers.length === 4 && headers.every((row) => row.state === "completedSuccess")
+        ? true
+        : undefined;
     });
-    assert.ok([...harness.collectRows().values()].filter((row) => row.kind === "assistantText").every((row) => row.state === "complete"));
+    assert.ok(
+      [...harness.collectRows().values()]
+        .filter((row) => row.kind === "assistantText")
+        .every((row) => row.state === "complete"),
+    );
   } finally {
     await harness.close();
   }
@@ -798,13 +998,20 @@ test("setFollowupMode guide 收敛 + 流式中输入按模式路由 steer/follow
 test("临时模型：modelSelection 随提交下发，相同选择不重复 set_model", async () => {
   const harness = await startAdapter();
   try {
-    const selection = { providerId: "mock", modelId: "mock-2", options: { reasoningLevel: "high" } };
+    const selection = {
+      providerId: "mock",
+      modelId: "mock-2",
+      options: { reasoningLevel: "high" },
+    };
     const createResult = await harness.request("v4/command", {
       commandId: "cmd-model-create",
       clientId: "test-client",
       sessionId: null,
       type: "createSession",
-      payload: { workspaceId: "test-workspace", firstInput: { text: "/help", modelSelection: selection } },
+      payload: {
+        workspaceId: "test-workspace",
+        firstInput: { text: "/help", modelSelection: selection },
+      },
       issuedAt: Date.now(),
     });
     const createAck = commandAckSchema.parse((createResult as { result: unknown }).result);
@@ -815,13 +1022,17 @@ test("临时模型：modelSelection 随提交下发，相同选择不重复 set_
       connectionId: "conn-model",
       clientMode: "desktop-continuous",
     });
-    await harness.waitUntil(() => [...harness.collectRows().values()].some(
-      (row) => row.kind === "turnHeader" && row.state === "completedSuccess",
-    ));
+    await harness.waitUntil(() =>
+      [...harness.collectRows().values()].some(
+        (row) => row.kind === "turnHeader" && row.state === "completedSuccess",
+      ),
+    );
     const rows = [...harness.collectRows().values()];
-    const marker = rows.find((row) => row.kind === "timelineMarker" && (row as { marker?: { type?: string } }).marker?.type === "modelChange") as
-      | { marker?: { toProvider?: string; toModel?: string } }
-      | undefined;
+    const marker = rows.find(
+      (row) =>
+        row.kind === "timelineMarker" &&
+        (row as { marker?: { type?: string } }).marker?.type === "modelChange",
+    ) as { marker?: { toProvider?: string; toModel?: string } } | undefined;
     assert.ok(marker, "缺少 modelChange 时间线标记");
     assert.equal(marker!.marker!.toProvider, "mock");
     assert.equal(marker!.marker!.toModel, "mock-2");
@@ -839,10 +1050,15 @@ test("临时模型：modelSelection 随提交下发，相同选择不重复 set_
       payload: { text: "/model-report", modelSelection: selection },
       issuedAt: Date.now(),
     });
-    assert.equal(commandAckSchema.parse((sendResult as { result: unknown }).result).status, "accepted");
-    await harness.waitUntil(() => [...harness.collectRows().values()].some(
-      (row) => row.kind === "assistantText" && String(row.text).includes("set_model calls: 1"),
-    ));
+    assert.equal(
+      commandAckSchema.parse((sendResult as { result: unknown }).result).status,
+      "accepted",
+    );
+    await harness.waitUntil(() =>
+      [...harness.collectRows().values()].some(
+        (row) => row.kind === "assistantText" && String(row.text).includes("set_model calls: 1"),
+      ),
+    );
   } finally {
     await harness.close();
   }
@@ -868,7 +1084,9 @@ test("session_info_update / config_update 回投会话标题与模型状态", as
     });
     await harness.waitUntil(() => {
       const state = harness.collectState();
-      return (state.meta as { title?: string } | undefined)?.title === "Fake Title" ? true : undefined;
+      return (state.meta as { title?: string } | undefined)?.title === "Fake Title"
+        ? true
+        : undefined;
     });
     const sendResult = await harness.request("v4/command", {
       commandId: "cmd-info-send",
@@ -878,7 +1096,10 @@ test("session_info_update / config_update 回投会话标题与模型状态", as
       payload: { text: "/config-new" },
       issuedAt: Date.now(),
     });
-    assert.equal(commandAckSchema.parse((sendResult as { result: unknown }).result).status, "accepted");
+    assert.equal(
+      commandAckSchema.parse((sendResult as { result: unknown }).result).status,
+      "accepted",
+    );
     await harness.waitUntil(() => {
       const state = harness.collectState();
       const config = state.config as { model?: string; thought?: string } | undefined;
@@ -913,16 +1134,21 @@ test("轮次终态必达 sessions-index（侧栏 phase 不停留在 running）",
     });
     // /help 本地命令在毫秒级完成：终态 flush 必然落在首个 running 通知后的 500ms 节流
     // 窗口内，是「丢弃式节流吞掉终态」的最严格回归场景。
-    await harness.waitUntil(() => [...harness.collectRows().values()].some(
-      (row) => row.kind === "turnHeader" && row.state === "completedSuccess",
-    ));
+    await harness.waitUntil(() =>
+      [...harness.collectRows().values()].some(
+        (row) => row.kind === "turnHeader" && row.state === "completedSuccess",
+      ),
+    );
     // 轮次已完成：sessions-index 的最后一次 session.upserted 必须是终态 phase。
     // 丢弃式节流的回归场景：终态 flush 落在上次通知 500ms 窗口内被丢弃，索引停在 running。
     await harness.waitUntil(() => {
       let lastPhase: string | null = null;
       for (const frame of harness.topicFrames("sessions-index/test-workspace")) {
         if (frame.payload.kind !== "deltas") continue;
-        for (const delta of frame.payload.deltas as { op?: string; session?: { phase?: string } }[]) {
+        for (const delta of frame.payload.deltas as {
+          op?: string;
+          session?: { phase?: string };
+        }[]) {
           if (delta.op === "session.upserted" && delta.session?.phase) {
             lastPhase = delta.session.phase;
           }
@@ -963,8 +1189,14 @@ test("available_commands_update 热刷新 workspace-config 命令目录", async 
     await harness.waitUntil(() => {
       for (const frame of harness.topicFrames("workspace-config/test-workspace")) {
         if (frame.payload.kind !== "deltas") continue;
-        for (const delta of frame.payload.deltas as { op?: string; config?: { slashCommands?: { name: string }[] } }[]) {
-          if (delta.op === "config.updated" && delta.config?.slashCommands?.some((command) => command.name === "ship2")) {
+        for (const delta of frame.payload.deltas as {
+          op?: string;
+          config?: { slashCommands?: { name: string }[] };
+        }[]) {
+          if (
+            delta.op === "config.updated" &&
+            delta.config?.slashCommands?.some((command) => command.name === "ship2")
+          ) {
             return true;
           }
         }
@@ -996,12 +1228,20 @@ test("供应商错误（stopReason=error）以 failed 收口并携带错误事�
     });
     await harness.waitUntil(() => {
       const state = harness.collectState();
-      return (state.control as { phase?: string } | undefined)?.phase === "error" ? true : undefined;
+      return (state.control as { phase?: string } | undefined)?.phase === "error"
+        ? true
+        : undefined;
     });
     await new Promise((resolve) => setTimeout(resolve, 30));
-    assert.equal((harness.collectState().control as { phase?: string }).phase, "error", "agentInvoked=true 的 prompt_result 不得改写失败终态");
+    assert.equal(
+      (harness.collectState().control as { phase?: string }).phase,
+      "error",
+      "agentInvoked=true 的 prompt_result 不得改写失败终态",
+    );
     const state = harness.collectState();
-    const lastError = (state.control as { lastError?: { code?: string; message?: string } | null } | undefined)?.lastError;
+    const lastError = (
+      state.control as { lastError?: { code?: string; message?: string } | null } | undefined
+    )?.lastError;
     assert.equal(lastError?.code, "omp_provider_401");
     assert.match(lastError?.message ?? "", /401 Model not supported/);
   } finally {

@@ -16,7 +16,10 @@ export type TurnOutcome = "success" | "interrupted" | "failed";
 export interface ProjectionAState {
   control: SessionControl;
   availability: SessionActionAvailability;
-  inputRouting: { mode: "startNow" | "enqueue" | "guide" | "reject" | "choice"; reasonCode?: string };
+  inputRouting: {
+    mode: "startNow" | "enqueue" | "guide" | "reject" | "choice";
+    reasonCode?: string;
+  };
   meta: { title: string; titleSource: "default" | "generated" | "custom" };
   config: SessionConfigState;
   modelTransition: null;

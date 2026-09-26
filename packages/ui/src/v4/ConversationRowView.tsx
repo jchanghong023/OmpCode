@@ -2087,8 +2087,12 @@ const SubagentRowView = memo(function SubagentRowView({ row }: { row: SubagentRo
         <div>{summary}</div>
         {row.transcriptText ? (
           <details className="mt-2">
-            <summary className="cursor-pointer text-[var(--color-foreground)]">{intl.formatMessage({ id: "chat.ompSubagent.transcript" })}</summary>
-            <pre className="mt-2 max-h-80 overflow-auto whitespace-pre-wrap rounded-lg bg-[var(--color-surface)] p-3 text-ui-sm">{row.transcriptText}</pre>
+            <summary className="cursor-pointer text-[var(--color-foreground)]">
+              {intl.formatMessage({ id: "chat.ompSubagent.transcript" })}
+            </summary>
+            <pre className="mt-2 max-h-80 overflow-auto whitespace-pre-wrap rounded-lg bg-[var(--color-surface)] p-3 text-ui-sm">
+              {row.transcriptText}
+            </pre>
           </details>
         ) : null}
       </div>

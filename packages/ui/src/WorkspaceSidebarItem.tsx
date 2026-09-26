@@ -188,7 +188,8 @@ export const WorkspaceSidebarItem = memo(function WorkspaceSidebarItem({
 }) {
   const { intl } = useZCodeIntl();
   const activeTaskId = useZCodeSessionStore(
-    (state) => selectWorkspaceZCodeState(state, tab.workspacePath, tab.workspaceIdentity).activeTaskId,
+    (state) =>
+      selectWorkspaceZCodeState(state, tab.workspacePath, tab.workspaceIdentity).activeTaskId,
   );
   const removeTaskState = useZCodeSessionStore((state) => state.removeTaskState);
   const upsertOptimisticTaskListItem = useZCodeSessionStore(

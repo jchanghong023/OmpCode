@@ -408,7 +408,11 @@ export function useWorkspaceFileTreeData({
           loadDirectory(
             directoryPath,
             getWorkspaceFileDirectoryChildDepth(workspacePath, directoryPath),
-            { force: true, silent: true, workspaceGeneration },
+            {
+              force: true,
+              silent: true,
+              workspaceGeneration,
+            },
           ),
           WORKSPACE_FILE_TREE_REFRESH_DIRECTORY_TIMEOUT_MS,
           `workspace file tree refresh ${directoryPath}`,

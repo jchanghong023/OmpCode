@@ -198,7 +198,9 @@ async function readPersistentWorkspaceHookTrustDigests(
     logger.warn(
       undefined,
       "Workspace Hook Trust store 结构不符合 schema，已 fail-closed 忽略全部持久信任记录",
-      { path: trustFilePath },
+      {
+        path: trustFilePath,
+      },
     );
     return { digests: new Set<string>(), corrupt: true };
   }

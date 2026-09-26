@@ -4,8 +4,10 @@ const ompZhCNOverrides: Record<string, string> = {
   "chat.subagents.unavailable": "omp 子代理状态暂不可用，当前会话的子代理记录可能不完整。",
   "settings.ompNative.extensions": "OMP 扩展",
   "settings.ompNative.mcp": "OMP MCP 服务器",
-  "settings.ompNative.description": "显示当前 omp profile 和本地项目中的原生配置。修改配置后刷新此页。",
-  "settings.ompNative.runtimeUnavailable": "omp RPC 暂未提供扩展运行状态或 MCP 连接状态；下列内容只表示配置入口。",
+  "settings.ompNative.description":
+    "显示当前 omp profile 和本地项目中的原生配置。修改配置后刷新此页。",
+  "settings.ompNative.runtimeUnavailable":
+    "omp RPC 暂未提供扩展运行状态或 MCP 连接状态；下列内容只表示配置入口。",
   "settings.ompNative.refresh": "刷新",
   "settings.ompNative.loadFailed": "读取 omp 配置失败",
   "settings.ompNative.profile": "当前 Profile",

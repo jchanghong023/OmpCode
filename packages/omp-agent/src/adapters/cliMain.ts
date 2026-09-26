@@ -43,7 +43,10 @@ function parseArgs(argv: string[]) {
   return { flags, cwd, positional };
 }
 
-export async function runCliMain(argv: string[], env: NodeJS.ProcessEnv = process.env): Promise<void> {
+export async function runCliMain(
+  argv: string[],
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<void> {
   const { flags, cwd: cwdArg, positional } = parseArgs(argv);
   const cwd = cwdArg ?? process.cwd();
   if (flags.has("--prepare-storage")) {
@@ -109,7 +112,9 @@ function parseExtraArgs(raw: string | undefined): string[] {
   }
   try {
     const parsed: unknown = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed.filter((arg): arg is string => typeof arg === "string") : [];
+    return Array.isArray(parsed)
+      ? parsed.filter((arg): arg is string => typeof arg === "string")
+      : [];
   } catch {
     return [];
   }
@@ -138,7 +143,9 @@ const isDirectRun =
   process.argv.includes("--prepare-storage");
 if (isDirectRun && !process.env.OMP_AGENT_NO_AUTO_START) {
   void runCliMain(process.argv).catch((error) => {
-    logger.error("omp-agent 启动失败", { error: error instanceof Error ? error.stack : String(error) });
+    logger.error("omp-agent 启动失败", {
+      error: error instanceof Error ? error.stack : String(error),
+    });
     process.exit(1);
   });
 }

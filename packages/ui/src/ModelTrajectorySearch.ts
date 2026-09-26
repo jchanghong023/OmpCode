@@ -86,7 +86,10 @@ function buildSearchTargets(items: readonly TrajectorySearchTimelineItem[]): Sea
           item.key,
           callIndex,
           `${item.key}:output:${toolCall.kind}:${toolCallIndex}`,
-          { role: "assistant", parts: [toolCall] },
+          {
+            role: "assistant",
+            parts: [toolCall],
+          },
         ),
       );
     });

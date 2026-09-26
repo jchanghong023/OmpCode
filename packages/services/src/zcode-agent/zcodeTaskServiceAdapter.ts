@@ -1952,7 +1952,9 @@ export function createZCodeTaskServiceAdapter(
     async enqueueTaskCommand(params): Promise<ZCodeEnqueueTaskCommandResult> {
       assertCurrentOwnerRun(params, params.ownerRunId);
       const key = taskKey(params);
-      const existing = runtimeCommands.get(key)?.find((item) => item.commandId === params.commandId);
+      const existing = runtimeCommands
+        .get(key)
+        ?.find((item) => item.commandId === params.commandId);
       if (existing) return { accepted: true, command: existing };
       const workspaceKeyValue = workspaceKey(params);
       const command: ZCodeTaskRuntimeCommand = {

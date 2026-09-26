@@ -1042,7 +1042,9 @@ function RootInner({
               className="h-full"
             >
               <Suspense
-                fallback={<RootStartupLoading label={intl.formatMessage({ id: "common.loading" })} />}
+                fallback={
+                  <RootStartupLoading label={intl.formatMessage({ id: "common.loading" })} />
+                }
               >
                 <SettingsPage {...settingsLayerProps} />
               </Suspense>

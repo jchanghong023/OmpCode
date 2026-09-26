@@ -661,18 +661,17 @@ export interface IPlatformService {
   openOmpModelConfig?(): Promise<{ success: boolean; error?: string }>;
   /** omp 换核：读取用户 omp modelRoles（role → provider/model:level）。桌面端实现；Web 端缺省。 */
   readOmpModelRoles?(): Promise<
-    | { success: true; roles: { role: string; value: string }[] }
-    | { success: false; error: string }
+    { success: true; roles: { role: string; value: string }[] } | { success: false; error: string }
   >;
   /** 只读 omp profile/项目的显式扩展和 MCP 配置名称；连接状态由 omp RPC 决定。 */
-  readOmpNativeIntegrations?(workspacePath?: string): Promise<
-    | { success: true; snapshot: OmpNativeIntegrationSnapshot }
-    | { success: false; error: string }
+  readOmpNativeIntegrations?(
+    workspacePath?: string,
+  ): Promise<
+    { success: true; snapshot: OmpNativeIntegrationSnapshot } | { success: false; error: string }
   >;
   /** 列出当前设备已有的 omp profile，以及本次应用启动实际使用的 profile。 */
   listOmpProfiles?(): Promise<
-    | { success: true; profiles: string[]; activeProfile: string }
-    | { success: false; error: string }
+    { success: true; profiles: string[]; activeProfile: string } | { success: false; error: string }
   >;
   /** omp 换核：写入用户 omp modelRoles（yaml Document 级替换保留注释；写前自动备份）。桌面端实现；Web 端缺省。 */
   writeOmpModelRoles?(roles: { role: string; value: string }[]): Promise<{

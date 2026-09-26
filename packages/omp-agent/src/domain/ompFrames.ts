@@ -41,7 +41,19 @@ export type OmpResponseFrame = z.infer<typeof ompResponseFrameSchema>;
 export const ompExtensionUiRequestFrameSchema = z.object({
   type: z.literal("extension_ui_request"),
   id: z.string(),
-  method: z.enum(["select", "confirm", "input", "editor", "cancel", "notify", "setStatus", "setWidget", "setTitle", "set_editor_text", "open_url"]),
+  method: z.enum([
+    "select",
+    "confirm",
+    "input",
+    "editor",
+    "cancel",
+    "notify",
+    "setStatus",
+    "setWidget",
+    "setTitle",
+    "set_editor_text",
+    "open_url",
+  ]),
   title: z.string().optional(),
   message: z.string().optional(),
   prompt: z.string().optional(),
@@ -70,55 +82,69 @@ export const ompHostToolCallFrameSchema = z.object({
 });
 
 // ── 会话事件（AgentSessionEvent 原样转发）──
-const ompContentBlockSchema = z.object({
-  type: z.string(),
-  text: z.string().optional(),
-  thinking: z.string().optional(),
-  id: z.string().optional(),
-  name: z.string().optional(),
-  arguments: z.unknown().optional(),
-}).passthrough();
+const ompContentBlockSchema = z
+  .object({
+    type: z.string(),
+    text: z.string().optional(),
+    thinking: z.string().optional(),
+    id: z.string().optional(),
+    name: z.string().optional(),
+    arguments: z.unknown().optional(),
+  })
+  .passthrough();
 
-export const ompAgentMessageSchema = z.object({
-  role: z.string(),
-  content: z.array(ompContentBlockSchema).optional(),
-  usage: z
-    .object({
-      input: z.number().optional(),
-      output: z.number().optional(),
-      cacheRead: z.number().optional(),
-      cacheWrite: z.number().optional(),
-      inputTokens: z.number().optional(),
-      outputTokens: z.number().optional(),
-    })
-    .passthrough()
-    .optional(),
-  provider: z.string().optional(),
-  model: z.string().optional(),
-  // 供应商失败事实（stopReason=error 时携带）；成功消息不带。
-  stopReason: z.string().optional(),
-  errorStatus: z.number().optional(),
-  errorMessage: z.string().optional(),
-}).passthrough();
+export const ompAgentMessageSchema = z
+  .object({
+    role: z.string(),
+    content: z.array(ompContentBlockSchema).optional(),
+    usage: z
+      .object({
+        input: z.number().optional(),
+        output: z.number().optional(),
+        cacheRead: z.number().optional(),
+        cacheWrite: z.number().optional(),
+        inputTokens: z.number().optional(),
+        outputTokens: z.number().optional(),
+      })
+      .passthrough()
+      .optional(),
+    provider: z.string().optional(),
+    model: z.string().optional(),
+    // 供应商失败事实（stopReason=error 时携带）；成功消息不带。
+    stopReason: z.string().optional(),
+    errorStatus: z.number().optional(),
+    errorMessage: z.string().optional(),
+  })
+  .passthrough();
 export type OmpAgentMessage = z.infer<typeof ompAgentMessageSchema>;
 
-export const ompAssistantMessageEventSchema = z.object({
-  type: z.string(),
-  contentIndex: z.number().optional(),
-  delta: z.string().optional(),
-  partial: ompAgentMessageSchema.optional(),
-  toolCall: ompContentBlockSchema.optional(),
-}).passthrough();
+export const ompAssistantMessageEventSchema = z
+  .object({
+    type: z.string(),
+    contentIndex: z.number().optional(),
+    delta: z.string().optional(),
+    partial: ompAgentMessageSchema.optional(),
+    toolCall: ompContentBlockSchema.optional(),
+  })
+  .passthrough();
 export type OmpAssistantMessageEvent = z.infer<typeof ompAssistantMessageEventSchema>;
 
-export const ompAgentToolResultSchema = z.object({
-  content: z.array(z.object({ type: z.string(), text: z.string().optional() }).passthrough()).optional(),
-  isError: z.boolean().optional(),
-}).passthrough();
+export const ompAgentToolResultSchema = z
+  .object({
+    content: z
+      .array(z.object({ type: z.string(), text: z.string().optional() }).passthrough())
+      .optional(),
+    isError: z.boolean().optional(),
+  })
+  .passthrough();
 
 export const ompSessionEventFrameSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("agent_start") }),
-  z.object({ type: z.literal("agent_end"), messages: z.array(ompAgentMessageSchema).optional(), isTerminal: z.boolean().optional() }),
+  z.object({
+    type: z.literal("agent_end"),
+    messages: z.array(ompAgentMessageSchema).optional(),
+    isTerminal: z.boolean().optional(),
+  }),
   z.object({ type: z.literal("turn_start") }),
   z.object({ type: z.literal("turn_end"), message: ompAgentMessageSchema.optional() }),
   z.object({ type: z.literal("message_start"), message: ompAgentMessageSchema }),
@@ -151,9 +177,19 @@ export const ompSessionEventFrameSchema = z.discriminatedUnion("type", [
   }),
   z.object({ type: z.literal("auto_compaction_start") }),
   z.object({ type: z.literal("auto_compaction_end") }),
-  z.object({ type: z.literal("model_changed"), model: z.object({ provider: z.string().optional(), id: z.string().optional() }).passthrough().optional() }),
+  z.object({
+    type: z.literal("model_changed"),
+    model: z
+      .object({ provider: z.string().optional(), id: z.string().optional() })
+      .passthrough()
+      .optional(),
+  }),
   z.object({ type: z.literal("thinking_level_changed"), thinkingLevel: z.string().optional() }),
-  z.object({ type: z.literal("notice"), level: z.string().optional(), message: z.string().optional() }),
+  z.object({
+    type: z.literal("notice"),
+    level: z.string().optional(),
+    message: z.string().optional(),
+  }),
 ]);
 export type OmpSessionEventFrame = z.infer<typeof ompSessionEventFrameSchema>;
 
@@ -183,7 +219,10 @@ export type OmpSessionInfoUpdateFrame = z.infer<typeof ompSessionInfoUpdateFrame
 
 export const ompConfigUpdateFrameSchema = z.object({
   type: z.literal("config_update"),
-  model: z.object({ provider: z.string().optional(), id: z.string().optional() }).passthrough().optional(),
+  model: z
+    .object({ provider: z.string().optional(), id: z.string().optional() })
+    .passthrough()
+    .optional(),
   thinkingLevel: z.string().optional(),
 });
 export type OmpConfigUpdateFrame = z.infer<typeof ompConfigUpdateFrameSchema>;
@@ -191,43 +230,86 @@ export type OmpConfigUpdateFrame = z.infer<typeof ompConfigUpdateFrameSchema>;
 export const ompAvailableCommandsFrameSchema = z.object({
   type: z.literal("available_commands_update"),
   commands: z.array(
-    z.object({
-      name: z.string(),
-      source: z.string().optional(),
-      aliases: z.array(z.string()).optional(),
-      description: z.string().optional(),
-      input: z.object({ hint: z.string().optional() }).passthrough().optional(),
-      subcommands: z.array(z.unknown()).optional(),
-    }).passthrough(),
+    z
+      .object({
+        name: z.string(),
+        source: z.string().optional(),
+        aliases: z.array(z.string()).optional(),
+        description: z.string().optional(),
+        input: z.object({ hint: z.string().optional() }).passthrough().optional(),
+        subcommands: z.array(z.unknown()).optional(),
+      })
+      .passthrough(),
   ),
 });
 export type OmpAvailableCommandsFrame = z.infer<typeof ompAvailableCommandsFrameSchema>;
 
 // omp task 子代理事件；保留扩展字段，但身份与状态必须校验后才能进入会话投影。
 export const ompSubagentFrameSchema = z.discriminatedUnion("type", [
-  z.object({ type: z.literal("subagent_lifecycle"), payload: z.object({
-    id: z.string().min(1), agent: z.string().min(1), status: z.enum(["started", "completed", "failed", "aborted"]),
-    description: z.string().optional(), sessionFile: z.string().optional(), parentToolCallId: z.string().optional(), index: z.number().int().optional(),
-  }).passthrough() }),
-  z.object({ type: z.literal("subagent_progress"), payload: z.object({
-    agent: z.string().min(1), task: z.string().optional(), assignment: z.string().optional(),
-    parentToolCallId: z.string().optional(), sessionFile: z.string().optional(),
-    progress: z.object({ id: z.string().min(1), status: z.string().optional(), recentOutput: z.array(z.string()).optional() }).passthrough(),
-  }).passthrough() }),
-  z.object({ type: z.literal("subagent_event"), payload: z.object({ id: z.string().min(1), event: z.unknown() }).passthrough() }),
+  z.object({
+    type: z.literal("subagent_lifecycle"),
+    payload: z
+      .object({
+        id: z.string().min(1),
+        agent: z.string().min(1),
+        status: z.enum(["started", "completed", "failed", "aborted"]),
+        description: z.string().optional(),
+        sessionFile: z.string().optional(),
+        parentToolCallId: z.string().optional(),
+        index: z.number().int().optional(),
+      })
+      .passthrough(),
+  }),
+  z.object({
+    type: z.literal("subagent_progress"),
+    payload: z
+      .object({
+        agent: z.string().min(1),
+        task: z.string().optional(),
+        assignment: z.string().optional(),
+        parentToolCallId: z.string().optional(),
+        sessionFile: z.string().optional(),
+        progress: z
+          .object({
+            id: z.string().min(1),
+            status: z.string().optional(),
+            recentOutput: z.array(z.string()).optional(),
+          })
+          .passthrough(),
+      })
+      .passthrough(),
+  }),
+  z.object({
+    type: z.literal("subagent_event"),
+    payload: z.object({ id: z.string().min(1), event: z.unknown() }).passthrough(),
+  }),
 ]);
 export type OmpSubagentFrame = z.infer<typeof ompSubagentFrameSchema>;
 
-export const ompSubagentSnapshotSchema = z.object({
-  id: z.string().min(1), agent: z.string().min(1), status: z.string(),
-  description: z.string().optional(), task: z.string().optional(), assignment: z.string().optional(),
-  sessionFile: z.string().optional(), lastUpdate: z.number().optional(), parentToolCallId: z.string().optional(),
-}).passthrough();
+export const ompSubagentSnapshotSchema = z
+  .object({
+    id: z.string().min(1),
+    agent: z.string().min(1),
+    status: z.string(),
+    description: z.string().optional(),
+    task: z.string().optional(),
+    assignment: z.string().optional(),
+    sessionFile: z.string().optional(),
+    lastUpdate: z.number().optional(),
+    parentToolCallId: z.string().optional(),
+  })
+  .passthrough();
 export type OmpSubagentSnapshot = z.infer<typeof ompSubagentSnapshotSchema>;
 
 // ── 入站命令（我们 → omp）──
 export type OmpCommandFrame =
-  | { id?: string; type: "prompt"; message: string; images?: unknown[]; streamingBehavior?: "steer" | "followUp" }
+  | {
+      id?: string;
+      type: "prompt";
+      message: string;
+      images?: unknown[];
+      streamingBehavior?: "steer" | "followUp";
+    }
   | { id?: string; type: "steer"; message: string; images?: unknown[] }
   | { id?: string; type: "follow_up"; message: string; images?: unknown[] }
   | { id?: string; type: "abort" }
@@ -246,27 +328,47 @@ export type OmpCommandFrame =
   | { id?: string; type: "abort_bash" }
   | { id?: string; type: "set_subagent_subscription"; level: "off" | "progress" | "events" }
   | { id?: string; type: "get_subagents" }
-  | { id?: string; type: "get_subagent_messages"; subagentId?: string; sessionFile?: string; fromByte?: number };
+  | {
+      id?: string;
+      type: "get_subagent_messages";
+      subagentId?: string;
+      sessionFile?: string;
+      fromByte?: number;
+    };
 
 // ── get_state 响应载荷 ──
-export const ompStateDataSchema = z.object({
-  model: z.object({ provider: z.string().optional(), id: z.string().optional() }).passthrough().optional(),
-  thinkingLevel: z.string().optional(),
-  isStreaming: z.boolean().optional(),
-  isCompacting: z.boolean().optional(),
-  // omp 未创建会话文件或尚未命名时返回 null；拒绝整份 get_state 会丢失模型与自动压缩状态。
-  sessionFile: z.string().nullable().optional(),
-  sessionId: z.string().optional(),
-  sessionName: z.string().nullable().optional(),
-  messageCount: z.number().optional(),
-  autoCompactionEnabled: z.boolean().optional(),
-  contextUsage: z.object({ tokens: z.number().optional(), contextWindow: z.number().optional(), percent: z.number().optional() }).passthrough().optional(),
-}).passthrough();
+export const ompStateDataSchema = z
+  .object({
+    model: z
+      .object({ provider: z.string().optional(), id: z.string().optional() })
+      .passthrough()
+      .optional(),
+    thinkingLevel: z.string().optional(),
+    isStreaming: z.boolean().optional(),
+    isCompacting: z.boolean().optional(),
+    // omp 未创建会话文件或尚未命名时返回 null；拒绝整份 get_state 会丢失模型与自动压缩状态。
+    sessionFile: z.string().nullable().optional(),
+    sessionId: z.string().optional(),
+    sessionName: z.string().nullable().optional(),
+    messageCount: z.number().optional(),
+    autoCompactionEnabled: z.boolean().optional(),
+    contextUsage: z
+      .object({
+        tokens: z.number().optional(),
+        contextWindow: z.number().optional(),
+        percent: z.number().optional(),
+      })
+      .passthrough()
+      .optional(),
+  })
+  .passthrough();
 export type OmpStateData = z.infer<typeof ompStateDataSchema>;
 
-export const ompModelCatalogEntrySchema = z.object({
-  provider: z.string().optional(),
-  id: z.string().optional(),
-  name: z.string().optional(),
-}).passthrough();
+export const ompModelCatalogEntrySchema = z
+  .object({
+    provider: z.string().optional(),
+    id: z.string().optional(),
+    name: z.string().optional(),
+  })
+  .passthrough();
 export type OmpModelCatalogEntry = z.infer<typeof ompModelCatalogEntrySchema>;

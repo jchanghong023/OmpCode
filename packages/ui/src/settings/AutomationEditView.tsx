@@ -1461,7 +1461,11 @@ export function AutomationEditView({
   const selectedWorkspacePath = selectedWorkspace?.workspacePath ?? "";
   const selectedWorkspaceIdentity = selectedWorkspace?.workspaceIdentity;
   // 换核后旧 Provider Registry 不含 omp 候选；读取与聊天工具栏同源的目录。
-  const { configOptions } = useToolbarConfigOptions(selectedWorkspacePath, null, selectedWorkspaceIdentity);
+  const { configOptions } = useToolbarConfigOptions(
+    selectedWorkspacePath,
+    null,
+    selectedWorkspaceIdentity,
+  );
   const ompCatalog = useMemo(() => readOmpModelCatalog(configOptions), [configOptions]);
   const effectiveSelection = resolveOmpAutomationSelection(ompCatalog, model, thoughtLevel);
   const effectiveModelValue = effectiveSelection
@@ -1469,7 +1473,7 @@ export function AutomationEditView({
     : "";
   const effectiveReasoningLevel = effectiveSelection?.options?.reasoningLevel ?? "";
   const modelSelectGroups = useMemo(
-    () => ompCatalog ? buildOmpModelSelectGroups(ompCatalog) : [],
+    () => (ompCatalog ? buildOmpModelSelectGroups(ompCatalog) : []),
     [ompCatalog],
   );
   const isSelectedConversationWorkspace = selectedWorkspace?.workspacePurpose === "conversation";
@@ -1516,9 +1520,10 @@ export function AutomationEditView({
       modelSelection.current = value;
       setModel(value);
       const identity = parseModelPickerValue(value);
-      const level = highestOmpThoughtLevel(
-        findOmpCatalogEntry(ompCatalog, identity?.providerId, identity?.modelId),
-      ) ?? "";
+      const level =
+        highestOmpThoughtLevel(
+          findOmpCatalogEntry(ompCatalog, identity?.providerId, identity?.modelId),
+        ) ?? "";
       thoughtLevelRef.current = level;
       setThoughtLevel(level);
       markFieldTouched("model");
@@ -1532,7 +1537,10 @@ export function AutomationEditView({
     [effectiveModelValue, modelSelectGroups],
   );
   const preferredModelValue = ompCatalog?.preferredSelection
-    ? encodeCustomModelValue(ompCatalog.preferredSelection.providerId, ompCatalog.preferredSelection.modelId)
+    ? encodeCustomModelValue(
+        ompCatalog.preferredSelection.providerId,
+        ompCatalog.preferredSelection.modelId,
+      )
     : null;
   const persistedSelectionInvalid = Boolean(
     model && ompCatalog && !resolveOmpAutomationSelection(ompCatalog, model, thoughtLevel),
@@ -2581,7 +2589,6 @@ export function AutomationEditView({
                         })}
                       </Button>
                     )}
-
                   </div>
 
                   {/* 模型 / 推理强度在右侧成组，和左侧 workspace / 权限形成清晰分区。 */}

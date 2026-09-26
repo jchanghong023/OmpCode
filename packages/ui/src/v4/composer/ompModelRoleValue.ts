@@ -11,7 +11,9 @@ export function parseOmpRoleValue(
   value: string,
   catalog: readonly OmpModelCatalogEntry[],
 ): ParsedOmpRoleValue {
-  const modelParts = new Map(catalog.map((entry) => [`${entry.providerId}/${entry.modelId}`, entry]));
+  const modelParts = new Map(
+    catalog.map((entry) => [`${entry.providerId}/${entry.modelId}`, entry]),
+  );
   if (modelParts.has(value)) return { modelPart: value, levelSuffix: null };
   const separator = value.lastIndexOf(":");
   if (separator <= 0 || separator >= value.length - 1) {
@@ -30,7 +32,9 @@ export function selectOmpRoleModelValue(
   modelPart: string,
   catalog: readonly OmpModelCatalogEntry[],
 ): string {
-  const entry = catalog.find((candidate) => `${candidate.providerId}/${candidate.modelId}` === modelPart);
+  const entry = catalog.find(
+    (candidate) => `${candidate.providerId}/${candidate.modelId}` === modelPart,
+  );
   if (!entry) return currentValue;
   const level = highestOmpThoughtLevel(entry);
   return level ? `${modelPart}:${level}` : modelPart;
@@ -42,7 +46,9 @@ export function selectOmpRoleLevelValue(
   catalog: readonly OmpModelCatalogEntry[],
 ): string {
   const { modelPart } = parseOmpRoleValue(currentValue, catalog);
-  const entry = catalog.find((candidate) => `${candidate.providerId}/${candidate.modelId}` === modelPart);
+  const entry = catalog.find(
+    (candidate) => `${candidate.providerId}/${candidate.modelId}` === modelPart,
+  );
   if (!entry || (level && !entry.thoughtLevels?.includes(level))) return currentValue;
   return level ? `${modelPart}:${level}` : modelPart;
 }

@@ -123,8 +123,15 @@ export function useWorkspaceSessionReload({
                 "ready",
                 workspaceIdentity,
               );
-              if ((latestAfterResolve.slashCommands?.length ?? 0) === 0 && prepareResult.slashCommands?.length) {
-                zcodeSessionStore.setSlashCommands(workspaceAbsPath, prepareResult.slashCommands, workspaceIdentity);
+              if (
+                (latestAfterResolve.slashCommands?.length ?? 0) === 0 &&
+                prepareResult.slashCommands?.length
+              ) {
+                zcodeSessionStore.setSlashCommands(
+                  workspaceAbsPath,
+                  prepareResult.slashCommands,
+                  workspaceIdentity,
+                );
               }
               zcodeSessionStore.setDraftError(workspaceAbsPath, null, workspaceIdentity);
             }

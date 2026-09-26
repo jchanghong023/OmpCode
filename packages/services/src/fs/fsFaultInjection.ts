@@ -284,9 +284,7 @@ export function parseFsFaultRulesFromEnvValue(rawValue: string): FsFaultRuleConf
     parsed = JSON.parse(rawValue);
   } catch (error) {
     throw new Error(
-      `Invalid ${ZCODE_E2E_FS_FAULTS_ENV}: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
+      `Invalid ${ZCODE_E2E_FS_FAULTS_ENV}: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
 

@@ -54,7 +54,11 @@ export function createOmpComposerSubmissionConfig(
     | null
     | undefined,
   catalog: {
-    entries: readonly { providerId: string; modelId: string; defaultThoughtLevel: string | undefined }[];
+    entries: readonly {
+      providerId: string;
+      modelId: string;
+      defaultThoughtLevel: string | undefined;
+    }[];
   } | null,
 ): ComposerSubmissionConfig | null {
   if (!composer || !catalog) {
@@ -65,8 +69,7 @@ export function createOmpComposerSubmissionConfig(
   const entry = selection
     ? catalog.entries.find(
         (candidate) =>
-          candidate.providerId === selection.providerId &&
-          candidate.modelId === selection.modelId,
+          candidate.providerId === selection.providerId && candidate.modelId === selection.modelId,
       )
     : undefined;
   if (!mode.success || !selection || !entry) {

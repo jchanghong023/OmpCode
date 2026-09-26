@@ -45,7 +45,10 @@ function insideRoundedRect(px, py, shape) {
   const nearTop = py < y + ry;
   const nearBottom = py > y + h - ry;
   const corner =
-    (nearLeft || nearRight) && (nearTop || nearBottom) && !(nearLeft && nearRight) && !(nearTop && nearBottom);
+    (nearLeft || nearRight) &&
+    (nearTop || nearBottom) &&
+    !(nearLeft && nearRight) &&
+    !(nearTop && nearBottom);
   if (!corner) return true;
   const cxCorner = nearLeft ? x + rx : x + w - rx;
   const cyCorner = nearTop ? y + ry : y + h - ry;
@@ -90,7 +93,10 @@ function renderIcon(size) {
             const gx = (sampleX - offsetX) / scale;
             const gy = (sampleY - offsetY) / scale;
             for (const layer of GLYPH_LAYERS) {
-              const hit = layer.kind === "circle" ? insideCircle(gx, gy, layer) : insideRoundedRect(gx, gy, layer);
+              const hit =
+                layer.kind === "circle"
+                  ? insideCircle(gx, gy, layer)
+                  : insideRoundedRect(gx, gy, layer);
               if (hit) {
                 color = blend(layer.color, layer.alpha, color);
               }
@@ -199,7 +205,15 @@ function encodeIco(entries) {
   return Buffer.concat([header, ...dirEntries, ...blobs]);
 }
 
-const ICNS_TYPES = { 16: "icp4", 32: "ic11", 64: "ic12", 128: "ic07", 256: "ic08", 512: "ic09", 1024: "ic10" };
+const ICNS_TYPES = {
+  16: "icp4",
+  32: "ic11",
+  64: "ic12",
+  128: "ic07",
+  256: "ic08",
+  512: "ic09",
+  1024: "ic10",
+};
 
 function encodeIcns(entries) {
   const chunks = [];
@@ -253,12 +267,18 @@ writeFileSync(
 );
 
 // Web favicon 与 README 公共副本
-writeFileSync(resolve(repoRoot, "packages", "web", "public", "favicon.ico"), encodeIco([16, 24, 32, 48, 64, 128, 256].map((size) => [size, pngOf(size)])));
+writeFileSync(
+  resolve(repoRoot, "packages", "web", "public", "favicon.ico"),
+  encodeIco([16, 24, 32, 48, 64, 128, 256].map((size) => [size, pngOf(size)])),
+);
 writeFileSync(resolve(repoRoot, "public", "icon_512@2x.png"), pngOf(1024));
 const publicIconsDir = resolve(repoRoot, "public", "logo", "icons");
 mkdirSync(publicIconsDir, { recursive: true });
 for (const size of [16, 24, 32, 48, 64, 128, 256, 512, 1024]) {
-  copyFileSync(resolve(linuxIconsDir, `${size}x${size}.png`), resolve(publicIconsDir, `${size}x${size}.png`));
+  copyFileSync(
+    resolve(linuxIconsDir, `${size}x${size}.png`),
+    resolve(publicIconsDir, `${size}x${size}.png`),
+  );
 }
 copyFileSync(resolve(buildDir, "icon.ico"), resolve(publicIconsDir, "icon.ico"));
 copyFileSync(resolve(buildDir, "icon.icns"), resolve(publicIconsDir, "icon.icns"));

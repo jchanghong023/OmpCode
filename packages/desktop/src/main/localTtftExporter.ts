@@ -85,7 +85,9 @@ export function createLocalTtftExporter(options: {
   });
   const preparationObservation = meter.createHistogram(
     "zcode.local_ttft.preparation.observation.duration",
-    { unit: "ms" },
+    {
+      unit: "ms",
+    },
   );
   const systemDuration = meter.createHistogram("zcode.local_ttft.system.duration", { unit: "ms" });
   const preparationDuration = meter.createHistogram("zcode.local_ttft.preparation.duration", {

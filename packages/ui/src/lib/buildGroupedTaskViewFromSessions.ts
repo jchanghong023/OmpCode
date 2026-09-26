@@ -30,10 +30,7 @@ function taskKeyOf(task: ZCodeTaskMeta): string {
 
 /** 与 taskIndexRepo.taskOrderNodeKey 对齐（node_key = JSON.stringify([workspaceKey, taskId]）。 */
 function taskOrderMapKey(task: ZCodeTaskMeta): string {
-  return `task:${JSON.stringify([
-    buildTaskWorkspaceKey(task.workspacePath, task.workspaceIdentity),
-    task.taskId,
-  ])}`;
+  return `task:${JSON.stringify([buildTaskWorkspaceKey(task.workspacePath, task.workspaceIdentity), task.taskId])}`;
 }
 
 function nodeMapKey(node: ZCodeGroupedTaskViewNode): string {

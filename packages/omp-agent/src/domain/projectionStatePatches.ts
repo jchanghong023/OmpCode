@@ -22,8 +22,17 @@ export function runningControlPatch(): StatePatch {
 }
 
 /** 轮终态：control phase 收口 + lastError + 输入路由复位（queue 清空）。 */
-export function terminalControlPatch(state: ProjectionAState, outcome: TurnOutcome, error?: { code: string; message: string }): StatePatch {
-  const phase = outcome === "success" ? "completedSuccess" : outcome === "interrupted" ? "completedInterrupted" : "error";
+export function terminalControlPatch(
+  state: ProjectionAState,
+  outcome: TurnOutcome,
+  error?: { code: string; message: string },
+): StatePatch {
+  const phase =
+    outcome === "success"
+      ? "completedSuccess"
+      : outcome === "interrupted"
+        ? "completedInterrupted"
+        : "error";
   return {
     control: {
       phase,
@@ -51,7 +60,12 @@ export function terminalControlPatch(state: ProjectionAState, outcome: TurnOutco
 
 export function usagePatch(
   state: ProjectionAState,
-  delta: { inputTokens?: number; outputTokens?: number; cacheReadTokens?: number; cacheWriteTokens?: number },
+  delta: {
+    inputTokens?: number;
+    outputTokens?: number;
+    cacheReadTokens?: number;
+    cacheWriteTokens?: number;
+  },
 ): StatePatch {
   const cumulative = state.usage.cumulative;
   return {
@@ -67,14 +81,25 @@ export function usagePatch(
   };
 }
 
-export function contextWindowPatch(state: ProjectionAState, usedTokens: number | null, maxTokens: number | null, report?: OmpContextReport | null): StatePatch {
+export function contextWindowPatch(
+  state: ProjectionAState,
+  usedTokens: number | null,
+  maxTokens: number | null,
+  report?: OmpContextReport | null,
+): StatePatch {
   return {
     usage: {
       ...state.usage,
       contextWindow:
         usedTokens !== null && maxTokens !== null && maxTokens > 0
-          ? { usedTokens, maxTokens, autoCompactThresholdTokens: null,
-              ...(report?.contextWindow === maxTokens ? { details: { entries: report.entries } } : {}) }
+          ? {
+              usedTokens,
+              maxTokens,
+              autoCompactThresholdTokens: null,
+              ...(report?.contextWindow === maxTokens
+                ? { details: { entries: report.entries } }
+                : {}),
+            }
           : null,
     },
   };
@@ -99,7 +124,9 @@ export function modelConfigPatch(
       ...(config.thought !== undefined ? { thought: config.thought } : {}),
       ...(config.thoughtLevels !== undefined ? { thoughtLevels: config.thoughtLevels } : {}),
       ...(config.followupMode !== undefined ? { followupMode: config.followupMode } : {}),
-      ...(config.autoCompactionEnabled !== undefined ? { autoCompactionEnabled: config.autoCompactionEnabled } : {}),
+      ...(config.autoCompactionEnabled !== undefined
+        ? { autoCompactionEnabled: config.autoCompactionEnabled }
+        : {}),
     },
   };
 }

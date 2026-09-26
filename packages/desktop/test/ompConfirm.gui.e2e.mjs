@@ -32,7 +32,9 @@ try {
     await page.waitForFunction(
       () => document.querySelector('[data-testid="v4-composer-send"]') !== null,
       undefined,
-      { timeout: 20_000 },
+      {
+        timeout: 20_000,
+      },
     );
     const resultPath = join(workspace, `gui-confirm-${choice}.txt`);
     let actual;

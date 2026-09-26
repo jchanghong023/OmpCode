@@ -99,12 +99,8 @@ export class ConversationProjection {
     const init = { turnId, productTurnId: turnId, createdAtSeq: this.sequence + 1 };
     const headerRowId = this.nextRowId++;
     const userRowId = this.nextRowId++;
-    this.appendRow(
-      createTurnHeaderRow({ ...init, rowId: headerRowId, sourceCommandId: input.sourceCommandId, historyRoundCount: turnNumber - 1 }),
-    );
-    this.appendRow(
-      createUserInputRow({ ...init, rowId: userRowId, text: input.text, sourceCommandId: input.sourceCommandId, clientId: input.clientId }),
-    );
+    this.appendRow(createTurnHeaderRow({ ...init, rowId: headerRowId, sourceCommandId: input.sourceCommandId, historyRoundCount: turnNumber - 1 }));
+    this.appendRow(createUserInputRow({ ...init, rowId: userRowId, text: input.text, sourceCommandId: input.sourceCommandId, clientId: input.clientId }));
     const nextTurn: TurnContext = {
       turnId,
       sourceCommandId: input.sourceCommandId,
@@ -144,10 +140,8 @@ export class ConversationProjection {
     return true;
   }
   failCommandTurn(sourceCommandId: string, error: { code: string; message: string }): void {
-    if (finalizeFailedQueuedTurn({
-      queuedTurns: this.queuedTurns, sourceCommandId, turnFacts: this.turnFacts,
-      rowAt: (rowId) => this.rows.get(rowId), upsertRow: (row) => this.upsertRow(row),
-    })) return;
+    if (finalizeFailedQueuedTurn({ queuedTurns: this.queuedTurns, sourceCommandId, turnFacts: this.turnFacts, rowAt: (rowId) => this.rows.get(rowId), upsertRow: (row) => this.upsertRow(row) }))
+      return;
     this.recordTurnError(error);
     this.finishTurn("failed", error);
   }
@@ -163,9 +157,7 @@ export class ConversationProjection {
     if (this.state.control.phase !== "running") {
       return;
     }
-    this.patchState({
-      control: { ...this.state.control, canStop: false, stopState: "stopping" },
-    });
+    this.patchState({ control: { ...this.state.control, canStop: false, stopState: "stopping" } });
   }
   /** 记录本轮错误事实（provider/运行时）；下一次 finishTurn 以 failed 收口；null 清除（omp 自动重试成功）。 */
   recordTurnError(error: { code: string; message: string } | null): void {
@@ -175,8 +167,10 @@ export class ConversationProjection {
     const turn = this.turn;
     if (!turn && this.suspendedTurns.length === 0) return;
     finalizeTurnContexts({
-      turns: [...this.suspendedTurns, ...(turn ? [turn] : [])], outcome,
-      rowAt: (rowId) => this.rows.get(rowId), upsertRow: (row) => this.upsertRow(row),
+      turns: [...this.suspendedTurns, ...(turn ? [turn] : [])],
+      outcome,
+      rowAt: (rowId) => this.rows.get(rowId),
+      upsertRow: (row) => this.upsertRow(row),
       closeStreamingRows: (active) => this.closeStreamingRows(outcome === "failed" ? "failed" : outcome === "interrupted" ? "interrupted" : "complete", active),
       turnFacts: this.turnFacts,
     });
@@ -203,14 +197,7 @@ export class ConversationProjection {
       this.turn.responseCounter += 1;
       const rowId = this.nextRowId++;
       this.appendRow(
-        createStreamingRow({
-          rowId,
-          turnId: this.turn.turnId,
-          productTurnId: this.turn.productTurnId,
-          createdAtSeq: this.sequence + 1,
-          kind,
-          responseCounter: this.turn.responseCounter,
-        }),
+        createStreamingRow({ rowId, turnId: this.turn.turnId, productTurnId: this.turn.productTurnId, createdAtSeq: this.sequence + 1, kind, responseCounter: this.turn.responseCounter }),
       );
       this.turn[anchorKey] = { rowId, entityId: `resp-${this.turn.turnId}-${this.turn.responseCounter}-${kind === "assistantText" ? "text" : "reasoning"}` };
     }
@@ -253,8 +240,12 @@ export class ConversationProjection {
     const turn = this.turn;
     if (!turn) return;
     applyProjectionToolCallUpdate({
-      turn, update, createdAtSeq: this.sequence + 1, rows: this.rows.values(),
-      nextRowId: () => this.nextRowId++, rowAt: (rowId) => this.rows.get(rowId),
+      turn,
+      update,
+      createdAtSeq: this.sequence + 1,
+      rows: this.rows.values(),
+      nextRowId: () => this.nextRowId++,
+      rowAt: (rowId) => this.rows.get(rowId),
       upsertRow: (row) => this.upsertRow(row),
     });
   }
@@ -277,7 +268,9 @@ export class ConversationProjection {
   upsertSubagent(input: Parameters<OmpSubagentProjection["upsert"]>[0]): void {
     this.subagents.upsert(input);
   }
-  setSubagentAvailability(availability: "ready" | "unavailable"): void { this.subagents.setAvailability(availability); }
+  setSubagentAvailability(availability: "ready" | "unavailable"): void {
+    this.subagents.setAvailability(availability);
+  }
   subagentDirectory(offset = 0) {
     return this.subagents.directory(offset);
   }
@@ -286,9 +279,7 @@ export class ConversationProjection {
   }
 
   resolvePendingInteraction(interactionId: string): void {
-    this.patchState({
-      pendingInteractions: this.state.pendingInteractions.filter((item) => item.interactionId !== interactionId),
-    });
+    this.patchState({ pendingInteractions: this.state.pendingInteractions.filter((item) => item.interactionId !== interactionId) });
   }
 
   addTimelineMarker(marker: TimelineMarkerPayload): void {
@@ -297,9 +288,7 @@ export class ConversationProjection {
       return;
     }
     const rowId = this.nextRowId++;
-    this.appendRow(
-      createMarkerRow({ rowId, turnId: turn.turnId, productTurnId: turn.productTurnId, createdAtSeq: this.sequence + 1, marker }),
-    );
+    this.appendRow(createMarkerRow({ rowId, turnId: turn.turnId, productTurnId: turn.productTurnId, createdAtSeq: this.sequence + 1, marker }));
   }
 
   fileChangesForTarget(targetRowId: number): { files: number; additions: number; deletions: number; items: ReturnType<TurnFileFacts["items"]> } {
@@ -376,8 +365,7 @@ export class ConversationProjection {
     }
     this.pushPending(isNew ? { op: "row.appended", row } : { op: "row.upserted", row });
   }
-  private materializeStreamTextRow = (rowId: number): ConversationRow | undefined =>
-    materializeStreamTextRow(this.rows, this.pendingStreamTextByRowId, rowId);
+  private materializeStreamTextRow = (rowId: number): ConversationRow | undefined => materializeStreamTextRow(this.rows, this.pendingStreamTextByRowId, rowId);
 
   private patchState(patch: StatePatch): void {
     this.state = { ...this.state, ...patch } as ProjectionAState;

@@ -156,7 +156,10 @@ export class ConversationSharePreviewClient {
     try {
       response = await this.fetchImpl(
         `${this.baseUrl}/shares/${encodeURIComponent(shareCode)}/preview`,
-        { method: "GET", ...(headers ? { headers } : {}) },
+        {
+          method: "GET",
+          ...(headers ? { headers } : {}),
+        },
       );
     } catch (error) {
       const errorName = error instanceof Error ? error.name : typeof error;

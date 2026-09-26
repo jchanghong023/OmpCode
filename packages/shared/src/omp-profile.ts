@@ -6,16 +6,20 @@ export function normalizeOmpProfileName(value: string | undefined): string {
   const name = value?.trim() ?? "";
   if (!name || name === "default") return "default";
   if (
-    name === "." || name === ".." || name.endsWith(".") ||
-    !PROFILE_NAME_RE.test(name) || WINDOWS_RESERVED_RE.test(name)
+    name === "." ||
+    name === ".." ||
+    name.endsWith(".") ||
+    !PROFILE_NAME_RE.test(name) ||
+    WINDOWS_RESERVED_RE.test(name)
   ) {
     throw new Error("omp_profile_invalid");
   }
   return name;
 }
 
-export function resolveOmpProfileFromEnv(env: { OMP_PROFILE?: string; PI_PROFILE?: string }): string {
-  return normalizeOmpProfileName(
-    env.OMP_PROFILE !== undefined ? env.OMP_PROFILE : env.PI_PROFILE,
-  );
+export function resolveOmpProfileFromEnv(env: {
+  OMP_PROFILE?: string;
+  PI_PROFILE?: string;
+}): string {
+  return normalizeOmpProfileName(env.OMP_PROFILE !== undefined ? env.OMP_PROFILE : env.PI_PROFILE);
 }

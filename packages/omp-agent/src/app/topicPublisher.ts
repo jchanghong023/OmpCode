@@ -40,7 +40,11 @@ export class ConversationTopicPublisher {
     private readonly gateway: HostGateway,
   ) {}
 
-  subscribe(params: SubscribeOptions): { subscriptionId: string; mode: "snapshot" | "resume"; logEpoch: string } {
+  subscribe(params: SubscribeOptions): {
+    subscriptionId: string;
+    mode: "snapshot" | "resume";
+    logEpoch: string;
+  } {
     this.flushNow();
     const subscriptionId = createSubscriptionId();
     const resumeDeltas =
@@ -57,10 +61,20 @@ export class ConversationTopicPublisher {
     };
     this.subscribers.set(subscriptionId, subscriber);
     if (resumeDeltas && params.base) {
-      this.emitFrames(subscriptionId, params.base.seq, { kind: "deltas", deltas: resumeDeltas }, "recovery");
+      this.emitFrames(
+        subscriptionId,
+        params.base.seq,
+        { kind: "deltas", deltas: resumeDeltas },
+        "recovery",
+      );
       subscriber.lastDeliveredSeq = this.projection.seq;
     } else {
-      this.emitFrames(subscriptionId, 0, { kind: "snapshot", snapshot: this.projection.buildSnapshot() }, "initial");
+      this.emitFrames(
+        subscriptionId,
+        0,
+        { kind: "snapshot", snapshot: this.projection.buildSnapshot() },
+        "initial",
+      );
     }
     return {
       subscriptionId,
@@ -82,19 +96,27 @@ export class ConversationTopicPublisher {
     }
     this.flushNow();
     const resumeDeltas =
-      !forceSnapshot &&
-      base !== null &&
-      base.logEpoch === this.projection.logEpoch
+      !forceSnapshot && base !== null && base.logEpoch === this.projection.logEpoch
         ? this.projection.deltasBetween(base.seq, this.projection.seq)
         : null;
     if (resumeDeltas && base && resumeDeltas.length > 0) {
-      this.emitFrames(subscriptionId, base.seq, { kind: "deltas", deltas: resumeDeltas }, "recovery");
+      this.emitFrames(
+        subscriptionId,
+        base.seq,
+        { kind: "deltas", deltas: resumeDeltas },
+        "recovery",
+      );
       subscriber.lastDeliveredSeq = this.projection.seq;
       return { subscriptionId, mode: "resume", logEpoch: this.projection.logEpoch };
     }
     // forceSnapshot 或无增量可续：必须回 snapshot + mode=snapshot。
     // renderer 以「ack=resume 且无帧到达」判 recovery 超时（GUI 链路实测踩坑）。
-    this.emitFrames(subscriptionId, 0, { kind: "snapshot", snapshot: this.projection.buildSnapshot() }, "recovery");
+    this.emitFrames(
+      subscriptionId,
+      0,
+      { kind: "snapshot", snapshot: this.projection.buildSnapshot() },
+      "recovery",
+    );
     subscriber.lastDeliveredSeq = this.projection.seq;
     return { subscriptionId, mode: "snapshot", logEpoch: this.projection.logEpoch };
   }
@@ -136,17 +158,30 @@ export class ConversationTopicPublisher {
   private flushNow(): void {
     this.projection.drainPendingDeltas();
     for (const subscriber of this.subscribers.values()) {
-      const deltas = this.projection.deltasBetween(subscriber.lastDeliveredSeq, this.projection.seq);
+      const deltas = this.projection.deltasBetween(
+        subscriber.lastDeliveredSeq,
+        this.projection.seq,
+      );
       if (deltas === null) {
         // 水位早于 log 覆盖范围：整快照重同步，避免订阅者永久等待缺口。
-        this.emitFrames(subscriber.subscriptionId, 0, { kind: "snapshot", snapshot: this.projection.buildSnapshot() }, "recovery");
+        this.emitFrames(
+          subscriber.subscriptionId,
+          0,
+          { kind: "snapshot", snapshot: this.projection.buildSnapshot() },
+          "recovery",
+        );
         subscriber.lastDeliveredSeq = this.projection.seq;
         continue;
       }
       if (deltas.length === 0) {
         continue;
       }
-      this.emitFrames(subscriber.subscriptionId, subscriber.lastDeliveredSeq, { kind: "deltas", deltas }, "online");
+      this.emitFrames(
+        subscriber.subscriptionId,
+        subscriber.lastDeliveredSeq,
+        { kind: "deltas", deltas },
+        "online",
+      );
       subscriber.lastDeliveredSeq = this.projection.seq;
     }
   }
@@ -154,7 +189,9 @@ export class ConversationTopicPublisher {
   private emitFrames(
     subscriptionId: string,
     fromSeq: number,
-    payload: { kind: "snapshot"; snapshot: ConversationSnapshot } | { kind: "deltas"; deltas: ConversationDelta[] },
+    payload:
+      | { kind: "snapshot"; snapshot: ConversationSnapshot }
+      | { kind: "deltas"; deltas: ConversationDelta[] },
     deliveryKind: "initial" | "online" | "recovery",
   ): void {
     const subscriber = this.subscribers.get(subscriptionId);
@@ -162,10 +199,15 @@ export class ConversationTopicPublisher {
     // 临时 ID 订阅保持原 topic；UUID 新订阅必须以请求的 ID 发 topic 与 snapshot。
     // 两者仅是同一投影的传输别名，不创建第二份可写会话状态。
     const topic = `conversation/${subscriber.sessionId}`;
-    const deliveredPayload = payload.kind === "snapshot"
-      ? { kind: "snapshot" as const, snapshot: { ...payload.snapshot, sessionId: subscriber.sessionId } }
-      : payload;
-    const toSeq = deliveredPayload.kind === "snapshot" ? deliveredPayload.snapshot.seq : this.projection.seq;
+    const deliveredPayload =
+      payload.kind === "snapshot"
+        ? {
+            kind: "snapshot" as const,
+            snapshot: { ...payload.snapshot, sessionId: subscriber.sessionId },
+          }
+        : payload;
+    const toSeq =
+      deliveredPayload.kind === "snapshot" ? deliveredPayload.snapshot.seq : this.projection.seq;
     const frame = {
       topic,
       subscriptionId,

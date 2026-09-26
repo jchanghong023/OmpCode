@@ -566,7 +566,6 @@ export function spawnHostProcess(
       return;
     }
 
-
     if (result.data.type === HostResponseTypes.BotRemoteWorkspaceReconnectRequest) {
       const request = result.data;
       const handler = dependencies.handleBotRemoteWorkspaceReconnectRequest;

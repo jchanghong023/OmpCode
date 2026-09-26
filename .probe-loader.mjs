@@ -17,13 +17,18 @@ const modelOption = state.configOptions.find((o) => o.id === "model");
 console.log(JSON.stringify({ options: modelOption?.options?.length ?? -1, currentValue: modelOption?.currentValue, levels: state.configOptions.filter(o=>o.id==="thought_level").length }));
 process.exit(0);
 `;
-const child = spawn(process.execPath, [
-  join(dirname(createRequire(import.meta.url).resolve("tsx/package.json")), "dist", "cli.mjs"),
-  "--eval", script,
-  "D:\\code1111111111\\forkZcode\\packages\\desktop\\dist\\win-unpacked\\resources\\glm\\omp\\omp.exe",
-], {
-  cwd: "D:/code1111111111/forkZcode",
-  env: { ...process.env, OMP_RPC_BINARY_PATH: undefined },
-  stdio: ["inherit", "inherit", "inherit"],
-});
+const child = spawn(
+  process.execPath,
+  [
+    join(dirname(createRequire(import.meta.url).resolve("tsx/package.json")), "dist", "cli.mjs"),
+    "--eval",
+    script,
+    "D:\\code1111111111\\forkZcode\\packages\\desktop\\dist\\win-unpacked\\resources\\glm\\omp\\omp.exe",
+  ],
+  {
+    cwd: "D:/code1111111111/forkZcode",
+    env: { ...process.env, OMP_RPC_BINARY_PATH: undefined },
+    stdio: ["inherit", "inherit", "inherit"],
+  },
+);
 child.on("exit", (code) => console.log("exit", code));

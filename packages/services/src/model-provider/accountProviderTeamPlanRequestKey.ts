@@ -134,7 +134,10 @@ async function resolveTeamPlanProjectApiKey(params: {
     log.warn(
       undefined,
       `${params.family} Team Plan runtime key projection skipped: project api key missing`,
-      { projectId, organizationId },
+      {
+        projectId,
+        organizationId,
+      },
     );
     return null;
   }
@@ -159,7 +162,11 @@ async function resolveTeamPlanProjectApiKey(params: {
     log.warn(
       undefined,
       `${params.family} Team Plan runtime key projection using api key without copied secret`,
-      { projectId, organizationId, hasApiKey: true },
+      {
+        projectId,
+        organizationId,
+        hasApiKey: true,
+      },
     );
   }
   return secretKey ? `${apiKey}.${secretKey}` : apiKey;

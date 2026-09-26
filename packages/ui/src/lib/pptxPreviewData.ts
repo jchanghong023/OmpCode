@@ -59,7 +59,7 @@ export async function readPptxPreviewData({
   const data = new Uint8Array(fileSize);
   let offset = 0;
 
-  for (; offset < fileSize; ) {
+  for (; offset < fileSize;) {
     const requestedLength = Math.min(PPTX_RANGE_CHUNK_BYTES, fileSize - offset);
     const chunk = await readRange(offset, requestedLength);
     if (isDisposed()) {

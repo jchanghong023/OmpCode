@@ -145,7 +145,9 @@ export function CuaPermissionObservationAttachment() {
                 permissionService.getStatus(
                   observation.workspacePath,
                   observation.workspaceIdentity,
-                  { includeFunctionalProbes: false },
+                  {
+                    includeFunctionalProbes: false,
+                  },
                 ),
               confirm: () =>
                 confirmDialog({

@@ -3807,7 +3807,9 @@ export function createBotsService(
                   requestController.signal.addEventListener(
                     "abort",
                     () => reject(requestController.signal.reason),
-                    { once: true },
+                    {
+                      once: true,
+                    },
                   );
                 }),
               ]);
@@ -5820,7 +5822,10 @@ export function createBotsService(
                 optionSource,
                 commandName,
                 currentValue,
-                { locale: auth.locale, provider: draftOptions.provider },
+                {
+                  locale: auth.locale,
+                  provider: draftOptions.provider,
+                },
               );
               const selectOption = findSelectConfigOption(optionSource, commandName);
               const options = listConfigSelectOptions(optionSource, commandName, {

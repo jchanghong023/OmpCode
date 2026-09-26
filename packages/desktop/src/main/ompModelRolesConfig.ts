@@ -18,12 +18,8 @@ export function resolveOmpModelRolesConfigPath(
   return join(resolveOmpAgentDir(home, env), "config.yml");
 }
 
-type ReadResult =
-  | { success: true; roles: OmpModelRole[] }
-  | { success: false; error: string };
-type WriteResult =
-  | { success: true; backupPath?: string }
-  | { success: false; error: string };
+type ReadResult = { success: true; roles: OmpModelRole[] } | { success: false; error: string };
+type WriteResult = { success: true; backupPath?: string } | { success: false; error: string };
 
 function parseConfig(raw: string) {
   const doc = parseDocument(raw);
@@ -93,7 +89,10 @@ export async function writeOmpModelRolesConfig(
       ? doc.toString()
       : replacements
           .sort((left, right) => right.start - left.start)
-          .reduce((text, item) => text.slice(0, item.start) + item.value + text.slice(item.end), raw);
+          .reduce(
+            (text, item) => text.slice(0, item.start) + item.value + text.slice(item.end),
+            raw,
+          );
     if (next === raw) return { success: true };
 
     const backupPath = `${configPath}.bak-${Date.now()}-${randomUUID()}`;

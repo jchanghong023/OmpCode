@@ -198,7 +198,9 @@ async function main() {
   const tunnel = spawn(
     "ssh",
     [...sshBaseArgs, "-N", "-L", `${localPort}:127.0.0.1:${remotePort}`, sshTargetHost],
-    { stdio: "ignore" },
+    {
+      stdio: "ignore",
+    },
   );
   cleanups.push(() => {
     if (!keep) tunnel.kill("SIGTERM");

@@ -32,7 +32,9 @@ function countLines(value: string | undefined): number {
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : undefined;
+  return typeof value === "object" && value !== null
+    ? (value as Record<string, unknown>)
+    : undefined;
 }
 
 function normalizePath(path: string | undefined): string | null {
@@ -45,7 +47,9 @@ function normalizePath(path: string | undefined): string | null {
 export class TurnFileFacts {
   private itemsByKey = new Map<string, FileFactAccumulator>();
 
-  static fromSummary(summary: { files: number; additions: number; deletions: number } | undefined): TurnFileFacts {
+  static fromSummary(
+    summary: { files: number; additions: number; deletions: number } | undefined,
+  ): TurnFileFacts {
     // 历史轮不驻留明细；摘要级事实足够 fileChanges 查询的聚合数字，明细为空。
     const facts = new TurnFileFacts();
     if (summary && summary.files > 0) {
@@ -56,7 +60,11 @@ export class TurnFileFacts {
 
   private placeholderSummary: { files: number; additions: number; deletions: number } | null = null;
 
-  recordToolResult(input: { toolName: string; input?: Record<string, unknown>; resultDetails?: unknown }): void {
+  recordToolResult(input: {
+    toolName: string;
+    input?: Record<string, unknown>;
+    resultDetails?: unknown;
+  }): void {
     const toolName = input.toolName;
     const args = input.input;
     if (toolName === "write" || toolName === "edit" || toolName === "multiedit") {
@@ -69,7 +77,11 @@ export class TurnFileFacts {
     }
   }
 
-  private recordWriteOrEdit(toolName: string, args: Record<string, unknown> | undefined, resultDetails: unknown): void {
+  private recordWriteOrEdit(
+    toolName: string,
+    args: Record<string, unknown> | undefined,
+    resultDetails: unknown,
+  ): void {
     if (!args) {
       return;
     }
@@ -80,7 +92,12 @@ export class TurnFileFacts {
         return;
       }
       const additions = countLines(content);
-      this.accumulate(path, { additions, deletions: 0, toolName, patch: buildPatch(0, additions, content ? `-${content}` : "") });
+      this.accumulate(path, {
+        additions,
+        deletions: 0,
+        toolName,
+        patch: buildPatch(0, additions, content ? `-${content}` : ""),
+      });
       return;
     }
     if (typeof args.input === "string") {
@@ -92,10 +109,15 @@ export class TurnFileFacts {
       const changes = typeof diff === "string" ? changesFromUnifiedDiff(diff, paths[0]) : [];
       const changedPaths = new Set(changes.map((item) => item.path));
       for (const change of changes) {
-        this.accumulate(change.path, { ...change, toolName, patch: buildPatch(change.deletions, change.additions, change.lines) });
+        this.accumulate(change.path, {
+          ...change,
+          toolName,
+          patch: buildPatch(change.deletions, change.additions, change.lines),
+        });
       }
       for (const path of new Set(paths)) {
-        if (!changedPaths.has(path)) this.accumulate(path, { additions: 0, deletions: 0, toolName });
+        if (!changedPaths.has(path))
+          this.accumulate(path, { additions: 0, deletions: 0, toolName });
       }
       return;
     }
@@ -113,7 +135,12 @@ export class TurnFileFacts {
         ...(oldString ? oldString.split("\n").map((line) => `-${line}`) : []),
         ...(newString ? newString.split("\n").map((line) => `+${line}`) : []),
       ];
-      this.accumulate(path, { additions, deletions, toolName, patch: buildPatch(deletions, additions, lines) });
+      this.accumulate(path, {
+        additions,
+        deletions,
+        toolName,
+        patch: buildPatch(deletions, additions, lines),
+      });
       return;
     }
     const edits = Array.isArray(args.edits) ? args.edits : [];
@@ -126,7 +153,9 @@ export class TurnFileFacts {
       if (diff) {
         const lines = diff.split("\n");
         const added = lines.filter((line) => line.startsWith("+") && !line.startsWith("++")).length;
-        const removed = lines.filter((line) => line.startsWith("-") && !line.startsWith("--")).length;
+        const removed = lines.filter(
+          (line) => line.startsWith("-") && !line.startsWith("--"),
+        ).length;
         additions += added;
         deletions += removed;
         patches.push(buildPatch(removed, added, lines));
@@ -137,10 +166,22 @@ export class TurnFileFacts {
     }
   }
 
-  private accumulate(path: string, fact: { additions: number; deletions: number; toolName: string; patch?: FileFactItem["patches"][number]; patches?: FileFactItem["patches"] }): void {
+  private accumulate(
+    path: string,
+    fact: {
+      additions: number;
+      deletions: number;
+      toolName: string;
+      patch?: FileFactItem["patches"][number];
+      patches?: FileFactItem["patches"];
+    },
+  ): void {
     this.placeholderSummary = null;
     const existing = this.itemsByKey.get(path);
-    const patches = [...(existing?.patches ?? []), ...(fact.patches ?? (fact.patch ? [fact.patch] : []))].slice(-20);
+    const patches = [
+      ...(existing?.patches ?? []),
+      ...(fact.patches ?? (fact.patch ? [fact.patch] : [])),
+    ].slice(-20);
     this.itemsByKey.set(path, {
       path,
       additions: (existing?.additions ?? 0) + fact.additions,
@@ -171,13 +212,19 @@ export class TurnFileFacts {
   }
 }
 
-function changesFromUnifiedDiff(diff: string, fallbackPath: string | undefined): { path: string; additions: number; deletions: number; lines: string[] }[] {
-  const changes = new Map<string, { path: string; additions: number; deletions: number; lines: string[] }>();
+function changesFromUnifiedDiff(
+  diff: string,
+  fallbackPath: string | undefined,
+): { path: string; additions: number; deletions: number; lines: string[] }[] {
+  const changes = new Map<
+    string,
+    { path: string; additions: number; deletions: number; lines: string[] }
+  >();
   let path = fallbackPath;
   for (const line of diff.split("\n")) {
     if (line.startsWith("+++ ")) {
       const next = line.slice(4).replace(/^b\//, "").trim();
-      path = next === "/dev/null" ? undefined : normalizePath(next) ?? undefined;
+      path = next === "/dev/null" ? undefined : (normalizePath(next) ?? undefined);
       continue;
     }
     if (!path || line.startsWith("--- ") || line.startsWith("@@")) continue;
@@ -191,7 +238,11 @@ function changesFromUnifiedDiff(diff: string, fallbackPath: string | undefined):
   return [...changes.values()];
 }
 
-function buildPatch(oldLines: number, newLines: number, lines: string | string[]): FileFactItem["patches"][number] {
+function buildPatch(
+  oldLines: number,
+  newLines: number,
+  lines: string | string[],
+): FileFactItem["patches"][number] {
   const lineArray = typeof lines === "string" ? lines.split("\n") : lines;
   return {
     oldStart: 1,

@@ -63,13 +63,11 @@ const ASSISTANT_PREVIEW_FILE_TYPES: readonly AssistantPreviewFileTypeDefinition[
   { extensions: [".xlsx"], kind: "xlsx", subtitleId: "chat.previewCards.xlsx" },
   { extensions: [".pptx"], kind: "pptx", subtitleId: "chat.previewCards.pptx" },
   { extensions: [".pdf"], kind: "pdf", subtitleId: "chat.previewCards.pdf" },
-  ...MEDIA_PREVIEW_FORMATS.map(
-    ({ extension, kind }): AssistantPreviewFileTypeDefinition => ({
-      extensions: [extension],
-      kind,
-      subtitleId: kind === "video" ? "chat.previewCards.video" : "chat.previewCards.audio",
-    }),
-  ),
+  ...MEDIA_PREVIEW_FORMATS.map(({ extension, kind }): AssistantPreviewFileTypeDefinition => ({
+    extensions: [extension],
+    kind,
+    subtitleId: kind === "video" ? "chat.previewCards.video" : "chat.previewCards.audio",
+  })),
 ];
 
 const FILE_URL_RE = /\bfile:\/\/[^\s<>()\]`"'*“”‘’，。！？；：、]+/gi;

@@ -398,11 +398,12 @@ export function V4InteractionDialogs({
         onRespond={(_requestId, action, content) => {
           if (answerMode) {
             const value = typeof content?.answer === "string" ? content.answer : undefined;
-            const answer = action === "accept" && value
-              ? answerMode === "option"
-                ? { optionId: value }
-                : { freeText: value }
-              : { action: "cancel" as const };
+            const answer =
+              action === "accept" && value
+                ? answerMode === "option"
+                  ? { optionId: value }
+                  : { freeText: value }
+                : { action: "cancel" as const };
             void resolveInteraction(pending.interactionId, answer);
             return;
           }

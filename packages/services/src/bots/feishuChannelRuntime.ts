@@ -6,10 +6,7 @@ import {
   type BotsConfigFile,
 } from "@zcode/shared";
 import type { ICredentialService } from "../credential/credential.js";
-import {
-  startFeishuBotWebSocket,
-  type FeishuWebSocketClient,
-} from "./providers/feishuProvider.js";
+import { startFeishuBotWebSocket, type FeishuWebSocketClient } from "./providers/feishuProvider.js";
 import {
   acquireFeishuWebSocketLock,
   assertBotCallbackSucceeded,
@@ -131,14 +128,8 @@ export function createFeishuChannelRuntime(deps: FeishuChannelRuntimeDeps) {
               undefined,
               `feishu websocket payload bot=${bot.id} ${deps.summarizeCallbackPayload(payload)}`,
             );
-            const callbackResult = await deps.processProviderCallback(
-              bot.provider,
-              payload,
-            );
-            assertBotCallbackSucceeded(
-              bot.provider === "lark" ? "Lark" : "Feishu",
-              callbackResult,
-            );
+            const callbackResult = await deps.processProviderCallback(bot.provider, payload);
+            assertBotCallbackSucceeded(bot.provider === "lark" ? "Lark" : "Feishu", callbackResult);
             return callbackResult.replies[0];
           },
         });
@@ -152,10 +143,7 @@ export function createFeishuChannelRuntime(deps: FeishuChannelRuntimeDeps) {
         });
         // Bugfix：首次 ready 不是长连接生命周期终点。SDK 重连耗尽必须进入 catch，
         // 才能更新错误状态、关闭 client、释放跨窗口锁并进入外层恢复循环。
-        await Promise.race([
-          waitForAbort(signal),
-          client.terminated,
-        ]);
+        await Promise.race([waitForAbort(signal), client.terminated]);
       } catch (error) {
         if (signal.aborted) {
           return;

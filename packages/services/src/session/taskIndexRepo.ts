@@ -1493,7 +1493,8 @@ export class TaskIndexRepo {
     toTaskId: string;
   }): Promise<ZCodeTaskMeta | null> {
     await this.ensureReady();
-    if (params.fromTaskId === params.toTaskId) return this.getTaskMeta({ ...params, taskId: params.toTaskId });
+    if (params.fromTaskId === params.toTaskId)
+      return this.getTaskMeta({ ...params, taskId: params.toTaskId });
     return this.enqueueWrite({ ...params, taskId: params.fromTaskId }, () => {
       const database = this.getDatabase();
       database.exec("BEGIN IMMEDIATE");
@@ -1507,18 +1508,32 @@ export class TaskIndexRepo {
         const oldKey = JSON.stringify([from.workspace_key, params.fromTaskId]);
         const newKey = JSON.stringify([from.workspace_key, params.toTaskId]);
         // UUID 基线可能抢先 seed；它没有用户归属，保留临时行的完整产品壳状态。
-        database.prepare("DELETE FROM tasks WHERE workspace_key = ? AND task_id = ?")
+        database
+          .prepare("DELETE FROM tasks WHERE workspace_key = ? AND task_id = ?")
           .run(from.workspace_key, params.toTaskId);
-        database.prepare("DELETE FROM task_group_members WHERE workspace_key = ? AND task_id = ?")
+        database
+          .prepare("DELETE FROM task_group_members WHERE workspace_key = ? AND task_id = ?")
           .run(from.workspace_key, params.toTaskId);
-        database.prepare("DELETE FROM task_group_view_node_orders WHERE node_type = 'task' AND node_key = ?")
+        database
+          .prepare(
+            "DELETE FROM task_group_view_node_orders WHERE node_type = 'task' AND node_key = ?",
+          )
           .run(newKey);
         const meta = { ...rowToMeta(from), taskId: params.toTaskId };
-        database.prepare("UPDATE tasks SET task_id = ?, meta_json = ? WHERE workspace_key = ? AND task_id = ?")
+        database
+          .prepare(
+            "UPDATE tasks SET task_id = ?, meta_json = ? WHERE workspace_key = ? AND task_id = ?",
+          )
           .run(params.toTaskId, serializeMetaJson(meta), from.workspace_key, params.fromTaskId);
-        database.prepare("UPDATE task_group_members SET task_id = ? WHERE workspace_key = ? AND task_id = ?")
+        database
+          .prepare(
+            "UPDATE task_group_members SET task_id = ? WHERE workspace_key = ? AND task_id = ?",
+          )
           .run(params.toTaskId, from.workspace_key, params.fromTaskId);
-        database.prepare("UPDATE task_group_view_node_orders SET node_key = ? WHERE node_type = 'task' AND node_key = ?")
+        database
+          .prepare(
+            "UPDATE task_group_view_node_orders SET node_key = ? WHERE node_type = 'task' AND node_key = ?",
+          )
           .run(newKey, oldKey);
         const migrated = this.getTaskRow({ ...params, taskId: params.toTaskId });
         database.exec("COMMIT");

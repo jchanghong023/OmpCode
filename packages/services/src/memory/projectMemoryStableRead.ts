@@ -86,7 +86,9 @@ async function readBoundedFile(handle: FileHandle, maxBytes: number): Promise<Bu
 function throwPreviewLimitError(fileName: string): never {
   throw Object.assign(
     new Error(`Project Memory file exceeds the 5 MiB preview limit: ${fileName}`),
-    { code: PROJECT_MEMORY_PREVIEW_LIMIT_EXCEEDED_ERROR_CODE },
+    {
+      code: PROJECT_MEMORY_PREVIEW_LIMIT_EXCEEDED_ERROR_CODE,
+    },
   );
 }
 

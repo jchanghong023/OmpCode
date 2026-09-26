@@ -2282,7 +2282,10 @@ export class BrowserGuestManager {
     if (action.type === "scrollTo") {
       const current = (await view.webContents.executeJavaScript(
         "({ x: window.scrollX, y: window.scrollY })",
-      )) as { x?: unknown; y?: unknown };
+      )) as {
+        x?: unknown;
+        y?: unknown;
+      };
       const target = action.selector
         ? await this.resolveRecordingSelectorScrollTarget(view, action.selector, signal)
         : { x: action.x ?? Number(current.x ?? 0), y: action.y ?? Number(current.y ?? 0) };

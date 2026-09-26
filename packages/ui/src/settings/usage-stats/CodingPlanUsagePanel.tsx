@@ -941,9 +941,7 @@ function CodingPlanUsageDetailSummary({
             <span className="min-w-0 truncate">{item.label}</span>
             {item.trend === null ? null : (
               <span
-                className={`shrink-0 text-ui-base ${
-                  item.trend < 0 ? "text-destructive" : "text-success"
-                }`}
+                className={`shrink-0 text-ui-base ${item.trend < 0 ? "text-destructive" : "text-success"}`}
               >
                 {formatCodingPlanTrend(locale, item.trend)}
               </span>

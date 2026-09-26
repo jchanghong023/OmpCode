@@ -64,7 +64,10 @@ export function createOmpStore(env: NodeJS.ProcessEnv = process.env): OmpStorePo
       if (!existsSync(directory)) {
         return [];
       }
-      const files = (await readdir(directory)).filter((name) => name.endsWith(".jsonl")).sort().reverse();
+      const files = (await readdir(directory))
+        .filter((name) => name.endsWith(".jsonl"))
+        .sort()
+        .reverse();
       const summaries: OmpStoreSessionSummary[] = [];
       for (const name of files.slice(0, 100)) {
         const sessionPath = join(directory, name);
@@ -145,9 +148,16 @@ export function createOmpStore(env: NodeJS.ProcessEnv = process.env): OmpStorePo
       try {
         const content = await readFile(childPath, "utf8");
         // 同 readSessionEntries：追加写文件截断保留末尾（最新）段。
-        return content.split("\n").slice(-4000).flatMap((line) => {
-          try { return [JSON.parse(line) as unknown]; } catch { return []; }
-        });
+        return content
+          .split("\n")
+          .slice(-4000)
+          .flatMap((line) => {
+            try {
+              return [JSON.parse(line) as unknown];
+            } catch {
+              return [];
+            }
+          });
       } catch {
         return [];
       }
@@ -170,7 +180,6 @@ function sessionIdOfFileName(name: string): string | null {
   const match = /^[0-9T:.+-Z]+_(.+)\.jsonl$/.exec(name);
   return match?.[1] ?? null;
 }
-
 
 /** 读标题（title_change / 首条用户消息）；失败返回原文 null。 */
 export async function readSessionTitle(sessionPath: string): Promise<string | null> {

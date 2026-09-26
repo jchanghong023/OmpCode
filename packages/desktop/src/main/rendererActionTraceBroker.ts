@@ -145,7 +145,9 @@ export function createRendererActionTraceBroker(options: {
           const droppedBatchCount = queue.splice(0, queue.length).length;
           options.logger.warn(
             "[renderer-action-trace] shutdown deadline exceeded; dropping queued batches",
-            { droppedBatchCount },
+            {
+              droppedBatchCount,
+            },
           );
           return;
         }

@@ -351,7 +351,10 @@ function PptxThumbnail({
     }
     const observer = new IntersectionObserver(
       ([entry]) => setVisible(entry?.isIntersecting ?? false),
-      { root: scrollRoot, rootMargin: "200px 0px" },
+      {
+        root: scrollRoot,
+        rootMargin: "200px 0px",
+      },
     );
     observer.observe(button);
     return () => observer.disconnect();

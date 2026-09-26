@@ -681,11 +681,14 @@ export function useWorkspaceTaskLists(params: {
             : {}),
         })((event: ZCodeWorkspaceEvent) => {
           if (event.type === "workspace_slash_commands_update") {
-            const eventWorkspaceKey = buildTaskWorkspaceKey(event.workspacePath, event.workspaceIdentity);
+            const eventWorkspaceKey = buildTaskWorkspaceKey(
+              event.workspacePath,
+              event.workspaceIdentity,
+            );
             if (eventWorkspaceKey === config.workspaceKey) {
-              useZCodeSessionStore.getState().setSlashCommands(
-                event.workspacePath, event.commands, event.workspaceIdentity,
-              );
+              useZCodeSessionStore
+                .getState()
+                .setSlashCommands(event.workspacePath, event.commands, event.workspaceIdentity);
             }
             return;
           }
@@ -705,7 +708,8 @@ export function useWorkspaceTaskLists(params: {
               return;
             }
             const existing =
-              store.getWorkspaceState(event.workspacePath, event.workspaceIdentity)?.configOptions ?? [];
+              store.getWorkspaceState(event.workspacePath, event.workspaceIdentity)
+                ?.configOptions ?? [];
             store.setConfigOptions(
               event.workspacePath,
               mergeOmpWorkspaceConfigOptions(existing, event.configOptions),

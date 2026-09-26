@@ -321,9 +321,7 @@ export function ConversationDraftSuggestedPromptsContainer({
       const active = activeOperationRef.current;
       if (active?.operationId === flow.operationId) activeOperationRef.current = null;
       // 成功态不能固定使用 installSucceeded，否则仅启用已安装插件时误显示“安装成功”。
-      const messageId = `chat.draft.suggestedPrompt.pluginFlow.${kind}${
-        succeeded ? "Succeeded" : "Failed"
-      }`;
+      const messageId = `chat.draft.suggestedPrompt.pluginFlow.${kind}${succeeded ? "Succeeded" : "Failed"}`;
       showPluginActionResultPopover(flow, messageId, succeeded);
     },
     [showPluginActionResultPopover],

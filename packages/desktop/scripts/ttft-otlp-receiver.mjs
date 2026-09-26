@@ -4,9 +4,7 @@ import { createRequire } from "node:module";
 import { gunzip } from "node:zlib";
 import { promisify } from "node:util";
 import { setTimeout as delay } from "node:timers/promises";
-const require = createRequire(
-  new URL("../../../packages/desktop/package.json", import.meta.url),
-);
+const require = createRequire(new URL("../../../packages/desktop/package.json", import.meta.url));
 const { opentelemetry } = require("@opentelemetry/otlp-transformer/build/src/generated/root.js");
 const unzip = promisify(gunzip);
 const records = [];

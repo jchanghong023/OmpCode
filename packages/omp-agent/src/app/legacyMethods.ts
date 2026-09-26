@@ -36,18 +36,36 @@ export function createLegacyHandlers(context: LegacyMethodContext) {
     [zcodeProtocolMethods.sessionResume]: async (params) => {
       const record = asRecord(params);
       const sessionId = requiredString(record, "sessionId");
-      const engine = await resumeOrReject(context.registry, sessionId, context.workspaceKey, context.workspacePath);
+      const engine = await resumeOrReject(
+        context.registry,
+        sessionId,
+        context.workspaceKey,
+        context.workspacePath,
+      );
       return buildLegacySnapshot({ ...context, engine, sessionId });
     },
     [zcodeProtocolMethods.sessionList]: async () => {
-      const cold = await context.registry.listLegacySessions(context.workspacePath, context.workspaceKey);
+      const cold = await context.registry.listLegacySessions(
+        context.workspacePath,
+        context.workspaceKey,
+      );
       return { sessions: cold };
     },
     [zcodeProtocolMethods.sessionRead]: async (params) => {
       const record = asRecord(params);
       const sessionId = requiredString(record, "sessionId");
-      const engine = await resumeOrReject(context.registry, sessionId, context.workspaceKey, context.workspacePath);
-      return buildLegacySnapshot({ ...context, engine, sessionId, messageLimit: optionalNumber(record, "messageLimit") ?? undefined });
+      const engine = await resumeOrReject(
+        context.registry,
+        sessionId,
+        context.workspaceKey,
+        context.workspacePath,
+      );
+      return buildLegacySnapshot({
+        ...context,
+        engine,
+        sessionId,
+        messageLimit: optionalNumber(record, "messageLimit") ?? undefined,
+      });
     },
     [zcodeProtocolMethods.sessionMessages]: async (params) => {
       const record = asRecord(params);
@@ -128,10 +146,12 @@ export function createLegacyHandlers(context: LegacyMethodContext) {
       const record = asRecord(params);
       const engine = context.registry.requireEngine(requiredString(record, "sessionId"));
       const offset = typeof record?.cursor === "string" ? Number.parseInt(record.cursor, 10) : 0;
-      return engine.projection.subagentDirectory(Number.isFinite(offset) && offset >= 0 ? offset : 0);
+      return engine.projection.subagentDirectory(
+        Number.isFinite(offset) && offset >= 0 ? offset : 0,
+      );
     },
     [zcodeProtocolMethods.pluginsReferenceCatalog]: async (params) => ({
-      authority: asRecord(params)?.sessionId ? "session" as const : "workspace" as const,
+      authority: asRecord(params)?.sessionId ? ("session" as const) : ("workspace" as const),
       plugins: [],
     }),
     [zcodeProtocolMethods.runtimeCapabilities]: async () => ({ independentPlanState: false }),
@@ -162,7 +182,8 @@ export function createLegacyHandlers(context: LegacyMethodContext) {
       const preferences = asRecord(record?.preferences) ?? {};
       return {
         workspace: record?.workspace ?? {},
-        askUserQuestionAutoResolutionEnabled: preferences.askUserQuestionAutoResolutionEnabled === true,
+        askUserQuestionAutoResolutionEnabled:
+          preferences.askUserQuestionAutoResolutionEnabled === true,
         snoozedInteractionCount: 0,
       };
     },
@@ -201,7 +222,12 @@ export function createLegacyHandlers(context: LegacyMethodContext) {
   return handlers;
 }
 
-async function resumeOrReject(registry: SessionRegistry, sessionId: string, workspaceId: string, workspacePath: string): Promise<ConversationEngine> {
+async function resumeOrReject(
+  registry: SessionRegistry,
+  sessionId: string,
+  workspaceId: string,
+  workspacePath: string,
+): Promise<ConversationEngine> {
   const existing = registry.getEngine(sessionId);
   if (existing) {
     return existing;

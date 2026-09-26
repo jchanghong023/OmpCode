@@ -188,7 +188,8 @@ export function getTasksIndexDatabasePath(
   env: { OMP_PROFILE?: string; PI_PROFILE?: string } = process.env,
 ): string {
   const profile = resolveOmpProfileFromEnv(env);
-  const fileName = profile === "default" ? "tasks-index.sqlite" : `tasks-index-omp-${profile}.sqlite`;
+  const fileName =
+    profile === "default" ? "tasks-index.sqlite" : `tasks-index-omp-${profile}.sqlite`;
   return join(getAppConfigDir(), fileName);
 }
 

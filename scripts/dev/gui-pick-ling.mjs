@@ -18,17 +18,35 @@ ws.addEventListener("message", (ev) => {
 const call = (method, params = {}) =>
   new Promise((resolve, reject) => {
     const id = ++seq;
-    pending.set(id, (m) => (m.error ? reject(new Error(method + ": " + JSON.stringify(m.error))) : resolve(m.result)));
+    pending.set(id, (m) =>
+      m.error ? reject(new Error(method + ": " + JSON.stringify(m.error))) : resolve(m.result),
+    );
     ws.send(JSON.stringify({ id, method, params }));
   });
 const ev = async (expr) => {
-  const r = await call("Runtime.evaluate", { expression: expr, returnByValue: true, awaitPromise: true });
+  const r = await call("Runtime.evaluate", {
+    expression: expr,
+    returnByValue: true,
+    awaitPromise: true,
+  });
   if (r.exceptionDetails) throw new Error(JSON.stringify(r.exceptionDetails).slice(0, 300));
   return r.result.value;
 };
 const click = async (x, y) => {
-  await call("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", clickCount: 1 });
-  await call("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", clickCount: 1 });
+  await call("Input.dispatchMouseEvent", {
+    type: "mousePressed",
+    x,
+    y,
+    button: "left",
+    clickCount: 1,
+  });
+  await call("Input.dispatchMouseEvent", {
+    type: "mouseReleased",
+    x,
+    y,
+    button: "left",
+    clickCount: 1,
+  });
 };
 const getSelection = () =>
   ev(`(() => {

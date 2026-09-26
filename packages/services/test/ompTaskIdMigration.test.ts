@@ -70,7 +70,9 @@ test("omp 临时任务迁移 UUID 时保留产品壳状态和分组顺序", asyn
         (
           verify
             .prepare("SELECT task_id FROM task_group_members WHERE group_id = 'custom'")
-            .get() as { task_id: string }
+            .get() as {
+            task_id: string;
+          }
         ).task_id,
         toTaskId,
       );

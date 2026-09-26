@@ -42,7 +42,10 @@ export class V4CommandService {
   async handle(raw: unknown): Promise<CommandAck> {
     const parsed = parseCommandEnvelope(raw);
     if (!parsed.ok) {
-      throw new ProtocolError(-32602, `invalid v4 command envelope: ${parsed.error.issues[0]?.message ?? "schema mismatch"}`);
+      throw new ProtocolError(
+        -32602,
+        `invalid v4 command envelope: ${parsed.error.issues[0]?.message ?? "schema mismatch"}`,
+      );
     }
     const envelope = parsed.envelope;
     const key = `${envelope.sessionId ?? "global"}:${envelope.commandId}`;
@@ -77,12 +80,16 @@ export class V4CommandService {
     }
   }
 
-  private ack(envelope: CommandEnvelope, status: CommandAck["status"], extra: Partial<CommandAck> = {}): CommandAck {
+  private ack(
+    envelope: CommandEnvelope,
+    status: CommandAck["status"],
+    extra: Partial<CommandAck> = {},
+  ): CommandAck {
     return {
       commandId: envelope.commandId,
       status,
       revisionAtDecision: envelope.sessionId
-        ? this.context.registry.getEngine(envelope.sessionId)?.projection.revision ?? 0
+        ? (this.context.registry.getEngine(envelope.sessionId)?.projection.revision ?? 0)
         : 0,
       ...extra,
     };
@@ -101,7 +108,9 @@ export class V4CommandService {
 
   private async dispatch(envelope: CommandEnvelope): Promise<CommandAck> {
     if (COMMANDS_REQUIRING_BASE_REVISION.has(envelope.type)) {
-      const engine = envelope.sessionId ? this.context.registry.getEngine(envelope.sessionId) : null;
+      const engine = envelope.sessionId
+        ? this.context.registry.getEngine(envelope.sessionId)
+        : null;
       if (!engine) {
         return this.ack(envelope, "rejected", { reasonCode: "fault.command.sessionNotFound" });
       }
@@ -111,20 +120,29 @@ export class V4CommandService {
     }
     switch (envelope.type) {
       case "createSession": {
-        const payload = envelope.payload as import("@zcode/shared/zcode-protocol-v4").CommandPayloadMap["createSession"];
+        const payload =
+          envelope.payload as import("@zcode/shared/zcode-protocol-v4").CommandPayloadMap["createSession"];
         const input = payload.firstInput
-          ? prepareOmpAttachmentInput(payload.firstInput.text, payload.firstInput.attachments, this.context.attachments)
+          ? prepareOmpAttachmentInput(
+              payload.firstInput.text,
+              payload.firstInput.attachments,
+              this.context.attachments,
+            )
           : null;
-        if (input && !input.ok) return this.ack(envelope, "rejected", {
-          reasonCode: "fault.command.attachmentUnsupportedByOmpCore", message: input.error,
-        });
+        if (input && !input.ok)
+          return this.ack(envelope, "rejected", {
+            reasonCode: "fault.command.attachmentUnsupportedByOmpCore",
+            message: input.error,
+          });
         const engine = await this.context.registry.createSession({
           workspaceId: payload.workspaceId,
           workspacePath: this.context.workspacePath,
         });
         if (payload.firstInput) {
           // 临时模型：首发优先 firstInput.modelSelection，回落 config.modelSelection（draft 冻结配置）。
-          const selection = engineModelSelectionOf(payload.firstInput.modelSelection ?? payload.config?.modelSelection);
+          const selection = engineModelSelectionOf(
+            payload.firstInput.modelSelection ?? payload.config?.modelSelection,
+          );
           const delivery = await engine.sendText(
             input?.text ?? payload.firstInput.text,
             envelope.commandId,
@@ -145,11 +163,18 @@ export class V4CommandService {
         });
       }
       case "sendText": {
-        const payload = envelope.payload as import("@zcode/shared/zcode-protocol-v4").CommandPayloadMap["sendText"];
-        const input = prepareOmpAttachmentInput(payload.text, payload.attachments, this.context.attachments);
-        if (!input.ok) return this.ack(envelope, "rejected", {
-          reasonCode: "fault.command.attachmentUnsupportedByOmpCore", message: input.error,
-        });
+        const payload =
+          envelope.payload as import("@zcode/shared/zcode-protocol-v4").CommandPayloadMap["sendText"];
+        const input = prepareOmpAttachmentInput(
+          payload.text,
+          payload.attachments,
+          this.context.attachments,
+        );
+        if (!input.ok)
+          return this.ack(envelope, "rejected", {
+            reasonCode: "fault.command.attachmentUnsupportedByOmpCore",
+            message: input.error,
+          });
         const engine = this.requireSessionEngine(envelope.sessionId);
         const delivery = await engine.sendText(
           input.text,
@@ -177,15 +202,22 @@ export class V4CommandService {
         const engine = this.requireSessionEngine(envelope.sessionId);
         const outcome = await engine.setAutoCompaction(payload.enabled);
         return outcome.error
-          ? this.ack(envelope, "rejected", { reasonCode: "fault.command.autoCompactionFailed", message: outcome.error })
+          ? this.ack(envelope, "rejected", {
+              reasonCode: "fault.command.autoCompactionFailed",
+              message: outcome.error,
+            })
           : this.ack(envelope, "accepted");
       }
       case "switchModelConfig": {
-        const payload = envelope.payload as import("@zcode/shared/zcode-protocol-v4").CommandPayloadMap["switchModelConfig"];
+        const payload =
+          envelope.payload as import("@zcode/shared/zcode-protocol-v4").CommandPayloadMap["switchModelConfig"];
         const engine = this.requireSessionEngine(envelope.sessionId);
         const outcome = await engine.setModel(payload.provider, payload.model, payload.thought);
         if (outcome.error) {
-          return this.ack(envelope, "rejected", { reasonCode: "fault.command.modelSwitchFailed", message: outcome.error });
+          return this.ack(envelope, "rejected", {
+            reasonCode: "fault.command.modelSwitchFailed",
+            message: outcome.error,
+          });
         }
         return this.ack(envelope, "accepted");
       }
@@ -198,7 +230,8 @@ export class V4CommandService {
         return this.ack(envelope, "accepted");
       }
       case "resolveInteraction": {
-        const payload = envelope.payload as import("@zcode/shared/zcode-protocol-v4").CommandPayloadMap["resolveInteraction"];
+        const payload =
+          envelope.payload as import("@zcode/shared/zcode-protocol-v4").CommandPayloadMap["resolveInteraction"];
         const engine = this.requireSessionEngine(envelope.sessionId);
         const answer = interactionAnswerOf(payload.answer);
         if (!engine.settleInteraction(payload.interactionId, answer)) {
@@ -208,12 +241,16 @@ export class V4CommandService {
         return this.ack(envelope, "accepted", {
           result: {
             type: "resolveInteraction",
-            resolvedBy: { clientId: envelope.clientId, ...(payload.answer.optionId ? { optionId: payload.answer.optionId } : {}) },
+            resolvedBy: {
+              clientId: envelope.clientId,
+              ...(payload.answer.optionId ? { optionId: payload.answer.optionId } : {}),
+            },
           },
         });
       }
       case "renameSession": {
-        const payload = envelope.payload as import("@zcode/shared/zcode-protocol-v4").CommandPayloadMap["renameSession"];
+        const payload =
+          envelope.payload as import("@zcode/shared/zcode-protocol-v4").CommandPayloadMap["renameSession"];
         const engine = this.requireSessionEngine(envelope.sessionId);
         await engine.rename(payload.title);
         return this.ack(envelope, "accepted");
@@ -289,7 +326,10 @@ export class V4CommandService {
 
 function interactionAnswerOf(
   answer: import("@zcode/shared/zcode-protocol-v4").CommandPayloadMap["resolveInteraction"]["answer"],
-): { action: "accept"; optionId?: string; freeText?: string } | { action: "decline" } | { action: "cancel" } {
+):
+  | { action: "accept"; optionId?: string; freeText?: string }
+  | { action: "decline" }
+  | { action: "cancel" } {
   if (answer.action === "decline" || answer.action === "cancel") {
     return { action: answer.action };
   }
@@ -307,16 +347,24 @@ function interactionAnswerOf(
 
 /** UI 提交的 ModelSelection（providerId/modelId/options.reasoningLevel）→ omp set_model 参数。 */
 function engineModelSelectionOf(
-  selection: { providerId?: string; modelId?: string; options?: { reasoningLevel?: string } } | undefined | null,
+  selection:
+    | { providerId?: string; modelId?: string; options?: { reasoningLevel?: string } }
+    | undefined
+    | null,
 ): { provider: string; model: string; thought?: string } | undefined {
-  if (!selection || typeof selection.providerId !== "string" || typeof selection.modelId !== "string") {
+  if (
+    !selection ||
+    typeof selection.providerId !== "string" ||
+    typeof selection.modelId !== "string"
+  ) {
     return undefined;
   }
   if (selection.providerId.length === 0 || selection.modelId.length === 0) {
     return undefined;
   }
   const thought =
-    typeof selection.options?.reasoningLevel === "string" && selection.options.reasoningLevel.length > 0
+    typeof selection.options?.reasoningLevel === "string" &&
+    selection.options.reasoningLevel.length > 0
       ? selection.options.reasoningLevel
       : undefined;
   return { provider: selection.providerId, model: selection.modelId, thought };

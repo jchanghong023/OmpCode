@@ -396,9 +396,7 @@ function showZCodeEndpointPromptWindow(options: {
     // Electron 菜单命令在主进程触发，调用 renderer 的 window.prompt 可能被禁用或没有焦点，表现为点击无反应。
     // 这里改为主进程创建受控 modal 输入窗，确保 Custom... 始终有可见交互入口。
     void promptWindow.loadURL(
-      `data:text/html;charset=utf-8,${encodeURIComponent(
-        buildZCodeEndpointPromptHtml(options.currentValue),
-      )}`,
+      `data:text/html;charset=utf-8,${encodeURIComponent(buildZCodeEndpointPromptHtml(options.currentValue))}`,
     );
   });
 }

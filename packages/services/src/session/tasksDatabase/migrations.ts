@@ -110,7 +110,9 @@ export function runTasksDatabaseMigrations(
         if (applied.checksum !== checksum)
           throw Object.assign(
             new Error(`Task database migration checksum mismatch: ${migration.id}`),
-            { kind: "checksum_mismatch" },
+            {
+              kind: "checksum_mismatch",
+            },
           );
         continue;
       }

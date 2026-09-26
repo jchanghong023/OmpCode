@@ -82,7 +82,13 @@ export class ProtocolServer implements HostGateway {
     if (typeof message !== "object" || message === null) {
       return;
     }
-    const record = message as { id?: unknown; method?: unknown; params?: unknown; result?: unknown; error?: unknown };
+    const record = message as {
+      id?: unknown;
+      method?: unknown;
+      params?: unknown;
+      result?: unknown;
+      error?: unknown;
+    };
     if (typeof record.method === "string") {
       if (record.id !== undefined && record.id !== null) {
         this.handleHostRequest(record.id as string | number, record.method, record.params);
@@ -97,7 +103,11 @@ export class ProtocolServer implements HostGateway {
         this.pending.delete(String(record.id));
         clearTimeout(pending.timer);
         if (record.error !== undefined) {
-          pending.reject(new Error(typeof record.error === "string" ? record.error : JSON.stringify(record.error)));
+          pending.reject(
+            new Error(
+              typeof record.error === "string" ? record.error : JSON.stringify(record.error),
+            ),
+          );
         } else {
           pending.resolve(record.result);
         }
@@ -106,10 +116,16 @@ export class ProtocolServer implements HostGateway {
   }
 
   private handleHostRequest(id: string | number, method: string, params: unknown): void {
-    this.dispatchTail = this.dispatchTail.then(() => this.processHostRequest(id, method, params)).catch(() => {});
+    this.dispatchTail = this.dispatchTail
+      .then(() => this.processHostRequest(id, method, params))
+      .catch(() => {});
   }
 
-  private async processHostRequest(id: string | number, method: string, params: unknown): Promise<void> {
+  private async processHostRequest(
+    id: string | number,
+    method: string,
+    params: unknown,
+  ): Promise<void> {
     this.inRequest = true;
     try {
       const result = await this.options.handleRequest(method, params);
@@ -165,7 +181,11 @@ export class ProtocolServer implements HostGateway {
         reject(new Error("host interaction timeout"));
       }, 170_000);
       timer.unref?.();
-      this.pending.set(params.requestId, { resolve: (result) => resolve(userInputAnswerOf(result)), reject, timer });
+      this.pending.set(params.requestId, {
+        resolve: (result) => resolve(userInputAnswerOf(result)),
+        reject,
+        timer,
+      });
       this.write({
         id: params.requestId,
         method: "interaction/requestUserInput",
@@ -190,10 +210,20 @@ function userInputAnswerOf(result: unknown): HostUserInputAnswer {
   }
   const record = result as { action?: unknown; content?: unknown };
   if (record.action === "accept" || record.action === "decline" || record.action === "cancel") {
-    const content = typeof record.content === "object" && record.content !== null ? (record.content as Record<string, unknown>) : {};
+    const content =
+      typeof record.content === "object" && record.content !== null
+        ? (record.content as Record<string, unknown>)
+        : {};
     const optionId = typeof content.optionId === "string" ? content.optionId : undefined;
-    const freeText = typeof content.freeText === "string" ? content.freeText : typeof content.value === "string" ? content.value : undefined;
-    return record.action === "accept" ? { action: "accept", optionId, freeText } : { action: record.action };
+    const freeText =
+      typeof content.freeText === "string"
+        ? content.freeText
+        : typeof content.value === "string"
+          ? content.value
+          : undefined;
+    return record.action === "accept"
+      ? { action: "accept", optionId, freeText }
+      : { action: record.action };
   }
   return { action: "cancel" };
 }

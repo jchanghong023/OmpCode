@@ -2,11 +2,7 @@ import armsRum from "@arms/rum-electron";
 import type { ArmsRumEnv, FinalArmsCustomEventPayload } from "@zcode/shared";
 
 import type { ZCodeDataSizeScanResult } from "./zcodeDataSizeScanner.js";
-import {
-  readZCodeDataSizeTelemetryState,
-  writeZCodeDataSizeTelemetryState,
-  type ZCodeDataSizeTelemetryState,
-} from "./zcodeDataSizeTelemetryState.js";
+import { readZCodeDataSizeTelemetryState, writeZCodeDataSizeTelemetryState, type ZCodeDataSizeTelemetryState } from "./zcodeDataSizeTelemetryState.js";
 import { scanZCodeDataDirectoryInWorker } from "./zcodeDataSizeWorkerClient.js";
 
 export type { ZCodeDataSizeTelemetryState } from "./zcodeDataSizeTelemetryState.js";
@@ -79,9 +75,7 @@ function normalizeOsCategory(platform: NodeJS.Platform): string {
   }
 }
 
-function stringifyProperties(
-  properties: Record<string, string | number | boolean | undefined>,
-): Record<string, string> {
+function stringifyProperties(properties: Record<string, string | number | boolean | undefined>): Record<string, string> {
   return Object.fromEntries(
     Object.entries(properties)
       .filter((entry): entry is [string, string | number | boolean] => entry[1] !== undefined)
@@ -90,13 +84,7 @@ function stringifyProperties(
 }
 
 function buildZCodeDataSizeArmsPayload(params: {
-  context: {
-    appVersion: string;
-    armsEnv: ArmsRumEnv;
-    dataRootKind: "custom" | "default";
-    deviceMid: string;
-    platform: NodeJS.Platform;
-  };
+  context: { appVersion: string; armsEnv: ArmsRumEnv; dataRootKind: "custom" | "default"; deviceMid: string; platform: NodeJS.Platform };
   result: ZCodeDataSizeScanResult;
 }): FinalArmsCustomEventPayload {
   const eventName = "perf_resource_zcode_data_size";
@@ -149,9 +137,7 @@ function unrefTimer(timer: ReturnType<typeof setTimeout> | ReturnType<typeof set
   }
 }
 
-function createZCodeDataSizeTelemetryScheduler(
-  dependencies: ZCodeDataSizeTelemetrySchedulerDependencies,
-): { start: () => Promise<void>; stop: () => void } {
+function createZCodeDataSizeTelemetryScheduler(dependencies: ZCodeDataSizeTelemetrySchedulerDependencies): { start: () => Promise<void>; stop: () => void } {
   const timing = { ...DEFAULT_TIMING, ...dependencies.timing };
   let scheduledTimer: ReturnType<typeof setTimeout> | null = null;
   let activityTimer: ReturnType<typeof setInterval> | null = null;
@@ -191,10 +177,7 @@ function createZCodeDataSizeTelemetryScheduler(
 
   function isPreferredIdleWindow(): boolean {
     try {
-      return (
-        dependencies.getSystemIdleTimeSeconds() >= timing.minimumIdleSeconds &&
-        dependencies.isAppBackground()
-      );
+      return dependencies.getSystemIdleTimeSeconds() >= timing.minimumIdleSeconds && dependencies.isAppBackground();
     } catch {
       return false;
     }
@@ -228,9 +211,7 @@ function createZCodeDataSizeTelemetryScheduler(
     return previousState;
   }
 
-  async function rollbackReportReservation(
-    previousState: ZCodeDataSizeTelemetryState | null,
-  ): Promise<void> {
+  async function rollbackReportReservation(previousState: ZCodeDataSizeTelemetryState | null): Promise<void> {
     try {
       const restoredState = previousState ?? {};
       await dependencies.writeState(restoredState);
@@ -286,26 +267,14 @@ function createZCodeDataSizeTelemetryScheduler(
       const reportedAt = Date.now();
       await persistSuccess(reportedAt);
       idleWaitingSince = null;
-      dependencies.logger.info(
-        `[zcode-data-size] reported status=${result.status} bytes=${result.bytes}`,
-      );
-      schedule(
-        timing.dailyIntervalMs +
-          stableJitterMs(
-            dependencies.deviceMid,
-            reportedAt + timing.dailyIntervalMs,
-            timing.dailyJitterMaxMs,
-          ),
-      );
+      dependencies.logger.info(`[zcode-data-size] reported status=${result.status} bytes=${result.bytes}`);
+      schedule(timing.dailyIntervalMs + stableJitterMs(dependencies.deviceMid, reportedAt + timing.dailyIntervalMs, timing.dailyJitterMaxMs));
     } catch (error) {
       if (stopped) {
         return;
       }
       const aborted = abortController.signal.aborted || isAbortError(error);
-      dependencies.logger.warn(
-        `[zcode-data-size] ${aborted ? "scan aborted" : "scan/report failed"}`,
-        error,
-      );
+      dependencies.logger.warn(`[zcode-data-size] ${aborted ? "scan aborted" : "scan/report failed"}`, error);
       schedule(aborted ? timing.abortedRetryMs : timing.failureRetryMs);
     } finally {
       clearActivityTimer();
@@ -350,25 +319,18 @@ function createZCodeDataSizeTelemetryScheduler(
     persistedState = state;
 
     const now = Date.now();
-    const rateLimitAnchor = Math.max(
-      state?.lastReportedAt ?? Number.NEGATIVE_INFINITY,
-      state?.reportReservedAt ?? Number.NEGATIVE_INFINITY,
-    );
+    const rateLimitAnchor = Math.max(state?.lastReportedAt ?? Number.NEGATIVE_INFINITY, state?.reportReservedAt ?? Number.NEGATIVE_INFINITY);
     if (Number.isFinite(rateLimitAnchor)) {
       const baseDueAt = rateLimitAnchor + timing.dailyIntervalMs;
       // Bug 根因：旧实现先用未加 jitter 的 baseDueAt 判断是否到期；应用在 jitter
       // 窗口内重启时会改走 startup jitter，破坏跨重启的稳定错峰。
-      const dueAt =
-        baseDueAt + stableJitterMs(dependencies.deviceMid, baseDueAt, timing.dailyJitterMaxMs);
+      const dueAt = baseDueAt + stableJitterMs(dependencies.deviceMid, baseDueAt, timing.dailyJitterMaxMs);
       if (dueAt > now) {
         schedule(dueAt - now);
         return;
       }
     }
-    schedule(
-      timing.startupMinDelayMs +
-        stableJitterMs(dependencies.deviceMid, now, timing.startupJitterMaxMs),
-    );
+    schedule(timing.startupMinDelayMs + stableJitterMs(dependencies.deviceMid, now, timing.startupJitterMaxMs));
   }
 
   return {
@@ -411,23 +373,9 @@ export function registerDesktopZCodeDataSizeTelemetry(options: {
     readState: () => readZCodeDataSizeTelemetryState(options.stateFile),
     report: (result) => {
       const payload = buildZCodeDataSizeArmsPayload({ context: options.context, result });
-      armsRum.sendCustom({
-        group: payload.group,
-        name: payload.name,
-        properties: payload.properties,
-        type: payload.type,
-        value: payload.value,
-      });
+      armsRum.sendCustom({ group: payload.group, name: payload.name, properties: payload.properties, type: payload.type, value: payload.value });
     },
-    scan: ({ signal }) =>
-      scanZCodeDataDirectoryInWorker(
-        {
-          maxDurationMs: ZCODE_DATA_SIZE_SCAN_MAX_DURATION_MS,
-          maxFiles: ZCODE_DATA_SIZE_SCAN_MAX_FILES,
-          rootPath: options.rootPath,
-        },
-        signal,
-      ),
+    scan: ({ signal }) => scanZCodeDataDirectoryInWorker({ maxDurationMs: ZCODE_DATA_SIZE_SCAN_MAX_DURATION_MS, maxFiles: ZCODE_DATA_SIZE_SCAN_MAX_FILES, rootPath: options.rootPath }, signal),
     writeState: (state) => writeZCodeDataSizeTelemetryState(options.stateFile, state),
   });
   void desktopScheduler.start().catch((error) => {

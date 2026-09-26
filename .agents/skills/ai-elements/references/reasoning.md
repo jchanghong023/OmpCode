@@ -218,9 +218,9 @@ const { isStreaming, isOpen, setIsOpen, duration } = useReasoning();
 
 Returns:
 
-| Prop          | Type                      | Default    | Description                               |
+| Prop | Type | Default | Description |
 | ------------- | ------------------------- | ---------- | ----------------------------------------- | ------------------------------------------------ |
-| `isStreaming` | `boolean`                 | -          | Whether reasoning is currently streaming. |
-| `isOpen`      | `boolean`                 | -          | Whether the reasoning panel is open.      |
-| `setIsOpen`   | `(open: boolean) => void` | -          | Function to set the open state.           |
-| `duration`    | `number                   | undefined` | -                                         | Duration in seconds (undefined while streaming). |
+| `isStreaming` | `boolean` | - | Whether reasoning is currently streaming. |
+| `isOpen` | `boolean` | - | Whether the reasoning panel is open. |
+| `setIsOpen` | `(open: boolean) => void` | - | Function to set the open state. |
+| `duration` | `number                   | undefined` | - | Duration in seconds (undefined while streaming). |

@@ -531,7 +531,10 @@ export function V4WorkspaceChatArea({
       return canPlaceWorkbenchSessionInSplit(
         placementShellBinding,
         dragPayloadSessionTarget(payload),
-        { mode: "drag", side: "right" },
+        {
+          mode: "drag",
+          side: "right",
+        },
       );
     },
     [placementShellBinding],

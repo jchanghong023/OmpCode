@@ -5,7 +5,9 @@ import type { WorkspaceConfigState } from "@zcode/shared/zcode-protocol-v4";
 import { ompAvailableCommandsFrameSchema } from "./ompFrames.js";
 
 /** omp available_commands_update / get_available_commands 的命令数组 → slashCommands 投影。 */
-export function normalizeOmpSlashCommands(commands: unknown): WorkspaceConfigState["slashCommands"] {
+export function normalizeOmpSlashCommands(
+  commands: unknown,
+): WorkspaceConfigState["slashCommands"] {
   if (!Array.isArray(commands)) {
     return [];
   }
@@ -20,7 +22,7 @@ export function normalizeOmpSlashCommands(commands: unknown): WorkspaceConfigSta
       name: command.name,
       description: command.description ?? "",
       ...(command.input?.hint ? { inputHint: command.input.hint } : {}),
-      source: command.source === "builtin" ? "builtin" as const : "custom" as const,
+      source: command.source === "builtin" ? ("builtin" as const) : ("custom" as const),
     });
   }
   return output;
@@ -29,6 +31,9 @@ export function normalizeOmpSlashCommands(commands: unknown): WorkspaceConfigSta
 /** get_available_commands 响应载荷（{commands} 包装）→ slashCommands 投影。 */
 export function slashCommandsOfResponse(data: unknown): WorkspaceConfigState["slashCommands"] {
   const payload = typeof data === "object" && data !== null ? data : {};
-  const parsed = ompAvailableCommandsFrameSchema.safeParse({ ...payload, type: "available_commands_update" });
+  const parsed = ompAvailableCommandsFrameSchema.safeParse({
+    ...payload,
+    type: "available_commands_update",
+  });
   return parsed.success ? normalizeOmpSlashCommands(parsed.data.commands) : [];
 }

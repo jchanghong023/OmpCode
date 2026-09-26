@@ -84,14 +84,12 @@ const PREVIEW_FILE_TYPES: readonly PreviewFileTypeDefinition[] = [
     mimeType: "application/pdf",
     artifactType: "pdf",
   },
-  ...MEDIA_PREVIEW_FORMATS.map(
-    ({ extension, kind, mediaType }): PreviewFileTypeDefinition => ({
-      extensions: [extension],
-      kind,
-      mimeType: mediaType,
-      artifactType: kind,
-    }),
-  ),
+  ...MEDIA_PREVIEW_FORMATS.map(({ extension, kind, mediaType }): PreviewFileTypeDefinition => ({
+    extensions: [extension],
+    kind,
+    mimeType: mediaType,
+    artifactType: kind,
+  })),
 ];
 
 export const CONVERSATION_PREVIEW_CARD_CANDIDATE_LIMIT = 15;

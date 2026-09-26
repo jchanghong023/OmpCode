@@ -196,9 +196,7 @@ async function readRemoteCommandStdout(
       }
       reject(
         new Error(
-          `remote command failed with exit code ${code}: ${command}${
-            stderrText ? `: ${stderrText}` : ""
-          }`,
+          `remote command failed with exit code ${code}: ${command}${stderrText ? `: ${stderrText}` : ""}`,
         ),
       );
     });

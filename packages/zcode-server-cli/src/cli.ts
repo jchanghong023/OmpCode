@@ -388,7 +388,9 @@ async function runUninstall(
     if (lockInspection.state === "invalid" || lockInspection.state === "unreadable") {
       throw new Error(
         `Cannot verify Server shutdown before uninstall (${describeLockInspection(lockInspection)})`,
-        { cause: error },
+        {
+          cause: error,
+        },
       );
     }
   }
@@ -504,6 +506,11 @@ async function readControlStatus(
 
 async function delegateLegacyCli(argv: readonly string[], io: CliIO): Promise<number> {
   // 原 CLI 已移除；保留服务器子命令的入口，未知命令直接报错而不再转给旧 runtime。
-  stdout(io, argv.length ? `Unknown command: ${argv[0]}` : "OmpCode Server: use serve, status, stop, or --help");
+  stdout(
+    io,
+    argv.length
+      ? `Unknown command: ${argv[0]}`
+      : "OmpCode Server: use serve, status, stop, or --help",
+  );
   return argv.length ? 1 : 0;
 }

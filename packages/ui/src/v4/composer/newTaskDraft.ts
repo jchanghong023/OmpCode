@@ -16,9 +16,12 @@ export function initializeNewTaskDraft(
 ): V4ComposerDraft {
   const recent = readComposerRecent(workspacePath, workspaceIdentity);
   const selected = recent?.modelSelection ?? catalog.preferredSelection ?? undefined;
-  const entry = selected && catalog.entries.find(
-    (candidate) => candidate.providerId === selected.providerId && candidate.modelId === selected.modelId,
-  );
+  const entry =
+    selected &&
+    catalog.entries.find(
+      (candidate) =>
+        candidate.providerId === selected.providerId && candidate.modelId === selected.modelId,
+    );
   const highestThoughtLevel = highestOmpThoughtLevel(entry);
   return {
     ...draft,
@@ -26,9 +29,10 @@ export function initializeNewTaskDraft(
     mode: recent?.mode === "plan" ? "build" : (recent?.mode ?? "build"),
     planEnabled: false,
     // Recent 只恢复模型身份；新任务的思考档按该模型当前目录取最高值。
-    modelSelection: selected && highestThoughtLevel
-      ? { ...selected, options: { ...selected.options, reasoningLevel: highestThoughtLevel } }
-      : selected,
+    modelSelection:
+      selected && highestThoughtLevel
+        ? { ...selected, options: { ...selected.options, reasoningLevel: highestThoughtLevel } }
+        : selected,
   };
 }
 

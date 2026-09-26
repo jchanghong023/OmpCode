@@ -11,7 +11,17 @@
 // 下载缓存：packages/desktop/.omp-release-cache/<tag>/<asset>，重复构建不重复下载。
 
 import { createHash } from "node:crypto";
-import { copyFileSync, createReadStream, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  copyFileSync,
+  createReadStream,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { createWriteStream } from "node:fs";
 import { dirname, resolve } from "node:path";
 import process from "node:process";
@@ -21,8 +31,12 @@ import { pipeline } from "node:stream/promises";
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const desktopRoot = resolve(scriptDir, "..");
 const repoRoot = resolve(desktopRoot, "..", "..");
-const GITHUB_API = process.env.OMP_RELEASE_API_BASE || "https://api.github.com/repos/jchanghong023/oh-my-pi/releases";
-const DOWNLOAD_BASE = process.env.OMP_RELEASE_DOWNLOAD_BASE || "https://github.com/jchanghong023/oh-my-pi/releases/download";
+const GITHUB_API =
+  process.env.OMP_RELEASE_API_BASE ||
+  "https://api.github.com/repos/jchanghong023/oh-my-pi/releases";
+const DOWNLOAD_BASE =
+  process.env.OMP_RELEASE_DOWNLOAD_BASE ||
+  "https://github.com/jchanghong023/oh-my-pi/releases/download";
 
 function normalizePlatform(raw) {
   if (raw === "mac" || raw === "macos" || raw === "darwin" || raw === "osx") return "darwin";
@@ -49,7 +63,8 @@ const manifestPath = resolve(glmOmpDir, "omp-release.json");
 
 function resolveAssetName(targetPlatform, targetArch) {
   if (targetPlatform === "win32") {
-    if (targetArch !== "x64") throw new Error(`[fetch-omp] 无 win32-${targetArch} 的 omp release 资产`);
+    if (targetArch !== "x64")
+      throw new Error(`[fetch-omp] 无 win32-${targetArch} 的 omp release 资产`);
     return "omp-windows-x64.exe";
   }
   if (targetPlatform === "darwin") {
@@ -116,7 +131,9 @@ async function resolveLatestTag() {
   }
   const fallbackTag = findNewestCachedTag();
   if (fallbackTag) {
-    console.warn(`[fetch-omp] 解析 latest 失败（${String(lastError)}），回退缓存 tag ${fallbackTag}`);
+    console.warn(
+      `[fetch-omp] 解析 latest 失败（${String(lastError)}），回退缓存 tag ${fallbackTag}`,
+    );
     return fallbackTag;
   }
   throw lastError instanceof Error ? lastError : new Error(String(lastError));
@@ -165,7 +182,9 @@ async function main() {
   if (assetName === null) {
     // omp releases 当前不提供 darwin 资产（FORK.md 已知限制）：不阻塞多平台构建链，
     // 仅警告跳过；运行时 omp-agent 会显式报「内嵌 omp 二进制未找到」。
-    console.warn(`[fetch-omp] omp releases 无 ${platform}-${arch} 资产，跳过内嵌（FORK.md 已知限制）`);
+    console.warn(
+      `[fetch-omp] omp releases 无 ${platform}-${arch} 资产，跳过内嵌（FORK.md 已知限制）`,
+    );
     return;
   }
   mkdirSync(glmOmpDir, { recursive: true });
@@ -176,7 +195,10 @@ async function main() {
       throw new Error(`[fetch-omp] OMP_RELEASE_BINARY_PATH 不存在：${localPath}`);
     }
     copyFileSync(localPath, targetPath);
-    writeFileSync(manifestPath, `${JSON.stringify({ source: "local", path: process.env.OMP_RELEASE_BINARY_PATH }, null, 2)}\n`);
+    writeFileSync(
+      manifestPath,
+      `${JSON.stringify({ source: "local", path: process.env.OMP_RELEASE_BINARY_PATH }, null, 2)}\n`,
+    );
     console.log(`[fetch-omp] 使用本地 omp 二进制 ${localPath} -> ${targetPath}`);
     return;
   }
@@ -196,7 +218,9 @@ async function main() {
       const actual = await sha256OfFile(cachedAsset);
       if (actual !== expected) {
         rmSync(cachedAsset, { force: true });
-        throw new Error(`[fetch-omp] SHA256 校验失败：${assetName}（期望 ${expected}，实际 ${actual}）`);
+        throw new Error(
+          `[fetch-omp] SHA256 校验失败：${assetName}（期望 ${expected}，实际 ${actual}）`,
+        );
       }
       console.log(`[fetch-omp] SHA256 校验通过 ${expected.slice(0, 12)}…`);
     } else {
@@ -224,7 +248,9 @@ async function main() {
     manifestPath,
     `${JSON.stringify({ tag: stagedTag, asset: assetName, bytes: size, platform: platformKey }, null, 2)}\n`,
   );
-  console.log(`[fetch-omp] 暂存 omp ${stagedTag} (${(size / 1024 / 1024).toFixed(1)} MiB) -> ${targetPath}`);
+  console.log(
+    `[fetch-omp] 暂存 omp ${stagedTag} (${(size / 1024 / 1024).toFixed(1)} MiB) -> ${targetPath}`,
+  );
 }
 
 await main();

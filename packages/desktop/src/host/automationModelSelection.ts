@@ -19,9 +19,10 @@ export async function resolveOmpAutomationSubmissionModelSelection(params: {
   const entry = modelOption?.options?.find((option) => option.value === modelValue);
   if (!entry) throw new Error("Automation omp 模型不在当前工作区目录中");
   const available = entry.modelThoughtLevels ?? [];
-  const reasoningLevel = selection?.options?.reasoningLevel
-    ?? available.filter((level) => level !== "off").at(-1)
-    ?? available.at(-1);
+  const reasoningLevel =
+    selection?.options?.reasoningLevel ??
+    available.filter((level) => level !== "off").at(-1) ??
+    available.at(-1);
   if (!reasoningLevel || !available.includes(reasoningLevel)) {
     throw new Error("Automation omp 模型思考档位不可用");
   }

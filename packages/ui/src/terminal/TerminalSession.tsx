@@ -495,16 +495,14 @@ export function TerminalSession({
               term.buffer.active,
               bufferLineNumber,
               term.cols,
-            )?.map(
-              (link): ILink => ({
-                ...link,
-                activate(event, text) {
-                  event.preventDefault();
-                  logger.debug("[Terminal] open plain http link", { url: text });
-                  openBrowserUrlRef.current(text);
-                },
-              }),
-            );
+            )?.map((link): ILink => ({
+              ...link,
+              activate(event, text) {
+                event.preventDefault();
+                logger.debug("[Terminal] open plain http link", { url: text });
+                openBrowserUrlRef.current(text);
+              },
+            }));
             callback(links);
           },
         }),
@@ -864,16 +862,14 @@ export function TerminalSession({
             term.buffer.active,
             bufferLineNumber,
             term.cols,
-          )?.map(
-            (link): ILink => ({
-              ...link,
-              activate(event, text) {
-                event.preventDefault();
-                logger.debug("[Terminal] open plain http link", { url: text });
-                openBrowserUrlRef.current(text);
-              },
-            }),
-          );
+          )?.map((link): ILink => ({
+            ...link,
+            activate(event, text) {
+              event.preventDefault();
+              logger.debug("[Terminal] open plain http link", { url: text });
+              openBrowserUrlRef.current(text);
+            },
+          }));
 
           callback(links);
         },

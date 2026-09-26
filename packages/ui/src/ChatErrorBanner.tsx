@@ -215,36 +215,36 @@ export function ChatErrorBanner({
         ) : null}
 
         <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={() => {
-              void handleCopyError();
-            }}
-            className={cn(actionButtonClassName, "gap-1.5")}
-            aria-label={intl.formatMessage({ id: "chat.error.copyFull" })}
-          >
-            <CopyIcon className="size-3.5" />
-            {intl.formatMessage({ id: "chat.error.copyFull" })}
-          </Button>
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={() => {
+            void handleCopyError();
+          }}
+          className={cn(actionButtonClassName, "gap-1.5")}
+          aria-label={intl.formatMessage({ id: "chat.error.copyFull" })}
+        >
+          <CopyIcon className="size-3.5" />
+          {intl.formatMessage({ id: "chat.error.copyFull" })}
+        </Button>
 
         {/* 错误横幅本身就是异常态，不能再经过 Radix Tooltip 的 Popper/Slot 状态链。
             这里改成普通 Button，避免无可用模型等错误触发横幅时发生 Maximum update depth 循环。 */}
         <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={() => {
-              void handleOpenFeedback();
-            }}
-            // ChatErrorBanner 这里之前混用了原生 button，导致按钮体系、焦点态和禁用态都绕开了设计系统。
-            // 统一收口到 Button 组件后，错误横幅里的所有操作按钮才能保持同一套交互和主题表现。
-            className={cn(actionButtonClassName)}
-            aria-label={intl.formatMessage({ id: "chat.error.feedback" })}
-            title={error.traceId}
-          >
-            {intl.formatMessage({ id: "chat.error.feedback" })}
-          </Button>
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={() => {
+            void handleOpenFeedback();
+          }}
+          // ChatErrorBanner 这里之前混用了原生 button，导致按钮体系、焦点态和禁用态都绕开了设计系统。
+          // 统一收口到 Button 组件后，错误横幅里的所有操作按钮才能保持同一套交互和主题表现。
+          className={cn(actionButtonClassName)}
+          aria-label={intl.formatMessage({ id: "chat.error.feedback" })}
+          title={error.traceId}
+        >
+          {intl.formatMessage({ id: "chat.error.feedback" })}
+        </Button>
 
         {onRetry ? (
           <Button variant="outline" size="sm" onClick={onRetry} disabled={retryDisabled}>

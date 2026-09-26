@@ -26,7 +26,9 @@ export interface EngineProcessHooks {
   onConfigUpdate: (frame: OmpConfigUpdateFrame) => void;
   /** 命令目录变化。 */
   onCommandsUpdate: (commands: unknown) => void;
-  onSubagentFrame: NonNullable<Parameters<import("./ports.js").OmpProcessFactory["create"]>[0]["onSubagentFrame"]>;
+  onSubagentFrame: NonNullable<
+    Parameters<import("./ports.js").OmpProcessFactory["create"]>[0]["onSubagentFrame"]
+  >;
 }
 
 export function createEngineOmpProcess(
@@ -61,9 +63,12 @@ export function readEngineContextDetails(
   isCurrent: () => boolean,
   apply: (report: OmpContextReport) => void,
 ): void {
-  void process.readContextReport().then((report) => {
-    if (report && isCurrent()) apply(report);
-  }).catch(() => {});
+  void process
+    .readContextReport()
+    .then((report) => {
+      if (report && isCurrent()) apply(report);
+    })
+    .catch(() => {});
 }
 
 export async function applyEngineThoughtLevel(
@@ -114,7 +119,9 @@ export async function applyEngineSetModel(
   const process = currentProcess();
   if (!process) return { error: "omp core failed to start" };
   const outcome = await process.send({
-    type: "set_model", provider: selection.provider, modelId: selection.model,
+    type: "set_model",
+    provider: selection.provider,
+    modelId: selection.model,
   });
   if (!outcome.success) return { error: outcome.error ?? "set_model failed" };
   if (selection.thought) {

@@ -2,10 +2,13 @@
 export function ompAttachmentRejectionDetail(error: unknown): string | null {
   if (!error || typeof error !== "object") return null;
   const candidate = error as { code?: unknown; ack?: { reasonCode?: unknown; message?: unknown } };
-  if (candidate.code === "ZCODE_V4_COMMAND_REJECTED" &&
-      candidate.ack?.reasonCode === "fault.command.attachmentUnsupportedByOmpCore") {
+  if (
+    candidate.code === "ZCODE_V4_COMMAND_REJECTED" &&
+    candidate.ack?.reasonCode === "fault.command.attachmentUnsupportedByOmpCore"
+  ) {
     return typeof candidate.ack.message === "string" && candidate.ack.message.length > 0
-      ? candidate.ack.message : null;
+      ? candidate.ack.message
+      : null;
   }
   // Host 跨进程错误可能只保留 Error.message，按服务层固定格式提取 ACK 说明。
   const message = error instanceof Error ? error.message : null;
@@ -19,7 +22,8 @@ export function ompAttachmentRejectionDetail(error: unknown): string | null {
 
 /** v4 ACK 转本地异常时保留附件拒绝的结构化原因，供输入框直接展示。 */
 export function sessionSendRejectionError(
-  ack: { reasonCode?: string; message?: string }, fallback: string,
+  ack: { reasonCode?: string; message?: string },
+  fallback: string,
 ): Error {
   const error = new Error(ack.reasonCode ?? fallback);
   if (ack.reasonCode === "fault.command.attachmentUnsupportedByOmpCore") {

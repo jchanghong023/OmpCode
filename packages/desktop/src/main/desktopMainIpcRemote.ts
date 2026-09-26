@@ -37,7 +37,11 @@ import {
   type RemoteConnectionStats,
 } from "./desktopRemoteUsageArmsTelemetry.js";
 import { openPathInDefaultApp } from "./desktopMainIpcHelpers.js";
-import { readOmpModelRolesConfig, resolveOmpModelRolesConfigPath, writeOmpModelRolesConfig } from "./ompModelRolesConfig.js";
+import {
+  readOmpModelRolesConfig,
+  resolveOmpModelRolesConfigPath,
+  writeOmpModelRolesConfig,
+} from "./ompModelRolesConfig.js";
 import { readOmpNativeIntegrations } from "./ompNativeIntegrations.js";
 import { listOmpProfiles } from "./ompProfiles.js";
 import { resolveOmpProfileFromEnv } from "@zcode/shared/omp-profile";
@@ -317,7 +321,12 @@ export function registerRemoteIpcHandlers(options: {
   // 文件不存在时显式报错，绝不代写用户 omp 配置。
   ipcMain.handle(PlatformChannels.OpenOmpModelConfig, async () => {
     const configPath = resolveOmpModelRolesConfigPath();
-    if (!(await access(configPath).then(() => true, () => false))) {
+    if (
+      !(await access(configPath).then(
+        () => true,
+        () => false,
+      ))
+    ) {
       return { success: false, error: "omp_config_missing" };
     }
     const message = await shell.openPath(configPath);
@@ -332,10 +341,13 @@ export function registerRemoteIpcHandlers(options: {
     const parsed = z.object({ workspacePath: z.string().min(1).optional() }).safeParse(payload);
     if (!parsed.success) return { success: false, error: "invalid_workspace_path" };
     try {
-      return { success: true, snapshot: await readOmpNativeIntegrations({
-        agentDir: dirname(resolveOmpModelRolesConfigPath()),
-        workspacePath: parsed.data.workspacePath,
-      }) };
+      return {
+        success: true,
+        snapshot: await readOmpNativeIntegrations({
+          agentDir: dirname(resolveOmpModelRolesConfigPath()),
+          workspacePath: parsed.data.workspacePath,
+        }),
+      };
     } catch {
       return { success: false, error: "omp_integrations_load_failed" };
     }
@@ -356,7 +368,9 @@ export function registerRemoteIpcHandlers(options: {
   ipcMain.handle(PlatformChannels.WriteOmpModelRoles, async (_event, payload: unknown) => {
     const configPath = resolveOmpModelRolesConfigPath();
     const parsed = z
-      .object({ roles: z.array(z.object({ role: z.string().min(1), value: z.string().min(1) })).min(1) })
+      .object({
+        roles: z.array(z.object({ role: z.string().min(1), value: z.string().min(1) })).min(1),
+      })
       .safeParse(payload);
     if (!parsed.success) {
       return { success: false, error: "invalid_roles_payload" };

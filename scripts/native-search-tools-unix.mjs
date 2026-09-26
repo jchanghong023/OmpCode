@@ -209,7 +209,11 @@ function buildZstd(sourcePath, prefix, jobs, env, quiet) {
   run(
     "make",
     ["-C", "lib", `PREFIX=${prefix}`, "install-static", "install-includes", "install-pc"],
-    { cwd: sourcePath, env, quiet },
+    {
+      cwd: sourcePath,
+      env,
+      quiet,
+    },
   );
 }
 

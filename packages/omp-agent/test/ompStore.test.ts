@@ -14,10 +14,7 @@ test("相对 PI_CONFIG_DIR 从用户主目录解析并扫描 omp 冷会话", asy
   const sessionDir = join(testRoot, "agent", "sessions", "-");
   await mkdir(sessionDir, { recursive: true });
   const sessionPath = join(sessionDir, "2026-09-24T00-00-00-000Z_test-session.jsonl");
-  await writeFile(
-    sessionPath,
-    `${JSON.stringify({ type: "session", id: "test-session" })}\n`,
-  );
+  await writeFile(sessionPath, `${JSON.stringify({ type: "session", id: "test-session" })}\n`);
   await utimes(sessionPath, 1_000_000_000.123, 1_000_000_000.123);
 
   const store = createOmpStore({ PI_CONFIG_DIR: relative(homedir(), testRoot) });
@@ -41,8 +38,14 @@ test("命名 profile 的历史与默认 profile 隔离", async (context) => {
     `${JSON.stringify({ type: "session", id: "named-session" })}\n`,
   );
   const configDir = relative(homedir(), testRoot);
-  assert.equal((await createOmpStore({ PI_CONFIG_DIR: configDir }).listSessions(homedir())).length, 0);
-  const named = await createOmpStore({ PI_CONFIG_DIR: configDir, OMP_PROFILE: "work" }).listSessions(homedir());
+  assert.equal(
+    (await createOmpStore({ PI_CONFIG_DIR: configDir }).listSessions(homedir())).length,
+    0,
+  );
+  const named = await createOmpStore({
+    PI_CONFIG_DIR: configDir,
+    OMP_PROFILE: "work",
+  }).listSessions(homedir());
   assert.equal(named[0]?.sessionId, "named-session");
 });
 
@@ -55,7 +58,12 @@ test("超长会话文件读取末尾 4000 行，短文件行为不变", async (c
   const total = 4500;
   const lines: string[] = [];
   for (let i = 0; i < total; i += 1) {
-    lines.push(JSON.stringify({ type: "message", message: { role: "user", content: [{ type: "text", text: `m-${i}` }] } }));
+    lines.push(
+      JSON.stringify({
+        type: "message",
+        message: { role: "user", content: [{ type: "text", text: `m-${i}` }] },
+      }),
+    );
   }
   // 不带尾随换行写入，保证窗口计数不受末尾空行干扰。
   const longPath = join(testRoot, "long.jsonl");
@@ -73,7 +81,9 @@ test("超长会话文件读取末尾 4000 行，短文件行为不变", async (c
   await writeFile(join(childDir, "scout.jsonl"), lines.join("\n"));
   const childEntries = await store.readSubagentEntries(longPath, "scout");
   assert.equal(childEntries.length, 4000);
-  const childLast = childEntries[childEntries.length - 1] as { message?: { content?: { text?: string }[] } };
+  const childLast = childEntries[childEntries.length - 1] as {
+    message?: { content?: { text?: string }[] };
+  };
   assert.equal(childLast?.message?.content?.[0]?.text, `m-${total - 1}`);
 
   // 短文件行为不变。

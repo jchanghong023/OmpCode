@@ -75,9 +75,7 @@ export interface BotProviderAdapter {
     state: BotStreamingReplyCardState,
     signal?: AbortSignal,
   ): Promise<void>;
-  splitStreamingReplyCardStates?(
-    state: BotStreamingReplyCardState,
-  ): BotStreamingReplyCardState[];
+  splitStreamingReplyCardStates?(state: BotStreamingReplyCardState): BotStreamingReplyCardState[];
   createTransientInteractionCard?(
     bot: BotConfig,
     message: BotOutboundMessage,
@@ -92,7 +90,10 @@ export interface BotProviderAdapter {
     handle: BotTransientInteractionCardHandle,
   ): Promise<void>;
   prepareCallbackPayload?(bot: BotConfig, payload: unknown): Promise<unknown>;
-  handleCallbackResponse?(bot: BotConfig, payload: unknown): Promise<Pick<BotProviderCallbackResult, "responseBody" | "status"> | null>;
+  handleCallbackResponse?(
+    bot: BotConfig,
+    payload: unknown,
+  ): Promise<Pick<BotProviderCallbackResult, "responseBody" | "status"> | null>;
   downloadAttachment?(
     bot: BotConfig,
     attachment: BotInboundAttachment,

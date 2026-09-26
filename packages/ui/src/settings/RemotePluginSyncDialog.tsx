@@ -433,14 +433,12 @@ async function loadRemotePluginSyncCandidates(params: {
   const inlineStatuses = buildRemotePluginSyncRows(
     localInlineResult.candidates,
     remoteInlineResult.statuses,
-  ).map(
-    (row): RemotePluginSyncCandidateStatus => ({
-      candidateId: row.candidate.id,
-      exists: row.exists,
-      ...(row.path ? { path: row.path } : {}),
-      ...(row.reason ? { reason: row.reason } : {}),
-    }),
-  );
+  ).map((row): RemotePluginSyncCandidateStatus => ({
+    candidateId: row.candidate.id,
+    exists: row.exists,
+    ...(row.path ? { path: row.path } : {}),
+    ...(row.reason ? { reason: row.reason } : {}),
+  }));
 
   if (!params.localZCodeAgentService || !params.remoteZCodeAgentService) {
     return { candidates: inlineCandidates, statuses: inlineStatuses };
@@ -585,9 +583,7 @@ async function awaitRemotePluginSyncStep<T>(
               params,
               row,
               "stopped",
-              `cancel request failed for ${operationId}: ${
-                error instanceof Error ? error.message : String(error)
-              }`,
+              `cancel request failed for ${operationId}: ${error instanceof Error ? error.message : String(error)}`,
             );
           }
         }

@@ -95,7 +95,10 @@ export async function promoteImmutableReleaseDirectory(options: {
   await writeFile(
     join(options.incomingDir, RELEASE_INTEGRITY_FILE),
     `${JSON.stringify(integrity, null, 2)}\n`,
-    { encoding: "utf8", mode: 0o600 },
+    {
+      encoding: "utf8",
+      mode: 0o600,
+    },
   );
   let promoted = false;
   try {

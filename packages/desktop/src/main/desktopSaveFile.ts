@@ -219,9 +219,7 @@ export function registerDesktopSaveFileIpcHandler(logger: { warn: (...args: unkn
       } catch (error) {
         const errorCode = error instanceof SaveFileError ? error.code : "write_failed";
         logger.warn(
-          `[save-file] 写入失败 path=${result.filePath} error=${
-            error instanceof Error ? error.message : String(error)
-          }`,
+          `[save-file] 写入失败 path=${result.filePath} error=${error instanceof Error ? error.message : String(error)}`,
         );
         return { success: false, error: errorCode };
       }

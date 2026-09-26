@@ -144,14 +144,16 @@ function findFragmentByteBudget<F>(params: {
   // 最外层的增幅为 4/3，另留长度前缀变长余量。
   // 只测一次最坏索引的空 envelope，逐片仍做真实上限校验。
   const worstCount = params.logicalBytes;
-  const envelopeBytes = params.options.measurePhysicalFrameBytes(makeFragment({
-    options: params.options,
-    fragmentIndex: Math.max(0, worstCount - 1),
-    fragmentCount: worstCount,
-    logicalBytes: params.logicalBytes,
-    checksum: params.checksum,
-    dataBase64: "",
-  }));
+  const envelopeBytes = params.options.measurePhysicalFrameBytes(
+    makeFragment({
+      options: params.options,
+      fragmentIndex: Math.max(0, worstCount - 1),
+      fragmentCount: worstCount,
+      logicalBytes: params.logicalBytes,
+      checksum: params.checksum,
+      dataBase64: "",
+    }),
+  );
   const available = params.maxPhysicalFrameBytes - envelopeBytes;
   const prefixReserve = Math.min(64, Math.floor(Math.max(available, 0) / 10));
   const base64Quads = Math.floor(((available - prefixReserve) * 3) / 16);

@@ -4786,10 +4786,10 @@ export function createZCodeAgentService(
             if ((attempt + 1) % SESSION_SUBSCRIBE_MAX_ATTEMPTS === 0) {
               // 持续失败仍保留订阅恢复能力，每八次报告一次，避免静默失活和刷屏。
               logger.warn(undefined, "session 订阅建立持续失败，继续重试", {
-                  sessionId: params.sessionId,
-                  workspaceKey: resolveWorkspaceKey(params),
-                  attempts: attempt + 1,
-                  message: error instanceof Error ? error.message : String(error),
+                sessionId: params.sessionId,
+                workspaceKey: resolveWorkspaceKey(params),
+                attempts: attempt + 1,
+                message: error instanceof Error ? error.message : String(error),
               });
             }
             const delay = Math.min(

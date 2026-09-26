@@ -8,7 +8,9 @@ const STEP_TIMEOUT_MS = 15000;
 function withTimeout(promise, label) {
   return Promise.race([
     promise,
-    new Promise((_, reject) => setTimeout(() => reject(new Error(`timeout: ${label}`)), STEP_TIMEOUT_MS)),
+    new Promise((_, reject) =>
+      setTimeout(() => reject(new Error(`timeout: ${label}`)), STEP_TIMEOUT_MS),
+    ),
   ]);
 }
 
@@ -63,15 +65,21 @@ async function main() {
   };
 
   await evaluate("title", "document.title");
-  await evaluate("brand", `(() => {
+  await evaluate(
+    "brand",
+    `(() => {
     const text = document.body.innerText;
     const count = (n) => text.split(n).length - 1;
     return { ompcode: count("OmpCode"), zcodeBrand: count("ZCode"), zCode: count("Z Code") };
-  })()`);
-  await evaluate("composer", `(() => {
+  })()`,
+  );
+  await evaluate(
+    "composer",
+    `(() => {
     const textarea = document.querySelector("textarea");
     return { hasTextarea: Boolean(textarea), placeholder: textarea?.placeholder ?? null };
-  })()`);
+  })()`,
+  );
 
   const shot = await call("Page.captureScreenshot", { format: "png" });
   const shotPath = "C:/Users/jiang/AppData/Local/Temp/ompcode-gui-01-initial.png";

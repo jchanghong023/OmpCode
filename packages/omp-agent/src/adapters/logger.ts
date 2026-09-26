@@ -1,7 +1,13 @@
 // 适配器进程日志：仅写 stderr（stdout 是协议通道）。级别：debug/info/warn/error。
 
 function emit(level: string, message: string, details?: Record<string, unknown>): void {
-  const line = JSON.stringify({ ts: new Date().toISOString(), level, scope: "omp-agent", message, ...(details ?? {}) });
+  const line = JSON.stringify({
+    ts: new Date().toISOString(),
+    level,
+    scope: "omp-agent",
+    message,
+    ...(details ?? {}),
+  });
   process.stderr.write(`${line}\n`);
 }
 

@@ -3,16 +3,17 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { normalizeOmpProfileName, resolveOmpProfileFromEnv } from "@zcode/shared/omp-profile";
 
-export function resolveOmpConfigRoot(home = homedir(), env: NodeJS.ProcessEnv = process.env): string {
+export function resolveOmpConfigRoot(
+  home = homedir(),
+  env: NodeJS.ProcessEnv = process.env,
+): string {
   return resolve(home, env.PI_CONFIG_DIR?.trim() || ".omp");
 }
 
 export function resolveOmpAgentDir(home = homedir(), env: NodeJS.ProcessEnv = process.env): string {
   const profile = resolveOmpProfileFromEnv(env);
   const root = resolveOmpConfigRoot(home, env);
-  return profile === "default"
-    ? join(root, "agent")
-    : join(root, "profiles", profile, "agent");
+  return profile === "default" ? join(root, "agent") : join(root, "profiles", profile, "agent");
 }
 
 export async function listOmpProfiles(

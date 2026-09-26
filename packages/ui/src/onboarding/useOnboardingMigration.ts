@@ -164,7 +164,9 @@ export function useOnboardingMigration(
         }));
         await settingsSync.actions.startImportWithAdditionalSelections(
           additionalSettingsSelections,
-          { includeCurrentSelections: includeSettingsSelections },
+          {
+            includeCurrentSelections: includeSettingsSelections,
+          },
         );
       }
 
