@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { VSBuffer } from "@zcode/rpc";
 import { HostV4RpcBridge, type HostV4BridgeInfo } from "../src/main/mobileRelay/hostV4RpcBridge.js";
 
 /**
