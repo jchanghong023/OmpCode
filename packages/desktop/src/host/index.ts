@@ -2333,6 +2333,24 @@ parentPort.on("message", async (e: Electron.MessageEvent) => {
     return;
   }
 
+  if (msg.type === HostMessageTypes.GetWindowBridgeableWorkspaces) {
+    // 手机远控 bootstrap：把窗口已注册的工作区 source 映射为可桥接条目；
+    // offline source 一并返回，由手机端列表自行呈现与选择。
+    const scopes = windowHostControllerRuntime.listSourceScopes();
+    parentPort.postMessage({
+      type: HostResponseTypes.WindowBridgeableWorkspacesResult,
+      requestId: msg.requestId,
+      ok: true,
+      workspaces: scopes.map((scope) => ({
+        kind: scope.kind,
+        workspacePath: scope.workspacePath,
+        ...(scope.workspaceIdentity ? { workspaceIdentity: scope.workspaceIdentity } : {}),
+        ...(scope.kind === "remote" ? { remoteSessionId: scope.remoteSessionId } : {}),
+      })),
+    });
+    return;
+  }
+
   if (msg.type === HostMessageTypes.FeedbackLogArchiveResult) {
     const pending = pendingFeedbackLogArchiveRequests.get(msg.requestId);
     if (!pending) {

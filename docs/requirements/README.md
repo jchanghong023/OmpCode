@@ -11,6 +11,7 @@
 | [integrations.md](integrations.md)               | 子代理、工具交互、扩展/MCP、自动化、文件引用与附件                                  |
 | [session-recovery.md](session-recovery.md)       | 会话身份、历史恢复、轮次收口、Host/远端连接与故障处理                               |
 | [performance.md](performance.md)                 | 流式长会话、查找和界面响应性及一致性约束                                            |
+| [mobile-relay.md](mobile-relay.md)               | 手机远控内嵌中继、桌面配对 host 端与公网隧道边界                                    |
 | [centos7-release.md](centos7-release.md)         | CentOS 7 独立兼容包、普通用户离线启动与发布边界                                     |
 
 需求或预期用户可见行为变化时，先更新对应文档及验收场景；新独立功能域可新增文档并更新索引。实现设计可解释状态所有权和时序，但不得重复定义另一套产品规则。`docs/specs/` 中保留的一次性依赖升级和 Lint 清理资料是工程任务记录，不是长期产品需求或自动执行授权。

@@ -1,4 +1,5 @@
 import { createLocalTtftExporter } from "./localTtftExporter.js";
+import { startMobileRelay, stopMobileRelay } from "./mobileRelay/mobileRelayLifecycle.js";
 /* eslint-disable max-lines */
 import "./desktopEarlyDataBaseDirBootstrap.js";
 import "./desktopEarlyChromiumHardwareAccelerationBootstrap.js";
@@ -1038,6 +1039,8 @@ async function prepareAppQuit(reason: string, kind: AppShutdownKind = "normal"):
   );
 
   appQuitPreparationInFlight = Promise.all([
+    // 手机远控中继先停：断开全部手机连接并释放端口，再进入 Host 清理屏障。
+    stopMobileRelay(),
     // 退出屏障结束后再启动窗口尺寸写入，可能在 app.exit 前留下 setting.json.lock。
     // 尺寸已在 resize 防抖或最大化状态变化时保存，退出屏障不再创建新的尺寸写入。
     // 修复原因：Main 过去不会等待仍在发送的 /event/report，正常退出也会直接丢事件。
@@ -2007,6 +2010,14 @@ app.whenReady().then(async () => {
 
   await hydratePendingPostUpdateReleaseNotes(mainSettingService);
   logWindowsBundledRuntimeIntegrityDiagnostic();
+
+  // 手机远控内嵌中继：无鉴权开放接入，进程存活即可连接。启动失败不阻塞桌面
+  // 主流程，状态经 PlatformChannels.MobileRelayEntry 供 UI 展示错误原因。
+  void startMobileRelay({
+    getHostProcess: (windowId) => windowHostProcessMap.get(windowId),
+  }).catch((error: unknown) => {
+    logger.error("[mobile-relay] failed to start:", error);
+  });
 
   // 本 Fork 只有 GitHub Release 手动分发；正式包绝不能安装上游 ZCode 的 feed。
   // 仅保留未打包开发态显式指定 feed 的更新联调入口。

@@ -198,6 +198,16 @@ function createWebPlatform(): IPlatformService {
     getPathForFile: () => null,
     createTempTextAttachment: () =>
       Promise.reject(new Error("Temporary text attachments require a desktop host")),
+    // 手机远控内嵌 relay 只存在于桌面 main 进程；Web 端没有 relay，
+    // 与 exportLogs 等能力一致返回固定占位，保持 IPlatformService 完整且不新发明语义。
+    getMobileRelayEntry: () =>
+      Promise.resolve({
+        url: "",
+        connections: 0,
+        listenPort: 0,
+        running: false,
+        error: "Not supported in web mode",
+      }),
     onRemoteConnectionLog: () => () => {},
     onRemoteSessionClosed: () => () => {},
     onBotRemoteWorkspaceReconnected: () => () => {},

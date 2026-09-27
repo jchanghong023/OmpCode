@@ -14,6 +14,18 @@ export function createDesktopPlatform(options: {
     selectFile: () => window.zcode.selectFile(),
     selectFiles: () => window.zcode.selectFiles?.() ?? Promise.resolve([]),
     createTempTextAttachment: (payload) => window.zcode.createTempTextAttachment(payload),
+    getMobileRelayEntry: () =>
+      // 开发态 renderer 热更新后可能短暂运行在尚未暴露 getMobileRelayEntry 的旧 preload 上；
+      // 与 getZCodeStdioTapDevState 一样做缺省兜底，返回 running=false 占位而不是抛错，
+      // 让手机远控弹层显示“服务未运行”，避免入口查询把弹层打成错误态。
+      window.zcode.getMobileRelayEntry?.() ??
+      Promise.resolve({
+        url: "",
+        connections: 0,
+        listenPort: 0,
+        running: false,
+        error: "mobile relay entry bridge unavailable",
+      }),
     onRemoteConnectionLog: (handler) => window.zcode.onRemoteConnectionLog(handler),
     onRemoteSessionClosed: (handler) => window.zcode.onRemoteSessionClosed(handler),
     onBotRemoteWorkspaceReconnected: (handler) =>

@@ -462,11 +462,44 @@ export type HostResourceUsageSnapshotRequestMessage = z.infer<
   typeof hostResourceUsageSnapshotRequestMessageSchema
 >;
 
+const windowBridgeableWorkspaceSchema = z
+  .object({
+    kind: z.enum(["local", "remote"]),
+    workspacePath: nonEmptyStringSchema,
+    workspaceIdentity: z.string().optional(),
+    remoteSessionId: z.string().optional(),
+  })
+  .strict();
+
+export const hostGetWindowBridgeableWorkspacesMessageSchema = z
+  .object({
+    type: z.literal("get-window-bridgeable-workspaces"),
+    requestId: nonEmptyStringSchema,
+  })
+  .strict();
+export type HostGetWindowBridgeableWorkspacesMessage = z.infer<
+  typeof hostGetWindowBridgeableWorkspacesMessageSchema
+>;
+
+export const hostWindowBridgeableWorkspacesResultResponseSchema = z
+  .object({
+    type: z.literal("window-bridgeable-workspaces-result"),
+    requestId: nonEmptyStringSchema,
+    ok: z.boolean(),
+    workspaces: z.array(windowBridgeableWorkspaceSchema).max(256).optional(),
+    error: z.string().optional(),
+  })
+  .strict();
+export type HostWindowBridgeableWorkspacesResultResponse = z.infer<
+  typeof hostWindowBridgeableWorkspacesResultResponseSchema
+>;
+
 export const hostIncomingMessageSchema = z.discriminatedUnion("type", [
   z
     .object({ type: z.literal("database-startup-control"), control: databaseStartupControlSchema })
     .strict(),
   hostResourceUsageSnapshotRequestMessageSchema,
+  hostGetWindowBridgeableWorkspacesMessageSchema,
   z
     .object({ type: z.literal("resource-usage-snapshot-cancel"), requestId: nonEmptyStringSchema })
     .strict(),
@@ -982,6 +1015,7 @@ export const hostResponseMessageSchema = z.discriminatedUnion("type", [
     .object({ type: z.literal("database-startup-state"), state: databaseStartupStateSchema })
     .strict(),
   hostResourceUsageSnapshotResultResponseSchema,
+  hostWindowBridgeableWorkspacesResultResponseSchema,
   hostRemoteWorkspaceConnectionLogResponseSchema,
   hostRemoteWorkspaceConnectedResponseSchema,
   hostRemoteWorkspaceConnectFailedResponseSchema,

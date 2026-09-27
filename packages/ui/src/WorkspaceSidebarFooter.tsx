@@ -34,6 +34,7 @@ import { useZCodeStore } from "@/store/StoreProvider.js";
 import { normalizeInterfaceMode } from "@/lib/interfaceMode.js";
 import type { Theme } from "@/useTheme.js";
 import { WorkspaceWebRemoteControlTrigger } from "@/WorkspaceWebRemoteControlTrigger.js";
+import { WorkspaceMobileRelayTrigger } from "@/WorkspaceMobileRelayTrigger.js";
 import { WorkspaceSidebarFooterUsageSummaryContent } from "@/WorkspaceSidebarFooterUsageSummary.js";
 
 const DESKTOP_ZOOM_MIN_LEVEL = -3;
@@ -271,6 +272,8 @@ export const WorkspaceSidebarFooter = memo(function WorkspaceSidebarFooterCompon
               compact
             />
           ) : null}
+          {/* 手机远控 relay 由桌面 main 进程提供，与工作区无关，只要求桌面形态即可显示入口。 */}
+          {isDesktop ? <WorkspaceMobileRelayTrigger compact /> : null}
           <ControlHintTooltip title={settingsButtonLabel}>
             <Button
               type="button"

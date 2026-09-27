@@ -12,6 +12,7 @@ import type {
   MigrateLegacyCommonMcpResult,
   SaveCliMcpToUserDirectoryRequest,
 } from "./mcp.js";
+import type { MobileRelayEntryStatus } from "./channels.js";
 import type { OAuthStateRegistration } from "./oauth.js";
 import type { OmpNativeIntegrationSnapshot } from "./omp-integrations.js";
 import type { AppSettings, Locale } from "./protocol.js";
@@ -565,6 +566,13 @@ export interface IPlatformService {
   createTempTextAttachment?(
     payload: CreateTempTextAttachmentRequest,
   ): Promise<CreateTempTextAttachmentResult>;
+
+  /**
+   * 查询手机远控内嵌中继的入口状态（入口链接、连接手机数、监听端口）。
+   * 仅 Desktop main 实现（ipcMain.handle(PlatformChannels.MobileRelayEntry)）；
+   * Web/手机端没有内嵌 relay，按接口惯例返回 running=false 的固定占位。
+   */
+  getMobileRelayEntry(): Promise<MobileRelayEntryStatus>;
 
   /** 订阅当前窗口内远程连接过程日志，返回 disposer */
   onRemoteConnectionLog(handler: (entry: RemoteConnectionRuntimeLog) => void): () => void;
