@@ -37,6 +37,8 @@ const HIDDEN_SETTINGS_SECTIONS = new Set<SettingsSectionId>([
   // 产品语义：定时任务是 workspace 主视图，不能再作为设置页分区出现。
   // 注意：hooks 已是正式设置页分区，不在此列。
   "automations",
+  "skill",
+  "commands",
   // 旧插件市场已迁出设置页；保留 id 只用于迁移历史偏好和旧调用。
   "plugins",
   // 工作区搜索（.zcodeignore）设置入口先隐藏：规则文件仍生效并可手动编辑，

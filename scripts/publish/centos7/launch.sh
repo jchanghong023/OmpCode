@@ -3,6 +3,9 @@ set -euo pipefail
 
 package_root=$(dirname "$(dirname "$(readlink -f "$0")")")
 app="$package_root/app"
+# CentOS 7 桌面端默认只访问本机和内网；omp 自身的联网模式由 --offline 单独决定。
+export OMPCODE_CENTOS7_LOCAL_ONLY=1
+unset ZCODE_ARMS_RUM_ENDPOINT ZCODE_TELEMETRY_REPORT_ENDPOINT
 [[ -x "$app/zcode" && -x "$app/resources/glm/omp/omp" && -f "$app/resources/app.asar" ]] || {
   echo 'OmpCode CentOS 7 package is incomplete.' >&2
   exit 1

@@ -524,6 +524,14 @@ export function buildHostProcessEnv(hostProcessLocalEnv: Record<string, string>)
     ...sanitizeZCodeRuntimeEnv(rawInheritedEnv),
     ...buildZCodeToolEnvPassthroughEnv(rawInheritedEnv),
   });
+  if (process.env.OMPCODE_CENTOS7_LOCAL_ONLY === "1") {
+    // 修复原因：dotenv 的 Host 本地环境不能重新启用启动脚本已关闭的遥测出口。
+    delete inheritedEnv.ZCODE_ARMS_RUM_ENDPOINT;
+    delete inheritedEnv.ZCODE_TELEMETRY_REPORT_ENDPOINT;
+    for (const key of Object.keys(agentTelemetryEnv)) {
+      if (key.startsWith("OTEL_EXPORTER_")) delete agentTelemetryEnv[key];
+    }
+  }
   // A release app must never inherit the local unsigned-Helper escape hatch.
   // Otherwise a developer shell/launchctl variable can make the signed app
   // reject its verified bundled Helper and route onboarding to a stale dev app.
@@ -541,6 +549,8 @@ export function buildHostProcessEnv(hostProcessLocalEnv: Record<string, string>)
 
   return {
     ...inheritedEnv,
+    // 修复原因：Host/scheduler 是独立进程，CentOS 7 网络边界必须由 Main 明确继承。
+    ...(process.env.OMPCODE_CENTOS7_LOCAL_ONLY === "1" ? { OMPCODE_CENTOS7_LOCAL_ONLY: "1" } : {}),
     // OTLP 凭据只定向传到 host；host 初始化 services 时会立即捕获并从 process.env 清除，
     // 后续只在启动 Agent 时短暂注入，不会进入 Bash/MCP/tool env。
     ...agentTelemetryEnv,

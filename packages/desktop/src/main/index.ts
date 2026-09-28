@@ -45,6 +45,7 @@ import {
 } from "electron";
 import type { UtilityProcess as ElectronUtilityProcess } from "electron";
 import { spawn } from "node:child_process";
+import { lookup } from "node:dns/promises";
 import { join, resolve } from "node:path";
 import { homedir } from "node:os";
 import { resolveImportMetaDirname } from "../shared/moduleDirname.js";
@@ -80,6 +81,8 @@ import {
   type UpdateStatePayload,
   type TelemetryEventPayload,
   HostMessageTypes,
+  isPrivateNetworkEndpoint,
+  isLoopbackUrl,
 } from "@zcode/shared";
 import { logger } from "./logger.js";
 import { markMainLaunchAppReady } from "./desktopLaunchMarks.js";
@@ -195,7 +198,6 @@ import {
   listRegisteredHostAgentProcessIds,
   setBrowserUseGuestWebContentsIdsProvider,
 } from "./resourceManagerWindow.js";
-import { createDesktopHelpConfigReader } from "./desktopHelpConfig.js";
 import { registerPlatformIpcHandlers } from "./desktopMainIpcPlatform.js";
 import { registerRemoteIpcHandlers } from "./desktopMainIpcRemote.js";
 import {
@@ -680,7 +682,7 @@ function resolveDesktopContextPromptEnabledForHost(): boolean {
     return false;
   }
   // Host 创建时顺便触发过期刷新，但只读取当前快照；网络请求不能阻塞 Local/Remote Host。
-  void rollout.refresh();
+  if (process.env.OMPCODE_CENTOS7_LOCAL_ONLY !== "1") void rollout.refresh();
   return rollout.getSnapshot().enabled;
 }
 
@@ -694,6 +696,7 @@ function resolveDesktopContextPromptEnabledForHost(): boolean {
 const DESKTOP_FIRST_HOST_SPAWN_DECISION_TIMEOUT_MS = 2_000;
 let firstHostSpawnDecisionPromise: Promise<void> | null = null;
 function awaitFirstHostSpawnDecision(): Promise<void> {
+  if (process.env.OMPCODE_CENTOS7_LOCAL_ONLY === "1") return Promise.resolve();
   if (firstHostSpawnDecisionPromise) {
     return firstHostSpawnDecisionPromise;
   }
@@ -783,12 +786,6 @@ const remoteSessionManager = createRemoteWorkspaceSessionManager({
 });
 
 const deviceMid = ensureDesktopDeviceMidSync();
-// 帮助配置是公开读取，不能复用下面附带账号鉴权的灰度响应缓存。
-const readHelpConfig = createDesktopHelpConfigReader({
-  appVersion: ZCODE_VERSION || app.getVersion(),
-  deviceMid,
-  resolveEndpointOrigin: resolveCurrentZCodeEndpointOrigin,
-});
 // 同一个 /api/v1/client/configs fetcher 供两个灰度 rollout 共用（请求参数与鉴权完全一致，
 // 各自独立缓存/去重，服务端按 data.configs.<key> 区分功能）。
 const electronClientConfigsFetcher = createElectronDesktopContextPromptConfigFetcher({
@@ -1346,7 +1343,6 @@ async function executeDesktopCommandForApp(
   senderWindow?: BrowserWindow | null,
 ) {
   return executeDesktopCommand({
-    fetchHelpConfig: readHelpConfig,
     command,
     senderWindow,
     logger,
@@ -1919,6 +1915,28 @@ app.on("second-instance", (_event, argv, _workingDirectory, additionalData) => {
 });
 
 app.whenReady().then(async () => {
+  if (process.env.OMPCODE_CENTOS7_LOCAL_ONLY === "1") {
+    // 修复原因：--offline 只属于 omp，桌面 Chromium 的配置、资源和浏览器请求须独立拦截。
+    session.defaultSession.webRequest.onBeforeRequest((details, callback) => {
+      callback({ cancel: !isLoopbackUrl(details.url) });
+    });
+    // 购买页使用独立 partition，不能继承默认 Session 的拦截规则。
+    session
+      .fromPartition("persist:zcode-coding-plan")
+      .webRequest.onBeforeRequest((_details, callback) => {
+        callback({ cancel: true });
+      });
+    session
+      .fromPartition(EMBEDDED_BROWSER_PARTITION)
+      .webRequest.onBeforeRequest((details, callback) => {
+        void isPrivateNetworkEndpoint(details.url, async (host) =>
+          (await lookup(host, { all: true })).map((entry) => entry.address),
+        ).then(
+          (allowed) => callback({ cancel: !allowed }),
+          () => callback({ cancel: true }),
+        );
+      });
+  }
   // CentOS 7 启动参数只覆盖本次运行；先设定 profile，再让所有 Host 与目录读取同一环境。
   const launchProfile = process.env.OMPCODE_CENTOS7_PROFILE;
   if (launchProfile !== undefined) {
@@ -1929,7 +1947,9 @@ app.whenReady().then(async () => {
     isPathAuthorized: localMediaPreviewPathRegistry.isAuthorized,
   });
   // Electron 的 net.request 只能在 app ready 后使用；灰度请求仍是旁路预热，不阻塞首个 Host。
-  void desktopContextPromptRollout?.refresh();
+  if (process.env.OMPCODE_CENTOS7_LOCAL_ONLY !== "1") {
+    void desktopContextPromptRollout?.refresh();
+  }
   installBrowserRestoreBootstrapProtocol(
     session.fromPartition(EMBEDDED_BROWSER_PARTITION).protocol,
   );
@@ -2063,7 +2083,6 @@ app.whenReady().then(async () => {
   });
 
   registerPlatformIpcHandlers({
-    fetchHelpConfig: readHelpConfig,
     logger,
     // CDP-on-guest pivot：renderer `<webview>` dom-ready 上报 guest webContentsId → attach。
     attachBrowserGuest: (key, webContentsId, options) => {

@@ -1449,7 +1449,6 @@
     "packages/ui/src/components/ai-elements/message.tsx": "6c35829ed11321e850cd59e20c1c88fdd452e8e2d9b5da45f808371021aabf99",
     "packages/ui/src/components/ai-elements/node.tsx": "d7b68c41717a509bd9063f0a9fc0c4525ceb2b23bae4028bcd49ec949fc6268f",
     "packages/ui/src/components/ai-elements/panel.tsx": "9c345ecb217fbb6a3a2b49b93ca81b746f249d18b9223470fbf511c0a9a37bb7",
-    "packages/ui/src/components/ai-elements/persona.tsx": "c796e1aa0f85395138eda5e4c7ffc7dac5321690b3f6949f73c7b3ebe8d52808",
     "packages/ui/src/components/ai-elements/plan.tsx": "576b2ee1a9546f9e30f2512bb2e097babca71ca35a2820c0be4c93caef600622",
     "packages/ui/src/components/ai-elements/prompt-input-actions.tsx": "198df66e5883016d542b4dfbfb12d050992febf53ccdcd712a289fbdd7a48a56",
     "packages/ui/src/components/ai-elements/prompt-input-buttons.tsx": "b1c2a6ded9a2866946d08691072a4dacb59ecdce761baba7ee06f02e1e117185",
@@ -2673,7 +2672,7 @@
     "scripts/license-texts/Apache-2.0.txt": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
     "scripts/native-search-tools-config.mjs": "281d368464f61363fa2d8ab74f416962fe730dd0a0572db5564475f876bb65aa",
     "scripts/remote-native-search-tools-config.mjs": "472322a66f84c7452f96aa9e16e9c4e0600f7c2588a03dc6bc869229161b1cb2",
-    "third-party/copied-components.json": "a411ef6ee22a25e910d2ccfb5dde572a116174645abbda9e99f86946deeb2072",
+    "third-party/copied-components.json": "3d75fc286dbeb3d0b622d3198e6b69269ef9b8af20693f0a9d88c7c0391b6997",
     "third-party/embedded-components.json": "9586ccca15897f56d4ca1d703dffe9e02880fedd766c1dff93f7ac1f52ea891a",
     "third-party/native-search/licenses/00373c9bf56a894b2ed67586596bc1e8b0630cabbaf1ab46c75fc754b6bcd1ce.txt": "00373c9bf56a894b2ed67586596bc1e8b0630cabbaf1ab46c75fc754b6bcd1ce",
     "third-party/native-search/licenses/01c266bced4a434da0051174d6bee16a4c82cf634e2679b6155d40d75012390f.txt": "01c266bced4a434da0051174d6bee16a4c82cf634e2679b6155d40d75012390f",
@@ -19608,7 +19607,6 @@
         "packages/ui/src/components/ai-elements/message.tsx",
         "packages/ui/src/components/ai-elements/node.tsx",
         "packages/ui/src/components/ai-elements/panel.tsx",
-        "packages/ui/src/components/ai-elements/persona.tsx",
         "packages/ui/src/components/ai-elements/plan.tsx",
         "packages/ui/src/components/ai-elements/prompt-input.tsx",
         "packages/ui/src/components/ai-elements/queue.tsx",
@@ -19836,10 +19834,6 @@
         {
           "file": "packages/ui/src/components/ai-elements/panel.tsx",
           "sha256": "9c345ecb217fbb6a3a2b49b93ca81b746f249d18b9223470fbf511c0a9a37bb7"
-        },
-        {
-          "file": "packages/ui/src/components/ai-elements/persona.tsx",
-          "sha256": "c796e1aa0f85395138eda5e4c7ffc7dac5321690b3f6949f73c7b3ebe8d52808"
         },
         {
           "file": "packages/ui/src/components/ai-elements/plan.tsx",

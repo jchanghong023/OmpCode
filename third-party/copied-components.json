@@ -39,7 +39,6 @@
       "packages/ui/src/components/ai-elements/message.tsx",
       "packages/ui/src/components/ai-elements/node.tsx",
       "packages/ui/src/components/ai-elements/panel.tsx",
-      "packages/ui/src/components/ai-elements/persona.tsx",
       "packages/ui/src/components/ai-elements/plan.tsx",
       "packages/ui/src/components/ai-elements/prompt-input.tsx",
       "packages/ui/src/components/ai-elements/queue.tsx",

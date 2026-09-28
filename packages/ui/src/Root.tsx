@@ -275,9 +275,6 @@ function RootInner({
         void services.zcodeAgentService.syncAppRuntimePreferences(parsed.data).catch((error) => {
           logger.warn("[settings] 同步跨窗口运行时偏好失败", error);
         });
-        void services.botsService.syncAppRuntimePreferences(parsed.data).catch((error) => {
-          logger.warn("[settings] 同步跨窗口 Bot 运行时偏好失败", error);
-        });
         return;
       }
 
@@ -311,7 +308,6 @@ function RootInner({
     };
   }, [
     refreshAppSettings,
-    services.botsService,
     services.broadcastService,
     services.zcodeAgentService,
   ]);
@@ -329,19 +325,9 @@ function RootInner({
       .catch((error) => {
         logger.warn("[settings] 初始化运行时偏好失败", error);
       });
-    void services.botsService
-      .syncAppRuntimePreferences({
-        askUserQuestionAutoResolutionEnabled:
-          appSettings.askUserQuestionAutoResolutionEnabled !== false,
-        modelIoFullRetentionEnabled: appSettings.modelIoFullRetentionEnabled === true,
-      })
-      .catch((error) => {
-        logger.warn("[settings] 初始化 Bot 运行时偏好失败", error);
-      });
   }, [
     appSettings?.askUserQuestionAutoResolutionEnabled,
     appSettings?.modelIoFullRetentionEnabled,
-    services.botsService,
     services.zcodeAgentService,
   ]);
 
