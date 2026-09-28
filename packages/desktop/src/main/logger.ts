@@ -5,6 +5,15 @@ import { formatTimestamp } from "@zcode/shared";
 import { cleanupExpiredLogFiles, LOG_RETENTION_DAYS } from "./logRetention.js";
 import { getAppConfigDir, maybeThrowInjectedFsFault } from "@zcode/services/node";
 
+// 无 GPU 桌面的交互与日志共用 Main 事件循环；每条同步 mkdir/append 在慢盘上会阻塞 UI。
+// 文件日志走本模块内的唯一有界异步队列（不做平台分叉），仍按原路径和日期记录。
+let exitLogDeadline: number | undefined;
+export async function flushMainLogs(): Promise<void> {
+  // Host 收尾和最终退出可能都调用此处，共用总预算，不能逐次累加退出等待。
+  exitLogDeadline ??= Date.now() + 1000;
+  await drainLogLines();
+}
+
 function getLogDir() {
   const e2eLogDir =
     process.env.ZCODE_ENV === "test" ? process.env.ZCODE_E2E_RUNTIME_LOG_DIR?.trim() : undefined;
@@ -51,6 +60,7 @@ process.stdout.on("error", ignoreBrokenPipeStreamError);
 process.stderr.on("error", ignoreBrokenPipeStreamError);
 
 function safeConsoleWrite(level: LogLevel, ...args: unknown[]): void {
+  if (process.env.OMPCODE_CENTOS7_LOCAL_ONLY === "1" && level !== "error") return;
   const consoleFn =
     level === "error" ? console.error : level === "warn" ? console.warn : console.log;
   try {
@@ -121,6 +131,8 @@ async function drainLogLines(): Promise<void> {
 }
 
 function write(level: LogLevel, source: string, ...args: unknown[]) {
+  // CentOS 7 只保留错误日志；在格式化、打印和文件入队之前退出，避免无 GPU 桌面的额外 IO。
+  if (process.env.OMPCODE_CENTOS7_LOCAL_ONLY === "1" && level !== "error") return;
   const now = new Date();
   const ts = formatTimestamp(now);
   const pid = process.pid;

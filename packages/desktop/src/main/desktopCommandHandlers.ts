@@ -1,7 +1,8 @@
 /* eslint-disable max-lines -- 桌面命令分发需要共享窗口与平台上下文，集中维护更便于一致性 */
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { app, BrowserWindow, dialog, session, shell } from "electron";
+import { app, BrowserWindow, dialog, session } from "electron";
+import { openDesktopExternalUrl } from "./openDesktopExternalUrl.js";
 import type { MessageBoxOptions } from "electron";
 import {
   DEFAULT_ZCODE_ENDPOINT_ORIGIN,
@@ -265,7 +266,7 @@ async function openFeedback(
     resolveTargetWindow(targetWindow)?.webContents.send(PlatformChannels.OpenFeedbackDialog);
     return;
   }
-  if (config.feedback_url) await shell.openExternal(config.feedback_url);
+  if (config.feedback_url) await openDesktopExternalUrl(config.feedback_url);
 }
 
 async function openCommunity(
@@ -281,7 +282,7 @@ async function openCommunity(
     logger.warn("[community] community_urls is missing from both remote and local config");
     return;
   }
-  await shell.openExternal(communityUrl);
+  await openDesktopExternalUrl(communityUrl);
 }
 
 async function promptCustomZCodeEndpoint(
@@ -457,7 +458,7 @@ export async function openChangelog(
   locale: Locale,
   endpointOrigin = DEFAULT_ZCODE_ENDPOINT_ORIGIN,
 ) {
-  await shell.openExternal(resolveChangelogUrl(locale, endpointOrigin));
+  await openDesktopExternalUrl(resolveChangelogUrl(locale, endpointOrigin));
 }
 
 async function resolveCurrentZCodeEndpointOrigin(settingService: {
@@ -598,9 +599,11 @@ export async function executeDesktopCommand(options: {
       await options.onRelaunchApp();
       return;
     case DesktopCommandIds.OpenFeedback:
+      if (process.env.OMPCODE_CENTOS7_LOCAL_ONLY === "1") return;
       await openFeedback(options.logger, targetWindow, options.fetchHelpConfig);
       return;
     case DesktopCommandIds.OpenCommunity:
+      if (process.env.OMPCODE_CENTOS7_LOCAL_ONLY === "1") return;
       await openCommunity(
         options.currentApplicationLocale,
         options.logger,

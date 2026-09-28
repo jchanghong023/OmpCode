@@ -323,6 +323,7 @@ export function registerPlatformIpcHandlers(options: {
   });
 
   ipcMain.handle(PlatformChannels.CanOpenCommunity, async (_event, locale: unknown) => {
+    if (process.env.OMPCODE_CENTOS7_LOCAL_ONLY === "1") return false;
     const result = localeSchema.safeParse(locale);
     if (!result.success) {
       options.logger.warn("[community] invalid locale:", formatZodError(result.error));

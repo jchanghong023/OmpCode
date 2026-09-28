@@ -8,6 +8,7 @@ import {
   type Locale,
 } from "@zcode/shared";
 import { requestForceAutoUpdate, type ForceAutoUpdateState } from "./autoUpdater.js";
+import { openDesktopExternalUrl } from "./openDesktopExternalUrl.js";
 import { showForceUpdatePrompt } from "./forceUpdatePrompt.js";
 
 const ZCODE_CLIENT_CONFIG_API_PATH = "/api/v1/client/configs";
@@ -227,7 +228,7 @@ export async function maybeBlockStartupForForceUpdate(
 
   options.logger.warn("[force-update] 远端配置要求强制升级，阻止创建主窗口", requirement);
   options.onBlocked?.(requirement);
-  const { app, shell } = await import("electron");
+  const { app } = await import("electron");
   const action = await showForceUpdatePrompt(
     formatForceUpdateDialogText(requirement, options.locale),
     options.locale,
@@ -245,7 +246,7 @@ export async function maybeBlockStartupForForceUpdate(
   if (action === "manual") {
     const url = resolveForceUpdateDownloadUrl(options.locale, options.endpointOrigin);
     options.logger.info(`[force-update] 用户选择手动升级：${url}`);
-    await shell.openExternal(url);
+    await openDesktopExternalUrl(url);
   }
 
   // 强制升级命中后不能进入主界面；非自动升级路径处理完弹窗后退出，避免露出旧客户端功能。

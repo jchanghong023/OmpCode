@@ -76,6 +76,12 @@ function clampBinaryPreviewBytes(length?: number) {
     : DEFAULT_BINARY_PREVIEW_BYTES;
   return Math.min(Math.max(safeLength, 1), MAX_BINARY_PREVIEW_BYTES);
 }
+
+function resolveWorkspaceHomeDir(): string {
+  // --home 也必须覆盖应用创建的默认/临时工作区，避免它们仍占用原 HOME 空间。
+  return process.env.ZCODE_DESKTOP_HOME_DIR?.trim() || homedir();
+}
+
 function inferMediaTypeFromPath(path: string): string {
   return (
     IMAGE_EXTENSION_TO_MEDIA_TYPE[extname(path).toLowerCase()] ??
@@ -428,7 +434,7 @@ export function createFileService(options: CreateFileServiceOptions = {}): IFile
       return realpath(params.path);
     },
     async createDefaultWorkspace(): Promise<{ path: string }> {
-      const workspacePath = join(homedir(), SCRATCH_WORKSPACE_ROOT_NAME);
+      const workspacePath = join(resolveWorkspaceHomeDir(), SCRATCH_WORKSPACE_ROOT_NAME);
       await mkdir(workspacePath, { recursive: true });
       const workspaceStat = await stat(workspacePath);
       if (!workspaceStat.isDirectory()) {
@@ -464,7 +470,11 @@ export function createFileService(options: CreateFileServiceOptions = {}): IFile
     },
     async createScratchWorkspace(params: { name: string }): Promise<{ path: string }> {
       const workspaceName = validateScratchWorkspaceName(params.name);
-      const workspacePath = join(homedir(), SCRATCH_WORKSPACE_ROOT_NAME, workspaceName);
+      const workspacePath = join(
+        resolveWorkspaceHomeDir(),
+        SCRATCH_WORKSPACE_ROOT_NAME,
+        workspaceName,
+      );
       await mkdir(workspacePath, { recursive: true });
       const workspaceStat = await stat(workspacePath);
       if (!workspaceStat.isDirectory()) {

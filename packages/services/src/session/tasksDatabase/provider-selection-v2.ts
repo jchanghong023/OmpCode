@@ -1,4 +1,4 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { SqliteDatabase } from "#src/session/tasksDatabase/sqlite.js";
 import type { ModelSelection } from "@zcode/shared";
 
 // 冻结 0002 的发布前已裁决编码；不能调用将来可能修改的运行时 parser/身份表。
@@ -71,7 +71,7 @@ function decodeLegacySelection(row: LegacySelectionRow): ModelSelection | undefi
  * 有旧来源允许重建未发布目标值；无法确定身份留 SQL NULL，默认语义写 JSON null。
  * 必须在库级 migration 事务内调用，不得恢复逐次读取导入。
  */
-export function importLegacyAutomationSelections(db: DatabaseSync): void {
+export function importLegacyAutomationSelections(db: SqliteDatabase): void {
   const rows = db
     .prepare(
       "SELECT automation_id, model, provider, thought_level FROM automations WHERE model IS NOT NULL",

@@ -31,7 +31,6 @@ import { createBrowserControlMainBridge } from "./browserControlMainBridge.js";
 import { materializeBrowserRecordingArtifact } from "./browserRecordingArtifactMaterializer.js";
 import {
   ServiceCollection,
-  IBotsService,
   IFileService,
   IClientConfigService,
   IMediaPreviewService,
@@ -82,6 +81,7 @@ import {
   isRemoteWorkspaceIdentity,
   resolveWorkspaceKey,
   formatModelPickerValue,
+  isLoopbackUrl,
   type ZCodePromptAttachment,
   type ZCodeStreamEvent,
   type ZCodeTaskMeta,
@@ -94,6 +94,18 @@ import {
   type ZCodeAutomationRunOutcome,
   type ModelSelection,
 } from "@zcode/shared";
+
+if (process.env.OMPCODE_CENTOS7_LOCAL_ONLY === "1") {
+  // 修复原因：Host 的原生 fetch 不经过 Electron Session，必须在 Host 入口独立阻断公网。
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (input, init) => {
+    const url = input instanceof Request ? input.url : String(input);
+    if (!isLoopbackUrl(url)) {
+      throw new Error("CentOS 7 desktop public network access is disabled");
+    }
+    return originalFetch(input, init);
+  };
+}
 import {
   parseHostIncomingMessageEvent,
   rejectUnavailableAttachedServicePort,
@@ -118,7 +130,6 @@ import {
   createRemoteMediaPreviewProxy,
   type RemoteMediaPreviewProxy,
 } from "./remoteMediaPreviewProxy.js";
-import { watchCronRunBotDelivery } from "./cronBotDelivery.js";
 import { createHostRemoteWorkspaceProxyState } from "./hostRemoteWorkspaceProxyState.js";
 import { createRemoteWorkspaceServiceCollection } from "./remoteWorkspaceServiceCollection.js";
 import { getRemoteProviderProvisioningExecutor } from "./remoteProviderProvisioningService.js";
@@ -282,6 +293,35 @@ const rawConsole = {
   error: console.error.bind(console),
 };
 
+function isClosedHostOutput(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    ((error as NodeJS.ErrnoException).code === "EBADF" ||
+      (error as NodeJS.ErrnoException).code === "EPIPE")
+  );
+}
+
+function writeRawHostConsole(consoleFn: (...args: unknown[]) => void, ...args: unknown[]): void {
+  try {
+    consoleFn(...args);
+  } catch (error) {
+    // 失效的终端或管道不能让日志写入杀掉 Host；日志仍通过结构化消息发往 Main。
+    if (!isClosedHostOutput(error)) {
+      throw error;
+    }
+  }
+}
+
+function handleHostOutputError(error: Error): void {
+  // Node 的流错误也可能异步发出，需要消费已关闭管道的错误事件。
+  if (!isClosedHostOutput(error)) {
+    throw error;
+  }
+}
+
+process.stdout.on("error", handleHostOutputError);
+process.stderr.on("error", handleHostOutputError);
+
 const remoteConnectionProgressContext = createRemoteConnectionProgressContext({
   emit: ({ requestId, level, args }) => {
     if (!parentPort) {
@@ -301,10 +341,12 @@ const remoteConnectionProgressContext = createRemoteConnectionProgressContext({
 });
 
 function writeHostLog(level: HostLogLevel, ...args: unknown[]): void {
+  // CentOS 7 的 Host 仅输出错误；远程连接进度由独立事件通道交付。
+  if (process.env.OMPCODE_CENTOS7_LOCAL_ONLY === "1" && level !== "error") return;
   const prefix = formatLogPrefix("zcode-host", process.pid);
   const consoleFn =
     level === "error" ? rawConsole.error : level === "warn" ? rawConsole.warn : rawConsole.log;
-  consoleFn(prefix, ...args);
+  writeRawHostConsole(consoleFn, prefix, ...args);
   reportHostLog(level, [prefix, ...args]);
 }
 
@@ -920,26 +962,6 @@ async function dispatchCronRun(request: CronRunDispatchRequest): Promise<{
         modelSelection: submissionModelSelection,
         mode: request.mode,
       });
-    }
-    const botsService = targetServices.getOptional(IBotsService);
-    if (botsService) {
-      try {
-        await watchCronRunBotDelivery({
-          automationId: request.automationId,
-          workspaceKey,
-          workspacePath: request.workspacePath,
-          ...(request.workspaceIdentity ? { workspaceIdentity: request.workspaceIdentity } : {}),
-          taskId: task.taskId,
-          repo: cronAutomationRepo,
-          botsService,
-        });
-      } catch (error) {
-        // Bot 回推是 best-effort 辅助通道；配置/凭据/订阅失败不能阻断 automation 派发与结算。
-        logger.warn(
-          `automation Bot delivery subscription failed automation=${request.automationId} provider=unknown`,
-          error,
-        );
-      }
     }
     trackedKey = cronRunSubscriptionKey(task.taskId, promptTraceId);
     trackCronRunOutcome({
@@ -1563,19 +1585,23 @@ function formatRemoteTargetForLog(target: RemoteTarget): string {
 }
 
 console.log = (...args: unknown[]) => {
-  rawConsole.log(...args);
-  reportHostLog("info", args);
+  if (process.env.OMPCODE_CENTOS7_LOCAL_ONLY !== "1") {
+    writeRawHostConsole(rawConsole.log, ...args);
+    reportHostLog("info", args);
+  }
   remoteConnectionProgressContext.report("info", args);
 };
 
 console.warn = (...args: unknown[]) => {
-  rawConsole.warn(...args);
-  reportHostLog("warn", args);
+  if (process.env.OMPCODE_CENTOS7_LOCAL_ONLY !== "1") {
+    writeRawHostConsole(rawConsole.warn, ...args);
+    reportHostLog("warn", args);
+  }
   remoteConnectionProgressContext.report("warn", args);
 };
 
 console.error = (...args: unknown[]) => {
-  rawConsole.error(...args);
+  writeRawHostConsole(rawConsole.error, ...args);
   // Electron 会把 Node warning 先走 console.error，而 process warning listener 随后还会
   // 结构化记录 warn；若这里继续上报，就会为同一个 warning 留下一条 error 和一条 warn。
   if (!shouldReportHostConsoleError(args)) {

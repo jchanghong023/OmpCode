@@ -5,7 +5,6 @@ import {
 /* eslint-disable max-lines -- task 索引仓库集中维护 sqlite schema、查询和状态写入，迁移稳定后再按读写职责拆分。 */
 import { mkdir } from "node:fs/promises";
 import { createHash, randomUUID } from "node:crypto";
-import { createRequire } from "node:module";
 import { dirname } from "node:path";
 import {
   isRemoteWorkspaceIdentity,
@@ -39,8 +38,7 @@ import { createServiceLogger } from "#src/logger/serviceLogger.js";
 import { getTasksIndexDatabasePath } from "#src/paths.js";
 import { runTasksDatabaseMigrations } from "#src/session/tasksDatabase/migrations.js";
 
-const require = createRequire(import.meta.url);
-const { DatabaseSync } = require("node:sqlite") as typeof import("node:sqlite");
+import { createDatabaseSync, type SqliteDatabase } from "#src/session/tasksDatabase/sqlite.js";
 
 function appendZCodeAgentIndexedProviderFilter(
   where: string[],
@@ -51,7 +49,7 @@ function appendZCodeAgentIndexedProviderFilter(
   where.push("provider = ?");
   args.push(provider);
 }
-type DatabaseSyncInstance = InstanceType<typeof DatabaseSync>;
+type DatabaseSyncInstance = SqliteDatabase;
 
 interface TaskIndexRow {
   workspace_key: string;
@@ -521,7 +519,7 @@ export class TaskIndexRepo {
   private async initialize(path: string): Promise<void> {
     await mkdir(dirname(path), { recursive: true });
     if (!this.db) {
-      this.db = new DatabaseSync(path);
+      this.db = createDatabaseSync(path);
       this.dbPath = path;
       // 多窗口 Host 共用 tasks-index；写事务和首次 schema 升级应短暂等待，而不是立即 SQLITE_BUSY。
       this.db.exec(`PRAGMA busy_timeout = ${this.startupBusyTimeoutMs}`);

@@ -21,9 +21,9 @@ import {
   PencilRuler,
   Globe,
   Maximize,
+  Monitor,
   Palette,
   Settings,
-  SlidersHorizontal,
   ZoomIn,
   ZoomOut,
 } from "lucide-react";
@@ -33,9 +33,7 @@ import { useShortcutCommandLabel } from "@/shortcuts/useShortcutBindings.js";
 import { useZCodeStore } from "@/store/StoreProvider.js";
 import { normalizeInterfaceMode } from "@/lib/interfaceMode.js";
 import type { Theme } from "@/useTheme.js";
-import { WorkspaceWebRemoteControlTrigger } from "@/WorkspaceWebRemoteControlTrigger.js";
 import { WorkspaceMobileRelayTrigger } from "@/WorkspaceMobileRelayTrigger.js";
-import { WorkspaceSidebarFooterUsageSummaryContent } from "@/WorkspaceSidebarFooterUsageSummary.js";
 
 const DESKTOP_ZOOM_MIN_LEVEL = -3;
 const DESKTOP_ZOOM_MAX_LEVEL = 5;
@@ -47,8 +45,6 @@ export const WorkspaceSidebarFooter = memo(function WorkspaceSidebarFooterCompon
   onThemeChange,
   onSettingsButtonClick,
   settingsButtonMode = "settings",
-  workspacePath,
-  workspaceIdentity,
   isDesktop = false,
   className,
 }: {
@@ -57,10 +53,6 @@ export const WorkspaceSidebarFooter = memo(function WorkspaceSidebarFooterCompon
   onLocaleChange: (value: string) => void;
   onThemeChange: (value: string) => void;
   onSettingsButtonClick?: () => void;
-  onUsageClick?: () => void;
-  onUpgradeClick?: Parameters<
-    typeof WorkspaceSidebarFooterUsageSummaryContent
-  >[0]["onUpgradeClick"];
   onLogin?: () => void;
   onLogout?: () => void;
   settingsButtonMode?: "settings" | "back";
@@ -145,9 +137,9 @@ export const WorkspaceSidebarFooter = memo(function WorkspaceSidebarFooterCompon
             >
               {/* Button 默认 shrink-0 且带 whitespace-nowrap，超长用户名会把 footer 撑出 sidebar。
                 这里让触发按钮和文本列都允许收缩，并只在用户名自身做单行截断。 */}
-              {/* 左侧是偏好菜单入口（语言/主题/界面模式/缩放），用滑杆图标；
+              {/* 左侧是偏好菜单入口（语言/主题/界面模式/缩放），用显示器图标；
                   齿轮 Settings 留给右侧打开设置页的按钮，避免两个齿轮并排造成重复。 */}
-              <SlidersHorizontal className="size-4" />
+              <Monitor className="size-4" />
               <span className="truncate text-ui-base font-medium text-foreground">
                 {preferencesTriggerLabel}
               </span>
@@ -265,13 +257,6 @@ export const WorkspaceSidebarFooter = memo(function WorkspaceSidebarFooterCompon
           </DropdownMenuContent>
         </DropdownMenu>
         <div className="flex shrink-0 items-center gap-1.5">
-          {isDesktop && workspacePath ? (
-            <WorkspaceWebRemoteControlTrigger
-              workspacePath={workspacePath}
-              workspaceIdentity={workspaceIdentity}
-              compact
-            />
-          ) : null}
           {/* 手机远控 relay 由桌面 main 进程提供，与工作区无关，只要求桌面形态即可显示入口。 */}
           {isDesktop ? <WorkspaceMobileRelayTrigger compact /> : null}
           <ControlHintTooltip title={settingsButtonLabel}>

@@ -53,7 +53,7 @@ export function OmpSkillsCatalogView({
 }: OmpSkillsCatalogViewProps) {
   const visibleSkills = filterCatalogSkills(skills, searchQuery);
   return (
-    <section className="space-y-4" data-testid="omp-skills-settings">
+    <section className="space-y-4" data-testid="omp-available-skills">
       <SettingsResourceGroupHeader
         title={labels.title}
         count={visibleSkills.length}
@@ -84,7 +84,7 @@ export function OmpSkillsCatalogView({
           items={visibleSkills}
           getKey={(skill) => skill.id}
           renderItem={(skill) => (
-            <div className="px-4 py-3" data-testid="omp-skill-row">
+            <div data-omp-skill-name={skill.name} className="px-4 py-3">
               <div className="text-ui-base font-medium text-foreground">{skill.name}</div>
               {skill.description ? (
                 <div className="mt-0.5 text-ui-sm text-foreground-subtle">{skill.description}</div>
@@ -98,7 +98,7 @@ export function OmpSkillsCatalogView({
 }
 
 interface SkillsSectionProps {
-  workspacePath?: string | null;
+  workspacePath: string;
   workspaceIdentity?: string;
   remoteSessionId?: string;
   remoteTarget?: RemoteTarget;
@@ -136,6 +136,7 @@ export function SkillsSection({
     () => filterCatalogSkills(catalog.skills, searchQuery).length,
     [catalog.skills, searchQuery],
   );
+
   useEffect(() => {
     onVisibleCountChange?.(visibleCount);
   }, [onVisibleCountChange, visibleCount]);

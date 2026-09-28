@@ -24,9 +24,11 @@ export function useDynamicWorkflowAvailability(): DynamicWorkflowAvailabilitySna
  */
 export function useDynamicWorkflowAvailabilityLoader(
   service: ICodingPlanSubscriptionService,
+  enabled = true,
 ): void {
   const ensureLoaded = useDynamicWorkflowAvailabilityStore((state) => state.ensureLoaded);
   useEffect(() => {
+    if (!enabled) return;
     void ensureLoaded(service);
-  }, [ensureLoaded, service]);
+  }, [enabled, ensureLoaded, service]);
 }

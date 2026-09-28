@@ -1,6 +1,7 @@
 /* eslint-disable max-lines -- Root 当前集中编排启动和 workspace shell wiring，先保持入口收口避免跨层状态拆散。 */
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { LucideProvider, RefreshCw } from "lucide-react";
+import { MotionConfig } from "motion/react";
 import {
   APP_RUNTIME_PREFERENCES_CHANGED_BROADCAST_CHANNEL,
   DesktopCommandIds,
@@ -48,6 +49,7 @@ import { useRootProviderStateRefresh } from "@/root/useRootProviderStateRefresh.
 import { useModelSelectionServiceView } from "@/hooks/useModelSelectionView.js";
 import { useRootProviderSettingsSnapshot } from "@/root/useRootProviderSettingsSnapshot.js";
 import { useRootOAuthEffects } from "@/root/useRootOAuthEffects.js";
+import { isCentos7DesktopBuild } from "@/lib/centos7Desktop.js";
 import { consumeZcodeJwtInvalidRestartMarker } from "@/root/zcodeJwtInvalidRestartMarker.js";
 import { useDesktopNativeThemeSync } from "@/root/useDesktopNativeThemeSync.js";
 import { useRootPlatformEffects } from "@/root/useRootPlatformEffects.js";
@@ -110,41 +112,53 @@ type WelcomeScreenOpenReason =
  * 外层挂载 StoreProvider（连接广播服务）+ TabStoreProvider，内层处理认证和路由。
  */
 export function Root(props: RootProps) {
+  useEffect(() => {
+    if (!isCentos7DesktopBuild) return;
+    document.documentElement.dataset.ompcodeReducedMotion = "true";
+    return () => {
+      delete document.documentElement.dataset.ompcodeReducedMotion;
+    };
+  }, []);
   return (
-    <LucideProvider strokeWidth={DEFAULT_LUCIDE_STROKE_WIDTH}>
-      {/*
-       * 之前通过 lucide.tsx 包装每个图标，把默认 strokeWidth 固定成 1.5。
-       * 现在移除包装文件后，如果不在根层统一注入，按钮、列表和工具栏里的 Lucide 图标会回退到 2，
-       * 导致同一套 size class 下视觉显得更粗、更挤。这里改用官方 LucideProvider 保持默认值，
-       * 同时保留个别图标显式传入 strokeWidth 时的覆盖能力。
-       */}
-      <TooltipProvider>
+    <MotionConfig
+      reducedMotion={isCentos7DesktopBuild ? "always" : "never"}
+      transition={isCentos7DesktopBuild ? { duration: 0 } : undefined}
+    >
+      <LucideProvider strokeWidth={DEFAULT_LUCIDE_STROKE_WIDTH}>
         {/*
-         * 大会话消息动作里会出现大量 tooltip。Provider 如果跟随每个 tooltip 实例创建，
-         * React 点击切换任务时会同步构造数量级相同的 Radix 上下文树；根层共享一次即可保留零延迟配置。
+         * 之前通过 lucide.tsx 包装每个图标，把默认 strokeWidth 固定成 1.5。
+         * 现在移除包装文件后，如果不在根层统一注入，按钮、列表和工具栏里的 Lucide 图标会回退到 2，
+         * 导致同一套 size class 下视觉显得更粗、更挤。这里改用官方 LucideProvider 保持默认值，
+         * 同时保留个别图标显式传入 strokeWidth 时的覆盖能力。
          */}
-        <ServiceProvider services={props.services}>
-          <PlatformProvider platform={props.platform}>
-            <StoreProvider
-              broadcastService={props.services.broadcastService}
-              initialIsRestoringOAuthSession
-            >
-              <TabStoreProvider>
-                <DiffsWorkerPoolProvider>
-                  <AssistantCodeCommentFeatureProvider
-                    enabled={props.assistantCodeCommentCardsEnabled}
-                  >
-                    <CodingPlanUpgradeDialogProvider>
-                      <RootInner {...props} />
-                    </CodingPlanUpgradeDialogProvider>
-                  </AssistantCodeCommentFeatureProvider>
-                </DiffsWorkerPoolProvider>
-              </TabStoreProvider>
-            </StoreProvider>
-          </PlatformProvider>
-        </ServiceProvider>
-      </TooltipProvider>
-    </LucideProvider>
+        <TooltipProvider>
+          {/*
+           * 大会话消息动作里会出现大量 tooltip。Provider 如果跟随每个 tooltip 实例创建，
+           * React 点击切换任务时会同步构造数量级相同的 Radix 上下文树；根层共享一次即可保留零延迟配置。
+           */}
+          <ServiceProvider services={props.services}>
+            <PlatformProvider platform={props.platform}>
+              <StoreProvider
+                broadcastService={props.services.broadcastService}
+                initialIsRestoringOAuthSession
+              >
+                <TabStoreProvider>
+                  <DiffsWorkerPoolProvider>
+                    <AssistantCodeCommentFeatureProvider
+                      enabled={props.assistantCodeCommentCardsEnabled}
+                    >
+                      <CodingPlanUpgradeDialogProvider>
+                        <RootInner {...props} />
+                      </CodingPlanUpgradeDialogProvider>
+                    </AssistantCodeCommentFeatureProvider>
+                  </DiffsWorkerPoolProvider>
+                </TabStoreProvider>
+              </StoreProvider>
+            </PlatformProvider>
+          </ServiceProvider>
+        </TooltipProvider>
+      </LucideProvider>
+    </MotionConfig>
   );
 }
 
@@ -170,10 +184,10 @@ function RootInner({
   useEffect(() => {
     setMcpStorePlatform(platform);
     // 对话 UI perf 只属于 desktop-continuous；Web/mobile 即使能看到权威状态也不装 reporter。
-    setUiPerfArmsReporter(isDesktop ? platform : null);
-    setSessionOpenArmsReporter(isDesktop ? platform : null);
+    setUiPerfArmsReporter(isDesktop && !isCentos7DesktopBuild ? platform : null);
+    setSessionOpenArmsReporter(isDesktop && !isCentos7DesktopBuild ? platform : null);
     // 发送漏斗同理：只在 Electron 桌面端上报，Web/mobile 的 reportArmsCustomEvent 是空实现。
-    setSendFunnelArmsReporter(isDesktop ? platform : null);
+    setSendFunnelArmsReporter(isDesktop && !isCentos7DesktopBuild ? platform : null);
     return () => {
       setMcpStorePlatform(null);
       setUiPerfArmsReporter(null);
@@ -192,7 +206,10 @@ function RootInner({
   // 动态工作流灰度快照的唯一取数点：
   // 放在 app 级 ServiceProvider 这一层取一次，自动化页与 run 面板只读。消费方可能位于
   // 工作区级 ServiceProvider 内（远程 Host 的 accessor），由它们取数会拿到另一台 Host 的答案。
-  useDynamicWorkflowAvailabilityLoader(services.codingPlanSubscriptionService);
+  useDynamicWorkflowAvailabilityLoader(
+    services.codingPlanSubscriptionService,
+    !isCentos7DesktopBuild,
+  );
 
   const { intl, locale } = useZCodeIntl();
   const theme = useZCodeStore((state) => state.theme);
@@ -275,9 +292,6 @@ function RootInner({
         void services.zcodeAgentService.syncAppRuntimePreferences(parsed.data).catch((error) => {
           logger.warn("[settings] 同步跨窗口运行时偏好失败", error);
         });
-        void services.botsService.syncAppRuntimePreferences(parsed.data).catch((error) => {
-          logger.warn("[settings] 同步跨窗口 Bot 运行时偏好失败", error);
-        });
         return;
       }
 
@@ -309,12 +323,7 @@ function RootInner({
     return () => {
       disposable.dispose();
     };
-  }, [
-    refreshAppSettings,
-    services.botsService,
-    services.broadcastService,
-    services.zcodeAgentService,
-  ]);
+  }, [refreshAppSettings, services.broadcastService, services.zcodeAgentService]);
 
   useEffect(() => {
     if (!appSettings) {
@@ -329,19 +338,9 @@ function RootInner({
       .catch((error) => {
         logger.warn("[settings] 初始化运行时偏好失败", error);
       });
-    void services.botsService
-      .syncAppRuntimePreferences({
-        askUserQuestionAutoResolutionEnabled:
-          appSettings.askUserQuestionAutoResolutionEnabled !== false,
-        modelIoFullRetentionEnabled: appSettings.modelIoFullRetentionEnabled === true,
-      })
-      .catch((error) => {
-        logger.warn("[settings] 初始化 Bot 运行时偏好失败", error);
-      });
   }, [
     appSettings?.askUserQuestionAutoResolutionEnabled,
     appSettings?.modelIoFullRetentionEnabled,
-    services.botsService,
     services.zcodeAgentService,
   ]);
 
@@ -395,6 +394,10 @@ function RootInner({
   const refreshProviderState = useRootProviderStateRefresh(services);
   useRootProviderSettingsSnapshot(services);
   useEffect(() => {
+    if (isCentos7DesktopBuild) {
+      setProviderFamilyDomainMigrationComplete(true);
+      return;
+    }
     let disposed = false;
 
     void (async () => {
@@ -481,7 +484,7 @@ function RootInner({
     registerBaseWorkspaceServices(services);
   }, [services]);
 
-  useBotBroadcastEffects(services, tabStoreApi);
+  useBotBroadcastEffects(services, tabStoreApi, !isCentos7DesktopBuild);
 
   const handleOpenRemoteConnection = useCallback((preference?: RemoteConnectionOpenPreference) => {
     setRemoteConnectionOpenPreference(preference ?? null);
@@ -702,6 +705,7 @@ function RootInner({
   }, [platform]);
 
   useRootOAuthEffects({
+    enabled: !isCentos7DesktopBuild,
     accountIntentKey: JSON.stringify([
       user?.id,
       appSettings?.providerFamilyDomain,

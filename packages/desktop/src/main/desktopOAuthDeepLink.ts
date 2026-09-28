@@ -293,6 +293,7 @@ export function handleDeepLink(
   }
 
   if (isPaymentCallbackUrl(parsedUrl)) {
+    if (process.env.OMPCODE_CENTOS7_LOCAL_ONLY === "1") return false;
     const targetWindow = options.resolveApplicationWindow
       ? options.resolveApplicationWindow()
       : (BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0] ?? null);
@@ -316,6 +317,7 @@ export function handleDeepLink(
   }
 
   if (isShareImportUrl(parsedUrl)) {
+    if (process.env.OMPCODE_CENTOS7_LOCAL_ONLY === "1") return false;
     const shareCode = extractShareImportCode(parsedUrl);
     if (!shareCode) {
       logger.warn("[deep-link] share import code 无效，已忽略", {
@@ -355,6 +357,7 @@ export function handleDeepLink(
   if (!isOAuthCallbackUrl(parsedUrl)) {
     return false;
   }
+  if (process.env.OMPCODE_CENTOS7_LOCAL_ONLY === "1") return false;
 
   const state = parsedUrl.searchParams.get("state");
   if (!state) {

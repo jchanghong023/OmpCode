@@ -306,3 +306,4 @@ export * from "./clientConfig.js";
 export * from "./pluginStoreOrdering.js";
 export * from "./session-debug.js";
 export { redactFeedbackText } from "./feedbackPrivacy.js";
+export { isPrivateNetworkUrl, isPrivateNetworkEndpoint, isLoopbackUrl } from "./privateNetwork.js";

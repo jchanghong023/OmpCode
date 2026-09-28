@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { rootCertificates } from "node:tls";
 import { Agent, ProxyAgent, fetch as undiciFetch, type Dispatcher } from "undici";
+import { isLoopbackUrl } from "@zcode/shared";
 
 export interface HostApiNetworkOptions {
   httpProxy?: string;
@@ -131,6 +132,10 @@ export function createHostApiNetworkTransport(
       throw new Error("Host API network transport has been disposed");
     }
     const requestUrl = input instanceof Request ? input.url : String(input);
+    // 修复原因：Host API 直接用 undici.fetch，会绕过 Host 入口的 globalThis.fetch 限制。
+    if (process.env.OMPCODE_CENTOS7_LOCAL_ONLY === "1" && !isLoopbackUrl(requestUrl)) {
+      throw new Error("CentOS 7 desktop public network access is disabled");
+    }
     const route = resolveHostProxyForUrl(requestUrl, options);
     if (route.kind === "invalid") {
       throw new Error(route.reason);

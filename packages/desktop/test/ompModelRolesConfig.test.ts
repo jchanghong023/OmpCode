@@ -69,14 +69,41 @@ test("modelRoles 保存保留注释、其他角色和字段，重复保存不备
   }
 });
 
-test("无配置或无效 YAML 时不写入", async () => {
+test("首次配置从空角色创建当前 profile 的 config.yml，重复保存不产生备份", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "omp-role-config-"));
+  const configPath = join(dir, "profiles", "work", "agent", "config.yml");
+  try {
+    assert.deepEqual(await readOmpModelRolesConfig(configPath), { success: true, roles: [] });
+    assert.deepEqual(
+      await writeOmpModelRolesConfig(configPath, [
+        { role: "default", value: "provider/model:free" },
+      ]),
+      { success: true },
+    );
+    assert.deepEqual(await readOmpModelRolesConfig(configPath), {
+      success: true,
+      roles: [{ role: "default", value: "provider/model:free" }],
+    });
+    assert.match(
+      await readFile(configPath, "utf8"),
+      /^modelRoles:\n  default: provider\/model:free\n$/u,
+    );
+    assert.deepEqual(
+      await writeOmpModelRolesConfig(configPath, [
+        { role: "default", value: "provider/model:free" },
+      ]),
+      { success: true },
+    );
+    assert.equal((await readdir(join(dir, "profiles", "work", "agent"))).length, 1);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("无效 YAML 时不写入", async () => {
   const dir = await mkdtemp(join(tmpdir(), "omp-role-config-"));
   const configPath = join(dir, "config.yml");
   try {
-    assert.deepEqual(await readOmpModelRolesConfig(configPath), {
-      success: false,
-      error: "omp_config_missing",
-    });
     await writeFile(configPath, "modelRoles: [\n");
     assert.deepEqual(
       await writeOmpModelRolesConfig(configPath, [{ role: "default", value: "provider/model" }]),

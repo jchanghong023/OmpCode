@@ -8,7 +8,7 @@
 import { randomUUID } from "node:crypto";
 import { readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { shell } from "electron";
+import { openDesktopExternalUrl } from "./openDesktopExternalUrl.js";
 import type { CuaHelperInstallerOptions } from "@zcode/services/node";
 import {
   resolveHelperPermissionSubjectIdentity,
@@ -434,7 +434,7 @@ class CuaPermissionOnboardingCoordinator {
         if (controller.signal.aborted) throw controller.signal.reason;
 
         const openSettingsUrl =
-          options.openSettingsUrl ?? ((url: string) => shell.openExternal(url));
+          options.openSettingsUrl ?? ((url: string) => openDesktopExternalUrl(url));
         const openSettings = async () => {
           await openSettingsUrl(settingsUrlForPermission(permission));
           if (!session.openedPermissions.includes(permission)) {

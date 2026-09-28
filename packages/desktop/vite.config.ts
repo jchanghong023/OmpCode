@@ -188,6 +188,7 @@ export default defineConfig(({ mode }) => {
     },
     server: { port: 5194, strictPort: true },
     define: {
+      __OMPCODE_CENTOS7_DESKTOP__: "true",
       __ZCODE_ENDPOINT_ENV__: JSON.stringify(pickProductEndpointEnv(env)),
       __ZCODE_VERSION__: JSON.stringify(buildMetadata.appVersion),
       __ZCODE_COMMIT__: JSON.stringify(buildMetadata.buildCommitId),

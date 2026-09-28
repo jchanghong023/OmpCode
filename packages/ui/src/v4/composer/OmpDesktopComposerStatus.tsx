@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { GitBranchIcon, ListFilterIcon, ListTodoIcon, RotateCcwIcon } from "lucide-react";
+import { GitBranchIcon, ListTodoIcon } from "lucide-react";
 import type { GitRepositorySummary } from "@zcode/shared";
 import { Button } from "@/components/ui/button.js";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
@@ -8,13 +8,9 @@ interface OmpDesktopComposerStatusProps {
   scopeKey: string;
   gitSummary?: GitRepositorySummary | null;
   gitDirtyFileCount?: number;
-  sessionId: string | null;
-  autoCompactionEnabled?: boolean;
   planModelActive: boolean;
   planModelAvailable: boolean;
   onTogglePlanModel: () => Promise<{ success: boolean; error?: string }>;
-  onCompact?: () => void;
-  onSetAutoCompaction?: (enabled: boolean) => Promise<{ success: boolean; error?: string }>;
   onOpenGitReview?: () => void;
 }
 
@@ -23,44 +19,31 @@ export function OmpDesktopComposerStatus({
   scopeKey,
   gitSummary,
   gitDirtyFileCount,
-  sessionId,
-  autoCompactionEnabled,
   planModelActive,
   planModelAvailable,
   onTogglePlanModel,
-  onCompact,
-  onSetAutoCompaction,
   onOpenGitReview,
 }: OmpDesktopComposerStatusProps) {
   const { intl } = useZCodeIntl();
-  const [busyAction, setBusyAction] = useState<"plan" | "auto" | null>(null);
+  const [busyAction, setBusyAction] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const scopeRef = useRef(scopeKey);
   scopeRef.current = scopeKey;
   useEffect(() => {
-    setBusyAction(null);
+    setBusyAction(false);
     setError(null);
   }, [scopeKey]);
   const branch = gitSummary?.isRepository ? gitSummary.branchName : null;
   const planLabel = intl.formatMessage({
     id: planModelActive ? "chat.ompStatus.exitPlanModel" : "chat.ompStatus.usePlanModel",
   });
-  const compactLabel = intl.formatMessage({ id: "chat.ompStatus.compact" });
-  const autoLabel = intl.formatMessage({ id: "chat.ompStatus.autoCompact" });
-  const autoStateLabel =
-    autoCompactionEnabled === undefined
-      ? "…"
-      : intl.formatMessage({
-          id: autoCompactionEnabled ? "chat.ompStatus.enabled" : "chat.ompStatus.disabled",
-        });
-
   const runPlanToggle = async () => {
     const requestScope = scopeKey;
-    setBusyAction("plan");
+    setBusyAction(true);
     setError(null);
     const result = await onTogglePlanModel();
     if (scopeRef.current !== requestScope) return;
-    setBusyAction(null);
+    setBusyAction(false);
     if (
       !result.success &&
       result.error !== "session_changed" &&
@@ -73,17 +56,6 @@ export function OmpDesktopComposerStatus({
       );
     }
   };
-  const runAutoToggle = async () => {
-    if (autoCompactionEnabled === undefined || !onSetAutoCompaction) return;
-    const requestScope = scopeKey;
-    setBusyAction("auto");
-    setError(null);
-    const result = await onSetAutoCompaction(!autoCompactionEnabled);
-    if (scopeRef.current !== requestScope) return;
-    setBusyAction(null);
-    if (!result.success) setError(intl.formatMessage({ id: "chat.ompStatus.autoFailed" }));
-  };
-
   return (
     <div
       className="hidden shrink-0 items-center gap-0.5 text-ui-sm text-foreground-subtle md:flex"
@@ -96,7 +68,7 @@ export function OmpDesktopComposerStatus({
         className="h-7 gap-1 px-1.5 text-ui-sm"
         aria-label={planLabel}
         aria-pressed={planModelActive}
-        disabled={!planModelAvailable || busyAction !== null}
+        disabled={!planModelAvailable || busyAction}
         onClick={() => void runPlanToggle()}
         title={planLabel}
       >
@@ -124,39 +96,6 @@ export function OmpDesktopComposerStatus({
           <span className="max-w-14 truncate @min-[900px]/composer:max-w-24">{branch}</span>
           {gitDirtyFileCount ? <span className="tabular-nums">{gitDirtyFileCount}</span> : null}
         </Button>
-      ) : null}
-      {sessionId ? (
-        <>
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            className="size-7 p-0"
-            disabled={!onCompact}
-            onClick={onCompact}
-            aria-label={compactLabel}
-            title={compactLabel}
-          >
-            <RotateCcwIcon className="size-4" />
-          </Button>
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            className={
-              autoCompactionEnabled ? "size-7 p-0 text-success hover:text-success" : "size-7 p-0"
-            }
-            aria-pressed={autoCompactionEnabled === true}
-            aria-label={`${autoLabel}: ${autoStateLabel}`}
-            disabled={
-              autoCompactionEnabled === undefined || !onSetAutoCompaction || busyAction !== null
-            }
-            onClick={() => void runAutoToggle()}
-            title={`${autoLabel}: ${autoStateLabel}`}
-          >
-            <ListFilterIcon className="size-4" />
-          </Button>
-        </>
       ) : null}
       {error ? (
         <span role="alert" className="px-1.5 text-warning" title={error}>

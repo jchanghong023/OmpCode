@@ -21,6 +21,13 @@ export {
   ZCODE_BUILTIN_PROVIDER_CONFIG_FILE_ENV,
 } from "@zcode/provider-node";
 
+export { backupDatabase, createDatabaseSync } from "./session/tasksDatabase/sqlite.js";
+export type {
+  SqliteDatabase,
+  SqliteDatabaseOptions,
+  SqliteRunResult,
+  SqliteStatement,
+} from "./session/tasksDatabase/sqlite.js";
 export { createFileService } from "./file/fileService.js";
 export {
   attributeHostProcessTree,
@@ -2073,7 +2080,8 @@ export function createLocalServices(options: {
   let offPeakTaskServiceForAgent: OffPeakTaskService | undefined;
   // desktop-attached-remote 装配不暴露 Off-Peak 工具面（远程不在支持范围）。
   const offPeakToolWiring =
-    options?.serviceAuthorityMode === "desktop-attached-remote"
+    options?.serviceAuthorityMode === "desktop-attached-remote" ||
+    process.env.OMPCODE_CENTOS7_LOCAL_ONLY === "1"
       ? {}
       : {
           resolveOffPeakClientConfig: () => codingPlanSubscriptionService.getOffPeakClientConfig(),
@@ -2090,8 +2098,12 @@ export function createLocalServices(options: {
     // 动态工作流灰度：与 Off-Peak 不同，
     // 这里不按 serviceAuthorityMode 裁剪——SSH/WSL/Docker 的 desktop-attached-remote Host
     // 是它自己那些 workspace 的唯一裁决者，灰度开启时远程 workspace 同样提供工作流。
-    resolveDynamicWorkflowClientConfig: () =>
-      codingPlanSubscriptionService.getDynamicWorkflowClientConfig(),
+    ...(process.env.OMPCODE_CENTOS7_LOCAL_ONLY === "1"
+      ? {}
+      : {
+          resolveDynamicWorkflowClientConfig: () =>
+            codingPlanSubscriptionService.getDynamicWorkflowClientConfig(),
+        }),
     commandResolver: options?.zcodeAgentCommandResolver,
     presentationSurface: resolveZCodeAgentPresentationSurface({
       runtimeSurface: options?.agentRuntimeContext?.runtimeSurface,
@@ -2401,30 +2413,26 @@ export function createLocalServices(options: {
     authorizeLocalMediaPreviewPath: options?.authorizeLocalMediaPreviewPath,
     createLocalMediaPreviewUrl: buildLocalMediaPreviewUrl,
   });
-  const conversationShareClient = new ConversationShareHttpClient({
-    // 分享运行时始终走真实 API；测试/Mock 场景应在 service 单测或 Web fixture 中显式注入，
-    // 不能让开发环境默认生成仅存在于进程内存的 mock-share 链接。
-    apiClient,
-    baseUrl: buildRuntimeZCodeApiUrl(process.env, "/api/v1"),
-    tokenProvider: async (): Promise<string | null> => {
-      const activeProvider = await oauthCredentialRepo.getActiveProvider();
-      if (!activeProvider) {
-        return null;
-      }
-      const tokenSet = await oauthCredentialRepo.loadTokenSet(activeProvider);
-      return tokenSet?.zcodeJwtToken ?? tokenSet?.accessToken ?? null;
-    },
-  });
-  const conversationShareService: IConversationShareServiceType = isDesktopAttachedRemote
-    ? createUnsupportedConversationShareService({
-        message: "Conversation publishing is not available for remote workspaces",
-      })
-    : new ConversationShareService({
-        zcodeAgentService,
-        zcodeSessionService,
-        client: conversationShareClient,
-        artifactSource: createLocalConversationShareArtifactSource(),
-      });
+  const conversationShareService: IConversationShareServiceType =
+    isDesktopAttachedRemote || process.env.OMPCODE_CENTOS7_LOCAL_ONLY === "1"
+      ? createUnsupportedConversationShareService({
+          message: "Conversation publishing is unavailable in this desktop distribution",
+        })
+      : new ConversationShareService({
+          zcodeAgentService,
+          zcodeSessionService,
+          client: new ConversationShareHttpClient({
+            apiClient,
+            baseUrl: buildRuntimeZCodeApiUrl(process.env, "/api/v1"),
+            tokenProvider: async (): Promise<string | null> => {
+              const activeProvider = await oauthCredentialRepo.getActiveProvider();
+              if (!activeProvider) return null;
+              const tokenSet = await oauthCredentialRepo.loadTokenSet(activeProvider);
+              return tokenSet?.zcodeJwtToken ?? tokenSet?.accessToken ?? null;
+            },
+          }),
+          artifactSource: createLocalConversationShareArtifactSource(),
+        });
   // 注册链上的懒工厂（如 OffPeak）会各自创建 tasks-index sqlite repo；先收集到本数组，
   // services 集合建好后在 return 前统一登记进 sharedSqliteRepos 侧表
   const sqliteReposToClose: Array<{ close(): void }> = [];
@@ -2456,7 +2464,9 @@ export function createLocalServices(options: {
         remoteWorkspaceService: botRemoteWorkspaceService,
         // 远端与本地 Bot 都读取所属 Environment 的 Model Selection View。
         // 远端启动期不再轮询旧 Preset，避免重新制造一套模型候选事实。
-        runStartupBackgroundTasks: !isDesktopAttachedRemote,
+        // 修复原因：CentOS 7 专有包不启用联网机器人轮询/WebSocket；OMP 的 API 独立运行。
+        runStartupBackgroundTasks:
+          !isDesktopAttachedRemote && process.env.OMPCODE_CENTOS7_LOCAL_ONLY !== "1",
       }),
     )
     .register(IFileWatcherService, createFileWatcherService())

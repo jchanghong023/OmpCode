@@ -3,6 +3,8 @@ export interface OmpNativeIntegrationSnapshot {
   profileDir: string;
   projectDir?: string;
   extensions: { name: string; scope: "profile" | "project" }[];
+  hooks: { name: string; scope: "profile" | "project"; phase: "pre" | "post" }[];
+  hookErrors: ("profile" | "project")[];
   mcpServers: {
     name: string;
     scope: "profile" | "project";

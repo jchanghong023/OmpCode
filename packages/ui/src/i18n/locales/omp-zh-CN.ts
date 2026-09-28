@@ -3,6 +3,12 @@ const ompZhCNOverrides: Record<string, string> = {
   "chat.error.ompAttachmentRejected": "附件无法发送给 omp：{reason}",
   "chat.subagents.unavailable": "omp 子代理状态暂不可用，当前会话的子代理记录可能不完整。",
   "settings.ompNative.extensions": "OMP 扩展",
+  "settings.ompNative.hooks": "OMP 钩子",
+  "settings.ompNative.hooksDescription":
+    "显示当前 Profile 和本地项目 hooks/pre、hooks/post 中的 JS/TS 钩子文件。",
+  "settings.ompNative.hooksRuntimeUnavailable":
+    "这里只列出可发现的文件；是否已加载由 omp 决定。修改后请刷新页面和会话。",
+  "settings.ompNative.hooksReadFailed": "钩子目录无法读取，请检查目录权限。",
   "settings.ompNative.mcp": "OMP MCP 服务器",
   "settings.ompNative.description":
     "显示当前 omp profile 和本地项目中的原生配置。修改配置后刷新此页。",
@@ -27,13 +33,14 @@ const ompZhCNOverrides: Record<string, string> = {
   "settings.ompModelRoles.configInvalid": "omp 模型配置格式无效，请检查 config.yml 中的 modelRoles",
   "settings.ompModelRoles.catalogEmpty": "omp 尚未提供可选模型",
   "settings.ompModelRoles.title": "模型设置",
-  "settings.ompModelRoles.description": "配置 omp 各角色的模型。保存前自动备份配置文件。",
+  "settings.ompModelRoles.description": "配置 omp 各角色的模型。已有配置保存前自动备份。",
   "settings.ompModelRoles.unset": "未配置",
   "settings.ompModelRoles.thinkingLevel": "思考等级",
   "settings.ompModelRoles.levelDefault": "默认档位",
   "settings.ompModelRoles.platformUnsupported": "当前环境不支持打开 omp 模型配置",
   "settings.ompModelRoles.loadFailed": "omp 模型配置加载失败",
   "settings.ompModelRoles.saved": "已保存（原配置已自动备份）",
+  "settings.ompModelRoles.created": "已保存",
   "settings.ompModelRoles.saving": "保存中…",
   "settings.ompModelRoles.save": "保存",
   "settings.ompProfile.label": "OMP Profile",

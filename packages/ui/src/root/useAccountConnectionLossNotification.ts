@@ -14,6 +14,7 @@ export function useAccountConnectionLossNotification(
   services: IServiceAccessor,
   intentKey: string,
   refreshAppSettings?: () => Promise<void>,
+  enabled = true,
 ) {
   const { intl } = useZCodeIntl();
   const latest = useRef({ intl, refreshAppSettings });
@@ -23,12 +24,14 @@ export function useAccountConnectionLossNotification(
   );
   const noticeRef = useRef<{ id: number; event: AccountConnectionLoss } | null>(null);
   useEffect(() => {
+    if (!enabled) return;
     // 设置/登录意图先于 Account 查询回包变化；即使切走又切回，旧按钮也不能重新有效。
     observerRef.current?.invalidate();
     if (noticeRef.current) dismissToast(noticeRef.current.id);
     noticeRef.current = null;
-  }, [intentKey]);
+  }, [enabled, intentKey]);
   useEffect(() => {
+    if (!enabled) return;
     const observer = createAccountConnectionRefreshObserver(async (event) => {
       let suggestion: Awaited<ReturnType<typeof prepareAccountConnectionSwitch>> = null;
       try {
@@ -130,5 +133,5 @@ export function useAccountConnectionLossNotification(
       if (noticeRef.current) dismissToast(noticeRef.current.id);
       noticeRef.current = null;
     };
-  }, [services]);
+  }, [enabled, services]);
 }

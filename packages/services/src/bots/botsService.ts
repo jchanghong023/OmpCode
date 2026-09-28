@@ -679,6 +679,37 @@ const BOT_ELICITATION_FORM_VALUE_PREFIX = "__form__:";
 export function createBotsService(
   deps: BotsServiceDeps,
 ): IBotsService & { disposeAll(): void; disposeAllAndWait(): Promise<void> } {
+  if (process.env.OMPCODE_CENTOS7_LOCAL_ONLY === "1") {
+    // 修复原因：禁止的不只是启动轮询；手动 RPC 也不能重新启用公网机器人。
+    const unavailable = (): Promise<never> =>
+      Promise.reject(new Error("Online bots are unavailable in this desktop distribution"));
+    return {
+      syncAppRuntimePreferences: async () => {},
+      getStatus: unavailable,
+      getConfig: unavailable,
+      listWorkspaceRefs: unavailable,
+      getUserConfigOptions: unavailable,
+      beginFeishuRegistration: unavailable,
+      pollFeishuRegistration: unavailable,
+      beginWeixinRegistration: unavailable,
+      pollWeixinRegistration: unavailable,
+      saveConfig: unavailable,
+      listBots: unavailable,
+      saveBot: unavailable,
+      removeBotSecret: unavailable,
+      deleteBot: unavailable,
+      testBot: unavailable,
+      createBindCode: unavailable,
+      getBotStates: unavailable,
+      resetBotState: unavailable,
+      watchAutomationRun: unavailable,
+      handleInboundMessage: unavailable,
+      handleProviderCallback: unavailable,
+      handleProviderCallbackResponse: unavailable,
+      disposeAll: () => {},
+      disposeAllAndWait: async () => {},
+    };
+  }
   const runStartupBackgroundTasks = deps.runStartupBackgroundTasks !== false;
   const repo = new BotsRepo();
   const bindCodes = new Map<string, BindCodeRecord>();

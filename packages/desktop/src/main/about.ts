@@ -11,6 +11,9 @@ import {
   ZCODE_VERSION,
 } from "@zcode/shared";
 import { createCustomAboutDialogHtml } from "./aboutWindow.js";
+import { resolveImportMetaDirname } from "../shared/moduleDirname.js";
+
+const moduleDir = resolveImportMetaDirname(import.meta);
 
 interface DesktopBuildMetadata {
   appVersion?: string;
@@ -114,7 +117,7 @@ function readJsonFile<T>(filePath: string): T | null {
 }
 
 function resolveBuildMetadataPath(): string {
-  return join(import.meta.dirname, "../metadata/build-meta.json");
+  return join(moduleDir, "../metadata/build-meta.json");
 }
 
 export function readBuildMetadata(
@@ -132,7 +135,7 @@ function resolveElectronBuilderVersion(buildMetadata: DesktopBuildMetadata | nul
   }
 
   const packageJson = readJsonFile<{ devDependencies?: Record<string, string> }>(
-    join(import.meta.dirname, "../../package.json"),
+    join(moduleDir, "../../package.json"),
   );
   return normalizePackageVersion(packageJson?.devDependencies?.["electron-builder"]);
 }
@@ -211,7 +214,7 @@ function formatAboutOptimizationLine(
 function resolveAboutIconPath(isPackaged: boolean): string {
   return isPackaged
     ? join(process.resourcesPath, "icon.png")
-    : join(import.meta.dirname, "../../build/icon.png");
+    : join(moduleDir, "../../build/icon.png");
 }
 
 export async function showAboutDialog(

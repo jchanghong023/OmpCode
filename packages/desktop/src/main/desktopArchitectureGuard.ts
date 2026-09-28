@@ -1,5 +1,6 @@
 import type { BrowserWindow, NativeImage } from "electron";
 import { DEFAULT_ZCODE_ENDPOINT_ORIGIN, buildZCodeEndpointUrls, type Locale } from "@zcode/shared";
+import { openDesktopExternalUrl } from "./openDesktopExternalUrl.js";
 
 interface ArchitectureMismatch {
   /** 当前运行的二进制架构，例如 x64。 */
@@ -106,7 +107,7 @@ export async function maybeWarnArchitectureMismatch(options: {
   parentWindow?: BrowserWindow | null;
   icon?: NativeImage;
 }): Promise<void> {
-  const { app, dialog, shell } = await import("electron");
+  const { app, dialog } = await import("electron");
 
   const mismatch = detectArchitectureMismatch({
     runningUnderARM64Translation: app.runningUnderARM64Translation,
@@ -139,6 +140,6 @@ export async function maybeWarnArchitectureMismatch(options: {
   if (response === 0) {
     const url = resolveArchitectureDownloadUrl(options.locale);
     options.logger.info(`[architecture] 用户选择前往下载：${url}`);
-    await shell.openExternal(url);
+    await openDesktopExternalUrl(url);
   }
 }

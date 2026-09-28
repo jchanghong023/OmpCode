@@ -3,10 +3,10 @@
 // 避免拆分后让 Windows App-Bound 原子失败语义与 Linux helper 回退顺序发生漂移。
 import { createDecipheriv, pbkdf2Sync } from "node:crypto";
 import { copyFile, mkdtemp, rm, stat } from "node:fs/promises";
-import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import type { ChromeBrowserDataImportError } from "@zcode/shared";
+import { backupDatabase, createDatabaseSync, type SqliteDatabase } from "@zcode/services/node";
 import { readChromeCookiesWithHelper } from "./chromeLocalStorageManager.js";
 import {
   toCookieDetails,
@@ -26,11 +26,6 @@ import {
   type WindowsChromeAppBoundKeyReader,
 } from "./windowsChromeAppBoundKey.js";
 
-const nodeRequire = createRequire(import.meta.url);
-// tsup/esbuild 会把动态 import("node:sqlite") 错误改写为 import("sqlite")，
-// Electron 运行时因此报 ERR_MODULE_NOT_FOUND。createRequire 能稳定保留 node: 协议。
-const { DatabaseSync, backup } = nodeRequire("node:sqlite") as typeof import("node:sqlite");
-
 const COOKIE_IMPORT_CONCURRENCY = 32;
 const DATABASE_SNAPSHOT_COPY_ATTEMPTS = 3;
 
@@ -48,7 +43,7 @@ interface CookieTargetSession {
 
 type CookieDecryptor = (encrypted: Uint8Array, hostKey: string, schemaVersion: number) => string;
 export type ChromeCookieHelper = typeof readChromeCookiesWithHelper;
-export type ChromeCookieDatabaseBackup = typeof backup;
+export type ChromeCookieDatabaseBackup = typeof backupDatabase;
 
 interface CookieDecryptorResource {
   decrypt: CookieDecryptor;
@@ -159,10 +154,11 @@ async function withDatabaseSnapshot<T>(
 ): Promise<T> {
   const tempDir = await mkdtemp(join(tmpdir(), "zcode-browser-import-"));
   const snapshotPath = join(tempDir, "database.sqlite");
-  let sourceDatabase: import("node:sqlite").DatabaseSync | null = null;
+  let sourceDatabase: SqliteDatabase | null = null;
   try {
     try {
-      sourceDatabase = new DatabaseSync(sourcePath, { readOnly: true });
+      // 修复依据：旧版 Electron 无 node:sqlite；复用服务层适配器保留在线备份语义。
+      sourceDatabase = createDatabaseSync(sourcePath, { readOnly: true });
       await databaseBackup(sourceDatabase, snapshotPath);
       sourceDatabase.close();
       sourceDatabase = null;
@@ -177,7 +173,7 @@ async function withDatabaseSnapshot<T>(
       let fallbackError: unknown = onlineBackupError;
       for (let attempt = 1; attempt <= DATABASE_SNAPSHOT_COPY_ATTEMPTS; attempt += 1) {
         const stagedPath = join(tempDir, `source-${attempt}.sqlite`);
-        let stagedDatabase: import("node:sqlite").DatabaseSync | null = null;
+        let stagedDatabase: SqliteDatabase | null = null;
         try {
           await rm(snapshotPath, { force: true });
           await copyFile(sourcePath, stagedPath);
@@ -187,7 +183,7 @@ async function withDatabaseSnapshot<T>(
           }
           // Chrome 的 SHM 仅用于并发协调且在 Windows 上可能被独占锁定。
           // 临时目录中的 SQLite 会自行重建 SHM，再通过 Online Backup 固化并校验主库与 WAL。
-          stagedDatabase = new DatabaseSync(stagedPath, { readOnly: true });
+          stagedDatabase = createDatabaseSync(stagedPath, { readOnly: true });
           await databaseBackup(stagedDatabase, snapshotPath);
           stagedDatabase.close();
           stagedDatabase = null;
@@ -215,7 +211,7 @@ async function withDatabaseSnapshot<T>(
   } finally {
     // TypeScript 会把前面显式置空后的 finally 路径收窄成 never，
     // 但 SQLite backup 在异常边界仍可能留下句柄；保留运行时兜底并显式恢复实际联合类型。
-    const danglingDatabase = sourceDatabase as import("node:sqlite").DatabaseSync | null;
+    const danglingDatabase = sourceDatabase as SqliteDatabase | null;
     danglingDatabase?.close();
     await rm(tempDir, { recursive: true, force: true });
   }
@@ -225,7 +221,7 @@ async function readChromeCookies(databasePath: string): Promise<{
   rows: ChromeCookieRow[];
   schemaVersion: number;
 }> {
-  const database = new DatabaseSync(databasePath, { readOnly: true });
+  const database = createDatabaseSync(databasePath, { readOnly: true });
   try {
     const versionRow = database.prepare("SELECT value FROM meta WHERE key = 'version'").get() as
       | { value?: string }
@@ -432,7 +428,7 @@ export async function importChromeCookies(options: {
   return withDatabaseSnapshot(
     cookieDatabasePath,
     options.logger,
-    options.databaseBackup ?? backup,
+    options.databaseBackup ?? backupDatabase,
     async (snapshotPath) => {
       const { rows, schemaVersion } = await readChromeCookies(snapshotPath);
       options.logger.info("[browser-data] Chrome Cookie 快照读取完成", {

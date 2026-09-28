@@ -5,7 +5,6 @@ import {
 /* eslint-disable max-lines -- automation 仓库集中维护 automations / automation_runs 的 sqlite schema、
    调度状态机写入与运行历史，稳定后再按读写职责拆分。 */
 import { mkdir } from "node:fs/promises";
-import { createRequire } from "node:module";
 import { dirname } from "node:path";
 import { randomUUID } from "node:crypto";
 import {
@@ -31,9 +30,8 @@ import { getTasksIndexDatabasePath } from "#src/paths.js";
 import { runTasksDatabaseMigrations } from "#src/session/tasksDatabase/migrations.js";
 import { createServiceLogger } from "#src/logger/serviceLogger.js";
 
-const require = createRequire(import.meta.url);
-const { DatabaseSync } = require("node:sqlite") as typeof import("node:sqlite");
-type DatabaseSyncInstance = InstanceType<typeof DatabaseSync>;
+import { createDatabaseSync, type SqliteDatabase } from "#src/session/tasksDatabase/sqlite.js";
+type DatabaseSyncInstance = SqliteDatabase;
 
 const logger = createServiceLogger("automation-repo");
 
@@ -301,7 +299,7 @@ export class AutomationRepo {
   private async initialize(path: string): Promise<void> {
     await mkdir(dirname(path), { recursive: true });
     if (!this.db) {
-      this.db = new DatabaseSync(path);
+      this.db = createDatabaseSync(path);
       this.dbPath = path;
       this.db.exec(`PRAGMA busy_timeout = ${this.startupBusyTimeoutMs}`);
       this.db.exec("PRAGMA journal_mode = WAL");

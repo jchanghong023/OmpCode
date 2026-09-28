@@ -1,10 +1,10 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { OmpNativeIntegrationSnapshot } from "@zcode/shared/omp-integrations";
 import { Button } from "@/components/ui/button.js";
 import { usePlatform } from "@/hooks/usePlatform.js";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
 
-type Kind = "extension" | "mcp";
+type Kind = "extension" | "mcp" | "hook";
 
 /** omp 原生配置只读视图；目录入口交给系统文件管理器，运行态不伪装成已连接。 */
 export function OmpNativeIntegrationsSection({
@@ -19,8 +19,11 @@ export function OmpNativeIntegrationsSection({
   const [snapshot, setSnapshot] = useState<OmpNativeIntegrationSnapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const requestId = useRef(0);
   const load = useCallback(async () => {
+    const currentRequest = ++requestId.current;
     setLoading(true);
+    setSnapshot(null);
     if (!platform.readOmpNativeIntegrations) {
       setError("unsupported");
       setLoading(false);
@@ -28,6 +31,7 @@ export function OmpNativeIntegrationsSection({
     }
     try {
       const result = await platform.readOmpNativeIntegrations(workspacePath);
+      if (requestId.current !== currentRequest) return;
       if (result.success) {
         setSnapshot(result.snapshot);
         setError(null);
@@ -35,17 +39,31 @@ export function OmpNativeIntegrationsSection({
         setError(result.error);
       }
     } catch {
+      if (requestId.current !== currentRequest) return;
       setError("load_failed");
     } finally {
-      setLoading(false);
+      if (requestId.current === currentRequest) setLoading(false);
     }
   }, [platform, workspacePath]);
   useEffect(() => {
     void load();
+    return () => {
+      requestId.current++;
+    };
   }, [load]);
-  const entries = kind === "extension" ? snapshot?.extensions : snapshot?.mcpServers;
+  const entries =
+    kind === "extension"
+      ? snapshot?.extensions
+      : kind === "hook"
+        ? snapshot?.hooks
+        : snapshot?.mcpServers;
   const title = intl.formatMessage({
-    id: kind === "extension" ? "settings.ompNative.extensions" : "settings.ompNative.mcp",
+    id:
+      kind === "extension"
+        ? "settings.ompNative.extensions"
+        : kind === "hook"
+          ? "settings.ompNative.hooks"
+          : "settings.ompNative.mcp",
   });
   return (
     <section className="flex max-w-3xl flex-col gap-5" data-testid={`omp-native-${kind}`}>
@@ -53,7 +71,12 @@ export function OmpNativeIntegrationsSection({
         <div>
           <h2 className="text-xl font-semibold text-foreground">{title}</h2>
           <p className="mt-1 text-sm text-foreground-subtle">
-            {intl.formatMessage({ id: "settings.ompNative.description" })}
+            {intl.formatMessage({
+              id:
+                kind === "hook"
+                  ? "settings.ompNative.hooksDescription"
+                  : "settings.ompNative.description",
+            })}
           </p>
         </div>
         <Button
@@ -74,7 +97,12 @@ export function OmpNativeIntegrationsSection({
       {snapshot ? (
         <>
           <p className="rounded-lg border border-border px-3 py-2 text-sm text-foreground-subtle">
-            {intl.formatMessage({ id: "settings.ompNative.runtimeUnavailable" })}
+            {intl.formatMessage({
+              id:
+                kind === "hook"
+                  ? "settings.ompNative.hooksRuntimeUnavailable"
+                  : "settings.ompNative.runtimeUnavailable",
+            })}
           </p>
           {(["profile", "project"] as const).map((scope) => {
             const path = scope === "profile" ? snapshot.profileDir : snapshot.projectDir;
@@ -98,7 +126,11 @@ export function OmpNativeIntegrationsSection({
                     {intl.formatMessage({ id: "settings.ompNative.openDirectory" })}
                   </Button>
                 </div>
-                {snapshot.configErrors.includes(scope) && kind === "mcp" ? (
+                {kind === "hook" && snapshot.hookErrors.includes(scope) ? (
+                  <p className="mt-3 text-sm text-destructive">
+                    {intl.formatMessage({ id: "settings.ompNative.hooksReadFailed" })}
+                  </p>
+                ) : snapshot.configErrors.includes(scope) && kind === "mcp" ? (
                   <p className="mt-3 text-sm text-destructive">
                     {intl.formatMessage({ id: "settings.ompNative.configInvalid" })}
                   </p>
@@ -115,9 +147,11 @@ export function OmpNativeIntegrationsSection({
                       >
                         <span className="truncate text-foreground">{entry.name}</span>
                         <span className="shrink-0 text-foreground-subtle">
-                          {"transport" in entry
-                            ? `${String(entry.transport)} · ${intl.formatMessage({ id: "enabled" in entry && entry.enabled ? "settings.ompNative.enabled" : "settings.ompNative.disabled" })}`
-                            : intl.formatMessage({ id: "settings.ompNative.directoryEntry" })}
+                          {"phase" in entry
+                            ? String(entry.phase)
+                            : "transport" in entry
+                              ? `${String(entry.transport)} · ${intl.formatMessage({ id: "enabled" in entry && entry.enabled ? "settings.ompNative.enabled" : "settings.ompNative.disabled" })}`
+                              : intl.formatMessage({ id: "settings.ompNative.directoryEntry" })}
                         </span>
                       </li>
                     ))}

@@ -528,7 +528,6 @@ function ConversationComposerImpl({
   gitSummary,
   gitDirtyFileCount,
   onOpenGitReview,
-  onSetAutoCompaction,
   onSwitchMode,
   onOpenRunningBackgroundWorks,
   backgroundWorkOpenTarget = "panel",
@@ -2157,15 +2156,9 @@ function ConversationComposerImpl({
             scopeKey={configPickerScopeKey}
             gitSummary={gitSummary}
             gitDirtyFileCount={gitDirtyFileCount}
-            sessionId={sessionId ?? null}
-            autoCompactionEnabled={snapshot?.config.autoCompactionEnabled}
             planModelActive={planModelActive}
             planModelAvailable={planModelAvailable}
             onTogglePlanModel={onTogglePlanModel}
-            onCompact={
-              onSendCompressionCommand ? () => onSendCompressionCommand("/compact") : undefined
-            }
-            onSetAutoCompaction={onSetAutoCompaction}
             onOpenGitReview={onOpenGitReview}
           />
         ) : null}
@@ -2197,8 +2190,6 @@ function ConversationComposerImpl({
       backgroundWorkOpenTarget,
       onOpenRunningBackgroundWorks,
       onOpenGitReview,
-      onSendCompressionCommand,
-      onSetAutoCompaction,
       onTogglePlanModel,
       onSwitchMode,
       planModelActive,
@@ -2207,7 +2198,6 @@ function ConversationComposerImpl({
       remoteSessionId,
       runningSubagentCount,
       snapshot?.backgroundWorks,
-      snapshot?.config.autoCompactionEnabled,
       sessionId,
       workspaceIdentity,
       workspacePath,

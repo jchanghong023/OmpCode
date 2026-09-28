@@ -60,6 +60,7 @@ export function registerRendererActionTraceIpc(options: {
   let lastConfig = resolveRuntimeConfig(options.rollout.getSnapshot(), options.env ?? process.env);
 
   const refresh = async (): Promise<RendererActionTraceConfigV1> => {
+    if (options.env?.OMPCODE_CENTOS7_LOCAL_ONLY === "1") return lastConfig;
     const next = resolveRuntimeConfig(await options.rollout.refresh(), options.env ?? process.env);
     if (JSON.stringify(next) !== JSON.stringify(lastConfig)) {
       lastConfig = next;

@@ -1,5 +1,6 @@
 /* eslint-disable max-lines -- 远程连接、OAuth 回调、遥测和通知 IPC 共用窗口级上下文，集中注册避免跨文件状态漂移。 */
 import { app, BrowserWindow, ipcMain, shell } from "electron";
+import { openDesktopExternalUrl } from "./openDesktopExternalUrl.js";
 import { access } from "node:fs/promises";
 import { dirname } from "node:path";
 import { z } from "zod";
@@ -236,6 +237,7 @@ export function registerRemoteIpcHandlers(options: {
   function reportRemoteConnectResultToArmsSafely(
     params: Parameters<typeof reportRemoteConnectResultToArms>[0],
   ): void {
+    if (process.env.OMPCODE_CENTOS7_LOCAL_ONLY === "1") return;
     try {
       reportRemoteConnectResultToArms(params);
     } catch (error) {
@@ -309,7 +311,7 @@ export function registerRemoteIpcHandlers(options: {
       });
       return;
     }
-    void Promise.resolve(shell.openExternal(url)).catch((error: unknown) => {
+    void Promise.resolve(openDesktopExternalUrl(url)).catch((error: unknown) => {
       options.logger.warn("[open-external] 外部 URL 打开失败", {
         url,
         error: error instanceof Error ? error.message : String(error),
@@ -406,10 +408,13 @@ export function registerRemoteIpcHandlers(options: {
       return;
     }
 
-    await options.appTelemetryCore.reportEvent(result.data);
+    if (process.env.OMPCODE_CENTOS7_LOCAL_ONLY !== "1") {
+      await options.appTelemetryCore.reportEvent(result.data);
+    }
   });
 
   ipcMain.handle(PlatformChannels.ReportArmsCustomEvent, async (event, payload: unknown) => {
+    if (process.env.OMPCODE_CENTOS7_LOCAL_ONLY === "1") return;
     const result = armsCustomEventPayloadSchema.safeParse(payload);
     if (!result.success) {
       options.logger.warn(
