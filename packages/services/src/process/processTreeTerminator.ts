@@ -342,7 +342,9 @@ function forceTerminatePosixProcessTree(
   if (canSignalOwnedGroup) {
     killPosixProcessGroup(pid, POSIX_FORCE_SIGNAL, options);
   }
-  for (const identity of currentIdentities.toReversed()) {
+  // 修复依据：Array.prototype.toReversed 是 Node 20+ API，Electron 28 内嵌 Node 18.18 上为
+  // undefined；slice().reverse() 同样返回倒序新副本且不改动 currentIdentities 原数组。
+  for (const identity of currentIdentities.slice().reverse()) {
     if (identity.pid !== pid) {
       killPid(identity.pid, POSIX_FORCE_SIGNAL, options);
     }

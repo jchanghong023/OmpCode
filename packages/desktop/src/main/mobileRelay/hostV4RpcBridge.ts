@@ -201,7 +201,8 @@ export class HostV4RpcBridge {
     const joined = new Uint8Array(message.messageBytes);
     let offset = 0;
     for (const part of message.fragments) {
-      if (!part || offset + part.length > joined.length) throw new Error("Invalid mobile RPC length");
+      if (!part || offset + part.length > joined.length)
+        throw new Error("Invalid mobile RPC length");
       joined.set(part, offset);
       offset += part.length;
     }

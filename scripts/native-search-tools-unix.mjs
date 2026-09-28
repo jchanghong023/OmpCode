@@ -36,42 +36,49 @@ export function assertLinuxNativeSearchBuildEnvironment({
   glibcVersion,
   gccVersion,
   cxxVersion,
+  centos7Baseline = false,
 }) {
-  if (readVersionMajor(nodeVersion) !== 24) {
+  const compatibleNode = centos7Baseline
+    ? String(nodeVersion).trim() === "20.19.0"
+    : readVersionMajor(nodeVersion) === 24;
+  if (!compatibleNode) {
     throw new Error(
-      `Linux native search producer requires Node 24; received ${nodeVersion || "<missing>"}`,
+      centos7Baseline
+        ? `CentOS 7 native search producer requires Node 20.19.0; received ${nodeVersion || "<missing>"}`
+        : `Linux native search producer requires Node 24; received ${nodeVersion || "<missing>"}`,
     );
   }
-  if (String(glibcVersion).trim() !== LINUX_NATIVE_SEARCH_GLIBC_BASELINE) {
+  const expectedGlibc = centos7Baseline ? "2.17" : LINUX_NATIVE_SEARCH_GLIBC_BASELINE;
+  const expectedGccMajor = centos7Baseline ? 11 : 12;
+  if (String(glibcVersion).trim() !== expectedGlibc) {
     throw new Error(
-      `Linux native search producer requires builder glibc ${LINUX_NATIVE_SEARCH_GLIBC_BASELINE}; received ${glibcVersion || "<missing>"}`,
+      `Linux native search producer requires builder glibc ${expectedGlibc}; received ${glibcVersion || "<missing>"}`,
     );
   }
-  if (readVersionMajor(gccVersion) !== 12) {
+  if (readVersionMajor(gccVersion) !== expectedGccMajor) {
     throw new Error(
-      `Linux native search producer requires GCC 12; received ${gccVersion || "<missing>"}`,
+      `Linux native search producer requires GCC ${expectedGccMajor}; received ${gccVersion || "<missing>"}`,
     );
   }
-  if (readVersionMajor(cxxVersion) !== 12) {
+  if (readVersionMajor(cxxVersion) !== expectedGccMajor) {
     throw new Error(
-      `Linux native search producer requires G++ 12 via CXX; received ${cxxVersion || "<missing>"}`,
+      `Linux native search producer requires G++ ${expectedGccMajor} via CXX; received ${cxxVersion || "<missing>"}`,
     );
   }
 }
 
-function verifyLinuxNativeSearchBuildEnvironment(config) {
+function verifyLinuxNativeSearchBuildEnvironment(config, centos7Baseline) {
   const glibcVersion = runCapture("getconf", ["GNU_LIBC_VERSION"])
     .trim()
     .replace(/^glibc\s+/u, "");
   const gccVersion = runCapture(config.cc, ["-dumpfullversion"]).trim();
-  // ugrep 由 CXX 编译；只检查 CC 会让 CXX=g++-13 等混合 toolchain
-  // 绕过 producer 门禁，并把非 GCC Toolset 12 的 C++ 产物写入固定 release。
   const cxxVersion = runCapture(config.cxx, ["-dumpfullversion"]).trim();
   assertLinuxNativeSearchBuildEnvironment({
     nodeVersion: process.versions.node,
     glibcVersion,
     gccVersion,
     cxxVersion,
+    centos7Baseline,
   });
   console.log(
     `==> Linux producer environment Node ${process.versions.node}, glibc ${glibcVersion}, GCC ${gccVersion}, G++ ${cxxVersion}`,
@@ -365,6 +372,7 @@ export function buildNativeSearchToolsUnix({
   keepWorkdir = false,
   quiet = false,
   runUpstreamTests = false,
+  centos7Baseline = false,
   processEnv = process.env,
 } = {}) {
   const config = resolveNativeUnixBuildConfig({
@@ -380,10 +388,10 @@ export function buildNativeSearchToolsUnix({
     outputDir,
   });
   if (config.platform === "linux") {
-    // 只靠最终 binary smoke 会让高版本 runner 产出的 GLIBC_2.34/2.36
-    // 误进入固定 release。下载源码前先锁住 producer 环境，产物阶段再由 readelf gate 复核。
-    verifyLinuxNativeSearchBuildEnvironment(config);
+    // Reject incompatible producer hosts before fetching sources; the output is checked again by the verifier.
+    verifyLinuxNativeSearchBuildEnvironment(config, centos7Baseline);
   }
+  const glibcBaseline = centos7Baseline ? "2.17" : LINUX_NATIVE_SEARCH_GLIBC_BASELINE;
   const workDir = mkdtempSync(join(tmpdir(), "zcode-native-search-build-"));
   const prefix = join(workDir, "prefix");
   const env = {
@@ -442,6 +450,7 @@ export function buildNativeSearchToolsUnix({
       platform: plan.platform,
       arch: plan.arch,
       producerOutputIds: plan.producerOutputIds,
+      glibcBaseline,
     });
 
     mkdirSync(dirname(plan.bfsPath), { recursive: true });
@@ -456,6 +465,7 @@ export function buildNativeSearchToolsUnix({
       platform: plan.platform,
       arch: plan.arch,
       producerOutputIds: plan.producerOutputIds,
+      glibcBaseline,
     });
     console.log(`==> Built ${plan.bfsPath}`);
     console.log(`==> Built ${plan.ugrepPath}`);

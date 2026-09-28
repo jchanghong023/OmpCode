@@ -4,7 +4,7 @@ import {
   databaseStartupPortPayloadSchema,
 } from "@zcode/shared";
 /* eslint-disable max-lines -- preload bridge 集中暴露桌面平台 IPC，拆散会让 contextBridge 权限边界更难审计。 */
-import { contextBridge, ipcRenderer, webFrame, webUtils } from "electron";
+import { contextBridge, ipcRenderer, webFrame } from "electron";
 import {
   installArmsRumBridgeIpcForward,
   scheduleArmsEventBridgePatch,
@@ -75,6 +75,7 @@ import type {
   WindowControlsOverlayReadyPayload,
   CreateTempTextAttachmentRequest,
   MobileRelayEntryStatus,
+  OfflineGateState,
   OpenCuaPermissionOnboardingOptions,
   ConfigureFinalArmsCustomEventE2ERequest,
   FinalArmsCustomEventE2EEntry,
@@ -301,10 +302,10 @@ contextBridge.exposeInMainWorld("zcode", {
     ipcRenderer.invoke(PlatformChannels.PrintToPdf),
   /** 从系统拖拽/文件输入得到的 Web File 解析真实本地路径 */
   getPathForFile: (file: File): string | null => {
-    // Electron 32 起移除了非标准 File.path，renderer 不能再直接从拖拽 File 上取路径。
-    // webUtils 只能在 preload 安全使用；取不到路径时返回 null，让 Web/内联附件逻辑继续兜底。
-    const path = webUtils.getPathForFile(file).trim();
-    return path.length > 0 ? path : null;
+    // 修复依据：Electron 28 尚无 webUtils.getPathForFile；其拖拽 File 自带非标准 path。
+    // 只从 preload 提取本地文件路径，避免把整份 File 或能力暴露给 renderer。
+    const path = (file as File & { path?: unknown }).path;
+    return typeof path === "string" && path.trim().length > 0 ? path.trim() : null;
   },
   /** 长文本粘贴落盘为真正的本地附件，避免正文和 prompt payload 被撑大 */
   createTempTextAttachment: (payload: CreateTempTextAttachmentRequest) =>
@@ -312,6 +313,9 @@ contextBridge.exposeInMainWorld("zcode", {
   /** 查询手机远控内嵌中继入口状态（入口链接/连接数/监听端口）；main 侧 handler 由手机远控 relay 接线 */
   getMobileRelayEntry: (): Promise<MobileRelayEntryStatus> =>
     ipcRenderer.invoke(PlatformChannels.MobileRelayEntry),
+  /** 查询离线锁定门控状态（Main 唯一所有者派生；renderer 只消费，不自行读环境变量解释） */
+  getOfflineGateState: (): Promise<OfflineGateState> =>
+    ipcRenderer.invoke(PlatformChannels.OfflineGateState),
   /** 订阅当前窗口内远程连接过程日志，返回 disposer */
   onRemoteConnectionLog: (callback: (entry: RemoteConnectionRuntimeLog) => void) => {
     const handler = (_event: unknown, payload: unknown) =>

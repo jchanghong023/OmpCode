@@ -21,6 +21,9 @@ function respond(id, command, success, data) {
 
 // HOLD 前缀：进入流式保持态（agent_start + 首段文本，不收口），用于测试 steer/follow_up 路由。
 let holding = false;
+// SLOW_TOOL_HOLD：工具在途保持态（tool_execution_start 后不收口），abort 时镜像真实 omp
+// v18.3.5+fork.265 的中断序列（P2 验收 D1）：end(isError) → 尾随 update → agent_end。
+let slowToolCallId = null;
 let setModelCalls = 0;
 let currentModel = { provider: "mock", id: "mock-1" };
 let autoCompactionEnabled = true;
@@ -115,6 +118,11 @@ async function runPromptTurn(message, promptId) {
       message: { role: "assistant", content: [] },
       assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "holding", partial: { role: "assistant", content: [] } },
     });
+    return;
+  }
+  if (message === "SLOW_TOOL_HOLD") {
+    slowToolCallId = `toolu-${nextId()}`;
+    out({ type: "tool_execution_start", toolCallId: slowToolCallId, toolName: "bash", args: { command: "sleep 60" } });
     return;
   }
   if (typeof message === "string" && message.startsWith("FOLLOWEDUP:")) {
@@ -306,6 +314,19 @@ readline.on("line", (line) => {
       return;
     case "abort":
       respond(command.id, "abort", true, {});
+      if (slowToolCallId) {
+        // 镜像真实 omp v18.3.5+fork.265 中断序列（P2 验收 D1）：
+        // 先 end(isError:true)，再补一条带 partialResult 的尾随 tool_execution_update。
+        out({ type: "tool_execution_end", toolCallId: slowToolCallId, toolName: "bash", result: { content: [{ type: "text", text: "Command aborted" }] }, isError: true });
+        out({
+          type: "tool_execution_update",
+          toolCallId: slowToolCallId,
+          toolName: "bash",
+          args: { command: "sleep 60" },
+          partialResult: { content: [{ type: "text", text: "[Command cancelled]\n" }] },
+        });
+        slowToolCallId = null;
+      }
       out({ type: "agent_end", messages: [], isTerminal: true });
       return;
     case "set_model":

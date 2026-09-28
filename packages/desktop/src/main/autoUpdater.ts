@@ -20,7 +20,33 @@ import pkg, { CancellationToken } from "electron-updater";
 import semver from "semver";
 import { logger } from "./logger.js";
 import { getElectronReleasePlatform, ManifestUpdateProvider } from "./manifestUpdateProvider.js";
-const { autoUpdater } = pkg;
+
+// electron-updater 的 autoUpdater 是模块级惰性 getter，首次访问才构造 AppUpdater 实例；
+// 其构造器无条件 semver.parse(app.getVersion())。Electron 28 构建态 dev 下
+// app.getVersion() 返回 "0.0"（packages/desktop/package.json 无 version 字段），
+// 首次访问即抛 ERR_UPDATER_INVALID_VERSION，主进程启动即崩、窗口无法创建
+// （P2 验收 D2；Windows dev 的 Electron 44 返回真实版本所以未暴露，打包态版本来自
+// 构建元数据不受影响）。因此禁止在模块加载期解构 autoUpdater：
+// 只有 updaterInstance() 的首次调用（init 前已通过运行时版本校验）才触发构造。
+type AutoUpdaterInstance = (typeof pkg)["autoUpdater"];
+let lazyAutoUpdater: AutoUpdaterInstance | null = null;
+
+function updaterInstance(): AutoUpdaterInstance {
+  if (lazyAutoUpdater) {
+    return lazyAutoUpdater;
+  }
+  lazyAutoUpdater = pkg.autoUpdater;
+  return lazyAutoUpdater;
+}
+
+/**
+ * 运行时 app 版本能否交给 electron-updater。
+ * 必须与 AppUpdater 构造器同口径（semver.parse 严格解析，不做 coerce）：
+ * "0.0" 非法；"0.0.0" 合法。校验必须先于 electron-updater 实例构造。
+ */
+export function isUpdaterRuntimeVersionUsable(version: string): boolean {
+  return semver.parse(version) !== null;
+}
 
 export const CHECK_FOR_UPDATE_MENU_ID = "check-for-update";
 const AUTO_UPDATE_POLL_INTERVAL_MS = 60 * 60 * 1000;
@@ -60,6 +86,9 @@ let autoUpdaterSettingService: SettingServiceLike | undefined;
 // （占位 feed、autoDownload 默认值）。任何漏改成按身份判断的入口若仍调用手动检查，
 // 都会对占位 feed 发真实请求。这里记住“本 flavor 已禁用”，让手动检查在模块内部 fail-closed。
 let autoUpdaterDisabledForProductFlavor = false;
+// P2 验收 D2：运行时 app 版本不是合法 semver（Electron 28 构建态 dev 返回 "0.0"）时，
+// 本进程整体跳过 updater（init 与手动检查都不再触达实例）；warn 只发一次。
+let updaterUnavailableForRuntimeVersion = false;
 
 type SettingServiceLike = Pick<ISettingService, "get" | "update">;
 
@@ -121,7 +150,7 @@ interface InitAutoUpdaterOptions {
 let quitAndInstallInFlight = false;
 let devAutoUpdateVersionOverride: string | null = null;
 
-type MutableAutoUpdaterForDev = typeof autoUpdater & {
+type MutableAutoUpdaterForDev = AutoUpdaterInstance & {
   currentVersion?: semver.SemVer;
   forceDevUpdateConfig?: boolean;
 };
@@ -148,6 +177,17 @@ function isDevAutoUpdateEnabled(): boolean {
   return (
     isTruthyRuntimeFlag(process.env[DEV_AUTO_UPDATE_ENV]) ||
     readCommandLineSwitchValue(DEV_AUTO_UPDATE_SWITCH) !== null
+  );
+}
+
+/** 运行时版本非法时标记 updater 不可用；重复调用（多次 init）不重复 warn。 */
+function markUpdaterUnavailableForRuntimeVersion(): void {
+  if (updaterUnavailableForRuntimeVersion) {
+    return;
+  }
+  updaterUnavailableForRuntimeVersion = true;
+  logger.warn(
+    `[auto-update] skip updater init: app version "${app.getVersion()}" is not a valid semver version (dev runtime without packaged version metadata)`,
   );
 }
 
@@ -467,7 +507,7 @@ async function quitAndInstallUpdate(rejectUnavailable = false) {
     // 3.3.0 的 Windows 自定义 PowerShell delayed launcher 在 detached/hidden
     // 模式下可能只创建 powershell.exe，却没有稳定执行到安装器启动，用户看到应用关闭但版本不变。
     // 这里恢复 electron-updater 原生安装入口，避免把“launcher 进程创建成功”误当成更新已接管。
-    autoUpdater.quitAndInstall();
+    updaterInstance().quitAndInstall();
   } finally {
     quitAndInstallInFlight = false;
   }
@@ -757,7 +797,7 @@ async function syncAutoUpdateCheckChannelFromSettings(
 
 function applyManifestUpdateProvider(options: InitAutoUpdaterOptions): void {
   const manifestUrl = options.updateFeedSource?.url.trim();
-  autoUpdater.setFeedURL({
+  updaterInstance().setFeedURL({
     provider: "custom",
     updateProvider: ManifestUpdateProvider,
     endpointOrigin: DEFAULT_ZCODE_ENDPOINT_ORIGIN,
@@ -1226,7 +1266,7 @@ function downloadAvailableUpdate(reason = "renderer") {
 
   const cancellationToken = new CancellationToken();
   downloadCancellationToken = cancellationToken;
-  void autoUpdater
+  void updaterInstance()
     .downloadUpdate(cancellationToken)
     .catch((error) => {
       if (isCancelledDownload(cancellationToken, error)) {
@@ -1361,6 +1401,11 @@ export function refreshAutoUpdaterReleaseChannel(
 
   // 正式 Fork 没有自有 feed；设置变化也不能绕过 initAutoUpdater(false) 触发上游检查。
   if (autoUpdaterDisabledForProductFlavor) return;
+  // P2 验收 D2：运行时版本非法时 updater 从未初始化，不能因设置变化触发实例构造。
+  if (updaterUnavailableForRuntimeVersion) {
+    logger.info(`[auto-update] skip ${reason}: runtime app version is not valid semver`);
+    return;
+  }
   if (!canUseAutoUpdaterInCurrentRuntime()) {
     logger.info(`[auto-update] skip ${reason}: not packaged`);
     return;
@@ -1395,7 +1440,7 @@ export function refreshAutoUpdaterReleaseChannel(
   clearAvailableUpdateState();
   setAutoUpdaterMenuState({ kind: "checking", enabled: false });
   const checkId = beginAutoUpdateCheck();
-  autoUpdater
+  updaterInstance()
     .checkForUpdates()
     .catch((err) => {
       logger.error(`[auto-update] ${reason} check failed:`, err);
@@ -1476,6 +1521,13 @@ export async function initAutoUpdater(options: InitAutoUpdaterOptions = {}): Pro
     return;
   }
   autoUpdaterDisabledForProductFlavor = false;
+  // P2 验收 D2：electron-updater 构造器无条件校验 app.getVersion() 的 semver，
+  // Electron 28 构建态 dev 返回 "0.0" 会让首次实例访问直接 throw。这里先行校验，
+  // 非法则跳过 updater 初始化并 warn 一次；本进程后续更新入口同样按不可用收敛。
+  if (!isUpdaterRuntimeVersionUsable(app.getVersion())) {
+    markUpdaterUnavailableForRuntimeVersion();
+    return;
+  }
   if (!canUseAutoUpdaterInCurrentRuntime()) return;
 
   onBeforeQuitAndInstall = options.onBeforeQuitAndInstall;
@@ -1504,12 +1556,12 @@ export async function initAutoUpdater(options: InitAutoUpdaterOptions = {}): Pro
   // 已下载旧版本后，feed 继续推进到更高版本时，主进程必须先比较远端版本和 ready 版本，
   // 再决定是否下载。若继续让 electron-updater 自动下载，它只会按当前 app 版本判断，
   // 导致 `3.1.2` 已 ready `3.1.3` 时每次轮询都可能重复下载 `3.1.3`。
-  autoUpdater.autoDownload = false;
+  updaterInstance().autoDownload = false;
   // Windows/NSIS 在窗口关闭后会异步启动安装；如果用户紧接着关机，安装器可能被系统中断，
   // 留下半更新状态并导致下次启动失败。
   // 这里仅在 Windows 关闭“退出即自动安装”，要求用户显式点更新；其他平台保持原有行为，避免改动既有升级链路。
-  autoUpdater.autoInstallOnAppQuit = process.platform !== "win32";
-  autoUpdater.logger = logger;
+  updaterInstance().autoInstallOnAppQuit = process.platform !== "win32";
+  updaterInstance().logger = logger;
   applyManifestUpdateProvider(options);
 
   const triggerCheckForUpdates = (reason: string) => {
@@ -1531,9 +1583,9 @@ export async function initAutoUpdater(options: InitAutoUpdaterOptions = {}): Pro
     const checkForUpdatesPromise = options.settingService
       ? (async () => {
           await syncAutoUpdateCheckChannelFromSettings(checkId, options.settingService, reason);
-          await autoUpdater.checkForUpdates();
+          await updaterInstance().checkForUpdates();
         })()
-      : autoUpdater.checkForUpdates();
+      : updaterInstance().checkForUpdates();
 
     checkForUpdatesPromise
       .catch((err) => {
@@ -1546,12 +1598,12 @@ export async function initAutoUpdater(options: InitAutoUpdaterOptions = {}): Pro
       });
   };
 
-  autoUpdater.on("checking-for-update", () => {
+  updaterInstance().on("checking-for-update", () => {
     logger.info("[auto-update] checking for update...");
     setAutoUpdaterMenuState({ kind: "checking", enabled: false });
   });
 
-  autoUpdater.on("update-available", (info: UpdateDownloadedInfoLike) => {
+  updaterInstance().on("update-available", (info: UpdateDownloadedInfoLike) => {
     logger.info(`[auto-update] new version available: ${info.version}`);
     const infoChannel = readUpdateInfoReleaseChannel(info);
     if (shouldIgnoreStaleAvailableUpdate(infoChannel)) {
@@ -1623,7 +1675,7 @@ export async function initAutoUpdater(options: InitAutoUpdaterOptions = {}): Pro
     });
   });
 
-  autoUpdater.on("update-not-available", (info) => {
+  updaterInstance().on("update-not-available", (info) => {
     void settleAutoUpdateCheckResult("update not available", () => {
       logger.info(
         `[auto-update] already up to date (local=${getCurrentAppVersionForUpdate()}, remote=${info.version})`,
@@ -1649,7 +1701,7 @@ export async function initAutoUpdater(options: InitAutoUpdaterOptions = {}): Pro
     });
   });
 
-  autoUpdater.on("download-progress", (progress) => {
+  updaterInstance().on("download-progress", (progress) => {
     // 用户快速取消下载后，electron-updater 可能还会补发旧下载流的 progress。
     // 如果继续接收这个陈旧事件，UI 会从“可更新”被重新推回“下载中”，看起来像取消后卡住。
     if (!downloadCancellationToken || downloadCancellationToken.cancelled) {
@@ -1681,7 +1733,7 @@ export async function initAutoUpdater(options: InitAutoUpdaterOptions = {}): Pro
     });
   });
 
-  autoUpdater.on("update-downloaded", (info: UpdateDownloadedInfoLike) => {
+  updaterInstance().on("update-downloaded", (info: UpdateDownloadedInfoLike) => {
     readyUpdateVersion = info.version;
     readyUpdateRestoredFromPendingReleaseNotes = false;
     readyUpdateChannel = downloadingUpdateChannel ?? availableUpdateChannel;
@@ -1723,7 +1775,7 @@ export async function initAutoUpdater(options: InitAutoUpdaterOptions = {}): Pro
     }
   });
 
-  autoUpdater.on("error", (err) => {
+  updaterInstance().on("error", (err) => {
     if (shouldIgnoreCancelledDownloadError(err)) {
       // electron-updater 在取消下载后可能异步补发 error("cancelled")。
       // 用户取消已经把状态恢复到可重试的 update-available，迟到取消事件不能再清空入口。
@@ -1790,6 +1842,14 @@ export function requestForceAutoUpdate(
     return dispose;
   }
 
+  // P2 验收 D2：运行时版本非法时 updater 从未初始化，强更入口不能触发实例构造。
+  if (updaterUnavailableForRuntimeVersion) {
+    const message = "runtime app version is not valid semver";
+    logger.info(`[force-update] 自动升级跳过：${message}`);
+    onStateChange({ kind: "dev-skipped", message });
+    return dispose;
+  }
+
   if (menuState.kind === "update-downloaded") {
     onStateChange({ kind: "installing" });
     void quitAndInstallUpdate();
@@ -1817,7 +1877,7 @@ export function requestForceAutoUpdate(
 
   const checkId = beginAutoUpdateCheck();
   setAutoUpdaterMenuState({ kind: "checking", enabled: false });
-  autoUpdater
+  updaterInstance()
     .checkForUpdates()
     .catch((err) => {
       const message = err instanceof Error ? err.message : String(err);
@@ -1872,6 +1932,15 @@ export function checkForUpdateMenuClick(originWindow?: BrowserWindow | null) {
     return;
   }
 
+  // P2 验收 D2：运行时版本非法时 updater 从未初始化，手动检查不能触发实例构造。
+  if (updaterUnavailableForRuntimeVersion) {
+    logger.info("[auto-update] skip manual check: runtime app version is not valid semver");
+    targetWindow.webContents.send(PlatformChannels.UpdateCheckResult, {
+      kind: "dev-skipped",
+    } satisfies UpdateCheckResultPayload);
+    return;
+  }
+
   if (menuState.kind === "update-downloaded") {
     // 菜单文案已经切到“重启以更新”，如果仍只发 ready toast，
     // 用户点击系统菜单不会安装更新，而顶部按钮会安装，两个入口语义不一致。
@@ -1915,7 +1984,7 @@ export function checkForUpdateMenuClick(originWindow?: BrowserWindow | null) {
   const checkId = beginAutoUpdateCheck();
   void (async () => {
     await clearSkippedUpdateVersionForManualCheck(manualCheckChannel, autoUpdaterSettingService);
-    await autoUpdater.checkForUpdates();
+    await updaterInstance().checkForUpdates();
   })()
     .catch((err) => {
       logger.error("[auto-update] manual check failed:", err);

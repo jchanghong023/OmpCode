@@ -5,7 +5,10 @@ import { join } from "node:path";
 import { test } from "node:test";
 import forge from "node-forge";
 import { loadOrCreateMobileRelayCertificate } from "../src/main/mobileRelay/mobileRelayCertificate.js";
-import { buildMobileRelayEntryUrl, MOBILE_RELAY_PUBLIC_ORIGIN } from "../src/main/mobileRelay/mobileRelayProtocol.js";
+import {
+  buildMobileRelayEntryUrl,
+  MOBILE_RELAY_PUBLIC_ORIGIN,
+} from "../src/main/mobileRelay/mobileRelayProtocol.js";
 
 test("入口链接：固定公网 origin + /remote/v4 + sid/hash/t 参数形状", () => {
   const url = new URL(buildMobileRelayEntryUrl());

@@ -1,6 +1,7 @@
 import { createRoot } from "react-dom/client";
 import type { ResourceUsageSnapshot, StorageManagementBridge } from "@zcode/shared";
 import "@zcode/ui/styles.css";
+import "../fonts/linuxChinese.css";
 import {
   ResourceManagerApp,
   ZCodeIntlProvider,
@@ -45,6 +46,12 @@ function applyResourceManagerTheme(): void {
   document.documentElement.classList.toggle("theme-zai-light", appliedTheme === "zai-light");
   document.documentElement.classList.toggle("theme-zai-dark", appliedTheme === "zai-dark");
 }
+
+// 资源管理器是独立 webContents，不能继承主窗口的 Linux 字体回退标记。
+document.documentElement.classList.toggle(
+  "platform-linux-desktop",
+  !navigator.userAgent.includes("Mac") && !navigator.userAgent.includes("Windows"),
+);
 
 applyResourceManagerTheme();
 // 资源管理器不创建主窗口的 Zustand store，text-ui-* 无法自动获得持久化基准。

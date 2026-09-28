@@ -2051,3 +2051,17 @@ body {
 .prompt-mention[data-mention-category="plugins"]::before {
   border-radius: var(--radius-sm);
 }
+
+/* CentOS 7 软件绘制 + 远程 X：装饰效果会持续占用 CPU 并传输重绘区域。
+ * 保留极短完成周期而不是 animation:none，避免依赖结束事件的弹窗/折叠无法收尾。 */
+html[data-ompcode-reduced-motion="true"] *,
+html[data-ompcode-reduced-motion="true"] *::before,
+html[data-ompcode-reduced-motion="true"] *::after {
+  animation-duration: 0.01ms !important;
+  animation-delay: 0ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.01ms !important;
+  transition-delay: 0ms !important;
+  scroll-behavior: auto !important;
+  backdrop-filter: none !important;
+}

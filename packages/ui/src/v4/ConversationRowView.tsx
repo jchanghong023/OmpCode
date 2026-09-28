@@ -1524,6 +1524,7 @@ const AssistantTextRowView = memo(function AssistantTextRowView({
         <MessageResponse
           renderZCodeFileCitations
           streaming={streaming}
+          streamingAnimationKey={String(row.rowId)}
           workspacePath={context.workspacePath}
           workspaceIdentity={context.workspaceIdentity}
           workspaceRemoteSessionId={context.workspaceRemoteSessionId}

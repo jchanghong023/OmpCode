@@ -39,6 +39,8 @@ import {
 } from "react";
 import type { BundledTheme } from "shiki";
 import { defaultRehypePlugins, defaultRemarkPlugins, Streamdown } from "streamdown";
+import { isCentos7DesktopBuild } from "@/lib/centos7Desktop.js";
+import { useBufferedStreamingText } from "@/hooks/useBufferedStreamingText.js";
 import type { Pluggable, PluggableList } from "unified";
 import { CodeBlock, CodeBlockHeader } from "@/components/ai-elements/code-block.js";
 import {
@@ -1315,6 +1317,7 @@ export const MessageResponse = memo(
   ({
     className,
     streaming = false,
+    streamingAnimationKey,
     forceCodeWrap = false,
     onOpenCodeViewer,
     onOpenFileLink,
@@ -1331,7 +1334,21 @@ export const MessageResponse = memo(
     children,
   }: MessageResponseProps) => {
     const wrapLongLines = forceCodeWrap || codePreviewSettings.wrapLongLines;
-    const rawMarkdown = useMemo(() => extractCodeText(children), [children]);
+    const incomingMarkdown = useMemo(() => extractCodeText(children), [children]);
+    // 无 GPU + 远程 X 环境下，每个 chunk 都扫描全文并重绘会拖慢打字和滚动。
+    // 在昂贵的 citation/数学/图片预处理之前合并显示更新，原始会话数据不变。
+    const rawMarkdown = useBufferedStreamingText(
+      incomingMarkdown,
+      streaming,
+      JSON.stringify([
+        workspaceIdentity,
+        workspacePath,
+        workspaceRemoteSessionId,
+        sessionId,
+        streamingAnimationKey,
+      ]),
+      isCentos7DesktopBuild ? 100 : 0,
+    );
     const renderStreaming = streaming;
     const projectedCitationMarkdown = useMemo(
       () =>

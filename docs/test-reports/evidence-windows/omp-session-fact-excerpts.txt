@@ -1,0 +1,32 @@
+# omp 会话事实源摘录（S1/S2 会话）
+
+## S1 会话 2026-09-28T18-09-36 模型记录
+     12 "model":"glm-5.3-flash"
+      4 "model":"gpt-6-sol"
+      1 "model":"openai-codex/gpt-6-sol"
+      1 "model":"zhipu-coding-plan/glm-5.3-flash"
+
+## S1 会话 stopReason 分布
+      1 "stopReason":"aborted"
+      3 "stopReason":"stop"
+     12 "stopReason":"toolUse"
+
+## S2 会话 工具调用统计
+      6 "toolName":"task"
+      4 "toolName":"wait"
+
+## S2 子代理结果元数据
+{
+  "detail": "目录存在，统计正常。",
+  "recursiveCount": 11,
+  "topLevelCount": 11
+}
+
+{
+  "detail": "目录存在；仅统计文件，不含目录。",
+  "recursiveCount": 8,
+  "topLevelCount": 8
+}
+
+## S2 末条 usage
+"usage":{"input":265,"output":137,"cacheRead":16064,"cacheWrite":0,"totalTokens":16466,"reasoningTokens":8,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0}

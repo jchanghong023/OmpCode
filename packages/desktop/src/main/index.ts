@@ -1,5 +1,9 @@
 import { createLocalTtftExporter } from "./localTtftExporter.js";
 import { startMobileRelay, stopMobileRelay } from "./mobileRelay/mobileRelayLifecycle.js";
+import {
+  buildMobileRelayEntryUrl,
+  MOBILE_RELAY_LISTEN_PORT,
+} from "./mobileRelay/mobileRelayProtocol.js";
 /* eslint-disable max-lines */
 import "./desktopEarlyDataBaseDirBootstrap.js";
 import "./desktopEarlyChromiumHardwareAccelerationBootstrap.js";
@@ -46,8 +50,10 @@ import {
 } from "electron";
 import type { UtilityProcess as ElectronUtilityProcess } from "electron";
 import { spawn } from "node:child_process";
+import { lookup } from "node:dns/promises";
 import { join, resolve } from "node:path";
 import { homedir } from "node:os";
+import { resolveImportMetaDirname } from "../shared/moduleDirname.js";
 import {
   createCredentialService,
   createSettingService,
@@ -80,8 +86,13 @@ import {
   type UpdateStatePayload,
   type TelemetryEventPayload,
   HostMessageTypes,
+  isPrivateNetworkEndpoint,
+  isLoopbackUrl,
+  buildOfflineLockedMobileRelayEntryStatus,
+  resolveOfflineGateState,
+  type OfflineGateState,
 } from "@zcode/shared";
-import { logger } from "./logger.js";
+import { flushMainLogs, logger } from "./logger.js";
 import { markMainLaunchAppReady } from "./desktopLaunchMarks.js";
 import { createCuaPipFocusRouter, resolveCuaPipWindowKey } from "./cuaPipFocusRouter.js";
 import { createDesktopTelemetryFetch } from "./desktopTelemetryFetch.js";
@@ -195,7 +206,6 @@ import {
   listRegisteredHostAgentProcessIds,
   setBrowserUseGuestWebContentsIdsProvider,
 } from "./resourceManagerWindow.js";
-import { createDesktopHelpConfigReader } from "./desktopHelpConfig.js";
 import { registerPlatformIpcHandlers } from "./desktopMainIpcPlatform.js";
 import { registerRemoteIpcHandlers } from "./desktopMainIpcRemote.js";
 import {
@@ -265,6 +275,13 @@ if (!shouldUseElectronDefaultUserDataPath) {
   app.setPath("sessionData", runtimeSessionDataPath);
 }
 process.title = runtimeApplicationName;
+const moduleDir = resolveImportMetaDirname(import.meta);
+
+// 离线锁定门控状态的唯一所有者：CentOS 7 启动器 --offline 写入 OMPCODE_CENTOS7_LOCAL_ONLY
+// （唯一设置者），Main 在此裁决一次并经 PlatformChannels.OfflineGateState 提供 renderer
+// （W4 据此做禁用态）；Main/Host 其余门控点共享同一事实，不各自解释环境变量。
+const offlineGate: OfflineGateState = resolveOfflineGateState(process.env);
+ipcMain.handle(PlatformChannels.OfflineGateState, () => offlineGate);
 
 process.on("unhandledRejection", (reason) => {
   logger.error("unhandledRejection:", reason);
@@ -274,15 +291,15 @@ const iconPath =
   process.platform === "win32"
     ? app.isPackaged
       ? join(process.resourcesPath, "icon_windows.png")
-      : join(import.meta.dirname, "../../build/icon_windows.png")
+      : join(moduleDir, "../../build/icon_windows.png")
     : app.isPackaged
       ? join(process.resourcesPath, "icon.png")
-      : join(import.meta.dirname, "../../build/icon.png");
+      : join(moduleDir, "../../build/icon.png");
 const linuxDesktopIntegrationIconPath =
   process.platform === "linux"
     ? app.isPackaged
       ? join(process.resourcesPath, "icon_512x512.png")
-      : join(import.meta.dirname, "../../build/icons/512x512.png")
+      : join(moduleDir, "../../build/icons/512x512.png")
     : iconPath;
 let currentApplicationLocale: Locale = DEFAULT_LOCALE;
 let closeToTrayOnWindows = true;
@@ -521,7 +538,7 @@ async function runBrowserCommandOnView(params: {
 }
 let currentDesktopZoomLevel = 0;
 let currentDesktopWindowSize: DesktopWindowSize | undefined;
-const preloadPath = join(import.meta.dirname, "../preload/index.cjs");
+const preloadPath = join(moduleDir, "../preload/index.cjs");
 const settingsFile = join(homedir(), ".ompcode", "v2", "setting.json");
 let activeAppShutdownPolicy = resolveAppShutdownPolicy("normal", process.platform);
 let activeAppShutdownKind: AppShutdownKind | null = null;
@@ -679,7 +696,7 @@ function resolveDesktopContextPromptEnabledForHost(): boolean {
     return false;
   }
   // Host 创建时顺便触发过期刷新，但只读取当前快照；网络请求不能阻塞 Local/Remote Host。
-  void rollout.refresh();
+  if (process.env.OMPCODE_CENTOS7_LOCAL_ONLY !== "1") void rollout.refresh();
   return rollout.getSnapshot().enabled;
 }
 
@@ -693,6 +710,7 @@ function resolveDesktopContextPromptEnabledForHost(): boolean {
 const DESKTOP_FIRST_HOST_SPAWN_DECISION_TIMEOUT_MS = 2_000;
 let firstHostSpawnDecisionPromise: Promise<void> | null = null;
 function awaitFirstHostSpawnDecision(): Promise<void> {
+  if (process.env.OMPCODE_CENTOS7_LOCAL_ONLY === "1") return Promise.resolve();
   if (firstHostSpawnDecisionPromise) {
     return firstHostSpawnDecisionPromise;
   }
@@ -726,11 +744,13 @@ const appTelemetryCore = createTelemetryCore({
   fetchImpl: createDesktopTelemetryFetch(net),
 });
 const appTelemetryRuntime = createAppTelemetryRuntime({
+  enabled: process.env.OMPCODE_CENTOS7_LOCAL_ONLY !== "1",
   telemetryCore: appTelemetryCore,
   appLaunchCoordinator,
 });
 
 function reportRemoteUsageEventForRenderer(rendererId: number, event: TelemetryEventPayload): void {
+  if (process.env.OMPCODE_CENTOS7_LOCAL_ONLY === "1") return;
   const context =
     appTelemetryRuntime.getRendererContext(rendererId) ??
     appTelemetryRuntime.getLatestRendererContext();
@@ -782,12 +802,6 @@ const remoteSessionManager = createRemoteWorkspaceSessionManager({
 });
 
 const deviceMid = ensureDesktopDeviceMidSync();
-// 帮助配置是公开读取，不能复用下面附带账号鉴权的灰度响应缓存。
-const readHelpConfig = createDesktopHelpConfigReader({
-  appVersion: ZCODE_VERSION || app.getVersion(),
-  deviceMid,
-  resolveEndpointOrigin: resolveCurrentZCodeEndpointOrigin,
-});
 // 同一个 /api/v1/client/configs fetcher 供两个灰度 rollout 共用（请求参数与鉴权完全一致，
 // 各自独立缓存/去重，服务端按 data.configs.<key> 区分功能）。
 const electronClientConfigsFetcher = createElectronDesktopContextPromptConfigFetcher({
@@ -1045,7 +1059,9 @@ async function prepareAppQuit(reason: string, kind: AppShutdownKind = "normal"):
     // 尺寸已在 resize 防抖或最大化状态变化时保存，退出屏障不再创建新的尺寸写入。
     // 修复原因：Main 过去不会等待仍在发送的 /event/report，正常退出也会直接丢事件。
     // 与其它 owner 并行进入既有屏障，最多等待 2 秒，避免 telemetry 串行放大退出预算。
-    appTelemetryCore.flushPendingReports({ timeoutMs: 2_000 }),
+    process.env.OMPCODE_CENTOS7_LOCAL_ONLY === "1"
+      ? Promise.resolve()
+      : appTelemetryCore.flushPendingReports({ timeoutMs: 2_000 }),
     localTtftExporter.shutdown(),
     rendererActionTraceBroker.shutdown().catch((error) => {
       logger.warn(`[app-quit] renderer action trace shutdown failed (${reason}):`, error);
@@ -1081,10 +1097,11 @@ async function prepareAppQuit(reason: string, kind: AppShutdownKind = "normal"):
     .catch((error) => {
       logger.error(`[app-quit] host process cleanup failed (${reason}):`, error);
     })
-    .finally(() => {
+    .finally(async () => {
       // before-quit 是同步事件。只发 Dispose 就继续退出 main 的话，
       // host 还没等到 agent 进程树的 SIGTERM/SIGKILL 兜底完成就被带走，zcode-cli 会被 init 接管成残留进程。
       // 这里先拦截第一次退出，等待 host 清理完成后再放行第二次 app.quit。
+      await flushMainLogs();
       hasPreparedAppQuit = true;
       appQuitPreparationInFlight = null;
     });
@@ -1094,7 +1111,7 @@ async function prepareAppQuit(reason: string, kind: AppShutdownKind = "normal"):
 
 async function exitPreparedApp(reason: string): Promise<void> {
   logger.info(`[app-quit] exiting prepared app (${reason})`);
-  await logger.flush();
+  await flushMainLogs();
   if (process.env.ZCODE_E2E_RUN_ID?.trim()) {
     flushMainE2ECoverage((error) => {
       logger.warn("[e2e-coverage] main coverage flush failed", error);
@@ -1348,7 +1365,6 @@ async function executeDesktopCommandForApp(
   senderWindow?: BrowserWindow | null,
 ) {
   return executeDesktopCommand({
-    fetchHelpConfig: readHelpConfig,
     command,
     senderWindow,
     logger,
@@ -1723,6 +1739,7 @@ function createWindowInstance(startupBootstrap: StartupWindowBootstrap = {}) {
           onMcpTelemetry: (message) =>
             reportMcpTelemetryToArms(message.event, message.runtimeSurface),
           onSessionCreateTelemetry: (message) => {
+            if (process.env.OMPCODE_CENTOS7_LOCAL_ONLY === "1") return;
             void appTelemetryCore.reportEvent(message.event).catch(() => {});
           },
           onCronRunResult: forwardCronRunResult,
@@ -1921,12 +1938,41 @@ app.on("second-instance", (_event, argv, _workingDirectory, additionalData) => {
 });
 
 app.whenReady().then(async () => {
+  if (process.env.OMPCODE_CENTOS7_LOCAL_ONLY === "1") {
+    // 修复原因：--offline 只属于 omp，桌面 Chromium 的配置、资源和浏览器请求须独立拦截。
+    session.defaultSession.webRequest.onBeforeRequest((details, callback) => {
+      callback({ cancel: !isLoopbackUrl(details.url) });
+    });
+    // 购买页使用独立 partition，不能继承默认 Session 的拦截规则。
+    session
+      .fromPartition("persist:zcode-coding-plan")
+      .webRequest.onBeforeRequest((_details, callback) => {
+        callback({ cancel: true });
+      });
+    session
+      .fromPartition(EMBEDDED_BROWSER_PARTITION)
+      .webRequest.onBeforeRequest((details, callback) => {
+        void isPrivateNetworkEndpoint(details.url, async (host) =>
+          (await lookup(host, { all: true })).map((entry) => entry.address),
+        ).then(
+          (allowed) => callback({ cancel: !allowed }),
+          () => callback({ cancel: true }),
+        );
+      });
+  }
+  // CentOS 7 启动参数只覆盖本次运行；先设定 profile，再让所有 Host 与目录读取同一环境。
+  const launchProfile = process.env.OMPCODE_CENTOS7_PROFILE;
+  if (launchProfile !== undefined) {
+    process.env.OMP_PROFILE = launchProfile;
+  }
   markMainLaunchAppReady();
   installLocalMediaPreviewProtocol(session.defaultSession.protocol, {
     isPathAuthorized: localMediaPreviewPathRegistry.isAuthorized,
   });
   // Electron 的 net.request 只能在 app ready 后使用；灰度请求仍是旁路预热，不阻塞首个 Host。
-  void desktopContextPromptRollout?.refresh();
+  if (process.env.OMPCODE_CENTOS7_LOCAL_ONLY !== "1") {
+    void desktopContextPromptRollout?.refresh();
+  }
   installBrowserRestoreBootstrapProtocol(
     session.fromPartition(EMBEDDED_BROWSER_PARTITION).protocol,
   );
@@ -1936,10 +1982,11 @@ app.whenReady().then(async () => {
   try {
     bootstrapSettings = await mainSettingService.get();
     // omp profile 在进程启动时固定；设置页保存后不热切换已有 Host/会话。
-    if (bootstrapSettings.ompProfile !== undefined) {
+    if (launchProfile === undefined && bootstrapSettings.ompProfile !== undefined) {
       process.env.OMP_PROFILE = bootstrapSettings.ompProfile;
     }
-    if (bootstrapSettings.dataBaseDir) {
+    // CentOS 7 --home 是本次启动的强制存储根，不能被用户设置里旧的数据目录覆盖。
+    if (bootstrapSettings.dataBaseDir && !process.env.OMPCODE_CENTOS7_HOME?.trim()) {
       setDataBaseDir(bootstrapSettings.dataBaseDir);
     }
     if (bootstrapSettings.locale) {
@@ -2013,20 +2060,37 @@ app.whenReady().then(async () => {
 
   // 手机远控内嵌中继：无鉴权开放接入，进程存活即可连接。启动失败不阻塞桌面
   // 主流程，状态经 PlatformChannels.MobileRelayEntry 供 UI 展示错误原因。
-  void startMobileRelay({
-    getHostProcess: (windowId) => windowHostProcessMap.get(windowId),
-  }).catch((error: unknown) => {
-    logger.error("[mobile-relay] failed to start:", error);
-  });
+  // 离线锁定时 relay 后端整体关闭：不监听、不建立桥接（mobile-relay.md 平台与
+  // 离线边界）；入口 IPC 仍注册并回报稳定禁用原因码，手机主动连入没有监听者，
+  // 在 TCP 层被明确拒绝而不是静默超时。
+  if (offlineGate.disabledFeatures.mobileRelay) {
+    ipcMain.handle(PlatformChannels.MobileRelayEntry, () =>
+      buildOfflineLockedMobileRelayEntryStatus({
+        url: buildMobileRelayEntryUrl(),
+        listenPort: MOBILE_RELAY_LISTEN_PORT,
+      }),
+    );
+  } else {
+    void startMobileRelay({
+      getHostProcess: (windowId) => windowHostProcessMap.get(windowId),
+    }).catch((error: unknown) => {
+      logger.error("[mobile-relay] failed to start:", error);
+    });
+  }
 
   // 本 Fork 只有 GitHub Release 手动分发；正式包绝不能安装上游 ZCode 的 feed。
   // 仅保留未打包开发态显式指定 feed 的更新联调入口。
+  // 离线锁定显式关闭公网更新检查（含未打包开发态的联调入口），fail-closed。
   const updateFeedSource = resolveUpdateFeedSourceFromStartupConfig({
     argv: process.argv,
     env: process.env,
   });
   void initAutoUpdater({
-    enabled: !app.isPackaged && ZCODE_PRODUCT_FLAVOR === "production" && Boolean(updateFeedSource),
+    enabled:
+      !offlineGate.disabledFeatures.publicUpdateCheck &&
+      !app.isPackaged &&
+      ZCODE_PRODUCT_FLAVOR === "production" &&
+      Boolean(updateFeedSource),
     onBeforeQuitAndInstall: async () => {
       notifyStabilityLifecycle("update_install");
       await prepareAppQuit("auto-update quitAndInstall", "update-install");
@@ -2067,7 +2131,6 @@ app.whenReady().then(async () => {
   });
 
   registerPlatformIpcHandlers({
-    fetchHelpConfig: readHelpConfig,
     logger,
     // CDP-on-guest pivot：renderer `<webview>` dom-ready 上报 guest webContentsId → attach。
     attachBrowserGuest: (key, webContentsId, options) => {
@@ -2367,4 +2430,11 @@ app.on("before-quit", (event) => {
 });
 app.on("activate", () => {
   void primaryWindowCoordinator.ensurePrimaryWindow("app-activate");
+});
+
+app.on("will-quit", (event) => {
+  if (process.env.OMPCODE_CENTOS7_LOCAL_ONLY !== "1") return;
+  // app.quit 的最终退出也要等待文件队列；app.exit 不会再次触发 will-quit。
+  event.preventDefault();
+  void flushMainLogs().finally(() => app.exit(0));
 });

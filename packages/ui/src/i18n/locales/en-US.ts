@@ -181,6 +181,7 @@ const enUS: Record<string, string> = {
   "common.generating": "Generating...",
   "common.connecting": "Connecting...",
   "common.cancel": "Cancel",
+  "offlineLock.disabledHint": "Disabled by offline lock",
   "common.retry": "Retry",
   "common.close": "Close",
   "chat.plan.removeMarker": "Turn off Plan mode",
@@ -1751,7 +1752,8 @@ const enUS: Record<string, string> = {
   "webRemoteControl.botChannel.manageBots": "Manage bots",
   "mobileRelay.trigger": "Mobile relay",
   "mobileRelay.title": "Mobile relay",
-  "mobileRelay.description": "Scan the QR code with the companion mobile app to connect to this desktop.",
+  "mobileRelay.description":
+    "Scan the QR code with the companion mobile app to connect to this desktop.",
   "mobileRelay.entryUrl": "Entry URL",
   "mobileRelay.copy": "Copy link",
   "mobileRelay.copied": "Entry link copied",
@@ -1761,7 +1763,8 @@ const enUS: Record<string, string> = {
   "mobileRelay.notRunning": "Mobile relay is not running",
   "mobileRelay.loadFailed": "Failed to load mobile relay status",
   "mobileRelay.qrAlt": "Mobile relay entry QR code",
-  "mobileRelay.note": "Install the companion app and trust the desktop-exported CA certificate (debug builds) before scanning.",
+  "mobileRelay.note":
+    "Install the companion app and trust the desktop-exported CA certificate (debug builds) before scanning.",
   "remote.title": "Connect remote environment",
   "remote.description":
     "Connect to a remote workspace over SSH, Server, WSL, or Docker, then choose a directory in the current window.",
@@ -2424,10 +2427,11 @@ const enUS: Record<string, string> = {
     "Unclassified files and stale copies left after changing the data directory.",
   "resourceManager.storage.confirmDescription.backups":
     "These copies allow recovery if an upgrade or migration goes wrong; deleting them cannot be undone.",
-  "settings.browser.title": "Browser Use",
-  "settings.browser.control.title": "Enable built-in browser control",
+  "settings.browser.title": "Browser",
+  "settings.browser.control.title": "OMP built-in browser",
   "settings.browser.control.description":
-    "Enable the official Browser Use plugin so new sessions can access and control web pages in the built-in browser.",
+    "OMP supports browsing and interacting with web pages in sessions by default.",
+  "settings.browser.control.defaultEnabled": "On by default",
   "settings.browser.control.enabledToast": "Built-in browser control enabled",
   "settings.browser.control.disabledToast": "Built-in browser control disabled",
   "settings.browser.security.section": "Security",
@@ -3730,6 +3734,7 @@ const enUS: Record<string, string> = {
   "settings.skills.ompAvailable": "Available in omp",
   "settings.skills.ompAvailableDescription":
     "Skills callable by omp in this workspace; disabled or shadowed discoveries are excluded.",
+  "settings.skills.ompEmpty": "No skills callable by omp in this workspace.",
   "settings.skills.searchPlaceholder": "Search skills...",
   "settings.skills.refresh": "Refresh",
   "settings.skills.refreshing": "Refreshing...",

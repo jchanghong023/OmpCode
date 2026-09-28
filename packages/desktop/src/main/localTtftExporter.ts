@@ -29,12 +29,14 @@ export function createLocalTtftExporter(options: {
 }) {
   const exporter = createRendererActionTraceExporter(options.env);
   const endpoint =
-    validHttpUrl(options.env.OTEL_EXPORTER_OTLP_METRICS_ENDPOINT) ??
-    validHttpUrl(
-      options.env.OTEL_EXPORTER_OTLP_ENDPOINT
-        ? `${options.env.OTEL_EXPORTER_OTLP_ENDPOINT.replace(/\/$/, "")}/v1/metrics`
-        : undefined,
-    );
+    process.env.OMPCODE_CENTOS7_LOCAL_ONLY === "1"
+      ? undefined
+      : (validHttpUrl(options.env.OTEL_EXPORTER_OTLP_METRICS_ENDPOINT) ??
+        validHttpUrl(
+          options.env.OTEL_EXPORTER_OTLP_ENDPOINT
+            ? `${options.env.OTEL_EXPORTER_OTLP_ENDPOINT.replace(/\/$/, "")}/v1/metrics`
+            : undefined,
+        ));
   const resource = resourceFromAttributes({
     "service.name": "zcode-local-ttft",
     "service.version": options.version,

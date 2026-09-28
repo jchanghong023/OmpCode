@@ -678,7 +678,9 @@ class IabPlaywrightLocatorSession {
     }
     let point = { x: probe.x, y: probe.y };
     const boundaryPoints = new Map<FrameBoundary, { x: number; y: number }>();
-    for (const boundary of target.boundaries.toReversed()) {
+    // 修复依据：Array.prototype.toReversed 是 Node 20+（V8 11.0）API，Electron 28 内嵌
+    // Node 18.18 上为 undefined；slice().reverse() 同样返回倒序新副本且不改动原数组。
+    for (const boundary of target.boundaries.slice().reverse()) {
       const [x0, y0, x1, y1, x2, y2, x3, y3] = boundary.contentQuad;
       const u = point.x / boundary.childSize.width;
       const v = point.y / boundary.childSize.height;
@@ -695,7 +697,8 @@ class IabPlaywrightLocatorSession {
     target: LocatorTarget,
     points: PointerFramePoints,
   ): Promise<string | undefined> {
-    for (const boundary of target.boundaries.toReversed()) {
+    // 同 pointerFramePoints：Node 18.18 无 Array.prototype.toReversed，用 slice().reverse() 等价。
+    for (const boundary of target.boundaries.slice().reverse()) {
       const point = points.boundaryPoints.get(boundary);
       if (!point) throw new Error("Playwright pointer frame chain is incomplete");
       const x = Math.round(point.x);

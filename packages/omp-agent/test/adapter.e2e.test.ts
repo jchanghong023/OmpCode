@@ -856,6 +856,71 @@ test("stop 命令与 abort 收口 + sessions-index 订阅", async () => {
   }
 });
 
+test("中断在途工具：end(isError)+尾随 update 序列后工具行收口为 cancelled（P2 验收 D1）", async () => {
+  const harness = await startAdapter();
+  try {
+    const createResult = await harness.request("v4/command", {
+      commandId: "cmd-create-d1",
+      clientId: "test-client",
+      sessionId: null,
+      type: "createSession",
+      payload: { workspaceId: "test-workspace" },
+      issuedAt: Date.now(),
+    });
+    const createAck = commandAckSchema.parse((createResult as { result: unknown }).result);
+    const sessionId = (createAck.result as { sessionId: string }).sessionId;
+    await harness.request("v4/conversation/subscribe", {
+      topic: `conversation/${sessionId}`,
+      connectionId: "conn-d1",
+      clientMode: "desktop-continuous",
+    });
+
+    // SLOW_TOOL_HOLD：fake omp 让 bash 工具停在在途态（对应真实 sleep 场景）
+    const sendResult = await harness.request("v4/command", {
+      commandId: "cmd-send-d1",
+      clientId: "test-client",
+      sessionId,
+      type: "sendText",
+      payload: { text: "SLOW_TOOL_HOLD" },
+      issuedAt: Date.now(),
+    });
+    const sendAck = commandAckSchema.parse((sendResult as { result: unknown }).result);
+    assert.equal(sendAck.status, "accepted");
+
+    await harness.waitUntil(() =>
+      [...harness.collectRows().values()].some(
+        (row) => row.kind === "toolCall" && row.toolName === "bash" && row.status === "running",
+      ),
+    );
+
+    const stopResult = await harness.request("v4/command", {
+      commandId: "cmd-stop-d1",
+      clientId: "test-client",
+      sessionId,
+      type: "stop",
+      payload: {},
+      issuedAt: Date.now(),
+    });
+    const stopAck = commandAckSchema.parse((stopResult as { result: unknown }).result);
+    assert.equal(stopAck.status, "accepted");
+
+    await harness.waitUntil(() =>
+      [...harness.collectRows().values()].some(
+        (row) => row.kind === "turnHeader" && row.state === "completedInterrupted",
+      ),
+    );
+    // 修复前：omp 端 tool_execution_end(isError) 后的尾随 tool_execution_update 会把
+    // 工具行复活为 running，且 failOpenToolRows 因在途表已清无法再收口（D1 残留 Running）。
+    const bashRow = [...harness.collectRows().values()].find(
+      (row) => row.kind === "toolCall" && row.toolName === "bash",
+    );
+    assert.ok(bashRow, "缺少 bash 工具行");
+    assert.equal(bashRow.status, "cancelled");
+  } finally {
+    await harness.close();
+  }
+});
+
 test("setFollowupMode guide 收敛 + 流式中输入按模式路由 steer/follow_up", async () => {
   const harness = await startAdapter();
   try {

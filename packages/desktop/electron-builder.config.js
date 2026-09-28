@@ -1,5 +1,5 @@
 /* eslint-disable max-lines -- Electron Builder config keeps related packaging hooks together so build order stays explicit. */
-import { cpSync, existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { readdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -93,6 +93,21 @@ const runtimeModuleLookupRoots = [
 ];
 const desktopDistDir = process.env.ZCODE_DESKTOP_DIST_DIR || "dist";
 const DEFAULT_ELECTRON_MIRROR = "https://npmmirror.com/mirrors/electron/";
+// W1 构建双轨：Electron 打包版本的唯一事实源是 packages/desktop/package.json 的精确
+// devDependency。Windows 基线为 44.4.5；CentOS 7 构建由 scripts/prepare-centos7-build.mjs
+// 在构建任务工作区内临时切换为 28.3.3（docs/requirements/centos7-release.md「Electron 选型」，
+// 版本切换不回传仓库）。这里动态读取以避免配置内出现第二个钉死版本——单分支合并曾把本行
+// 固化为 28.3.3，导致 Windows 基线被破坏，故收回为单一事实源。
+function resolvePinnedElectronVersion() {
+  const manifest = JSON.parse(readFileSync(resolve(import.meta.dirname, "package.json"), "utf8"));
+  const version = manifest.devDependencies?.electron;
+  if (typeof version !== "string" || !/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(version)) {
+    throw new Error(
+      `[electron-builder.config] devDependencies.electron 必须是精确版本（由 scripts/prepare-centos7-build.mjs 在 CentOS 7 构建态切换），当前: ${String(version)}`,
+    );
+  }
+  return version;
+}
 // `pnpm exec asar` 依赖 `.bin/asar`，但 @electron/asar 仅是 electron-builder 传递依赖时，
 // Linux CI（pnpm hoisted）往往解析不到该二进制，`asar list` 未运行即 exit 1。
 // 显式依赖 @electron/asar 并用 Node 直接执行 CLI，避免跨平台找不齐 shim。
@@ -472,8 +487,8 @@ export default {
   electronLanguages: ["en-US", "zh-CN"],
   // pnpm workspace 下，electron-builder
   // 有时无法从依赖树里稳定推导出 Electron 版本，导致 bundle 直接中断。
-  // 显式写死当前桌面端使用的 Electron 版本，避免打包阶段再做不可靠的猜测。
-  electronVersion: "44.4.5",
+  // 显式按 manifest 精确 devDependency 写死当前桌面端使用的 Electron 版本，避免打包阶段再做不可靠的猜测。
+  electronVersion: resolvePinnedElectronVersion(),
   electronDownload: {
     // ELECTRON_MIRROR 是 @electron/get 的全局环境变量，会覆盖 dmg-builder 等
     // generic artifact 自己传入的 mirrorOptions，导致 builder 辅助包被错误拼到 Electron runtime 镜像目录。

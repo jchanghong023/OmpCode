@@ -13,6 +13,7 @@ interface TelemetryCoreLike {
 type DailyActiveInterval = ReturnType<typeof setInterval> | number;
 
 interface AppTelemetryRuntimeDependencies {
+  enabled?: boolean;
   telemetryCore: TelemetryCoreLike;
   appLaunchCoordinator: StartupCoordinatorLike;
   onError?: (error: unknown) => void;
@@ -24,6 +25,7 @@ interface AppTelemetryRuntimeDependencies {
 const DEFAULT_DAILY_ACTIVE_HEARTBEAT_INTERVAL_MS = 15 * 60 * 1000;
 
 export function createAppTelemetryRuntime({
+  enabled = true,
   telemetryCore,
   appLaunchCoordinator,
   onError,
@@ -37,6 +39,7 @@ export function createAppTelemetryRuntime({
   let interactive = false;
 
   function reportDailyActive(context: TelemetryRendererContext): void {
+    if (!enabled) return;
     void telemetryCore.reportAppDailyActive(context).catch((error) => {
       onError?.(error);
     });
@@ -50,15 +53,15 @@ export function createAppTelemetryRuntime({
     reportDailyActive(latestRendererContext);
   }
 
-  const dailyActiveHeartbeat = setIntervalFn(
-    maybeReportDailyActive,
-    dailyActiveHeartbeatIntervalMs,
-  );
-  if (typeof dailyActiveHeartbeat === "object") {
+  const dailyActiveHeartbeat = enabled
+    ? setIntervalFn(maybeReportDailyActive, dailyActiveHeartbeatIntervalMs)
+    : null;
+  if (dailyActiveHeartbeat !== null && typeof dailyActiveHeartbeat === "object") {
     dailyActiveHeartbeat.unref?.();
   }
 
   function flushStartupTelemetry(): void {
+    if (!enabled) return;
     if (pendingStartupTelemetryRendererId == null) {
       return;
     }
@@ -116,7 +119,7 @@ export function createAppTelemetryRuntime({
     },
 
     dispose(): void {
-      clearIntervalFn(dailyActiveHeartbeat);
+      if (dailyActiveHeartbeat !== null) clearIntervalFn(dailyActiveHeartbeat);
     },
   };
 }

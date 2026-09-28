@@ -1049,6 +1049,13 @@ export function PluginsSection({
     [onOpenPluginStore, selectedScope.kind],
   );
   const target = selectedScope.kind === "workspace" ? selectedScope.tab : preferredHost;
+  // 技能只认 omp 工作区目录；旧 User 作用域不是可执行技能来源。
+  const skillTarget =
+    selectedScopeKey === "user"
+      ? preferredHost
+      : selectedScope.kind === "workspace"
+        ? selectedScope.tab
+        : null;
   const effectiveMcpScopeKey =
     mcpEditorOpen && mcpFormScopeKey ? mcpFormScopeKey : selectedScopeKey;
   const effectiveMcpWorkspace = workspaceTabs.find(
@@ -1166,15 +1173,22 @@ export function PluginsSection({
         {!mcpEditorOpen && !pluginDetailOpen && !commandEditorOpen ? (
           <div className="flex min-w-0 flex-wrap items-center gap-3">
             <div className="flex min-w-0 flex-wrap items-center gap-3">
-              <PluginScopeMenu
-                align="start"
-                selectedScopeKey={selectedScopeKey}
-                triggerTestId="plugin-settings-scope-trigger"
-                userOptionTestId="plugin-settings-scope-user-option"
-                workspaceOptionTestIdPrefix="plugin-settings-scope-option"
-                workspaceTabs={workspaceTabs}
-                onScopeKeyChange={setPickedScopeKey}
-              />
+              {selectedTab !== "skills" || skillTarget ? (
+                <PluginScopeMenu
+                  align="start"
+                  includeUser={selectedTab !== "skills"}
+                  selectedScopeKey={
+                    selectedTab === "skills" && skillTarget
+                      ? workspaceKey(skillTarget)
+                      : selectedScopeKey
+                  }
+                  triggerTestId="plugin-settings-scope-trigger"
+                  userOptionTestId="plugin-settings-scope-user-option"
+                  workspaceOptionTestIdPrefix="plugin-settings-scope-option"
+                  workspaceTabs={workspaceTabs}
+                  onScopeKeyChange={setPickedScopeKey}
+                />
+              ) : null}
               <div className="hidden h-4 w-px bg-border sm:block" aria-hidden="true" />
               {mode === "plugin" ? (
                 <TabsList variant="line" className="h-7 max-w-full gap-1 overflow-x-auto p-0">
@@ -1332,12 +1346,12 @@ export function PluginsSection({
         ) : null}
         {mode === "plugin" || mode === "skill" ? (
           <TabsContent forceMount value="skills" className="mt-6 data-[state=inactive]:hidden">
-            {target ? (
+            {skillTarget ? (
               <SkillsSection
-                workspacePath={target.workspacePath}
-                workspaceIdentity={target.workspaceIdentity}
-                remoteSessionId={target.remoteSessionId}
-                remoteTarget={target.remoteTarget}
+                workspacePath={skillTarget.workspacePath}
+                workspaceIdentity={skillTarget.workspaceIdentity}
+                remoteSessionId={skillTarget.remoteSessionId}
+                remoteTarget={skillTarget.remoteTarget}
                 searchQuery={searchQueries.skills}
                 onVisibleCountChange={updateSkillCount}
               />

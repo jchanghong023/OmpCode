@@ -45,16 +45,13 @@ import {
   unregisterHostProcess,
 } from "./resourceManagerWindow.js";
 import { resolveHostResourceUsageResult } from "./resourceManagerHostSampling.js";
-import {
-  buildHostProcessEnv,
-  hostModulePath,
-  resolveBundledGlmBinaryPath,
-} from "./desktopRuntimeEnv.js";
+import { buildHostProcessEnv, hostModulePath } from "./desktopRuntimeEnv.js";
 import { ingestHostNetworkObservations } from "./desktopNetworkTelemetry.js";
 import { ingestCliResourceSample } from "./processResourceCliSource.js";
 import { ingestHostSelfResourceSample } from "./processResourceSelfHeapSource.js";
 import { createFeedbackLogArchiveFromExportLogs } from "./exportLogs.js";
 import { buildHostE2ECoverageEnv } from "./e2eCoverage.js";
+import { resolveImportMetaDirname } from "../shared/moduleDirname.js";
 
 export interface WindowBootstrapOptions {
   restoreSession?: boolean;
@@ -100,6 +97,8 @@ interface SpawnHostProcessOptions {
   attachInitialServicePort?: boolean;
 }
 
+const moduleDir = resolveImportMetaDirname(import.meta);
+
 const exitedHostProcesses = new WeakSet<ElectronUtilityProcess>();
 const disposingHostProcesses = new Set<ElectronUtilityProcess>();
 
@@ -143,7 +142,7 @@ export function loadWindow(
     }
     return win.loadURL(url.toString());
   } else {
-    return win.loadFile(join(import.meta.dirname, `../renderer/${page}.html`), {
+    return win.loadFile(join(moduleDir, `../renderer/${page}.html`), {
       query,
     });
   }
@@ -250,7 +249,6 @@ export function spawnHostProcess(
   options?: SpawnHostProcessOptions,
 ): ElectronUtilityProcess {
   const hostId = randomUUID();
-  const glmBinaryPath = resolveBundledGlmBinaryPath();
   const execArgv = [
     ...(RUNTIME_ZCODE_DEBUG ? [`--inspect-brk=${RUNTIME_ZCODE_DEBUG}`] : []),
     "--no-warnings",
@@ -258,6 +256,8 @@ export function spawnHostProcess(
   const child = electronUtilityProcess.fork(hostModulePath, [], {
     serviceName: formatZCodeHostProcessName(label),
     execArgv,
+    // Host 日志写入独立管道，避免继承图形会话中失效的标准输出描述符。
+    stdio: "pipe",
     env: {
       ...buildHostProcessEnv(dependencies.hostProcessLocalEnv),
       ...buildHostE2ECoverageEnv(),
@@ -283,7 +283,6 @@ export function spawnHostProcess(
     `[spawnHostProcess] forked host process for (${label}), pid=${child.pid}`,
   );
   dependencies.logger.info(`[spawnHostProcess] host module path: ${hostModulePath}`);
-  dependencies.logger.info(`[spawnHostProcess] glm binary path: ${glmBinaryPath ?? "<not found>"}`);
   dependencies.logger.info(
     `[spawnHostProcess] BIGMODEL_OAUTH_APP_SECRET source: ${process.env.BIGMODEL_OAUTH_APP_SECRET ? "process" : dependencies.hostProcessLocalEnv.BIGMODEL_OAUTH_APP_SECRET ? "dotenv" : "fallback"}`,
   );

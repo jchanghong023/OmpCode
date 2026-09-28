@@ -5,6 +5,33 @@ import type { OmpNativeIntegrationSnapshot } from "@zcode/shared/omp-integration
 type Scope = "profile" | "project";
 type McpServer = OmpNativeIntegrationSnapshot["mcpServers"][number];
 type Extension = OmpNativeIntegrationSnapshot["extensions"][number];
+type Hook = OmpNativeIntegrationSnapshot["hooks"][number];
+
+async function readHooks(
+  directory: string,
+  scope: Scope,
+): Promise<{ hooks: Hook[]; invalid: boolean }> {
+  const phases = await Promise.all(
+    (["pre", "post"] as const).map(async (phase) => {
+      try {
+        const entries = await readdir(join(directory, "hooks", phase), { withFileTypes: true });
+        return {
+          hooks: entries
+            .filter((entry) => entry.isFile() && /\.(?:ts|js)$/iu.test(entry.name))
+            .map((entry) => ({ name: entry.name, scope, phase })),
+          invalid: false,
+        };
+      } catch (error) {
+        // 目录未创建是空配置；权限或 IO 失败不能伪装成没有钩子。
+        return { hooks: [], invalid: (error as NodeJS.ErrnoException).code !== "ENOENT" };
+      }
+    }),
+  );
+  return {
+    hooks: phases.flatMap((entry) => entry.hooks),
+    invalid: phases.some((entry) => entry.invalid),
+  };
+}
 
 async function readExtensions(directory: string, scope: Scope): Promise<Extension[]> {
   const entries = await readdir(join(directory, "extensions"), { withFileTypes: true }).catch(
@@ -81,6 +108,7 @@ export async function readOmpNativeIntegrations(params: {
     roots.map(async ({ directory, scope }) => ({
       scope,
       extensions: await readExtensions(directory, scope),
+      hooks: await readHooks(directory, scope),
       mcp: await readMcp(directory, scope),
     })),
   );
@@ -91,6 +119,8 @@ export async function readOmpNativeIntegrations(params: {
     profileDir: params.agentDir,
     ...(params.workspacePath ? { projectDir: join(params.workspacePath, ".omp") } : {}),
     extensions: entries.flatMap((entry) => entry.extensions),
+    hooks: entries.flatMap((entry) => entry.hooks.hooks),
+    hookErrors: entries.filter((entry) => entry.hooks.invalid).map((entry) => entry.scope),
     mcpServers: entries
       .flatMap((entry) => entry.mcp.servers)
       .map((server) => ({

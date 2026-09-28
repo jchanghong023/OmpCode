@@ -265,4 +265,8 @@ function startArmsRum(): Promise<void> {
 
 // 总开关关闭或端点未配置时不初始化 SDK。
 export const armsInitPromise: Promise<void> =
-  ZCODE_TELEMETRY_ENABLED && ZCODE_ARMS_RUM_ENDPOINT ? startArmsRum() : Promise.resolve();
+  ZCODE_TELEMETRY_ENABLED &&
+  ZCODE_ARMS_RUM_ENDPOINT &&
+  process.env.OMPCODE_CENTOS7_LOCAL_ONLY !== "1"
+    ? startArmsRum()
+    : Promise.resolve();

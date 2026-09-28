@@ -6,9 +6,8 @@ import { createRequire } from "node:module";
 const require = createRequire(import.meta.url);
 const WebSocket = require("ws");
 const { connectViaProtocol } = await import("../../packages/client/src/index.js");
-const { HostV4RpcBridge } = await import(
-  "../../packages/desktop/src/main/mobileRelay/hostV4RpcBridge.js"
-);
+const { HostV4RpcBridge } =
+  await import("../../packages/desktop/src/main/mobileRelay/hostV4RpcBridge.js");
 
 const origin = process.argv[2] ?? "wss://8.137.101.112:443";
 const socket = new WebSocket(`${origin}/ws?mid=e2e-probe`, { rejectUnauthorized: false });
@@ -43,7 +42,10 @@ socket.on("message", (raw) => {
   if (!payload) return;
   if (payload.zcode_type === "bootstrap-response" && !opened) {
     const workspaces = payload.result?.workspaces ?? [];
-    console.log("BOOTSTRAP:", workspaces.map((w) => w.workspacePath));
+    console.log(
+      "BOOTSTRAP:",
+      workspaces.map((w) => w.workspacePath),
+    );
     if (!workspaces.length) process.exit(3);
     bridgeSessionId = randomUUID();
     const first = workspaces[0];

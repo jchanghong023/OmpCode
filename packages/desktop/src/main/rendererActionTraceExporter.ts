@@ -29,6 +29,7 @@ export function parseRendererActionTraceHeaders(
 }
 
 export function createRendererActionTraceExporter(env: EnvRecord): SpanExporter | undefined {
+  if (process.env.OMPCODE_CENTOS7_LOCAL_ONLY === "1") return undefined;
   const endpoint = resolveRendererActionTraceEndpoint(env);
   if (!endpoint) return undefined;
   return new OTLPTraceExporter({

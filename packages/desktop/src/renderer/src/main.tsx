@@ -16,6 +16,7 @@ import {
   setReactErrorArmsReporter,
 } from "@zcode/ui";
 import "@zcode/ui/styles.css";
+import "../fonts/linuxChinese.css";
 import { connectViaMessagePort, createMessagePortServiceConnection } from "@zcode/client";
 import {
   InternalChannels,
@@ -321,7 +322,7 @@ function initializeBusinessRoot(port: MessagePort): void {
   // React 错误边界捕获的异常不会冒泡到 window.onerror，RUM Browser SDK 默认收不到。
   // 必须在 createRoot 之前注入 reporter：根级 AppErrorBoundary 的职责正是兜住 Root 自身
   // 渲染崩溃，若依赖 Root 的 effect 注入，则 Root 首帧就崩时上报会丢失。
-  setReactErrorArmsReporter(desktopPlatform);
+  setReactErrorArmsReporter(null);
 
   appRoot?.render(
     <AppErrorBoundary isDesktop isMacDesktop={isMacDesktop} isWindowsDesktop={isWindowsDesktop}>

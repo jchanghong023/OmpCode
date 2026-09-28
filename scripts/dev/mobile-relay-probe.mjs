@@ -14,14 +14,28 @@ const timeout = setTimeout(() => {
 let authAcked = false;
 socket.on("open", () => {
   console.log("OPEN", url);
-  socket.send(JSON.stringify({ type: "auth_init", role: "terminal", device_sid: "probe", meta: { platform: "web", version: "probe" }, client_ts: Date.now() }));
+  socket.send(
+    JSON.stringify({
+      type: "auth_init",
+      role: "terminal",
+      device_sid: "probe",
+      meta: { platform: "web", version: "probe" },
+      client_ts: Date.now(),
+    }),
+  );
 });
 socket.on("message", (raw) => {
   const message = JSON.parse(String(raw));
   if (message.type === "auth_ack" || message.type === "pair_status_ack") {
     authAcked = true;
     console.log(message.type, message.pair_status);
-    socket.send(JSON.stringify({ type: "data", payload: { zcode_type: "bootstrap-request", requestId: "probe-1" }, client_ts: Date.now() }));
+    socket.send(
+      JSON.stringify({
+        type: "data",
+        payload: { zcode_type: "bootstrap-request", requestId: "probe-1" },
+        client_ts: Date.now(),
+      }),
+    );
     return;
   }
   if (message.type === "error") {

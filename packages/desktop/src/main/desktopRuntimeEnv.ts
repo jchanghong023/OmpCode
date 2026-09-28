@@ -37,7 +37,9 @@ import {
   type ResolveRemoteCdnOptions,
 } from "./remoteCdn.js";
 import { getElectronAppPath, isElectronAppPackaged } from "./desktopElectronApp.js";
+import { resolveImportMetaDirname } from "../shared/moduleDirname.js";
 
+const moduleDir = resolveImportMetaDirname(import.meta);
 const isLocalDevelopmentRuntime = !isElectronAppPackaged();
 export const desktopRuntimeEnv: ZCodeRuntimeEnv = isLocalDevelopmentRuntime
   ? "development"
@@ -82,8 +84,8 @@ export const runtimeSessionDataPath =
 // Chromedriver 会注入临时 --user-data-dir，并在该目录等待 DevToolsActivePort。
 // e2e 如果再用 app.setPath 覆盖 userData/sessionData，端口文件会被写到另一个目录，
 // 导致 Electron 已启动但 WebDriver session 一直创建失败。测试态打开该开关后保留 Chromedriver 的目录。
-export const hostModulePath = join(import.meta.dirname, "../host/index.js");
-export const schedulerModulePath = join(import.meta.dirname, "../scheduler/index.js");
+export const hostModulePath = join(moduleDir, "../host/index.js");
+export const schedulerModulePath = join(moduleDir, "../scheduler/index.js");
 export function getCredentialsDir() {
   return getAppConfigDir();
 }
@@ -148,7 +150,7 @@ function parseDotenv(content: string): Record<string, string> {
 }
 
 function resolveWorkspaceRootForEnvFiles(): string | null {
-  const workspaceRootCandidate = resolve(import.meta.dirname, "../../../..");
+  const workspaceRootCandidate = resolve(moduleDir, "../../../..");
   return existsSync(join(workspaceRootCandidate, "pnpm-workspace.yaml"))
     ? workspaceRootCandidate
     : null;
@@ -161,7 +163,7 @@ export function loadHostProcessEnvFromLocalFiles(): Record<string, string> {
     return { ZCODE_TELEMETRY_RUNTIME_DISTRIBUTION: "packaged" };
   }
 
-  const desktopRoot = resolve(import.meta.dirname, "../..");
+  const desktopRoot = resolve(moduleDir, "../..");
   const workspaceRoot = resolveWorkspaceRootForEnvFiles();
   const fileCandidates = [
     ...(workspaceRoot
@@ -204,7 +206,7 @@ export function loadHostProcessEnvFromLocalFiles(): Record<string, string> {
 }
 
 function resolveDevelopmentMockCdnDir(): string {
-  return join(import.meta.dirname, "../../mock-cdn");
+  return join(moduleDir, "../../mock-cdn");
 }
 
 function resolveAvailableDevelopmentMockCdnDir(): string | undefined {
@@ -361,7 +363,7 @@ function resolveBundledZCodeAgentBinaryPath(): string | undefined {
       ...entrySegments,
     ),
     join(
-      import.meta.dirname,
+      moduleDir,
       "../../bundled-agents",
       platformKey,
       runtime.bundledResourceDir,
@@ -382,7 +384,7 @@ function resolveBundledRuntimeToolBinaryPath(
       ? join(process.resourcesPath, "tools", toolDir, candidateBinaryName)
       : null,
     join(
-      import.meta.dirname,
+      moduleDir,
       "../../bundled-tools",
       resolvePlatformKeyForPackagedApp(),
       toolDir,
@@ -522,6 +524,14 @@ export function buildHostProcessEnv(hostProcessLocalEnv: Record<string, string>)
     ...sanitizeZCodeRuntimeEnv(rawInheritedEnv),
     ...buildZCodeToolEnvPassthroughEnv(rawInheritedEnv),
   });
+  if (process.env.OMPCODE_CENTOS7_LOCAL_ONLY === "1") {
+    // 修复原因：dotenv 的 Host 本地环境不能重新启用启动脚本已关闭的遥测出口。
+    delete inheritedEnv.ZCODE_ARMS_RUM_ENDPOINT;
+    delete inheritedEnv.ZCODE_TELEMETRY_REPORT_ENDPOINT;
+    for (const key of Object.keys(agentTelemetryEnv)) {
+      if (key.startsWith("OTEL_EXPORTER_")) delete agentTelemetryEnv[key];
+    }
+  }
   // A release app must never inherit the local unsigned-Helper escape hatch.
   // Otherwise a developer shell/launchctl variable can make the signed app
   // reject its verified bundled Helper and route onboarding to a stale dev app.
@@ -539,6 +549,8 @@ export function buildHostProcessEnv(hostProcessLocalEnv: Record<string, string>)
 
   return {
     ...inheritedEnv,
+    // 修复原因：Host/scheduler 是独立进程，CentOS 7 网络边界必须由 Main 明确继承。
+    ...(process.env.OMPCODE_CENTOS7_LOCAL_ONLY === "1" ? { OMPCODE_CENTOS7_LOCAL_ONLY: "1" } : {}),
     // OTLP 凭据只定向传到 host；host 初始化 services 时会立即捕获并从 process.env 清除，
     // 后续只在启动 Agent 时短暂注入，不会进入 Bash/MCP/tool env。
     ...agentTelemetryEnv,

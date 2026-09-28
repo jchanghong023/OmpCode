@@ -65,12 +65,15 @@ export function OmpModelRolesDialog(props: OmpModelRolesDialogProps) {
   void _workspaceIdentity;
   const { intl } = useZCodeIntl();
   const platform = usePlatform();
-  const [roles, setRoles] = useState<{ role: string; value: string }[]>([]);
+  const [roles, setRoles] = useState<{ role: string; value: string }[]>(() =>
+    BUILTIN_OMP_ROLES.map((role) => ({ role, value: "" })),
+  );
   const [originalRoles, setOriginalRoles] = useState<ReadonlyMap<string, string>>(new Map());
   const [loadError, setLoadError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [savedAt, setSavedAt] = useState<number | null>(null);
+  const [savedWithBackup, setSavedWithBackup] = useState(false);
 
   const loadRoles = useCallback(async () => {
     if (!platform.readOmpModelRoles) {
@@ -162,6 +165,7 @@ export function OmpModelRolesDialog(props: OmpModelRolesDialogProps) {
       const result = await platform.writeOmpModelRoles(changedRoles);
       if (result.success) {
         setSavedAt(Date.now());
+        setSavedWithBackup(Boolean(result.backupPath));
         setOriginalRoles(
           new Map(roles.filter((item) => item.value).map((item) => [item.role, item.value])),
         );
@@ -259,7 +263,11 @@ export function OmpModelRolesDialog(props: OmpModelRolesDialogProps) {
           <span className="mr-auto text-ui-base text-foreground-subtle">{saveError}</span>
         ) : savedAt ? (
           <span className="mr-auto text-ui-base text-foreground-subtle">
-            {intl.formatMessage({ id: "settings.ompModelRoles.saved" })}
+            {intl.formatMessage({
+              id: savedWithBackup
+                ? "settings.ompModelRoles.saved"
+                : "settings.ompModelRoles.created",
+            })}
           </span>
         ) : null}
         {!inline ? (

@@ -1,5 +1,15 @@
 import { randomUUID } from "node:crypto";
-import { copyFile, open, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import {
+  copyFile,
+  link,
+  mkdir,
+  open,
+  readFile,
+  rename,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { isMap, parseDocument, stringify, YAMLMap } from "yaml";
@@ -48,6 +58,10 @@ export async function readOmpModelRolesConfig(configPath: string): Promise<ReadR
     }
     return { success: true, roles: list };
   } catch (error) {
+    // 首次使用 omp 时 config.yml 尚不存在，内建角色仍需要显示供用户选择。
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") {
+      return { success: true, roles: [] };
+    }
     return { success: false, error: configError(error) };
   }
 }
@@ -58,7 +72,27 @@ export async function writeOmpModelRolesConfig(
 ): Promise<WriteResult> {
   const tempPath = join(dirname(configPath), `.omp-config-${randomUUID()}.tmp`);
   try {
-    const raw = await readFile(configPath, "utf8");
+    let raw: string;
+    try {
+      raw = await readFile(configPath, "utf8");
+    } catch (error) {
+      if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error;
+      const doc = parseDocument("");
+      const roles = new YAMLMap();
+      for (const { role, value } of updates) roles.set(role, value);
+      doc.set("modelRoles", roles);
+      await mkdir(dirname(configPath), { recursive: true });
+      await writeFile(tempPath, doc.toString(), { encoding: "utf8", flag: "wx", mode: 0o600 });
+      const handle = await open(tempPath, "r+");
+      try {
+        await handle.sync();
+      } finally {
+        await handle.close();
+      }
+      // 配置可能在读取后由 omp 创建；原子链接只在目标仍不存在时成功，绝不覆盖它。
+      await link(tempPath, configPath);
+      return { success: true };
+    }
     const { doc, roles } = parseConfig(raw);
     const map = roles ?? new YAMLMap();
     const replacements: { start: number; end: number; value: string }[] = [];

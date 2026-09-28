@@ -1,10 +1,13 @@
 import { randomUUID } from "node:crypto";
 import { createServer, type Server as HttpServer } from "node:https";
-import type { MessagePortMain, UtilityProcess as ElectronUtilityProcess } from "electron";
-import { MessageChannelMain } from "electron";
+import type { UtilityProcess as ElectronUtilityProcess } from "electron";
 import { WebSocket, WebSocketServer } from "ws";
-import { MessagePortProtocol, type MessagePortLike, type MessagePortPayload } from "@zcode/rpc";
-import { HostMessageTypes, type MobileRelayEntryStatus, type WindowBridgeableWorkspace } from "@zcode/shared";
+import { MessagePortProtocol } from "@zcode/rpc";
+import {
+  HostMessageTypes,
+  type MobileRelayEntryStatus,
+  type WindowBridgeableWorkspace,
+} from "@zcode/shared";
 import { logger } from "../logger.js";
 import {
   MOBILE_RELAY_LISTEN_HOST,
@@ -14,6 +17,7 @@ import {
 } from "./mobileRelayProtocol.js";
 import type { MobileRelayCertificate } from "./mobileRelayCertificate.js";
 import { HostV4RpcBridge, type HostV4BridgeInfo } from "./hostV4RpcBridge.js";
+import { wrapElectronPort } from "./wrapElectronPort.js";
 
 /**
  * 手机远控内嵌中继（无鉴权开放接入）。
@@ -54,38 +58,17 @@ export interface MobileRelayServerOptions {
   /** 解析当前焦点窗口的 Host 进程；无窗口/未就绪返回 undefined。 */
   resolveFocusHost: () => ElectronUtilityProcess | undefined;
   /** 向 Host 查询可桥接工作区（Main 侧负责消息关联与超时）。 */
-  requestBridgeableWorkspaces: (host: ElectronUtilityProcess) => Promise<WindowBridgeableWorkspace[]>;
+  requestBridgeableWorkspaces: (
+    host: ElectronUtilityProcess,
+  ) => Promise<WindowBridgeableWorkspace[]>;
   onConnectionsChanged?: (connections: number) => void;
+  /** 仅测试注入；真实桌面固定用 MOBILE_RELAY_LISTEN_PORT，E2E 用临时端口。 */
+  listenPort?: number;
 }
 
 const HANDSHAKE_TIMEOUT_MS = 30_000;
 /** 空闲保活：frp TCP 隧道与 NAT 对长空闲连接不友好，RPC 层心跳之外保持链路活性。 */
 const KEEPALIVE_PING_INTERVAL_MS = 30_000;
-
-/**
- * MessagePortMain → rpc 层 MessagePortLike 适配，与 host 侧
- * packages/desktop/src/host/electronPort.ts 同构；main 工程的 rootDir 不含
- * host 目录，不能跨目录引用，在此收口一份等价实现。
- */
-function wrapElectronPort(port: MessagePortMain): MessagePortLike {
-  return {
-    addEventListener(_type: "message", listener: (e: { data: MessagePortPayload }) => void) {
-      port.on("message", listener);
-    },
-    removeEventListener(_type: "message", listener: (e: { data: MessagePortPayload }) => void) {
-      port.off("message", listener);
-    },
-    postMessage(data: MessagePortPayload) {
-      port.postMessage(data);
-    },
-    start() {
-      port.start();
-    },
-    close() {
-      port.close();
-    },
-  };
-}
 
 export class MobileRelayServer {
   private readonly sessions = new Set<RelaySession>();
@@ -110,17 +93,23 @@ export class MobileRelayServer {
   async start(): Promise<void> {
     if (this.running) return;
     const { certPem, keyPem } = this.options.certificate;
-    const httpServer = createServer({
-      cert: certPem,
-      key: keyPem,
-      // TLS 终止在本 relay；公网侧 frp 是 TCP 透传，SNI/ALPN 无需特殊处理。
-    }, (_req, res) => {
-      res.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
-      res.end("mobile relay: only /ws is served");
-    });
+    const httpServer = createServer(
+      {
+        cert: certPem,
+        key: keyPem,
+        // TLS 终止在本 relay；公网侧 frp 是 TCP 透传，SNI/ALPN 无需特殊处理。
+      },
+      (_req, res) => {
+        res.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
+        res.end("mobile relay: only /ws is served");
+      },
+    );
     const wss = new WebSocketServer({ noServer: true });
     httpServer.on("upgrade", (request, socket, head) => {
-      const { pathname } = new URL(request.url ?? "/", `https://${request.headers.host ?? "local"}`);
+      const { pathname } = new URL(
+        request.url ?? "/",
+        `https://${request.headers.host ?? "local"}`,
+      );
       if (pathname !== MOBILE_RELAY_WS_PATH) {
         socket.destroy();
         return;
@@ -133,7 +122,8 @@ export class MobileRelayServer {
 
     await new Promise<void>((resolve, reject) => {
       httpServer.once("error", reject);
-      httpServer.listen(MOBILE_RELAY_LISTEN_PORT, MOBILE_RELAY_LISTEN_HOST, () => {
+      const listenPort = this.options.listenPort ?? MOBILE_RELAY_LISTEN_PORT;
+      httpServer.listen(listenPort, MOBILE_RELAY_LISTEN_HOST, () => {
         httpServer.removeListener("error", reject);
         resolve();
       });
@@ -149,7 +139,9 @@ export class MobileRelayServer {
       }
     }, KEEPALIVE_PING_INTERVAL_MS);
     this.keepaliveTimer.unref?.();
-    logger.info(`mobile relay listening on wss://${MOBILE_RELAY_LISTEN_HOST}:${MOBILE_RELAY_LISTEN_PORT}${MOBILE_RELAY_WS_PATH}`);
+    logger.info(
+      `mobile relay listening on wss://${MOBILE_RELAY_LISTEN_HOST}:${MOBILE_RELAY_LISTEN_PORT}${MOBILE_RELAY_WS_PATH}`,
+    );
   }
 
   async stop(): Promise<void> {
@@ -175,7 +167,12 @@ export class MobileRelayServer {
   }
 
   private handleConnection(socket: WebSocket): void {
-    const session: RelaySession = { socket, host: undefined, workspaces: [], attachment: undefined };
+    const session: RelaySession = {
+      socket,
+      host: undefined,
+      workspaces: [],
+      attachment: undefined,
+    };
     this.sessions.add(session);
     this.options.onConnectionsChanged?.(this.sessions.size);
 
@@ -217,7 +214,11 @@ export class MobileRelayServer {
         logger.warn("[mobile-relay] unexpected inbound frame type=" + String(message.type));
         return;
       }
-      if (message.type !== "data" || typeof message.payload !== "object" || message.payload === null) {
+      if (
+        message.type !== "data" ||
+        typeof message.payload !== "object" ||
+        message.payload === null
+      ) {
         logger.debug("[mobile-relay] inbound frame type=" + String(message.type));
         return;
       }
@@ -240,7 +241,10 @@ export class MobileRelayServer {
 
   private sendPayload(session: RelaySession, payload: object): void {
     if (session.socket.readyState !== WebSocket.OPEN) return;
-    logger.debug("[mobile-relay] out payload zcode_type=", (payload as { zcode_type?: string }).zcode_type);
+    logger.debug(
+      "[mobile-relay] out payload zcode_type=",
+      (payload as { zcode_type?: string }).zcode_type,
+    );
     session.socket.send(JSON.stringify({ type: "data", payload, client_ts: Date.now() }));
   }
 
@@ -251,7 +255,10 @@ export class MobileRelayServer {
     session.socket.send(JSON.stringify({ type: "error", code, client_ts: Date.now() }));
   }
 
-  private async handleDataPayload(session: RelaySession, payload: Record<string, unknown>): Promise<void> {
+  private async handleDataPayload(
+    session: RelaySession,
+    payload: Record<string, unknown>,
+  ): Promise<void> {
     const zcodeType = payload.zcode_type;
 
     if (zcodeType === "bootstrap-request") {
@@ -288,7 +295,8 @@ export class MobileRelayServer {
         this.sendError(session, "bridge_unavailable");
         return;
       }
-      const bridgeSessionId = typeof payload.bridgeSessionId === "string" ? payload.bridgeSessionId : "";
+      const bridgeSessionId =
+        typeof payload.bridgeSessionId === "string" ? payload.bridgeSessionId : "";
       const generation = payload.bridgeGeneration;
       if (!bridgeSessionId || generation !== 1 || typeof payload.workspaceKey !== "string") {
         this.closeSession(session, 1002, "invalid bridge open");
@@ -305,6 +313,9 @@ export class MobileRelayServer {
       const host = session.host;
       // 同一手机连接重开 bridge（切换项目/断线恢复）时先释放旧 attachment。
       this.releaseAttachment(session);
+      // electron 只在 main 进程提供 MessageChannelMain；延迟解析让纯 Node
+      // 测试也能装载本模块做握手/门控回归（main 进程内行为不变）。
+      const { MessageChannelMain } = await import("electron");
       const { port1, port2 } = new MessageChannelMain();
       const attachmentId = randomUUID();
       const bridgeInfo: HostV4BridgeInfo = {
@@ -312,7 +323,9 @@ export class MobileRelayServer {
         bridgeGeneration: 1,
         workspacePath: workspace.workspacePath,
         ...(workspace.workspaceIdentity ? { workspaceIdentity: workspace.workspaceIdentity } : {}),
-        ...(typeof payload.taskId === "string" && payload.taskId ? { initialTaskId: payload.taskId } : {}),
+        ...(typeof payload.taskId === "string" && payload.taskId
+          ? { initialTaskId: payload.taskId }
+          : {}),
       };
       const rpc = new HostV4RpcBridge(bridgeInfo, (frame) => this.sendPayload(session, frame));
       rpc.onFatalError(() => {
@@ -369,7 +382,9 @@ export class MobileRelayServer {
           bridgeGeneration: 1,
           workspaceKey,
           workspacePath: workspace.workspacePath,
-          ...(workspace.workspaceIdentity ? { workspaceIdentity: workspace.workspaceIdentity } : {}),
+          ...(workspace.workspaceIdentity
+            ? { workspaceIdentity: workspace.workspaceIdentity }
+            : {}),
           ...(bridgeInfo.initialTaskId ? { initialTaskId: bridgeInfo.initialTaskId } : {}),
         },
       });
@@ -419,7 +434,10 @@ export class MobileRelayServer {
 
   private closeSession(session: RelaySession, code: number, reason: string): void {
     this.disposeSession(session);
-    if (session.socket.readyState === WebSocket.OPEN || session.socket.readyState === WebSocket.CONNECTING) {
+    if (
+      session.socket.readyState === WebSocket.OPEN ||
+      session.socket.readyState === WebSocket.CONNECTING
+    ) {
       session.socket.close(code, reason);
     }
   }

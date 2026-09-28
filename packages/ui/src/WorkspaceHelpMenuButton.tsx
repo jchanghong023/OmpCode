@@ -29,6 +29,12 @@ import { useDesktopUpdateMenu } from "@/hooks/useDesktopUpdateMenu.js";
 import { usePlatform } from "@/hooks/usePlatform.js";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
 import { createHelpMenuActionHandlers } from "@/lib/helpMenuActions.js";
+import { useOfflineFeature } from "@/lib/offlineLockGate.js";
+
+/** 离线锁定禁用项的行内说明：紧跟原标签，不做二级弹层，保证锁定语义在菜单内自明。 */
+function OfflineLockHint({ hint }: { hint: string }) {
+  return <span className="text-ui-xs text-foreground-subtlest">· {hint}</span>;
+}
 
 export function WorkspaceHelpMenuButton({
   className,
@@ -44,6 +50,14 @@ export function WorkspaceHelpMenuButton({
   const { intl } = useZCodeIntl();
   const platform = usePlatform();
   const updateMenu = useDesktopUpdateMenu(isDesktop);
+  // 离线锁定（CentOS 7 --offline）下公网帮助/社区/反馈与更新检查由后端关闭；
+  // 入口按 FORK.md 保留并呈禁用态，附「离线锁定中已关闭」说明，不按平台隐藏。
+  // 逐项消费 W3 门控接口的对应功能键（offlineGate.ts 门控面清单）。
+  const docsLocked = useOfflineFeature("publicHelp");
+  const communityLocked = useOfflineFeature("community");
+  const feedbackLocked = useOfflineFeature("feedback");
+  const updateCheckLocked = useOfflineFeature("publicUpdateCheck");
+  const offlineLockHint = intl.formatMessage({ id: "offlineLock.disabledHint" });
   const openFeedbackSubmit = useFeedbackStore((state) => state.openSubmit);
   const openFeatureRequest = useFeedbackStore((state) => state.openFeatureRequest);
   const helpMenuLabel = intl.formatMessage({ id: "workspaceHeader.help.menu" });
@@ -88,21 +102,26 @@ export function WorkspaceHelpMenuButton({
         align="end"
         className="min-w-0 w-max [&_[data-slot=dropdown-menu-item]]:pr-6"
       >
-        <DropdownMenuItem onSelect={helpMenuActions.openProductDocs}>
+        {/* 公网帮助/社区/反馈在离线锁定下禁用而非移除：入口两平台一致保留（FORK.md）。 */}
+        <DropdownMenuItem disabled={docsLocked} onSelect={helpMenuActions.openProductDocs}>
           <BookOpenIcon className="size-4" />
           {intl.formatMessage({ id: "workspaceHeader.help.docs" })}
+          {docsLocked ? <OfflineLockHint hint={offlineLockHint} /> : null}
         </DropdownMenuItem>
-        <DropdownMenuItem onSelect={handleOpenCommunity}>
+        <DropdownMenuItem disabled={communityLocked} onSelect={handleOpenCommunity}>
           <UsersIcon className="size-4" />
           {intl.formatMessage({ id: "workspaceHeader.help.community" })}
+          {communityLocked ? <OfflineLockHint hint={offlineLockHint} /> : null}
         </DropdownMenuItem>
-        <DropdownMenuItem onSelect={helpMenuActions.openIssueReport}>
+        <DropdownMenuItem disabled={feedbackLocked} onSelect={helpMenuActions.openIssueReport}>
           <MessageSquareIcon className="size-4" />
           {intl.formatMessage({ id: "workspaceHeader.help.issueReport" })}
+          {feedbackLocked ? <OfflineLockHint hint={offlineLockHint} /> : null}
         </DropdownMenuItem>
-        <DropdownMenuItem onSelect={openFeatureRequest}>
+        <DropdownMenuItem disabled={feedbackLocked} onSelect={openFeatureRequest}>
           <LightbulbIcon className="size-4" />
           {intl.formatMessage({ id: "workspaceHeader.help.productRequest" })}
+          {feedbackLocked ? <OfflineLockHint hint={offlineLockHint} /> : null}
         </DropdownMenuItem>
         {/* Windows/Linux 没有原生菜单栏，自绘标题栏箭头菜单也已下线，
             资源管理器只能从这里进；Web 端没有该窗口，不渲染。 */}
@@ -118,7 +137,7 @@ export function WorkspaceHelpMenuButton({
             </DropdownMenuItem>
             {updateMenu.visible ? (
               <DropdownMenuItem
-                disabled={updateMenu.disabled}
+                disabled={updateMenu.disabled || updateCheckLocked}
                 onSelect={updateMenu.checkForUpdates}
               >
                 <RefreshCwIcon className="size-4" />
@@ -137,6 +156,7 @@ export function WorkspaceHelpMenuButton({
                 ) : (
                   intl.formatMessage({ id: updateMenu.labelId }, updateMenu.labelValues)
                 )}
+                {updateCheckLocked ? <OfflineLockHint hint={offlineLockHint} /> : null}
               </DropdownMenuItem>
             ) : null}
             <DropdownMenuItem onSelect={handleShowAbout}>

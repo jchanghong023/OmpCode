@@ -307,7 +307,9 @@ export async function dispatchKeyPress(
   for (const key of held) await dispatch("keyDown", key);
   await dispatch("keyDown", last);
   await dispatch("keyUp", last);
-  for (const key of held.toReversed()) await dispatch("keyUp", key);
+  // 修复依据：Array.prototype.toReversed 是 Node 20+ API，Electron 28 内嵌 Node 18.18 上为
+  // undefined；slice().reverse() 同样按倒序新副本迭代且不改动 held 原数组。
+  for (const key of held.slice().reverse()) await dispatch("keyUp", key);
 }
 
 /** 发一次按键（keyDown + keyUp）；已知键带完整映射，未知键裸传 key。modifiers 位掩码可透传。 */

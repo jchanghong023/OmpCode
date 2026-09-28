@@ -13,6 +13,7 @@ import type {
   SaveCliMcpToUserDirectoryRequest,
 } from "./mcp.js";
 import type { MobileRelayEntryStatus } from "./channels.js";
+import type { OfflineGateState } from "./offlineGate.js";
 import type { OAuthStateRegistration } from "./oauth.js";
 import type { OmpNativeIntegrationSnapshot } from "./omp-integrations.js";
 import type { AppSettings, Locale } from "./protocol.js";
@@ -573,6 +574,14 @@ export interface IPlatformService {
    * Web/手机端没有内嵌 relay，按接口惯例返回 running=false 的固定占位。
    */
   getMobileRelayEntry(): Promise<MobileRelayEntryStatus>;
+
+  /**
+   * 查询离线锁定门控状态（CentOS 7 启动器 `--offline`，Main 唯一所有者派生，见
+   * offlineGate.ts）。仅 Desktop main 实现（ipcMain.handle(PlatformChannels.OfflineGateState)）；
+   * Web/非桌面没有该运行时事实，缺省不实现——消费方把「未提供」按未锁定处理，
+   * 与 Windows 全功能基准一致。
+   */
+  getOfflineGateState?(): Promise<OfflineGateState>;
 
   /** 订阅当前窗口内远程连接过程日志，返回 disposer */
   onRemoteConnectionLog(handler: (entry: RemoteConnectionRuntimeLog) => void): () => void;

@@ -208,6 +208,25 @@ function createWebPlatform(): IPlatformService {
         running: false,
         error: "Not supported in web mode",
       }),
+    // 离线锁定是 CentOS 7 桌面启动器 `--offline` 的运行时事实；Web 端没有该状态，
+    // 按「未提供即未锁定」惯例返回全功能占位，与 Windows 基准一致。
+    getOfflineGateState: () =>
+      Promise.resolve({
+        localOnly: false,
+        disabledFeatures: {
+          mobileRelay: false,
+          publicUpdateCheck: false,
+          publicConfig: false,
+          publicHelp: false,
+          community: false,
+          feedback: false,
+          accountShare: false,
+          externalBrowser: false,
+          telemetry: false,
+          hostOnlineBots: false,
+          remoteRecommendedPrompts: false,
+        },
+      }),
     onRemoteConnectionLog: () => () => {},
     onRemoteSessionClosed: () => () => {},
     onBotRemoteWorkspaceReconnected: () => () => {},

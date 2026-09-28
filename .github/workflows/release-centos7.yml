@@ -37,7 +37,7 @@ jobs:
           REQUESTED_TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
-          [[ "$GITHUB_REF" == refs/heads/experiment/centos7-no-proot ]] || { echo 'CentOS 7 releases must run from experiment/centos7-no-proot.' >&2; exit 1; }
+          [[ "$GITHUB_REF" == refs/heads/main ]] || { echo 'CentOS 7 releases must run from main.' >&2; exit 1; }
           version=$(node -p 'require("./package.json").version')
           release_tag=${REQUESTED_TAG:-"v${version}-centos7-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"}
           git check-ref-format "refs/tags/$release_tag" || { echo "Invalid release tag: $release_tag" >&2; exit 1; }
@@ -71,11 +71,19 @@ jobs:
           node-version: 24.14.0
           cache: pnpm
 
+      - name: Switch to CentOS 7 build state
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/prepare-centos7-build.mjs apply
+
       - name: Install desktop build dependencies
         shell: bash
         run: |
           set -euo pipefail
-          pnpm install --frozen-lockfile
+          # 切换后的 manifest 与仓库 lockfile 不一致，必须 --no-frozen-lockfile；
+          # 切换脚本全精确钉版保证解析可重现（C1 实证：services/server undici 必须与 desktop 同钉 6.23.0）。
+          pnpm install --no-frozen-lockfile
 
       - name: Build Linux desktop
         shell: bash
@@ -127,11 +135,18 @@ jobs:
           node-version: 24.14.0
           cache: pnpm
 
+      - name: Switch to CentOS 7 build state
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/prepare-centos7-build.mjs apply
+
       - name: Install native build dependencies
         shell: bash
         run: |
           set -euo pipefail
-          pnpm install --frozen-lockfile
+          # 与 desktop job 相同：切换后 manifest 与 lockfile 不一致，须 --no-frozen-lockfile。
+          pnpm install --no-frozen-lockfile
 
       - name: Prepare pinned CentOS 7 native toolchain
         shell: bash

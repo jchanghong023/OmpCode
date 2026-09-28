@@ -49,7 +49,6 @@ import {
   type OffPeakCreateBlockReason,
 } from "@/settings/offPeakUiPresentation.js";
 import { useProviderSettingsView } from "@/hooks/useProviderSettingsView.js";
-import { useOffPeakEligibility } from "@/hooks/useOffPeakEligibility.js";
 import { useSettings } from "@/hooks/useSettingService.js";
 import { logger } from "@/logger.js";
 import {
@@ -526,7 +525,7 @@ export function AutomationsSection({
 }: AutomationsSectionProps) {
   const { intl, locale } = useZCodeIntl();
   const platform = usePlatform();
-  const { clientScenesService, offPeakTaskService, zcodeAgentService } = useServices();
+  const { offPeakTaskService, zcodeAgentService } = useServices();
   const confirmDialog = useConfirmDialog();
   const { openCodingPlanUpgrade } = useCodingPlanUpgradeDialog();
   const providerSettingsRead = useProviderSettingsView();
@@ -534,7 +533,6 @@ export function AutomationsSection({
     providerSettingsRead.state.status === "ready" ? providerSettingsRead.state.view : null;
   const { status: entryStatus, label: entryLabel, retry: retryEntry } = useCodingPlanEntryGate();
   const { settings: sharedSettings, update: updateSharedSettings } = useSettings();
-  useOffPeakEligibility(sharedSettings, providerSettingsView?.revision);
 
   const automations = useAutomationManagementStore((state) => state.automations);
   const automationCreateLimitReached = automations.length >= AUTOMATION_CREATE_LIMIT;
@@ -552,7 +550,7 @@ export function AutomationsSection({
   const deleteRun = useAutomationManagementStore((state) => state.deleteRun);
   const refresh = useAutomationManagementStore((state) => state.refresh);
 
-  const automationTemplates = useAutomationTemplates(clientScenesService);
+  const automationTemplates = useAutomationTemplates();
   const offPeakTasks = useOffPeakTaskStore((state) => state.tasks);
   const offPeakStoreLoading = useOffPeakTaskStore((state) => state.loading);
   const offPeakGrayConfig = useOffPeakTaskStore((state) => state.grayConfig);
@@ -565,9 +563,6 @@ export function AutomationsSection({
   );
   const offPeakOperationId = useOffPeakTaskStore((state) => state.operationId);
   const offPeakRefresh = useOffPeakTaskStore((state) => state.refresh);
-  const offPeakRefreshCodingPlanSupport = useOffPeakTaskStore(
-    (state) => state.refreshCodingPlanSupport,
-  );
   const offPeakRefreshTakeNumberAvailability = useOffPeakTaskStore(
     (state) => state.refreshTakeNumberAvailability,
   );
@@ -623,7 +618,7 @@ export function AutomationsSection({
   const currentWorkspaceIsRemote = isRemoteAutomationWorkspace(activeWorkspaceTab);
   // 灰度中途翻转：只藏创建入口；有非终态存量仍展示并跑到终态。
   const offPeakGrayEnabled = offPeakGrayConfig?.enabled === true;
-  const offPeakCreationEnabled = offPeakGrayEnabled && !currentWorkspaceIsRemote;
+  const offPeakCreationEnabled = false;
   // 扫描全部 provider 会把未选中的 Coding Plan 当成当前执行凭证。
   // mock 演示字段仍可覆盖；真实路径只接受与当前 family/selectedKey 一致的脱敏 resolver 快照。
   const offPeakNoPlan =
@@ -631,9 +626,8 @@ export function AutomationsSection({
     (offPeakGrayConfig?.codingPlanActive === undefined &&
       !offPeakStoreLoading &&
       !isCurrentOffPeakCodingPlanSupported(offPeakCodingPlanSupport, sharedSettings));
-  const offPeakVisible =
-    !currentWorkspaceIsRemote && (offPeakGrayEnabled || offPeakTasks.length > 0);
-  const hasAnyTasks = automations.length > 0 || offPeakTasks.length > 0;
+  const offPeakVisible = false;
+  const hasAnyTasks = automations.length > 0;
   const visibleTabs = resolveVisibleAutomationTabs({
     hasAnyTasks,
     offPeakVisible,
@@ -767,6 +761,7 @@ export function AutomationsSection({
 
   // 服务端给出准确恢复时间；到点后重查。刷新期间及失败后继续禁入，直到成功返回 true。
   useEffect(() => {
+    if (!offPeakVisible) return;
     const nextTakeAt = offPeakTakeNumberAvailability?.nextTakeAt;
     if (offPeakTakeNumberAvailability?.canTakeNumber !== false || nextTakeAt === undefined) return;
     const delay = Math.max(0, nextTakeAt - Date.now()) + 100;
@@ -775,10 +770,16 @@ export function AutomationsSection({
       void offPeakRefreshTakeNumberAvailability(offPeakTaskService);
     }, delay);
     return () => clearTimeout(timer);
-  }, [offPeakRefreshTakeNumberAvailability, offPeakTaskService, offPeakTakeNumberAvailability]);
+  }, [
+    offPeakRefreshTakeNumberAvailability,
+    offPeakTaskService,
+    offPeakTakeNumberAvailability,
+    offPeakVisible,
+  ]);
 
   // 额度 Tooltip 曾改成不会递减的绝对日期；按远端实现推进分钟边界，保持剩余时长准确。
   useEffect(() => {
+    if (!offPeakVisible) return;
     const nextTakeAt = offPeakTakeNumberAvailability?.nextTakeAt;
     if (offPeakTakeNumberAvailability?.canTakeNumber !== false || nextTakeAt === undefined) return;
     const remainingMs = nextTakeAt - Date.now();
@@ -788,11 +789,11 @@ export function AutomationsSection({
     const delay = (remainderMs === 0 ? minuteMs : remainderMs) + 50;
     const timer = setTimeout(() => setNow(Date.now()), delay);
     return () => clearTimeout(timer);
-  }, [now, offPeakTakeNumberAvailability]);
+  }, [now, offPeakTakeNumberAvailability, offPeakVisible]);
 
   // 位次/状态轮询刷新（host offPeakTaskSync 写库，renderer 每 10s 读快照；无任务不轮）。
   useEffect(() => {
-    if (view.mode !== "list" || offPeakTasks.length === 0) return;
+    if (!offPeakVisible || view.mode !== "list" || offPeakTasks.length === 0) return;
     const timer = setInterval(() => {
       void offPeakRefresh(offPeakTaskService);
     }, 10_000);
@@ -802,32 +803,21 @@ export function AutomationsSection({
   const handleRefresh = useCallback(async () => {
     setRefreshing(true);
     try {
-      await Promise.all([
-        refresh(zcodeAgentService),
-        offPeakRefresh(offPeakTaskService),
-        ...(offPeakGrayEnabled ? [offPeakRefreshCodingPlanSupport(offPeakTaskService)] : []),
-      ]);
+      await refresh(zcodeAgentService);
       setNow(Date.now());
     } finally {
       setRefreshing(false);
     }
-  }, [
-    offPeakGrayEnabled,
-    offPeakRefresh,
-    offPeakRefreshCodingPlanSupport,
-    offPeakTaskService,
-    refresh,
-    zcodeAgentService,
-  ]);
+  }, [refresh, zcodeAgentService]);
 
   // New task 页模板卡跳转过来：消费预填草稿 → 切 idle tab + 打开创建表单预填。
   useEffect(() => {
     const draft = consumePendingCreateDraft();
     if (!draft) return;
-    if (currentWorkspaceIsRemote) return;
+    if (currentWorkspaceIsRemote || !offPeakVisible) return;
     setTab("idle");
     setView({ mode: "offpeak-create", draft });
-  }, [consumePendingCreateDraft, currentWorkspaceIsRemote]);
+  }, [consumePendingCreateDraft, currentWorkspaceIsRemote, offPeakVisible]);
 
   useEffect(() => {
     if (!currentWorkspaceIsRemote) return;
@@ -895,7 +885,7 @@ export function AutomationsSection({
     error: string | null;
   }>({ id: null, error: null });
   useEffect(() => {
-    if (!isOffPeakDetailNavigationId(openAutomationId)) return;
+    if (!offPeakVisible || !isOffPeakDetailNavigationId(openAutomationId)) return;
     let disposed = false;
     void offPeakRefresh(offPeakTaskService).finally(() => {
       if (disposed) return;
@@ -908,12 +898,16 @@ export function AutomationsSection({
     return () => {
       disposed = true;
     };
-  }, [openAutomationId, offPeakRefresh, offPeakTaskService]);
+  }, [openAutomationId, offPeakRefresh, offPeakTaskService, offPeakVisible]);
 
   useEffect(() => {
     // 闲时轮尾卡携带 offpeak- 前缀 id，从并行路径解析进 offpeak-edit 视图；
     // 不能落进 cron 解析（必然 missing 并误报 targetNotFound）。
     if (isOffPeakDetailNavigationId(openAutomationId)) {
+      if (!offPeakVisible) {
+        onOpenAutomationConsumed?.();
+        return;
+      }
       const result = resolveOffPeakDetailNavigation(
         offPeakTasks,
         openAutomationId,
@@ -956,6 +950,7 @@ export function AutomationsSection({
     loadedWorkspaceKey,
     offPeakNavRefreshed,
     offPeakTasks,
+    offPeakVisible,
     onOpenAutomationConsumed,
     openAutomationId,
     workspaceIdentity,

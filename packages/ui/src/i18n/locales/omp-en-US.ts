@@ -4,6 +4,13 @@ const ompEnUSOverrides: Record<string, string> = {
   "chat.subagents.unavailable":
     "omp subagent status is unavailable; this session may have incomplete subagent records.",
   "settings.ompNative.extensions": "OMP Extensions",
+  "settings.ompNative.hooks": "OMP Hooks",
+  "settings.ompNative.hooksDescription":
+    "Shows JS/TS hook files in hooks/pre and hooks/post for the current profile and local project.",
+  "settings.ompNative.hooksRuntimeUnavailable":
+    "These are discoverable files only; omp determines whether they loaded. Refresh this page and the session after changes.",
+  "settings.ompNative.hooksReadFailed":
+    "Could not read the hook directories. Check directory permissions.",
   "settings.ompNative.mcp": "OMP MCP Servers",
   "settings.ompNative.description":
     "Shows native configuration in the current omp profile and local project. Refresh after changing configuration.",
@@ -30,13 +37,14 @@ const ompEnUSOverrides: Record<string, string> = {
   "settings.ompModelRoles.catalogEmpty": "omp has not provided any models yet",
   "settings.ompModelRoles.title": "Model settings",
   "settings.ompModelRoles.description":
-    "Configure models for omp roles. The config is backed up before saving.",
+    "Configure models for omp roles. Existing config is backed up before saving.",
   "settings.ompModelRoles.unset": "Not configured",
   "settings.ompModelRoles.thinkingLevel": "thinking level",
   "settings.ompModelRoles.levelDefault": "Default level",
   "settings.ompModelRoles.platformUnsupported": "Opening omp model config is unsupported here",
   "settings.ompModelRoles.loadFailed": "Failed to load omp model config",
   "settings.ompModelRoles.saved": "Saved (previous config backed up automatically)",
+  "settings.ompModelRoles.created": "Saved",
   "settings.ompModelRoles.saving": "Saving…",
   "settings.ompModelRoles.save": "Save",
   "settings.ompProfile.label": "OMP Profile",

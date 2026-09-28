@@ -171,6 +171,7 @@ const zhCN: Record<string, string> = {
   "common.generating": "生成中...",
   "common.connecting": "连接中...",
   "common.cancel": "取消",
+  "offlineLock.disabledHint": "离线锁定中已关闭",
   "common.retry": "重试",
   "common.close": "关闭",
   "chat.plan.removeMarker": "关闭计划模式",
@@ -2280,9 +2281,9 @@ const zhCN: Record<string, string> = {
   "resourceManager.storage.confirmDescription.backups":
     "这些副本用于升级或迁移出错时恢复数据，删除后将无法回退。",
   "settings.browser.title": "浏览器控制",
-  "settings.browser.control.title": "开启内置浏览器控制",
-  "settings.browser.control.description":
-    "启用 Browser Use 官方插件，让新会话可以通过内置浏览器访问和操作网页。",
+  "settings.browser.control.title": "OMP 内置浏览器",
+  "settings.browser.control.description": "OMP 默认支持在会话中访问和操作网页。",
+  "settings.browser.control.defaultEnabled": "默认开启",
   "settings.browser.control.enabledToast": "已开启内置浏览器控制",
   "settings.browser.control.disabledToast": "已关闭内置浏览器控制",
   "settings.browser.security.section": "安全",
@@ -3491,6 +3492,7 @@ const zhCN: Record<string, string> = {
   "settings.skills.ompAvailable": "omp 可用技能",
   "settings.skills.ompAvailableDescription":
     "当前工作区中 omp 可执行的技能；禁用或被遮蔽的发现项不计入。",
+  "settings.skills.ompEmpty": "当前工作区没有 omp 可调用的技能。",
   "settings.skills.searchPlaceholder": "搜索技能...",
   "settings.skills.refresh": "刷新",
   "settings.skills.refreshing": "刷新中...",
