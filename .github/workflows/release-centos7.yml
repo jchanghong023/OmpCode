@@ -64,6 +64,13 @@ jobs:
           echo "release_tag=$release_tag" >> "$GITHUB_OUTPUT"
           echo "Release tag: $release_tag" >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Restore CentOS 7 native assets
+        id: native_cache
+        uses: actions/cache@v4
+        with:
+          path: packages/desktop/dist/centos7-native
+          key: centos7-native-v1-${{ runner.os }}-x64-${{ hashFiles('pnpm-lock.yaml', 'packages/desktop/package.json', 'scripts/publish/centos7/build-native-assets.*', 'scripts/native-search-tools-*.mjs', '.github/workflows/release-centos7.yml') }}
+
       - uses: pnpm/action-setup@v4
         with:
           version: 10.33.2
@@ -95,6 +102,7 @@ jobs:
           pnpm --filter @zcode/desktop exec node -e 'const asar = require("@electron/asar"); if (!asar.extractFile("dist/linux-unpacked/resources/app.asar", "out/renderer/index.html").length) process.exit(1)'
 
       - name: Prepare pinned CentOS 7 native toolchain
+        if: steps.native_cache.outputs.cache-hit != 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -112,6 +120,7 @@ jobs:
           chmod +x "$tools/bin/pnpm"
 
       - name: Build glibc 2.17 native addons and search tools
+        if: steps.native_cache.outputs.cache-hit != 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -153,6 +162,21 @@ jobs:
               export PYTHON=/opt/python/cp311-cp311/bin/python3.11
               bash scripts/publish/centos7/build-native-assets.sh
             '
+
+      - name: Verify CentOS 7 native assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          native=packages/desktop/dist/centos7-native
+          for binary in \
+            app/node_modules/better-sqlite3/build/Release/better_sqlite3.node \
+            app/node_modules/node-pty/prebuilds/linux-x64/pty.node \
+            app/node_modules/cpu-features/build/Release/cpufeatures.node \
+            app/resources/tools/bfs/bfs \
+            app/resources/tools/ugrep/ugrep; do
+            [[ -s "$native/$binary" ]] || { echo "Missing native asset: $binary" >&2; exit 1; }
+          done
+          python3 scripts/publish/centos7/verify-elf.py "$native"
 
       - name: Build ZIP and checksum
         shell: bash
