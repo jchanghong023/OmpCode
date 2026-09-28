@@ -255,6 +255,8 @@ export function spawnHostProcess(
   const child = electronUtilityProcess.fork(hostModulePath, [], {
     serviceName: formatZCodeHostProcessName(label),
     execArgv,
+    // Host 日志写入独立管道，避免继承图形会话中失效的标准输出描述符。
+    stdio: "pipe",
     env: {
       ...buildHostProcessEnv(dependencies.hostProcessLocalEnv),
       ...buildHostE2ECoverageEnv(),

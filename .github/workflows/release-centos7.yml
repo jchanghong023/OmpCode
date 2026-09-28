@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Unique tag, for example v3.14.3-omp.1-centos7"
+        description: "Unique release tag, for example v0928"
         required: true
         type: string
       prerelease:
@@ -42,8 +42,6 @@ jobs:
           set -euo pipefail
           [[ "$GITHUB_REF" == refs/heads/experiment/centos7-no-proot ]] || { echo 'CentOS 7 releases must run from experiment/centos7-no-proot.' >&2; exit 1; }
           version=$(node -p 'require("./package.json").version')
-          pattern="^v${version//./\\.}-omp\\.[1-9][0-9]*-centos7$"
-          [[ "$RELEASE_TAG" =~ $pattern ]] || { echo "Tag must match v$version-omp.<positive number>-centos7." >&2; exit 1; }
           existing_tag=$(git ls-remote --tags origin "refs/tags/$RELEASE_TAG") || { echo 'Could not check existing release tags.' >&2; exit 1; }
           [[ -z "$existing_tag" ]] || { echo "Tag $RELEASE_TAG already exists." >&2; exit 1; }
           echo "APP_VERSION=$version" >> "$GITHUB_ENV"

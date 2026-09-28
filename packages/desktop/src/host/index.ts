@@ -282,6 +282,35 @@ const rawConsole = {
   error: console.error.bind(console),
 };
 
+function isClosedHostOutput(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    ((error as NodeJS.ErrnoException).code === "EBADF" ||
+      (error as NodeJS.ErrnoException).code === "EPIPE")
+  );
+}
+
+function writeRawHostConsole(consoleFn: (...args: unknown[]) => void, ...args: unknown[]): void {
+  try {
+    consoleFn(...args);
+  } catch (error) {
+    // 失效的终端或管道不能让日志写入杀掉 Host；日志仍通过结构化消息发往 Main。
+    if (!isClosedHostOutput(error)) {
+      throw error;
+    }
+  }
+}
+
+function handleHostOutputError(error: Error): void {
+  // Node 的流错误也可能异步发出，需要消费已关闭管道的错误事件。
+  if (!isClosedHostOutput(error)) {
+    throw error;
+  }
+}
+
+process.stdout.on("error", handleHostOutputError);
+process.stderr.on("error", handleHostOutputError);
+
 const remoteConnectionProgressContext = createRemoteConnectionProgressContext({
   emit: ({ requestId, level, args }) => {
     if (!parentPort) {
@@ -304,7 +333,7 @@ function writeHostLog(level: HostLogLevel, ...args: unknown[]): void {
   const prefix = formatLogPrefix("zcode-host", process.pid);
   const consoleFn =
     level === "error" ? rawConsole.error : level === "warn" ? rawConsole.warn : rawConsole.log;
-  consoleFn(prefix, ...args);
+  writeRawHostConsole(consoleFn, prefix, ...args);
   reportHostLog(level, [prefix, ...args]);
 }
 
@@ -1563,19 +1592,19 @@ function formatRemoteTargetForLog(target: RemoteTarget): string {
 }
 
 console.log = (...args: unknown[]) => {
-  rawConsole.log(...args);
+  writeRawHostConsole(rawConsole.log, ...args);
   reportHostLog("info", args);
   remoteConnectionProgressContext.report("info", args);
 };
 
 console.warn = (...args: unknown[]) => {
-  rawConsole.warn(...args);
+  writeRawHostConsole(rawConsole.warn, ...args);
   reportHostLog("warn", args);
   remoteConnectionProgressContext.report("warn", args);
 };
 
 console.error = (...args: unknown[]) => {
-  rawConsole.error(...args);
+  writeRawHostConsole(rawConsole.error, ...args);
   // Electron 会把 Node warning 先走 console.error，而 process warning listener 随后还会
   // 结构化记录 warn；若这里继续上报，就会为同一个 warning 留下一条 error 和一条 warn。
   if (!shouldReportHostConsoleError(args)) {
