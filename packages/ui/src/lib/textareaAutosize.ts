@@ -65,10 +65,7 @@ export function useTextareaAutosize(forwardedRef?: Ref<HTMLTextAreaElement>): {
 }
 
 /** 受控 value（或初始 defaultValue）变化后同步高度；非受控场景 value 为 undefined 时跳过。 */
-export function useTextareaAutosizeValueEffect(
-  value: unknown,
-  resize: () => void,
-): void {
+export function useTextareaAutosizeValueEffect(value: unknown, resize: () => void): void {
   useLayoutEffect(() => {
     resize();
   }, [value, resize]);

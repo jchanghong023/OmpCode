@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button.js";
 import { cn } from "@/components/lib/utils.js";
 import { ControlHintTooltip } from "@/ControlHintTooltip.js";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
-import { useOfflineLock } from "@/lib/offlineLockGate.js";
+import { useOfflineFeature } from "@/lib/offlineLockGate.js";
 import { logger } from "@/logger.js";
 import { MobileRelayDialog } from "@/MobileRelayDialog.js";
 
@@ -21,16 +21,18 @@ export function WorkspaceMobileRelayTrigger({
   className?: string;
 }) {
   const { intl } = useZCodeIntl();
-  // 离线锁定（CentOS 7 --offline）下 relay 后端关闭；入口两平台保留并呈禁用态
-  // 附「离线锁定中已关闭」说明（mobile-relay.md「平台与离线边界」），不隐藏入口。
-  const offlineLocked = useOfflineLock();
+  // 离线锁定（CentOS 7 --offline）下 relay 后端关闭（mobileRelay 功能键）；入口两平台
+  // 保留并呈禁用态附「离线锁定中已关闭」说明（mobile-relay.md「平台与离线边界」），不隐藏入口。
+  const offlineLocked = useOfflineFeature("mobileRelay");
   const [mobileRelayOpen, setMobileRelayOpen] = useState(false);
   const triggerLabel = intl.formatMessage({ id: "mobileRelay.trigger" });
   return (
     <>
       <ControlHintTooltip
         title={triggerLabel}
-        description={offlineLocked ? intl.formatMessage({ id: "offlineLock.disabledHint" }) : undefined}
+        description={
+          offlineLocked ? intl.formatMessage({ id: "offlineLock.disabledHint" }) : undefined
+        }
         side="top"
         align="center"
         triggerClassName={compact ? undefined : "w-full"}

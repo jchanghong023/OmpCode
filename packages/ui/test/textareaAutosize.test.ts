@@ -4,10 +4,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { ZCodeIntlProvider } from "../src/i18n/IntlProvider.js";
 import { ElicitationDialog } from "../src/ElicitationDialog.js";
-import {
-  resizeTextareaToContent,
-  supportsCssFieldSizing,
-} from "../src/lib/textareaAutosize.js";
+import { resizeTextareaToContent, supportsCssFieldSizing } from "../src/lib/textareaAutosize.js";
 
 test("field-sizing 能力检测可判定且稳定（按进程缓存）", () => {
   assert.equal(typeof supportsCssFieldSizing(), "boolean");

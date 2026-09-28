@@ -35,15 +35,10 @@ async function collectSourceFiles(dir: string, collected: string[] = []): Promis
 test("CentOS 7 构建标记只出现在白名单封装模块内", async () => {
   const violations: string[] = [];
   for (const fullPath of await collectSourceFiles(UI_SRC_DIR)) {
-    const relativePath = fullPath
-      .slice(UI_SRC_DIR.length + sep.length)
-      .replaceAll("\\", "/");
+    const relativePath = fullPath.slice(UI_SRC_DIR.length + sep.length).replaceAll("\\", "/");
     if (CENTOS7_MARKER_CONSUMER_WHITELIST.has(relativePath)) continue;
     const source = await readFile(fullPath, "utf8");
-    if (
-      /centos7Desktop/u.test(source) ||
-      /__OMPCODE_CENTOS7_DESKTOP__/u.test(source)
-    ) {
+    if (/centos7Desktop/u.test(source) || /__OMPCODE_CENTOS7_DESKTOP__/u.test(source)) {
       violations.push(relativePath);
     }
   }

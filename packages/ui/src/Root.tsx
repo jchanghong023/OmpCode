@@ -50,6 +50,7 @@ import { useModelSelectionServiceView } from "@/hooks/useModelSelectionView.js";
 import { useRootProviderSettingsSnapshot } from "@/root/useRootProviderSettingsSnapshot.js";
 import { useRootOAuthEffects } from "@/root/useRootOAuthEffects.js";
 import { isCentos7DesktopBuild } from "@/lib/centos7Desktop.js";
+import { primeOfflineLockFromPlatform } from "@/lib/offlineLockGate.js";
 import { consumeZcodeJwtInvalidRestartMarker } from "@/root/zcodeJwtInvalidRestartMarker.js";
 import { useDesktopNativeThemeSync } from "@/root/useDesktopNativeThemeSync.js";
 import { useRootPlatformEffects } from "@/root/useRootPlatformEffects.js";
@@ -183,6 +184,9 @@ function RootInner({
 }: RootProps) {
   useEffect(() => {
     setMcpStorePlatform(platform);
+    // 离线锁定门控状态从这里拉一次（Main 唯一所有者应答；非桌面/查询失败=未锁定），
+    // 之后的禁用态消费全部走 offlineLockGate 的订阅快照。
+    primeOfflineLockFromPlatform(platform);
     // 对话 UI perf 只属于 desktop-continuous；Web/mobile 即使能看到权威状态也不装 reporter。
     setUiPerfArmsReporter(isDesktop && !isCentos7DesktopBuild ? platform : null);
     setSessionOpenArmsReporter(isDesktop && !isCentos7DesktopBuild ? platform : null);
