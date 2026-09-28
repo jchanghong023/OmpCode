@@ -37,8 +37,7 @@ jobs:
           REQUESTED_TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
-          # 过渡期接受集成分支（P3 收窄为仅 refs/heads/main，与合回 main 同一 PR）。
-          [[ "$GITHUB_REF" == refs/heads/main || "$GITHUB_REF" == refs/heads/refactor/unify-centos7 ]] || { echo 'CentOS 7 releases must run from main or refactor/unify-centos7 (transitional).' >&2; exit 1; }
+          [[ "$GITHUB_REF" == refs/heads/main ]] || { echo 'CentOS 7 releases must run from main.' >&2; exit 1; }
           version=$(node -p 'require("./package.json").version')
           release_tag=${REQUESTED_TAG:-"v${version}-centos7-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"}
           git check-ref-format "refs/tags/$release_tag" || { echo "Invalid release tag: $release_tag" >&2; exit 1; }
