@@ -23,6 +23,7 @@ import type {
   RendererActionTraceConfigV1,
 } from "./rendererActionTrace.js";
 import type { RendererHeapSample } from "./validation.js";
+import type { OfflineGateState } from "./offlineGate.js";
 import type {
   CancelPendingRemoteConnectionRequest,
   BindRemoteWorkspaceSessionContextRequest,
@@ -168,6 +169,8 @@ export const PlatformChannels = {
   SelectFiles: "zcode:select-files",
   /** Renderer → Main：读取手机远控内嵌中继的入口链接与连接状态 */
   MobileRelayEntry: "zcode:mobile-relay-entry",
+  /** Renderer → Main：读取离线锁定门控状态（Main 唯一所有者，W4 禁用态消费） */
+  OfflineGateState: "zcode:offline-gate-state",
   /** Renderer → Main：写入宿主 ~/.ompcode 临时文本附件 */
   CreateTempTextAttachment: "zcode:create-temp-text-attachment",
   /** Renderer → Main：通过原生另存为对话框保存文件 */
@@ -708,6 +711,10 @@ export interface PlatformChannelMap {
   [PlatformChannels.MobileRelayEntry]: {
     request: void;
     response: MobileRelayEntryStatus;
+  };
+  [PlatformChannels.OfflineGateState]: {
+    request: void;
+    response: OfflineGateState;
   };
   [PlatformChannels.SelectDirectory]: {
     request: void;

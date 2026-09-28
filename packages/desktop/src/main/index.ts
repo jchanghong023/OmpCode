@@ -1,5 +1,9 @@
 import { createLocalTtftExporter } from "./localTtftExporter.js";
 import { startMobileRelay, stopMobileRelay } from "./mobileRelay/mobileRelayLifecycle.js";
+import {
+  buildMobileRelayEntryUrl,
+  MOBILE_RELAY_LISTEN_PORT,
+} from "./mobileRelay/mobileRelayProtocol.js";
 /* eslint-disable max-lines */
 import "./desktopEarlyDataBaseDirBootstrap.js";
 import "./desktopEarlyChromiumHardwareAccelerationBootstrap.js";
@@ -84,6 +88,9 @@ import {
   HostMessageTypes,
   isPrivateNetworkEndpoint,
   isLoopbackUrl,
+  buildOfflineLockedMobileRelayEntryStatus,
+  resolveOfflineGateState,
+  type OfflineGateState,
 } from "@zcode/shared";
 import { flushMainLogs, logger } from "./logger.js";
 import { markMainLaunchAppReady } from "./desktopLaunchMarks.js";
@@ -269,6 +276,12 @@ if (!shouldUseElectronDefaultUserDataPath) {
 }
 process.title = runtimeApplicationName;
 const moduleDir = resolveImportMetaDirname(import.meta);
+
+// 离线锁定门控状态的唯一所有者：CentOS 7 启动器 --offline 写入 OMPCODE_CENTOS7_LOCAL_ONLY
+// （唯一设置者），Main 在此裁决一次并经 PlatformChannels.OfflineGateState 提供 renderer
+// （W4 据此做禁用态）；Main/Host 其余门控点共享同一事实，不各自解释环境变量。
+const offlineGate: OfflineGateState = resolveOfflineGateState(process.env);
+ipcMain.handle(PlatformChannels.OfflineGateState, () => offlineGate);
 
 process.on("unhandledRejection", (reason) => {
   logger.error("unhandledRejection:", reason);
@@ -2047,20 +2060,39 @@ app.whenReady().then(async () => {
 
   // 手机远控内嵌中继：无鉴权开放接入，进程存活即可连接。启动失败不阻塞桌面
   // 主流程，状态经 PlatformChannels.MobileRelayEntry 供 UI 展示错误原因。
-  void startMobileRelay({
-    getHostProcess: (windowId) => windowHostProcessMap.get(windowId),
-  }).catch((error: unknown) => {
-    logger.error("[mobile-relay] failed to start:", error);
-  });
+  // 离线锁定时 relay 后端整体关闭：不监听、不建立桥接（mobile-relay.md 平台与
+  // 离线边界）；入口 IPC 仍注册并回报稳定禁用原因码，手机主动连入没有监听者，
+  // 在 TCP 层被明确拒绝而不是静默超时。
+  if (offlineGate.disabledFeatures.mobileRelay) {
+    ipcMain.handle(
+      PlatformChannels.MobileRelayEntry,
+      () =>
+        buildOfflineLockedMobileRelayEntryStatus({
+          url: buildMobileRelayEntryUrl(),
+          listenPort: MOBILE_RELAY_LISTEN_PORT,
+        }),
+    );
+  } else {
+    void startMobileRelay({
+      getHostProcess: (windowId) => windowHostProcessMap.get(windowId),
+    }).catch((error: unknown) => {
+      logger.error("[mobile-relay] failed to start:", error);
+    });
+  }
 
   // 本 Fork 只有 GitHub Release 手动分发；正式包绝不能安装上游 ZCode 的 feed。
   // 仅保留未打包开发态显式指定 feed 的更新联调入口。
+  // 离线锁定显式关闭公网更新检查（含未打包开发态的联调入口），fail-closed。
   const updateFeedSource = resolveUpdateFeedSourceFromStartupConfig({
     argv: process.argv,
     env: process.env,
   });
   void initAutoUpdater({
-    enabled: !app.isPackaged && ZCODE_PRODUCT_FLAVOR === "production" && Boolean(updateFeedSource),
+    enabled:
+      !offlineGate.disabledFeatures.publicUpdateCheck &&
+      !app.isPackaged &&
+      ZCODE_PRODUCT_FLAVOR === "production" &&
+      Boolean(updateFeedSource),
     onBeforeQuitAndInstall: async () => {
       notifyStabilityLifecycle("update_install");
       await prepareAppQuit("auto-update quitAndInstall", "update-install");
