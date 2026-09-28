@@ -61,7 +61,7 @@
 | omp UT、协议模拟及真实核心测试合集 | `pnpm --filter @zcode/omp-agent test`；匹配 `test/*.test.ts`，包含真实核心文件，不只是 fake-omp                                                                                                                                                      |
 | 协议级 fake-omp 集成测试           | `pnpm --filter @zcode/omp-agent exec tsx --test test/adapter.e2e.test.ts`；不依赖真实模型，不覆盖真实 omp/GUI 边界                                                                                                                                   |
 | 真实内嵌核心 E2E                   | `pnpm --filter @zcode/omp-agent exec tsx --test test/real-omp.e2e.test.ts`；先准备 `pnpm --filter @zcode/desktop run prepare:agent-bundle`，使用已发布内嵌二进制及 omp 已有凭据；缺少二进制或设置 `OMP_AGENT_SKIP_REAL_E2E=1` 时跳过，跳过不能算通过 |
-| CentOS 7/Linux 侧功能验收          | 经 `jch-wsl-git-test` 技能执行（用户指定）：从 Windows 仓库推送待测代码到指定 WSL2 发行版，以 Linux 原生仓库运行核心场景（工具调用会话、子代理、界面与 omp 数据一致性，模型 `zhipu-coding-plan/glm-5.3-flash`）；测试意图只在 Windows 侧解析一次     |
+| CentOS 7/Linux 侧功能验收          | 经 `jch-run-tests-in-wsl` 技能执行（用户指定）：从 Windows 仓库推送待测代码到指定 WSL2 发行版，以 Linux 原生仓库运行核心场景（工具调用会话、子代理、界面与 omp 数据一致性，模型 `zhipu-coding-plan/glm-5.3-flash`）；测试意图只在 Windows 侧解析一次 |
 | 其他包 UT/集成测试                 | `packages/{desktop,ui,services,client,server}/test/` 存在测试文件；按实际文件用根 `pnpm exec tsx --test <测试文件>` 执行，不能假定这些包有 `test` script                                                                                             |
 | 桌面 GUI 冒烟                      | `node scripts/dev/gui-smoke-cdp.mjs`；需要当前测试桌面已启动、CDP 9230 及 localhost renderer，仅检查品牌/输入区并截图，不是完整功能 E2E                                                                                                              |
 
