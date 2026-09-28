@@ -72,16 +72,7 @@ export async function runCliMain(
   const workspacePath = cwd;
   const workspaceKey = env.ZCODE_WORKSPACE_IDENTITY?.trim() || workspacePath;
   const gatewayRef: { server: ProtocolServer | null } = { server: null };
-  // CentOS 7 启动参数分别透传给 omp；profile 与 GUI 历史使用同一选择。
-  const centos7Offline = env.OMPCODE_CENTOS7_OFFLINE === "1";
-  const launchProfile = env.OMPCODE_CENTOS7_PROFILE;
-  const profile = launchProfile ? resolveOmpProfileFromEnv(env) : null;
-  // OMP_RPC_ARGS_JSON：开发/测试用的附加 omp 启动参数（如 fake 核心脚本路径）。
-  const ompExtraArgs = [
-    ...parseExtraArgs(env.OMP_RPC_ARGS_JSON),
-    ...(centos7Offline ? ["--offline"] : []),
-    ...(profile ? ["--profile", profile] : []),
-  ];
+  const ompExtraArgs = buildOmpExtraArgs(env);
   const ompFactory = createOmpProcessFactory(ompBinaryPath, ompExtraArgs);
   // 目录进程的 available_commands_update → ServerApp 缓存 + workspace-config topic 推送。
   // 构造顺序上 loader 先于 app，用 ref 解引用。
@@ -116,6 +107,23 @@ export async function runCliMain(
   gatewayRef.server = protocolServer;
   protocolServer.start();
   logger.info("omp-agent app-server 就绪", { workspacePath, ompBinaryPath });
+}
+
+/**
+ * omp 启动参数装配（纯函数，UT 覆盖参数矩阵）。
+ * CentOS 7 启动参数分别透传给 omp；profile 值与 GUI 历史使用同一选择
+ * （desktop main 先把 OMPCODE_CENTOS7_PROFILE 复制到 OMP_PROFILE，此处按 OMP_PROFILE/PI_PROFILE 解析）。
+ */
+export function buildOmpExtraArgs(env: NodeJS.ProcessEnv): string[] {
+  const centos7Offline = env.OMPCODE_CENTOS7_OFFLINE === "1";
+  const launchProfile = env.OMPCODE_CENTOS7_PROFILE;
+  const profile = launchProfile ? resolveOmpProfileFromEnv(env) : null;
+  // OMP_RPC_ARGS_JSON：开发/测试用的附加 omp 启动参数（如 fake 核心脚本路径）。
+  return [
+    ...parseExtraArgs(env.OMP_RPC_ARGS_JSON),
+    ...(centos7Offline ? ["--offline"] : []),
+    ...(profile ? ["--profile", profile] : []),
+  ];
 }
 
 function parseExtraArgs(raw: string | undefined): string[] {

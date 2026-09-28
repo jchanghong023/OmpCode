@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, rm, utimes, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, realpath, rm, symlink, utimes, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join, relative, resolve, sep } from "node:path";
 import { test } from "node:test";
@@ -45,6 +45,41 @@ test(
     const store = createOmpStore({ PI_CONFIG_DIR: join(testRoot, "profile") });
     assert.equal((await store.findSession?.(workspace, "temp-session"))?.sessionPath, sessionPath);
     assert.equal((await store.listSessions(workspace))[0]?.sessionId, "temp-session");
+  },
+);
+
+test(
+  "目录链接访问的会话恢复：链接路径 realpath 后与 omp 真实路径编码同一目录（--home 链接语义）",
+  async (context) => {
+    const testRoot = await mkdtemp(join(tmpdir(), "omp-store-link-"));
+    context.after(async () => {
+      assert.ok(resolve(testRoot).startsWith(`${resolve(tmpdir())}${sep}`));
+      await rm(testRoot, { recursive: true, force: true });
+    });
+    const workspace = join(testRoot, "project");
+    await mkdir(workspace, { recursive: true });
+    const linkPath = join(testRoot, "project-link");
+    try {
+      // Windows 用 junction（无需管理员权限），POSIX 用目录符号链接；环境不允许时跳过。
+      await symlink(workspace, linkPath, process.platform === "win32" ? "junction" : "dir");
+    } catch {
+      context.skip("当前环境不允许创建目录链接");
+      return;
+    }
+    // omp 按真实路径落盘会话；编码须以 realpath 计算，链接路径才能命中同一目录。
+    const realTmp = await realpath(tmpdir());
+    const realWorkspace = await realpath(workspace);
+    const encodedWorkspace = `-tmp-${relative(realTmp, realWorkspace).replace(/[/\\:]/g, "-")}`;
+    const sessionDir = join(testRoot, "store", "agent", "sessions", encodedWorkspace);
+    await mkdir(sessionDir, { recursive: true });
+    await writeFile(
+      join(sessionDir, "2026-09-24T00-00-00-000Z_link-session.jsonl"),
+      `${JSON.stringify({ type: "session", id: "link-session" })}\n`,
+    );
+
+    const store = createOmpStore({ PI_CONFIG_DIR: join(testRoot, "store") });
+    assert.equal((await store.listSessions(linkPath))[0]?.sessionId, "link-session");
+    assert.equal((await store.findSession?.(linkPath, "link-session"))?.sessionId, "link-session");
   },
 );
 
