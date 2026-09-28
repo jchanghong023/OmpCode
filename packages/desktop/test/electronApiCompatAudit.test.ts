@@ -76,6 +76,9 @@ const CONTEXTS: readonly CompatContext[] = [
       "packages/ui/src/GitActionMenu.tsx": ["CSS field-sizing"],
       "packages/ui/src/components/ai-elements/prompt-input-textarea.tsx": ["CSS field-sizing"],
       "packages/ui/src/components/ui/textarea.tsx": ["CSS field-sizing"],
+      // textareaAutosize 的 field-sizing 出现在 CSS.supports 能力检测中：Chromium 120 检测为假时
+      // 启用 JS 自适应回退（W4 追加），属渐进增强而非裸用，120 上不产生降级差异。
+      "packages/ui/src/lib/textareaAutosize.ts": ["CSS field-sizing"],
       "packages/ui/src/feedback/FeatureRequestDialog.tsx": ["CSS field-sizing"],
       "packages/ui/src/feedback/FeedbackSubmitSections.tsx": ["CSS field-sizing"],
       "packages/ui/src/settings/model-provider-section/ProviderModelMetadataFields.tsx": [
