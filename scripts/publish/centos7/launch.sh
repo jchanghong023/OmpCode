@@ -1,6 +1,25 @@
 #!/bin/bash
 set -euo pipefail
 
+for arg in "$@"; do
+  case "$arg" in
+    --help|-h)
+      cat <<'HELP'
+用法：bin/ompcode-centos7 [选项] [桌面程序参数...]
+
+  --home <绝对路径>   将 OmpCode 和内嵌 omp 的数据存放在该目录下
+  --profile <名称>   选择内嵌 omp 的配置（也支持 --profile=名称）
+  --offline          让内嵌 omp 离线运行
+  -h, --help         显示此帮助并退出
+
+其他参数会传递给桌面程序。桌面应用始终遵守本地网络边界；
+--offline 仅控制内嵌 omp。使用 --home 时不会覆盖已有的 ~/.ompcode 或 ~/.omp。
+HELP
+      exit 0
+      ;;
+  esac
+done
+
 package_root=$(dirname "$(dirname "$(readlink -f "$0")")")
 app="$package_root/app"
 # CentOS 7 桌面端默认只访问本机和内网；omp 自身的联网模式由 --offline 单独决定。

@@ -10,6 +10,16 @@ launcher="$package_root/bin/ompcode-centos7"
 mkdir -p "$package_root/bin" "$package_root/app/resources/glm/omp"
 cp "$script_dir/launch.sh" "$launcher"
 chmod +x "$launcher"
+help_home="$test_root/help-home"
+help_data="$test_root/help-data"
+help_output=$(HOME="$help_home" "$launcher" --home "$help_data" --help)
+grep -Fq -- '--home <绝对路径>' <<<"$help_output"
+grep -Fq -- '--profile <名称>' <<<"$help_output"
+grep -Fq -- '--offline' <<<"$help_output"
+[[ ! -e "$help_home" && ! -e "$help_data" ]]
+HOME="$help_home" "$launcher" -h >/dev/null
+[[ ! -e "$help_home" ]]
+
 touch "$package_root/app/resources/app.asar" "$package_root/app/resources/glm/omp/omp"
 chmod +x "$package_root/app/resources/glm/omp/omp"
 cat > "$package_root/app/zcode" <<'STUB'
