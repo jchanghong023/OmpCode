@@ -72,7 +72,12 @@ test("非中断的 isError 工具终态仍是 error，且结束后的尾随 upda
   const projector = new OmpEventProjector(projection);
   beginTurn(projection, "run failing tool");
   projector.handleEvent({ type: "agent_start" });
-  projector.handleEvent({ type: "tool_execution_start", toolCallId: "call-2", toolName: "bash", args: {} });
+  projector.handleEvent({
+    type: "tool_execution_start",
+    toolCallId: "call-2",
+    toolName: "bash",
+    args: {},
+  });
   projector.handleEvent({
     type: "tool_execution_end",
     toolCallId: "call-2",
@@ -101,7 +106,12 @@ test("无 end 事件的在途工具由 terminal agent_end 收口为 cancelled，
   const projector = new OmpEventProjector(projection);
   beginTurn(projection, "long task");
   projector.handleEvent({ type: "agent_start" });
-  projector.handleEvent({ type: "tool_execution_start", toolCallId: "call-3", toolName: "write", args: {} });
+  projector.handleEvent({
+    type: "tool_execution_start",
+    toolCallId: "call-3",
+    toolName: "write",
+    args: {},
+  });
   projector.noteStopRequested();
   projector.handleEvent({ type: "agent_end", messages: [], isTerminal: true });
   assert.equal(toolRowOf(projection)?.status, "cancelled");
@@ -121,7 +131,12 @@ test("工具正常完成后同一轮内的后续工具不受 endedTools 影响",
   const projector = new OmpEventProjector(projection);
   beginTurn(projection, "two tools");
   projector.handleEvent({ type: "agent_start" });
-  projector.handleEvent({ type: "tool_execution_start", toolCallId: "call-a", toolName: "bash", args: {} });
+  projector.handleEvent({
+    type: "tool_execution_start",
+    toolCallId: "call-a",
+    toolName: "bash",
+    args: {},
+  });
   projector.handleEvent({
     type: "tool_execution_end",
     toolCallId: "call-a",
@@ -129,7 +144,12 @@ test("工具正常完成后同一轮内的后续工具不受 endedTools 影响",
     result: { content: [{ type: "text", text: "ok" }] },
     isError: false,
   });
-  projector.handleEvent({ type: "tool_execution_start", toolCallId: "call-b", toolName: "write", args: {} });
+  projector.handleEvent({
+    type: "tool_execution_start",
+    toolCallId: "call-b",
+    toolName: "write",
+    args: {},
+  });
   projector.handleEvent({
     type: "tool_execution_update",
     toolCallId: "call-b",

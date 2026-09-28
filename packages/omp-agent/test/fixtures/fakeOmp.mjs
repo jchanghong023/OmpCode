@@ -318,7 +318,13 @@ readline.on("line", (line) => {
         // 镜像真实 omp v18.3.5+fork.265 中断序列（P2 验收 D1）：
         // 先 end(isError:true)，再补一条带 partialResult 的尾随 tool_execution_update。
         out({ type: "tool_execution_end", toolCallId: slowToolCallId, toolName: "bash", result: { content: [{ type: "text", text: "Command aborted" }] }, isError: true });
-        out({ type: "tool_execution_update", toolCallId: slowToolCallId, toolName: "bash", args: { command: "sleep 60" }, partialResult: { content: [{ type: "text", text: "[Command cancelled]\n" }] } });
+        out({
+          type: "tool_execution_update",
+          toolCallId: slowToolCallId,
+          toolName: "bash",
+          args: { command: "sleep 60" },
+          partialResult: { content: [{ type: "text", text: "[Command cancelled]\n" }] },
+        });
         slowToolCallId = null;
       }
       out({ type: "agent_end", messages: [], isTerminal: true });
