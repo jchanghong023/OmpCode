@@ -1919,6 +1919,11 @@ app.on("second-instance", (_event, argv, _workingDirectory, additionalData) => {
 });
 
 app.whenReady().then(async () => {
+  // CentOS 7 启动参数只覆盖本次运行；先设定 profile，再让所有 Host 与目录读取同一环境。
+  const launchProfile = process.env.OMPCODE_CENTOS7_PROFILE;
+  if (launchProfile !== undefined) {
+    process.env.OMP_PROFILE = launchProfile;
+  }
   markMainLaunchAppReady();
   installLocalMediaPreviewProtocol(session.defaultSession.protocol, {
     isPathAuthorized: localMediaPreviewPathRegistry.isAuthorized,
@@ -1934,7 +1939,7 @@ app.whenReady().then(async () => {
   try {
     bootstrapSettings = await mainSettingService.get();
     // omp profile 在进程启动时固定；设置页保存后不热切换已有 Host/会话。
-    if (bootstrapSettings.ompProfile !== undefined) {
+    if (launchProfile === undefined && bootstrapSettings.ompProfile !== undefined) {
       process.env.OMP_PROFILE = bootstrapSettings.ompProfile;
     }
     if (bootstrapSettings.dataBaseDir) {
