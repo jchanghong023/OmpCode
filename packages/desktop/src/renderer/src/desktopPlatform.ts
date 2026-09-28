@@ -26,6 +26,27 @@ export function createDesktopPlatform(options: {
         running: false,
         error: "mobile relay entry bridge unavailable",
       }),
+    getOfflineGateState: () =>
+      // 开发态热更新后可能短暂运行在尚未暴露 getOfflineGateState 的旧 preload 上；
+      // 与 getMobileRelayEntry 同样缺省兜底为未锁定（Windows/未加锁 CentOS 7 全功能），
+      // 避免离线门控查询在桥接缺失时把入口误判成禁用态。
+      window.zcode.getOfflineGateState?.() ??
+      Promise.resolve({
+        localOnly: false,
+        disabledFeatures: {
+          mobileRelay: false,
+          publicUpdateCheck: false,
+          publicConfig: false,
+          publicHelp: false,
+          community: false,
+          feedback: false,
+          accountShare: false,
+          externalBrowser: false,
+          telemetry: false,
+          hostOnlineBots: false,
+          remoteRecommendedPrompts: false,
+        },
+      }),
     onRemoteConnectionLog: (handler) => window.zcode.onRemoteConnectionLog(handler),
     onRemoteSessionClosed: (handler) => window.zcode.onRemoteSessionClosed(handler),
     onBotRemoteWorkspaceReconnected: (handler) =>
