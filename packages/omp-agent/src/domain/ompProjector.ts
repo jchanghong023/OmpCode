@@ -12,6 +12,8 @@ interface ToolCallRuntime {
 
 export class OmpEventProjector {
   private tools = new Map<string, ToolCallRuntime>();
+  /** 已收到终态（tool_execution_end / failOpenToolRows）的工具行；运行态更新不得复活终态行。 */
+  private endedTools = new Set<string>();
   private streaming = false;
   private stopRequested = false;
 
@@ -39,6 +41,7 @@ export class OmpEventProjector {
     // 清掉崩溃进程的在途工具运行时：若残留，下一个进程首个 terminal agent_end 的
     // failOpenToolRows 会把上一进程已收口的工具行错误改写为 cancelled。
     this.tools.clear();
+    this.endedTools.clear();
   }
 
   handleEvent(event: OmpSessionEventFrame): void {
@@ -101,6 +104,14 @@ export class OmpEventProjector {
         });
         return;
       case "tool_execution_update":
+        // 修复依据（P2 验收 D1，Windows/CentOS 双平台真实 omp v18.3.5+fork.265 实测）：
+        // abort 时 omp 先发 tool_execution_end(isError:true) 再补一条带 partialResult 的
+        // 尾随 tool_execution_update；旧逻辑会把已终态工具行改回 running，而 end 已把工具
+        // 移出在途表，terminal agent_end 的 failOpenToolRows 无法再收口，造成「会话标头已
+        // Stopped 但工具行残留 Running」。工具行终态不变式：终态行不接受运行态更新。
+        if (this.endedTools.has(event.toolCallId)) {
+          return;
+        }
         if (event.partialResult?.content) {
           const preview = textOfContent(event.partialResult.content);
           this.projection.upsertToolCall({
@@ -114,14 +125,20 @@ export class OmpEventProjector {
       case "tool_execution_end": {
         const text = event.result?.content ? textOfContent(event.result.content) : "";
         this.tools.delete(event.toolCallId);
+        this.endedTools.add(event.toolCallId);
+        // 用户中断期间的 isError 是 abort 的取消事实（omp 文案「Command aborted」），
+        // 不是工具自身失败：收口为 cancelled（已停止），与 failOpenToolRows 的中断语义、
+        // UI 已停止标签及 Windows 基线一致；非中断期的 isError 仍是真实工具失败（error）。
+        const abortedByUser = this.stopRequested && event.isError === true;
         this.projection.upsertToolCall({
           toolCallId: event.toolCallId,
           toolName: event.toolName,
-          status: event.isError ? "error" : "success",
+          status: abortedByUser ? "cancelled" : event.isError ? "error" : "success",
           outputText: text,
-          error: event.isError
-            ? { code: "tool_error", message: firstLine(text) || "tool execution failed" }
-            : undefined,
+          error:
+            !abortedByUser && event.isError
+              ? { code: "tool_error", message: firstLine(text) || "tool execution failed" }
+              : undefined,
           endedAt: Date.now(),
           resultDetails: event.result?.details,
         });
@@ -199,6 +216,8 @@ export class OmpEventProjector {
 
   private failOpenToolRows(): void {
     for (const tool of this.tools.values()) {
+      // 与 tool_execution_end 同语义：这些行已按 cancelled 收口，尾随运行态更新不得复活。
+      this.endedTools.add(tool.toolCallId);
       this.projection.upsertToolCall({
         toolCallId: tool.toolCallId,
         toolName: "unknown",
