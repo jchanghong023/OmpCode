@@ -26,6 +26,25 @@
 
 ## Acceptance
 
+### IBus session selection
+
+- The CentOS launcher alone owns input-method environment selection, before private XDG paths and Electron startup. On X11 with IBus selected (or no explicit alternative), inspect only the current UID's `ibus-daemon` processes whose initial `DISPLAY` exactly matches the caller. Read their NUL-delimited `/proc/<pid>/environ` as data, never source it. Only local Unix session-bus addresses qualify.
+- Validate each candidate using `gdbus --session` with a command-local `DBUS_SESSION_BUS_ADDRESS`: `org.freedesktop.DBus.GetConnectionUnixProcessID(org.freedesktop.IBus)` must return that daemon's PID. Bound each probe to two seconds. Preserve an already matching validated caller bus; otherwise adopt the sole validated candidate. Ambiguous candidates, unreadable/disappeared processes, missing tools and failed probes must not prevent Electron startup or cause a guessed selection; warn when automatic alignment cannot be completed.
+- Export the selected session bus only to the application and its children. Default unset/empty `GTK_IM_MODULE` and `XMODIFIERS` to IBus; preserve explicit alternative input methods. Preserve an explicit `IBUS_ADDRESS`; if absent, query `ibus address` with the original HOME/XDG environment and selected session bus, with a two-second bound, before XDG isolation. Preserve daemon lifecycle, the parent shell, other users and persistent input-method settings.
+- Regression evidence: IBus 1.5.17's GTK module separately watches `org.freedesktop.IBus` on the session bus. A working private IBus connection, `libpinyin` engine and `FocusIn`/cursor notifications do not prove key handling is enabled: without the session-bus name, `_daemon_is_running` stays false and `filter_keypress` falls back to simple input. Matching the application's session bus to the daemon restored Chinese input on the user's host. Config-directory links alone do not repair this condition.
+
+```mermaid
+flowchart TD
+    A[Launcher: caller environment] --> B[Same UID and DISPLAY daemon candidates]
+    B --> C[Validate session bus service owner PID]
+    C --> D[Keep matching bus or select unique bus]
+    D --> E[Export child environment, isolate XDG, start Electron]
+```
+
+- Automated launcher regression must cover split-bus repair, already correct environment, absent address discovery before XDG isolation, explicit overrides, other DISPLAY/user exclusion, ambiguous sessions, failed probes and no daemon. Real GUI acceptance: start the packaged launcher from tcsh with the wrong inherited session bus and an existing same-user/display IBus daemon, then type `ni` and commit Chinese in the chat input. The corporate-host manual environment fix is confirmed; the automated launcher still requires package-level GUI verification there.
+
+### Package acceptance
+
 - On the CentOS 7 x64 VM (`glibc 2.17`, kernel `3.10.0-1160.el7.x86_64`), a non-root user extracts the ZIP under HOME without installing anything, starts the launcher and sees the OmpCode UI. With no CJK host fonts, Chinese settings and menu labels and arbitrary Chinese conversation text display as glyphs rather than empty boxes; English remains legible. Exercise a real embedded omp session, the integrated terminal and native search; complete an SSH handshake with the packaged `ssh2` client and verify the optional native crypto accelerator is absent from both `app.asar` and `app.asar.unpacked`.
 - Launch with a named `--profile` that differs from the saved App Settings profile: bundled omp receives that profile, while the UI's roles and history read the same named profile. Launch with `--offline` to pass it to each bundled omp process; omit it to leave omp's ordinary network behavior intact. A missing or invalid profile name exits with a clear error before Electron starts.
 - Without `--offline`, trace network connections while starting the desktop, opening settings, showing recommended content, and using the embedded browser: Main, Renderer, Host and scheduler never connect to public hosts; the embedded browser opens a corporate DNS name resolving to a private IP and rejects a public URL; only omp may reach the configured enterprise API. With `--offline`, verify the same desktop boundary and verify that omp receives its offline flag.

@@ -84,7 +84,7 @@ import {
   isPrivateNetworkEndpoint,
   isLoopbackUrl,
 } from "@zcode/shared";
-import { logger } from "./logger.js";
+import { flushMainLogs, logger } from "./logger.js";
 import { markMainLaunchAppReady } from "./desktopLaunchMarks.js";
 import { createCuaPipFocusRouter, resolveCuaPipWindowKey } from "./cuaPipFocusRouter.js";
 import { createDesktopTelemetryFetch } from "./desktopTelemetryFetch.js";
@@ -1081,10 +1081,11 @@ async function prepareAppQuit(reason: string, kind: AppShutdownKind = "normal"):
     .catch((error) => {
       logger.error(`[app-quit] host process cleanup failed (${reason}):`, error);
     })
-    .finally(() => {
+    .finally(async () => {
       // before-quit 是同步事件。只发 Dispose 就继续退出 main 的话，
       // host 还没等到 agent 进程树的 SIGTERM/SIGKILL 兜底完成就被带走，zcode-cli 会被 init 接管成残留进程。
       // 这里先拦截第一次退出，等待 host 清理完成后再放行第二次 app.quit。
+      await flushMainLogs();
       hasPreparedAppQuit = true;
       appQuitPreparationInFlight = null;
     });
@@ -1092,8 +1093,9 @@ async function prepareAppQuit(reason: string, kind: AppShutdownKind = "normal"):
   await appQuitPreparationInFlight;
 }
 
-function exitPreparedApp(reason: string): never | void {
+async function exitPreparedApp(reason: string): Promise<void> {
   logger.info(`[app-quit] exiting prepared app (${reason})`);
+  await flushMainLogs();
   if (process.env.ZCODE_E2E_RUN_ID?.trim()) {
     flushMainE2ECoverage((error) => {
       logger.warn("[e2e-coverage] main coverage flush failed", error);
@@ -2364,7 +2366,7 @@ app.on("before-quit", (event) => {
       // closing 状态，此时重入 app.quit 会被 Electron 忽略，ChromeDriver 会等待
       // 约 70 秒。这里把最后一次退出绑定到真实 closed 事件，不依赖超时猜测。
       if (remainingWindows.length === 0) {
-        exitPreparedApp("no-windows-after-preparation");
+        void exitPreparedApp("no-windows-after-preparation");
         return;
       }
 
@@ -2375,7 +2377,7 @@ app.on("before-quit", (event) => {
         }
         exitRequested = true;
         logger.info("[app-quit] all windows closed after preparation, exiting app");
-        exitPreparedApp("all-windows-closed-after-preparation");
+        void exitPreparedApp("all-windows-closed-after-preparation");
       };
       for (const win of remainingWindows) {
         win.once("closed", exitAfterLastWindowClosed);
@@ -2386,4 +2388,11 @@ app.on("before-quit", (event) => {
 });
 app.on("activate", () => {
   void primaryWindowCoordinator.ensurePrimaryWindow("app-activate");
+});
+
+app.on("will-quit", (event) => {
+  if (process.env.OMPCODE_CENTOS7_LOCAL_ONLY !== "1") return;
+  // app.quit 的最终退出也要等待文件队列；app.exit 不会再次触发 will-quit。
+  event.preventDefault();
+  void flushMainLogs().finally(() => app.exit(0));
 });

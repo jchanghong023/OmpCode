@@ -3,7 +3,16 @@ set -euo pipefail
 
 script_dir=$(dirname "$(readlink -f "$0")")
 test_root=$(mktemp -d)
-trap 'rm -rf -- "$test_root"' EXIT
+fixture_pids=()
+cleanup() {
+  for pid in ${fixture_pids[@]+"${fixture_pids[@]}"}; do
+    kill "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+  done
+  rm -rf -- "$test_root"
+}
+trap cleanup EXIT
+unset DISPLAY GTK_IM_MODULE XMODIFIERS IBUS_ADDRESS DBUS_SESSION_BUS_ADDRESS
 
 package_root="$test_root/package"
 launcher="$package_root/bin/ompcode-centos7"
@@ -29,7 +38,7 @@ for name in \
   HOME XDG_CONFIG_HOME XDG_DATA_HOME XDG_CACHE_HOME XDG_STATE_HOME TMPDIR PI_CONFIG_DIR \
   ZCODE_DATA_BASE_DIR ZCODE_DESKTOP_HOME_DIR ZCODE_DESKTOP_USER_DATA_DIR \
   ZCODE_DESKTOP_SESSION_DATA_DIR OMPCODE_CENTOS7_HOME OMPCODE_CENTOS7_PROFILE \
-  OMPCODE_CENTOS7_OFFLINE; do
+  OMPCODE_CENTOS7_OFFLINE DBUS_SESSION_BUS_ADDRESS IBUS_ADDRESS GTK_IM_MODULE XMODIFIERS; do
   printf '%s=%s\n' "$name" "${!name-}"
 done
 for arg in "$@"; do
@@ -74,6 +83,7 @@ expect_line 'OMPCODE_CENTOS7_PROFILE=test-profile'
 expect_line 'OMPCODE_CENTOS7_OFFLINE=1'
 expect_line 'ARG=--no-sandbox'
 expect_line 'ARG=--disable-gpu'
+expect_line 'ARG=--force-prefers-reduced-motion'
 expect_line 'ARG=--extra'
 expect_line 'ARG=value'
 if grep -Fxq 'ARG=--profile' <<<"$output" || grep -Fxq 'ARG=--offline' <<<"$output"; then
@@ -139,3 +149,111 @@ grep -Fxq 'OMPCODE_CENTOS7_HOME=' <<<"$default_output"
 mkdir -p "$default_home/.config/ompcode-centos7/fcitx5"
 env HOME="$default_home" "$launcher" >/dev/null
 [[ -d "$default_home/.config/ompcode-centos7/fcitx5" && ! -L "$default_home/.config/ompcode-centos7/fcitx5" ]]
+
+# 使用真实子进程的 NUL 分隔 environ；只替换发现进程和查询总线的外部命令。
+# 不依赖测试机上的桌面/IBus，也不触碰正在运行的用户输入法。
+mock_bin="$test_root/ime-bin"
+mkdir -p "$mock_bin"
+cat > "$mock_bin/pgrep" <<'STUB'
+#!/bin/bash
+[[ "$*" == "-u $EUID -x ibus-daemon" ]] || exit 2
+printf '%s\n' "${OMPCODE_TEST_PIDS-}"
+STUB
+cat > "$mock_bin/gdbus" <<'STUB'
+#!/bin/bash
+[[ "$*" == 'call --session --dest org.freedesktop.DBus --object-path /org/freedesktop/DBus --method org.freedesktop.DBus.GetConnectionUnixProcessID org.freedesktop.IBus' ]] || exit 2
+printf '%s\n' "$DBUS_SESSION_BUS_ADDRESS" >> "$OMPCODE_TEST_PROBES"
+case "$DBUS_SESSION_BUS_ADDRESS" in
+  unix:path=/test/bus-a) printf '(uint32 %s,)\n' "$OMPCODE_TEST_OWNER_A" ;;
+  unix:path=/test/bus-b) printf '(uint32 %s,)\n' "$OMPCODE_TEST_OWNER_B" ;;
+  unix:path=/test/slow) sleep 10; exit 1 ;;
+  *) exit 1 ;;
+esac
+STUB
+cat > "$mock_bin/ibus" <<'STUB'
+#!/bin/bash
+[[ "$*" == address && "$XDG_CONFIG_HOME" == "$OMPCODE_TEST_ORIGINAL_CONFIG" ]] || exit 2
+[[ "$DBUS_SESSION_BUS_ADDRESS" == unix:path=/test/bus-a ]] || exit 3
+printf '%s\n' 'unix:path=/test/ibus-private'
+STUB
+chmod +x "$mock_bin/pgrep" "$mock_bin/gdbus" "$mock_bin/ibus"
+start_fixture() {
+  local marker="$test_root/pid-$2"
+  env DISPLAY="$1" DBUS_SESSION_BUS_ADDRESS="unix:path=/test/$2" bash -c '
+    while read -r key value rest; do
+      if [[ $key == Pid: ]]; then printf "%s\n" "$value" > "$1"; break; fi
+    done < /proc/self/status
+    exec sleep 120
+  ' bash "$marker" &
+  fixture_pids+=("$!")
+  # /proc 可能来自外层 PID namespace；用进程自行读取的 Pid 定位 environ。
+  for attempt in {1..100}; do
+    if [[ -s "$marker" ]]; then break; fi
+    sleep 0.01
+  done
+  fixture_pid=$(cat "$marker")
+}
+start_fixture :71 bus-a; pid_a=$fixture_pid
+start_fixture :71 bus-b; pid_b=$fixture_pid
+start_fixture :72 other-display; pid_other=$fixture_pid
+start_fixture :71 dead; pid_dead_bus=$fixture_pid
+start_fixture :71 slow; pid_slow=$fixture_pid
+run_ime() {
+  : > "$test_root/probes"
+  output=$(env PATH="$mock_bin:$PATH" HOME="$default_home" DISPLAY=:71 \
+    GTK_IM_MODULE=ibus XMODIFIERS=@im=ibus DBUS_SESSION_BUS_ADDRESS=unix:path=/test/wrong \
+    XDG_CONFIG_HOME="$test_root/original-config" \
+    OMPCODE_TEST_ORIGINAL_CONFIG="$test_root/original-config" \
+    OMPCODE_TEST_PROBES="$test_root/probes" \
+    OMPCODE_TEST_PIDS="$pid_other $pid_a" \
+    OMPCODE_TEST_OWNER_A="$pid_a" OMPCODE_TEST_OWNER_B="$pid_b" \
+    "$@" "$launcher" --home "$test_root/ime-data" 2> "$test_root/ime-stderr")
+}
+run_ime
+expect_line 'DBUS_SESSION_BUS_ADDRESS=unix:path=/test/bus-a'
+expect_line 'IBUS_ADDRESS=unix:path=/test/ibus-private'
+expect_line 'ARG=--disable-gpu'
+[[ "$(cat "$test_root/probes")" == unix:path=/test/bus-a ]]
+run_ime IBUS_ADDRESS=unix:path=/test/explicit GTK_IM_MODULE= XMODIFIERS=
+expect_line 'IBUS_ADDRESS=unix:path=/test/explicit'
+expect_line 'GTK_IM_MODULE=ibus'
+expect_line 'XMODIFIERS=@im=ibus'
+run_ime OMPCODE_TEST_PIDS="$pid_a $pid_b" DBUS_SESSION_BUS_ADDRESS=unix:path=/test/bus-b
+expect_line 'DBUS_SESSION_BUS_ADDRESS=unix:path=/test/bus-b'
+run_ime OMPCODE_TEST_PIDS="$pid_a $pid_b"
+expect_line 'DBUS_SESSION_BUS_ADDRESS=unix:path=/test/wrong'
+grep -q 'multiple' "$test_root/ime-stderr"
+run_ime OMPCODE_TEST_PIDS="$pid_dead_bus"
+expect_line 'DBUS_SESSION_BUS_ADDRESS=unix:path=/test/wrong'
+started=$SECONDS
+run_ime OMPCODE_TEST_PIDS="$pid_slow"
+expect_line 'DBUS_SESSION_BUS_ADDRESS=unix:path=/test/wrong'
+((SECONDS - started < 6))
+run_ime OMPCODE_TEST_PIDS=9999999999
+expect_line 'DBUS_SESSION_BUS_ADDRESS=unix:path=/test/wrong'
+run_ime OMPCODE_TEST_OWNER_A=1
+expect_line 'DBUS_SESSION_BUS_ADDRESS=unix:path=/test/wrong'
+run_ime OMPCODE_TEST_PIDS=
+expect_line 'DBUS_SESSION_BUS_ADDRESS=unix:path=/test/wrong'
+run_ime OMPCODE_TEST_PIDS="$pid_other"
+expect_line 'DBUS_SESSION_BUS_ADDRESS=unix:path=/test/wrong'
+[[ ! -s "$test_root/probes" ]]
+missing_tool_bin="$test_root/missing-tool-bin"
+mkdir -p "$missing_tool_bin"
+for tool in dirname readlink mkdir ln timeout; do
+  ln -s "$(command -v "$tool")" "$missing_tool_bin/$tool"
+done
+ln -s "$mock_bin/pgrep" "$missing_tool_bin/pgrep"
+run_ime PATH="$missing_tool_bin"
+expect_line 'DBUS_SESSION_BUS_ADDRESS=unix:path=/test/wrong'
+grep -q 'missing gdbus' "$test_root/ime-stderr"
+run_ime GTK_IM_MODULE=fcitx
+expect_line 'GTK_IM_MODULE=fcitx'
+expect_line 'DBUS_SESSION_BUS_ADDRESS=unix:path=/test/wrong'
+[[ ! -s "$test_root/probes" ]]
+run_ime XMODIFIERS=@im=fcitx
+expect_line 'XMODIFIERS=@im=fcitx'
+[[ ! -s "$test_root/probes" ]]
+run_ime DISPLAY=
+expect_line 'DBUS_SESSION_BUS_ADDRESS=unix:path=/test/wrong'
+[[ ! -s "$test_root/probes" ]]

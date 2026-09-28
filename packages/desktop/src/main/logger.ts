@@ -1,8 +1,30 @@
 import { mkdirSync, appendFileSync } from "node:fs";
+import { appendFile } from "node:fs/promises";
 import { join } from "node:path";
 import { formatTimestamp } from "@zcode/shared";
 import { cleanupExpiredLogFiles, LOG_RETENTION_DAYS } from "./logRetention.js";
 import { getAppConfigDir, maybeThrowInjectedFsFault } from "@zcode/services/node";
+import { createMainLogWriter } from "./mainLogWriter.js";
+
+// 无 GPU 桌面的交互与日志共用 Main 事件循环；每条同步 mkdir/append 在慢盘上会阻塞 UI。
+// CentOS 专用路径异步合批，仍按原路径和日期记录；其他构建保持已有行为。
+const asyncFileLog =
+  process.env.OMPCODE_CENTOS7_LOCAL_ONLY === "1"
+    ? createMainLogWriter({
+        append: (path, text) => {
+          maybeThrowInjectedFsFault({ operation: "appendFile", path });
+          return appendFile(path, text, "utf8");
+        },
+      })
+    : undefined;
+
+let exitLogDeadline: number | undefined;
+export async function flushMainLogs(): Promise<void> {
+  if (!asyncFileLog) return;
+  // Host 收尾和最终退出可能都调用此处，共用总预算，不能逐次累加退出等待。
+  exitLogDeadline ??= Date.now() + 1000;
+  await asyncFileLog.flushBeforeExit(Math.max(0, exitLogDeadline - Date.now()));
+}
 
 function getLogDir() {
   const e2eLogDir =
@@ -77,12 +99,16 @@ function write(level: LogLevel, source: string, ...args: unknown[]) {
   const message = args.map((a) => (typeof a === "string" ? a : JSON.stringify(a))).join(" ");
   const line = `[${ts}] [${level}] [pid:${pid}] [${source}] ${message}\n`;
   const logDir = getLogDir();
-  mkdirSync(logDir, { recursive: true });
   const filePath = join(logDir, `${formatDate(now)}.log`);
 
   // 同时保留 console 输出，方便开发调试；console 也加时间戳和 PID，与文件格式对齐
   safeConsoleWrite(level, `[${ts}] [pid:${pid}] [${source}]`, ...args);
 
+  if (asyncFileLog) {
+    asyncFileLog.enqueue(filePath, line);
+    return;
+  }
+  mkdirSync(logDir, { recursive: true });
   try {
     maybeThrowInjectedFsFault({ operation: "appendFile", path: filePath });
     appendFileSync(filePath, line);

@@ -1,6 +1,7 @@
 /* eslint-disable max-lines -- Root 当前集中编排启动和 workspace shell wiring，先保持入口收口避免跨层状态拆散。 */
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { LucideProvider, RefreshCw } from "lucide-react";
+import { MotionConfig } from "motion/react";
 import {
   APP_RUNTIME_PREFERENCES_CHANGED_BROADCAST_CHANNEL,
   DesktopCommandIds,
@@ -111,41 +112,53 @@ type WelcomeScreenOpenReason =
  * 外层挂载 StoreProvider（连接广播服务）+ TabStoreProvider，内层处理认证和路由。
  */
 export function Root(props: RootProps) {
+  useEffect(() => {
+    if (!isCentos7DesktopBuild) return;
+    document.documentElement.dataset.ompcodeReducedMotion = "true";
+    return () => {
+      delete document.documentElement.dataset.ompcodeReducedMotion;
+    };
+  }, []);
   return (
-    <LucideProvider strokeWidth={DEFAULT_LUCIDE_STROKE_WIDTH}>
-      {/*
-       * 之前通过 lucide.tsx 包装每个图标，把默认 strokeWidth 固定成 1.5。
-       * 现在移除包装文件后，如果不在根层统一注入，按钮、列表和工具栏里的 Lucide 图标会回退到 2，
-       * 导致同一套 size class 下视觉显得更粗、更挤。这里改用官方 LucideProvider 保持默认值，
-       * 同时保留个别图标显式传入 strokeWidth 时的覆盖能力。
-       */}
-      <TooltipProvider>
+    <MotionConfig
+      reducedMotion={isCentos7DesktopBuild ? "always" : "never"}
+      transition={isCentos7DesktopBuild ? { duration: 0 } : undefined}
+    >
+      <LucideProvider strokeWidth={DEFAULT_LUCIDE_STROKE_WIDTH}>
         {/*
-         * 大会话消息动作里会出现大量 tooltip。Provider 如果跟随每个 tooltip 实例创建，
-         * React 点击切换任务时会同步构造数量级相同的 Radix 上下文树；根层共享一次即可保留零延迟配置。
+         * 之前通过 lucide.tsx 包装每个图标，把默认 strokeWidth 固定成 1.5。
+         * 现在移除包装文件后，如果不在根层统一注入，按钮、列表和工具栏里的 Lucide 图标会回退到 2，
+         * 导致同一套 size class 下视觉显得更粗、更挤。这里改用官方 LucideProvider 保持默认值，
+         * 同时保留个别图标显式传入 strokeWidth 时的覆盖能力。
          */}
-        <ServiceProvider services={props.services}>
-          <PlatformProvider platform={props.platform}>
-            <StoreProvider
-              broadcastService={props.services.broadcastService}
-              initialIsRestoringOAuthSession
-            >
-              <TabStoreProvider>
-                <DiffsWorkerPoolProvider>
-                  <AssistantCodeCommentFeatureProvider
-                    enabled={props.assistantCodeCommentCardsEnabled}
-                  >
-                    <CodingPlanUpgradeDialogProvider>
-                      <RootInner {...props} />
-                    </CodingPlanUpgradeDialogProvider>
-                  </AssistantCodeCommentFeatureProvider>
-                </DiffsWorkerPoolProvider>
-              </TabStoreProvider>
-            </StoreProvider>
-          </PlatformProvider>
-        </ServiceProvider>
-      </TooltipProvider>
-    </LucideProvider>
+        <TooltipProvider>
+          {/*
+           * 大会话消息动作里会出现大量 tooltip。Provider 如果跟随每个 tooltip 实例创建，
+           * React 点击切换任务时会同步构造数量级相同的 Radix 上下文树；根层共享一次即可保留零延迟配置。
+           */}
+          <ServiceProvider services={props.services}>
+            <PlatformProvider platform={props.platform}>
+              <StoreProvider
+                broadcastService={props.services.broadcastService}
+                initialIsRestoringOAuthSession
+              >
+                <TabStoreProvider>
+                  <DiffsWorkerPoolProvider>
+                    <AssistantCodeCommentFeatureProvider
+                      enabled={props.assistantCodeCommentCardsEnabled}
+                    >
+                      <CodingPlanUpgradeDialogProvider>
+                        <RootInner {...props} />
+                      </CodingPlanUpgradeDialogProvider>
+                    </AssistantCodeCommentFeatureProvider>
+                  </DiffsWorkerPoolProvider>
+                </TabStoreProvider>
+              </StoreProvider>
+            </PlatformProvider>
+          </ServiceProvider>
+        </TooltipProvider>
+      </LucideProvider>
+    </MotionConfig>
   );
 }
 

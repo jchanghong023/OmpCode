@@ -95,6 +95,75 @@ else
   unset OMPCODE_CENTOS7_OFFLINE
 fi
 
+configure_ibus_session() {
+  [[ -n ${DISPLAY:-} ]] || return 0
+  [[ ${GTK_IM_MODULE:-ibus} == ibus && ${XMODIFIERS:-@im=ibus} == @im=ibus ]] || return 0
+  local tool pid entry daemon_display daemon_bus owner selected_bus= ambiguous=0 address
+  for tool in pgrep gdbus timeout; do
+    if ! command -v "$tool" >/dev/null 2>&1; then
+      echo "OmpCode: cannot check IBus session (missing $tool); keeping input-method environment." >&2
+      return 0
+    fi
+  done
+
+  # 根因（CentOS 7 / IBus 1.5.17，SSH + 共享 X server 实测）：GTK 模块除连接
+  # IBUS_ADDRESS 指向的私有总线外，还在 DBUS_SESSION_BUS_ADDRESS 所指会话总线上
+  # 监听 org.freedesktop.IBus。若该名称不存在，_daemon_is_running 为 false，
+  # ibus_im_context_filter_keypress 会退回普通字符输入，不发送 ProcessKeyEvent。
+  # 因而即使 im-ibus.so 已加载、libpinyin/FocusIn/光标更新正常，仍可能只能输入英文。
+  # 修复是继承当前用户、当前 DISPLAY 的 ibus-daemon 会话总线；不是将两个总线
+  # 地址设成相同值，也不是修改 HOME/dconf。只改变本次应用环境，不重启守护进程。
+  for pid in $(pgrep -u "$EUID" -x ibus-daemon 2>/dev/null || true); do
+    [[ $pid =~ ^[0-9]+$ ]] || continue
+    [[ -O /proc/$pid/environ && -r /proc/$pid/environ ]] || continue
+    daemon_display= daemon_bus=
+    # /proc 是 NUL 分隔数据，不能 source/eval；进程退出或权限变化时跳过。
+    {
+      while IFS= read -r -d '' entry; do
+        case "$entry" in
+          DISPLAY=*) daemon_display=${entry#DISPLAY=} ;;
+          DBUS_SESSION_BUS_ADDRESS=*) daemon_bus=${entry#DBUS_SESSION_BUS_ADDRESS=} ;;
+        esac
+      done < "/proc/$pid/environ"
+    } 2>/dev/null || continue
+    [[ $daemon_display == "$DISPLAY" && $daemon_bus == unix:* && $daemon_bus != *';'* ]] || continue
+    # gdbus --address 在宿主旧版本上可能未发送 Hello；必须用 --session 注册。
+    # 核对服务所有者 PID，排除失效地址及同用户其他会话；超时只限制探测耗时。
+    owner=$(timeout 2s env DBUS_SESSION_BUS_ADDRESS="$daemon_bus" gdbus call --session \
+      --dest org.freedesktop.DBus --object-path /org/freedesktop/DBus \
+      --method org.freedesktop.DBus.GetConnectionUnixProcessID org.freedesktop.IBus 2>/dev/null) || continue
+    [[ $owner == "(uint32 $pid,)" ]] || continue
+    if [[ $daemon_bus == "${DBUS_SESSION_BUS_ADDRESS:-}" ]]; then
+      selected_bus=$daemon_bus
+      ambiguous=0
+      break
+    fi
+    if [[ -n $selected_bus && $selected_bus != "$daemon_bus" ]]; then
+      ambiguous=1
+    fi
+    selected_bus=$daemon_bus
+  done
+  if ((ambiguous)); then
+    echo 'OmpCode: multiple IBus sessions match this DISPLAY; keeping input-method environment.' >&2
+    return 0
+  fi
+  if [[ -z $selected_bus ]]; then
+    echo 'OmpCode: no verified IBus session for this user/DISPLAY; keeping input-method environment.' >&2
+    return 0
+  fi
+
+  export DBUS_SESSION_BUS_ADDRESS="$selected_bus"
+  export GTK_IM_MODULE="${GTK_IM_MODULE:-ibus}" XMODIFIERS="${XMODIFIERS:-@im=ibus}"
+  # 在 XDG_CONFIG_HOME 隔离前读取原会话地址；尊重用户显式提供的 IBUS_ADDRESS。
+  if [[ -z ${IBUS_ADDRESS:-} ]] && command -v ibus >/dev/null 2>&1; then
+    address=$(timeout 2s ibus address 2>/dev/null) || address=
+    if [[ $address == unix:* && $address != *$'\n'* && $address != *';'* ]]; then
+      export IBUS_ADDRESS="$address"
+    fi
+  fi
+}
+configure_ibus_session
+
 if ((home_requested)); then
   if [[ "$home_override" != /* ]]; then
     echo 'OmpCode: --home requires an absolute directory.' >&2
@@ -176,10 +245,9 @@ else
   export XDG_DATA_HOME="$HOME/.local/share/ompcode-centos7"
   unset OMPCODE_CENTOS7_HOME
 fi
-# 修复说明：XDG_CONFIG_HOME 被隔离到应用私有目录后，GTK 输入法模块在新路径找不到
-# ibus/fcitx 守护进程的连接与配置（地址文件位于 ~/.config/ibus/bus 等），导致应用内
-# 无法输入中文而其他程序正常。将用户真实的输入法配置目录只读桥接进隔离配置根；
-# 目标位置已存在的同名条目一律不覆盖、不迁移。
+# 将真实输入法配置链接到隔离目录，保持 ibus/fcitx 地址文件等可见。
+# 这只是路径兼容，不是只读隔离，也不能替代上面的 IBus 会话总线对齐；
+# 目标位置已存在的同名条目不覆盖、不迁移。
 if [[ -d "$HOME/.config" ]]; then
   mkdir -p -- "$XDG_CONFIG_HOME"
   for im_name in ibus fcitx fcitx5; do
@@ -191,4 +259,5 @@ fi
 # 修复说明：CentOS 7 的 bash 4.2 在 set -u 下展开空数组 "${arr[@]}" 会误报 unbound
 # variable，导致无参数启动直接失败；${arr[@]+"${arr[@]}"} 是 4.2 兼容的惯用替代。
 # CentOS 7 的目标环境没有 GPU；禁用 Chromium 硬件加速，仍允许软件渲染。
-exec "$app/zcode" --no-sandbox --disable-gpu ${desktop_args[@]+"${desktop_args[@]}"}
+# 与 UI 的静态样式配合，让读取系统偏好的 JS 动画也停止持续刷新。
+exec "$app/zcode" --no-sandbox --disable-gpu --force-prefers-reduced-motion ${desktop_args[@]+"${desktop_args[@]}"}
