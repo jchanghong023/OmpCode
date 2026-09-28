@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { createServer, type Server as HttpServer } from "node:https";
 import type { MessagePortMain, UtilityProcess as ElectronUtilityProcess } from "electron";
-import { MessageChannelMain } from "electron";
 import { WebSocket, WebSocketServer } from "ws";
 import { MessagePortProtocol, type MessagePortLike, type MessagePortPayload } from "@zcode/rpc";
 import { HostMessageTypes, type MobileRelayEntryStatus, type WindowBridgeableWorkspace } from "@zcode/shared";
@@ -56,6 +55,8 @@ export interface MobileRelayServerOptions {
   /** 向 Host 查询可桥接工作区（Main 侧负责消息关联与超时）。 */
   requestBridgeableWorkspaces: (host: ElectronUtilityProcess) => Promise<WindowBridgeableWorkspace[]>;
   onConnectionsChanged?: (connections: number) => void;
+  /** 仅测试注入：真实桌面固定使用 MOBILE_RELAY_LISTEN_PORT；E2E 用临时端口避免抢占 8765。 */
+  listenPort?: number;
 }
 
 const HANDSHAKE_TIMEOUT_MS = 30_000;
@@ -133,7 +134,8 @@ export class MobileRelayServer {
 
     await new Promise<void>((resolve, reject) => {
       httpServer.once("error", reject);
-      httpServer.listen(MOBILE_RELAY_LISTEN_PORT, MOBILE_RELAY_LISTEN_HOST, () => {
+      const listenPort = this.options.listenPort ?? MOBILE_RELAY_LISTEN_PORT;
+      httpServer.listen(listenPort, MOBILE_RELAY_LISTEN_HOST, () => {
         httpServer.removeListener("error", reject);
         resolve();
       });
@@ -305,6 +307,9 @@ export class MobileRelayServer {
       const host = session.host;
       // 同一手机连接重开 bridge（切换项目/断线恢复）时先释放旧 attachment。
       this.releaseAttachment(session);
+      // electron 仅在 main 进程内提供 MessageChannelMain；延迟到建桥时解析，
+      // 让纯 Node 测试也能装载本模块做握手/门控回归（main 进程内行为不变）。
+      const { MessageChannelMain } = await import("electron");
       const { port1, port2 } = new MessageChannelMain();
       const attachmentId = randomUUID();
       const bridgeInfo: HostV4BridgeInfo = {

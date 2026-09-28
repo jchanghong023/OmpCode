@@ -21,7 +21,7 @@ export const OMPCODE_LOCAL_ONLY_ENV = "OMPCODE_CENTOS7_LOCAL_ONLY";
  * 离线锁定下被逐一关闭的功能面。键与 centos7-release.md 的门控面清单一一对应，
  * 全部为 `true` 表示该功能后端已关闭；未锁定时全部为 `false`（与 Windows 全功能基准一致）。
  */
-export const offlineDisabledFeaturesSchema = z.object({
+export const offlineDisabledFeaturesSchema = z.strictObject({
   /** 手机远控 relay：不监听、不建立桥接；手机主动连入在 TCP 层被拒绝。 */
   mobileRelay: z.boolean(),
   /** 公网更新检查（含调度与手动检查）。 */
@@ -46,7 +46,7 @@ export const offlineDisabledFeaturesSchema = z.object({
   remoteRecommendedPrompts: z.boolean(),
 });
 
-export const offlineGateStateSchema = z.object({
+export const offlineGateStateSchema = z.strictObject({
   /** 当前进程是否处于离线锁定（启动器传入 `--offline`）。 */
   localOnly: z.boolean(),
   disabledFeatures: offlineDisabledFeaturesSchema,
