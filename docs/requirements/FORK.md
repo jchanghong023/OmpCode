@@ -15,9 +15,18 @@
 
 ## 本 Fork 的目的
 
-把本地 Agent 核心从上游 `apps/zcode-cli`（Agent CLI 与运行时）替换为 omp 的 RPC 核心，ZCode 侧通过适配层对接。产品形态、全部界面与既有双链路语义保持不变；omp 自身的功能演进在其自己的 fork 仓库进行，本仓库只消费其 RPC 核心能力，不重定义 omp。
+把本地 Agent 核心从上游 `apps/zcode-cli`（Agent CLI 与运行时）替换为 omp 的 RPC 核心，ZCode 侧通过适配层对接。产品形态、界面与既有双链路语义除本目录明确记录的差异决策外保持上游形态；omp 自身的功能演进在其自己的 fork 仓库进行，本仓库只消费其 RPC 核心能力，不重定义 omp。
 
 本次初始化已确认该提交存在且为 HEAD 的共同基线；未获取或核验远端当前 main HEAD，不把尚未同步的上游变化识别为本地需求。以下本地要求仍需维护，尚未逐项证明上游等价满足。
+
+## 上游同步策略与平台范围
+
+- 同步上游 `main` 的主要目的：跟进上游 UI 界面显示效果的演进；Agent 核心方向的上游演进不改变本 Fork 的换核决策。
+- 结构隔离原则：本地改动与上游改动尽量分开，能用独立目录或独立文件承载就不修改上游共享文件——omp 协议与适配独占 `packages/omp-agent`；新增 UI 组件与文案以 `Omp*` 前缀独立文件维护；Fork 需求只记录于 `docs/requirements/`；对上游共享文件的修改保持最小必要 diff。目标是上游 UI 改动可以低冲突合并进本仓库。
+- 平台范围：产品仅支持 Windows 与 CentOS 7 两个系统；macOS、常规 Linux（RHEL 8+ RPM 等）不再是支持目标。
+- 分支策略：产品分支只有 `main` 一个；CentOS 7 专有分支合入后删除，不做分支级平台分叉（分发构建见 [centos7-release.md](centos7-release.md)）。
+- 界面统一：两平台的界面结构、入口与交互完全一致，Windows 为全功能基准界面；不按平台分叉界面，不因平台能力差异删除或隐藏 UI 入口。唯一豁免：CentOS 7 发布构建标记（`__OMPCODE_CENTOS7_DESKTOP__`）只允许改变动画时长、流式正文合批等渲染性能策略（见 [centos7-performance.md](centos7-performance.md)），不得触及界面元素、入口或功能。上游官方云远控入口（依赖闭源云 relay）按替代关系在两平台统一移除，手机远控只保留内嵌 relay 入口（见 [mobile-relay.md](mobile-relay.md)），属功能替代而非按平台裁剪。
+- 功能区分：两平台差异只允许存在于底层依赖（Electron 版本、原生资产、打包链路）、上述豁免的渲染性能策略，与后端功能的参数门控。CentOS 7 启动器沿用现有 `--offline` 参数作为企业离线锁定开关：传入时关闭手机远控 relay、公网更新、公网配置与遥测等后端并透传给内嵌 omp；不传入时桌面为全功能，与 Windows 基准一致（Windows 不提供该锁定参数）。被关闭功能的 UI 入口保留并呈禁用态，附「离线锁定中已关闭」说明；技术上无法做禁用态的操作在触发时明确报错，不静默缺失。
 
 ## 数据、端口与更新隔离
 
@@ -72,13 +81,13 @@
 - 更换覆盖全部用户可见的图标位：桌面应用图标、安装包图标、窗口图标与 Web 端 favicon 等各尺寸资源统一更换。
 - 仅更换图标资产，不改其他视觉主题与界面样式。
 
-- 侧栏左下角的偏好菜单入口（界面语言/界面主题/界面模式/界面缩放）由「设置」更名为「显示效果」（英文 Display），与右侧打开完整设置页的齿轮「设置」按钮区分；仅改入口文案与 aria 标签，菜单内容与设置页不变。
+- 侧栏左下角的偏好菜单入口（界面语言/界面主题/界面模式/界面缩放）由「设置」更名为「显示效果」（英文 Display），与右侧打开完整设置页的齿轮「设置」按钮区分；仅改入口文案与 aria 标签，菜单内容与设置页不变。「显示效果」入口使用 Lucide `Monitor` 图标（尺寸维持 `size-4`），右侧完整设置入口继续使用齿轮；仅静态图标变化，不改文案、菜单项与开关行为，不引入新状态或迁移。
 
-验收：桌面、Web、安装器、菜单、托盘、关于页、引导、登录/分享页的用户可见品牌统一为 OmpCode；全部尺寸图标及 Windows 开发态任务栏均显示 omp 官方图标。上游引用、内部标识及构建流程保持约定兼容，菜单内容与其他视觉样式不变化。
+验收：桌面、Web、安装器、菜单、托盘、关于页、引导、登录/分享页的用户可见品牌统一为 OmpCode；全部尺寸图标及 Windows 开发态任务栏均显示 omp 官方图标；桌面侧栏「显示效果」入口前显示 Monitor 显示器图标，点击后仍展开语言、主题、模式与缩放选项，右侧完整设置入口仍为齿轮。上游引用、内部标识及构建流程保持约定兼容；除品牌图标与该入口图标外，菜单内容与其他视觉样式不变化。
 
 ## 已知与允许的差异
 
-换核后以下能力无法与上游等价提供，要求以显式拒绝（JSON-RPC `-32601` / v4 ACK `fault.command.unsupportedByOmpCore` 等 guard id）或明确的替代行为交付，不静默缺失。UI 侧表现为对应入口不可用（禁用态 tooltip / 操作失败提示），主对话链路不受影响。
+换核后以下能力无法与上游等价提供，要求以显式拒绝（JSON-RPC `-32601` / v4 ACK `fault.command.unsupportedByOmpCore` 等 guard id）或明确的替代行为交付，不静默缺失。UI 侧表现为对应入口不可用（禁用态 tooltip / 操作失败提示），主对话链路不受影响。个别差异的功能域文档规定了入口隐藏等替代形态时（如插件市场入口隐藏）以该功能域文档为准；「上游同步策略与平台范围」的入口保留约束针对两平台之间的差异，不改变这些既定裁剪。
 
 1. **插件与技能市场**：见 [原生集成](integrations.md) 与 [可执行技能](skills.md)。
 2. **工作流中枢与动态工作流**：已保存工作流 GUI（`workflows/*`）、`v4/conversation/workflowRun*` 全族、`startSavedWorkflow`/`resumeWorkflowRun`/`amendWorkflowRunSettings` 不可用。替代行为：无（omp 无等价工作流引擎）。
@@ -93,7 +102,7 @@
 11. **子代理/后台任务面板**：见 [原生集成](integrations.md)。
 12. **legacy session 事件流**：`session/subscribe` 返回空事件（无 live 事件回放）。替代行为：桌面与 Web/手机主链路均走 v4 帧，不受影响；task 索引的 live 增量更新降级。
 13. **冷会话历史投影**：见 [会话恢复](session-recovery.md)。
-14. **macOS 与旧版 Linux 打包**：原基线记录 omp releases 不提供 darwin 资产，macOS 安装包无法内嵌 omp；运行时须报「内嵌 omp 二进制未找到」的显式错误。Windows 与较新 Linux 各架构为既有支持范围；本次未重验发布资产或各平台运行。CentOS 7 见 [兼容分发](centos7-release.md)，常规 RPM 仅支持 RHEL 8+。
+14. **macOS 与其他 Linux 打包**：原基线记录 omp releases 不提供 darwin 资产，macOS 安装包无法内嵌 omp；运行时须报「内嵌 omp 二进制未找到」的显式错误。产品支持范围仅为 Windows 与 CentOS 7（见上文「上游同步策略与平台范围」），常规 Linux RPM 及其他平台不再维护。CentOS 7 见 [兼容分发](centos7-release.md)。
 15. **`startup/storageState` 存储准备**：omp 核心无 ZCode CLI 的 SQLite 会话库，适配器按协议帧序直接报告 ready；`--prepare-storage` worker 为无操作握手（帧序完整，exit 0）。
 16. **附件**：见 [原生集成的附件规则](integrations.md)。
 17. **与上游共享的安装级标识**：深链 scheme `zcode://`、Windows AUMID/appId（`dev.zcode.app`）、Linux 包名按「内部标识不动」约定保留，双装时 scheme 由最后注册方接管、任务栏按 appId 分组——属链接路由与安装身份冲突，非数据/端口共享；数据与端口须遵守本文件隔离要求。

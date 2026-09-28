@@ -7,7 +7,9 @@
 
 ## 项目定位与需求权威（Fork）
 
-- 本仓库是持续同步上游的个人 Fork；上游来源、跟踪目标和产品目的见 `docs/requirements/FORK.md`。同步操作只针对其中指定的上游 `main` HEAD，优先采用上游最新实现。
+- 本仓库是持续同步上游的个人 Fork；上游来源、跟踪目标和产品目的见 `docs/requirements/FORK.md`。同步操作只针对其中指定的上游 `main` HEAD，优先采用上游最新实现。同步上游的主要目的是跟进 UI 界面显示效果。
+- 产品仅支持 Windows 与 CentOS 7：两平台前端 UI 与功能界面完全一致，Windows 为全功能基准；平台差异只允许存在于底层依赖、打包链路和后端功能的参数门控（离线参数），不按平台分叉界面，不因平台能力差异删除或隐藏 UI 入口。
+- 自有改动与上游改动尽量结构隔离：fork 逻辑优先放独立目录或独立文件（`packages/omp-agent`、`Omp*` 前缀 UI 文件、`docs/requirements/`），对上游共享文件保持最小 diff，便于低冲突合并上游 UI 更新；详见 `docs/requirements/FORK.md` 的「上游同步策略与平台范围」。
 - 本项目完全由 AI Agent 实现和维护：质量不依赖用户手工读代码或人工回归，必须依靠可复现的自动化验证与文档约定。
 - 固定需求权威目录是 `docs/requirements/`，从 `README.md` 按功能边界定位文档；Fork 目的、差异需求、规划及验收标准只在该目录维护。根目录 `FORK.md` 仅保留跳转，不是第二份权威副本。
 - 新增、修改或取消本地差异需求，或预期用户可见行为变化时，MUST 检查并同步目录中对应文档；新独立功能域可新增文档并更新索引，每项需求只有一个维护位置。仅实现方式变化且需求不变时，不制造需求变更，也不得改写需求来合理化实现缺陷。入口、命令或开发规则变化时同步本文件。
@@ -81,7 +83,7 @@
 
 - 遵守 `DESIGN.md`，复用已有组件，兼顾桌面与手机 Web 的布局、交互、主题和国际化。
 - 组件通过 `packages/ui/src/hooks/` 访问服务；平台操作通过 `IPlatformService`（`packages/shared/src/platform.ts`），不直接调用 `window.zcode`。
-- 通过依赖注入处理 Desktop、Web、本地和远程环境的差异，并兼顾 Windows、macOS 和 Linux。
+- 通过依赖注入处理 Desktop、Web、本地和远程环境的差异，并兼顾 Windows 与 CentOS 7 两个支持平台。
 - Zustand 状态位于 `packages/ui/src/store/`。广播同步的主题、语言等字段需要防止回环；UI 局部状态不应被误当作服务端事实。
 - hooks 中含 JSX 的文件使用 `.tsx`。
 
