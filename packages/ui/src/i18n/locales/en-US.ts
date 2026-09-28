@@ -181,6 +181,7 @@ const enUS: Record<string, string> = {
   "common.generating": "Generating...",
   "common.connecting": "Connecting...",
   "common.cancel": "Cancel",
+  "offlineLock.disabledHint": "Disabled by offline lock",
   "common.retry": "Retry",
   "common.close": "Close",
   "chat.plan.removeMarker": "Turn off Plan mode",
@@ -1751,7 +1752,8 @@ const enUS: Record<string, string> = {
   "webRemoteControl.botChannel.manageBots": "Manage bots",
   "mobileRelay.trigger": "Mobile relay",
   "mobileRelay.title": "Mobile relay",
-  "mobileRelay.description": "Scan the QR code with the companion mobile app to connect to this desktop.",
+  "mobileRelay.description":
+    "Scan the QR code with the companion mobile app to connect to this desktop.",
   "mobileRelay.entryUrl": "Entry URL",
   "mobileRelay.copy": "Copy link",
   "mobileRelay.copied": "Entry link copied",
@@ -1761,7 +1763,8 @@ const enUS: Record<string, string> = {
   "mobileRelay.notRunning": "Mobile relay is not running",
   "mobileRelay.loadFailed": "Failed to load mobile relay status",
   "mobileRelay.qrAlt": "Mobile relay entry QR code",
-  "mobileRelay.note": "Install the companion app and trust the desktop-exported CA certificate (debug builds) before scanning.",
+  "mobileRelay.note":
+    "Install the companion app and trust the desktop-exported CA certificate (debug builds) before scanning.",
   "remote.title": "Connect remote environment",
   "remote.description":
     "Connect to a remote workspace over SSH, Server, WSL, or Docker, then choose a directory in the current window.",
