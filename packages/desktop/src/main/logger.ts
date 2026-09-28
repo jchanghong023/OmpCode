@@ -108,7 +108,6 @@ interface PendingLogLine {
   bytes: number;
 }
 
-const MAX_QUEUED_LOG_BYTES = 16 * 1024 * 1024;
 const pendingLines: PendingLogLine[] = [];
 let queuedBytes = 0;
 let flushTimer: ReturnType<typeof setTimeout> | undefined;
