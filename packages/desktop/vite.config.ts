@@ -8,6 +8,7 @@ import { resolveZCodeEndpointOrigin, pickProductEndpointEnv } from "@zcode/share
 import { pdfJsCMapsPlugin } from "../ui/vite/pdfJsCMapsPlugin.js";
 import { getBuildMetadata } from "./scripts/build-metadata.mjs";
 import { resolveDesktopProductFlavor } from "./scripts/desktop-product-identity.mjs";
+import { isCentos7DesktopBuild } from "./scripts/centos7-build-flag.mjs";
 
 const buildMetadata = getBuildMetadata();
 const desktopRequire = createRequire(import.meta.url);
@@ -155,6 +156,10 @@ export default defineConfig(({ mode }) => {
     env.ZCODE_E2E_COVERAGE === "1" || process.env.ZCODE_E2E_COVERAGE === "1";
   const e2eStoreBridgeEnabled =
     env.VITE_ZCODE_E2E_STORE_BRIDGE === "1" || process.env.VITE_ZCODE_E2E_STORE_BRIDGE === "1";
+  // __OMPCODE_CENTOS7_DESKTOP__ 由构建态决定：Windows 基线恒为 false；仅 CentOS 7 构建任务
+  // 经 scripts/prepare-centos7-build.mjs 切换 manifest（或显式环境变量）后为 true，
+  // 供 UI 层 CentOS 专用渲染性能策略识别，不触及界面结构、入口与功能。
+  const centos7DesktopBuild = isCentos7DesktopBuild();
   const zcodeEndpointOrigin = resolveZCodeEndpointOrigin({
     env: zcodeEnv,
     envBaseOrigin: env.ZCODE_BASE_URL ?? env.ZCODE_ENDPOINT_ORIGIN,
@@ -188,7 +193,7 @@ export default defineConfig(({ mode }) => {
     },
     server: { port: 5194, strictPort: true },
     define: {
-      __OMPCODE_CENTOS7_DESKTOP__: "true",
+      __OMPCODE_CENTOS7_DESKTOP__: JSON.stringify(centos7DesktopBuild),
       __ZCODE_ENDPOINT_ENV__: JSON.stringify(pickProductEndpointEnv(env)),
       __ZCODE_VERSION__: JSON.stringify(buildMetadata.appVersion),
       __ZCODE_COMMIT__: JSON.stringify(buildMetadata.buildCommitId),
