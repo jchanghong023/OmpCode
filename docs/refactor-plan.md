@@ -107,16 +107,21 @@ flowchart TD
 
 1. 清理 `docs/specs/` 已迁移的分支 spec 与过时引用；需求索引与 AGENTS.md 复核。
 2. 验收矩阵覆盖 `docs/requirements/` **全部 10 份文档**（含 session-recovery.md 与 performance.md——本次合并风险最高的会话叠加恰在其域内）：每条需求 → 验证方式（UT/E2E/GUI/VM/人工）→ 负责工作流 → 状态列。
-3. 组织 P2 的 VM 验收清单执行与公司主机 IBus 验收排期。
+3. 组织 P2 的 VM 验收清单执行与公司主机 IBus 验收排期；汇总 Windows 与 CentOS 7/Linux 侧的验收文档（每平台一份，`docs/test-reports/`）。
 
 ## P2 集成验证门禁（合入 main 前必须全绿）
 
 1. `node scripts/check-workspace-freshness.mjs`、`pnpm typecheck`、`pnpm lint`、`pnpm fmt:check`、`pnpm architecture:check`。
 2. `pnpm --filter @zcode/omp-agent test`（含 `test/real-omp.e2e.test.ts` 真实核心 E2E 必须实际执行——环境缺失即门禁不绿并如实记录，不得以跳过充当通过）；desktop/services/client 相关既有 UT 按实际文件运行。
-3. Windows GUI 冒烟：`pnpm dev:desktop` 起真实桌面 + `node scripts/dev/gui-smoke-cdp.mjs`；手机远控入口在 Windows 正常（有 frp 环境则真机连一次）。
-4. CentOS 7：集成分支金丝雀先过一轮 VM 初验（C1），合流前按 centos7-release.md「Package acceptance」终验，含 `--offline` 两模式网络追踪与被关功能入口逐项检查、文件附件拖拽与浏览器历史导航、Windows 基线保护检查、Chromium 120 与 Windows 的 UI 走查对比；ELF/GLIBC 检查由流水线内置步骤保证。
+3. Windows 真实界面验收（操作计算机执行界面测试，不止 CDP 冒烟）：`pnpm dev:desktop` 起真实桌面后，经真实界面操作至少完成：
+   a) 基本工具调用会话：新建会话 → 发起会触发工具调用的任务 → 工具调用展示与结果 → 实际文件变更 → 完成/中断；
+   b) 子代理分配：发起会派生子代理的任务，核对子代理运行/结束状态与记录展开；
+   c) 核心界面与 omp 数据一致性：会话列表、技能目录、模型目录与角色、上下文用量、子代理状态等界面展示与 omp 事实源逐一核对；
+   真实模型统一使用 `zhipu-coding-plan/glm-5.3-flash`；手机远控入口在 Windows 正常（有 frp 环境则真机连一次）。
+4. CentOS 7/Linux 侧验收：经 `jch-wsl-git-test` 技能执行（用户指定路径）——从 Windows 仓库推送待测代码到指定 WSL2 发行版，以 Linux 原生仓库运行与 Windows 同一组核心场景（基本工具调用会话、子代理分配、界面与 omp 数据一致性，模型同为 glm-5.3-flash）；集成分支金丝雀先过一轮 VM 初验（C1），合流前按 centos7-release.md「Package acceptance」终验，含 `--offline` 两模式网络追踪与被关功能入口逐项检查、文件附件拖拽与浏览器历史导航、Windows 基线保护检查、Chromium 120 与 Windows 的 UI 走查对比；ELF/GLIBC 检查由流水线内置步骤保证。
 5. 公司 Citrix 主机 IBus 中文输入验收单独执行并记录（VM 不等价）。
-6. 任何一项不绿不得进入 P3；验证结论写入 `docs/test-reports/`。
+6. 验收文档：代码测试通过后必须产出验收文档——每平台一份写入 `docs/test-reports/`，逐场景记录执行的操作/命令、证据（截图、日志、omp 侧对照数据）、结果与未验证范围；无验收文档不得进入 P3。
+7. 任何一项不绿不得进入 P3；验证结论随验收文档落盘。
 
 ## P3 收尾
 
