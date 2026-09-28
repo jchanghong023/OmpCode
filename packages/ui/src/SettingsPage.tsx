@@ -43,7 +43,6 @@ import { AppUsagePanel } from "@/settings/usage-stats/AppUsagePanel.js";
 import { SubagentsSection } from "@/settings/SubagentsSection.js";
 import { AutomationsSection } from "@/settings/AutomationsSection.js";
 import { PluginsSection } from "@/settings/PluginsSection.js";
-import { HooksSection } from "@/settings/HooksSection.js";
 import { WorkspaceFileSearchSection } from "@/settings/WorkspaceFileSearchSection.js";
 import { MemorySettingsSection } from "@/settings/MemorySettingsSection.js";
 import { BrowserSettingsSection } from "@/settings/BrowserSettingsSection.js";
@@ -1450,9 +1449,13 @@ export function SettingsPage({
                             }}
                           />
                         ) : activeSection === "hooks" ? (
-                          <HooksSection
-                            workspacePath={activeWorkspacePath}
-                            workspaceIdentity={activeWorkspaceIdentity}
+                          <OmpNativeIntegrationsSection
+                            kind="hook"
+                            workspacePath={
+                              activeWorkspaceTab?.remoteSessionId
+                                ? undefined
+                                : (activeWorkspacePath ?? undefined)
+                            }
                           />
                         ) : activeSection === "workspaceFileSearch" ? (
                           <WorkspaceFileSearchSection

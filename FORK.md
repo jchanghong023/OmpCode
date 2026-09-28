@@ -142,7 +142,7 @@
 
 换核后以下能力无法与上游等价提供，均已以显式拒绝（JSON-RPC `-32601` / v4 ACK `fault.command.unsupportedByOmpCore` 等 guard id）或明确的替代行为交付，不静默缺失。UI 侧表现为对应入口不可用（禁用态 tooltip / 操作失败提示），主对话链路不受影响。
 
-1. **插件与技能市场**：ZCode 插件安装/市场不可用（-32601）；技能可执行目录由 omp `source=skill` 命令投影，旧 `plugins/referenceCatalog` 在 omp 会话返回合法空目录，`@` 文件引用不显示原始 RPC 错误。设置中的扩展页展示 omp profile 与项目原生扩展目录，可打开配置目录；桌面不内嵌 ZCode 官方插件运行时与内置技能包。
+1. **插件与技能市场**：ZCode 插件安装/市场不可用（-32601）；技能可执行目录由 omp `source=skill` 命令投影，旧 `plugins/referenceCatalog` 在 omp 会话返回合法空目录，`@` 文件引用不显示原始 RPC 错误。设置中的扩展页展示 omp profile 与项目原生扩展目录，可打开配置目录；「钩子」页展示 omp 原生 `hooks/pre`、`hooks/post` 中可发现的 JS/TS 文件与来源，允许打开目录，不调用 ZCode 插件接口或伪装运行状态。桌面不内嵌 ZCode 官方插件运行时与内置技能包。
 2. **工作流中枢与动态工作流**：已保存工作流 GUI（`workflows/*`）、`v4/conversation/workflowRun*` 全族、`startSavedWorkflow`/`resumeWorkflowRun`/`amendWorkflowRunSettings` 不可用。替代行为：无（omp 无等价工作流引擎）。
 3. **automation / Off-Peak**：定时任务使用现有 Host 调度服务持久化与派发，执行仍走 omp 核心；表单模型和思考档从目标工作区的 omp 模型目录选择，运行记录关联 omp 会话。错峰任务仍不可用。
 4. **会话内编辑类操作**：fork 某轮（`forkAssistant`）、重试（`retryTurn`）、编辑已发送消息（`editUserQuery`）、工作区文件回滚（`applyFileRewind`/`fileRewindPreview`）不可用。替代行为：无（omp 会话树的 `branch` 能力未进本适配层首版）。

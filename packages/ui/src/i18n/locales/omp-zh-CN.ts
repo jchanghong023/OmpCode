@@ -3,6 +3,12 @@ const ompZhCNOverrides: Record<string, string> = {
   "chat.error.ompAttachmentRejected": "附件无法发送给 omp：{reason}",
   "chat.subagents.unavailable": "omp 子代理状态暂不可用，当前会话的子代理记录可能不完整。",
   "settings.ompNative.extensions": "OMP 扩展",
+  "settings.ompNative.hooks": "OMP 钩子",
+  "settings.ompNative.hooksDescription":
+    "显示当前 Profile 和本地项目 hooks/pre、hooks/post 中的 JS/TS 钩子文件。",
+  "settings.ompNative.hooksRuntimeUnavailable":
+    "这里只列出可发现的文件；是否已加载由 omp 决定。修改后请刷新页面和会话。",
+  "settings.ompNative.hooksReadFailed": "钩子目录无法读取，请检查目录权限。",
   "settings.ompNative.mcp": "OMP MCP 服务器",
   "settings.ompNative.description":
     "显示当前 omp profile 和本地项目中的原生配置。修改配置后刷新此页。",

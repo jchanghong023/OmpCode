@@ -78,3 +78,40 @@ test("MCP 启用状态遵循 omp 的跨来源名单与 enabled 字段", async ()
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("只枚举 profile 与项目 pre/post 中的 JS/TS 钩子文件", async () => {
+  const root = await mkdtemp(join(tmpdir(), "omp-native-hooks-"));
+  try {
+    const agentDir = join(root, "agent");
+    const workspacePath = join(root, "workspace");
+    await mkdir(join(agentDir, "hooks", "pre"), { recursive: true });
+    await mkdir(join(workspacePath, ".omp", "hooks", "post"), { recursive: true });
+    await writeFile(join(agentDir, "hooks", "pre", "guard.ts"), "private hook source");
+    await writeFile(join(agentDir, "hooks", "pre", "ignored.mjs"), "ignored");
+    await writeFile(join(workspacePath, ".omp", "hooks", "post", "notify.js"), "private source");
+    const snapshot = await readOmpNativeIntegrations({ agentDir, workspacePath });
+    assert.deepEqual(snapshot.hooks, [
+      { name: "guard.ts", scope: "profile", phase: "pre" },
+      { name: "notify.js", scope: "project", phase: "post" },
+    ]);
+    assert.deepEqual(snapshot.hookErrors, []);
+    assert.ok(!JSON.stringify(snapshot).includes("private hook source"));
+  } finally {
+    assert.ok(resolve(root).startsWith(`${resolve(tmpdir())}${sep}`));
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("钩子目录读取失败不被当成空目录", async () => {
+  const root = await mkdtemp(join(tmpdir(), "omp-native-hooks-"));
+  try {
+    await mkdir(join(root, "hooks"));
+    await writeFile(join(root, "hooks", "pre"), "not a directory");
+    const snapshot = await readOmpNativeIntegrations({ agentDir: root });
+    assert.deepEqual(snapshot.hooks, []);
+    assert.deepEqual(snapshot.hookErrors, ["profile"]);
+  } finally {
+    assert.ok(resolve(root).startsWith(`${resolve(tmpdir())}${sep}`));
+    await rm(root, { recursive: true, force: true });
+  }
+});

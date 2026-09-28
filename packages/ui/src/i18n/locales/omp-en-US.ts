@@ -4,6 +4,13 @@ const ompEnUSOverrides: Record<string, string> = {
   "chat.subagents.unavailable":
     "omp subagent status is unavailable; this session may have incomplete subagent records.",
   "settings.ompNative.extensions": "OMP Extensions",
+  "settings.ompNative.hooks": "OMP Hooks",
+  "settings.ompNative.hooksDescription":
+    "Shows JS/TS hook files in hooks/pre and hooks/post for the current profile and local project.",
+  "settings.ompNative.hooksRuntimeUnavailable":
+    "These are discoverable files only; omp determines whether they loaded. Refresh this page and the session after changes.",
+  "settings.ompNative.hooksReadFailed":
+    "Could not read the hook directories. Check directory permissions.",
   "settings.ompNative.mcp": "OMP MCP Servers",
   "settings.ompNative.description":
     "Shows native configuration in the current omp profile and local project. Refresh after changing configuration.",
