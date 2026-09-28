@@ -4,8 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Unique release tag, for example v0928"
-        required: true
+        description: "Optional release tag; leave blank to generate one automatically"
+        required: false
+        default: ""
         type: string
       prerelease:
         description: "Mark the GitHub Release as a prerelease"
@@ -14,13 +15,15 @@ on:
         type: boolean
 
 concurrency:
-  group: release-centos7-${{ inputs.tag }}
+  group: release-centos7-${{ inputs.tag || github.run_id }}
   cancel-in-progress: false
 
 jobs:
   build:
     runs-on: ubuntu-24.04
     timeout-minutes: 180
+    outputs:
+      release_tag: ${{ steps.release_meta.outputs.release_tag }}
     permissions:
       contents: read
     env:
@@ -35,16 +38,21 @@ jobs:
           ref: experiment/centos7-no-proot
 
       - name: Validate release target
+        id: release_meta
         shell: bash
         env:
-          RELEASE_TAG: ${{ inputs.tag }}
+          REQUESTED_TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
           [[ "$GITHUB_REF" == refs/heads/experiment/centos7-no-proot ]] || { echo 'CentOS 7 releases must run from experiment/centos7-no-proot.' >&2; exit 1; }
           version=$(node -p 'require("./package.json").version')
-          existing_tag=$(git ls-remote --tags origin "refs/tags/$RELEASE_TAG") || { echo 'Could not check existing release tags.' >&2; exit 1; }
-          [[ -z "$existing_tag" ]] || { echo "Tag $RELEASE_TAG already exists." >&2; exit 1; }
+          release_tag=${REQUESTED_TAG:-"v${version}-centos7-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"}
+          git check-ref-format "refs/tags/$release_tag" || { echo "Invalid release tag: $release_tag" >&2; exit 1; }
+          existing_tag=$(git ls-remote --tags origin "refs/tags/$release_tag") || { echo 'Could not check existing release tags.' >&2; exit 1; }
+          [[ -z "$existing_tag" ]] || { echo "Tag $release_tag already exists." >&2; exit 1; }
           echo "APP_VERSION=$version" >> "$GITHUB_ENV"
+          echo "release_tag=$release_tag" >> "$GITHUB_OUTPUT"
+          echo "Release tag: $release_tag" >> "$GITHUB_STEP_SUMMARY"
 
       - uses: pnpm/action-setup@v4
         with:
@@ -167,7 +175,7 @@ jobs:
       contents: write
     env:
       GH_TOKEN: ${{ github.token }}
-      RELEASE_TAG: ${{ inputs.tag }}
+      RELEASE_TAG: ${{ needs.build.outputs.release_tag }}
       IS_PRERELEASE: ${{ inputs.prerelease }}
     steps:
       - uses: actions/download-artifact@v4
