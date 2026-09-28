@@ -28,18 +28,18 @@
 
 Electron 命名空间面审计：Main/Host/preload 实际 import 的 Electron API 集合为 BrowserWindow、Menu、MessageChannelMain、MessagePortMain、NativeImage、Notification、Tray、UtilityProcess、WebContents、WebFrameMain、app、contextBridge、crashReporter、dialog、ipcMain、ipcRenderer、nativeImage、nativeTheme、powerMonitor、powerSaveBlocker、screen、session、shell、utilityProcess、webContents、webFrame——全部在 Electron 28 存在。浏览器 guest 实现为 `<webview>`（Electron 28 支持）；代码注释中出现的「WebContentsView」为陈旧措辞，无实际 `WebContentsView`/`BaseWindow`/`BrowserView` 类使用。
 
-## 3. Main/Host（Node 18.18 目标）审计发现——待所有者修复
+## 3. Main/Host（Node 18.18 目标）审计发现与修复状态
 
-合并后 main 分叉新增/保留代码逐项扫描（Node 18.18 缺失的运行时 API）。以下为**未回退的真实不兼容**，文件不在 W2 文件所有权内，登记待对应工作流修复（均为一行级改动）：
+合并后 main 分叉新增/保留代码逐项扫描（Node 18.18 缺失的运行时 API）。审计曾登记 4 处**未回退的真实不兼容**；经调度者明确授权，W2 已在本分支直接修复并从扫描测试 baseline 移除（修复方式均为等价改写，不改变行为语义）：
 
-| 位置 | 问题 | 影响 | 所有者 | 建议修复 |
-| --- | --- | --- | --- | --- |
-| `packages/services/src/providers/api/nodeApiClient.ts:111` | `AbortSignal.any`（Node 20.3+，Node 18.18 undefined），超时与调用方 signal 并存路径必触发 | CentOS 7 Host 发起带超时+外部取消的请求时 TypeError | W5 | `init.signal` 存在时改用 `controller.signal` + `init.signal.addEventListener("abort", …)` 组合，或仅在没有 caller signal 时使用超时 controller |
-| `packages/desktop/src/main/browserView/browserPlaywrightLocatorExecutor.ts:681,698` | `Array.prototype.toReversed`（V8 11.0/Node 20+；Node 18.18 为 V8 10.2） | CentOS 7 桌面 playwright locator 边界计算 TypeError | Desktop main（W3 域邻近文件） | 改 `[...arr].reverse()` |
-| `packages/desktop/src/main/browserView/browserCommandInput.ts:310` | 同上 | CentOS 7 按键 up 序列分发 TypeError | 同上 | 同上 |
-| `packages/services/src/process/processTreeTerminator.ts:345` | 同上 | CentOS 7 进程树终止遍历 TypeError | W5 | 同上 |
+| 位置 | 问题 | 修复（已落地） |
+| --- | --- | --- |
+| `packages/services/src/providers/api/nodeApiClient.ts` | `AbortSignal.any`（Node 20.3+，Node 18.18 undefined），超时与调用方 signal 并存路径必触发 TypeError | 改为 abort 监听转发组合：`AbortController` + 对两个来源 `addEventListener("abort", …, { once: true })` 转发原 `reason`，`finally` 解除监听防泄漏，语义与 `AbortSignal.any` 一致 |
+| `packages/desktop/src/main/browserView/browserPlaywrightLocatorExecutor.ts`（pointerFramePoints、frameObstruction 两处） | `Array.prototype.toReversed`（V8 11.0/Node 20+；Node 18.18 为 V8 10.2） | `slice().reverse()`——同样返回倒序新副本、不改原数组 |
+| `packages/desktop/src/main/browserView/browserCommandInput.ts` | 同上 | 同上 |
+| `packages/services/src/process/processTreeTerminator.ts` | 同上 | 同上 |
 
-已核查无回退需求的 Main/Host 新增代码：
+其余核查项无回退需求：
 
 - `packages/desktop/src/main/logger.ts`（P0 保留的 main 侧有界异步日志队列）：仅用 `mkdirSync`、`appendFile`、`queueMicrotask`、`Buffer.byteLength`、`process.stdout/stderr.on("error")`——全部 Node 18.18 可用；`OMPCODE_CENTOS7_LOCAL_ONLY` error-only 过滤在队列入队前生效。
 - `packages/services/src/runtime-tools/providerRuntimeResolver.ts`、`runtimeToolResolver.ts` 的 `import.meta.dirname`（Node 20.11+ 才有值）：三处均显式 `const moduleDir: string | undefined` 空值保护，Node 18.18 上为 `undefined` 时走无模块相对候选路径分支，安全。
@@ -76,6 +76,6 @@ Electron 命名空间面审计：Main/Host/preload 实际 import 的 Electron AP
 
 ## 6. 验证状态与未验证范围
 
-- 本机已验证：better-sqlite3 9.6.0 对 Electron 28 headers 编译通过、对 Node 24 headers 两种 C++ 标准均失败；sqlite UT/typecheck/lint（见提交记录）；扫描测试全绿。
-- 本机未验证（不在此宣称）：Electron 28.3.3 真实运行时内加载 better-sqlite3 二进制、CentOS 7 glibc 2.17 构建器编译、渲染层 field-sizing/scrollbar 降级的真实观感——按计划由 C1 金丝雀 + P2 VM 验收与 UI 走查覆盖（centos7-release.md「Package acceptance」），不得以本清单替代。
-- 待所有者修复项（§3 表格）修复后，应同步移除扫描测试 baseline 中对应条目。
+- 本机已验证：better-sqlite3 9.6.0 对 Electron 28 headers 编译通过、对 Node 24 headers 两种 C++ 标准均失败；sqlite UT/typecheck/lint（见提交记录）；扫描测试全绿（§3 的 4 处 Node 18.18 破坏点已修复并移出 baseline，扫描 0 违规 0 baseline）。
+- 本机未验证（不在此宣称）：Electron 28.3.3 真实运行时内加载 better-sqlite3 二进制、CentOS 7 glibc 2.17 构建器编译、§3 修复在 Electron 28 运行时的实测、渲染层 field-sizing/scrollbar 降级的真实观感——按计划由 C1 金丝雀 + P2 VM 验收与 UI 走查覆盖（centos7-release.md「Package acceptance」），不得以本清单替代。
+- 后续新增 Main/Host/renderer 代码如再引入清单外差异，按扫描测试提示登记 baseline（附所有者与修复建议）。

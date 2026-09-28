@@ -43,15 +43,8 @@ const CONTEXTS: readonly CompatContext[] = [
       ["Array.prototype.toSorted", /\.toSorted\(/g],
     ],
     baseline: {
-      // 所有者与修复建议见 docs/electron-44-28-api-compat.md §3；修复落地后同步删除对应条目。
-      "packages/desktop/src/main/browserView/browserPlaywrightLocatorExecutor.ts": [
-        "Array.prototype.toReversed",
-      ],
-      "packages/desktop/src/main/browserView/browserCommandInput.ts": [
-        "Array.prototype.toReversed",
-      ],
-      "packages/services/src/providers/api/nodeApiClient.ts": ["AbortSignal.any"],
-      "packages/services/src/process/processTreeTerminator.ts": ["Array.prototype.toReversed"],
+      // 历史登记的 4 处 Node 18.18 破坏点（AbortSignal.any、toReversed ×3）已修复并移出 baseline；
+      // 新登记差异须附所有者与修复建议，见 docs/electron-44-28-api-compat.md §3。
     },
   },
   {
