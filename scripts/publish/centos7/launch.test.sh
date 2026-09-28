@@ -71,6 +71,7 @@ expect_line "OMPCODE_CENTOS7_HOME=$data_home"
 expect_line 'OMPCODE_CENTOS7_PROFILE=test-profile'
 expect_line 'OMPCODE_CENTOS7_OFFLINE=1'
 expect_line 'ARG=--no-sandbox'
+expect_line 'ARG=--disable-gpu'
 expect_line 'ARG=--extra'
 expect_line 'ARG=value'
 if grep -Fxq 'ARG=--profile' <<<"$output" || grep -Fxq 'ARG=--offline' <<<"$output"; then

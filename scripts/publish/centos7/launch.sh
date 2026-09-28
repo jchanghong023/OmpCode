@@ -178,4 +178,5 @@ else
 fi
 # 修复说明：CentOS 7 的 bash 4.2 在 set -u 下展开空数组 "${arr[@]}" 会误报 unbound
 # variable，导致无参数启动直接失败；${arr[@]+"${arr[@]}"} 是 4.2 兼容的惯用替代。
-exec "$app/zcode" --no-sandbox ${desktop_args[@]+"${desktop_args[@]}"}
+# CentOS 7 的目标环境没有 GPU；禁用 Chromium 硬件加速，仍允许软件渲染。
+exec "$app/zcode" --no-sandbox --disable-gpu ${desktop_args[@]+"${desktop_args[@]}"}
