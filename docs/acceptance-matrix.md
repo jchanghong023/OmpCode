@@ -6,7 +6,7 @@
 
 - **来源**：需求出处锚点，链接到 `docs/requirements/` 对应文档章节。
 - **验证方式**：`UT`（单元/协议模拟测试）、`E2E`（真实入口到可观察结果，含 fake-omp 协议级与真实核心）、`GUI`（真实界面操作走查）、`VM`（CentOS 7 VM 包级验收）、`人工`（人工核对/环境依赖的人工步骤）。多值表示需组合覆盖。
-- **负责工作流**：`W1` 构建双轨、`W2` 双运行时兼容、`W3` 桌面 Main/Host、`W4` UI 统一、`W5` 会话/协议核验、`W6` 文档与验收组织、`P2` 集成验证（见 [refactor-plan.md](refactor-plan.md)）。
+- **负责工作流**：`W1` 构建双轨、`W2` 双运行时兼容、`W3` 桌面 Main/Host、`W4` UI 统一、`W5` 会话/协议核验、`W6` 文档与验收组织、`P2` 集成验证（见 [refactor-plan.md](test-reports/refactor-plan.md)）。
 - **状态**：空白 = 尚未执行或结果未知。**只能由 P2 及各工作流实际执行后回填**；不得预填「通过」。验证不绿、跳过或环境缺失均须如实记录（AGENTS.md「实现与验证」）。
 
 各工作流交付验证入口见 [AGENTS.md](../AGENTS.md)「自动化验证入口」；平台验收执行记录落 `docs/test-reports/`（[windows-acceptance.md](test-reports/windows-acceptance.md)、[centos7-acceptance.md](test-reports/centos7-acceptance.md)）。
@@ -193,6 +193,6 @@
 
 ## 执行与回填约定
 
-- 各行状态由对应负责工作流完成自身验证后标注实际结果（通过/失败/跳过+原因），**P2 集成验证是唯一「通过」判定来源**；任何一项不绿不得进入 P3（[refactor-plan.md](refactor-plan.md)「P2 集成验证门禁」）。
+- 各行状态由对应负责工作流完成自身验证后标注实际结果（通过/失败/跳过+原因），**P2 集成验证是唯一「通过」判定来源**；任何一项不绿不得进入 P3（[refactor-plan.md](test-reports/refactor-plan.md)「P2 集成验证门禁」）。
 - Windows 真实界面验收记录落 [test-reports/windows-acceptance.md](test-reports/windows-acceptance.md)；CentOS 7/Linux 侧与 VM 验收记录落 [test-reports/centos7-acceptance.md](test-reports/centos7-acceptance.md)；两份验收文档与本矩阵行号互相引用。
 - 环境不可用（VM、frp、公司主机）时如实记录未验证范围，不得以跳过充当通过。

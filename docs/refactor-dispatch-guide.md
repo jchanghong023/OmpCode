@@ -1,6 +1,6 @@
 # 单分支重构任务分配指南（给调度 Agent）
 
-> 配套 [refactor-plan.md](refactor-plan.md) 使用。**你是调度者，不是实现者**：按本指南机械执行，不要自行发挥顺序或范围。每一步都是「做 → 查 → 过/停」：检查不符合预期就停下向用户报告，不要猜、不要绕。
+> 配套 [refactor-plan.md](test-reports/refactor-plan.md) 使用。**你是调度者，不是实现者**：按本指南机械执行，不要自行发挥顺序或范围。每一步都是「做 → 查 → 过/停」：检查不符合预期就停下向用户报告，不要猜、不要绕。
 
 ## 0. 角色与红线
 
@@ -19,7 +19,7 @@
 ## 1. 开工准备（一次性，任何一步失败就停）
 
 1. `git pull`，确认 HEAD 不低于 `9d0c94e`。
-2. 按序通读：`AGENTS.md` → `docs/refactor-plan.md`（重点：分工总览、文件所有权、各工作流任务明细、P2 门禁）→ `docs/requirements/README.md` 索引。
+2. 按序通读：`AGENTS.md` → `docs/test-reports/refactor-plan.md`（重点：分工总览、文件所有权、各工作流任务明细、P2 门禁）→ `docs/requirements/README.md` 索引。
 3. 环境就绪：按 `mise.toml` 准备 Node 24.14.0 与 pnpm 10.33.2，根目录 `pnpm install`，运行 `node scripts/check-workspace-freshness.mjs`。
 4. 向用户发一次开工汇报（当前基线 commit、环境检查结果、即将派发 P0）。
 
@@ -42,7 +42,7 @@
 
 ```text
 【角色】OmpCode 单分支重构的 P0 集成者。仓库 D:\code1111111111\forkZcode（Windows/Git Bash）。
-【先读】AGENTS.md、docs/refactor-plan.md 的「P0 集成主干」与「文件所有权」、docs/requirements/ 全部文档。
+【先读】AGENTS.md、docs/test-reports/refactor-plan.md 的「P0 集成主干」与「文件所有权」、docs/requirements/ 全部文档。
 【任务】
 1. git merge --no-ff experiment/centos7-no-proot 进 main 之上的新分支 refactor/unify-centos7。
 2. 解决 13 个冲突文件，裁决依据=docs/requirements/ 现行文档；manifest 冲突取 main 侧（electron 44.4.5、
@@ -57,7 +57,7 @@
 
 ```text
 【角色】W2 双运行时兼容。基线：refactor/unify-centos7；子分支 refactor/w2-runtime；独立 worktree。
-【先读】docs/refactor-plan.md「W2」、docs/requirements/centos7-release.md（Electron 选型与 sqlite 双驱动段）。
+【先读】docs/test-reports/refactor-plan.md「W2」、docs/requirements/centos7-release.md（Electron 选型与 sqlite 双驱动段）。
 【只许改】packages/desktop/src/main/chromeCookieManager.ts、packages/services/src/session/*Repo.ts、
 packages/services/src/session/tasksDatabase/**、新建 sqlite/undici 封装模块及其测试。
 【任务】
@@ -75,7 +75,7 @@ packages/services/src/session/tasksDatabase/**、新建 sqlite/undici 封装模�
 
 ```text
 【角色】W3 桌面 Main/Host。基线 refactor/unify-centos7；子分支 refactor/w3-main-host；独立 worktree。
-【先读】docs/refactor-plan.md「W3」、docs/requirements/centos7-release.md（离线锁定激活链与门控面）、
+【先读】docs/test-reports/refactor-plan.md「W3」、docs/requirements/centos7-release.md（离线锁定激活链与门控面）、
 mobile-relay.md（平台与离线边界）、centos7-performance.md（日志）。
 【只许改】packages/desktop/src/main/index.ts、logger.ts、mainLogWriter*、desktopHostProcess.ts、
 preload/**、packages/shared/**（新增门控状态接口，只你所有）、scripts/publish/centos7/**（含 UT）。
@@ -98,7 +98,7 @@ preload/**、packages/shared/**（新增门控状态接口，只你所有）、s
 
 ```text
 【角色】W4 UI 统一。基线 refactor/unify-centos7；子分支 refactor/w4-ui；独立 worktree。
-【先读】docs/refactor-plan.md「W4」、docs/requirements/ 的 FORK.md（界面统一条）、composer.md、skills.md、
+【先读】docs/test-reports/refactor-plan.md「W4」、docs/requirements/ 的 FORK.md（界面统一条）、composer.md、skills.md、
 integrations.md（浏览器/钩子段）、mobile-relay.md。
 【只许改】packages/ui/src/**。
 【任务】
@@ -117,7 +117,7 @@ integrations.md（浏览器/钩子段）、mobile-relay.md。
 
 ```text
 【角色】W5 会话/协议核验。基线 refactor/unify-centos7；子分支 refactor/w5-session；独立 worktree。
-【先读】docs/refactor-plan.md「W5」、docs/requirements/session-recovery.md、performance.md、skills.md。
+【先读】docs/test-reports/refactor-plan.md「W5」、docs/requirements/session-recovery.md、performance.md、skills.md。
 【只许改】packages/omp-agent/**、packages/services/**（除 *Repo.ts 与 tasksDatabase/）、相关 test/。
 【任务】
 1. 逐文件审查 merge 自动合并结果（对照 experiment/centos7-no-proot 分支 32 提交），重点：会话级并发与
@@ -133,7 +133,7 @@ integrations.md（浏览器/钩子段）、mobile-relay.md。
 
 ```text
 【角色】W1 构建双轨。基线 refactor/unify-centos7；子分支 refactor/w1-build。
-【先读】docs/refactor-plan.md「W1」与 C1 阶段、docs/requirements/centos7-release.md（Electron 选型、
+【先读】docs/test-reports/refactor-plan.md「W1」与 C1 阶段、docs/requirements/centos7-release.md（Electron 选型、
 发布 workflow 条目）。
 【只许改】scripts/prepare-centos7-build.mjs（新建）、.github/workflows/**、vite 配置的 define 注入点。
 【任务（第一段，先交付）】
@@ -155,7 +155,7 @@ integrations.md（浏览器/钩子段）、mobile-relay.md。
 
 ```text
 【角色】W6 文档与验收。基线 refactor/unify-centos7；子分支 refactor/w6-docs。
-【先读】docs/refactor-plan.md「W6」、docs/requirements/README.md。
+【先读】docs/test-reports/refactor-plan.md「W6」、docs/requirements/README.md。
 【只许改】docs/**（不含 test-reports 下他人产出）、AGENTS.md。
 【任务】
 1. 清理 docs/specs/ 已迁移的分支 spec 与过时引用；需求索引与 AGENTS.md 一致性复核。
@@ -171,7 +171,7 @@ integrations.md（浏览器/钩子段）、mobile-relay.md。
 ### 卡 P2（验证官，D3 集成完成后派发）
 
 ```text
-【角色】P2 验证官。对象：refactor/unify-centos7 集成结果。严格按 docs/refactor-plan.md「P2 集成验证门禁」
+【角色】P2 验证官。对象：refactor/unify-centos7 集成结果。严格按 docs/test-reports/refactor-plan.md「P2 集成验证门禁」
 7 条逐项执行并记录证据。要点：
 1. 静态门禁：freshness/typecheck/lint/fmt/architecture。
 2. UT：omp-agent 全量；real-omp.e2e 必须实际执行，环境缺失即不绿并如实记录。
@@ -191,7 +191,7 @@ integrations.md（浏览器/钩子段）、mobile-relay.md。
 
 ```text
 【角色】P3 收尾。前置：P2 门禁全绿且用户明确确认。
-【任务】按 docs/refactor-plan.md「P3」执行：refactor/unify-centos7 合回 main 并 push；同批把 workflow
+【任务】按 docs/test-reports/refactor-plan.md「P3」执行：refactor/unify-centos7 合回 main 并 push；同批把 workflow
 分支校验收窄为仅 refs/heads/main；发布一个 Windows EXE tag 与一个 CentOS 7 金丝雀 tag 验证两条流水线；
 删除本地与远端 experiment/centos7-no-proot（保留既有 centos7 tag）；更新 docs/requirements/README.md
 「实现与验证状态」；归档 refactor-plan.md。

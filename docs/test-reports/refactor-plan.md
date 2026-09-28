@@ -1,6 +1,6 @@
 # 单分支统一重构执行计划
 
-> 工程执行计划，不是需求权威。需求以 [docs/requirements/](requirements/README.md) 为准；本计划只定义怎么并行落地。完成后归档到 `docs/test-reports/` 或删除。
+> 工程执行计划，不是需求权威。需求以 [docs/requirements/](../requirements/README.md) 为准；本计划只定义怎么并行落地。**已于 2026-09-28 执行完毕并归档至本目录**：`experiment/centos7-no-proot` 已合回 `main`（合并提交 cd4a492）并删除专有分支；验收结论见 [windows-acceptance.md](windows-acceptance.md)、[centos7-acceptance.md](centos7-acceptance.md) 与 [requirements/README.md](../requirements/README.md)「实现与验证状态」。
 
 ## 目标与边界
 

@@ -1,6 +1,6 @@
 # Electron 44 ↔ 28 API 差异清单（W2 双运行时兼容审计）
 
-> 状态：W2 审计交付（对应 `docs/refactor-plan.md` W2-2 与 `docs/requirements/centos7-release.md`「Ownership and boundaries」）。
+> 状态：W2 审计交付（对应 `docs/test-reports/refactor-plan.md` W2-2 与 `docs/requirements/centos7-release.md`「Ownership and boundaries」）。
 > 运行时基线：Windows 全功能基准 = Electron 44.4.5（内嵌 Node 22+，`node:sqlite` 可用）；CentOS 7 发布构建 = Electron 28.3.3（Chromium 120、内嵌 Node 18.18.2）。
 > 机器可检查部分由扫描测试固化：`packages/desktop/test/electronApiCompatAudit.test.ts`（`pnpm exec tsx --test packages/desktop/test/electronApiCompatAudit.test.ts`）。新增 Main/Host/renderer 代码不得引入清单外仅 Electron 44 可用的 API；扫描失败即违规，豁免必须落入测试内 baseline 并登记所有者。
 

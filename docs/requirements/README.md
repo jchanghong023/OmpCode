@@ -19,6 +19,9 @@
 
 ## 实现与验证状态
 
+- 2026-09-28 单分支统一重构完成：`experiment/centos7-no-proot` 已合回 `main`（合并提交 cd4a492）并删除本地与远端专有分支（既有 centos7 tag 保留），仓库恢复仅 `main` 一个产品分支；CentOS 7 发布流水线分支校验收窄为仅 `main`。执行计划已归档为 [refactor-plan.md](../test-reports/refactor-plan.md)。P2 七条门禁全绿（freshness、typecheck、lint、fmt、architecture、`@zcode/omp-agent` 全量 95 项含真实核心 E2E 实际执行 0 跳过、双平台真实界面验收）；合并回 main 后复跑 typecheck/lint 仍绿。逐场景结论与证据见 [windows-acceptance.md](../test-reports/windows-acceptance.md)、[centos7-acceptance.md](../test-reports/centos7-acceptance.md) 及 `evidence-windows/`、`evidence-centos7/`。
+- 2026-09-28 双平台发布流水线金丝雀均从 `main` 通过：Windows [run 36487871248](https://github.com/jchanghong023/OmpCode/actions/runs/36487871248)（发布 v3.14.3-omp.4，含 `OmpCode-3.14.3-win-x64.exe` 与 SHA256）、CentOS 7 [run 36487891891](https://github.com/jchanghong023/OmpCode/actions/runs/36487891891)（发布 v3.14.3-centos7-36487891891-1，preflight/desktop/native/package/publish 全绿）。
+- 上述重构仍未验证（环境不可用，如实记录，不视为已验收）：CentOS 7 真 VM 对发布 ZIP 的 Package acceptance 终验（以本地 C1 链出包 + WSL CentOS-7 原生运行替代验证）、公司 IBus 输入法真机、frp 真机链路。
 - 本次依据初始化前的根目录 `FORK.md` 及对应规格迁移；原文已标记实现的换核、品牌/图标、账号与模型面、命令、输入区、隔离及显示菜单保留“已有实现”的状态，长会话响应性保留“已实现首批”。其余细化规格保留验收要求，不因存在源码就标为已验收。
 - [历史 Fork 验证记录](../test-reports/fork-baseline-validation.md) 保留早期结果及安装包 GUI 未验收范围；其中当时的版本、模型数量、测试数不是长期需求或当前结果。
 - [2026-09-26 GUI 记录](../test-reports/gui-e2e-2026-09-26.md) 只覆盖报告所列的 Web 页面及一条真实对话。该次桌面启动被审批拒绝；辅助对话标签创建失败仍未确认原因。本次仅整理文档，未重跑真实核心、桌面/手机 GUI、发布或 CentOS 7 原生环境验收。
