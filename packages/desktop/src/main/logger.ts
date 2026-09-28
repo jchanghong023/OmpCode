@@ -72,6 +72,7 @@ process.stdout.on("error", ignoreBrokenPipeStreamError);
 process.stderr.on("error", ignoreBrokenPipeStreamError);
 
 function safeConsoleWrite(level: LogLevel, ...args: unknown[]): void {
+  if (process.env.OMPCODE_CENTOS7_LOCAL_ONLY === "1" && level !== "error") return;
   const consoleFn =
     level === "error" ? console.error : level === "warn" ? console.warn : console.log;
   try {
@@ -93,6 +94,8 @@ function formatDate(date: Date): string {
 }
 
 function write(level: LogLevel, source: string, ...args: unknown[]) {
+  // CentOS 7 只保留错误日志；在格式化、打印和文件入队之前退出，避免无 GPU 桌面的额外 IO。
+  if (process.env.OMPCODE_CENTOS7_LOCAL_ONLY === "1" && level !== "error") return;
   const now = new Date();
   const ts = formatTimestamp(now);
   const pid = process.pid;

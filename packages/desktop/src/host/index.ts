@@ -341,6 +341,8 @@ const remoteConnectionProgressContext = createRemoteConnectionProgressContext({
 });
 
 function writeHostLog(level: HostLogLevel, ...args: unknown[]): void {
+  // CentOS 7 的 Host 仅输出错误；远程连接进度由独立事件通道交付。
+  if (process.env.OMPCODE_CENTOS7_LOCAL_ONLY === "1" && level !== "error") return;
   const prefix = formatLogPrefix("zcode-host", process.pid);
   const consoleFn =
     level === "error" ? rawConsole.error : level === "warn" ? rawConsole.warn : rawConsole.log;
@@ -1583,14 +1585,18 @@ function formatRemoteTargetForLog(target: RemoteTarget): string {
 }
 
 console.log = (...args: unknown[]) => {
-  writeRawHostConsole(rawConsole.log, ...args);
-  reportHostLog("info", args);
+  if (process.env.OMPCODE_CENTOS7_LOCAL_ONLY !== "1") {
+    writeRawHostConsole(rawConsole.log, ...args);
+    reportHostLog("info", args);
+  }
   remoteConnectionProgressContext.report("info", args);
 };
 
 console.warn = (...args: unknown[]) => {
-  writeRawHostConsole(rawConsole.warn, ...args);
-  reportHostLog("warn", args);
+  if (process.env.OMPCODE_CENTOS7_LOCAL_ONLY !== "1") {
+    writeRawHostConsole(rawConsole.warn, ...args);
+    reportHostLog("warn", args);
+  }
   remoteConnectionProgressContext.report("warn", args);
 };
 

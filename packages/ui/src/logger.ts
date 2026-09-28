@@ -1,4 +1,5 @@
 import { formatLogPrefix } from "@zcode/shared";
+import { isCentos7DesktopBuild } from "@/lib/centos7Desktop.js";
 
 export type LogLevel = "debug" | "info" | "warn" | "error";
 
@@ -37,7 +38,9 @@ const consoleFns: Record<LogLevel, (...args: unknown[]) => void> = {
   error: console.error,
 };
 
-function isLoggerLevelEnabled(_level: LogLevel): boolean {
+function isLoggerLevelEnabled(level: LogLevel): boolean {
+  // CentOS 7 生产包只转发错误；原生产门控会吞掉 error，导致现场无法排查失败。
+  if (isCentos7DesktopBuild) return level === "error" && !isRendererLoggingDisabled();
   // 生产构建下 renderer 所有日志级别都禁用；暴露 guard 让调用方在构造重 payload 前退出。
   return !isRendererProductionBuild() && !isRendererLoggingDisabled();
 }
@@ -60,6 +63,10 @@ function log(level: LogLevel, ...args: unknown[]) {
 }
 
 function lifecycleLog(level: DesktopLogLevel, ...args: unknown[]) {
+  if (isCentos7DesktopBuild) {
+    if (level === "error") log("error", ...args);
+    return;
+  }
   // 生产包默认只保留经过筛选的生命周期诊断，避免把消息流日志重新打开。
   // 测试和故障注入仍可通过显式全局开关关闭全部 renderer 日志。
   if (isRendererLoggingDisabled()) {
@@ -96,6 +103,7 @@ export const logger = {
  * 有变化才写），Web 端无桥时 no-op。业务模块不得借用它绕过生产门控。
  */
 export function logMemoryDiagnostics(line: string): void {
+  if (isCentos7DesktopBuild) return;
   if (isRendererLoggingDisabled()) {
     return;
   }
