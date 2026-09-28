@@ -55,9 +55,9 @@ export const offlineGateStateSchema = z.strictObject({
 export type OfflineDisabledFeatures = z.infer<typeof offlineDisabledFeaturesSchema>;
 export type OfflineGateState = z.infer<typeof offlineGateStateSchema>;
 
-const ALL_DISABLED_FEATURE_KEYS = Object.keys(
-  offlineDisabledFeaturesSchema.shape,
-) as Array<keyof OfflineDisabledFeatures>;
+const ALL_DISABLED_FEATURE_KEYS = Object.keys(offlineDisabledFeaturesSchema.shape) as Array<
+  keyof OfflineDisabledFeatures
+>;
 
 /**
  * 从进程环境派生唯一门控状态。Main 是该状态的唯一所有者：只在此依据

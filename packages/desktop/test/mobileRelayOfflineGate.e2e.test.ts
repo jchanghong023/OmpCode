@@ -21,13 +21,11 @@ process.env.ZCODE_ENV = "test";
 const logRoot = await mkdtemp(join(tmpdir(), "omp-mobile-relay-e2e-"));
 process.env.ZCODE_E2E_RUNTIME_LOG_DIR = logRoot;
 
-const { resolveOfflineGateState, buildOfflineLockedMobileRelayEntryStatus } = await import(
-  "@zcode/shared"
-);
+const { resolveOfflineGateState, buildOfflineLockedMobileRelayEntryStatus } =
+  await import("@zcode/shared");
 const { MobileRelayServer } = await import("../src/main/mobileRelay/mobileRelayServer.js");
-const { loadOrCreateMobileRelayCertificate } = await import(
-  "../src/main/mobileRelay/mobileRelayCertificate.js"
-);
+const { loadOrCreateMobileRelayCertificate } =
+  await import("../src/main/mobileRelay/mobileRelayCertificate.js");
 const { MOBILE_RELAY_WS_PATH } = await import("../src/main/mobileRelay/mobileRelayProtocol.js");
 
 const { createServer } = await import("node:net");
@@ -81,9 +79,7 @@ test("真实 TLS relay：握手 → bootstrap 分发 → 停止后同端口探�
     });
     socket.on("open", () => {
       socket.send(JSON.stringify({ type: "auth_init", role: "terminal", sid: "s", hash: "h" }));
-      socket.send(
-        JSON.stringify({ type: "data", payload: { zcode_type: "bootstrap-request" } }),
-      );
+      socket.send(JSON.stringify({ type: "data", payload: { zcode_type: "bootstrap-request" } }));
     });
   });
   assert.equal(frames[0]!.type, "auth_ack");

@@ -10,7 +10,10 @@ import { createHostLogRelay } from "../src/main/hostLogRelay.js";
  */
 
 test("EBADF/EPIPE 分类为已关闭输出，无关错误与普通值不算", () => {
-  assert.equal(isClosedHostOutput(Object.assign(new Error("broken pipe"), { code: "EPIPE" })), true);
+  assert.equal(
+    isClosedHostOutput(Object.assign(new Error("broken pipe"), { code: "EPIPE" })),
+    true,
+  );
   assert.equal(isClosedHostOutput(Object.assign(new Error("bad fd"), { code: "EBADF" })), true);
   assert.equal(isClosedHostOutput(Object.assign(new Error("denied"), { code: "EACCES" })), false);
   assert.equal(isClosedHostOutput(new Error("no code")), false);

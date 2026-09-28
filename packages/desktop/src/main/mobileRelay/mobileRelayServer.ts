@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { createServer, type Server as HttpServer } from "node:https";
-import type { MessagePortMain, UtilityProcess as ElectronUtilityProcess } from "electron";
+import type { UtilityProcess as ElectronUtilityProcess } from "electron";
 import { WebSocket, WebSocketServer } from "ws";
-import { MessagePortProtocol, type MessagePortLike, type MessagePortPayload } from "@zcode/rpc";
+import { MessagePortProtocol } from "@zcode/rpc";
 import {
   HostMessageTypes,
   type MobileRelayEntryStatus,
@@ -17,6 +17,7 @@ import {
 } from "./mobileRelayProtocol.js";
 import type { MobileRelayCertificate } from "./mobileRelayCertificate.js";
 import { HostV4RpcBridge, type HostV4BridgeInfo } from "./hostV4RpcBridge.js";
+import { wrapElectronPort } from "./wrapElectronPort.js";
 
 /**
  * 手机远控内嵌中继（无鉴权开放接入）。
@@ -61,38 +62,13 @@ export interface MobileRelayServerOptions {
     host: ElectronUtilityProcess,
   ) => Promise<WindowBridgeableWorkspace[]>;
   onConnectionsChanged?: (connections: number) => void;
-  /** 仅测试注入：真实桌面固定使用 MOBILE_RELAY_LISTEN_PORT；E2E 用临时端口避免抢占 8765。 */
+  /** 仅测试注入；真实桌面固定用 MOBILE_RELAY_LISTEN_PORT，E2E 用临时端口。 */
   listenPort?: number;
 }
 
 const HANDSHAKE_TIMEOUT_MS = 30_000;
 /** 空闲保活：frp TCP 隧道与 NAT 对长空闲连接不友好，RPC 层心跳之外保持链路活性。 */
 const KEEPALIVE_PING_INTERVAL_MS = 30_000;
-
-/**
- * MessagePortMain → rpc 层 MessagePortLike 适配，与 host 侧
- * packages/desktop/src/host/electronPort.ts 同构；main 工程的 rootDir 不含
- * host 目录，不能跨目录引用，在此收口一份等价实现。
- */
-function wrapElectronPort(port: MessagePortMain): MessagePortLike {
-  return {
-    addEventListener(_type: "message", listener: (e: { data: MessagePortPayload }) => void) {
-      port.on("message", listener);
-    },
-    removeEventListener(_type: "message", listener: (e: { data: MessagePortPayload }) => void) {
-      port.off("message", listener);
-    },
-    postMessage(data: MessagePortPayload) {
-      port.postMessage(data);
-    },
-    start() {
-      port.start();
-    },
-    close() {
-      port.close();
-    },
-  };
-}
 
 export class MobileRelayServer {
   private readonly sessions = new Set<RelaySession>();
@@ -337,8 +313,8 @@ export class MobileRelayServer {
       const host = session.host;
       // 同一手机连接重开 bridge（切换项目/断线恢复）时先释放旧 attachment。
       this.releaseAttachment(session);
-      // electron 仅在 main 进程内提供 MessageChannelMain；延迟到建桥时解析，
-      // 让纯 Node 测试也能装载本模块做握手/门控回归（main 进程内行为不变）。
+      // electron 只在 main 进程提供 MessageChannelMain；延迟解析让纯 Node
+      // 测试也能装载本模块做握手/门控回归（main 进程内行为不变）。
       const { MessageChannelMain } = await import("electron");
       const { port1, port2 } = new MessageChannelMain();
       const attachmentId = randomUUID();

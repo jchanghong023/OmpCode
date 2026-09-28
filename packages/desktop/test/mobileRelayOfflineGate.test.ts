@@ -23,9 +23,8 @@ const {
   MOBILE_RELAY_OFFLINE_LOCKED_ERROR,
 } = await import("@zcode/shared");
 const { MobileRelayServer } = await import("../src/main/mobileRelay/mobileRelayServer.js");
-const { loadOrCreateMobileRelayCertificate } = await import(
-  "../src/main/mobileRelay/mobileRelayCertificate.js"
-);
+const { loadOrCreateMobileRelayCertificate } =
+  await import("../src/main/mobileRelay/mobileRelayCertificate.js");
 const { MOBILE_RELAY_WS_PATH } = await import("../src/main/mobileRelay/mobileRelayProtocol.js");
 
 const { createServer } = await import("node:net");
@@ -47,7 +46,10 @@ test.after(() => rm(logRoot, { recursive: true, force: true }));
 test("门控派生：未锁定时 11 项功能面全部可用（与 Windows 全功能基准一致）", () => {
   const gate = resolveOfflineGateState({ OMPCODE_CENTOS7_LOCAL_ONLY: "0" });
   assert.equal(gate.localOnly, false);
-  assert.deepEqual(Object.values(gate.disabledFeatures).every((value) => value === false), true);
+  assert.deepEqual(
+    Object.values(gate.disabledFeatures).every((value) => value === false),
+    true,
+  );
 });
 
 test("门控派生：离线锁定时全部后端关闭，relay 不监听由该状态驱动", () => {
@@ -74,7 +76,10 @@ test("运行时校验：非法门控状态被拒绝，合法载荷可解析", ()
   assert.deepEqual(parseOfflineGateState(JSON.parse(JSON.stringify(valid))), valid);
   assert.throws(() => parseOfflineGateState({ localOnly: "yes", disabledFeatures: {} }));
   assert.throws(() =>
-    parseOfflineGateState({ ...valid, disabledFeatures: { ...valid.disabledFeatures, extra: true } }),
+    parseOfflineGateState({
+      ...valid,
+      disabledFeatures: { ...valid.disabledFeatures, extra: true },
+    }),
   );
   assert.throws(() => parseOfflineGateState(null));
 });

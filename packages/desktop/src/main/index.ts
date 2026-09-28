@@ -2064,13 +2064,11 @@ app.whenReady().then(async () => {
   // 离线边界）；入口 IPC 仍注册并回报稳定禁用原因码，手机主动连入没有监听者，
   // 在 TCP 层被明确拒绝而不是静默超时。
   if (offlineGate.disabledFeatures.mobileRelay) {
-    ipcMain.handle(
-      PlatformChannels.MobileRelayEntry,
-      () =>
-        buildOfflineLockedMobileRelayEntryStatus({
-          url: buildMobileRelayEntryUrl(),
-          listenPort: MOBILE_RELAY_LISTEN_PORT,
-        }),
+    ipcMain.handle(PlatformChannels.MobileRelayEntry, () =>
+      buildOfflineLockedMobileRelayEntryStatus({
+        url: buildMobileRelayEntryUrl(),
+        listenPort: MOBILE_RELAY_LISTEN_PORT,
+      }),
     );
   } else {
     void startMobileRelay({
