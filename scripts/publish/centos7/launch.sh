@@ -20,6 +20,8 @@ desktop_args=()
 profile_override=
 profile_requested=0
 offline_requested=0
+home_override=
+home_requested=0
 while (($#)); do
   case "$1" in
     --profile)
@@ -39,6 +41,15 @@ while (($#)); do
     --offline)
       offline_requested=1
       shift
+      ;;
+    --home)
+      if (($# < 2)); then
+        echo 'OmpCode: --home requires an absolute directory.' >&2
+        exit 2
+      fi
+      home_override=$2
+      home_requested=1
+      shift 2
       ;;
     *)
       desktop_args+=("$1")
@@ -63,5 +74,35 @@ if ((offline_requested)); then
   export OMPCODE_CENTOS7_OFFLINE=1
 else
   unset OMPCODE_CENTOS7_OFFLINE
+fi
+
+if ((home_requested)); then
+  if [[ "$home_override" != /* ]]; then
+    echo 'OmpCode: --home requires an absolute directory.' >&2
+    exit 2
+  fi
+  data_base=$(readlink -m -- "$home_override")
+  canonical_home=$(readlink -f -- "$HOME")
+  case "$data_base" in
+    "$canonical_home"|"$canonical_home/.ompcode"|"$canonical_home/.ompcode/"*)
+      echo 'OmpCode: --home cannot be ~ or inside ~/.ompcode.' >&2
+      exit 2
+      ;;
+  esac
+  data_target="$data_base/.ompcode"
+  data_link="$HOME/.ompcode"
+  if [[ -L "$data_link" ]]; then
+    if [[ "$(readlink -m -- "$data_link")" != "$(readlink -m -- "$data_target")" ]]; then
+      echo 'OmpCode: ~/.ompcode already links to another location.' >&2
+      exit 2
+    fi
+  elif [[ -e "$data_link" ]]; then
+    echo 'OmpCode: ~/.ompcode already exists; move its data before using --home.' >&2
+    exit 2
+  fi
+  mkdir -p -- "$data_target"
+  if [[ ! -L "$data_link" ]]; then
+    ln -s -- "$data_target" "$data_link"
+  fi
 fi
 exec "$app/zcode" --no-sandbox "${desktop_args[@]}"
