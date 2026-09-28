@@ -8,23 +8,23 @@
 
 实测环境：Windows x64，Node v24.20.0，node-gyp v12.4.0，VS 2022 BuildTools，better-sqlite3 9.6.0（workspace 实际安装副本）。
 
-| 实验 | 结果 |
-| --- | --- |
-| `prebuild-install`（Node 24 ABI v137，win32-x64） | GitHub release 资产 404，无预编译二进制 |
-| `node-gyp rebuild --release`（Node 24 headers，源码默认 `/std:c++17`） | 失败：`v8config.h(13,1): error C1189: #error: "C++20 or later required."` |
-| 同上，改 binding.gyp 为 `/std:c++20` 重试 | 失败：85 个 C2xx/C7xx 错误——`CopyablePersistentTraits` 已从 V8 移除、`ObjectTemplate::SetAccessor`/`AccessorGetterCallback` 已删除/改名、`DefineOwnProperty` 签名变更 |
-| `node-gyp rebuild --release --target=28.3.3 --dist-url=https://electronjs.org/headers --arch=x64`（Electron 28 headers，C++17） | 成功（`gyp info ok`），产出 `build/Release/better_sqlite3.node` |
+| 实验                                                                                                                            | 结果                                                                                                                                                                  |
+| ------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `prebuild-install`（Node 24 ABI v137，win32-x64）                                                                               | GitHub release 资产 404，无预编译二进制                                                                                                                               |
+| `node-gyp rebuild --release`（Node 24 headers，源码默认 `/std:c++17`）                                                          | 失败：`v8config.h(13,1): error C1189: #error: "C++20 or later required."`                                                                                             |
+| 同上，改 binding.gyp 为 `/std:c++20` 重试                                                                                       | 失败：85 个 C2xx/C7xx 错误——`CopyablePersistentTraits` 已从 V8 移除、`ObjectTemplate::SetAccessor`/`AccessorGetterCallback` 已删除/改名、`DefineOwnProperty` 签名变更 |
+| `node-gyp rebuild --release --target=28.3.3 --dist-url=https://electronjs.org/headers --arch=x64`（Electron 28 headers，C++17） | 成功（`gyp info ok`），产出 `build/Release/better_sqlite3.node`                                                                                                       |
 
 结论：better-sqlite3 9.6.0 是 V8 API 原生插件（非 N-API），同一份源码无法同时覆盖 Electron 28 与 Electron 44 两个 ABI；单一 better-sqlite3 驱动不可行。sqlite 层保持 `packages/services/src/session/tasksDatabase/sqlite.ts` 的双驱动单入口（运行时有 `node:sqlite` 则优先，否则回退 better-sqlite3），与 centos7-release.md 的选型一致。CentOS 7 发布流水线沿用 `scripts/publish/centos7/build-native-assets.mjs` 用 Electron 28 header 现场编译 9.6.0（本机实验证明该路径可编译通过）。
 
 ## 2. 已知差异项与回退（全部核查成立）
 
-| 差异 API | Electron 44 | Electron 28 | 回退位置（已核查） |
-| --- | --- | --- | --- |
-| `node:sqlite` | Node 22+ 内置 | 无（Node 18.18） | `packages/services/src/session/tasksDatabase/sqlite.ts` 双驱动；四个使用点（`chromeCookieManager.ts`、`automationRepo.ts`、`offPeakTaskRepo.ts`、`taskIndexRepo.ts`、`tasksDatabase/startup.ts`）全部经 `createDatabaseSync` 单入口，无散落直连（grep 核查） |
-| `fs/promises.glob` | Node 22+ | 无 | `packages/services/src/system/sshConfigAlias.ts`：`nativeGlob` 可选探测 + `expandPathGlob` 回退（第 289 行三元） |
-| `webUtils.getPathForFile` | webUtils 自 Electron 29 | 无 | `packages/desktop/src/preload/index.ts` `getPathForFile`：回退拖拽 File 的非标准 `path` 属性（约 304 行起） |
-| `webContents.navigationHistory` | Electron 31+ | 无 | 全库未使用 `navigationHistory`（grep 核查）；浏览器历史走 `<webview>`/webContents 经典 `canGoBack/goBack/goForward`（`browserCommandTypes.ts`、`browserGuestManager.ts`），Electron 28 可用 |
+| 差异 API                        | Electron 44             | Electron 28      | 回退位置（已核查）                                                                                                                                                                                                                                           |
+| ------------------------------- | ----------------------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `node:sqlite`                   | Node 22+ 内置           | 无（Node 18.18） | `packages/services/src/session/tasksDatabase/sqlite.ts` 双驱动；四个使用点（`chromeCookieManager.ts`、`automationRepo.ts`、`offPeakTaskRepo.ts`、`taskIndexRepo.ts`、`tasksDatabase/startup.ts`）全部经 `createDatabaseSync` 单入口，无散落直连（grep 核查） |
+| `fs/promises.glob`              | Node 22+                | 无               | `packages/services/src/system/sshConfigAlias.ts`：`nativeGlob` 可选探测 + `expandPathGlob` 回退（第 289 行三元）                                                                                                                                             |
+| `webUtils.getPathForFile`       | webUtils 自 Electron 29 | 无               | `packages/desktop/src/preload/index.ts` `getPathForFile`：回退拖拽 File 的非标准 `path` 属性（约 304 行起）                                                                                                                                                  |
+| `webContents.navigationHistory` | Electron 31+            | 无               | 全库未使用 `navigationHistory`（grep 核查）；浏览器历史走 `<webview>`/webContents 经典 `canGoBack/goBack/goForward`（`browserCommandTypes.ts`、`browserGuestManager.ts`），Electron 28 可用                                                                  |
 
 Electron 命名空间面审计：Main/Host/preload 实际 import 的 Electron API 集合为 BrowserWindow、Menu、MessageChannelMain、MessagePortMain、NativeImage、Notification、Tray、UtilityProcess、WebContents、WebFrameMain、app、contextBridge、crashReporter、dialog、ipcMain、ipcRenderer、nativeImage、nativeTheme、powerMonitor、powerSaveBlocker、screen、session、shell、utilityProcess、webContents、webFrame——全部在 Electron 28 存在。浏览器 guest 实现为 `<webview>`（Electron 28 支持）；代码注释中出现的「WebContentsView」为陈旧措辞，无实际 `WebContentsView`/`BaseWindow`/`BrowserView` 类使用。
 
@@ -32,12 +32,12 @@ Electron 命名空间面审计：Main/Host/preload 实际 import 的 Electron AP
 
 合并后 main 分叉新增/保留代码逐项扫描（Node 18.18 缺失的运行时 API）。审计曾登记 4 处**未回退的真实不兼容**；经调度者明确授权，W2 已在本分支直接修复并从扫描测试 baseline 移除（修复方式均为等价改写，不改变行为语义）：
 
-| 位置 | 问题 | 修复（已落地） |
-| --- | --- | --- |
-| `packages/services/src/providers/api/nodeApiClient.ts` | `AbortSignal.any`（Node 20.3+，Node 18.18 undefined），超时与调用方 signal 并存路径必触发 TypeError | 改为 abort 监听转发组合：`AbortController` + 对两个来源 `addEventListener("abort", …, { once: true })` 转发原 `reason`，`finally` 解除监听防泄漏，语义与 `AbortSignal.any` 一致 |
-| `packages/desktop/src/main/browserView/browserPlaywrightLocatorExecutor.ts`（pointerFramePoints、frameObstruction 两处） | `Array.prototype.toReversed`（V8 11.0/Node 20+；Node 18.18 为 V8 10.2） | `slice().reverse()`——同样返回倒序新副本、不改原数组 |
-| `packages/desktop/src/main/browserView/browserCommandInput.ts` | 同上 | 同上 |
-| `packages/services/src/process/processTreeTerminator.ts` | 同上 | 同上 |
+| 位置                                                                                                                     | 问题                                                                                                | 修复（已落地）                                                                                                                                                                  |
+| ------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `packages/services/src/providers/api/nodeApiClient.ts`                                                                   | `AbortSignal.any`（Node 20.3+，Node 18.18 undefined），超时与调用方 signal 并存路径必触发 TypeError | 改为 abort 监听转发组合：`AbortController` + 对两个来源 `addEventListener("abort", …, { once: true })` 转发原 `reason`，`finally` 解除监听防泄漏，语义与 `AbortSignal.any` 一致 |
+| `packages/desktop/src/main/browserView/browserPlaywrightLocatorExecutor.ts`（pointerFramePoints、frameObstruction 两处） | `Array.prototype.toReversed`（V8 11.0/Node 20+；Node 18.18 为 V8 10.2）                             | `slice().reverse()`——同样返回倒序新副本、不改原数组                                                                                                                             |
+| `packages/desktop/src/main/browserView/browserCommandInput.ts`                                                           | 同上                                                                                                | 同上                                                                                                                                                                            |
+| `packages/services/src/process/processTreeTerminator.ts`                                                                 | 同上                                                                                                | 同上                                                                                                                                                                            |
 
 其余核查项无回退需求：
 

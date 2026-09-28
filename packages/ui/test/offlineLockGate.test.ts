@@ -8,7 +8,10 @@ import {
 } from "../src/lib/offlineLockGate.js";
 
 test("缺省（无注入快照）视为未锁定，Windows 与未加锁 CentOS 7 全功能", () => {
-  assert.equal((globalThis as { __OMPCODE_OFFLINE_LOCK__?: unknown }).__OMPCODE_OFFLINE_LOCK__, undefined);
+  assert.equal(
+    (globalThis as { __OMPCODE_OFFLINE_LOCK__?: unknown }).__OMPCODE_OFFLINE_LOCK__,
+    undefined,
+  );
   assert.equal(isOfflineLocked(), false);
   assert.deepEqual(getOfflineLockSnapshot(), { localOnly: false });
 });

@@ -108,7 +108,7 @@ export class NodeApiClient implements ApiClient {
     // 修复依据：AbortSignal.any 是 Node 20.3+ API，Electron 28 内嵌 Node 18.18 上为 undefined，
     // 超时与调用方取消并存时会直接 TypeError。用 abort 监听转发组合出同语义信号
     // （任一来源中止即以原 reason 中止，与 AbortSignal.any 一致），finally 中解除监听避免泄漏。
-      const callerSignal = init?.signal ?? undefined;
+    const callerSignal = init?.signal ?? undefined;
     let disposeCombinedSignal: (() => void) | null = null;
     try {
       let signal: AbortSignal | undefined;

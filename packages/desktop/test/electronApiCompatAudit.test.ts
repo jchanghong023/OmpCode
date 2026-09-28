@@ -119,7 +119,10 @@ interface Violation {
   token: string;
 }
 
-function scanContext(context: CompatContext): { violations: Violation[]; matches: Map<string, Set<string>> } {
+function scanContext(context: CompatContext): {
+  violations: Violation[];
+  matches: Map<string, Set<string>>;
+} {
   const violations: Violation[] = [];
   const matches = new Map<string, Set<string>>();
   for (const dir of context.dirs) {
@@ -153,8 +156,8 @@ for (const context of CONTEXTS) {
     assert.deepEqual(
       violations,
       [],
-      `发现未登记的 Electron 44 独占/Node 22+ API 使用（登记方式见 docs/electron-44-28-api-compat.md）:\n`
-        + violations.map((entry) => `  ${entry.file}:${entry.line} → ${entry.token}`).join("\n"),
+      `发现未登记的 Electron 44 独占/Node 22+ API 使用（登记方式见 docs/electron-44-28-api-compat.md）:\n` +
+        violations.map((entry) => `  ${entry.file}:${entry.line} → ${entry.token}`).join("\n"),
     );
   });
 
@@ -171,8 +174,8 @@ for (const context of CONTEXTS) {
     assert.deepEqual(
       stale,
       [],
-      `baseline 条目已无对应命中，请从扫描测试 baseline 移除（回退已落地）:\n`
-        + stale.map((entry) => `  ${entry}`).join("\n"),
+      `baseline 条目已无对应命中，请从扫描测试 baseline 移除（回退已落地）:\n` +
+        stale.map((entry) => `  ${entry}`).join("\n"),
     );
   });
 }
@@ -187,7 +190,11 @@ test("Electron 28 兼容扫描：四项已知差异的回退仍然成立", () =>
 
   // webContents.navigationHistory（Electron 31+）：全库不得直接使用，历史导航走经典 canGoBack/goBack。
   let navigationHistoryHits = 0;
-  for (const dir of ["packages/desktop/src/main", "packages/desktop/src/preload", "packages/desktop/src/host"]) {
+  for (const dir of [
+    "packages/desktop/src/main",
+    "packages/desktop/src/preload",
+    "packages/desktop/src/host",
+  ]) {
     for (const fullPath of walkSources(join(repoRoot, dir), new Set([".ts", ".tsx"]))) {
       if (stripComments(readFileSync(fullPath, "utf8")).includes("navigationHistory")) {
         navigationHistoryHits += 1;

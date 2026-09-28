@@ -45,13 +45,7 @@ export function OmpNativeIntegrationsView({
           <h2 className="text-xl font-semibold text-foreground">{title}</h2>
           <p className="mt-1 text-sm text-foreground-subtle">{description}</p>
         </div>
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          onClick={onRefresh}
-          disabled={loading}
-        >
+        <Button type="button" variant="outline" size="sm" onClick={onRefresh} disabled={loading}>
           {intl.formatMessage({ id: "settings.ompNative.refresh" })}
         </Button>
       </div>
@@ -194,7 +188,10 @@ export function OmpNativeIntegrationsSection({
       kind={kind}
       title={title}
       description={intl.formatMessage({
-        id: kind === "hook" ? "settings.ompNative.hooksDescription" : "settings.ompNative.description",
+        id:
+          kind === "hook"
+            ? "settings.ompNative.hooksDescription"
+            : "settings.ompNative.description",
       })}
       snapshot={snapshot}
       error={error}

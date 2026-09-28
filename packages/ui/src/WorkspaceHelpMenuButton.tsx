@@ -99,10 +99,7 @@ export function WorkspaceHelpMenuButton({
         className="min-w-0 w-max [&_[data-slot=dropdown-menu-item]]:pr-6"
       >
         {/* 公网帮助/社区/反馈在离线锁定下禁用而非移除：入口两平台一致保留（FORK.md）。 */}
-        <DropdownMenuItem
-          disabled={offlineLocked}
-          onSelect={helpMenuActions.openProductDocs}
-        >
+        <DropdownMenuItem disabled={offlineLocked} onSelect={helpMenuActions.openProductDocs}>
           <BookOpenIcon className="size-4" />
           {intl.formatMessage({ id: "workspaceHeader.help.docs" })}
           {offlineLocked ? <OfflineLockHint hint={offlineLockHint} /> : null}
@@ -112,10 +109,7 @@ export function WorkspaceHelpMenuButton({
           {intl.formatMessage({ id: "workspaceHeader.help.community" })}
           {offlineLocked ? <OfflineLockHint hint={offlineLockHint} /> : null}
         </DropdownMenuItem>
-        <DropdownMenuItem
-          disabled={offlineLocked}
-          onSelect={helpMenuActions.openIssueReport}
-        >
+        <DropdownMenuItem disabled={offlineLocked} onSelect={helpMenuActions.openIssueReport}>
           <MessageSquareIcon className="size-4" />
           {intl.formatMessage({ id: "workspaceHeader.help.issueReport" })}
           {offlineLocked ? <OfflineLockHint hint={offlineLockHint} /> : null}

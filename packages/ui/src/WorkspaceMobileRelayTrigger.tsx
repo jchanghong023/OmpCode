@@ -30,7 +30,9 @@ export function WorkspaceMobileRelayTrigger({
     <>
       <ControlHintTooltip
         title={triggerLabel}
-        description={offlineLocked ? intl.formatMessage({ id: "offlineLock.disabledHint" }) : undefined}
+        description={
+          offlineLocked ? intl.formatMessage({ id: "offlineLock.disabledHint" }) : undefined
+        }
         side="top"
         align="center"
         triggerClassName={compact ? undefined : "w-full"}

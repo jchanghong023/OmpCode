@@ -25,16 +25,31 @@ test("离线锁定下 renderer 只保留 error，解除锁定后恢复正常级�
     logger.lifecycle.info("locked-lifecycle-info");
     logger.lifecycle.error("locked-lifecycle-error");
     assert.equal(calls.filter((line) => line.startsWith("error:")).length, 2);
-    assert.equal(calls.some((line) => line.includes("locked-info")), false);
-    assert.equal(calls.some((line) => line.includes("locked-warn")), false);
-    assert.equal(calls.some((line) => line.includes("locked-lifecycle-info")), false);
+    assert.equal(
+      calls.some((line) => line.includes("locked-info")),
+      false,
+    );
+    assert.equal(
+      calls.some((line) => line.includes("locked-warn")),
+      false,
+    );
+    assert.equal(
+      calls.some((line) => line.includes("locked-lifecycle-info")),
+      false,
+    );
 
     calls.length = 0;
     applyOfflineLockState({ localOnly: false });
     logger.info("open-info");
     logger.lifecycle.info("open-lifecycle-info");
-    assert.equal(calls.some((line) => line.includes("open-info")), true);
-    assert.equal(calls.some((line) => line.includes("open-lifecycle-info")), true);
+    assert.equal(
+      calls.some((line) => line.includes("open-info")),
+      true,
+    );
+    assert.equal(
+      calls.some((line) => line.includes("open-lifecycle-info")),
+      true,
+    );
   } finally {
     console.debug = originalDebug;
     console.log = originalLog;

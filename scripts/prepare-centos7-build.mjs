@@ -68,15 +68,15 @@ export const CENTOS7_PINNED_RUNTIME_DEPENDENCIES = Object.freeze({
   "node-forge": "1.4.0",
   "node-pty": "1.1.0",
   "playwright-core": "1.63.0",
-  "react": "19.3.0",
+  react: "19.3.0",
   "react-dom": "19.3.0",
-  "semver": "7.8.5",
-  "ssh2": "1.17.0",
-  "undici": "6.23.0",
-  "ws": "8.21.3",
-  "yaml": "2.9.1",
-  "yauzl": "3.4.0",
-  "yazl": "3.3.1",
+  semver: "7.8.5",
+  ssh2: "1.17.0",
+  undici: "6.23.0",
+  ws: "8.21.3",
+  yaml: "2.9.1",
+  yauzl: "3.4.0",
+  yazl: "3.3.1",
 });
 
 function log(message) {
@@ -117,7 +117,9 @@ function applyState() {
   const currentElectron = manifest.devDependencies?.electron;
   if (currentElectron !== CENTOS7_ELECTRON_VERSION) {
     manifest.devDependencies.electron = CENTOS7_ELECTRON_VERSION;
-    changes.push(`devDependencies.electron: ${String(currentElectron)} -> ${CENTOS7_ELECTRON_VERSION}`);
+    changes.push(
+      `devDependencies.electron: ${String(currentElectron)} -> ${CENTOS7_ELECTRON_VERSION}`,
+    );
   }
 
   // 2. 运行时依赖切到 Node 18 兼容精确版。需求要求全精确版本保证 --no-frozen-lockfile
@@ -156,12 +158,16 @@ function applyState() {
   for (const warning of warnings) {
     console.warn(`[prepare-centos7-build][warn] ${warning}`);
   }
-  log(`done: packages/desktop/package.json electron=${CENTOS7_ELECTRON_VERSION}, ${CENTOS7_DESKTOP_MANIFEST_FIELD}=true`);
+  log(
+    `done: packages/desktop/package.json electron=${CENTOS7_ELECTRON_VERSION}, ${CENTOS7_DESKTOP_MANIFEST_FIELD}=true`,
+  );
   return 0;
 }
 
 async function resolveRepoRootFromGit() {
-  const { stdout } = await execFileAsync("git", ["rev-parse", "--show-toplevel"], { cwd: repoRoot });
+  const { stdout } = await execFileAsync("git", ["rev-parse", "--show-toplevel"], {
+    cwd: repoRoot,
+  });
   return stdout.trim();
 }
 
@@ -178,7 +184,9 @@ async function restoreState() {
   }
 
   // 恢复能力按任务卡设计为 git checkout：临时改写绝不进入提交。
-  await execFileAsync("git", ["checkout", "--", "packages/desktop/package.json"], { cwd: repoRoot });
+  await execFileAsync("git", ["checkout", "--", "packages/desktop/package.json"], {
+    cwd: repoRoot,
+  });
 
   const { stdout: leftover } = await execFileAsync(
     "git",
@@ -186,7 +194,9 @@ async function restoreState() {
     { cwd: repoRoot },
   );
   if (leftover.trim()) {
-    throw new Error(`还原后 packages/desktop/package.json 仍有本地改动，请人工检查：${leftover.trim()}`);
+    throw new Error(
+      `还原后 packages/desktop/package.json 仍有本地改动，请人工检查：${leftover.trim()}`,
+    );
   }
   log("restored: packages/desktop/package.json 已回到 Windows 基线（与 HEAD 一致）");
   return 0;
@@ -198,20 +208,25 @@ async function statusState() {
   const electronVersion = manifest.devDependencies?.electron;
   const defineValue = isCentos7DesktopBuild();
   const unpinnedRuntimeDeps = Object.entries(manifest.dependencies ?? {})
-    .filter(([name, spec]) => !isWorkspaceSpec(spec) && CENTOS7_PINNED_RUNTIME_DEPENDENCIES[name] !== spec)
+    .filter(
+      ([name, spec]) =>
+        !isWorkspaceSpec(spec) && CENTOS7_PINNED_RUNTIME_DEPENDENCIES[name] !== spec,
+    )
     .map(([name, spec]) => `${name}@${String(spec)}`);
 
-  log(JSON.stringify(
-    {
-      state: applied ? "centos7" : "windows-baseline",
-      electron: electronVersion,
-      centos7ElectronTarget: CENTOS7_ELECTRON_VERSION,
-      viteDefineValue: defineValue,
-      unpinnedRuntimeDependencies: unpinnedRuntimeDeps,
-    },
-    null,
-    2,
-  ));
+  log(
+    JSON.stringify(
+      {
+        state: applied ? "centos7" : "windows-baseline",
+        electron: electronVersion,
+        centos7ElectronTarget: CENTOS7_ELECTRON_VERSION,
+        viteDefineValue: defineValue,
+        unpinnedRuntimeDependencies: unpinnedRuntimeDeps,
+      },
+      null,
+      2,
+    ),
+  );
   return 0;
 }
 
@@ -228,7 +243,9 @@ async function main() {
       process.exitCode = await statusState();
       break;
     default:
-      console.error(`[prepare-centos7-build] 未知子命令: ${command}（可用: apply | restore | status）`);
+      console.error(
+        `[prepare-centos7-build] 未知子命令: ${command}（可用: apply | restore | status）`,
+      );
       process.exitCode = 1;
   }
 }

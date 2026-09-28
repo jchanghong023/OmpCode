@@ -46,13 +46,16 @@ test("OMPCODE_CENTOS7_HOME 覆盖设置读取的 dataBaseDir，并锁定数据�
       assert.equal(settings.dataBaseDir, home);
     });
 
-    await withEnv({ ZCODE_DESKTOP_HOME_DIR: home, OMPCODE_CENTOS7_HOME: externalHome }, async () => {
-      // --home 是本次启动的强制存储根：文件里的旧 dataBaseDir 不再生效。
-      const settings = await service.get();
-      assert.equal(settings.dataBaseDir, externalHome);
-      // 设置页不能把数据迁回其它目录（含原 HOME）。
-      await assert.rejects(service.updateDataBaseDir(home), /CentOS 7 --home/);
-    });
+    await withEnv(
+      { ZCODE_DESKTOP_HOME_DIR: home, OMPCODE_CENTOS7_HOME: externalHome },
+      async () => {
+        // --home 是本次启动的强制存储根：文件里的旧 dataBaseDir 不再生效。
+        const settings = await service.get();
+        assert.equal(settings.dataBaseDir, externalHome);
+        // 设置页不能把数据迁回其它目录（含原 HOME）。
+        await assert.rejects(service.updateDataBaseDir(home), /CentOS 7 --home/);
+      },
+    );
   } finally {
     await rm(home, { recursive: true, force: true });
     await rm(externalHome, { recursive: true, force: true });

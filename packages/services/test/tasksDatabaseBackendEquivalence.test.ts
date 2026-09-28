@@ -88,8 +88,8 @@ interface BehaviorSnapshot {
 /** 在给定库上执行同一段数据行为脚本，返回可跨后端比较的快照。 */
 function runBehaviorScript(database: SqliteDatabase): BehaviorSnapshot {
   database.exec(
-    "CREATE TABLE kv (k TEXT PRIMARY KEY, v TEXT, n INTEGER);"
-      + "INSERT INTO kv (k, v, n) VALUES ('big', 'committed', 9007199254740993);",
+    "CREATE TABLE kv (k TEXT PRIMARY KEY, v TEXT, n INTEGER);" +
+      "INSERT INTO kv (k, v, n) VALUES ('big', 'committed', 9007199254740993);",
   );
   database.prepare("INSERT INTO kv (k, v, n) VALUES (@k, @v, @n)").run({
     k: "named",
@@ -182,10 +182,13 @@ for (const backend of ["node:sqlite", "better-sqlite3"] as const) {
         const restored = createDatabaseSync(backupPath, { readOnly: true });
         try {
           assert.equal((restored.prepare("SELECT id FROM marks").get() as { id: number }).id, 42);
-          assert.throws(() => restored.exec("INSERT INTO marks VALUES (1)"), (error: unknown) => {
-            const errcode = (error as { errcode?: unknown }).errcode;
-            return typeof errcode === "number" && (errcode & 0xff) === 8;
-          });
+          assert.throws(
+            () => restored.exec("INSERT INTO marks VALUES (1)"),
+            (error: unknown) => {
+              const errcode = (error as { errcode?: unknown }).errcode;
+              return typeof errcode === "number" && (errcode & 0xff) === 8;
+            },
+          );
         } finally {
           restored.close();
         }
@@ -232,17 +235,20 @@ for (const backend of ["node:sqlite", "better-sqlite3"] as const) {
       await withBackend(backend, () => {
         // node:sqlite 打开是惰性的（首条语句才报错），better-sqlite3 在构造时即报错；
         // 等价性要求是"打开+使用序列必须失败"，错误码一致而不是抛出时机一致。
-        assert.throws(() => {
-          const database = createDatabaseSync(path);
-          try {
-            database.exec("CREATE TABLE attempts (a)");
-          } finally {
-            database.close();
-          }
-        }, (error: unknown) => {
-          const errcode = (error as { errcode?: unknown }).errcode;
-          return typeof errcode !== "number" || (errcode & 0xff) === 26;
-        });
+        assert.throws(
+          () => {
+            const database = createDatabaseSync(path);
+            try {
+              database.exec("CREATE TABLE attempts (a)");
+            } finally {
+              database.close();
+            }
+          },
+          (error: unknown) => {
+            const errcode = (error as { errcode?: unknown }).errcode;
+            return typeof errcode !== "number" || (errcode & 0xff) === 26;
+          },
+        );
       });
     } finally {
       await rm(root, { recursive: true, force: true });
@@ -268,7 +274,9 @@ test("[node:sqlite] 默认读取超精度整数抛 RangeError（已确认的双�
   await withBackend("node:sqlite", () => {
     const database = createDatabaseSync(":memory:");
     try {
-      database.exec("CREATE TABLE stamps (v INTEGER); INSERT INTO stamps VALUES (9007199254740993)");
+      database.exec(
+        "CREATE TABLE stamps (v INTEGER); INSERT INTO stamps VALUES (9007199254740993)",
+      );
       assert.throws(() => database.prepare("SELECT v FROM stamps").get(), RangeError);
       const safe = database.prepare("SELECT v FROM stamps");
       safe.setReadBigInts(true);
@@ -279,11 +287,12 @@ test("[node:sqlite] 默认读取超精度整数抛 RangeError（已确认的双�
   });
 });
 
-test("两后端同脚本行为快照一致（双后端可用时）", async (t) => {  for (const backend of ["node:sqlite", "better-sqlite3"] as const) {
+test("两后端同脚本行为快照一致（双后端可用时）", async (t) => {
+  for (const backend of ["node:sqlite", "better-sqlite3"] as const) {
     if (!backendAvailability[backend]) {
       t.diagnostic(
-        `跳过 ${backend}：当前运行时不可用（better-sqlite3 9.6.0 无 Node 24 预编译且源码不兼容，`
-          + "见 docs/electron-44-28-api-compat.md 的双 ABI 实测结论）",
+        `跳过 ${backend}：当前运行时不可用（better-sqlite3 9.6.0 无 Node 24 预编译且源码不兼容，` +
+          "见 docs/electron-44-28-api-compat.md 的双 ABI 实测结论）",
       );
     }
   }
@@ -319,9 +328,12 @@ test("强制选择不可用后端时显式报错而不是静默换驱动", async
   }
   for (const backend of unavailable) {
     await withBackend(backend, () => {
-      assert.throws(() => createDatabaseSync(":memory:"), (error: unknown) => {
-        return error instanceof Error && error.message.includes(backend);
-      });
+      assert.throws(
+        () => createDatabaseSync(":memory:"),
+        (error: unknown) => {
+          return error instanceof Error && error.message.includes(backend);
+        },
+      );
     });
   }
 });
@@ -373,10 +385,13 @@ test("better-sqlite3 适配层把原生语义映射到统一接口（桩实例�
   // exec 原样转发且不吞 BUSY 语义：错误补 errcode=5 供 startup 锁等待识别。
   database.exec("CREATE TABLE t (a)");
   assert.equal(tracked.lastExecSql, "CREATE TABLE t (a)");
-  assert.throws(() => database.exec("BUSY_TRAP"), (error: unknown) => {
-    const errcode = (error as { errcode?: unknown }).errcode;
-    return errcode === 5 && (error as { code?: string }).code === "SQLITE_BUSY";
-  });
+  assert.throws(
+    () => database.exec("BUSY_TRAP"),
+    (error: unknown) => {
+      const errcode = (error as { errcode?: unknown }).errcode;
+      return errcode === 5 && (error as { code?: string }).code === "SQLITE_BUSY";
+    },
+  );
 
   // prepare/run/get/all 转发，setReadBigInts 映射 safeIntegers。
   const statement = database.prepare("SELECT ? ");
@@ -387,9 +402,12 @@ test("better-sqlite3 适配层把原生语义映射到统一接口（桩实例�
   statement.setReadBigInts(true);
   statement.setReadBigInts(false);
   assert.deepEqual(safeIntegersCalls, [true, false]);
-  assert.throws(() => database.prepare("INSERT INTO BUSY_TRAP"), (error: unknown) => {
-    return (error as { errcode?: unknown }).errcode === 5;
-  });
+  assert.throws(
+    () => database.prepare("INSERT INTO BUSY_TRAP"),
+    (error: unknown) => {
+      return (error as { errcode?: unknown }).errcode === 5;
+    },
+  );
 
   // close 绑定原始实例。
   database.close();
@@ -398,7 +416,14 @@ test("better-sqlite3 适配层把原生语义映射到统一接口（桩实例�
 });
 
 test("backupDatabase 拒绝非本封装创建的库对象", async () => {
-  const foreign = { exec() {}, prepare() { throw new Error("unused"); }, close() {}, isTransaction: false };
+  const foreign = {
+    exec() {},
+    prepare() {
+      throw new Error("unused");
+    },
+    close() {},
+    isTransaction: false,
+  };
   await assert.rejects(
     () => backupDatabase(foreign as unknown as SqliteDatabase, join(tmpdir(), "unused.sqlite")),
     TypeError,
