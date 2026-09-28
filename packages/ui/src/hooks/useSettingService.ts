@@ -161,14 +161,7 @@ export function useSettings() {
         });
       }
     },
-    [
-      broadcastService,
-      settingService,
-      settingsStore,
-      zcodeAgentService,
-      platform,
-      refresh,
-    ],
+    [broadcastService, settingService, settingsStore, zcodeAgentService, platform, refresh],
   );
 
   return {

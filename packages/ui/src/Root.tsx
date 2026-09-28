@@ -306,11 +306,7 @@ function RootInner({
     return () => {
       disposable.dispose();
     };
-  }, [
-    refreshAppSettings,
-    services.broadcastService,
-    services.zcodeAgentService,
-  ]);
+  }, [refreshAppSettings, services.broadcastService, services.zcodeAgentService]);
 
   useEffect(() => {
     if (!appSettings) {
