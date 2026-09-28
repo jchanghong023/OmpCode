@@ -2267,11 +2267,10 @@ const zhCN: Record<string, string> = {
   "resourceManager.storage.confirmDescription.backups":
     "这些副本用于升级或迁移出错时恢复数据，删除后将无法回退。",
   "settings.browser.title": "浏览器控制",
-  "settings.browser.control.title": "开启内置浏览器控制",
+  "settings.browser.control.title": "OMP 内置浏览器",
   "settings.browser.control.description":
-    "启用 Browser Use 官方插件，让新会话可以通过内置浏览器访问和操作网页。",
-  "settings.browser.control.enabledToast": "已开启内置浏览器控制",
-  "settings.browser.control.disabledToast": "已关闭内置浏览器控制",
+    "OMP 默认支持在会话中访问和操作网页。",
+  "settings.browser.control.defaultEnabled": "默认开启",
   "settings.browser.security.section": "安全",
   "settings.embeddedBrowserAllowInsecureCertificates": "忽略证书校验",
   "settings.embeddedBrowserAllowInsecureCertificatesDescription":
