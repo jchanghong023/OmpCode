@@ -81,6 +81,7 @@ import {
 import { AppearanceSectionContent } from "./settingsCodePreview.js";
 import type { SettingsSectionId } from "@/lib/settingsNavigation.js";
 import { requestPluginStoreOpen } from "@/lib/pluginStoreNavigation.js";
+import { isCentos7DesktopBuild } from "@/lib/centos7Desktop.js";
 import {
   runUserAction,
   runUserActionAsync,
@@ -981,7 +982,10 @@ export function SettingsPage({
                             trigger: "button",
                           },
                           operation: () => {
-                            if (pluginNavigationOrigin === "plugin-store") {
+                            if (
+                              !isCentos7DesktopBuild &&
+                              pluginNavigationOrigin === "plugin-store"
+                            ) {
                               requestPluginStoreOpen("user");
                             }
                             onBack?.();
@@ -1407,6 +1411,7 @@ export function SettingsPage({
                             workspaceIdentity={activeWorkspaceIdentity}
                             onCreateTask={onCreateTask}
                             onOpenPluginStore={(_returnScopeKey, intent) => {
+                              if (isCentos7DesktopBuild) return;
                               // 添加市场与浏览插件都先离开设置层，再显示商店。
                               requestPluginStoreOpen({ returnScopeKey: "user", intent });
                               onBack?.();
@@ -1438,6 +1443,7 @@ export function SettingsPage({
                             workspaceIdentity={activeWorkspaceIdentity}
                             onCreateTask={onCreateTask}
                             onOpenPluginStore={(_returnScopeKey, intent) => {
+                              if (isCentos7DesktopBuild) return;
                               // 添加市场与浏览插件都先离开设置层，再显示商店。
                               requestPluginStoreOpen({ returnScopeKey: "user", intent });
                               onBack?.();

@@ -599,9 +599,11 @@ export async function executeDesktopCommand(options: {
       await options.onRelaunchApp();
       return;
     case DesktopCommandIds.OpenFeedback:
+      if (process.env.OMPCODE_CENTOS7_LOCAL_ONLY === "1") return;
       await openFeedback(options.logger, targetWindow, options.fetchHelpConfig);
       return;
     case DesktopCommandIds.OpenCommunity:
+      if (process.env.OMPCODE_CENTOS7_LOCAL_ONLY === "1") return;
       await openCommunity(
         options.currentApplicationLocale,
         options.logger,

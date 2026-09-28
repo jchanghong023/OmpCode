@@ -63,8 +63,10 @@ export function shouldMirrorBotTaskStreamToStore(params: {
 export function useBotBroadcastEffects(
   services: IServiceAccessor,
   tabStoreApi: ReturnType<typeof useTabStoreApi>,
+  enabled = true,
 ) {
   useEffect(() => {
+    if (!enabled) return;
     const disposable = services.broadcastService.onMessage((message) => {
       const stream = resolveBotTaskStreamBroadcast(message, tabStoreApi.getState().tabs);
       if (stream) {
@@ -354,5 +356,5 @@ export function useBotBroadcastEffects(
       }
     });
     return () => disposable.dispose();
-  }, [services.broadcastService, tabStoreApi]);
+  }, [enabled, services.broadcastService, tabStoreApi]);
 }

@@ -29,6 +29,7 @@ import { useDesktopUpdateMenu } from "@/hooks/useDesktopUpdateMenu.js";
 import { usePlatform } from "@/hooks/usePlatform.js";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
 import { createHelpMenuActionHandlers } from "@/lib/helpMenuActions.js";
+import { isCentos7DesktopBuild } from "@/lib/centos7Desktop.js";
 
 export function WorkspaceHelpMenuButton({
   className,
@@ -88,22 +89,30 @@ export function WorkspaceHelpMenuButton({
         align="end"
         className="min-w-0 w-max [&_[data-slot=dropdown-menu-item]]:pr-6"
       >
-        <DropdownMenuItem onSelect={helpMenuActions.openProductDocs}>
-          <BookOpenIcon className="size-4" />
-          {intl.formatMessage({ id: "workspaceHeader.help.docs" })}
-        </DropdownMenuItem>
-        <DropdownMenuItem onSelect={handleOpenCommunity}>
-          <UsersIcon className="size-4" />
-          {intl.formatMessage({ id: "workspaceHeader.help.community" })}
-        </DropdownMenuItem>
-        <DropdownMenuItem onSelect={helpMenuActions.openIssueReport}>
-          <MessageSquareIcon className="size-4" />
-          {intl.formatMessage({ id: "workspaceHeader.help.issueReport" })}
-        </DropdownMenuItem>
-        <DropdownMenuItem onSelect={openFeatureRequest}>
-          <LightbulbIcon className="size-4" />
-          {intl.formatMessage({ id: "workspaceHeader.help.productRequest" })}
-        </DropdownMenuItem>
+        {!isCentos7DesktopBuild && (
+          <DropdownMenuItem onSelect={helpMenuActions.openProductDocs}>
+            <BookOpenIcon className="size-4" />
+            {intl.formatMessage({ id: "workspaceHeader.help.docs" })}
+          </DropdownMenuItem>
+        )}
+        {!isCentos7DesktopBuild && (
+          <DropdownMenuItem onSelect={handleOpenCommunity}>
+            <UsersIcon className="size-4" />
+            {intl.formatMessage({ id: "workspaceHeader.help.community" })}
+          </DropdownMenuItem>
+        )}
+        {!isCentos7DesktopBuild && (
+          <DropdownMenuItem onSelect={helpMenuActions.openIssueReport}>
+            <MessageSquareIcon className="size-4" />
+            {intl.formatMessage({ id: "workspaceHeader.help.issueReport" })}
+          </DropdownMenuItem>
+        )}
+        {!isCentos7DesktopBuild && (
+          <DropdownMenuItem onSelect={openFeatureRequest}>
+            <LightbulbIcon className="size-4" />
+            {intl.formatMessage({ id: "workspaceHeader.help.productRequest" })}
+          </DropdownMenuItem>
+        )}
         {/* Windows/Linux 没有原生菜单栏，自绘标题栏箭头菜单也已下线，
             资源管理器只能从这里进；Web 端没有该窗口，不渲染。 */}
         {isDesktop ? (

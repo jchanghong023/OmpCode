@@ -333,10 +333,14 @@ function buildApplicationMenuTemplate(options: {
           click: () => void options.executeDesktopCommand(DesktopCommandIds.OpenResourceManager),
         },
         { type: "separator" as const },
-        {
-          label: getLabel(desktopMenuMessageIds.helpFeedback),
-          click: () => void options.executeDesktopCommand(DesktopCommandIds.OpenFeedback),
-        },
+        ...(process.env.OMPCODE_CENTOS7_LOCAL_ONLY === "1"
+          ? []
+          : [
+              {
+                label: getLabel(desktopMenuMessageIds.helpFeedback),
+                click: () => void options.executeDesktopCommand(DesktopCommandIds.OpenFeedback),
+              },
+            ]),
         {
           label: getLabel(desktopMenuMessageIds.helpExportLogs),
           click: () => void options.executeDesktopCommand(DesktopCommandIds.ExportLogs),

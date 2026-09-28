@@ -48,6 +48,7 @@ import { useRootProviderStateRefresh } from "@/root/useRootProviderStateRefresh.
 import { useModelSelectionServiceView } from "@/hooks/useModelSelectionView.js";
 import { useRootProviderSettingsSnapshot } from "@/root/useRootProviderSettingsSnapshot.js";
 import { useRootOAuthEffects } from "@/root/useRootOAuthEffects.js";
+import { isCentos7DesktopBuild } from "@/lib/centos7Desktop.js";
 import { consumeZcodeJwtInvalidRestartMarker } from "@/root/zcodeJwtInvalidRestartMarker.js";
 import { useDesktopNativeThemeSync } from "@/root/useDesktopNativeThemeSync.js";
 import { useRootPlatformEffects } from "@/root/useRootPlatformEffects.js";
@@ -170,10 +171,10 @@ function RootInner({
   useEffect(() => {
     setMcpStorePlatform(platform);
     // 对话 UI perf 只属于 desktop-continuous；Web/mobile 即使能看到权威状态也不装 reporter。
-    setUiPerfArmsReporter(isDesktop ? platform : null);
-    setSessionOpenArmsReporter(isDesktop ? platform : null);
+    setUiPerfArmsReporter(isDesktop && !isCentos7DesktopBuild ? platform : null);
+    setSessionOpenArmsReporter(isDesktop && !isCentos7DesktopBuild ? platform : null);
     // 发送漏斗同理：只在 Electron 桌面端上报，Web/mobile 的 reportArmsCustomEvent 是空实现。
-    setSendFunnelArmsReporter(isDesktop ? platform : null);
+    setSendFunnelArmsReporter(isDesktop && !isCentos7DesktopBuild ? platform : null);
     return () => {
       setMcpStorePlatform(null);
       setUiPerfArmsReporter(null);
@@ -192,7 +193,10 @@ function RootInner({
   // 动态工作流灰度快照的唯一取数点：
   // 放在 app 级 ServiceProvider 这一层取一次，自动化页与 run 面板只读。消费方可能位于
   // 工作区级 ServiceProvider 内（远程 Host 的 accessor），由它们取数会拿到另一台 Host 的答案。
-  useDynamicWorkflowAvailabilityLoader(services.codingPlanSubscriptionService);
+  useDynamicWorkflowAvailabilityLoader(
+    services.codingPlanSubscriptionService,
+    !isCentos7DesktopBuild,
+  );
 
   const { intl, locale } = useZCodeIntl();
   const theme = useZCodeStore((state) => state.theme);
@@ -377,6 +381,10 @@ function RootInner({
   const refreshProviderState = useRootProviderStateRefresh(services);
   useRootProviderSettingsSnapshot(services);
   useEffect(() => {
+    if (isCentos7DesktopBuild) {
+      setProviderFamilyDomainMigrationComplete(true);
+      return;
+    }
     let disposed = false;
 
     void (async () => {
@@ -463,7 +471,7 @@ function RootInner({
     registerBaseWorkspaceServices(services);
   }, [services]);
 
-  useBotBroadcastEffects(services, tabStoreApi);
+  useBotBroadcastEffects(services, tabStoreApi, !isCentos7DesktopBuild);
 
   const handleOpenRemoteConnection = useCallback((preference?: RemoteConnectionOpenPreference) => {
     setRemoteConnectionOpenPreference(preference ?? null);
@@ -684,6 +692,7 @@ function RootInner({
   }, [platform]);
 
   useRootOAuthEffects({
+    enabled: !isCentos7DesktopBuild,
     accountIntentKey: JSON.stringify([
       user?.id,
       appSettings?.providerFamilyDomain,

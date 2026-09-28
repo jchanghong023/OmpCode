@@ -237,6 +237,7 @@ export function registerRemoteIpcHandlers(options: {
   function reportRemoteConnectResultToArmsSafely(
     params: Parameters<typeof reportRemoteConnectResultToArms>[0],
   ): void {
+    if (process.env.OMPCODE_CENTOS7_LOCAL_ONLY === "1") return;
     try {
       reportRemoteConnectResultToArms(params);
     } catch (error) {
@@ -407,10 +408,13 @@ export function registerRemoteIpcHandlers(options: {
       return;
     }
 
-    await options.appTelemetryCore.reportEvent(result.data);
+    if (process.env.OMPCODE_CENTOS7_LOCAL_ONLY !== "1") {
+      await options.appTelemetryCore.reportEvent(result.data);
+    }
   });
 
   ipcMain.handle(PlatformChannels.ReportArmsCustomEvent, async (event, payload: unknown) => {
+    if (process.env.OMPCODE_CENTOS7_LOCAL_ONLY === "1") return;
     const result = armsCustomEventPayloadSchema.safeParse(payload);
     if (!result.success) {
       options.logger.warn(

@@ -730,11 +730,13 @@ const appTelemetryCore = createTelemetryCore({
   fetchImpl: createDesktopTelemetryFetch(net),
 });
 const appTelemetryRuntime = createAppTelemetryRuntime({
+  enabled: process.env.OMPCODE_CENTOS7_LOCAL_ONLY !== "1",
   telemetryCore: appTelemetryCore,
   appLaunchCoordinator,
 });
 
 function reportRemoteUsageEventForRenderer(rendererId: number, event: TelemetryEventPayload): void {
+  if (process.env.OMPCODE_CENTOS7_LOCAL_ONLY === "1") return;
   const context =
     appTelemetryRuntime.getRendererContext(rendererId) ??
     appTelemetryRuntime.getLatestRendererContext();
@@ -1041,7 +1043,9 @@ async function prepareAppQuit(reason: string, kind: AppShutdownKind = "normal"):
     // 尺寸已在 resize 防抖或最大化状态变化时保存，退出屏障不再创建新的尺寸写入。
     // 修复原因：Main 过去不会等待仍在发送的 /event/report，正常退出也会直接丢事件。
     // 与其它 owner 并行进入既有屏障，最多等待 2 秒，避免 telemetry 串行放大退出预算。
-    appTelemetryCore.flushPendingReports({ timeoutMs: 2_000 }),
+    process.env.OMPCODE_CENTOS7_LOCAL_ONLY === "1"
+      ? Promise.resolve()
+      : appTelemetryCore.flushPendingReports({ timeoutMs: 2_000 }),
     localTtftExporter.shutdown(),
     rendererActionTraceBroker.shutdown().catch((error) => {
       logger.warn(`[app-quit] renderer action trace shutdown failed (${reason}):`, error);
@@ -1717,6 +1721,7 @@ function createWindowInstance(startupBootstrap: StartupWindowBootstrap = {}) {
           onMcpTelemetry: (message) =>
             reportMcpTelemetryToArms(message.event, message.runtimeSurface),
           onSessionCreateTelemetry: (message) => {
+            if (process.env.OMPCODE_CENTOS7_LOCAL_ONLY === "1") return;
             void appTelemetryCore.reportEvent(message.event).catch(() => {});
           },
           onCronRunResult: forwardCronRunResult,
