@@ -12,6 +12,7 @@
 
 import { createHash } from "node:crypto";
 import {
+  chmodSync,
   copyFileSync,
   createReadStream,
   existsSync,
@@ -195,6 +196,9 @@ async function main() {
       throw new Error(`[fetch-omp] OMP_RELEASE_BINARY_PATH 不存在：${localPath}`);
     }
     copyFileSync(localPath, targetPath);
+    if (platform !== "win32") {
+      chmodSync(targetPath, 0o755);
+    }
     writeFileSync(
       manifestPath,
       `${JSON.stringify({ source: "local", path: process.env.OMP_RELEASE_BINARY_PATH }, null, 2)}\n`,
@@ -242,6 +246,9 @@ async function main() {
     } else {
       throw error;
     }
+  }
+  if (platform !== "win32") {
+    chmodSync(targetPath, 0o755);
   }
   const size = statSync(targetPath).size;
   writeFileSync(
