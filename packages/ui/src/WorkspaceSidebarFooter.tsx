@@ -1,5 +1,5 @@
-/* oxlint-disable eslint(max-lines) -- footer 聚合账户、主题、模式和快捷键菜单。 */
-import type { Locale, UserInfo } from "@zcode/shared";
+/* oxlint-disable eslint(max-lines) -- footer 聚合显示偏好、手机远控与设置入口菜单。 */
+import type { Locale } from "@zcode/shared";
 import { memo, useCallback, useEffect, useState } from "react";
 import { DesktopCommandIds, TID_TASK_SETTINGS_BUTTON } from "@zcode/shared";
 import { ControlHintTooltip } from "@/ControlHintTooltip.js";
@@ -53,14 +53,7 @@ export const WorkspaceSidebarFooter = memo(function WorkspaceSidebarFooterCompon
   onLocaleChange: (value: string) => void;
   onThemeChange: (value: string) => void;
   onSettingsButtonClick?: () => void;
-  onLogin?: () => void;
-  onLogout?: () => void;
   settingsButtonMode?: "settings" | "back";
-  user?: UserInfo | null;
-  workspacePath?: string;
-  workspaceIdentity?: string;
-  workspaceRemoteSessionId?: string;
-  activeTaskId?: string | null;
   isDesktop?: boolean;
   className?: string;
 }) {

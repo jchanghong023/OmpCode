@@ -8,8 +8,9 @@ import { logger } from "@/logger.js";
 import { MobileRelayDialog } from "@/MobileRelayDialog.js";
 
 /**
- * 手机远控入口：与 WorkspaceWebRemoteControlTrigger 并列挂在 sidebar footer，
- * 打开内嵌中继的扫码弹层。relay 由桌面 main 进程提供，本组件只负责入口和弹层。
+ * 手机远控入口：挂在 sidebar footer，打开内嵌中继的扫码弹层。
+ * 上游官方云远控入口（闭源云 relay）已按 FORK.md「上游同步策略与平台范围」在两平台移除，
+ * 本组件是手机远控的唯一桌面入口；relay 由桌面 main 进程提供，本组件只负责入口和弹层。
  */
 export function WorkspaceMobileRelayTrigger({
   compact = false,
