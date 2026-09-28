@@ -176,6 +176,18 @@ else
   export XDG_DATA_HOME="$HOME/.local/share/ompcode-centos7"
   unset OMPCODE_CENTOS7_HOME
 fi
+# 修复说明：XDG_CONFIG_HOME 被隔离到应用私有目录后，GTK 输入法模块在新路径找不到
+# ibus/fcitx 守护进程的连接与配置（地址文件位于 ~/.config/ibus/bus 等），导致应用内
+# 无法输入中文而其他程序正常。将用户真实的输入法配置目录只读桥接进隔离配置根；
+# 目标位置已存在的同名条目一律不覆盖、不迁移。
+if [[ -d "$HOME/.config" ]]; then
+  mkdir -p -- "$XDG_CONFIG_HOME"
+  for im_name in ibus fcitx fcitx5; do
+    if [[ -d "$HOME/.config/$im_name" && ! -e "$XDG_CONFIG_HOME/$im_name" ]]; then
+      ln -s -- "$HOME/.config/$im_name" "$XDG_CONFIG_HOME/$im_name"
+    fi
+  done
+fi
 # 修复说明：CentOS 7 的 bash 4.2 在 set -u 下展开空数组 "${arr[@]}" 会误报 unbound
 # variable，导致无参数启动直接失败；${arr[@]+"${arr[@]}"} 是 4.2 兼容的惯用替代。
 # CentOS 7 的目标环境没有 GPU；禁用 Chromium 硬件加速，仍允许软件渲染。

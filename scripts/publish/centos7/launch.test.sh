@@ -40,7 +40,9 @@ chmod +x "$package_root/app/zcode"
 
 user_home="$test_root/user-home"
 data_home="$test_root/external data"
-mkdir -p "$user_home"
+mkdir -p "$user_home/.config/ibus/bus"
+ibus_marker="$user_home/.config/ibus/bus/address-marker"
+printf 'ibus-socket-address\n' >"$ibus_marker"
 output=$(env \
   -u XDG_CONFIG_HOME -u XDG_DATA_HOME -u XDG_CACHE_HOME -u XDG_STATE_HOME -u TMPDIR \
   -u PI_CONFIG_DIR -u ZCODE_DATA_BASE_DIR -u ZCODE_DESKTOP_HOME_DIR \
@@ -85,6 +87,9 @@ fi
 [[ -d "$data_home/.local/state/ompcode-centos7" ]]
 [[ -d "$data_home/.cache/ompcode-centos7" ]]
 [[ -d "$data_home/.tmp/ompcode-centos7" ]]
+[[ -L "$data_home/.config/ompcode-centos7/ibus" ]]
+[[ "$(readlink -- "$data_home/.config/ompcode-centos7/ibus")" == "$user_home/.config/ibus" ]]
+[[ "$(cat -- "$data_home/.config/ompcode-centos7/ibus/bus/address-marker")" == 'ibus-socket-address' ]]
 
 # The same destination is reusable on later launches.
 env -u OMPCODE_CENTOS7_HOME HOME="$user_home" "$launcher" --home "$data_home" >/dev/null
@@ -113,7 +118,7 @@ set -e
 [[ ! -e "$escape_home/.ompcode" && ! -e "$escape_home/.omp" ]]
 
 default_home="$test_root/default-home"
-mkdir -p "$default_home"
+mkdir -p "$default_home/.config/fcitx"
 default_output=$(env \
   -u PI_CONFIG_DIR -u ZCODE_DATA_BASE_DIR -u ZCODE_DESKTOP_HOME_DIR \
   -u ZCODE_DESKTOP_USER_DATA_DIR -u ZCODE_DESKTOP_SESSION_DATA_DIR \
@@ -128,3 +133,9 @@ grep -Fxq "XDG_STATE_HOME=$test_root/preserved-state" <<<"$default_output"
 grep -Fxq "TMPDIR=$test_root/preserved-tmp" <<<"$default_output"
 grep -Fxq 'OMPCODE_CENTOS7_HOME=' <<<"$default_output"
 [[ ! -e "$default_home/.ompcode" && ! -e "$default_home/.omp" ]]
+[[ -L "$default_home/.config/ompcode-centos7/fcitx" ]]
+[[ "$(readlink -- "$default_home/.config/ompcode-centos7/fcitx")" == "$default_home/.config/fcitx" ]]
+# 目标位置已有同名条目时不得覆盖。
+mkdir -p "$default_home/.config/ompcode-centos7/fcitx5"
+env HOME="$default_home" "$launcher" >/dev/null
+[[ -d "$default_home/.config/ompcode-centos7/fcitx5" && ! -L "$default_home/.config/ompcode-centos7/fcitx5" ]]
