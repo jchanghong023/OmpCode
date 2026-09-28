@@ -224,9 +224,7 @@ export const MobileRelayDialog = memo(function MobileRelayDialogComponent({
                         <span className="text-foreground-subtle">
                           {intl.formatMessage({ id: "mobileRelay.connections" })}
                         </span>
-                        <span className="font-medium text-foreground">
-                          {status.connections}
-                        </span>
+                        <span className="font-medium text-foreground">{status.connections}</span>
                       </div>
                       <div className="flex items-center justify-between text-ui-base">
                         <span className="text-foreground-subtle">

@@ -8,6 +8,7 @@
 
 import { InputGroupTextarea } from "../ui/input-group.js";
 import { cn } from "../lib/utils.js";
+import { useTextareaAutosize, useTextareaAutosizeValueEffect } from "../../lib/textareaAutosize.js";
 import type {
   ChangeEvent,
   ClipboardEventHandler,
@@ -23,12 +24,17 @@ export const PromptInputTextarea = ({
   onChange,
   onKeyDown,
   className,
+  value,
   placeholder = "What would you like to know?",
   ...props
 }: PromptInputTextareaProps) => {
   const controller = useOptionalPromptInputController();
   const attachments = usePromptInputAttachments();
   const [isComposing, setIsComposing] = useState(false);
+  // Chromium 120（CentOS 7 发布运行时）不支持 field-sizing，输入框会固定在 min 高度内部
+  // 滚动；不支持的运行时用 JS 自适应补齐，两平台交互一致（docs/electron-44-28-api-compat.md）。
+  const { attachRef, resize } = useTextareaAutosize();
+  useTextareaAutosizeValueEffect(value, resize);
 
   const handleKeyDown: KeyboardEventHandler<HTMLTextAreaElement> = useCallback(
     (e) => {
@@ -107,6 +113,7 @@ export const PromptInputTextarea = ({
     ? {
         onChange: (e: ChangeEvent<HTMLTextAreaElement>) => {
           controller.textInput.setInput(e.currentTarget.value);
+          resize();
           onChange?.(e);
         },
         value: controller.textInput.value,
@@ -117,6 +124,7 @@ export const PromptInputTextarea = ({
 
   return (
     <InputGroupTextarea
+      ref={attachRef}
       className={cn("field-sizing-content max-h-48 min-h-16", className)}
       name="message"
       onCompositionEnd={handleCompositionEnd}

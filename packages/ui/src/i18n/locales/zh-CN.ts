@@ -171,6 +171,7 @@ const zhCN: Record<string, string> = {
   "common.generating": "生成中...",
   "common.connecting": "连接中...",
   "common.cancel": "取消",
+  "offlineLock.disabledHint": "离线锁定中已关闭",
   "common.retry": "重试",
   "common.close": "关闭",
   "chat.plan.removeMarker": "关闭计划模式",
@@ -2281,9 +2282,10 @@ const zhCN: Record<string, string> = {
     "这些副本用于升级或迁移出错时恢复数据，删除后将无法回退。",
   "settings.browser.title": "浏览器控制",
   "settings.browser.control.title": "OMP 内置浏览器",
-  "settings.browser.control.description":
-    "OMP 默认支持在会话中访问和操作网页。",
+  "settings.browser.control.description": "OMP 默认支持在会话中访问和操作网页。",
   "settings.browser.control.defaultEnabled": "默认开启",
+  "settings.browser.control.enabledToast": "已开启内置浏览器控制",
+  "settings.browser.control.disabledToast": "已关闭内置浏览器控制",
   "settings.browser.security.section": "安全",
   "settings.embeddedBrowserAllowInsecureCertificates": "忽略证书校验",
   "settings.embeddedBrowserAllowInsecureCertificatesDescription":

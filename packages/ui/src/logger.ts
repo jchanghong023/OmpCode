@@ -1,5 +1,5 @@
 import { formatLogPrefix } from "@zcode/shared";
-import { isCentos7DesktopBuild } from "@/lib/centos7Desktop.js";
+import { isOfflineLocked } from "@/lib/offlineLockGate.js";
 
 export type LogLevel = "debug" | "info" | "warn" | "error";
 
@@ -39,8 +39,9 @@ const consoleFns: Record<LogLevel, (...args: unknown[]) => void> = {
 };
 
 function isLoggerLevelEnabled(level: LogLevel): boolean {
-  // CentOS 7 生产包只转发错误；原生产门控会吞掉 error，导致现场无法排查失败。
-  if (isCentos7DesktopBuild) return level === "error" && !isRendererLoggingDisabled();
+  // 离线锁定（CentOS 7 --offline）下 renderer 只转发 error；原生产门控会吞掉 error，
+  // 导致现场无法排查失败。锁定是运行时状态（centos7-performance.md），不是构建标记。
+  if (isOfflineLocked()) return level === "error" && !isRendererLoggingDisabled();
   // 生产构建下 renderer 所有日志级别都禁用；暴露 guard 让调用方在构造重 payload 前退出。
   return !isRendererProductionBuild() && !isRendererLoggingDisabled();
 }
@@ -63,7 +64,7 @@ function log(level: LogLevel, ...args: unknown[]) {
 }
 
 function lifecycleLog(level: DesktopLogLevel, ...args: unknown[]) {
-  if (isCentos7DesktopBuild) {
+  if (isOfflineLocked()) {
     if (level === "error") log("error", ...args);
     return;
   }
@@ -103,7 +104,7 @@ export const logger = {
  * 有变化才写），Web 端无桥时 no-op。业务模块不得借用它绕过生产门控。
  */
 export function logMemoryDiagnostics(line: string): void {
-  if (isCentos7DesktopBuild) return;
+  if (isOfflineLocked()) return;
   if (isRendererLoggingDisabled()) {
     return;
   }

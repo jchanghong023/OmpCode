@@ -79,8 +79,6 @@ import {
 } from "./settingsPageHelpers.js";
 import { AppearanceSectionContent } from "./settingsCodePreview.js";
 import type { SettingsSectionId } from "@/lib/settingsNavigation.js";
-import { requestPluginStoreOpen } from "@/lib/pluginStoreNavigation.js";
-import { isCentos7DesktopBuild } from "@/lib/centos7Desktop.js";
 import {
   runUserAction,
   runUserActionAsync,
@@ -981,12 +979,8 @@ export function SettingsPage({
                             trigger: "button",
                           },
                           operation: () => {
-                            if (
-                              !isCentos7DesktopBuild &&
-                              pluginNavigationOrigin === "plugin-store"
-                            ) {
-                              requestPluginStoreOpen("user");
-                            }
+                            // ZCode 插件商店已按 integrations.md 在两平台整体移除
+                            // （市场入口隐藏、商店页已删），返回动作只回到工作区。
                             onBack?.();
                           },
                           completed: { resultSource: "local_commit" },
@@ -1409,12 +1403,8 @@ export function SettingsPage({
                             workspacePath={activeWorkspacePath}
                             workspaceIdentity={activeWorkspaceIdentity}
                             onCreateTask={onCreateTask}
-                            onOpenPluginStore={(_returnScopeKey, intent) => {
-                              if (isCentos7DesktopBuild) return;
-                              // 添加市场与浏览插件都先离开设置层，再显示商店。
-                              requestPluginStoreOpen({ returnScopeKey: "user", intent });
-                              onBack?.();
-                            }}
+                            // 插件市场入口按 integrations.md 两平台隐藏，本模式不渲染商店跳转。
+                            onOpenPluginStore={() => {}}
                           />
                         ) : activeSection === "migration" ? (
                           <MigrationSection
@@ -1441,12 +1431,8 @@ export function SettingsPage({
                             workspacePath={activeWorkspacePath}
                             workspaceIdentity={activeWorkspaceIdentity}
                             onCreateTask={onCreateTask}
-                            onOpenPluginStore={(_returnScopeKey, intent) => {
-                              if (isCentos7DesktopBuild) return;
-                              // 添加市场与浏览插件都先离开设置层，再显示商店。
-                              requestPluginStoreOpen({ returnScopeKey: "user", intent });
-                              onBack?.();
-                            }}
+                            // 插件市场入口按 integrations.md 两平台隐藏，本模式不渲染商店跳转。
+                            onOpenPluginStore={() => {}}
                           />
                         ) : activeSection === "hooks" ? (
                           <OmpNativeIntegrationsSection
