@@ -19,33 +19,16 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  build:
+  preflight:
     runs-on: ubuntu-24.04
-    timeout-minutes: 180
+    timeout-minutes: 10
     outputs:
       release_tag: ${{ steps.release_meta.outputs.release_tag }}
+      app_version: ${{ steps.release_meta.outputs.app_version }}
     permissions:
       contents: read
-    env:
-      ZCODE_ENV: production
-      ZCODE_SKIP_REMOTE_ASSETS: "1"
-      ZCODE_TARGET_OS: linux
-      ZCODE_TARGET_ARCH: x64
-      GITHUB_TOKEN: ${{ github.token }}
     steps:
-      - name: Check release token configuration
-        shell: bash
-        env:
-          RELEASE_TOKEN_CONFIGURED: ${{ secrets.OMPCODE_RELEASE_TOKEN != '' }}
-        run: |
-          if [[ "$RELEASE_TOKEN_CONFIGURED" != 'true' ]]; then
-            echo 'Configure repository secret OMPCODE_RELEASE_TOKEN with Contents and Workflows write permissions before releasing.' >&2
-            exit 1
-          fi
-
       - uses: actions/checkout@v4
-        with:
-          ref: experiment/centos7-no-proot
 
       - name: Validate release target
         id: release_meta
@@ -60,17 +43,24 @@ jobs:
           git check-ref-format "refs/tags/$release_tag" || { echo "Invalid release tag: $release_tag" >&2; exit 1; }
           existing_tag=$(git ls-remote --tags origin "refs/tags/$release_tag") || { echo 'Could not check existing release tags.' >&2; exit 1; }
           [[ -z "$existing_tag" ]] || { echo "Tag $release_tag already exists." >&2; exit 1; }
-          echo "APP_VERSION=$version" >> "$GITHUB_ENV"
+          echo "app_version=$version" >> "$GITHUB_OUTPUT"
           echo "release_tag=$release_tag" >> "$GITHUB_OUTPUT"
           echo "Release tag: $release_tag" >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Restore CentOS 7 native assets
-        id: native_cache
-        uses: actions/cache@v4
-        with:
-          path: packages/desktop/dist/centos7-native
-          key: centos7-native-v1-${{ runner.os }}-x64-${{ hashFiles('pnpm-lock.yaml', 'packages/desktop/package.json', 'scripts/publish/centos7/build-native-assets.*', 'scripts/native-search-tools-*.mjs', '.github/workflows/release-centos7.yml') }}
-
+  desktop:
+    needs: preflight
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    env:
+      ZCODE_ENV: production
+      ZCODE_SKIP_REMOTE_ASSETS: "1"
+      ZCODE_TARGET_OS: linux
+      ZCODE_TARGET_ARCH: x64
+      GITHUB_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
         with:
           version: 10.33.2
@@ -81,12 +71,10 @@ jobs:
           node-version: 24.14.0
           cache: pnpm
 
-      - name: Install build dependencies
+      - name: Install desktop build dependencies
         shell: bash
         run: |
           set -euo pipefail
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends zip unzip
           pnpm install --frozen-lockfile
 
       - name: Build Linux desktop
@@ -100,6 +88,60 @@ jobs:
           [[ -f packages/desktop/out/renderer/index.html ]]
           pnpm --filter @zcode/desktop exec electron-builder --config electron-builder.config.js --linux --x64 --dir --publish never
           pnpm --filter @zcode/desktop exec node -e 'const asar = require("@electron/asar"); if (!asar.extractFile("dist/linux-unpacked/resources/app.asar", "out/renderer/index.html").length) process.exit(1)'
+
+      - name: Archive desktop stage
+        shell: bash
+        run: |
+          set -euo pipefail
+          tar -C packages/desktop/dist -cf "$RUNNER_TEMP/linux-unpacked.tar" linux-unpacked
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: centos7-desktop-stage
+          path: ${{ runner.temp }}/linux-unpacked.tar
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+
+  native:
+    needs: preflight
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    env:
+      ZCODE_ENV: production
+      ZCODE_SKIP_REMOTE_ASSETS: "1"
+      ZCODE_TARGET_OS: linux
+      ZCODE_TARGET_ARCH: x64
+      GITHUB_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Restore CentOS 7 native assets
+        id: native_cache
+        uses: actions/cache@v4
+        with:
+          path: packages/desktop/dist/centos7-native
+          key: centos7-native-v1-${{ runner.os }}-x64-${{ hashFiles('pnpm-lock.yaml', 'packages/desktop/package.json', 'scripts/publish/centos7/build-native-assets.*', 'scripts/native-search-tools-*.mjs', '.github/workflows/release-centos7.yml') }}
+
+      - uses: pnpm/action-setup@v4
+        if: steps.native_cache.outputs.cache-hit != 'true'
+        with:
+          version: 10.33.2
+          run_install: false
+
+      - uses: actions/setup-node@v4
+        if: steps.native_cache.outputs.cache-hit != 'true'
+        with:
+          node-version: 24.14.0
+          cache: pnpm
+
+      - name: Install native build dependencies
+        if: steps.native_cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm install --frozen-lockfile
 
       - name: Prepare pinned CentOS 7 native toolchain
         if: steps.native_cache.outputs.cache-hit != 'true'
@@ -178,6 +220,66 @@ jobs:
           done
           python3 scripts/publish/centos7/verify-elf.py "$native"
 
+      - name: Archive native stage
+        shell: bash
+        run: |
+          set -euo pipefail
+          tar -C packages/desktop/dist -cf "$RUNNER_TEMP/centos7-native.tar" centos7-native
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: centos7-native-stage
+          path: ${{ runner.temp }}/centos7-native.tar
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+
+  package:
+    needs: [preflight, desktop, native]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    env:
+      APP_VERSION: ${{ needs.preflight.outputs.app_version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.2
+          run_install: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.14.0
+          cache: pnpm
+
+      - name: Install packaging dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends zip unzip
+          pnpm install --frozen-lockfile
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: centos7-desktop-stage
+          path: release-inputs
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: centos7-native-stage
+          path: release-inputs
+
+      - name: Extract build stages
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p packages/desktop/dist
+          tar -C packages/desktop/dist -xf release-inputs/linux-unpacked.tar
+          tar -C packages/desktop/dist -xf release-inputs/centos7-native.tar
+
       - name: Build ZIP and checksum
         shell: bash
         run: |
@@ -202,14 +304,14 @@ jobs:
           retention-days: 7
 
   publish:
-    needs: build
+    needs: [preflight, package]
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
-      contents: read
+      contents: write
     env:
-      GH_TOKEN: ${{ secrets.OMPCODE_RELEASE_TOKEN }}
-      RELEASE_TAG: ${{ needs.build.outputs.release_tag }}
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ needs.preflight.outputs.release_tag }}
       IS_PRERELEASE: ${{ inputs.prerelease }}
     steps:
       - uses: actions/download-artifact@v4
