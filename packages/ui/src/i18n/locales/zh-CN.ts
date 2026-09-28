@@ -2284,6 +2284,8 @@ const zhCN: Record<string, string> = {
   "settings.browser.control.description":
     "OMP 默认支持在会话中访问和操作网页。",
   "settings.browser.control.defaultEnabled": "默认开启",
+  "settings.browser.control.enabledToast": "已开启内置浏览器控制",
+  "settings.browser.control.disabledToast": "已关闭内置浏览器控制",
   "settings.browser.security.section": "安全",
   "settings.embeddedBrowserAllowInsecureCertificates": "忽略证书校验",
   "settings.embeddedBrowserAllowInsecureCertificatesDescription":

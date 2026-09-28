@@ -2429,6 +2429,8 @@ const enUS: Record<string, string> = {
   "settings.browser.control.description":
     "OMP supports browsing and interacting with web pages in sessions by default.",
   "settings.browser.control.defaultEnabled": "On by default",
+  "settings.browser.control.enabledToast": "Built-in browser control enabled",
+  "settings.browser.control.disabledToast": "Built-in browser control disabled",
   "settings.browser.security.section": "Security",
   "settings.embeddedBrowserAllowInsecureCertificates": "Ignore certificate errors",
   "settings.embeddedBrowserAllowInsecureCertificatesDescription":
