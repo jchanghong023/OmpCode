@@ -1,5 +1,5 @@
 import { access, readFile, mkdir, rename } from "node:fs/promises";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { homedir } from "node:os";
 import type {
   AppSettings,
@@ -58,6 +58,11 @@ function getSettingsDir() {
 
 function getSettingsFile() {
   return join(getSettingsDir(), "setting.json");
+}
+
+function applyCentos7HomeOverride(settings: AppSettings): AppSettings {
+  const home = process.env.OMPCODE_CENTOS7_HOME?.trim();
+  return home ? { ...settings, dataBaseDir: home } : settings;
 }
 
 function defaultSettings(): AppSettings {
@@ -282,7 +287,7 @@ export function createSettingServiceWithMigrations(): {
       await updateQueue;
       const result = await readSettingsWithMeta();
       if (!result.needsMigrationPersist) {
-        return result.settings;
+        return applyCentos7HomeOverride(result.settings);
       }
 
       await enqueueSettingsWrite(async (shouldCommit, enterCommitPhase) => {
@@ -296,7 +301,7 @@ export function createSettingServiceWithMigrations(): {
         await writeSettings(latest.settings, shouldCommit, runSettingsCommit, enterCommitPhase);
       });
 
-      return readSettings();
+      return applyCentos7HomeOverride(await readSettings());
     },
 
     async update(patch: Partial<AppSettings>, expectedAccountSettings): Promise<void> {
@@ -342,6 +347,13 @@ export function createSettingServiceWithMigrations(): {
     async updateDataBaseDir(newDir: string | undefined): Promise<void> {
       const currentBaseDir = getDataBaseDir();
       const targetBaseDir = newDir?.trim() || homedir();
+      const centos7Home = process.env.OMPCODE_CENTOS7_HOME?.trim();
+      if (centos7Home && resolve(targetBaseDir) !== resolve(centos7Home)) {
+        // CentOS 7 --home 的用途是避免写入空间不足的原 HOME，设置页不能把数据再迁回其它目录。
+        throw new Error(
+          `The data directory is fixed by the CentOS 7 --home option: ${centos7Home}`,
+        );
+      }
       const validation = validateDataBaseDirTarget(targetBaseDir);
       if (!validation.ok) {
         // Windows 安装目录由安装器/自动更新管理，把 .zcode/v2 放进去可能在升级时被覆盖。

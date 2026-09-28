@@ -13,9 +13,6 @@ app="$package_root/app"
 if [[ -d "$package_root/lib" ]]; then
   export LD_LIBRARY_PATH="$package_root/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 fi
-export XDG_CONFIG_HOME="$HOME/.config/ompcode-centos7"
-export XDG_DATA_HOME="$HOME/.local/share/ompcode-centos7"
-
 desktop_args=()
 profile_override=
 profile_requested=0
@@ -84,25 +81,77 @@ if ((home_requested)); then
   data_base=$(readlink -m -- "$home_override")
   canonical_home=$(readlink -f -- "$HOME")
   case "$data_base" in
-    "$canonical_home"|"$canonical_home/.ompcode"|"$canonical_home/.ompcode/"*)
-      echo 'OmpCode: --home cannot be ~ or inside ~/.ompcode.' >&2
+    "$canonical_home"|\
+      "$canonical_home/.ompcode"|"$canonical_home/.ompcode/"*|\
+      "$canonical_home/.omp"|"$canonical_home/.omp/"*)
+      echo 'OmpCode: --home cannot be ~ or inside ~/.ompcode or ~/.omp.' >&2
       exit 2
       ;;
   esac
-  data_target="$data_base/.ompcode"
-  data_link="$HOME/.ompcode"
-  if [[ -L "$data_link" ]]; then
-    if [[ "$(readlink -m -- "$data_link")" != "$(readlink -m -- "$data_target")" ]]; then
-      echo 'OmpCode: ~/.ompcode already links to another location.' >&2
+
+  # 修复依据：只迁移 ~/.ompcode 会让 Electron、Chromium 和 omp 继续把独立状态写入原 HOME。
+  # 在创建任何目录前检查两个共享配置入口，避免冲突时留下半套新数据目录或覆盖用户数据。
+  check_home_data_link() {
+    local name=$1
+    local link="$HOME/$name"
+    local target="$data_base/$name"
+    if [[ -L "$link" ]]; then
+      if [[ "$(readlink -m -- "$link")" != "$(readlink -m -- "$target")" ]]; then
+        echo "OmpCode: ~/$name already links to another location." >&2
+        exit 2
+      fi
+    elif [[ -e "$link" ]]; then
+      echo "OmpCode: ~/$name already exists; move its data before using --home." >&2
       exit 2
     fi
-  elif [[ -e "$data_link" ]]; then
-    echo 'OmpCode: ~/.ompcode already exists; move its data before using --home.' >&2
-    exit 2
+  }
+
+  check_home_data_link .ompcode
+  check_home_data_link .omp
+
+  app_config_root="$data_base/.config/ompcode-centos7"
+  managed_data_dirs=(
+    "$data_base/.ompcode"
+    "$data_base/.omp"
+    "$app_config_root/OmpCode/session"
+    "$data_base/.local/share/ompcode-centos7"
+    "$data_base/.local/state/ompcode-centos7"
+    "$data_base/.cache/ompcode-centos7"
+    "$data_base/.tmp/ompcode-centos7"
+  )
+  data_prefix="${data_base%/}/"
+  if [[ "$data_base" == / ]]; then
+    data_prefix=/
   fi
-  mkdir -p -- "$data_target"
-  if [[ ! -L "$data_link" ]]; then
-    ln -s -- "$data_target" "$data_link"
-  fi
+  for directory in "${managed_data_dirs[@]}"; do
+    resolved_directory=$(readlink -m -- "$directory")
+    case "$resolved_directory" in
+      "$data_prefix"*) ;;
+      *)
+        echo "OmpCode: managed data path escapes --home: $directory" >&2
+        exit 2
+        ;;
+    esac
+  done
+  mkdir -p -- "${managed_data_dirs[@]}"
+
+  [[ -L "$HOME/.ompcode" ]] || ln -s -- "$data_base/.ompcode" "$HOME/.ompcode"
+  [[ -L "$HOME/.omp" ]] || ln -s -- "$data_base/.omp" "$HOME/.omp"
+
+  export XDG_CONFIG_HOME="$app_config_root"
+  export XDG_DATA_HOME="$data_base/.local/share/ompcode-centos7"
+  export XDG_CACHE_HOME="$data_base/.cache/ompcode-centos7"
+  export XDG_STATE_HOME="$data_base/.local/state/ompcode-centos7"
+  export TMPDIR="$data_base/.tmp/ompcode-centos7"
+  export PI_CONFIG_DIR="$data_base/.omp"
+  export ZCODE_DATA_BASE_DIR="$data_base"
+  export ZCODE_DESKTOP_HOME_DIR="$data_base"
+  export ZCODE_DESKTOP_USER_DATA_DIR="$app_config_root/OmpCode"
+  export ZCODE_DESKTOP_SESSION_DATA_DIR="$app_config_root/OmpCode/session"
+  export OMPCODE_CENTOS7_HOME="$data_base"
+else
+  export XDG_CONFIG_HOME="$HOME/.config/ompcode-centos7"
+  export XDG_DATA_HOME="$HOME/.local/share/ompcode-centos7"
+  unset OMPCODE_CENTOS7_HOME
 fi
 exec "$app/zcode" --no-sandbox "${desktop_args[@]}"

@@ -1942,7 +1942,8 @@ app.whenReady().then(async () => {
     if (launchProfile === undefined && bootstrapSettings.ompProfile !== undefined) {
       process.env.OMP_PROFILE = bootstrapSettings.ompProfile;
     }
-    if (bootstrapSettings.dataBaseDir) {
+    // CentOS 7 --home 是本次启动的强制存储根，不能被用户设置里旧的数据目录覆盖。
+    if (bootstrapSettings.dataBaseDir && !process.env.OMPCODE_CENTOS7_HOME?.trim()) {
       setDataBaseDir(bootstrapSettings.dataBaseDir);
     }
     if (bootstrapSettings.locale) {
