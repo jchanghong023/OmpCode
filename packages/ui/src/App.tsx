@@ -30,6 +30,8 @@ import {
 } from "@/quickpick/taskFindNavigationState.js";
 import { createQuickPickCommands } from "@/quickpick/quickPickCommands.js";
 import { CommandCenterDialog } from "@/command-center/CommandCenterDialog.js";
+import { FeedbackHost } from "@/feedback/FeedbackHost.js";
+import { useFeedbackStore } from "@/feedback/feedbackStore.js";
 import {
   resolveQuickPickConversationNavigation,
   selectQuickPickConversationTaskIds,
@@ -83,6 +85,7 @@ const EMPTY_REMOTE_WORKSPACE_SESSIONS: NonNullable<AppProps["remoteWorkspaceSess
 
 export function App({
   services,
+  baseFeedbackService,
   onConnectRemote,
   onSelectRemoteProject,
   onCancelRemoteProject,
@@ -135,6 +138,23 @@ export function App({
     });
     return () => memoryDiagnosticsLogger.stop();
   }, [reportRendererHeapSample]);
+  const openFeedbackSubmit = useFeedbackStore((state) => state.openSubmit);
+  const openFeedbackTickets = useFeedbackStore((state) => state.openTickets);
+  useEffect(() => {
+    // 反馈中心弹窗由 App 统一挂载（见下方 <FeedbackHost/>），main 侧应用菜单 Help → Feedback
+    // 经 OpenFeedbackDialog IPC 触发；离线锁定下 main 侧（desktopCommandHandlers）已直接拦截，
+    // renderer 不重复门控，保证 Windows 与 CentOS 7 全功能态行为一致。
+    const disposeFeedbackDialog = platform.onOpenFeedbackDialog?.(() => {
+      openFeedbackSubmit();
+    });
+    const disposeTicketsPanel = platform.onOpenTicketsPanel?.(() => {
+      openFeedbackTickets();
+    });
+    return () => {
+      disposeFeedbackDialog?.();
+      disposeTicketsPanel?.();
+    };
+  }, [openFeedbackSubmit, openFeedbackTickets, platform]);
   const activeWorkspaceRpcTarget = useTabStore(
     useShallow((state) => {
       if (!state.activeTabId) {
@@ -1010,7 +1030,10 @@ export function App({
         onOpenCodeViewer={handleOpenCodeViewerIfWritable}
       />
       {/* 反馈是应用级能力，必须固定走本机 base host；SSH session 连接中或断开时，
-          workspace-scoped services 会切成断连代理，不能让反馈提交跟随远程 session 失效。 */}
+          workspace-scoped services 会切成断连代理，不能让反馈提交跟随远程 session 失效。
+          修复依据：centos7-release.md 要求反馈仅在离线锁定下禁用且入口保留禁用态；
+          单分支重构中该挂载被误删导致全功能态所有反馈入口静默无响应，现恢复唯一挂载点。 */}
+      <FeedbackHost feedbackService={baseFeedbackService} platform={platform} />
       <WorkspaceShellLayout
         services={services}
         workspaceReadOnlyReason={workspaceReadOnlyReason}
