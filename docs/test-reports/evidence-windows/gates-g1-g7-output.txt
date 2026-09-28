@@ -1,0 +1,40 @@
+== G1 freshness ==
+[freshness] 基线新鲜：refactor/unify-centos7（与 origin/refactor/unify-centos7 同步），相对 origin/main：ahead 81 / behind 0（阈值 50）
+
+== G2 typecheck ==
+> zcode@3.14.3 typecheck D:\code1111111111\forkZcode
+> tsc -b packages/rpc packages/provider packages/provider-node packages/shared packages/omp-agent packages/services packages/client packages/server packages/zcode-server-cli packages/ui packages/web packages/desktop/tsconfig.host.json
+
+(exit 0)
+
+== G3 lint ==
+
+Found 0 warnings and 0 errors.
+Finished in 60ms on 2811 files using 32 threads.
+
+== G4 fmt ==
+
+All matched files use the correct format.
+Finished in 2257ms on 3150 files using 32 threads.
+
+== G5 architecture ==
+architecture: OK
+violations: 0
+baseline: 0
+new: 0
+
+== G6 omp-agent test ==
+[real-e2e] 文件已落盘: real omp wrote this
+✔ 真实 omp 二进制 + zhipu-coding-plan/glm-5.3-flash：流式 → write 工具 → 审批 → 文件落盘 → 完成 (13931.9188ms)
+✔ 真实 omp 二进制：本地命令收口 + 临时模型切换到 zhipu-coding-plan/glm-5.3-flash (6828.0506ms)
+ℹ tests 90
+ℹ pass 90
+ℹ fail 0
+ℹ skipped 0
+
+== G7 既有 UT ==
+ui-services-client-server 测试文件数: 54
+     31 ℹ skipped 0
+      1 ℹ skipped 6
+desktop 测试文件数: 16
+     15 ℹ skipped 0

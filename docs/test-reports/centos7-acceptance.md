@@ -1,17 +1,17 @@
 # CentOS 7 / Linux 侧验收记录（骨架）
 
-> 状态：**待执行**。本文件是 P2 集成验证的 CentOS 7/Linux 侧验收骨架，覆盖三段：① 经 `jch-wsl-git-test` 的 Linux 原生仓库核心场景（与 Windows 同组）、② C1 金丝雀起步的 CentOS 7 VM 包级验收（centos7-release.md「Package acceptance」）、③ 公司 Citrix 主机 IBus 中文输入（VM 不等价，单独执行）。未执行前全部留空，不得预填「通过」。需求条目见 [acceptance-matrix.md](../acceptance-matrix.md)。
+> 状态：**A 段已执行（2026-09-29）；B 段（VM 包级）与 C 段（公司 IBus）待执行，保持留空**。本文件是 P2 集成验证的 CentOS 7/Linux 侧验收记录，覆盖三段：① 经 `jch-wsl-git-test` 的 Linux 原生仓库核心场景（与 Windows 同组）、② C1 金丝雀起步的 CentOS 7 VM 包级验收（centos7-release.md「Package acceptance」）、③ 公司 Citrix 主机 IBus 中文输入（VM 不等价，单独执行）。未执行段全部留空，不得预填「通过」。需求条目见 [acceptance-matrix.md](../acceptance-matrix.md)。
 
 ## 执行元信息
 
 | 项                 | 值                                                                                                    |
 | ------------------ | ----------------------------------------------------------------------------------------------------- |
-| 执行日期           | （待填；Linux 侧 / VM / 公司主机分段记录）                                                            |
+| 执行日期           | 2026-09-29（Linux 核心场景段，UTC+8 约 02:40–03:12；VM / 公司主机分段待执行）                          |
 | 执行者 / 工作流    | P2（Linux 核心场景经 `jch-wsl-git-test` 技能，用户指定路径）                                          |
-| 被测 commit / 分支 | （待填）                                                                                              |
-| Linux 核心场景形态 | 从 Windows 仓库推送待测代码到指定 WSL2 发行版，以 Linux 原生仓库运行；测试意图只在 Windows 侧解析一次 |
-| VM 形态            | CentOS 7 x64（glibc 2.17、内核 3.10.0-1160.el7.x86_64），非 root 用户解压 ZIP 到 HOME                 |
-| 真实模型           | `zhipu-coding-plan/glm-5.3-flash`（与 Windows 同一配置语义）                                          |
+| 被测 commit / 分支 | `refactor/unify-centos7` @ `80e90cdf9f30220e9af75f145f5312a62999d480`（Windows EXPECTED_SHA == origin ls-remote == WSL HEAD 三方一致；WSL 工作区干净，验收后已还原构建态保持干净） |
+| Linux 核心场景形态 | 从 Windows 仓库推送待测代码到 WSL2 发行版 `CentOS-7`（7.9.2009 用户态、glibc 2.17、WSLg `DISPLAY=:0`；**内核非 3.10，如实标注**），以 root 在 `/root/forkZcode` Linux 原生仓库运行；测试意图只在 Windows 侧解析一次。桌面运行形态：`prepare-centos7-build.mjs apply` 后的 CentOS 7 构建态（Electron 28.3.3 + Chromium 120，Node 24.21.0 glibc-217 驱动工具链），vite dev 5194 + CDP 9230，经 CDP 驱动真实界面操作 |
+| VM 形态            | CentOS 7 x64（glibc 2.17、内核 3.10.0-1160.el7.x86_64），非 root 用户解压 ZIP 到 HOME（**B 段待执行**） |
+| 真实模型           | `zhipu-coding-plan/glm-5.3-flash`（与 Windows 同一配置语义，用户 `/root/.omp` 既有凭据）。实际执行：场景轮次按 `config.yml` 默认角色跑在 `zhipu-coding-plan/glm-5.3`，末轮经 UI 模型选择器显式切换 `GLM-5.3-Flash` 并经 omp 会话记录证实（见 A3）；测试态 flag 未注入、未改用户配置 |
 
 ## A. Linux 原生仓库核心场景（与 Windows 同组）
 
@@ -19,9 +19,30 @@
 
 | #   | 场景                                                                                | 对应矩阵行                              | 操作记录 | 实际结果 | 证据（截图/日志/omp 侧对照） |
 | --- | ----------------------------------------------------------------------------------- | --------------------------------------- | -------- | -------- | ---------------------------- |
-| A1  | 基本工具调用会话                                                                    | F15、R02、I14                           |          |          |                              |
-| A2  | 子代理分配                                                                          | I01–I05                                 |          |          |                              |
-| A3  | 界面与 omp 数据一致性（会话列表、技能目录、模型目录与角色、上下文用量、子代理状态） | R06/R07、S01/S03、M02/M09、C06、I03/I04 |          |          |                              |
+| A1  | 基本工具调用会话                                                                    | F15、R02、I14                           | 新建任务 → composer 输入「在 /tmp 创建 `omp-acceptance-a.txt`（三行：`CentOS7-ACCEPTANCE-A`/当前时间戳/`done`），写完读取确认」→ 发送（Worked for 10s）→ 展开「Worked for」明细；另起新任务发「执行 `sleep 90`」，运行约 10s 点击 Stop 中断 | 通过。工具调用展示齐全（Thought 行 + Terminal 工具行含完整 printf 命令），读取结果以 text 卡片呈现；磁盘文件三行内容与任务逐字一致；中断后会话标头显示 Stopped、composer 复位为可发送态、`sleep 90` 进程真实终止（pgrep 无残留）、omp 侧 bash toolResult=「Command aborted」isError:true 且时间戳吻合。发现 1 个次要 UI 缺陷（D1，见「缺陷与环境适配记录」） | [ui-02](evidence-centos7/ui-02-toolcall-expanded.png)（工具明细）、[ui-03](evidence-centos7/ui-03-a-done.png)（完成态+文件卡）、[ui-04](evidence-centos7/ui-04-running.png)（运行中）、[ui-05](evidence-centos7/ui-05-interrupted.png)（中断态）；omp 侧 `~/.omp/agent/sessions/-.ompcode-workspace-default/2026-09-28T18-48-29*.jsonl`（写文件会话）、`2026-09-28T18-52-28*.jsonl`（中断会话，含 aborted 标记） |
+| A2  | 子代理分配                                                                          | I01–I05                                 | 新任务发「派生一个子代理读取 /tmp/omp-acceptance-a.txt 并原样返回」；流式期间每 5s 轮询 UI 状态，结束后展开「Worked for」与「View subagent transcript」 | 通过。运行态可见：composer 侧出现后台任务计数「1」、「allRunning」→「allCompleted」状态演进；记录行「SubAgent general-purpose · task · success — Read local file /tmp/omp-acceptance-a.txt verbatim」；「View subagent transcript」展开显示派发任务原文（user: Complete assignment thoroughly…）与 toolResult（文件原文逐字一致，`Result submitted.`）；主代理汇报含名称（ReadFileEcho，通用 task 子代理单任务派生）、状态 completed、耗时 10.9s、string schema 校验通过。omp 侧父会话目录存在子代理转录 `ReadFileEcho.jsonl`（`parentSession` 回链父会话，末条 yield toolResult `details.data`=文件原文、status success）。证据缺口：运行中截帧写盘失败（0 字节已删），以轮询文本与结束态截图佐证 | [ui-07](evidence-centos7/ui-07-subagent-done.png)、[ui-08](evidence-centos7/ui-08-subagent-record.png)（状态/耗时/记录）、[ui-09](evidence-centos7/ui-09-subagent-transcript.png)（转录展开）；omp 侧 `…/2026-09-28T18-54-31-691Z_01a0e95e-610b-7081-b8bc-8af016b704aa.jsonl` 与同目录 `ReadFileEcho.jsonl` |
+| A3  | 界面与 omp 数据一致性（会话列表、技能目录、模型目录与角色、上下文用量、子代理状态） | R06/R07、S01/S03、M02/M09、C06、I03/I04 | 逐项核对：① 会话列表 vs `~/.omp/agent/sessions/`；② composer「/」命令菜单 vs 技能目录；③ 模型选择器目录与角色 vs `config.yml` modelRoles 与 omp 会话记录；④ Context 面板 vs 会话 jsonl usage；⑤ 子代理状态 vs ReadFileEcho.jsonl | 通过（5/5 一致）。① UI Tasks 4 条（3 条今日+1 条 2d 前）↔ 会话目录今日 3 个 jsonl + 子代理目录，时间一一对应（02:48/02:52/02:54 CST vs UTC 18-48/18-52/18-54）。② 「/」菜单 14 个内置命令（/security /model /switch /fast /slow /skillful /extended-context /computer /prewalk /advisor /export /trace /dump /share），无技能条目 ↔ `/root/.omp` 与 workspace 均无技能目录（skill-descriptions.db 为空表），source=skill 为空。③ UI 选择器 provider 目录 10 家，zhipu-coding-plan 下 GLM-4.5～GLM-5.3-Flash 全系与 `omp models` 一致；UI 默认 `zhipu-coding-plan/GLM-5.3` + 独立「Plan model」入口 ↔ `config.yml` modelRoles（default `zhipu-coding-plan/glm-5.3:max`、plan `deepseek/deepseek-flash:high` 等）；会话 jsonl 实际模型 `zhipu-coding-plan/glm-5.3` 与 UI 一致；显式切换 GLM-5.3-Flash 后选择器文本、UI 轮次、jsonl（`model: glm-5.3-flash` + read 工具）三重一致。④ UI Context 面板 `11.7K/1M (1.2%)`（System prompt 2.4K + System tools 4.6K + System context 2.6K + Messages 2.1K + Auto-compact buffer 150K + Free space 838.3K）↔ 会话 jsonl `promptTokens: 11677`、glm-5.3 窗口 1M。⑤ 见 A2（completed/success/10.9s 与转录逐字一致） | [ui-10](evidence-centos7/ui-10-commands.png)（命令菜单）、[ui-11](evidence-centos7/ui-11-context-panel.png)（上下文面板）、[ui-12](evidence-centos7/ui-12-model-menu.png)（provider 列表）、[ui-13](evidence-centos7/ui-13-model-catalog.png)（模型目录）、[ui-14](evidence-centos7/ui-14-model-flash-selected.png)（切换后）、[ui-15](evidence-centos7/ui-15-flash-turn.png)（Flash 轮完成）；omp 侧 `config.yml`、`~/.omp/agent/sessions/-.ompcode-workspace-default/*.jsonl` |
+
+### A 段缺陷与环境适配记录（均未修改仓库代码；node_modules 适配验收后已还原）
+
+| #   | 级别                 | 描述                                                                                                                                                                                                 | 证据/出处 |
+| --- | -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------- |
+| D1  | 次要缺陷（UI 显示）  | 中断后工具行标签未收敛：会话标头已显示「Stopped」、`sleep 90` 进程已终止、omp 侧已记 `aborted`，但工具行仍显示「Running sleep 90」且 6s 后复查未变。Windows 同场景显示「已停止」（见 windows-acceptance.md S1 步骤 1.5） | [ui-05](evidence-centos7/ui-05-interrupted.png)；`2026-09-28T18-52-28*.jsonl` 末条 bash toolResult「Command aborted」 |
+| D2  | 平台差异（dev 启动阻塞） | CentOS 7 构建态（Electron 28）下 dev 启动即崩：dev 态 `app.getVersion()` 返回 `"0.0"`（`packages/desktop/package.json` 无 version 字段），electron-updater 6.8.9 构造器无条件做 semver 校验 → 主进程 Uncaught Exception、窗口无法创建。基线 Electron 44（Windows dev）同代码正常。验收以 node_modules 补丁（无效版本回退 `"0.0.0"`）绕过，验收后已还原。打包态版本来自构建元数据、预期不受影响（待 B 段证实）。需代码级修复（autoUpdater 懒加载或 dev 版本兜底） | `/tmp/electron.log`（`App version is not a valid semver version: "0.0"`） |
+| D3  | 平台差异（dev 工具链） | Electron 28 下 `app.commandLine.appendSwitch("remote-debugging-port", "9230")` 不生效（构建产物含该调用、主进程健康但 9230 无监听）；以 CLI 参数注入后生效。影响 CentOS 7 dev 态的 CDP 工作流（gui-smoke 等）；Windows dev（Electron 44）同代码可开 | `/tmp/electron.log`（首次启动 CDP 不监听，CLI 注入后 `/json/version` 正常） |
+| E1  | 环境适配（非缺陷）   | root 运行 Electron 被 Chromium sandbox 拒绝（dev.mjs 无参数透传）：以二进制内置 `ELECTRON_DISABLE_SANDBOX=1` 环境变量 + `--disable-gpu --disable-dev-shm-usage`（WSL）启动；Electron 二进制保持原名、未做包装器改造 | `/tmp/ompdev.log`（`Running as root without --no-sandbox is not supported`） |
+| E2  | 环境注意（B 段相关） | `pre-dev` 的 ensure-local-runtime-assets 报 bundled `bfs` 需 GLIBC_2.28（glibc 2.17 上校验失败后从仓库归档重新提取；ripgrep 为 musl 静态可用）——内嵌原生搜索工具在 glibc 2.17 存在受限信号，与 B 段 CR17 相关，待 B 段核实 | `/tmp/electron.log` pre-dev 段输出 |
+
+### 与 Windows 同组场景结果对照
+
+Windows 侧记录见 [windows-acceptance.md](windows-acceptance.md)（S1–S3 通过 @ `c241898`）。两侧 commit 不同（Windows `c241898` ahead 79；本侧 `80e90cd` ahead 81，为集成完成提交），按调度者结论两者 UI 无差异。
+
+| 场景           | Windows（c241898，dev 态 Electron 44） | CentOS 7 / Linux（80e90cd，构建态 Electron 28） | 差异说明 |
+| -------------- | -------------------------------------- | ----------------------------------------------- | -------- |
+| S1 基本工具调用（含中断） | 通过                                   | 通过                                             | 中断收口 UI：Windows 显示「已停止」；本侧会话标头 Stopped 但工具行残留「Running」标签（D1，omp 侧两侧一致记 aborted） |
+| S2 子代理分配  | 通过（2 个并行子代理）                 | 通过（单任务派生子代理）                         | 两侧均呈现运行/结束状态与可展开记录；omp 侧均存在子代理转录文件（Windows `CountReqMd/CountTempDir`，本侧 `ReadFileEcho`） |
+| S3 界面与 omp 数据一致性 | 通过                                   | 通过（5/5 分项）                                 | 本侧额外覆盖模型目录/角色与 Context 用量面板的数值级核对 |
+| 真实模型       | `zhipu-coding-plan/glm-5.3-flash`（UI 显式切换） | `glm-5.3`（默认角色）+ `GLM-5.3-Flash`（UI 显式切换，末轮） | 两侧最终均经 UI 切换到 glm-5.3-flash 并有 omp 记录佐证 |
 
 ## B. CentOS 7 VM 包级验收（矩阵 CR01–CR18）
 
@@ -75,7 +96,7 @@
 
 ## 结果汇总与未验证范围
 
-- Linux 核心场景结论：（待填）
+- Linux 核心场景结论：**通过（A1/A2/A3 全部通过，WSL HEAD == EXPECTED_SHA == 80e90cd）**。同组场景与 Windows 侧结论一致（见对照表）；附带 1 个次要 UI 缺陷（D1 工具行中断后标签未收敛）与 2 个 dev 启动/工具链平台差异（D2、D3，仅影响 CentOS 7 构建态 dev 流程，均未修改仓库代码，node_modules 适配已还原）。
 - VM 包级验收结论：（待填；须在 Windows 基线保护与 UI 对比完成后才能宣称 Package acceptance 完成）
 - IBus 公司主机验收结论：（待填；环境不可用时如实记录，不得以 VM 结果替代）
-- 未验证范围与环境限制（frp 真机、公司主机排期等）：（待填）
+- 未验证范围与环境限制：B 段（VM 包级）与 C 段（公司 IBus）本轮未执行；A2 运行中截帧失败（ui-06，0 字节已删，以轮询文本佐证）；D2 的打包态不受影响的结论待 B 段证实；E2 内嵌原生搜索在 glibc 2.17 的实际可用性待 B 段核实；本轮桌面运行于 WSLg（内核非 3.10），与真实 CentOS 7 VM 内核环境的差异由 B 段覆盖。

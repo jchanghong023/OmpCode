@@ -1,0 +1,8 @@
+# dev 桌面日志摘录（会话生命周期与模型切换）
+[electron] [2026-09-29 02:02:01.517] [pid:24472] [renderer] v4 conversation store connect completed {
+[electron]   event: 'v4.conversation.store.connect.completed',
+[electron] [2026-09-29 02:08:20.374] [pid:24472] [renderer] v4 conversation store connect completed {
+[electron] [2026-09-29 02:01:53.326] [pid:24472] [main] [host-log] (local-1) [host] [2026-09-29 02:01:53.326] [pid:19236] [zcode-host] [rpc:call] provider-settings.refresh OK (353.7ms)
+[electron] [2026-09-29 02:01:53.326] [pid:24472] [main] [host-log] (local-1) [host] [2026-09-29 02:01:53.326] [pid:19236] [zcode-host] [rpc:call] provider-settings.refresh OK (252.7ms)
+set_model|model_change 相关行数: 0
+updater 活动条数: 0
