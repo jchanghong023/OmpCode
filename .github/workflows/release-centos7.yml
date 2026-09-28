@@ -117,34 +117,23 @@ jobs:
       GITHUB_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
-      - name: Restore CentOS 7 native assets
-        id: native_cache
-        uses: actions/cache@v4
-        with:
-          path: packages/desktop/dist/centos7-native
-          key: centos7-native-v1-${{ runner.os }}-x64-${{ hashFiles('pnpm-lock.yaml', 'packages/desktop/package.json', 'scripts/publish/centos7/build-native-assets.*', 'scripts/native-search-tools-*.mjs', '.github/workflows/release-centos7.yml') }}
-
       - uses: pnpm/action-setup@v4
-        if: steps.native_cache.outputs.cache-hit != 'true'
         with:
           version: 10.33.2
           run_install: false
 
       - uses: actions/setup-node@v4
-        if: steps.native_cache.outputs.cache-hit != 'true'
         with:
           node-version: 24.14.0
           cache: pnpm
 
       - name: Install native build dependencies
-        if: steps.native_cache.outputs.cache-hit != 'true'
         shell: bash
         run: |
           set -euo pipefail
           pnpm install --frozen-lockfile
 
       - name: Prepare pinned CentOS 7 native toolchain
-        if: steps.native_cache.outputs.cache-hit != 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -162,7 +151,6 @@ jobs:
           chmod +x "$tools/bin/pnpm"
 
       - name: Build glibc 2.17 native addons and search tools
-        if: steps.native_cache.outputs.cache-hit != 'true'
         shell: bash
         run: |
           set -euo pipefail
