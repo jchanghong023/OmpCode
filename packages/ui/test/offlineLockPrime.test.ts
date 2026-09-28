@@ -74,7 +74,10 @@ test("prime 拉取 Main 应答后进入锁定态并通知订阅者；同平台�
     unsubscribe();
     applyOfflineLockState({
       localOnly: false,
-      disabledFeatures: { ...LOCKED.disabledFeatures, mobileRelay: false } as OfflineGateState["disabledFeatures"],
+      disabledFeatures: {
+        ...LOCKED.disabledFeatures,
+        mobileRelay: false,
+      } as OfflineGateState["disabledFeatures"],
     });
     // 恢复未锁定基线（applyOfflineLockState 会经 schema 校验归一化全部键）。
   }
