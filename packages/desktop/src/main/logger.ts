@@ -7,11 +7,32 @@ import { getAppConfigDir, maybeThrowInjectedFsFault } from "@zcode/services/node
 
 // 无 GPU 桌面的交互与日志共用 Main 事件循环；每条同步 mkdir/append 在慢盘上会阻塞 UI。
 // 文件日志走本模块内的唯一有界异步队列（不做平台分叉），仍按原路径和日期记录。
+//
+// 队列的时间/容量上限必须显式定义为常量并被回归测试引用
+// （centos7-performance.md：参考值 25ms 合批窗口与 4MiB 队列上限、退出 1 秒排空预算）。
+/** 同一轮日志的合批窗口：窗口内同文件行合并成一次 appendFile，持续写入不能被无限延期。 */
+export const MAIN_LOG_FLUSH_WINDOW_MS = 25;
+/** 队列容量上限（不含正在写的一批）：超限行计数并在后续文件记录中报告，console 仍可见。 */
+export const MAIN_LOG_MAX_QUEUED_BYTES = 4 * 1024 * 1024;
+/** 正常退出排空共享预算：Host 清理后与最终退出的全部 flush 共用，不逐次累加等待。 */
+export const MAIN_LOG_EXIT_FLUSH_BUDGET_MS = 1000;
+/** 单文件单批最大行数，防止一次性超大 append 阻塞事件循环。 */
+export const MAIN_LOG_MAX_BATCH_LINES = 256;
+
 let exitLogDeadline: number | undefined;
 export async function flushMainLogs(): Promise<void> {
   // Host 收尾和最终退出可能都调用此处，共用总预算，不能逐次累加退出等待。
-  exitLogDeadline ??= Date.now() + 1000;
-  await drainLogLines();
+  exitLogDeadline ??= Date.now() + MAIN_LOG_EXIT_FLUSH_BUDGET_MS;
+  cancelScheduledFlush();
+  // 超过共享预算即放行退出；强杀、磁盘失败或超时不保证日志落盘（需求明确允许）。
+  await Promise.race([
+    drainLogLines(),
+    new Promise<void>((resolve) => {
+      const remaining = Math.max(exitLogDeadline! - Date.now(), 0);
+      const timer = setTimeout(resolve, remaining);
+      timer.unref?.();
+    }),
+  ]);
 }
 
 function getLogDir() {
@@ -87,20 +108,27 @@ interface PendingLogLine {
   bytes: number;
 }
 
-const MAX_QUEUED_LOG_BYTES = 16 * 1024 * 1024;
 const pendingLines: PendingLogLine[] = [];
 let queuedBytes = 0;
-let flushScheduled = false;
+let flushTimer: ReturnType<typeof setTimeout> | undefined;
 let drainTask: Promise<void> | null = null;
 let droppedLines = 0;
 
-function scheduleDrain(): void {
-  if (flushScheduled || drainTask) return;
-  flushScheduled = true;
-  queueMicrotask(() => {
-    flushScheduled = false;
+function scheduleFlush(): void {
+  if (flushTimer || drainTask) return;
+  // 合批窗口：先攒一批再落盘；unref 不阻塞进程自然退出，退出路径走显式 flush。
+  flushTimer = setTimeout(() => {
+    flushTimer = undefined;
     void drainLogLines();
-  });
+  }, MAIN_LOG_FLUSH_WINDOW_MS);
+  flushTimer.unref?.();
+}
+
+function cancelScheduledFlush(): void {
+  if (flushTimer) {
+    clearTimeout(flushTimer);
+    flushTimer = undefined;
+  }
 }
 
 async function drainLogLines(): Promise<void> {
@@ -109,7 +137,10 @@ async function drainLogLines(): Promise<void> {
     while (pendingLines.length > 0) {
       const first = pendingLines[0]!;
       let batchSize = 0;
-      while (batchSize < 256 && pendingLines[batchSize]?.filePath === first.filePath)
+      while (
+        batchSize < MAIN_LOG_MAX_BATCH_LINES &&
+        pendingLines[batchSize]?.filePath === first.filePath
+      )
         batchSize += 1;
       const batch = pendingLines.splice(0, batchSize);
       const bytes = batch.reduce((total, entry) => total + entry.bytes, 0);
@@ -125,7 +156,7 @@ async function drainLogLines(): Promise<void> {
     }
   })().finally(() => {
     drainTask = null;
-    if (pendingLines.length > 0) scheduleDrain();
+    if (pendingLines.length > 0) scheduleFlush();
   });
   return drainTask;
 }
@@ -144,14 +175,14 @@ function write(level: LogLevel, source: string, ...args: unknown[]) {
   safeConsoleWrite(level, `[${ts}] [pid:${pid}] [${source}]`, ...args);
 
   const bytes = Buffer.byteLength(line);
-  if (queuedBytes + bytes > MAX_QUEUED_LOG_BYTES) {
+  if (queuedBytes + bytes > MAIN_LOG_MAX_QUEUED_BYTES) {
     droppedLines += 1;
     return;
   }
   if (droppedLines > 0) {
     const notice = `[${ts}] [warn] [pid:${pid}] [main] log buffer dropped ${droppedLines} lines\n`;
     const noticeBytes = Buffer.byteLength(notice);
-    if (queuedBytes + bytes + noticeBytes <= MAX_QUEUED_LOG_BYTES) {
+    if (queuedBytes + bytes + noticeBytes <= MAIN_LOG_MAX_QUEUED_BYTES) {
       pendingLines.push({ filePath, line: notice, bytes: noticeBytes });
       queuedBytes += noticeBytes;
       droppedLines = 0;
@@ -159,7 +190,7 @@ function write(level: LogLevel, source: string, ...args: unknown[]) {
   }
   pendingLines.push({ filePath, line, bytes });
   queuedBytes += bytes;
-  scheduleDrain();
+  scheduleFlush();
 }
 
 /**
@@ -179,5 +210,9 @@ export const logger = {
 
   /** renderer 日志通过 IPC 传入后调用此方法写入同一文件 */
   fromRenderer: (level: LogLevel, args: unknown[]) => write(level, "renderer", ...args),
-  flush: () => drainLogLines(),
+  /** 显式立即排空（绕过合批窗口）；退出路径用 flushMainLogs 共享 1 秒预算。 */
+  flush: () => {
+    cancelScheduledFlush();
+    return drainLogLines();
+  },
 };

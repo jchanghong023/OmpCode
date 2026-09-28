@@ -75,6 +75,7 @@ import type {
   WindowControlsOverlayReadyPayload,
   CreateTempTextAttachmentRequest,
   MobileRelayEntryStatus,
+  OfflineGateState,
   OpenCuaPermissionOnboardingOptions,
   ConfigureFinalArmsCustomEventE2ERequest,
   FinalArmsCustomEventE2EEntry,
@@ -312,6 +313,9 @@ contextBridge.exposeInMainWorld("zcode", {
   /** 查询手机远控内嵌中继入口状态（入口链接/连接数/监听端口）；main 侧 handler 由手机远控 relay 接线 */
   getMobileRelayEntry: (): Promise<MobileRelayEntryStatus> =>
     ipcRenderer.invoke(PlatformChannels.MobileRelayEntry),
+  /** 查询离线锁定门控状态（Main 唯一所有者派生；renderer 只消费，不自行读环境变量解释） */
+  getOfflineGateState: (): Promise<OfflineGateState> =>
+    ipcRenderer.invoke(PlatformChannels.OfflineGateState),
   /** 订阅当前窗口内远程连接过程日志，返回 disposer */
   onRemoteConnectionLog: (callback: (entry: RemoteConnectionRuntimeLog) => void) => {
     const handler = (_event: unknown, payload: unknown) =>

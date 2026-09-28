@@ -23,7 +23,8 @@ function resolveFocusHostFrom(
   getHostProcess: (windowId: number) => ElectronUtilityProcess | undefined,
 ): ElectronUtilityProcess | undefined {
   const window =
-    BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows().find((item) => !item.isDestroyed());
+    BrowserWindow.getFocusedWindow() ??
+    BrowserWindow.getAllWindows().find((item) => !item.isDestroyed());
   if (!window) return undefined;
   return getHostProcess(window.id);
 }

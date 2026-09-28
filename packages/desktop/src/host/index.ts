@@ -14,6 +14,7 @@
  * 3. 后续远端 connect / scoped attachment 都由同一 Host 处理
  */
 import { createHostDatabaseStartup } from "./hostDatabaseStartup.js";
+import { isClosedHostOutput } from "./closedOutputError.js";
 import { randomUUID } from "node:crypto";
 import {
   MessagePortProtocol,
@@ -292,14 +293,6 @@ const rawConsole = {
   warn: console.warn.bind(console),
   error: console.error.bind(console),
 };
-
-function isClosedHostOutput(error: unknown): boolean {
-  return (
-    error instanceof Error &&
-    ((error as NodeJS.ErrnoException).code === "EBADF" ||
-      (error as NodeJS.ErrnoException).code === "EPIPE")
-  );
-}
 
 function writeRawHostConsole(consoleFn: (...args: unknown[]) => void, ...args: unknown[]): void {
   try {

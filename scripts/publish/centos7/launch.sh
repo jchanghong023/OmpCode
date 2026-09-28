@@ -9,11 +9,13 @@ for arg in "$@"; do
 
   --home <绝对路径>   将 OmpCode 和内嵌 omp 的数据存放在该目录下
   --profile <名称>   选择内嵌 omp 的配置（也支持 --profile=名称）
-  --offline          让内嵌 omp 离线运行
+  --offline          启用离线锁定：关闭手机远控、公网更新/配置/帮助/
+                     社区/反馈、账号/分享、外部浏览器与遥测等桌面联网
+                     后端，并把离线模式透传给内嵌 omp
   -h, --help         显示此帮助并退出
 
-其他参数会传递给桌面程序。桌面应用始终遵守本地网络边界；
---offline 仅控制内嵌 omp。使用 --home 时不会覆盖已有的 ~/.ompcode 或 ~/.omp。
+不传 --offline 时桌面为全功能，与 Windows 基准一致。其他参数会传递给
+桌面程序。使用 --home 时不会覆盖已有的 ~/.ompcode 或 ~/.omp。
 HELP
       exit 0
       ;;
@@ -22,9 +24,8 @@ done
 
 package_root=$(dirname "$(dirname "$(readlink -f "$0")")")
 app="$package_root/app"
-# CentOS 7 桌面端默认只访问本机和内网；omp 自身的联网模式由 --offline 单独决定。
-export OMPCODE_CENTOS7_LOCAL_ONLY=1
-unset ZCODE_ARMS_RUM_ENDPOINT ZCODE_TELEMETRY_REPORT_ENDPOINT
+# 离线锁定的唯一开关是 --offline：由下方参数解析决定 OMPCODE_CENTOS7_LOCAL_ONLY，
+# 不传时桌面为全功能（与 Windows 基准一致），绝不继承调用者残留的锁定变量。
 [[ -x "$app/zcode" && -x "$app/resources/glm/omp/omp" && -f "$app/resources/app.asar" ]] || {
   echo 'OmpCode CentOS 7 package is incomplete.' >&2
   exit 1
@@ -90,9 +91,17 @@ elif [[ ${OMPCODE_CENTOS7_PROFILE+x} ]]; then
 fi
 
 if ((offline_requested)); then
+  # 离线锁定激活链（centos7-release.md）：--offline 同时设置桌面锁定变量并透传
+  # 内嵌 omp（omp 侧由 OMPCODE_CENTOS7_OFFLINE 经适配器转成 omp --offline 参数）。
+  export OMPCODE_CENTOS7_LOCAL_ONLY=1
   export OMPCODE_CENTOS7_OFFLINE=1
+  # 桌面遥测出口一并关闭，dotenv 也不能重新启用（Main 侧另有同语义兜底）。
+  unset ZCODE_ARMS_RUM_ENDPOINT ZCODE_TELEMETRY_REPORT_ENDPOINT
 else
-  unset OMPCODE_CENTOS7_OFFLINE
+  # 该变量的唯一设置者是本启动器：不传 --offline 时必须清掉调用者环境里的
+  # 残留锁定变量，保证未锁定桌面为全功能（与 Windows 基准一致）；遥测出口
+  # 等环境按原样继承，与 Windows 语义相同。
+  unset OMPCODE_CENTOS7_LOCAL_ONLY OMPCODE_CENTOS7_OFFLINE
 fi
 
 configure_ibus_session() {
