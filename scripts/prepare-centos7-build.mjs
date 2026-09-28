@@ -5,21 +5,21 @@
 // 按 Windows 基线维护（Electron 44.x）；CentOS 7 发布流水线在构建任务内把桌面依赖临时切换为
 // Electron 28.3.3 与 Node 18 兼容运行时依赖精确版本，并同时启用 `__OMPCODE_CENTOS7_DESKTOP__`
 // 发布构建标记。版本切换只发生在 CentOS 7 构建任务的工作区内，「CI 工作区内的临时改写不回传
-// 仓库」：本脚本绝不提交、绝不 push，恢复走 `restore`（git checkout）或人工 `git checkout --`
-// packages/desktop/package.json，保证「不切换时 Windows 构建零变化」可被验证。
+// 仓库」，本脚本绝不提交、绝不 push，恢复走 `restore`（git checkout）或人工 `git checkout --`，
+// 保证「不切换时 Windows 构建零变化」可被验证。
 //
 // 用法：
 //   node scripts/prepare-centos7-build.mjs apply     # 切换到 CentOS 7 构建态（默认子命令）
-//   node scripts/prepare-centos7-build.mjs restore   # 还原 Windows 基线（git checkout 该 manifest）
+//   node scripts/prepare-centos7-build.mjs restore   # 还原 Windows 基线（git checkout 相关 manifest）
 //   node scripts/prepare-centos7-build.mjs status    # 报告当前工作区构建态（不修改任何文件）
 //
-// 切换内容（唯一被改写的文件是 packages/desktop/package.json）：
-//   1. devDependencies.electron -> 精确 28.3.3（glibc 2.17 上官方二进制可用的最后版本；
+// 切换内容（被改写的文件是 packages/{desktop,services,server}/package.json）：
+//   1. desktop devDependencies.electron -> 精确 28.3.3（glibc 2.17 上官方二进制可用的最后版本；
 //      实测 29.4.6 需 GLIBC_2.18、30.5.1 需 GLIBC_2.25）。
-//   2. dependencies 内运行时依赖 -> Node 18 兼容精确版本清单（下方常量，固化自
-//      experiment/centos7-no-proot 分支 pnpm-lock.yaml 的 packages/desktop importer 解析值，
-//      已剥离 peer 依赖后缀）。workspace:* 依赖保持不变。
-//   3. 写入载体字段 ompCodeCentos7Desktop: true——packages/desktop/vite.config.ts 经
+//   2. desktop dependencies 内运行时依赖 -> Node 18 兼容精确版本清单（下方常量，固化自
+//      experiment/centos7-no-proot 分支 lockfile 解析值，已剥离 peer 依赖后缀）。
+//      workspace:* 依赖保持不变。services/server 仅钉 undici（见 MANIFEST_TARGETS 注释）。
+//   3. desktop 写入载体字段 ompCodeCentos7Desktop: true——packages/desktop/vite.config.ts 经
 //      packages/desktop/scripts/centos7-build-flag.mjs 读取它来决定 `__OMPCODE_CENTOS7_DESKTOP__`
 //      define 的注入值；Windows 基线不含该字段，define 恒为 false。
 //
@@ -37,11 +37,9 @@ const execFileAsync = promisify(execFile);
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(scriptDir, "..");
-const desktopManifestPath = resolve(repoRoot, "packages/desktop/package.json");
 
 // CentOS 7 构建任务钉住的 Electron 精确版本（docs/requirements/centos7-release.md「Electron 选型」）。
 export const CENTOS7_ELECTRON_VERSION = "28.3.3";
-
 // __OMPCODE_CENTOS7_DESKTOP__ 构建标记在 manifest 内的载体字段，与 centos7-build-flag.mjs 保持一致。
 export const CENTOS7_DESKTOP_MANIFEST_FIELD = "ompCodeCentos7Desktop";
 
@@ -79,6 +77,37 @@ export const CENTOS7_PINNED_RUNTIME_DEPENDENCIES = Object.freeze({
   yazl: "3.3.1",
 });
 
+const DESKTOP_MANIFEST_PATH = "packages/desktop/package.json";
+const SERVICES_MANIFEST_PATH = "packages/services/package.json";
+const SERVER_MANIFEST_PATH = "packages/server/package.json";
+
+// 各 manifest 的切换规则（C1 金丝雀实证 2026-09：仅钉 desktop 的 undici 不够——services 的
+// ^8.11.2 在 --no-frozen-lockfile 解析中胜出并被 electron-builder 打进 app.asar，undici 8.x
+// 的 webidl 模块在 Electron 28/Node 18.18 下加载期引用 Node 20+ 才有的全局 File 直接崩溃
+// （`ReferenceError: File is not defined`，主进程初始化中断、窗口无法创建）。experiment
+// 分支当年能运行，正是因为 desktop/services/server 三处全部钉 6.23.0，无版本歧义。
+// services/server 只钉 undici，其余依赖不在本脚本职责内。）
+const MANIFEST_TARGETS = [
+  {
+    path: DESKTOP_MANIFEST_PATH,
+    pinAllRuntimeDependencies: true,
+    pinElectron: true,
+    injectBuildFlag: true,
+  },
+  {
+    path: SERVICES_MANIFEST_PATH,
+    pinRuntimeDependencyNames: ["undici"],
+  },
+  {
+    path: SERVER_MANIFEST_PATH,
+    pinRuntimeDependencyNames: ["undici"],
+  },
+];
+
+function resolveManifestPath(relativePath) {
+  return resolve(repoRoot, relativePath);
+}
+
 function log(message) {
   console.log(`[prepare-centos7-build] ${message}`);
 }
@@ -92,8 +121,8 @@ function serializeManifest(manifest, eol) {
   return `${JSON.stringify(manifest, null, 2).replaceAll("\n", eol)}${eol}`;
 }
 
-function readDesktopManifest() {
-  return JSON.parse(readFileSync(desktopManifestPath, "utf8"));
+function readManifest(relativePath) {
+  return JSON.parse(readFileSync(resolveManifestPath(relativePath), "utf8"));
 }
 
 function isWorkspaceSpec(spec) {
@@ -101,54 +130,73 @@ function isWorkspaceSpec(spec) {
 }
 
 function isCentos7AppliedManifest(manifest) {
-  // 载体字段是切换态的签名：apply 只在字段存在时才有资格被 restore 还原，
+  // 载体字段是切换态的签名（只在 desktop manifest 注入）：restore 仅在签名存在时执行，
   // 防止把用户与脚本无关的未提交 manifest 改动误当成本脚本的临时改写一并 checkout 丢弃。
   return manifest[CENTOS7_DESKTOP_MANIFEST_FIELD] === true;
 }
 
 function applyState() {
-  const originalContent = readFileSync(desktopManifestPath, "utf8");
-  const eol = detectEol(originalContent);
-  const manifest = JSON.parse(originalContent);
   const changes = [];
   const warnings = [];
 
-  // 1. Electron 切到精确 28.3.3。
-  const currentElectron = manifest.devDependencies?.electron;
-  if (currentElectron !== CENTOS7_ELECTRON_VERSION) {
-    manifest.devDependencies.electron = CENTOS7_ELECTRON_VERSION;
-    changes.push(
-      `devDependencies.electron: ${String(currentElectron)} -> ${CENTOS7_ELECTRON_VERSION}`,
-    );
-  }
+  for (const target of MANIFEST_TARGETS) {
+    const originalContent = readFileSync(resolveManifestPath(target.path), "utf8");
+    const eol = detectEol(originalContent);
+    const manifest = JSON.parse(originalContent);
+    const targetChanges = [];
 
-  // 2. 运行时依赖切到 Node 18 兼容精确版。需求要求全精确版本保证 --no-frozen-lockfile
-  //    构建可重现；清单外依赖无法证明 Node 18 兼容，保留原样并告警，由人工/W2 依赖审计补清单。
-  for (const [name, spec] of Object.entries(manifest.dependencies ?? {})) {
-    if (isWorkspaceSpec(spec)) {
-      continue;
+    if (target.pinElectron) {
+      // desktop：Electron 切到精确 28.3.3。
+      const currentElectron = manifest.devDependencies?.electron;
+      if (currentElectron !== CENTOS7_ELECTRON_VERSION) {
+        manifest.devDependencies.electron = CENTOS7_ELECTRON_VERSION;
+        targetChanges.push(
+          `devDependencies.electron: ${String(currentElectron)} -> ${CENTOS7_ELECTRON_VERSION}`,
+        );
+      }
     }
-    const pinned = CENTOS7_PINNED_RUNTIME_DEPENDENCIES[name];
-    if (pinned === undefined) {
-      warnings.push(
-        `dependencies.${name}=${String(spec)} 不在 Node 18 兼容精确清单内，已保留原样，需人工确认兼容性`,
-      );
-      continue;
-    }
-    if (spec !== pinned) {
-      manifest.dependencies[name] = pinned;
-      changes.push(`dependencies.${name}: ${String(spec)} -> ${pinned}`);
-    }
-  }
 
-  // 3. 注入 __OMPCODE_CENTOS7_DESKTOP__ 构建标记载体字段。
-  if (manifest[CENTOS7_DESKTOP_MANIFEST_FIELD] !== true) {
-    manifest[CENTOS7_DESKTOP_MANIFEST_FIELD] = true;
-    changes.push(`${CENTOS7_DESKTOP_MANIFEST_FIELD}: true（vite define 注入源）`);
+    // 运行时依赖切到 Node 18 兼容精确版。需求要求全精确版本保证 --no-frozen-lockfile
+    // 构建可重现；desktop 全量钉清单并告警清单外依赖，services/server 仅钉指定依赖
+    //（当前为 undici），其余依赖不属于本脚本职责、不告警。
+    const onlyNames = target.pinAllRuntimeDependencies
+      ? null
+      : new Set(target.pinRuntimeDependencyNames ?? []);
+    for (const [name, spec] of Object.entries(manifest.dependencies ?? {})) {
+      if (isWorkspaceSpec(spec)) {
+        continue;
+      }
+      if (!target.pinAllRuntimeDependencies && !onlyNames.has(name)) {
+        continue;
+      }
+      const pinned = CENTOS7_PINNED_RUNTIME_DEPENDENCIES[name];
+      if (pinned === undefined) {
+        warnings.push(
+          `${target.path} dependencies.${name}=${String(spec)} 不在 Node 18 兼容精确清单内，已保留原样，需人工确认兼容性`,
+        );
+        continue;
+      }
+      if (spec !== pinned) {
+        manifest.dependencies[name] = pinned;
+        targetChanges.push(`dependencies.${name}: ${String(spec)} -> ${pinned}`);
+      }
+    }
+
+    if (target.injectBuildFlag && manifest[CENTOS7_DESKTOP_MANIFEST_FIELD] !== true) {
+      // 注入 __OMPCODE_CENTOS7_DESKTOP__ 构建标记载体字段（desktop 专属）。
+      manifest[CENTOS7_DESKTOP_MANIFEST_FIELD] = true;
+      targetChanges.push(`${CENTOS7_DESKTOP_MANIFEST_FIELD}: true（vite define 注入源）`);
+    }
+
+    if (targetChanges.length > 0) {
+      writeFileSync(resolveManifestPath(target.path), serializeManifest(manifest, eol), "utf8");
+      for (const change of targetChanges) {
+        changes.push(`${target.path}: ${change}`);
+      }
+    }
   }
 
   if (changes.length > 0) {
-    writeFileSync(desktopManifestPath, serializeManifest(manifest, eol), "utf8");
     for (const change of changes) {
       log(`switched: ${change}`);
     }
@@ -159,7 +207,7 @@ function applyState() {
     console.warn(`[prepare-centos7-build][warn] ${warning}`);
   }
   log(
-    `done: packages/desktop/package.json electron=${CENTOS7_ELECTRON_VERSION}, ${CENTOS7_DESKTOP_MANIFEST_FIELD}=true`,
+    `done: desktop electron=${CENTOS7_ELECTRON_VERSION} + ${CENTOS7_DESKTOP_MANIFEST_FIELD}=true; services/server undici=${CENTOS7_PINNED_RUNTIME_DEPENDENCIES.undici}`,
   );
   return 0;
 }
@@ -172,9 +220,9 @@ async function resolveRepoRootFromGit() {
 }
 
 async function restoreState() {
-  const manifest = readDesktopManifest();
-  if (!isCentos7AppliedManifest(manifest)) {
-    log("workspace is not in CentOS 7 build state (manifest 载体字段不存在)；未做任何修改");
+  const desktopManifest = readManifest(DESKTOP_MANIFEST_PATH);
+  if (!isCentos7AppliedManifest(desktopManifest)) {
+    log("workspace is not in CentOS 7 build state (desktop manifest 载体字段不存在)；未做任何修改");
     return 0;
   }
 
@@ -183,27 +231,28 @@ async function restoreState() {
     throw new Error(`git 仓库根 (${gitRoot}) 与脚本仓库根 (${repoRoot}) 不一致，拒绝还原`);
   }
 
-  // 恢复能力按任务卡设计为 git checkout：临时改写绝不进入提交。
-  await execFileAsync("git", ["checkout", "--", "packages/desktop/package.json"], {
+  const manifestPaths = MANIFEST_TARGETS.map((target) => target.path);
+
+  // 恢复能力按任务卡设计为 git checkout：临时改写绝不进入提交。desktop 签名在，
+  // 三处被本脚本切换的 manifest 一并还原。
+  await execFileAsync("git", ["checkout", "--", ...manifestPaths], {
     cwd: repoRoot,
   });
 
   const { stdout: leftover } = await execFileAsync(
     "git",
-    ["status", "--porcelain", "--", "packages/desktop/package.json"],
+    ["status", "--porcelain", "--", ...manifestPaths],
     { cwd: repoRoot },
   );
   if (leftover.trim()) {
-    throw new Error(
-      `还原后 packages/desktop/package.json 仍有本地改动，请人工检查：${leftover.trim()}`,
-    );
+    throw new Error(`还原后仍有本地改动，请人工检查：${leftover.trim()}`);
   }
-  log("restored: packages/desktop/package.json 已回到 Windows 基线（与 HEAD 一致）");
+  log(`restored: ${manifestPaths.join("、")} 已回到 Windows 基线（与 HEAD 一致）`);
   return 0;
 }
 
 async function statusState() {
-  const manifest = readDesktopManifest();
+  const manifest = readManifest(DESKTOP_MANIFEST_PATH);
   const applied = isCentos7AppliedManifest(manifest);
   const electronVersion = manifest.devDependencies?.electron;
   const defineValue = isCentos7DesktopBuild();
@@ -213,6 +262,7 @@ async function statusState() {
         !isWorkspaceSpec(spec) && CENTOS7_PINNED_RUNTIME_DEPENDENCIES[name] !== spec,
     )
     .map(([name, spec]) => `${name}@${String(spec)}`);
+  const pinnedUndici = CENTOS7_PINNED_RUNTIME_DEPENDENCIES.undici;
 
   log(
     JSON.stringify(
@@ -221,6 +271,11 @@ async function statusState() {
         electron: electronVersion,
         centos7ElectronTarget: CENTOS7_ELECTRON_VERSION,
         viteDefineValue: defineValue,
+        undici: {
+          services: readManifest(SERVICES_MANIFEST_PATH).dependencies?.undici,
+          server: readManifest(SERVER_MANIFEST_PATH).dependencies?.undici,
+          centos7Target: pinnedUndici,
+        },
         unpinnedRuntimeDependencies: unpinnedRuntimeDeps,
       },
       null,
