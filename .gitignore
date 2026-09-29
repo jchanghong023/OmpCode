@@ -76,3 +76,12 @@ packages/desktop/.e2e-network-capture/
 packages/desktop/.omp-release-cache/
 # 真实 omp 二进制 E2E 的落盘沙箱（real-omp.e2e.test.ts 每次运行重建）。
 packages/omp-agent/.test-real-e2e-workspace/
+
+# src 目录下的 tsc 编译残留（评审发现 schedulerProtocol.js/.d.ts 产物与源码同目录入库）。
+# 源码一律以 .ts 为准，编译产物只进打包输出目录，不入库。
+packages/desktop/src/scheduler/schedulerProtocol.js*
+packages/desktop/src/scheduler/schedulerProtocol.d.ts*
+
+# 仓库根的一次性调试探针与图标验证临时文件（评审发现 .probe-*/.tmp-* 误提交入库）。
+/.probe-*
+/.tmp-*

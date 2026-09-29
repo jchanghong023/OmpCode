@@ -599,11 +599,31 @@ export async function executeDesktopCommand(options: {
       await options.onRelaunchApp();
       return;
     case DesktopCommandIds.OpenFeedback:
-      if (process.env.OMPCODE_CENTOS7_LOCAL_ONLY === "1") return;
+      // 修复依据：centos7-release.md 要求“技术上无法做禁用态的操作在触发时明确报错，
+      // 不静默缺失”。菜单/下拉入口已是禁用态，这里是兜底触发路径，改为显式提示而非静默返回。
+      if (process.env.OMPCODE_CENTOS7_LOCAL_ONLY === "1") {
+        options.logger.warn("[desktop-command] 离线锁定中拒绝 OpenFeedback");
+        await showMessageBoxWithOptionalParent(targetWindow, {
+          type: "info",
+          title: "问题上报",
+          message: "离线锁定中已关闭",
+          detail: "企业离线锁定模式下问题上报不可用。",
+        });
+        return;
+      }
       await openFeedback(options.logger, targetWindow, options.fetchHelpConfig);
       return;
     case DesktopCommandIds.OpenCommunity:
-      if (process.env.OMPCODE_CENTOS7_LOCAL_ONLY === "1") return;
+      if (process.env.OMPCODE_CENTOS7_LOCAL_ONLY === "1") {
+        options.logger.warn("[desktop-command] 离线锁定中拒绝 OpenCommunity");
+        await showMessageBoxWithOptionalParent(targetWindow, {
+          type: "info",
+          title: "社区",
+          message: "离线锁定中已关闭",
+          detail: "企业离线锁定模式下社区入口不可用。",
+        });
+        return;
+      }
       await openCommunity(
         options.currentApplicationLocale,
         options.logger,

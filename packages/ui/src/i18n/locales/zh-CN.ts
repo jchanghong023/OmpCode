@@ -4292,6 +4292,7 @@ const zhCN: Record<string, string> = {
   "chat.send": "发送",
   "chat.scrollToBottom": "滚动到底部",
   "chat.message.edit": "编辑",
+  "chat.message.edit.unsupported": "当前 agent 暂不支持编辑已发送消息",
   "chat.message.restore": "恢复",
   "chat.message.copy": "复制",
   "chat.message.copy.copied": "已复制",

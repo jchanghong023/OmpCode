@@ -7,7 +7,8 @@ import { quoteArgsForWindowsShell } from "./spawn-command.mjs";
 
 const requestedEnv = process.argv[2]?.trim().toLowerCase();
 if (requestedEnv !== "test" && requestedEnv !== "production") {
-  console.error("Usage: node scripts/dev-desktop-env.mjs <test|production> [--agent-bytecode]");
+  // 修复依据：--agent-bytecode 解析与 bytecode 构建链已随重构删除，Usage 提示同步移除。
+  console.error("Usage: node scripts/dev-desktop-env.mjs <test|production>");
   process.exit(1);
 }
 

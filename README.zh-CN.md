@@ -88,7 +88,7 @@ pnpm bundle:desktop -- --os win --arch x64
 
 ## 手动发布
 
-在 GitHub Actions 中从 `main` 手动运行 **Release Windows EXE** 或 **Release CentOS 7 ZIP**。两条流水线都只打包和发布，不运行测试。输入符合当前 `package.json` 版本且未使用过的标签，例如 Windows 用 `v3.14.3-omp.1`，CentOS 7 用 `v3.14.3-omp.2-centos7`；按需选择预发布。标签和资产相互独立，不修改 Windows 安装包。
+在 GitHub Actions 中从 `main` 手动运行 **Release Windows EXE** 或 **Release CentOS 7 ZIP**。两条流水线都只打包和发布，不运行测试。Windows 必须输入符合当前 `package.json` 版本且未使用过的标签（`v<版本>-omp.N`，例如 `v3.14.3-omp.1`）；CentOS 7 的标签可选——留空自动生成 `v<版本>-centos7-<run-id>-<run-attempt>`，也可输入任意未占用标签（不强加命名模式）。按需选择预发布。标签和资产相互独立，不修改 Windows 安装包。
 
 CentOS 7 流水线发布一个自包含的 `OmpCode-<version>-centos7-x64.zip` 和可选的 `.sha256` 校验文件。将 ZIP 复制到离线机器，以普通用户解压运行：
 

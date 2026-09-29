@@ -1,6 +1,6 @@
 # Windows 真实界面验收记录
 
-> 状态：**已执行（2026-09-29）**。本文件是 P2 集成验证的 Windows 侧验收记录，场景与证据栏为实际执行结果回填。对应需求条目见 [acceptance-matrix.md](../acceptance-matrix.md)，门禁要求见 [refactor-plan.md](../refactor-plan.md)「P2 集成验证门禁」。证据文件在 [evidence-windows/](evidence-windows/) 目录。
+> 状态：**已执行（2026-09-29）**。本文件是 P2 集成验证的 Windows 侧验收记录，场景与证据栏为实际执行结果回填。对应需求条目见 [acceptance-matrix.md](../acceptance-matrix.md)，门禁要求见 [refactor-plan.md](refactor-plan.md)「P2 集成验证门禁」。证据文件在 [evidence-windows/](evidence-windows/) 目录。
 
 ## 执行元信息
 

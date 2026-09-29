@@ -240,9 +240,14 @@ async function main() {
   try {
     copyFileSync(cachedAsset, targetPath);
   } catch (error) {
-    // dev 回环时正在运行的 omp.exe 会锁住目标文件；内容一致则视为已就位。
-    if (existsSync(targetPath) && statSync(targetPath).size === statSync(cachedAsset).size) {
-      console.log("[fetch-omp] 目标被占用但已存在同尺寸二进制，跳过覆盖");
+    // dev 回环时正在运行的 omp.exe 会锁住目标文件。修复依据：评审指出仅按文件
+    // 大小放行会让同尺寸不同内容的残留二进制静默进入打包；改为 SHA256 与缓存
+    // 资产一致才视为已就位，否则要求释放占用后重试。
+    if (
+      existsSync(targetPath) &&
+      (await sha256OfFile(targetPath)) === (await sha256OfFile(cachedAsset))
+    ) {
+      console.log("[fetch-omp] 目标被占用但内容与缓存一致（SHA256 相同），跳过覆盖");
     } else {
       throw error;
     }

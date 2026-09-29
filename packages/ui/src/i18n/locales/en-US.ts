@@ -4591,6 +4591,7 @@ const enUS: Record<string, string> = {
   "chat.send": "Send",
   "chat.scrollToBottom": "Scroll to bottom",
   "chat.message.edit": "Edit",
+  "chat.message.edit.unsupported": "The current agent does not support editing sent messages yet",
   "chat.message.restore": "Restore",
   "chat.message.copy": "Copy",
   "chat.message.copy.copied": "Copied",

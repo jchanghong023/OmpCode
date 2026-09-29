@@ -88,7 +88,7 @@ See the root and package `package.json` files for additional commands.
 
 ## Manual release packaging
 
-In GitHub Actions, run **Release Windows EXE** or **Release CentOS 7 ZIP** from `main`; both workflows refuse other refs. The Windows workflow only packages and publishes; CentOS packaging also verifies an SSH handshake with its bundled Electron before publishing, but neither runs the full test suite. Supply a unique tag matching the current `package.json` version, such as `v3.14.3-omp.1` for Windows or `v3.14.3-omp.2-centos7` for CentOS 7.
+In GitHub Actions, run **Release Windows EXE** or **Release CentOS 7 ZIP** from `main`; both workflows refuse other refs. The Windows workflow only packages and publishes; CentOS packaging also verifies an SSH handshake with its bundled Electron before publishing, but neither runs the full test suite. Windows requires a unique tag matching the current `package.json` version (`v<version>-omp.N`, e.g. `v3.14.3-omp.1`). The CentOS 7 tag is optional: leave it empty to auto-generate `v<version>-centos7-<run-id>-<run-attempt>`, or supply any unused tag (naming is not restricted).
 
 The CentOS workflow publishes `OmpCode-<version>-centos7-x64.zip` and its `.sha256` checksum. Copy both files to the offline machine, then extract and launch as a regular user:
 

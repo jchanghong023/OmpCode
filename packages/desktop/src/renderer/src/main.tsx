@@ -322,7 +322,9 @@ function initializeBusinessRoot(port: MessagePort): void {
   // React 错误边界捕获的异常不会冒泡到 window.onerror，RUM Browser SDK 默认收不到。
   // 必须在 createRoot 之前注入 reporter：根级 AppErrorBoundary 的职责正是兜住 Root 自身
   // 渲染崩溃，若依赖 Root 的 effect 注入，则 Root 首帧就崩时上报会丢失。
-  setReactErrorArmsReporter(null);
+  // 修复依据：评审发现注入被置空导致渲染崩溃不再进 RUM（B 行为回退）；
+  // 恢复注入 desktopPlatform——离线锁定下 RUM 未初始化（appARMSBootstrap 跳过），上报自然空转。
+  setReactErrorArmsReporter(desktopPlatform);
 
   appRoot?.render(
     <AppErrorBoundary isDesktop isMacDesktop={isMacDesktop} isWindowsDesktop={isWindowsDesktop}>

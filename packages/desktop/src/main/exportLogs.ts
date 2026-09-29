@@ -761,7 +761,10 @@ function shouldApplyLogExportRetention(archivePath: string): boolean {
   const normalizedArchivePath = normalizeArchivePath(archivePath);
   if (
     normalizedArchivePath.startsWith("logs/") ||
-    normalizedArchivePath.startsWith(".zcode/cli/log/")
+    // 修复依据：数据根已从 ~/.zcode 迁到 ~/.ompcode（FORK.md「数据、端口与更新隔离」），
+    // cli 日志收集前缀（下方 createLogArchiveArtifacts）已是 .ompcode/cli/log，
+    // 保留期谓词若仍匹配旧 .zcode 前缀，这些日志会落入“非保留期”分支被无条件全量导出。
+    normalizedArchivePath.startsWith(".ompcode/cli/log/")
   ) {
     return true;
   }
@@ -1141,10 +1144,11 @@ export async function createFeedbackLogArchiveFromExportLogs(
   return createFeedbackDiagnosticArchive({
     sources: [
       { directory: join(sourceDir, "logs"), archivePrefix: "logs" },
-      { directory: getZCodeCliLogDir(), archivePrefix: ".zcode/cli/log" },
+      // 归档内目录前缀与实际数据根保持一致（~/.ompcode），排障时标签与内容源不误导。
+      { directory: getZCodeCliLogDir(), archivePrefix: ".ompcode/cli/log" },
       {
         directory: getCuaHelperRunDir(),
-        archivePrefix: ".zcode/computer-use/run",
+        archivePrefix: ".ompcode/computer-use/run",
         exitLogsOnly: true,
       },
     ],

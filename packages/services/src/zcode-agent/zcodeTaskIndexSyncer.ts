@@ -1132,8 +1132,14 @@ export function createZCodeTaskIndexSyncer(
     for (const delta of frame.payload.deltas) {
       if (delta.op === "session.upserted") {
         const fromTaskId = state.pendingRekeyFrom;
-        state.pendingRekeyFrom = null;
+        // 修复依据：评审指出原实现先无条件清空 pendingRekeyFrom、UUID 形状判断在其后，
+        // 任何中途到达的非匹配 upserted 都会无谓丢弃 rekey 候选，temp 任务行不随迁、
+        // 被下轮快照对账整行标 deleted。改为仅在 UUID 形状匹配（成功建立 alias）时才
+        // 消费清空。发射端 sessionRegistry.upsertEngineSummary 的 removed(temp)→
+        // upserted(uuid) 为同步相邻发射（无 await 间隙），正常流中二者之间无插入；
+        // 仅剩的断线重启窗口由快照对账兜底收敛（快照帧清零是有意设计，保留）。
         if (fromTaskId && /^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(delta.session.sessionId)) {
+          state.pendingRekeyFrom = null;
           // SessionRegistry 先发临时 ID 终态，再连续发 removed/upserted UUID。
           // SQLite 是唯一产品壳状态所有者；迁移后列表只广播同一个稳定任务。
           taskIdAliases.set(aliasKey(state.target, fromTaskId), delta.session.sessionId);

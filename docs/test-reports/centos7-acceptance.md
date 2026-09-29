@@ -54,7 +54,7 @@ Windows 侧记录见 [windows-acceptance.md](windows-acceptance.md)（S1–S3 �
 
 ## B. CentOS 7 VM 包级验收（矩阵 CR01–CR18）
 
-前置：C1 金丝雀已从集成分支出包并通过一轮 VM 初验后，方调整 workflow 校验（[refactor-plan.md](../refactor-plan.md) 阶段与依赖）。
+前置：C1 金丝雀已从集成分支出包并通过一轮 VM 初验后，方调整 workflow 校验（[refactor-plan.md](refactor-plan.md) 阶段与依赖）。
 
 ### B1 安装与启动
 

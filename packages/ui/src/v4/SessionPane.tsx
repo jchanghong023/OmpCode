@@ -3031,6 +3031,9 @@ export function SessionPane({
       ).then((ack) => {
         if (ack.status !== "accepted" && ack.status !== "duplicate") {
           logger.warn(`[v4-pane] fork 被拒绝: ${ack.status} ${ack.reasonCode ?? ""}`);
+          // 修复依据：FORK.md 差异 4 要求不可用能力“不静默缺失”——omp 核心对
+          // forkAssistant 显式拒绝时必须给用户可见反馈，复用既有“暂不支持分叉”文案。
+          toast(intl.formatMessage({ id: "chat.message.fork.unsupported" }));
           return;
         }
         if (ack.result?.type === "forkAssistant") {
@@ -3039,7 +3042,7 @@ export function SessionPane({
         }
       });
     },
-    [dispatchCommand, onSessionCreated, sessionId],
+    [dispatchCommand, intl, onSessionCreated, sessionId],
   );
 
   const handleEdit = useCallback(
@@ -3071,12 +3074,15 @@ export function SessionPane({
       );
       if (ack.status !== "accepted" && ack.status !== "duplicate") {
         logger.warn(`[v4-pane] edit 被拒绝: ${ack.status} ${ack.reasonCode ?? ""}`);
+        // 修复依据：FORK.md 差异 4 要求不可用能力“不静默缺失”——omp 核心对
+        // editUserQuery 显式拒绝时编辑器保持打开且无反馈，这里补用户可见提示。
+        toast(intl.formatMessage({ id: "chat.message.edit.unsupported" }));
         return false;
       }
       // fork ACK 只做旧协议解码兼容；新 edit 永不导航 child。blocked 由行内冲突弹窗处理。
       return ack;
     },
-    [dispatchCommand, sessionId],
+    [dispatchCommand, intl, sessionId],
   );
 
   const dispatchRetryTurn = useCallback(

@@ -334,7 +334,16 @@ function buildApplicationMenuTemplate(options: {
         },
         { type: "separator" as const },
         ...(process.env.OMPCODE_CENTOS7_LOCAL_ONLY === "1"
-          ? []
+          ? [
+              {
+                // 修复依据：centos7-release.md 要求离线锁定下入口“保留并呈禁用态，
+                // 附「离线锁定中已关闭」说明”；原生菜单无 tooltip，以 label 后缀说明 +
+                // enabled:false 交付。原实现直接删除菜单项，违反入口保留约束。
+                label: getLabel(desktopMenuMessageIds.helpFeedbackOfflineLocked),
+                enabled: false,
+                click: () => void options.executeDesktopCommand(DesktopCommandIds.OpenFeedback),
+              },
+            ]
           : [
               {
                 label: getLabel(desktopMenuMessageIds.helpFeedback),

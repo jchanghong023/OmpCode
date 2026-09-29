@@ -46,7 +46,9 @@ const ACCEPTED_INPUT_PROJECTION_GRACE_MS = 2_000;
 const ACCEPTED_INPUT_COMMAND_TYPES = new Set(["sendText"]);
 
 /** 退避耗尽时展示给用户的 lastError（无底层 error 对象可引用的换代路径）。 */
-const RUNTIME_RECYCLED_ERROR = "ZCode agent runtime 已被回收，重连未成功";
+// 品牌修复依据：FORK.md「产品身份」要求用户可见文案统一为 OmpCode；
+// 此处是展示文案，不参与任何字符串匹配（匹配上游错误原文的逻辑在下方独立常量，不受影响）。
+const RUNTIME_RECYCLED_ERROR = "OmpCode agent runtime 已被回收，重连未成功";
 
 function monotonicNow(): number {
   return typeof performance !== "undefined" ? performance.now() : Date.now();
