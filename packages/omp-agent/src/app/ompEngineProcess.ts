@@ -55,7 +55,14 @@ export async function refreshEngineModelAfterChange(
   const nextModel = state.model?.id ?? previous.model;
   applyState(state);
   if (previous.provider !== nextProvider || previous.model !== nextModel) {
-    projection.addTimelineMarker({ type: "modelChange", fromProvider: previous.provider, fromModel: previous.model, toProvider: nextProvider, toModel: nextModel, toThought: state.thinkingLevel ?? "" });
+    projection.addTimelineMarker({
+      type: "modelChange",
+      fromProvider: previous.provider,
+      fromModel: previous.model,
+      toProvider: nextProvider,
+      toModel: nextModel,
+      toThought: state.thinkingLevel ?? "",
+    });
   }
   scheduleFlush();
 }

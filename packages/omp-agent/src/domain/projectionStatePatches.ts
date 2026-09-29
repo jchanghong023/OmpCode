@@ -1,7 +1,11 @@
 // A 区状态的纯 patch 构造器（键级整体替换）。从 conversationProjection 拆出
 // （架构 maxFileLines=400）；输入旧状态，输出新键值，不改状态机本身。
 
-import type { PendingInteraction, SessionConfigState, StatePatch } from "@zcode/shared/zcode-protocol-v4";
+import type {
+  PendingInteraction,
+  SessionConfigState,
+  StatePatch,
+} from "@zcode/shared/zcode-protocol-v4";
 import type { ProjectionAState, TurnOutcome } from "./projectionTypes.js";
 import type { OmpContextReport } from "./ompContextReport.js";
 

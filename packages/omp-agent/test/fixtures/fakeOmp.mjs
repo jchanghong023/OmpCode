@@ -1,7 +1,9 @@
 // fake omp：讲 omp RPC-UI 的最小假核心，供适配器集成测试使用。
 // 行为脚本：prompt → 流式文本 → write 工具（先 select 审批）→ 完成收口。
+// v3 fork surface 行为（结构化审批/富 ask/fork 查询）在 fakeOmpV3.mjs。
 
 import { createInterface } from "node:readline";
+import { createV3Surface, PROMPT_SCENARIOS } from "./fakeOmpV3.mjs";
 
 if (process.argv.slice(2).join(" ") !== "--mode rpc-ui") {
   throw new Error(`fake omp requires --mode rpc-ui, got: ${process.argv.slice(2).join(" ")}`);
@@ -13,7 +15,25 @@ const nextId = () => `fake-${++counter}`;
 let sessionFile = null;
 const deniedTools = new Set();
 
-out({ type: "ready", protocolVersion: 1, supportedProtocolVersions: [1, 2], maxFrameBytes: 1048576, maxReassembledFrameBytes: 67108864 });
+// v3 fork surface 模式（rpc-ui-protocol 4.0）：ready 公告 [1,2,3]，协商成功后审批走
+// permission_request、ask 走 ask_request、fork 查询命令可用；未协商时镜像真实 omp 的
+// Unknown command 拒绝与 legacy extension_ui select 降级。
+const v3Announced = process.env.FAKE_OMP_PROTOCOL_V3 === "1";
+const v3 = createV3Surface({ out, nextId });
+
+out({ type: "ready", protocolVersion: 1, supportedProtocolVersions: v3Announced ? v3.announce() : [1, 2], maxFrameBytes: 1048576, maxReassembledFrameBytes: 67108864 });
+
+/** 文本轮：流式 delta（message_update）→ message_end 收口（投影器文本只来自 delta）。 */
+function emitTextTurn(text) {
+  out({ type: "message_start", message: { role: "assistant", content: [] } });
+  out({
+    type: "message_update",
+    message: { role: "assistant", content: [] },
+    assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: text, partial: { role: "assistant", content: [] } },
+  });
+  out({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text }] } });
+  out({ type: "agent_end", messages: [], isTerminal: true });
+}
 
 function respond(id, command, success, data) {
   out({ ...(id ? { id } : {}), type: "response", command, success, ...(data !== undefined ? { data } : {}) });
@@ -31,6 +51,8 @@ let subagentSubscription = "off";
 let subagents = [];
 
 function runLocalCommand(message) {
+  const report = v3.localReport(message);
+  if (report) return report;
   if (message === "/model-report") {
     out({ type: "command_output", text: `set_model calls: ${setModelCalls}` });
     return { agentInvoked: false };
@@ -63,6 +85,29 @@ function runLocalCommand(message) {
 
 async function runPromptTurn(message, promptId) {
   out({ type: "agent_start" });
+  if (message === "ASK_ME") {
+    if (v3.isV3()) {
+      await v3.runAskTurn(emitTextTurn);
+      return;
+    }
+    // 未协商 v3：ask 降级路径（4.0/4.3）——真实 omp 走逐题 select，这里以文本收口即可。
+    emitTextTurn("legacy ask degraded");
+    return;
+  }
+  if (message === "SECRET_INPUT") {
+    if (v3.isV3()) {
+      const token = await new Promise((resolve) => {
+        const id = nextId();
+        pendingUi.set(id, (cmd) => resolve(cmd.value));
+        out({ type: "extension_ui_request", id, method: "input", title: "Login", message: "Enter access token", sensitive: true });
+      });
+      emitTextTurn(`token received: ${token}`);
+      return;
+    }
+    // v1/v2 不携带 sensitive（4.3：login secret 输入 v3 解禁）；回落普通文本轮。
+    emitTextTurn("legacy secret rejected");
+    return;
+  }
   if (message === "CUSTOM_TERMINAL_MESSAGE") {
     out({ type: "message_start", message: { role: "assistant", content: [] } });
     out({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "Skill completed" }] } });
@@ -132,6 +177,7 @@ async function runPromptTurn(message, promptId) {
     out({ type: "agent_end", messages: [], isTerminal: true });
     return;
   }
+  const scenario = PROMPT_SCENARIOS[message] ?? PROMPT_SCENARIOS.default;
   out({ type: "message_start", message: { role: "assistant", content: [] } });
   for (const delta of ["Hello", " wor", "ld!"]) {
     out({ type: "message_update", message: { role: "assistant", content: [] }, assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta, partial: { role: "assistant", content: [] } } });
@@ -140,27 +186,34 @@ async function runPromptTurn(message, promptId) {
   if (!sessionFile) {
     sessionFile = `${process.cwd()}/.fake-omp-sessions/session-1.jsonl`;
   }
-  out({ type: "tool_execution_start", toolCallId, toolName: "write", args: { path: "greeting.txt", content: "line1\nline2\n" } });
-  const approved = await requestApproval(toolCallId);
+  out({ type: "tool_execution_start", toolCallId, toolName: scenario.toolName, args: scenario.args });
+  const approved = await requestApproval(toolCallId, scenario);
   if (approved) {
-    out({ type: "tool_execution_end", toolCallId, toolName: "write", result: { content: [{ type: "text", text: "wrote 2 lines" }] }, isError: false });
+    out({ type: "tool_execution_end", toolCallId, toolName: scenario.toolName, result: { content: [{ type: "text", text: "wrote 2 lines" }] }, isError: false });
     out({
       type: "message_update",
       message: { role: "assistant", content: [] },
       assistantMessageEvent: { type: "text_delta", contentIndex: 1, delta: " Done.", partial: { role: "assistant", content: [] } },
     });
   } else {
-    out({ type: "tool_execution_end", toolCallId, toolName: "write", result: { content: [{ type: "text", text: "denied by user" }] }, isError: true });
+    out({ type: "tool_execution_end", toolCallId, toolName: scenario.toolName, result: { content: [{ type: "text", text: "denied by user" }] }, isError: true });
     deniedTools.add(toolCallId);
   }
   out({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "Hello world! Done." }], usage: { input: 120, output: 30 } } });
   out({ type: "agent_end", messages: [], isTerminal: true });
 }
 
-function requestApproval(toolCallId) {
+function requestApproval(toolCallId, scenario) {
+  if (v3.isV3()) {
+    return v3.requestApproval(toolCallId, scenario);
+  }
+  return requestLegacyApproval(toolCallId);
+}
+
+function requestLegacyApproval(toolCallId) {
   return new Promise((resolve) => {
     const id = nextId();
-    pendingUi.set(id, resolve);
+    pendingUi.set(id, (cmd) => resolve(cmd.value === "Approve"));
     out({ type: "extension_ui_request", id, method: "select", title: "Tool approval", message: `Approve write to greeting.txt? (toolCallId=${toolCallId})`, options: ["Approve", "Deny"] });
   });
 }
@@ -179,12 +232,16 @@ readline.on("line", (line) => {
     const resolve = pendingUi.get(command.id);
     if (resolve) {
       pendingUi.delete(command.id);
-      resolve(command.value === "Approve");
+      resolve(command);
     }
+    return;
+  }
+  if (v3.handleBypassFrame(command)) {
     return;
   }
   switch (command.type) {
     case "negotiate_protocol":
+      v3.setNegotiatedVersion(command.protocolVersion);
       respond(command.id, "negotiate_protocol", true, { protocolVersion: command.protocolVersion });
       return;
     case "get_state":
@@ -348,6 +405,14 @@ readline.on("line", (line) => {
       return;
     case "set_session_name":
       respond(command.id, "set_session_name", true, {});
+      return;
+    case "test_model":
+    case "list_mcp_servers":
+      if (v3.isV3()) {
+        v3.forkCommand(command);
+      } else {
+        v3.rejectForkCommand(command);
+      }
       return;
     default:
       respond(command.id, command.type ?? "unknown", false, { error: `unsupported: ${command.type}` });

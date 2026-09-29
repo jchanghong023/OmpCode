@@ -148,7 +148,8 @@ test("omp exit cancels a pending UI question", async () => {
     });
     await Promise.resolve();
     exit?.(1);
-    await Promise.resolve();
+    // 交互代理的取消经 awaitAnswer 的 then 链回执，需等满微任务链。
+    await new Promise((resolve) => setImmediate(resolve));
     assert.deepEqual(response, { type: "extension_ui_response", id: "ask", cancelled: true });
   } finally {
     await engine.dispose();

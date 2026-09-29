@@ -10,7 +10,14 @@
 
 import type { PendingInteraction } from "@zcode/shared/zcode-protocol-v4";
 import { createInteractionId } from "../domain/ids.js";
-import type { HostGateway, HostUserInputAnswer, HostUserInputQuestion, OmpAskRequest, OmpPermissionRequest, OmpUiRequest } from "./ports.js";
+import type {
+  HostGateway,
+  HostUserInputAnswer,
+  HostUserInputQuestion,
+  OmpAskRequest,
+  OmpPermissionRequest,
+  OmpUiRequest,
+} from "./ports.js";
 import {
   askDeadlineOf,
   askResponseOf,
@@ -118,7 +125,8 @@ export class OmpInteractionProxy {
     const options = permissionOptionsOf(frame);
     const origin = ompOriginToZcode(frame.origin, this.deps.sessionId);
     // 审批门 reason 缺席时用 omp 预览行兜底，保证卡片始终有可读摘要。
-    const summary = frame.reason?.trim() || frame.details[0] || `${frame.toolName} requests approval`;
+    const summary =
+      frame.reason?.trim() || frame.details[0] || `${frame.toolName} requests approval`;
     const pending: PendingInteraction = {
       interactionId,
       kind: "permission",
@@ -363,4 +371,3 @@ function toOmpUiResponse(request: OmpUiRequest, answer: HostUserInputAnswer) {
     value: answer.action === "accept" ? (answer.freeText ?? "") : "",
   };
 }
-

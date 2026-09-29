@@ -337,20 +337,20 @@ function interactionAnswerOf(
   if (answer.action === "decline" || answer.action === "cancel") {
     return { action: answer.action };
   }
-  if (answer.action === "accept") {
-    // content 无损携带富问答的多题 answers/annotations（AskUserQuestion 回执收敛路径）。
+  // accept 分支与「缺 action 兼容路径」都必须无损携带全部字段：UI 权限卡拒绝+理由
+  // 提交 {optionId, freeText}（无 action），富问答提交 {action, content}，二者缺一不可。
+  if (
+    answer.action === "accept" ||
+    answer.optionId !== undefined ||
+    answer.freeText !== undefined ||
+    answer.content !== undefined
+  ) {
     return {
       action: "accept",
       optionId: answer.optionId,
       freeText: answer.freeText,
       ...(answer.content ? { content: answer.content } : {}),
     };
-  }
-  if (answer.optionId !== undefined) {
-    return { action: "accept", optionId: answer.optionId };
-  }
-  if (answer.freeText !== undefined) {
-    return { action: "accept", freeText: answer.freeText };
   }
   return { action: "cancel" };
 }

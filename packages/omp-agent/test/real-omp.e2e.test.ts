@@ -218,12 +218,16 @@ test(
         clientMode: "desktop-continuous",
       });
 
-      // --approval-mode write：模型调用 write 工具时触发 omp 审批 select → 适配器转
-      // interaction/requestUserInput。免费模型是否调用工具不受控：先到者为准（交互或轮完成）。
+      // --approval-mode write：模型调用 write 工具时触发 omp 审批。v3 二进制走
+      // permission_request → interaction/requestPermission；旧二进制走 select →
+      // interaction/requestUserInput。免费模型是否调用工具不受控：先到者为准。
       const firstSignal = (await harness.waitUntil(() => {
-        const hasInteraction = harness.frames.some(
-          (frame) => (frame as { method?: string }).method === "interaction/requestUserInput",
-        );
+        const hasInteraction = harness.frames.some((frame) => {
+          const method = (frame as { method?: string }).method;
+          return (
+            method === "interaction/requestUserInput" || method === "interaction/requestPermission"
+          );
+        });
         const turnDone = [...harness.rows().values()].some(
           (row) =>
             row.kind === "turnHeader" &&
@@ -233,9 +237,36 @@ test(
         );
         return hasInteraction || turnDone;
       })) as unknown;
+      const permissionRequest = harness.frames.find(
+        (frame) => (frame as { method?: string }).method === "interaction/requestPermission",
+      ) as { id: string; params: { toolName: string; options: unknown[] } } | undefined;
       const interaction = harness.frames.find(
         (frame) => (frame as { method?: string }).method === "interaction/requestUserInput",
       ) as { id: string; params: { requestId: string; prompt: string } } | undefined;
+      if (permissionRequest) {
+        // v3 结构化审批：六档选项映射 + allow 应答放行。
+        assert.equal(permissionRequest.params.toolName, "write");
+        const optionIds = (permissionRequest.params.options as { optionId: string }[]).map(
+          (option) => option.optionId,
+        );
+        assert.deepEqual(optionIds, [
+          "allowOnce",
+          "allowSession",
+          "allowAlways",
+          "deny",
+          "denyAlways",
+        ]);
+        const permissionCard = harness.state().pendingInteractions as
+          | Array<{ kind: string; payload: { toolName?: string; options?: unknown[] } }>
+          | undefined;
+        const card = permissionCard?.find((item) => item.kind === "permission");
+        assert.ok(card, "v3 审批须投影为 permission 卡");
+        assert.deepEqual(
+          (card!.payload.options as { optionId: string }[]).map((option) => option.optionId),
+          optionIds,
+        );
+        harness.respond(permissionRequest.id, { decision: "allow", reason: "Approved for e2e" });
+      }
       if (interaction) {
         assert.match(
           interaction.params.prompt,
@@ -270,7 +301,7 @@ test(
         .reduce((total, row) => total + String(row.text ?? "").length, 0);
       assert.ok(headerRow, `缺少 turnHeader 行\n${stderrTail}`);
       assert.ok(textLength > 0, `缺少 assistantText 流式输出\n${stderrTail}`);
-      if (interaction) {
+      if (interaction || permissionRequest) {
         assert.ok(toolRow, `出现审批但缺少 write 工具行\n${stderrTail}`);
       }
       if (toolRow && toolRow.status === "success" && existsSync(targetFile)) {
@@ -425,6 +456,99 @@ test(
         [...harness.rows().values()].some(
           (row) => row.kind === "assistantText" && /Model set to/.test(String(row.text ?? "")),
         ),
+      );
+    } finally {
+      child.kill();
+      await new Promise((done) => setTimeout(done, 300));
+    }
+  },
+);
+
+test(
+  `真实 omp v3 fork surface：协议协商生效（test_model 实测 + mcp/list 状态）`,
+  {
+    skip: hasRealBinary ? false : "内嵌 omp 二进制未下载（跳过真实 E2E）",
+  },
+  async (t) => {
+    const sandbox = mkdtempSync(join(tmpdir(), "zcode-real-e2e-v3-"));
+    const child = spawn(process.execPath, [tsxCliPath, adapterEntry, "app-server", "--stdio"], {
+      cwd: sandbox,
+      env: {
+        ...process.env,
+        ZCODE_WORKSPACE_IDENTITY: "real-e2e-workspace-3",
+        OMP_RPC_BINARY_PATH: ompBinary,
+        OMP_RPC_ARGS_JSON: JSON.stringify(ompModelArgs),
+      },
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    let stderrTail = "";
+    child.stderr.on("data", (chunk: Buffer) => {
+      stderrTail = `${stderrTail}${chunk.toString("utf8")}`.slice(-8000);
+    });
+    const harness = new Harness(child);
+    try {
+      await harness.waitUntil(() =>
+        harness.frames.find(
+          (frame) =>
+            (frame as { method?: string }).method === "startup/storageState" &&
+            (frame as { params?: { phase?: string } }).params?.phase === "ready",
+        ),
+      );
+      const workspace = {
+        workspacePath: sandbox,
+        workspaceIdentity: "real-e2e-workspace-3",
+        workspaceKey: "real-e2e-workspace-3",
+      };
+
+      // 1. v3 协商生效的判据：test_model 不再按 -32601 拒绝（未协商二进制的既有行为），
+      //    而是返回实测结果。实测消耗一次最小模型请求；失败时六类归因必须之一。
+      const testResponse = (await harness.request("provider/testModelConnectivity", {
+        workspace,
+        selection: { providerId: modelProvider, modelId },
+      })) as {
+        result?: { success: boolean };
+        error?: { code: number; message: string };
+      };
+      if (testResponse.error?.code === -32601) {
+        // 二进制早于 rpc-ui v3（协商回落 v2，fork 命令被拒绝）：显式跳过而非失败，
+        // v3 验收以发布版 v18.4.3+fork.270 及之后的二进制为准。
+        t.skip("内嵌 omp 二进制不支持 v3 fork surface（跳过 v3 验收）");
+        return;
+      }
+      if (testResponse.result?.success === true) {
+        console.log("[real-e2e] test_model 实测通过");
+      } else {
+        const message = testResponse.error?.message ?? "";
+        const categories = [
+          "auth_failed",
+          "model_not_found",
+          "rate_limited",
+          "network",
+          "server",
+          "endpoint_not_configured",
+        ];
+        assert.ok(
+          categories.some((category) => message.includes(category)),
+          `test_model 失败信息缺少六类归因: ${message}
+${stderrTail}`,
+        );
+        console.log("[real-e2e] test_model 失败归因:", message.slice(0, 160));
+      }
+
+      // 2. mcp/list 映射 omp list_mcp_servers：状态快照为合法对象（无服务器时为空表）。
+      const mcpResponse = (await harness.request("mcp/list", { workspace })) as {
+        result?: { statuses: Record<string, unknown> };
+        error?: { code: number; message: string };
+      };
+      assert.ok(
+        mcpResponse.result,
+        `mcp/list 失败: ${JSON.stringify(mcpResponse.error)}
+${stderrTail}`,
+      );
+      assert.equal(typeof mcpResponse.result!.statuses, "object");
+      console.log(
+        "[real-e2e] mcp/list 状态服务器数:",
+        Object.keys(mcpResponse.result!.statuses).length,
       );
     } finally {
       child.kill();

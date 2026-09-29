@@ -67,8 +67,7 @@ export class ConversationEngine {
       addPendingInteraction: (interaction) => this.projection.addPendingInteraction(interaction),
       resolvePendingInteraction: (interactionId) => this.projection.resolvePendingInteraction(interactionId),
       scheduleFlush: () => this.scheduleFlush(),
-      // 权限卡锚定到 omp 工具行（tool_execution_start 已建行时）。
-      anchorRowIdOf: (toolCallId) => this.projection.rowIdOfToolCall(toolCallId),
+      anchorRowIdOf: (toolCallId) => this.projection.rowIdOfToolCall(toolCallId), // 权限卡锚定到 omp 工具行（已建行时）。
     });
     this.publisher = new ConversationTopicPublisher(init.sessionId, this.projection, init.gateway);
     this.titleInitialized = Boolean(init.initialTitle);
@@ -80,8 +79,7 @@ export class ConversationEngine {
     return this.ompProcess?.ompSessionFile ?? this.resumeSessionPath ?? null;
   }
   async ensureOmpStarted(): Promise<void> {
-    // 订阅冷会话会后台启动 omp；此时进程对象已创建但 ready/get_state 还未完成。
-    // 后续发送必须等待同一启动 promise，不能把对象存在误当成进程就绪。
+    // 订阅冷会话会后台启动 omp（进程对象已创建但未 ready）；必须等待同一启动 promise。
     if (this.ompStarting) {
       await this.ompStarting;
       return;
@@ -183,7 +181,12 @@ export class ConversationEngine {
     // 真实 omp 的 model_changed 不带载荷（#emit({type}) 无字段）：回读 get_state 再落
     // 配置与 modelChange 标记，避免 UI 出现空 provider/model 的占位标记。
     if (event.type === "model_changed" && !event.model) {
-      void refreshEngineModelAfterChange(this.ompProcess, this.projection, (state) => this.applyOmpState(state), () => this.scheduleFlush());
+      void refreshEngineModelAfterChange(
+        this.ompProcess,
+        this.projection,
+        (state) => this.applyOmpState(state),
+        () => this.scheduleFlush(),
+      );
       return;
     }
     this.projector.handleEvent(event);
@@ -195,11 +198,19 @@ export class ConversationEngine {
     }
     this.scheduleFlush();
     if (event.type === "agent_end" && event.isTerminal !== false) {
-      void refreshEngineStateAfterActivity(this.ompProcess, (process) => this.ompProcess === process, (state) => this.applyOmpState(state));
+      void refreshEngineStateAfterActivity(
+        this.ompProcess,
+        (process) => this.ompProcess === process,
+        (state) => this.applyOmpState(state),
+      );
     }
   }
   private async refreshStateAfterActivity(): Promise<void> {
-    await refreshEngineStateAfterActivity(this.ompProcess, (process) => this.ompProcess === process, (state) => this.applyOmpState(state));
+    await refreshEngineStateAfterActivity(
+      this.ompProcess,
+      (process) => this.ompProcess === process,
+      (state) => this.applyOmpState(state),
+    );
   }
   /** v4 resolveInteraction 命令入口：把 UI 应答汇入等待中的交互。 */
   settleInteraction(interactionId: string, answer: HostUserInputAnswer): boolean {

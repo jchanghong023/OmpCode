@@ -162,6 +162,12 @@ export interface HostGateway {
     riskLevel: "low" | "medium" | "high" | "critical";
     input: unknown;
     origin?: unknown;
-    options: { optionId: string; kind: string; name: string; description?: string; response: unknown }[];
+    options: {
+      optionId: string;
+      kind: string;
+      name: string;
+      description?: string;
+      response: unknown;
+    }[];
   }): Promise<HostPermissionAnswer>;
 }

@@ -343,7 +343,9 @@ function userInputAnswerOf(result: unknown): HostUserInputAnswer {
   const record = result as { action?: unknown; content?: unknown };
   if (record.action === "accept" || record.action === "decline" || record.action === "cancel") {
     const content =
-      typeof record.content === "object" && record.content !== null && !Array.isArray(record.content)
+      typeof record.content === "object" &&
+      record.content !== null &&
+      !Array.isArray(record.content)
         ? (record.content as Record<string, unknown>)
         : undefined;
     const optionId = typeof content?.optionId === "string" ? content.optionId : undefined;

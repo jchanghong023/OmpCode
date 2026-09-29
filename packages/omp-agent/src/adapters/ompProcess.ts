@@ -23,15 +23,7 @@ import { encodeJsonlLine } from "../domain/jsonlFraming.js";
 import { awaitOmpReady } from "./ompReady.js";
 import { dispatchOmpUiFrame } from "./ompUiFrames.js";
 import { parseJson } from "./jsonl.js";
-import type {
-  OmpCommandOutcome,
-  OmpProcessFactory,
-  OmpSessionProcess,
-  OmpStateData,
-  OmpAskRequest,
-  OmpPermissionRequest,
-  OmpUiRequest,
-} from "../app/ports.js";
+import type { OmpCommandOutcome, OmpProcessFactory, OmpSessionProcess, OmpStateData, OmpAskRequest, OmpPermissionRequest, OmpUiRequest } from "../app/ports.js";
 import type { OmpSideChannelHandlers } from "../app/ports.js";
 import { logger } from "./logger.js";
 import { PromptResultTracker } from "../domain/promptResultTracker.js";
@@ -221,12 +213,7 @@ class OmpChildProcess implements OmpSessionProcess {
       case "extension_ui_request":
       case "permission_request":
       case "ask_request":
-        dispatchOmpUiFrame(record, {
-          onUiRequest: this.options.onUiRequest,
-          onPermissionRequest: this.options.onPermissionRequest,
-          onAskRequest: this.options.onAskRequest,
-          respond: (response) => this.respondUi(response),
-        });
+        dispatchOmpUiFrame(record, { onUiRequest: this.options.onUiRequest, onPermissionRequest: this.options.onPermissionRequest, onAskRequest: this.options.onAskRequest, respond: (response) => this.respondUi(response) });
         return;
       default: {
         const parsed = ompSessionEventFrameSchema.safeParse(record);
@@ -373,4 +360,3 @@ class OmpChildProcess implements OmpSessionProcess {
     });
   }
 }
-

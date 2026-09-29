@@ -21,11 +21,18 @@ export interface PermissionOptionProjection {
 }
 
 /** omp 六档审批选项 → ZCode 权限卡选项（optionId 是应答回传键；kind 决定 UI 排序与样式）。 */
-export function permissionOptionsOf(frame: OmpPermissionRequestFrame): PermissionOptionProjection[] {
+export function permissionOptionsOf(
+  frame: OmpPermissionRequestFrame,
+): PermissionOptionProjection[] {
   return [
     { optionId: "allowOnce", label: "Allow once", kind: "allowOnce", omp: "allow_once" },
     // 「Always allow in this session」命中 UI 全局名称表，按会话免确认渲染。
-    { optionId: "allowSession", label: "Always allow in this session", kind: "allowAlways", omp: "allow_session" },
+    {
+      optionId: "allowSession",
+      label: "Always allow in this session",
+      kind: "allowAlways",
+      omp: "allow_session",
+    },
     { optionId: "allowAlways", label: "Always allow", kind: "allowAlways", omp: "allow_always" },
     // 前缀档仅 bash 且服务端给出 prefixSuggestion 时投放。
     ...(frame.prefixSuggestion
@@ -43,9 +50,10 @@ export function permissionOptionsOf(frame: OmpPermissionRequestFrame): Permissio
   ];
 }
 
-export function permissionOptionsResponseOf(
-  option: PermissionOptionProjection,
-): { decision: "allow" | "deny"; reason: string } {
+export function permissionOptionsResponseOf(option: PermissionOptionProjection): {
+  decision: "allow" | "deny";
+  reason: string;
+} {
   return option.omp.startsWith("allow")
     ? { decision: "allow", reason: option.label }
     : { decision: "deny", reason: "Denied by user" };
@@ -157,14 +165,19 @@ export function askResponseOf(
   };
 }
 
-function askAnswersOf(frame: OmpAskRequestFrame, answer: HostUserInputAnswer): OmpAskAnswer[] | null {
+function askAnswersOf(
+  frame: OmpAskRequestFrame,
+  answer: HostUserInputAnswer,
+): OmpAskAnswer[] | null {
   if (answer.action !== "accept") {
     return null;
   }
   const content = answer.content;
   if (content && typeof content === "object") {
     const rawAnswers =
-      typeof content.answers === "object" && content.answers !== null && !Array.isArray(content.answers)
+      typeof content.answers === "object" &&
+      content.answers !== null &&
+      !Array.isArray(content.answers)
         ? (content.answers as Record<string, unknown>)
         : {};
     // UI 同时提交 answers（按题文本连接）与 answer_N（数组保真）；优先 answer_N。
@@ -197,7 +210,10 @@ function askAnswersOf(frame: OmpAskRequestFrame, answer: HostUserInputAnswer): O
   return null;
 }
 
-function parseAskAnswerValue(raw: unknown, labels: string[]): { selected: string[]; other?: string } {
+function parseAskAnswerValue(
+  raw: unknown,
+  labels: string[],
+): { selected: string[]; other?: string } {
   const values = Array.isArray(raw)
     ? raw.filter((value): value is string => typeof value === "string")
     : typeof raw === "string"

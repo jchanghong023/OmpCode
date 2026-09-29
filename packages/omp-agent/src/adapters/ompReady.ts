@@ -12,7 +12,10 @@ const READY_TIMEOUT_MS = 60_000;
 
 export interface OmpNegotiationHooks {
   /** 发送命令（带请求关联与超时）。 */
-  request: (command: { type: "negotiate_protocol"; protocolVersion: number }) => Promise<OmpCommandOutcome>;
+  request: (command: {
+    type: "negotiate_protocol";
+    protocolVersion: number;
+  }) => Promise<OmpCommandOutcome>;
   /** v3 协商成功回调（fork surface 激活）。 */
   onForkSurface: () => void;
 }
@@ -21,7 +24,10 @@ export interface OmpNegotiationHooks {
  * 等待 omp ready 帧并触发协议协商。resolve 于 ready 到达；协商 fire-and-forget——
  * omp 侧对 fork 命令/帧按协商结果门控，本函数只记录能力事实，不阻塞启动。
  */
-export function awaitOmpReady(child: ChildProcessWithoutNullStreams, hooks: OmpNegotiationHooks): Promise<void> {
+export function awaitOmpReady(
+  child: ChildProcessWithoutNullStreams,
+  hooks: OmpNegotiationHooks,
+): Promise<void> {
   return new Promise<void>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error("omp core ready timeout")), READY_TIMEOUT_MS);
     const onLine = (line: string) => {
@@ -71,7 +77,10 @@ export function awaitOmpReady(child: ChildProcessWithoutNullStreams, hooks: OmpN
 }
 
 /** v2 分片协商（v3 不可用或协商失败时的回落路径）。 */
-async function negotiateV2(hooks: OmpNegotiationHooks, versions: number[] | undefined): Promise<void> {
+async function negotiateV2(
+  hooks: OmpNegotiationHooks,
+  versions: number[] | undefined,
+): Promise<void> {
   if (!versions?.includes(2)) {
     return;
   }

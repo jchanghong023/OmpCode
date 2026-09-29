@@ -228,7 +228,10 @@ export function createLegacyHandlers(context: LegacyMethodContext) {
       const result = await context.testModelConnectivity?.(provider, modelId);
       if (!result) {
         // 未接目录进程或 omp 未协商 v3：与既有已知差异一致，按能力缺失拒绝。
-        throw new ProtocolError(-32601, "method not supported by omp core: provider/testModelConnectivity");
+        throw new ProtocolError(
+          -32601,
+          "method not supported by omp core: provider/testModelConnectivity",
+        );
       }
       if (!result.ok) {
         // 六类失败归因（rpc-ui-protocol 5.6 A）随错误信息透出，供设置页呈现原因。
