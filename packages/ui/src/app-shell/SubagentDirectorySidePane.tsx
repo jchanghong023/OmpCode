@@ -70,7 +70,10 @@ const DirectoryRow = memo(function DirectoryRow({
 }) {
   const { intl } = useZCodeIntl();
   const timestamp = "endedAt" in item ? item.endedAt : item.startedAt;
-  const hasChildSession = !item.childSessionId.startsWith("omp-subagent:");
+  // Fork（omp-project-mode.md）：omp 子代理详情以合成地址 `omp-subagent:<id>@<parent>`
+  // 下钻（含父会话归属的可订阅视图）；旧格式（无 @parent，旧拓扑）仍禁用。
+  const hasChildSession =
+    !item.childSessionId.startsWith("omp-subagent:") || item.childSessionId.includes("@");
   return (
     <button
       type="button"

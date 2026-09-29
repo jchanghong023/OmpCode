@@ -208,6 +208,21 @@ const ompZhCNOverrides: Record<string, string> = {
     "检测到电脑控制工具，但它们并非来自已校验的 OmpCode 官方插件。请检查插件安装后重新验证。",
   "cuaPermission.ready.sessionValidationHint":
     "首个会话启动时，OmpCode 会针对该会话精确验证电脑控制工具。",
+  "ompSubagentControl.send": "发送",
+  "ompSubagentControl.stop": "停止",
+  "ompSubagentControl.sendPlaceholder": "向该子代理发送消息…",
+  "ompSubagentControl.status": "操作结果",
+  "ompSubagentControl.failed": "操作失败",
+  "ompModelRoles.dialogTitle": "OMP 模型角色",
+  "ompModelRoles.fromAgent": "来自 OMP 运行时的完整角色目录（含未配置项）；选择后自动保存。",
+  "ompModelRoles.saveFailed": "保存失败",
+  "ompModelRoles.saving": "保存中…",
+  "ompModelRoles.saved": "已保存",
+  "ompModelRoles.notConfigured": "未配置",
+  "ompModelRoles.overridden": "用户配置已保存，但当前被其他来源覆盖",
+  "ompModelRoles.unresolved": "未解析",
+  "ompModelRoles.loadFailedRpc": "读取 OMP 角色目录失败",
+  "ompModelRoles.autoOption": "自动",
 };
 
 export default ompZhCNOverrides;

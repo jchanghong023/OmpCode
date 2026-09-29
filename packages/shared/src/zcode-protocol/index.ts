@@ -2688,6 +2688,152 @@ export type ZCodeSkillsReferenceCatalogResult = z.infer<
   typeof zcodeSkillsReferenceCatalogResultSchema
 >;
 
+// ── Fork：OMP 项目模式能力入口（docs/requirements/omp-project-mode.md）──
+// 命令补全（complete_command）、模型角色目录/保存（get_model_roles/set_model_role）
+// 与子代理控制（control_subagent）。omp 未提供项目模式时按能力缺失显式报错。
+
+export const zcodeOmpCommandCompletionItemSchema = z
+  .object({
+    label: nonEmptyString,
+    insertText: nonEmptyString,
+    // UTF-16 替换区间（左闭右开）；越界由调用方丢弃。
+    replaceStart: z.number().int().nonnegative(),
+    replaceEnd: z.number().int().nonnegative(),
+    kind: z.string().optional(),
+    description: z.string().optional(),
+    hint: z.string().optional(),
+  })
+  .strict();
+export type ZCodeOmpCommandCompletionItem = z.infer<typeof zcodeOmpCommandCompletionItemSchema>;
+
+export const zcodeOmpCompleteCommandParamsSchema = z
+  .object({
+    workspace: zcodeWorkspaceRefSchema,
+    text: z.string(),
+    cursor: z.number().int().nonnegative(),
+    sessionId: nonEmptyString.optional(),
+  })
+  .strict();
+export type ZCodeOmpCompleteCommandParams = z.infer<typeof zcodeOmpCompleteCommandParamsSchema>;
+export const zcodeOmpCompleteCommandResultSchema = z
+  .object({
+    items: z.array(zcodeOmpCommandCompletionItemSchema),
+    revision: z.string().optional(),
+  })
+  .strict();
+export type ZCodeOmpCompleteCommandResult = z.infer<typeof zcodeOmpCompleteCommandResultSchema>;
+
+export const zcodeOmpModelRoleSchema = z
+  .object({
+    roleId: nonEmptyString,
+    name: z.string().optional(),
+    description: z.string().optional(),
+    configurable: z.boolean().optional(),
+    nonConfigurableReason: z.string().optional(),
+    explicitValue: z.string().optional(),
+    effectiveModel: z
+      .object({
+        provider: z.string().optional(),
+        modelId: z.string().optional(),
+        thinkingLevel: z.string().optional(),
+      })
+      .strict()
+      .optional(),
+    unresolvedReason: z.string().optional(),
+    source: z.string().optional(),
+    writableScopes: z.array(z.string()).optional(),
+    hidden: z.boolean().optional(),
+    section: z.string().optional(),
+    revision: z.string().optional(),
+  })
+  .strict();
+export type ZCodeOmpModelRole = z.infer<typeof zcodeOmpModelRoleSchema>;
+
+export const zcodeOmpModelRolesParamsSchema = z
+  .object({
+    workspace: zcodeWorkspaceRefSchema,
+    sessionId: nonEmptyString.optional(),
+  })
+  .strict();
+export type ZCodeOmpModelRolesParams = z.infer<typeof zcodeOmpModelRolesParamsSchema>;
+export const zcodeOmpModelRolesResultSchema = z
+  .object({
+    roles: z.array(zcodeOmpModelRoleSchema),
+    revision: z.string().optional(),
+    sessionModel: z
+      .object({
+        sessionId: z.string(),
+        sessionGeneration: z.string().optional(),
+        model: z
+          .object({ provider: z.string().optional(), modelId: z.string().optional() })
+          .strict()
+          .optional(),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict();
+export type ZCodeOmpModelRolesResult = z.infer<typeof zcodeOmpModelRolesResultSchema>;
+
+export const zcodeOmpModelRoleSelectionSchema = z.union([
+  z
+    .object({
+      kind: z.literal("model"),
+      model: z
+        .object({
+          provider: nonEmptyString,
+          modelId: nonEmptyString,
+          thinkingLevel: z.string().optional(),
+        })
+        .strict(),
+    })
+    .strict(),
+  z.object({ kind: z.literal("auto") }).strict(),
+  z.null(),
+]);
+export type ZCodeOmpModelRoleSelection = z.infer<typeof zcodeOmpModelRoleSelectionSchema>;
+
+export const zcodeOmpSetModelRoleParamsSchema = z
+  .object({
+    workspace: zcodeWorkspaceRefSchema,
+    roleId: nonEmptyString,
+    scope: z.literal("user"),
+    selection: zcodeOmpModelRoleSelectionSchema,
+    expectedRevision: z.string().optional(),
+  })
+  .strict();
+export type ZCodeOmpSetModelRoleParams = z.infer<typeof zcodeOmpSetModelRoleParamsSchema>;
+
+export const zcodeOmpSetModelRoleResultSchema = z
+  .object({
+    role: zcodeOmpModelRoleSchema,
+    revision: z.string().optional(),
+    persisted: z.literal(true),
+    effectiveNote: z.string().optional(),
+  })
+  .strict();
+export type ZCodeOmpSetModelRoleResult = z.infer<typeof zcodeOmpSetModelRoleResultSchema>;
+
+export const zcodeControlSubagentParamsSchema = z
+  .object({
+    workspace: zcodeWorkspaceRefSchema,
+    sessionId: nonEmptyString,
+    subagentId: nonEmptyString,
+    action: z.enum(["send_message", "stop"]),
+    message: z.string().optional(),
+  })
+  .strict();
+export type ZCodeControlSubagentParams = z.infer<typeof zcodeControlSubagentParamsSchema>;
+export const zcodeControlSubagentResultSchema = z
+  .object({
+    subagentId: z.string(),
+    action: z.enum(["send_message", "stop"]),
+    status: z.enum(["sent", "queued", "stopped", "stopping", "accepted"]),
+    detail: z.string().optional(),
+  })
+  .strict();
+export type ZCodeControlSubagentResult = z.infer<typeof zcodeControlSubagentResultSchema>;
+
 // ── 已保存工作流的 GUI 中枢──
 // workspace 级、无会话的五个方法，照 skills/referenceCatalog 的先例：每次调用现扫
 // `<cwd>/.zcode/workflows/`（挂载时快照会漏掉手改的文件）。形状与 @zcode/contracts 的
@@ -3622,6 +3768,11 @@ export const zcodeProtocolMethods = {
   pluginsReferenceCatalog: "plugins/referenceCatalog",
   pluginsReferenceCatalogWithCategory: "plugins/referenceCatalogWithCategory",
   skillsReferenceCatalog: "skills/referenceCatalog",
+  // ── Fork（omp-project-mode.md）：OMP 项目模式能力入口 ──
+  workspaceCompleteOmpCommand: "workspace/completeOmpCommand",
+  workspaceOmpModelRoles: "workspace/ompModelRoles",
+  workspaceOmpSetModelRole: "workspace/ompSetModelRole",
+  sessionControlSubagent: "session/controlSubagent",
   // 已保存工作流的 GUI 中枢：workspace 级、无会话。
   workflowsList: "workflows/list",
   workflowsGet: "workflows/get",

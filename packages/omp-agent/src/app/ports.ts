@@ -30,6 +30,8 @@ export interface OmpSessionProcess {
   readonly subagentSubscriptionAvailable?: boolean;
   /** negotiate_protocol v3（fork surface）协商成功的事实；未协商/协商中为 false。 */
   readonly forkSurface?: boolean;
+  /** 项目模式通道事实：prompt 默认 text、/xxx 走 execute_command、帧带 sessionId 戳。 */
+  readonly projectMode?: boolean;
   start(): Promise<void>;
   send(command: OmpCommandFrame): Promise<OmpCommandOutcome>;
   respondUi(response: OmpBypassFrame): void;
@@ -70,6 +72,12 @@ export interface OmpProcessFactory {
     } & OmpSideChannelHandlers,
   ): OmpSessionProcess;
 }
+
+/** 会话进程的处理器集合（不含 cwd/resume；项目模式通道与旧进程共用同一形状）。 */
+export type OmpSessionProcessHandlers = Omit<
+  Parameters<OmpProcessFactory["create"]>[0],
+  "cwd" | "resumeSessionPath"
+>;
 
 export interface OmpUiRequest {
   frame: {
@@ -170,4 +178,30 @@ export interface HostGateway {
       response: unknown;
     }[];
   }): Promise<HostPermissionAnswer>;
+}
+
+/** 项目模式会话摘要（app 层消费的字段；完整形状见 domain/ompProjectFrames）。 */
+export interface OmpProjectSessionSummaryPort {
+  readonly sessionId: string;
+  readonly name?: string;
+  readonly sessionFile?: string;
+  readonly sessionGeneration?: string;
+}
+
+/**
+ * OMP 项目模式网关端口（实现 = adapters/ompProjectGateway.ts）。app 层经此消费进程
+ * 生命周期与会话通道，不直接依赖适配层；omp 未提供项目模式时 available() 为 false，
+ * 调用方整体回落「每会话一进程」旧拓扑。
+ */
+export interface OmpProjectGatewayPort {
+  available(): Promise<boolean>;
+  createSession(params: { name?: string }): Promise<OmpProjectSessionSummaryPort>;
+  resumeSession(sessionId: string): Promise<OmpProjectSessionSummaryPort>;
+  deleteSession(sessionId: string): Promise<OmpCommandOutcome>;
+  sendProject(command: unknown): Promise<OmpCommandOutcome>;
+  acquireSessionChannel(
+    sessionId: string,
+    handlers: OmpSessionProcessHandlers,
+  ): Promise<OmpSessionProcess>;
+  dispose(): Promise<void>;
 }

@@ -2,9 +2,7 @@
 // 并产出 snapshot / deltas。纯内存、无 IO；权威 schema 校验发生在发送边界（adapters）。
 //
 // seq 语义：每个增量 op 在产生时立即分配 seq（帧区间 (fromSeq, toSeq] 的记账基础）；
-// pending 列表只是「尚未进入 delta log 的 op」，snapshot 恒以当前 seq 为准，
-// 因此任意订阅者以 watermark=seq 收快照后，后续只会收到 seq 更大的 op，不会重复施加。
-//
+// pending 列表只是「尚未进入 delta log 的 op」；以 watermark=seq 收快照后只会收到更大 seq 的 op。
 // 行对象组装在 projectionRows.ts；增量合并在 deltaMerge.ts（架构 maxFileLines=400）。
 
 import {
@@ -22,6 +20,7 @@ import { TurnFileFacts } from "./fileFacts.js";
 import { contextWindowPatch, modelConfigPatch, runningControlPatch, snoozePendingInteractions, terminalControlPatch, usagePatch } from "./projectionStatePatches.js";
 import { mergeDeltas, type LoggedDelta } from "./deltaMerge.js";
 import { OmpSubagentProjection } from "./ompSubagentDirectory.js";
+import { buildOmpSubagentViewId } from "./ompProjectFrames.js";
 import { readProjectionFileChanges } from "./projectionFileChanges.js";
 import { finalizeFailedQueuedTurn, finalizeTurnContexts } from "./projectionTurnFinalizer.js";
 import { applyProjectionToolCallUpdate } from "./projectionToolCallUpdate.js";
@@ -70,7 +69,7 @@ export class ConversationProjection {
     this.subagents = new OmpSubagentProjection({
       rowAt: (id) => this.rows.get(id),
       turnAnchor: () => {
-        const row = this.turn ?? [...this.rows.values()].reverse().find((candidate) => candidate.kind === "turnHeader");
+        const row = this.turn ?? [...this.rows.values()].reverse().find((r) => r.kind === "turnHeader");
         return row ? { turnId: row.turnId, productTurnId: row.productTurnId ?? row.turnId } : null;
       },
       nextRowId: () => this.nextRowId++,
@@ -78,6 +77,7 @@ export class ConversationProjection {
       state: () => this.state.subagents,
       upsertRow: (row) => this.upsertRow(row),
       patchState: (subagents) => this.patchState({ subagents }),
+      viewIdOf: (id) => buildOmpSubagentViewId(sessionId, id),
     });
   }
   get seq(): number {
@@ -207,7 +207,7 @@ export class ConversationProjection {
     bufferStreamText(this.pendingStreamTextByRowId, anchor.rowId, delta);
     this.pushPending({ op: "row.delta", rowId: anchor.rowId, path: "text", append: delta });
   }
-  /** 模型响应结束（message_end）：关闭本响应的流式行；下一次文本增量开新行。 */
+  // 模型响应结束（message_end）：关闭本响应的流式行；下一次文本增量开新行。
   closeAssistantResponse(): void {
     this.closeStreamingRows("complete");
     if (this.turn) {

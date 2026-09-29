@@ -1,0 +1,107 @@
+// Fork（omp-project-mode.md）：OMP 项目模式子代理目录与控制。
+// ended 以 OMP 持久目录为准（含重启后的历史子代理）；控制走 control_subagent 业务入口。
+
+import {
+  buildOmpSubagentViewId,
+  ompProjectSubagentSummarySchema,
+} from "../domain/ompProjectFrames.js";
+import type { OmpProjectGatewayPort } from "./ports.js";
+
+export interface OmpProjectDirectoryDeps {
+  project: OmpProjectGatewayPort | null | undefined;
+  projectAvailable: () => Promise<boolean>;
+  /** 父会话投影目录（running 与修订来源）。 */
+  projectionDirectory: (sessionId: string) => Record<string, unknown> | null;
+}
+
+/**
+ * 项目模式子代理目录：running 来自父会话投影；ended 以 OMP 持久目录为准。
+ * OMP 分页无 total 字段，以「已见条数 + 是否还有下一页」近似，不伪造精确值。
+ */
+export async function projectSubagentDirectory(
+  deps: OmpProjectDirectoryDeps,
+  sessionId: string,
+  offset: number,
+): Promise<Record<string, unknown> | null> {
+  if (!deps.project || !(await deps.projectAvailable())) return null;
+  const projectionDirectory = deps.projectionDirectory(sessionId) ?? {
+    revision: 0,
+    childSessionIds: [],
+    running: [],
+    ended: { total: 0, items: [] },
+  };
+  const outcome = await deps.project.sendProject({
+    type: "get_subagents",
+    sessionId,
+    status: "finished",
+    cursor: offset,
+    limit: 20,
+  });
+  if (!outcome.success) {
+    return projectionDirectory;
+  }
+  const data = outcome.data as { items?: unknown[]; nextCursor?: string | number } | undefined;
+  const items = (Array.isArray(data?.items) ? data!.items : []).flatMap((raw) => {
+    const parsed = ompProjectSubagentSummarySchema.safeParse(raw);
+    if (!parsed.success) return [];
+    return [
+      {
+        childSessionId: buildOmpSubagentViewId(sessionId, parsed.data.subagentId),
+        agentId: parsed.data.subagentId,
+        subagentType: parsed.data.name ?? parsed.data.subagentId,
+        title:
+          parsed.data.description ?? parsed.data.task ?? parsed.data.name ?? parsed.data.subagentId,
+        summary: parsed.data.task ?? "",
+        status: projectStatusToDirectory(parsed.data.status),
+        ...(parsed.data.lastUpdate
+          ? { endedAt: Date.parse(parsed.data.lastUpdate) || undefined }
+          : {}),
+      },
+    ];
+  });
+  const hasMore = data?.nextCursor !== undefined && data.nextCursor !== null;
+  return {
+    ...(projectionDirectory as Record<string, unknown>),
+    ended: {
+      total: offset + items.length + (hasMore ? 1 : 0),
+      items,
+      ...(hasMore ? { nextCursor: String(offset + items.length) } : {}),
+    },
+  };
+}
+
+/** 项目模式子代理控制（control_subagent）：send_message/stop 的业务入口。 */
+export async function controlSubagent(
+  deps: OmpProjectDirectoryDeps,
+  sessionId: string,
+  subagentId: string,
+  action: "send_message" | "stop",
+  message?: string,
+): Promise<{ success: boolean; data?: unknown; error?: string }> {
+  if (!deps.project || !(await deps.projectAvailable())) {
+    return { success: false, error: "omp project mode unavailable" };
+  }
+  return deps.project.sendProject({
+    type: "control_subagent",
+    sessionId,
+    subagentId,
+    action,
+    ...(action === "send_message" && message !== undefined ? { message } : {}),
+  });
+}
+
+/** OMP 项目目录状态 → legacy 目录状态词（interrupted 无恢复事实按 lost）。 */
+function projectStatusToDirectory(
+  status: string | undefined,
+): "success" | "failed" | "cancelled" | "lost" {
+  switch (status) {
+    case "completed":
+      return "success";
+    case "failed":
+      return "failed";
+    case "aborted":
+      return "cancelled";
+    default:
+      return "lost";
+  }
+}

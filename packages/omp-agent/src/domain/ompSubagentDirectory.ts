@@ -11,6 +11,7 @@ export function buildOmpSubagentDirectory(
   rowAt: (rowId: number) => ConversationRow | undefined,
   state: SubagentProjectionState,
   offset: number,
+  viewIdOf: (id: string) => string = (id) => `omp-subagent:${id}`,
 ) {
   const ended = [...statuses.entries()].filter(([, status]) => status !== "running");
   const items = ended.slice(offset, offset + 20).flatMap(([id, status]) => {
@@ -18,7 +19,7 @@ export function buildOmpSubagentDirectory(
     if (row?.kind !== "subagent" || status === "running") return [];
     return [
       {
-        childSessionId: `omp-subagent:${id}`,
+        childSessionId: viewIdOf(id),
         agentId: id,
         subagentType: row.subagentType,
         title: row.summaryText || row.subagentType,
@@ -64,6 +65,8 @@ export class OmpSubagentProjection {
       state: () => SubagentProjectionState;
       upsertRow: (row: SubagentRow) => void;
       patchState: (state: SubagentProjectionState) => void;
+      /** 子代理只读详情的 UI 地址（含父会话归属；entityId 仍为 `omp-subagent:<id>`）。 */
+      viewIdOf: (id: string) => string;
     },
   ) {}
 
@@ -89,7 +92,7 @@ export class OmpSubagentProjection {
         if (row?.kind !== "subagent") return [];
         return [
           {
-            childSessionId: `omp-subagent:${id}`,
+            childSessionId: this.host.viewIdOf(id),
             agentId: id,
             subagentType: row.subagentType,
             title: row.summaryText,
@@ -100,7 +103,7 @@ export class OmpSubagentProjection {
       });
     return {
       revision: this.statuses.size > 0 ? 1 : 0,
-      childSessionIds: [...this.statuses.keys()].map((id) => `omp-subagent:${id}`),
+      childSessionIds: [...this.statuses.keys()].map((id) => this.host.viewIdOf(id)),
       running,
       endedTotal: [...this.statuses.values()].filter((status) => status !== "running").length,
     };
@@ -143,7 +146,7 @@ export class OmpSubagentProjection {
       .map(([id]) => {
         const candidate = this.host.rowAt(this.rowIds.get(id) ?? -1);
         return {
-          childSessionId: `omp-subagent:${id}`,
+          childSessionId: this.host.viewIdOf(id),
           agentId: id,
           subagentType: candidate?.kind === "subagent" ? candidate.subagentType : input.agent,
           title: candidate?.kind === "subagent" ? candidate.summaryText : input.summaryText,
@@ -156,7 +159,7 @@ export class OmpSubagentProjection {
     this.host.patchState({
       ...this.host.state(),
       revision: this.host.state().revision + 1,
-      childSessionIds: [...this.statuses.keys()].map((id) => `omp-subagent:${id}`),
+      childSessionIds: [...this.statuses.keys()].map((id) => this.host.viewIdOf(id)),
       running,
       endedTotal: [...this.statuses.values()].filter((status) => status !== "running").length,
     });
@@ -169,6 +172,7 @@ export class OmpSubagentProjection {
       this.host.rowAt,
       this.host.state(),
       offset,
+      this.host.viewIdOf,
     );
   }
 }

@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { resolveOmpProfileFromEnv } from "@zcode/shared/omp-profile";
 import { resolveOmpBinary } from "../contract.js";
 import { ServerApp } from "../app/serverApp.js";
+import { OmpProjectGateway } from "./ompProjectGateway.js";
 import { ProtocolServer } from "./protocolServer.js";
 import { emitStorageStartup, runPrepareStorageWorker } from "./storageStartupFrames.js";
 import { createOmpProcessFactory } from "./ompProcess.js";
@@ -77,8 +78,26 @@ export async function runCliMain(
   // 目录进程的 available_commands_update → ServerApp 缓存 + workspace-config topic 推送。
   // 构造顺序上 loader 先于 app，用 ref 解引用。
   const appRef: { app: ServerApp | null } = { app: null };
+  // OMP 项目模式网关（omp-project-mode.md）：懒启动；ready 无项目模式时整体回落旧拓扑。
+  const projectGateway = new OmpProjectGateway({
+    binaryPath: ompBinaryPath,
+    extraArgs: ompExtraArgs,
+    cwd: workspacePath,
+    onCatalogChanged: () => {
+      // 命令目录失效：清缓存重读（下一次 loadWorkspaceConfig/技能目录查询取新值）。
+      appRef.app?.invalidateWorkspaceConfigCache();
+    },
+  });
+  // sessions_changed：OMP 目录事实变化 → 重扫冷会话并推送 sessions-index 增量。
+  // 进程退出 → 清理注册表通道登记（引擎已按各自通道 onExit 终结轮次）。
+  const wireProjectHooks = (appInstance: ServerApp) => {
+    projectGateway.setEventHooks({
+      onSessionsChanged: () => void appInstance.registry.onProjectSessionsChanged().catch(() => {}),
+    });
+  };
   const workspaceCatalog = createWorkspaceConfigLoader(ompFactory, workspacePath, {
     onCommandsUpdate: (commands) => appRef.app?.updateSlashCommands(commands),
+    project: projectGateway,
   });
   const app = new ServerApp({
     ompFactory,
@@ -99,8 +118,10 @@ export async function runCliMain(
     // v3 fork surface 工作区级查询（模型连通性实测、MCP 状态）复用同一目录 omp 进程。
     testModelConnectivity: workspaceCatalog.testModel,
     listMcpServers: workspaceCatalog.listMcpServers,
+    project: projectGateway,
   });
   appRef.app = app;
+  wireProjectHooks(app);
   const protocolServer = new ProtocolServer({
     input: process.stdin,
     output: process.stdout,

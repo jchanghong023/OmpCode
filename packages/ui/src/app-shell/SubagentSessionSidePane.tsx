@@ -7,6 +7,7 @@ import type {
   SubagentSessionSidePaneTab,
 } from "@/lib/workspaceSidePane.js";
 import type { PaneWorkspaceScope } from "@/v4/paneLayoutStore.js";
+import { OmpSubagentControlBar } from "@/app-shell/OmpSubagentControlBar.js";
 import { SessionPane } from "@/v4/SessionPane.js";
 import { V4PaneConversationProvider } from "@/v4/V4ConversationContext.js";
 
@@ -38,24 +39,35 @@ export const SubagentSessionSidePane = memo(function SubagentSessionSidePane({
 
   return (
     <V4PaneConversationProvider scope={scope}>
-      <SessionPane
-        paneId={tab.id}
-        sessionId={tab.childSessionId}
-        openTrigger="subagent"
-        rootSessionId={tab.rootSessionId}
-        readOnly
-        allowWorkspaceFileRewind
-        focused={focused}
-        telemetryVisible={focused}
-        workspacePath={tab.workspacePath}
-        workspaceIdentity={tab.workspaceIdentity}
-        remoteSessionId={tab.remoteSessionId}
-        onOpenBrowserUrl={onOpenBrowserUrl}
-        onOpenCodeViewer={onOpenCodeViewer}
-        onOpenFileLink={onOpenFileLink}
-        onOpenSubagentSession={onOpenSubagentSession}
-        onOpenBackgroundBash={onOpenBackgroundBash}
-      />
+      <div className="flex size-full min-h-0 flex-col">
+        {/* Fork（omp-project-mode.md）：omp 合成地址的显式控制入口（Z15）；其余保持只读。 */}
+        {tab.childSessionId.startsWith("omp-subagent:") ? (
+          <OmpSubagentControlBar
+            workspacePath={tab.workspacePath}
+            workspaceIdentity={tab.workspaceIdentity}
+            remoteSessionId={tab.remoteSessionId}
+            childSessionId={tab.childSessionId}
+          />
+        ) : null}
+        <SessionPane
+          paneId={tab.id}
+          sessionId={tab.childSessionId}
+          openTrigger="subagent"
+          rootSessionId={tab.rootSessionId}
+          readOnly
+          allowWorkspaceFileRewind
+          focused={focused}
+          telemetryVisible={focused}
+          workspacePath={tab.workspacePath}
+          workspaceIdentity={tab.workspaceIdentity}
+          remoteSessionId={tab.remoteSessionId}
+          onOpenBrowserUrl={onOpenBrowserUrl}
+          onOpenCodeViewer={onOpenCodeViewer}
+          onOpenFileLink={onOpenFileLink}
+          onOpenSubagentSession={onOpenSubagentSession}
+          onOpenBackgroundBash={onOpenBackgroundBash}
+        />
+      </div>
     </V4PaneConversationProvider>
   );
 });

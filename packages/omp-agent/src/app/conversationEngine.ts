@@ -5,36 +5,27 @@ import { ConversationProjection } from "../domain/conversationProjection.js";
 import { OmpEventProjector } from "../domain/ompProjector.js";
 import { createId } from "../domain/ids.js";
 import type { OmpSessionEventFrame, OmpStateData } from "../domain/ompFrames.js";
-import type { HostGateway, HostUserInputAnswer, OmpProcessFactory, OmpSessionProcess } from "./ports.js";
+import type { HostGateway, HostUserInputAnswer, OmpProcessFactory, OmpSessionProcess, OmpSessionProcessHandlers } from "./ports.js";
 import { ConversationTopicPublisher, type SubscribeOptions } from "./topicPublisher.js";
 import { OmpInteractionProxy } from "./ompInteractionProxy.js";
-import { applyEngineAutoCompaction, applyEngineCompaction, applyEngineSetModel, applyEngineThoughtLevel, createEngineOmpProcess, projectEngineContextWindow, readOmpSkillCommands, refreshEngineModelAfterChange, refreshEngineStateAfterActivity } from "./ompEngineProcess.js";
+import { applyEngineAutoCompaction, applyEngineCompaction, applyEngineSetModel, applyEngineThoughtLevel, projectEngineContextWindow, readOmpSkillCommands, refreshEngineModelAfterChange, refreshEngineStateAfterActivity, startEngineProcess } from "./ompEngineProcess.js";
 import { dispatchOmpText } from "./ompPromptDispatch.js";
 import { TrailingThrottle } from "./trailingThrottle.js";
 import { deriveTitle, agentInvokedOf } from "../domain/titleText.js";
 import { OmpSubagentBridge } from "./ompSubagentBridge.js";
-export interface EngineInit {
-  sessionId: string;
-  workspaceId: string;
-  workspacePath: string;
-  ompFactory: OmpProcessFactory;
-  gateway: HostGateway;
-  onIndexChange: (engine: ConversationEngine) => void;
-  /** omp 命令目录热更新出口（available_commands_update 原始命令数组）。 */
-  onCommandsUpdate?: (commands: unknown) => void;
-  resumeSessionPath?: string;
-  initialTitle?: string;
-}
+import type { EngineInit } from "./engineInit.js";
 export class ConversationEngine {
   readonly sessionId: string;
   readonly workspaceId: string;
   readonly workspacePath: string;
   readonly projection: ConversationProjection;
   private readonly projector: OmpEventProjector;
-  private readonly ompFactory: OmpProcessFactory;
+  private readonly ompFactory: OmpProcessFactory | undefined;
   private readonly gateway: HostGateway;
   private readonly onIndexChange: (engine: ConversationEngine) => void;
   private readonly onCommandsUpdate: ((commands: unknown) => void) | undefined;
+  private readonly acquireProjectProcess: ((handlers: OmpSessionProcessHandlers) => Promise<OmpSessionProcess>) | undefined;
+  private readonly forwardSubagentFrame: ((frame: import("../domain/ompFrames.js").OmpSubagentFrame) => void) | undefined;
   private readonly publisher: ConversationTopicPublisher;
   private readonly interactionProxy: OmpInteractionProxy;
   private ompProcess: OmpSessionProcess | null = null;
@@ -45,11 +36,13 @@ export class ConversationEngine {
   private pendingLocalOnlyCompletions = 0;
   private titleInitialized: boolean;
   private readonly subagents: OmpSubagentBridge;
-  constructor(init: EngineInit) {
+  constructor(init: EngineInit<ConversationEngine>) {
     this.sessionId = init.sessionId;
     this.workspaceId = init.workspaceId;
     this.workspacePath = init.workspacePath;
     this.ompFactory = init.ompFactory;
+    this.acquireProjectProcess = init.acquireProjectProcess;
+    this.forwardSubagentFrame = init.forwardSubagentFrame;
     this.gateway = init.gateway;
     this.onIndexChange = init.onIndexChange;
     this.onCommandsUpdate = init.onCommandsUpdate;
@@ -97,49 +90,52 @@ export class ConversationEngine {
     return readOmpSkillCommands(this.ompProcess!);
   }
   private async startOmp(): Promise<void> {
-    let process!: OmpSessionProcess;
-    process = createEngineOmpProcess(
-      this.ompFactory,
-      { cwd: this.workspacePath, resumeSessionPath: this.resumeSessionPath },
-      {
-        onEvent: (event) => this.handleOmpEvent(event),
-        interaction: this.interactionProxy,
-        onExit: (code) => this.handleOmpExit(code, process),
-        onCommandOutput: ({ text }) => {
-          if (!this.projector.isStreaming) this.projection.activateQueuedTurn();
-          this.projection.appendAssistantText(text);
-          this.scheduleFlush();
-        },
-        // agentInvoked=true 的完成帧紧随 agent_end，不能覆盖失败或中断终态。
-        onPromptResult: (frame) => {
-          if (frame.agentInvoked === false) this.finishLocalOnlyPrompt();
-        },
-        onSessionInfoUpdate: ({ title }) => this.applySessionTitle(title),
-        onConfigUpdate: ({ model, thinkingLevel }) => {
-          this.projection.setModelConfig({ ...(model?.provider !== undefined ? { provider: model.provider } : {}), ...(model?.id !== undefined ? { model: model.id } : {}), ...(thinkingLevel !== undefined ? { thought: thinkingLevel } : {}) });
-          this.notifyIndexChange();
-          this.scheduleFlush();
-        },
-        onCommandsUpdate: (commands) => this.onCommandsUpdate?.(commands),
-        onSubagentFrame: (frame) => this.subagents.handle(frame),
+    await startEngineProcess({
+      workspacePath: this.workspacePath,
+      ompFactory: this.ompFactory,
+      resumeSessionPath: this.resumeSessionPath,
+      acquireProjectProcess: this.acquireProjectProcess,
+      interaction: this.interactionProxy,
+      onEvent: (event) => this.handleOmpEvent(event),
+      onExit: (code, process) => this.handleOmpExit(code, process),
+      onCommandOutput: ({ text }) => {
+        if (!this.projector.isStreaming) this.projection.activateQueuedTurn();
+        this.projection.appendAssistantText(text);
+        this.scheduleFlush();
       },
-    );
-    this.ompProcess = process;
-    try {
-      await process.start();
-      this.projection.setSubagentAvailability(process.subagentSubscriptionAvailable === false ? "unavailable" : "ready");
-      this.scheduleFlush();
-      const state = await process.refreshState();
-      this.applyOmpState(state);
-      await this.subagents.refresh(process);
-    } catch (error) {
-      // 后台读取失败不得留下伪“已启动”进程，下一次用户发送仍可重试。
-      if (this.ompProcess === process) this.ompProcess = null;
-      await process.dispose();
-      throw error;
-    }
+      // agentInvoked=true 的完成帧紧随 agent_end，不能覆盖失败或中断终态。
+      onPromptResult: (frame) => {
+        if (frame.agentInvoked === false) this.finishLocalOnlyPrompt();
+      },
+      onSessionInfoUpdate: ({ title }) => this.applySessionTitle(title),
+      onConfigUpdate: ({ model, thinkingLevel }) => {
+        this.projection.setModelConfig({ ...(model?.provider !== undefined ? { provider: model.provider } : {}), ...(model?.id !== undefined ? { model: model.id } : {}), ...(thinkingLevel !== undefined ? { thought: thinkingLevel } : {}) });
+        this.notifyIndexChange();
+        this.scheduleFlush();
+      },
+      onCommandsUpdate: this.onCommandsUpdate,
+      onSubagentFrame: (frame) => {
+        this.subagents.handle(frame);
+        this.forwardSubagentFrame?.(frame);
+      },
+      currentProcess: () => this.ompProcess,
+      setProcess: (process) => {
+        this.ompProcess = process;
+      },
+      bootstrap: (process) => this.bootstrapProcess(process),
+    });
   }
-  private applySessionTitle(title: string | undefined): void {
+
+  /** 进程启动后的首次状态水合（订阅可用性 + get_state + 子代理快照）。 */
+  private async bootstrapProcess(process: OmpSessionProcess): Promise<void> {
+    await process.start();
+    this.projection.setSubagentAvailability(process.subagentSubscriptionAvailable === false ? "unavailable" : "ready");
+    this.scheduleFlush();
+    const state = await process.refreshState();
+    this.applyOmpState(state);
+    await this.subagents.refresh(process);
+  }
+  applySessionTitle(title: string | undefined): void {
     if (title && title.trim().length > 0) {
       this.titleInitialized = true;
       this.projection.setTitle(title, "custom");
@@ -177,7 +173,7 @@ export class ConversationEngine {
     this.notifyIndexChange();
     this.scheduleFlush();
   }
-  private handleOmpEvent(event: OmpSessionEventFrame): void {
+  handleOmpEvent(event: OmpSessionEventFrame): void {
     // 真实 omp 的 model_changed 不带载荷（#emit({type}) 无字段）：回读 get_state 再落
     // 配置与 modelChange 标记，避免 UI 出现空 provider/model 的占位标记。
     if (event.type === "model_changed" && !event.model) {
@@ -212,6 +208,11 @@ export class ConversationEngine {
       (state) => this.applyOmpState(state),
     );
   }
+  /** 只读详情视图（子代理记录）的事件入口：与主会话共用投影器，不触发状态回读。 */
+  applyViewEvent(event: OmpSessionEventFrame): void {
+    this.projector.handleEvent(event);
+    this.scheduleFlush();
+  }
   /** v4 resolveInteraction 命令入口：把 UI 应答汇入等待中的交互。 */
   settleInteraction(interactionId: string, answer: HostUserInputAnswer): boolean {
     return this.interactionProxy.settle(interactionId, answer);
@@ -224,7 +225,7 @@ export class ConversationEngine {
     this.scheduleFlush();
     return paused;
   }
-  private handleOmpExit(code: number | null, process: OmpSessionProcess): void {
+  handleOmpExit(code: number | null, process: OmpSessionProcess): void {
     if (this.ompProcess !== process) return;
     // 崩溃时先保存 omp 进程的会话文件，供下次 --resume 使用。
     const exitedSessionFile = process.ompSessionFile;
@@ -317,10 +318,7 @@ export class ConversationEngine {
     );
   }
 
-  /**
-   * ZCode followup 模式收敛：guide/queue 均接受并如实投影。实际路由在 sendText 流式分支
-   * （guide→steer、queue→follow_up），omp 队列默认 one-at-a-time 已满足「每轮一条」，无需下发命令。
-   */
+  /** guide/queue 均接受；实际路由在 sendText 流式分支（guide→steer、queue→follow_up）。 */
   setFollowupMode(mode: SessionConfigState["followupMode"]): void {
     this.followupMode = mode;
     this.projection.setModelConfig({ followupMode: mode });
@@ -392,8 +390,9 @@ export class ConversationEngine {
     this.onIndexChange(this);
   }
 
-  /** 冷恢复：把历史行放入投影（订阅建立前调用）。 */
+  /** 冷恢复：把历史行放入投影（订阅建立前调用）；订阅后补入时触发一次下发。 */
   hydrateRows(rows: ConversationRow[]): void {
     this.projection.hydrateRows(rows);
+    this.scheduleFlush();
   }
 }

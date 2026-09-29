@@ -12,7 +12,10 @@ export class PromptResultTracker {
   }): void {
     if (
       frame.id &&
-      (frame.command === "prompt" || frame.command === "follow_up") &&
+      // execute_command 仅项目模式出现（严格分发的本地命令同样可能异步收口）。
+      (frame.command === "prompt" ||
+        frame.command === "follow_up" ||
+        frame.command === "execute_command") &&
       frame.success &&
       agentInvokedOf(frame.data) === null
     ) {

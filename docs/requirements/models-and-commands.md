@@ -17,7 +17,7 @@
 - 角色选择器允许在模型支持的档位中选择思考等级。切换模型时保留新模型也支持的原等级；不支持时使用新模型的缺省等级，未设置缺省则不写档位后缀。
 - omp profile 选择由 App Settings 持久化；Desktop Main 启动时读取并通过 `OMP_PROFILE` 传给 Host/内嵌 omp。默认或已有命名 profile 来自 omp 配置根目录，角色配置与历史扫描使用同一 profile 路径。保存后只标记待重启，不能热切换现有会话；待重启时角色编辑器不写旧 profile。
 - 任务索引是 omp 会话的本地投影，必须按已启动的 profile 分库；默认 profile 保持现有 `tasks-index.sqlite` 以保留历史，命名 profile 使用独立数据库，切回时仍可看到原 profile 的索引。Host 启动准备与所有索引 Repo 必须解析到同一路径，避免在 UI 混入其他 profile 的任务。
-- 设置侧栏“模型设置”始终展示全部内建 omp role 的选择器，已有配置的自定义 role 追加展示；会话工具栏“管理模型”复用同一编辑器。当前 profile 没有配置文件时显示未配置的内建角色，首次保存仅创建所选角色的 `modelRoles`，不写入空角色；两处只允许选择 omp 目录已有模型，不提供供应商或模型新增操作。
+- 设置侧栏“模型设置”始终展示全部内建 omp role 的选择器，已有配置的自定义 role 追加展示；会话工具栏“管理模型”复用同一编辑器。当前 profile 没有配置文件时显示未配置的内建角色，首次保存仅创建所选角色的 `modelRoles`，不写入空角色；两处只允许选择 omp 目录已有模型，不提供供应商或模型新增操作。项目模式下该编辑器的目录与保存改走 OMP RPC（`get_model_roles`/`set_model_role`，全部可配置 role 含未配置项、逐 role 自动保存与保存中/失败/被覆盖状态），本地 YAML 读写仅作无项目模式时的回落；两条路径的入口与状态语义见 [omp-project-mode.md](omp-project-mode.md)。
 
 ## 时序与失败语义
 

@@ -235,6 +235,22 @@ const ompEnUSOverrides: Record<string, string> = {
     "Computer Use tools were found, but they did not come from the verified OmpCode plugin. Review the plugin installation, then check again.",
   "cuaPermission.ready.sessionValidationHint":
     "OmpCode will verify the Computer Use tools against the exact session when your first session starts.",
+  "ompSubagentControl.send": "Send",
+  "ompSubagentControl.stop": "Stop",
+  "ompSubagentControl.sendPlaceholder": "Send a message to this subagent…",
+  "ompSubagentControl.status": "Result",
+  "ompSubagentControl.failed": "Failed",
+  "ompModelRoles.dialogTitle": "OMP model roles",
+  "ompModelRoles.fromAgent":
+    "Full role catalog from the OMP runtime (unconfigured roles included); saving is automatic on selection.",
+  "ompModelRoles.saveFailed": "Save failed",
+  "ompModelRoles.saving": "Saving…",
+  "ompModelRoles.saved": "Saved",
+  "ompModelRoles.notConfigured": "Not configured",
+  "ompModelRoles.overridden": "User config saved but currently overridden by another source",
+  "ompModelRoles.unresolved": "Unresolved",
+  "ompModelRoles.loadFailedRpc": "Failed to load OMP role catalog",
+  "ompModelRoles.autoOption": "Auto",
 };
 
 export default ompEnUSOverrides;

@@ -954,7 +954,15 @@ function buildRunningSubagentOpenRequest({
   rootSessionId?: string;
   subagent: ZCodeSessionRunningSubagent;
 }): OpenSubagentSideTabRequest | null {
-  if (!parentSessionId || subagent.childSessionId.startsWith("omp-subagent:")) return null;
+  if (!parentSessionId) return null;
+  // Fork（omp-project-mode.md）：`omp-subagent:<id>@<parent>` 合成地址可下钻只读详情；
+  // 旧格式（无 @parent）仍不下钻。
+  if (
+    subagent.childSessionId.startsWith("omp-subagent:") &&
+    !subagent.childSessionId.includes("@")
+  ) {
+    return null;
+  }
   return {
     rootSessionId: rootSessionId ?? parentSessionId,
     parentSessionId,

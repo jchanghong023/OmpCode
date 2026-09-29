@@ -1,10 +1,12 @@
 // workspace-config 目录构建：用一个常驻 omp 进程查询模型目录与思考档位。
 // omp 的 provider/model 注册表是进程级的；每个会话进程重复查询代价高且无必要。
 // v3 fork surface 的工作区级查询（test_model / list_mcp_servers）也复用该进程。
+// 项目模式可用时（omp-project-mode.md）改用共享 OMP 项目进程，不再另起目录进程。
 
 import type { WorkspaceConfigState } from "@zcode/shared/zcode-protocol-v4";
 import type { OmpProcessFactory } from "../app/ports.js";
-import { slashCommandsOfResponse } from "../domain/ompCommands.js";
+import type { OmpProjectGateway } from "./ompProjectGateway.js";
+import { ompProjectCommandsToLegacy, slashCommandsOfResponse } from "../domain/ompCommands.js";
 import { ompModelCatalogEntrySchema } from "../domain/ompFrames.js";
 import {
   ompMcpServerRowSchema,
@@ -18,6 +20,8 @@ import { logger } from "./logger.js";
 export interface WorkspaceConfigLoaderOptions {
   /** 命令目录变化推送（available_commands_update；目录进程常驻监听）；载荷为 omp 原始命令数组。 */
   onCommandsUpdate?: (commands: unknown) => void;
+  /** 项目模式网关：可用时全部目录查询走共享项目进程（无目录进程）。 */
+  project?: OmpProjectGateway | null;
 }
 
 /** 未协商 v3 的 omp 对 fork 命令的拒绝文案（rpc-ui-protocol 4.0 既有行为）。 */
@@ -55,6 +59,9 @@ export function createWorkspaceConfigLoader(
 
   async function loadWorkspaceConfig(): Promise<WorkspaceConfigState> {
     try {
+      if (options.project && (await options.project.ensure())) {
+        return loadProjectWorkspaceConfig();
+      }
       const processHandle = await ensureProcess();
       const [modelsOutcome, levelsOutcome, commandsOutcome, state] = await Promise.all([
         processHandle.send({ type: "get_available_models" }),
@@ -78,52 +85,47 @@ export function createWorkspaceConfigLoader(
         currentModel?.provider && currentModel?.id
           ? `${currentModel.provider}/${currentModel.id}`
           : "";
-      return {
-        configOptions: [
-          {
-            id: "model",
-            name: "Model",
-            type: "select" as const,
-            currentValue,
-            options: models.map((model) => ({
-              value: `${model.provider}/${model.id}`,
-              name: model.name ?? `${model.provider}/${model.id}`,
-              origin: "native" as const,
-              modelProviderId: model.provider,
-              modelProviderName: model.provider,
-              ...(model.thoughtLevels && model.thoughtLevels.length > 0
-                ? {
-                    modelThoughtLevels: model.thoughtLevels,
-                    modelDefaultThoughtLevel: model.defaultThoughtLevel,
-                  }
-                : {}),
-            })),
-          },
-          ...(levels.length > 0
-            ? [
-                {
-                  id: "thought_level",
-                  name: "Thinking",
-                  type: "select" as const,
-                  currentValue: state?.thinkingLevel ?? "off",
-                  options: levels.map((level) => ({
-                    value: level,
-                    name: level,
-                    origin: "native" as const,
-                  })),
-                },
-              ]
-            : []),
-        ],
-        slashCommands,
-      };
+      return buildConfigState(models, levels, currentValue, slashCommands, state?.thinkingLevel);
     } catch (error) {
       logger.warn("workspace-config 目录加载失败", { error: String(error) });
       return { configOptions: [], slashCommands: [] };
     }
   }
 
+  /** 项目模式目录：同一共享进程查询；workspace 无“当前模型”，currentValue 留空。 */
+  async function loadProjectWorkspaceConfig(): Promise<WorkspaceConfigState> {
+    const project = options.project!;
+    const [modelsOutcome, commandsOutcome] = await Promise.all([
+      project.sendProject({ type: "get_available_models" }),
+      project.sendProject({ type: "get_available_commands" }).catch((error) => ({
+        success: false as const,
+        error: String(error),
+      })),
+    ]);
+    const models = modelsOutcome.success ? parseModels(modelsOutcome.data) : [];
+    if (!commandsOutcome.success) {
+      logger.warn("omp 命令目录加载失败（项目模式）", { error: commandsOutcome.error });
+    }
+    const slashCommands = commandsOutcome.success
+      ? slashCommandsOfResponse(ompProjectCommandsToLegacy(commandsOutcome.data))
+      : [];
+    // 思考档位在项目模式是会话级命令（需 sessionId）；workspace 目录不再提供
+    // thought_level 选项，会话工具栏仍从会话状态获取。
+    return buildConfigState(models, [], "", slashCommands);
+  }
+
   async function loadSkillCommands(): Promise<unknown> {
+    if (options.project && (await options.project.ensure())) {
+      const outcome = await options.project.sendProject({ type: "get_available_commands" });
+      if (!outcome.success) {
+        throw new Error(outcome.error ?? "omp command catalog unavailable");
+      }
+      const record =
+        typeof outcome.data === "object" && outcome.data !== null
+          ? (ompProjectCommandsToLegacy(outcome.data) as { commands?: unknown })
+          : {};
+      return record.commands;
+    }
     const processHandle = await ensureProcess();
     const outcome = await processHandle.send({ type: "get_available_commands" });
     if (!outcome.success) {
@@ -140,8 +142,19 @@ export function createWorkspaceConfigLoader(
    * v3 fork surface 工作区级查询。协商顺序由 omp 串行 stdin 保证（negotiate_protocol
    * 先于本命令写入），因此到达时 v3 门控已定：未协商二进制回 Unknown command → 返回
    * null（能力缺失，调用方按既有降级语义处理），其余失败如实抛出。
+   * 项目模式可用时同一命令走共享项目进程（已协商 v3）。
    */
   async function sendForkQuery(command: OmpForkQueryCommand): Promise<unknown | null> {
+    if (options.project && (await options.project.ensure())) {
+      const outcome = await options.project.sendProject(command as never);
+      if (!outcome.success) {
+        if (isUnknownCommand(outcome.error)) {
+          return null;
+        }
+        throw new Error(outcome.error ?? `omp ${command.type} failed`);
+      }
+      return outcome.data;
+    }
     const processHandle = await ensureProcess();
     const outcome = await processHandle.send(command);
     if (!outcome.success) {
@@ -239,4 +252,58 @@ function parseLevels(data: unknown): string[] {
   return Array.isArray(record.levels)
     ? record.levels.filter((level): level is string => typeof level === "string")
     : [];
+}
+
+function buildConfigState(
+  models: {
+    provider: string;
+    id: string;
+    name?: string;
+    thoughtLevels?: string[];
+    defaultThoughtLevel?: string;
+  }[],
+  levels: string[],
+  currentValue: string,
+  slashCommands: WorkspaceConfigState["slashCommands"],
+  currentThoughtLevel?: string,
+): WorkspaceConfigState {
+  return {
+    configOptions: [
+      {
+        id: "model",
+        name: "Model",
+        type: "select" as const,
+        currentValue,
+        options: models.map((model) => ({
+          value: `${model.provider}/${model.id}`,
+          name: model.name ?? `${model.provider}/${model.id}`,
+          origin: "native" as const,
+          modelProviderId: model.provider,
+          modelProviderName: model.provider,
+          ...(model.thoughtLevels && model.thoughtLevels.length > 0
+            ? {
+                modelThoughtLevels: model.thoughtLevels,
+                modelDefaultThoughtLevel: model.defaultThoughtLevel,
+              }
+            : {}),
+        })),
+      },
+      ...(levels.length > 0
+        ? [
+            {
+              id: "thought_level",
+              name: "Thinking",
+              type: "select" as const,
+              currentValue: currentThoughtLevel ?? "off",
+              options: levels.map((level) => ({
+                value: level,
+                name: level,
+                origin: "native" as const,
+              })),
+            },
+          ]
+        : []),
+    ],
+    slashCommands,
+  };
 }

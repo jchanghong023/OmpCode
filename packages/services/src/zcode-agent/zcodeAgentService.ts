@@ -41,6 +41,10 @@ import {
   zcodeProcessChildProcessesResultSchema,
   type ZCodeProcessChildProcess,
   zcodeSkillsReferenceCatalogResultSchema,
+  zcodeOmpCompleteCommandResultSchema,
+  zcodeOmpModelRolesResultSchema,
+  zcodeOmpSetModelRoleResultSchema,
+  zcodeControlSubagentResultSchema,
   zcodeWorkflowsDeleteResultSchema,
   zcodeWorkflowsGetResultSchema,
   zcodeWorkflowsListResultSchema,
@@ -174,6 +178,10 @@ import type {
   ZCodeAgentSetThoughtLevelParams,
   ZCodeAgentPluginReferenceCatalogParams,
   ZCodeAgentSkillReferenceCatalogParams,
+  ZCodeAgentCompleteOmpCommandParams,
+  ZCodeAgentOmpModelRolesParams,
+  ZCodeAgentOmpSetModelRoleParams,
+  ZCodeAgentControlSubagentParams,
   ZCodeAgentDeleteSavedWorkflowParams,
   ZCodeAgentGetSavedWorkflowParams,
   ZCodeAgentListSavedWorkflowRunsParams,
@@ -3856,6 +3864,65 @@ export function createZCodeAgentService(
           ...(params.sessionId ? { sessionId: params.sessionId } : {}),
         },
         zcodeSkillsReferenceCatalogResultSchema,
+      );
+    },
+
+    // ── Fork（omp-project-mode.md）：OMP 项目模式能力入口（同一 workspace client 路径）。
+    async completeOmpCommand(params: ZCodeAgentCompleteOmpCommandParams) {
+      const client = await getReadOnlyClient(params);
+      return client.request(
+        zcodeProtocolMethods.workspaceCompleteOmpCommand,
+        {
+          workspace: buildWorkspaceRef(params),
+          text: params.text,
+          cursor: params.cursor,
+          ...(params.sessionId ? { sessionId: params.sessionId } : {}),
+        },
+        zcodeOmpCompleteCommandResultSchema,
+      );
+    },
+
+    async getOmpModelRoles(params: ZCodeAgentOmpModelRolesParams) {
+      const client = await getReadOnlyClient(params);
+      return client.request(
+        zcodeProtocolMethods.workspaceOmpModelRoles,
+        {
+          workspace: buildWorkspaceRef(params),
+          ...(params.sessionId ? { sessionId: params.sessionId } : {}),
+        },
+        zcodeOmpModelRolesResultSchema,
+      );
+    },
+
+    async setOmpModelRole(params: ZCodeAgentOmpSetModelRoleParams) {
+      const client = await getReadOnlyClient(params);
+      return client.request(
+        zcodeProtocolMethods.workspaceOmpSetModelRole,
+        {
+          workspace: buildWorkspaceRef(params),
+          roleId: params.roleId,
+          scope: params.scope,
+          selection: params.selection,
+          ...(params.expectedRevision !== undefined
+            ? { expectedRevision: params.expectedRevision }
+            : {}),
+        },
+        zcodeOmpSetModelRoleResultSchema,
+      );
+    },
+
+    async controlSubagent(params: ZCodeAgentControlSubagentParams) {
+      const client = await getReadOnlyClient(params);
+      return client.request(
+        zcodeProtocolMethods.sessionControlSubagent,
+        {
+          workspace: buildWorkspaceRef(params),
+          sessionId: params.sessionId,
+          subagentId: params.subagentId,
+          action: params.action,
+          ...(params.message !== undefined ? { message: params.message } : {}),
+        },
+        zcodeControlSubagentResultSchema,
       );
     },
 

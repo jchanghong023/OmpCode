@@ -107,6 +107,32 @@ export interface ZCodeAgentPluginReferenceCatalogParams extends ZCodeAgentWorksp
 export interface ZCodeAgentSkillReferenceCatalogParams extends ZCodeAgentWorkspaceTarget {
   sessionId?: string;
 }
+
+// ── Fork（omp-project-mode.md）：OMP 项目模式能力参数 ──
+// 命令补全（complete_command）：无副作用；带 sessionId 时为会话感知目录。
+export interface ZCodeAgentCompleteOmpCommandParams extends ZCodeAgentWorkspaceTarget {
+  text: string;
+  cursor: number;
+  sessionId?: string;
+}
+// 模型角色目录（get_model_roles）：全部可配置 role，零会话可用；带 sessionId 附会话实际模型。
+export interface ZCodeAgentOmpModelRolesParams extends ZCodeAgentWorkspaceTarget {
+  sessionId?: string;
+}
+// 逐 role 持久保存（set_model_role）：等待落盘，返回保存后的 role 与新修订。
+export interface ZCodeAgentOmpSetModelRoleParams extends ZCodeAgentWorkspaceTarget {
+  roleId: string;
+  scope: "user";
+  selection: import("@zcode/shared").ZCodeOmpModelRoleSelection;
+  expectedRevision?: string;
+}
+// 子代理控制（control_subagent）：send_message/stop 的显式用户动作入口。
+export interface ZCodeAgentControlSubagentParams extends ZCodeAgentWorkspaceTarget {
+  sessionId: string;
+  subagentId: string;
+  action: "send_message" | "stop";
+  message?: string;
+}
 export interface ZCodeAgentResolveSuggestedPluginReferenceParams extends ZCodeAgentWorkspaceTarget {
   stableId: string;
   operationId: string;

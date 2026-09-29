@@ -6,10 +6,12 @@
 import type {
   OmpConfigUpdateFrame,
   OmpPromptResultFrame,
+  OmpSessionEventFrame,
   OmpSessionInfoUpdateFrame,
   OmpStateData,
+  OmpSubagentFrame,
 } from "../domain/ompFrames.js";
-import type { OmpProcessFactory, OmpSessionProcess } from "./ports.js";
+import type { OmpProcessFactory, OmpSessionProcess, OmpSessionProcessHandlers } from "./ports.js";
 import type { OmpContextReport } from "../domain/ompContextReport.js";
 import type { OmpInteractionProxy } from "./ompInteractionProxy.js";
 import type { ConversationProjection } from "../domain/conversationProjection.js";
@@ -65,6 +67,88 @@ export async function refreshEngineModelAfterChange(
     });
   }
   scheduleFlush();
+}
+
+/** startEngineProcess 的宿主表面（ConversationEngine.startOmp 以字面量提供）。 */
+export interface EngineProcessStartHost {
+  readonly workspacePath: string;
+  readonly resumeSessionPath: string | undefined;
+  readonly ompFactory: OmpProcessFactory | undefined;
+  readonly acquireProjectProcess:
+    | ((handlers: OmpSessionProcessHandlers) => Promise<OmpSessionProcess>)
+    | undefined;
+  readonly interaction: OmpInteractionProxy;
+  onEvent: (event: OmpSessionEventFrame) => void;
+  onExit: (code: number | null, process: OmpSessionProcess) => void;
+  onCommandOutput: (frame: { text: string }) => void;
+  onPromptResult: (frame: OmpPromptResultFrame) => void;
+  onSessionInfoUpdate: (frame: OmpSessionInfoUpdateFrame) => void;
+  onConfigUpdate: (frame: OmpConfigUpdateFrame) => void;
+  onCommandsUpdate: ((commands: unknown) => void) | undefined;
+  onSubagentFrame: (frame: OmpSubagentFrame) => void;
+  currentProcess: () => OmpSessionProcess | null;
+  setProcess: (process: OmpSessionProcess | null) => void;
+  bootstrap: (process: OmpSessionProcess) => Promise<void>;
+}
+
+/**
+ * 引擎进程启动（从 conversationEngine.ts 拆出）：项目模式取共享进程通道（失败不清空，
+ * 可重试），旧拓扑按 factory 拉起独立进程（失败回收并允许下次重试）。
+ */
+export async function startEngineProcess(host: EngineProcessStartHost): Promise<void> {
+  const handlers: OmpSessionProcessHandlers = {
+    onEvent: host.onEvent,
+    onUiRequest: (request) => void host.interaction.handle(request),
+    onPermissionRequest: (request) => void host.interaction.handlePermission(request),
+    onAskRequest: (request) => void host.interaction.handleAsk(request),
+    onExit: (code) => {
+      const current = host.currentProcess();
+      if (current) host.onExit(code, current);
+    },
+    onCommandOutput: host.onCommandOutput,
+    onPromptResult: host.onPromptResult,
+    onSessionInfoUpdate: host.onSessionInfoUpdate,
+    onConfigUpdate: host.onConfigUpdate,
+    onCommandsUpdate: (commands) => host.onCommandsUpdate?.(commands),
+    onSubagentFrame: host.onSubagentFrame,
+  };
+  if (host.acquireProjectProcess) {
+    const process = await host.acquireProjectProcess(handlers);
+    host.setProcess(process);
+    // 失败不清空：通道与会话仍在（OMP 侧已加载），下一次调用可重试。
+    await host.bootstrap(process);
+    return;
+  }
+  if (!host.ompFactory) {
+    throw new Error("engine has no omp process source");
+  }
+  const process = createEngineOmpProcess(
+    host.ompFactory,
+    { cwd: host.workspacePath, resumeSessionPath: host.resumeSessionPath },
+    {
+      onEvent: host.onEvent,
+      interaction: host.interaction,
+      onExit: (code) => {
+        const current = host.currentProcess();
+        if (current) host.onExit(code, current);
+      },
+      onCommandOutput: (frame) => handlers.onCommandOutput?.(frame),
+      onPromptResult: (frame) => handlers.onPromptResult?.(frame),
+      onSessionInfoUpdate: (frame) => handlers.onSessionInfoUpdate?.(frame),
+      onConfigUpdate: (frame) => handlers.onConfigUpdate?.(frame),
+      onCommandsUpdate: (commands) => handlers.onCommandsUpdate?.(commands),
+      onSubagentFrame: (frame) => handlers.onSubagentFrame?.(frame),
+    },
+  );
+  host.setProcess(process);
+  try {
+    await host.bootstrap(process);
+  } catch (error) {
+    // 后台读取失败不得留下伪“已启动”进程，下一次用户发送仍可重试。
+    if (host.currentProcess() === process) host.setProcess(null);
+    await process.dispose();
+    throw error;
+  }
 }
 
 export interface EngineProcessHooks {

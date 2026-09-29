@@ -313,6 +313,8 @@ export type OmpCommandFrame =
       message: string;
       images?: unknown[];
       streamingBehavior?: "steer" | "followUp";
+      /** 项目模式可选（rpc-ui-protocol §14.4）：text=斜杠按普通文本；auto=严格命令分发。 */
+      inputMode?: "text" | "auto";
     }
   | { id?: string; type: "steer"; message: string; images?: unknown[] }
   | { id?: string; type: "follow_up"; message: string; images?: unknown[] }
@@ -340,7 +342,9 @@ export type OmpCommandFrame =
       subagentId?: string;
       sessionFile?: string;
       fromByte?: number;
-    };
+    }
+  // 项目模式（rpc-ui-protocol §14.5）：严格分发执行命令/技能；未知命令不进模型。
+  | { id?: string; type: "execute_command"; text: string };
 
 // ── get_state 响应载荷 ──
 export const ompStateDataSchema = z

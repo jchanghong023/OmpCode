@@ -24,6 +24,10 @@ import {
 } from "lexical";
 import { useSubagents } from "@/hooks/useSubagents.js";
 import { useSkills } from "@/hooks/useSkills.js";
+import {
+  ompCompletionDedupeKey,
+  useOmpCommandCompletion,
+} from "./hooks/useOmpCommandCompletion.js";
 import { buildSlashApplyMentionPayload } from "@/lib/slashApplyMentionPayload.js";
 import { filterSkillsForProvider } from "@/lib/skillSourceFilter.js";
 import { useZCodeIntl } from "./i18n/IntlProvider.js";
@@ -90,6 +94,9 @@ export function SlashCommandPlugin({
     enabled: !disabled && activeTrigger?.trigger === "/",
   });
   const [selectedIndex, setSelectedIndex] = useState(0);
+  // Fork（omp-project-mode.md）：正在编辑的完整 "/" 命令行（含参数空格）；驱动
+  // complete_command 动态候选。null 表示当前不在命令编辑态。
+  const [slashText, setSlashText] = useState<string | null>(null);
   const dismissedSignatureRef = useRef<string | null>(null);
   const activeSignatureRef = useRef<string | null>(null);
   const activeTokenRef = useRef<ActivePromptInputTokenSnapshot | null>(null);
@@ -105,6 +112,50 @@ export function SlashCommandPlugin({
     );
     return [...cliSuggestions, ...appSuggestions];
   }, [appCommands, commands, excludedCommandNames]);
+  // Fork（omp-project-mode.md）：OMP complete_command 动态候选；名称级与静态目录合并
+  // （去重），参数级（argument/subcommand）在命令编辑模式单独成组。
+  const { items: ompCompletionItems } = useOmpCommandCompletion({
+    workspacePath,
+    workspaceIdentity,
+    sessionId: sessionId ?? null,
+    text: slashText,
+    enabled: !disabled && activeTrigger?.trigger === "/",
+  });
+  const dynamicCommandSuggestions = useMemo(() => {
+    const seen = new Set(commandSuggestions.map((item) => normalizeSlashCommandValue(item.value)));
+    return ompCompletionItems.flatMap((item) => {
+      if (item.kind === "argument" || item.kind === "subcommand") return [];
+      const value = item.insertText.replace(/^\//, "").trim();
+      if (!value || seen.has(normalizeSlashCommandValue(value))) return [];
+      return [
+        {
+          id: `omp-cmd:${ompCompletionDedupeKey(item)}`,
+          trigger: "/" as const,
+          value,
+          label: item.label || item.insertText,
+          description: item.description ?? item.hint ?? "",
+          keywords: [item.description, item.hint].filter((k): k is string => typeof k === "string"),
+        },
+      ];
+    });
+  }, [commandSuggestions, ompCompletionItems]);
+  const dynamicArgumentSuggestions = useMemo(
+    () =>
+      ompCompletionItems.flatMap((item) => {
+        if (item.kind !== "argument" && item.kind !== "subcommand") return [];
+        if (!item.insertText.trim()) return [];
+        return [
+          {
+            id: `omp-arg:${ompCompletionDedupeKey(item)}`,
+            trigger: "/" as const,
+            value: item.insertText.trim(),
+            label: item.label || item.insertText,
+            description: item.description ?? item.hint ?? "",
+          },
+        ];
+      }),
+    [ompCompletionItems],
+  );
   const subagentSuggestions = useMemo(
     () => buildSubagentSuggestions(agents, locale),
     [agents, locale],
@@ -117,17 +168,43 @@ export function SlashCommandPlugin({
       ),
     [locale, provider, skills],
   );
+  // Fork：命令编辑模式（query 含空格 = 已输入命令名，正在补参数）只显示动态参数候选，
+  // 过滤键取最后一个词；名称模式合并动态名称候选。
+  const argumentMode = (activeTrigger?.query ?? "").includes(" ");
+  const filterQuery = useMemo(() => {
+    const query = activeTrigger?.query ?? null;
+    if (query === null) return null;
+    return argumentMode ? query.slice(query.lastIndexOf(" ") + 1) : query;
+  }, [activeTrigger?.query, argumentMode]);
   const filteredCommandSuggestions = useMemo(
-    () => filterPromptInputSuggestions(commandSuggestions, activeTrigger?.query ?? null),
-    [commandSuggestions, activeTrigger?.query],
+    () =>
+      argumentMode
+        ? filterPromptInputSuggestions(dynamicArgumentSuggestions, filterQuery)
+        : [
+            ...filterPromptInputSuggestions(commandSuggestions, filterQuery),
+            ...filterPromptInputSuggestions(dynamicCommandSuggestions, filterQuery),
+          ],
+    [
+      argumentMode,
+      commandSuggestions,
+      dynamicArgumentSuggestions,
+      dynamicCommandSuggestions,
+      filterQuery,
+    ],
   );
   const filteredSubagentSuggestions = useMemo(
-    () => filterPromptInputSuggestions(subagentSuggestions, activeTrigger?.query ?? null),
-    [subagentSuggestions, activeTrigger?.query],
+    () =>
+      argumentMode
+        ? []
+        : filterPromptInputSuggestions(subagentSuggestions, activeTrigger?.query ?? null),
+    [argumentMode, subagentSuggestions, activeTrigger?.query],
   );
   const filteredSkillSuggestions = useMemo(
-    () => filterPromptInputSuggestions(skillSuggestions, activeTrigger?.query ?? null),
-    [skillSuggestions, activeTrigger?.query],
+    () =>
+      argumentMode
+        ? []
+        : filterPromptInputSuggestions(skillSuggestions, activeTrigger?.query ?? null),
+    [argumentMode, skillSuggestions, activeTrigger?.query],
   );
   const filteredSuggestions = useMemo(
     () => [
@@ -182,12 +259,14 @@ export function SlashCommandPlugin({
         // 否则面板以 COMMAND_PRIORITY_CRITICAL 注册方向键处理器，吞掉后续历史翻阅按键。
         if (!shouldSlashPanelProcessUpdate(tags)) {
           activeTokenRef.current = null;
+          setSlashText(null);
           setActiveTrigger(null);
           return;
         }
 
         if (disabled) {
           activeTokenRef.current = null;
+          setSlashText(null);
           setActiveTrigger(null);
           return;
         }
@@ -197,6 +276,7 @@ export function SlashCommandPlugin({
         if (!cursorText) {
           activeTokenRef.current = null;
           dismissedSignatureRef.current = null;
+          setSlashText(null);
           setActiveTrigger(null);
           return;
         }
@@ -208,16 +288,34 @@ export function SlashCommandPlugin({
               dirtyElements.size === 0 && dirtyLeaves.size === 0,
             )
           : null;
-        const nextActiveTrigger = selectionState
+        const textBeforeCursor = selectionState
+          ? selectionState.textBeforeCursor
+          : cursorText.textBeforeCursor;
+        const baseActiveTrigger = selectionState
           ? nextActiveToken
           : extractActivePromptInputTrigger(cursorText.textBeforeCursor);
+        // Fork（omp-project-mode.md）：整行以 "/" 开头且已带空格（正在补参数）时，基础
+        // token 正则不再命中；保持面板开启由 complete_command 提供参数级候选。
+        const composingQuery = slashComposingQueryOf(textBeforeCursor);
+        const nextActiveTrigger =
+          baseActiveTrigger?.trigger === "/"
+            ? baseActiveTrigger
+            : composingQuery !== null
+              ? ({ trigger: "/", query: composingQuery } as ActivePromptInputTrigger)
+              : null;
         if (!nextActiveTrigger || nextActiveTrigger.trigger !== "/") {
           activeTokenRef.current = null;
           dismissedSignatureRef.current = null;
+          setSlashText(null);
           setActiveTrigger(null);
           return;
         }
-        activeTokenRef.current = nextActiveToken;
+        activeTokenRef.current = selectionState ? nextActiveToken : null;
+        setSlashText(
+          textBeforeCursor.startsWith("/") && !textBeforeCursor.includes("\n")
+            ? textBeforeCursor
+            : null,
+        );
 
         const nextSignature = getPromptInputTriggerSignature(nextActiveTrigger);
         if (
@@ -261,8 +359,35 @@ export function SlashCommandPlugin({
         );
         const activeSlashTrigger = snapshotRange
           ? activeTokenRef.current
-          : extractActivePromptInputTrigger(selectionState.textBeforeCursor);
+          : (extractActivePromptInputTrigger(selectionState.textBeforeCursor) ??
+            (slashComposingQueryOf(selectionState.textBeforeCursor) !== null
+              ? ({
+                  trigger: "/",
+                  query: slashComposingQueryOf(selectionState.textBeforeCursor)!,
+                } as ActivePromptInputTrigger)
+              : null));
         if (!activeSlashTrigger || activeSlashTrigger.trigger !== "/") {
+          return;
+        }
+
+        // Fork：命令编辑模式（已带空格）选中的是参数候选；替换最后一个词并按纯文本插入，
+        // 不生成命令 mention。
+        if (activeSlashTrigger.query.includes(" ")) {
+          const before = selectionState.textBeforeCursor;
+          const lastSpace = before.lastIndexOf(" ");
+          const argumentStart = lastSpace + 1;
+          selectionState.selection.setTextNodeRange(
+            selectionState.node,
+            argumentStart,
+            selectionState.node,
+            selectionState.cursorOffset,
+          );
+          const replacement = $createTextNode(`${suggestion.value} `);
+          selectionState.selection.insertNodes([replacement]);
+          replacement.selectEnd();
+          dismissedSignatureRef.current = null;
+          activeTokenRef.current = null;
+          setSelectedIndex(0);
           return;
         }
 
@@ -297,6 +422,7 @@ export function SlashCommandPlugin({
 
       dismissedSignatureRef.current = null;
       activeTokenRef.current = null;
+      setSlashText(null);
       setActiveTrigger(null);
       setSelectedIndex(0);
       if (isAppCommand) {
@@ -461,4 +587,13 @@ export function SlashCommandPlugin({
     />,
     container,
   );
+}
+
+/** Fork（omp-project-mode.md）：单行 "/" 命令且已含空格时的编辑态 query；否则 null。 */
+function slashComposingQueryOf(textBeforeCursor: string): string | null {
+  // 单行、以 "/" 开头、已出现空格（命令名后正在补参数）。
+  if (!/^\/\S*\s\S.*$/.test(textBeforeCursor)) {
+    return null;
+  }
+  return textBeforeCursor.slice(1);
 }

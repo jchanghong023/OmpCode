@@ -22,6 +22,8 @@ export interface LegacyMethodContext {
   /** v3 fork surface 工作区级查询；omp 未协商 v3 时返回 null（按能力缺失降级）。 */
   testModelConnectivity?: (provider: string, modelId: string) => Promise<OmpModelTestResult | null>;
   listMcpServers?: () => Promise<OmpMcpServerRow[] | null>;
+  /** 项目模式子代理目录（omp-project-mode.md）：以 OMP 持久目录为准；不可用返回 null。 */
+  listSubagents?: (sessionId: string, offset: number) => Promise<Record<string, unknown> | null>;
 }
 
 export function createLegacyHandlers(context: LegacyMethodContext) {
@@ -148,11 +150,16 @@ export function createLegacyHandlers(context: LegacyMethodContext) {
     [zcodeProtocolMethods.sessionSetMode]: async () => ({}),
     [zcodeProtocolMethods.sessionSubagents]: async (params) => {
       const record = asRecord(params);
-      const engine = context.registry.requireEngine(requiredString(record, "sessionId"));
+      const sessionId = requiredString(record, "sessionId");
       const offset = typeof record?.cursor === "string" ? Number.parseInt(record.cursor, 10) : 0;
-      return engine.projection.subagentDirectory(
-        Number.isFinite(offset) && offset >= 0 ? offset : 0,
-      );
+      const normalizedOffset = Number.isFinite(offset) && offset >= 0 ? offset : 0;
+      // 项目模式：ended 以 OMP 持久目录为准（重启后仍可发现）；不可用时回落投影目录。
+      const projectDirectory = await context.listSubagents?.(sessionId, normalizedOffset);
+      if (projectDirectory) {
+        return projectDirectory;
+      }
+      const engine = context.registry.requireEngine(sessionId);
+      return engine.projection.subagentDirectory(normalizedOffset);
     },
     [zcodeProtocolMethods.pluginsReferenceCatalog]: async (params) => ({
       authority: asRecord(params)?.sessionId ? ("session" as const) : ("workspace" as const),

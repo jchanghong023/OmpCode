@@ -5,6 +5,7 @@
 | 文档                                             | 唯一维护的需求域                                                                                                                                  |
 | ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------- |
 | [FORK.md](FORK.md)                               | Fork 目的、上游同步策略与平台范围（单分支、界面统一、`--offline` 门控）、上游基线、核心替换、双链路、产品身份、数据隔离、分发及尚不等价的能力边界 |
+| [omp-project-mode.md](omp-project-mode.md)       | OMP 项目模式接入：单项目进程多会话拓扑、事件归属、execute_command 输入分流、complete_command 补全、子代理详情与控制、模型双入口及 Z01—Z15 验收    |
 | [models-and-commands.md](models-and-commands.md) | 账号移除、Profile 隔离、角色配置、模型目录与原生命令                                                                                              |
 | [composer.md](composer.md)                       | 桌面输入区、临时模型与计划模型、上下文、压缩与 Git 状态                                                                                           |
 | [skills.md](skills.md)                           | omp 可执行技能目录、候选、调用与只读设置                                                                                                          |
@@ -19,6 +20,7 @@
 
 ## 实现与验证状态
 
+- 2026-09-29/30 OMP 项目模式接入（Z1/Z2）完成：omp-agent 内每 workspace 至多一个 OMP 项目进程承载全部会话（旧核自动回落旧拓扑），`/` 输入走 `execute_command` 严格分发，新增 complete_command 动态补全（含参数级）、子代理只读详情（`omp-subagent:<id>@<parent>` 合成地址）与 `control_subagent` 控制入口、模型角色 RPC 化（get_model_roles/set_model_role 逐 role 自动保存）。门禁全绿（typecheck/lint/fmt/architecture 0 违例），`@zcode/omp-agent` 123 项测试 0 失败 0 跳过（含新增项目模式 E2E 8 项与真实内嵌核/源码核链路）；GUI 真实验收（OMP 源码进程 + glm-5.3-flash）逐项结果与未竟边界见 [omp-project-mode.md](omp-project-mode.md)。
 - 2026-09-28 单分支统一重构完成：`experiment/centos7-no-proot` 已合回 `main`（合并提交 cd4a492）并删除本地与远端专有分支（既有 centos7 tag 保留），仓库恢复仅 `main` 一个产品分支；CentOS 7 发布流水线分支校验收窄为仅 `main`。执行计划已归档为 [refactor-plan.md](../test-reports/refactor-plan.md)。P2 七条门禁全绿（freshness、typecheck、lint、fmt、architecture、`@zcode/omp-agent` 全量 95 项含真实核心 E2E 实际执行 0 跳过、双平台真实界面验收）；合并回 main 后复跑 typecheck/lint 仍绿。逐场景结论与证据见 [windows-acceptance.md](../test-reports/windows-acceptance.md)、[centos7-acceptance.md](../test-reports/centos7-acceptance.md) 及 `evidence-windows/`、`evidence-centos7/`。
 - 2026-09-28 双平台发布流水线金丝雀均从 `main` 通过：Windows [run 36487871248](https://github.com/jchanghong023/OmpCode/actions/runs/36487871248)（发布 v3.14.3-omp.4，含 `OmpCode-3.14.3-win-x64.exe` 与 SHA256）、CentOS 7 [run 36487891891](https://github.com/jchanghong023/OmpCode/actions/runs/36487891891)（发布 v3.14.3-centos7-36487891891-1，preflight/desktop/native/package/publish 全绿）。
 - 上述重构仍未验证（环境不可用，如实记录，不视为已验收）：CentOS 7 真 VM 对发布 ZIP 的 Package acceptance 终验（以本地 C1 链出包 + WSL CentOS-7 原生运行替代验证）、公司 IBus 输入法真机、frp 真机链路。

@@ -1,10 +1,11 @@
-// omp 换核（FORK.md）：模型管理事实源在 omp 侧。本对话框读写用户 omp 配置的
-// modelRoles（role → provider/model:level）：角色清单来自 omp 配置，模型候选来自
-// workspace-config 下发的 omp 目录；写入经主进程 yaml Document 级替换（保留注释，
-// 写前自动备份），绝不整文件重写。
+// omp 换核（FORK.md / omp-project-mode.md）：模型管理事实源在 omp 侧。角色目录与保存
+// 优先走 OMP 项目模式 RPC（get_model_roles / set_model_role）：全部可配置 role 始终可见
+// （含未配置项），选定即自动保存（含保存中/失败/被覆盖状态）；OMP 未提供项目模式时
+// 回落主进程读写用户 omp 配置 modelRoles（OmpModelRolesFallbackFields）。
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { usePlatform } from "@/hooks/usePlatform.js";
+import type { ZCodeOmpModelRole } from "@zcode/shared";
+import { useWorkspaceServicesResolution } from "@/hooks/useWorkspaceServices.js";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
 import { Button } from "@/components/ui/button.js";
 import {
@@ -16,30 +17,10 @@ import {
 } from "@/components/ui/dialog.js";
 import { logger } from "@/logger.js";
 import type { OmpModelCatalogEntry } from "./ompModelCatalog.js";
-import {
-  parseOmpRoleValue,
-  selectOmpRoleLevelValue,
-  selectOmpRoleModelValue,
-} from "./ompModelRoleValue.js";
+import { parseOmpRoleValue } from "./ompModelRoleValue.js";
+import { OmpModelRolesFallbackFields } from "./OmpModelRolesFallbackFields.js";
 
-// 当前内嵌 omp 的内建 role；用户配置的自定义 role 会在其后追加。
-const BUILTIN_OMP_ROLES = [
-  "default",
-  "smol",
-  "slow",
-  "vision",
-  "plan",
-  "commit",
-  "tiny",
-  "memory",
-  "task",
-  "advisor",
-  "image",
-  "web",
-  "speech",
-  "dictation",
-  "judge",
-] as const;
+type RolesSource = "loading" | "rpc" | "fallback";
 
 export interface OmpModelRolesDialogProps {
   open?: boolean;
@@ -52,55 +33,55 @@ export interface OmpModelRolesDialogProps {
   workspaceIdentity?: string;
 }
 
+interface RpcRowState {
+  saving: boolean;
+  savedAt: number | null;
+  error: string | null;
+}
+
 export function OmpModelRolesDialog(props: OmpModelRolesDialogProps) {
   const {
     open = false,
     onOpenChange,
     inline = false,
     catalogEntries,
-    workspacePath: _workspacePath,
-    workspaceIdentity: _workspaceIdentity,
+    workspacePath,
+    workspaceIdentity,
   } = props;
-  void _workspacePath;
-  void _workspaceIdentity;
   const { intl } = useZCodeIntl();
-  const platform = usePlatform();
-  const [roles, setRoles] = useState<{ role: string; value: string }[]>(() =>
-    BUILTIN_OMP_ROLES.map((role) => ({ role, value: "" })),
-  );
-  const [originalRoles, setOriginalRoles] = useState<ReadonlyMap<string, string>>(new Map());
-  const [loadError, setLoadError] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
-  const [saveError, setSaveError] = useState<string | null>(null);
-  const [savedAt, setSavedAt] = useState<number | null>(null);
-  const [savedWithBackup, setSavedWithBackup] = useState(false);
+  const resolution = useWorkspaceServicesResolution(workspacePath, undefined, workspaceIdentity);
+  const services = resolution.services;
 
-  const loadRoles = useCallback(async () => {
-    if (!platform.readOmpModelRoles) {
-      setLoadError("platform-unsupported");
-      return;
-    }
-    setLoadError(null);
+  const [source, setSource] = useState<RolesSource>("loading");
+  const [rpcRoles, setRpcRoles] = useState<ZCodeOmpModelRole[]>([]);
+  const [rpcRowState, setRpcRowState] = useState<Record<string, RpcRowState>>({});
+  // 本地待保存选择（保存失败时保留，供重试；Z12）。
+  const [rpcPending, setRpcPending] = useState<Record<string, string>>({});
+
+  const loadRpcRoles = useCallback(async () => {
+    if (!resolution.rpcReady) return false;
     try {
-      const result = await platform.readOmpModelRoles();
-      if (result.success) {
-        const configured = new Map(result.roles.map((item) => [item.role, item.value]));
-        setOriginalRoles(configured);
-        const allRoles = [...new Set([...BUILTIN_OMP_ROLES, ...configured.keys()])];
-        setRoles(allRoles.map((role) => ({ role, value: configured.get(role) ?? "" })));
-      } else {
-        setLoadError(result.error);
-      }
+      const result = await services.zcodeAgentService.getOmpModelRoles({
+        workspacePath,
+        ...(workspaceIdentity ? { workspaceIdentity } : {}),
+      });
+      setRpcRoles(result.roles);
+      setSource("rpc");
+      return true;
     } catch (error) {
-      setLoadError(error instanceof Error ? error.message : String(error));
+      const message = error instanceof Error ? error.message : String(error);
+      logger.debug("[omp-model-roles] RPC 目录不可用，回落本地配置", { error: message });
+      return false;
     }
-  }, [platform]);
+  }, [resolution.rpcReady, services, workspaceIdentity, workspacePath]);
 
   useEffect(() => {
-    if (open || inline) {
-      void loadRoles();
-    }
-  }, [inline, loadRoles, open]);
+    if (!open && !inline) return;
+    setSource("loading");
+    void loadRpcRoles().then((ok) => {
+      if (!ok) setSource("fallback");
+    });
+  }, [inline, loadRpcRoles, open]);
 
   const catalogByModelPart = useMemo(() => {
     const map = new Map<string, OmpModelCatalogEntry>();
@@ -114,175 +95,195 @@ export function OmpModelRolesDialog(props: OmpModelRolesDialogProps) {
     const groups = new Map<string, { label: string; models: { value: string; label: string }[] }>();
     for (const entry of catalogEntries) {
       const value = `${entry.providerId}/${entry.modelId}`;
-      const group = groups.get(entry.providerId) ?? {
-        label: entry.providerName,
-        models: [],
-      };
+      const group = groups.get(entry.providerId) ?? { label: entry.providerName, models: [] };
       group.models.push({ value, label: entry.modelName });
       groups.set(entry.providerId, group);
     }
     return [...groups.values()];
   }, [catalogEntries]);
 
-  const handleRoleChange = useCallback(
-    (role: string, catalogValue: string) => {
-      setRoles((current) =>
-        current.map((item) =>
-          item.role === role
-            ? { ...item, value: selectOmpRoleModelValue(item.value, catalogValue, catalogEntries) }
-            : item,
-        ),
-      );
-    },
-    [catalogEntries],
-  );
-
-  const handleLevelChange = useCallback(
-    (role: string, level: string) => {
-      setRoles((current) =>
-        current.map((item) =>
-          item.role === role
-            ? { ...item, value: selectOmpRoleLevelValue(item.value, level, catalogEntries) }
-            : item,
-        ),
-      );
-    },
-    [catalogEntries],
-  );
-
-  const handleSave = useCallback(async () => {
-    if (!platform.writeOmpModelRoles) {
-      setSaveError("platform-unsupported");
-      return;
-    }
-    const changedRoles = roles.filter(
-      (item) => item.value && item.value !== originalRoles.get(item.role),
-    );
-    if (changedRoles.length === 0) return;
-    setSaving(true);
-    setSaveError(null);
-    try {
-      const result = await platform.writeOmpModelRoles(changedRoles);
-      if (result.success) {
-        setSavedAt(Date.now());
-        setSavedWithBackup(Boolean(result.backupPath));
-        setOriginalRoles(
-          new Map(roles.filter((item) => item.value).map((item) => [item.role, item.value])),
-        );
-        logger.info("[omp-model-roles] 已写入 omp modelRoles", {
-          backupPath: result.backupPath ?? null,
-          roles: changedRoles.length,
+  /** RPC 模式：选定模型/档位即自动保存（逐 role 修订；失败保留待保存选择）。 */
+  const saveRpcRole = useCallback(
+    async (roleId: string, catalogValue: string, clear: boolean) => {
+      const selection =
+        clear || !catalogValue || catalogValue === "auto"
+          ? catalogValue === "auto"
+            ? ({ kind: "auto" } as const)
+            : null
+          : (() => {
+              const slash = catalogValue.indexOf("/");
+              const provider = catalogValue.slice(0, slash);
+              const modelId = catalogValue.slice(slash + 1);
+              if (!provider || !modelId) return null;
+              const level =
+                rpcPending[`${roleId}#level`] && rpcPending[`${roleId}#level`] !== ""
+                  ? rpcPending[`${roleId}#level`]
+                  : undefined;
+              return {
+                kind: "model" as const,
+                model: { provider, modelId, ...(level ? { thinkingLevel: level } : {}) },
+              };
+            })();
+      setRpcRowState((current) => ({
+        ...current,
+        [roleId]: { saving: true, savedAt: null, error: null },
+      }));
+      try {
+        const result = await services.zcodeAgentService.setOmpModelRole({
+          workspacePath,
+          ...(workspaceIdentity ? { workspaceIdentity } : {}),
+          roleId,
+          scope: "user",
+          selection,
         });
-      } else {
-        setSaveError(result.error ?? "unknown");
+        setRpcRoles((current) =>
+          current.map((role) => (role.roleId === roleId ? result.role : role)),
+        );
+        setRpcPending((current) => {
+          const next = { ...current };
+          delete next[roleId];
+          delete next[`${roleId}#level`];
+          return next;
+        });
+        setRpcRowState((current) => ({
+          ...current,
+          [roleId]: { saving: false, savedAt: Date.now(), error: null },
+        }));
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        setRpcPending((current) => ({ ...current, [roleId]: catalogValue }));
+        setRpcRowState((current) => ({
+          ...current,
+          [roleId]: { saving: false, savedAt: null, error: message },
+        }));
       }
-    } catch (error) {
-      setSaveError(error instanceof Error ? error.message : String(error));
-    } finally {
-      setSaving(false);
-    }
-  }, [originalRoles, platform, roles]);
+    },
+    [rpcPending, services, workspaceIdentity, workspacePath],
+  );
 
-  const dirty = roles.some((item) => item.value && item.value !== originalRoles.get(item.role));
+  const handleRpcLevelChange = useCallback((roleId: string, level: string) => {
+    setRpcPending((current) => ({ ...current, [`${roleId}#level`]: level }));
+  }, []);
 
   if (!open && !inline) return null;
 
-  const fields = (
-    <>
-      {loadError ? (
-        <div className="rounded-lg border border-border bg-surface px-3 py-2 text-ui-base text-foreground-subtle">
-          {loadError === "omp_config_missing"
-            ? intl.formatMessage({ id: "settings.ompModelRoles.configMissing" })
-            : loadError === "omp_config_parse_failed" || loadError === "omp_model_roles_invalid"
-              ? intl.formatMessage({ id: "settings.ompModelRoles.configInvalid" })
-              : loadError === "platform-unsupported"
-                ? intl.formatMessage({ id: "settings.ompModelRoles.platformUnsupported" })
-                : intl.formatMessage({ id: "settings.ompModelRoles.loadFailed" })}
-        </div>
-      ) : (
+  const fields =
+    source === "rpc" ? (
+      <>
+        <p className="text-ui-base text-foreground-subtle">
+          {intl.formatMessage({ id: "ompModelRoles.fromAgent" })}
+        </p>
         <div className="flex max-h-[50vh] flex-col gap-3 overflow-y-auto py-1">
-          {catalogEntries.length === 0 ? (
-            <div className="rounded-lg border border-border bg-surface px-3 py-2 text-ui-base text-foreground-subtle">
-              {intl.formatMessage({ id: "settings.ompModelRoles.catalogEmpty" })}
-            </div>
-          ) : null}
-          {roles.map((item) => {
-            const parsed = parseOmpRoleValue(item.value, catalogEntries);
+          {rpcRoles.map((role) => {
+            const row = rpcRowState[role.roleId];
+            const effective = role.effectiveModel
+              ? `${role.effectiveModel.provider ?? ""}/${role.effectiveModel.modelId ?? ""}`
+              : "";
+            const pending = rpcPending[role.roleId];
+            const displayValue = pending ?? role.explicitValue ?? "";
+            const parsed = parseOmpRoleValue(displayValue, catalogEntries);
             const entry = catalogByModelPart.get(parsed.modelPart);
-            const known = Boolean(entry);
+            const overridden =
+              role.explicitValue !== undefined &&
+              role.source !== undefined &&
+              role.source !== "global" &&
+              role.source !== "default" &&
+              role.source !== "runtime";
             return (
-              <div key={item.role} className="flex items-center gap-3">
-                <span className="w-24 shrink-0 text-ui-base font-medium text-foreground">
-                  {item.role}
-                </span>
-                <select
-                  aria-label={item.role}
-                  className="h-8 min-w-0 flex-1 rounded-md border border-border bg-surface px-2 text-ui-base text-foreground"
-                  value={known ? parsed.modelPart : ""}
-                  onChange={(event) => handleRoleChange(item.role, event.target.value)}
-                >
-                  {!known ? (
-                    <option value="">
-                      {item.value || intl.formatMessage({ id: "settings.ompModelRoles.unset" })}
-                    </option>
-                  ) : null}
-                  {providerGroups.map((group) => (
-                    <optgroup key={group.label} label={group.label}>
-                      {group.models.map((model) => (
-                        <option key={model.value} value={model.value}>
-                          {model.label}
-                        </option>
-                      ))}
-                    </optgroup>
-                  ))}
-                </select>
-                {entry?.thoughtLevels?.length ? (
+              <div
+                key={role.roleId}
+                className="flex flex-col gap-1"
+                data-testid={`omp-role-${role.roleId}`}
+              >
+                <div className="flex items-center gap-3">
+                  <span className="w-24 shrink-0 text-ui-base font-medium text-foreground">
+                    {role.roleId}
+                  </span>
                   <select
-                    aria-label={`${item.role} ${intl.formatMessage({ id: "settings.ompModelRoles.thinkingLevel" })}`}
-                    className="h-8 w-28 shrink-0 rounded-md border border-border bg-surface px-2 text-ui-base text-foreground"
-                    value={parsed.levelSuffix ?? ""}
-                    onChange={(event) => handleLevelChange(item.role, event.target.value)}
+                    aria-label={role.roleId}
+                    className="h-8 min-w-0 flex-1 rounded-md border border-border bg-surface px-2 text-ui-base text-foreground disabled:opacity-60"
+                    value={parsed.modelPart || (displayValue === "auto" ? "auto" : "")}
+                    disabled={row?.saving || role.configurable === false}
+                    onChange={(event) =>
+                      void saveRpcRole(role.roleId, event.target.value, event.target.value === "")
+                    }
                   >
                     <option value="">
-                      {intl.formatMessage({ id: "settings.ompModelRoles.levelDefault" })}
+                      {intl.formatMessage({ id: "ompModelRoles.notConfigured" })}
+                      {effective
+                        ? ` (${effective})`
+                        : role.unresolvedReason
+                          ? ` (${role.unresolvedReason})`
+                          : ""}
                     </option>
-                    {entry.thoughtLevels.map((level) => (
-                      <option key={level} value={level}>
-                        {level}
-                      </option>
+                    <option value="auto">
+                      {intl.formatMessage({ id: "ompModelRoles.autoOption" })}
+                    </option>
+                    {providerGroups.map((group) => (
+                      <optgroup key={group.label} label={group.label}>
+                        {group.models.map((model) => (
+                          <option key={model.value} value={model.value}>
+                            {model.label}
+                          </option>
+                        ))}
+                      </optgroup>
                     ))}
                   </select>
-                ) : null}
+                  {entry?.thoughtLevels?.length ? (
+                    <select
+                      aria-label={`${role.roleId} ${intl.formatMessage({ id: "settings.ompModelRoles.thinkingLevel" })}`}
+                      className="h-8 w-28 shrink-0 rounded-md border border-border bg-surface px-2 text-ui-base text-foreground"
+                      value={parsed.levelSuffix ?? ""}
+                      onChange={(event) => handleRpcLevelChange(role.roleId, event.target.value)}
+                    >
+                      <option value="">
+                        {intl.formatMessage({ id: "settings.ompModelRoles.levelDefault" })}
+                      </option>
+                      {entry.thoughtLevels.map((level) => (
+                        <option key={level} value={level}>
+                          {level}
+                        </option>
+                      ))}
+                    </select>
+                  ) : null}
+                </div>
+                <div className="pl-24 text-ui-sm text-foreground-subtlest">
+                  {row?.saving ? (
+                    <span>{intl.formatMessage({ id: "ompModelRoles.saving" })}</span>
+                  ) : row?.error ? (
+                    <span className="text-[var(--color-danger)]">
+                      {intl.formatMessage({ id: "ompModelRoles.saveFailed" })}: {row.error}
+                    </span>
+                  ) : row?.savedAt ? (
+                    <span>
+                      {intl.formatMessage({ id: "ompModelRoles.saved" })}
+                      {overridden
+                        ? ` · ${intl.formatMessage({ id: "ompModelRoles.overridden" })}`
+                        : ""}
+                    </span>
+                  ) : role.configurable === false ? (
+                    <span>{role.nonConfigurableReason ?? ""}</span>
+                  ) : null}
+                </div>
               </div>
             );
           })}
         </div>
-      )}
-      <div className="flex items-center justify-end gap-2">
-        {saveError ? (
-          <span className="mr-auto text-ui-base text-foreground-subtle">{saveError}</span>
-        ) : savedAt ? (
-          <span className="mr-auto text-ui-base text-foreground-subtle">
-            {intl.formatMessage({
-              id: savedWithBackup
-                ? "settings.ompModelRoles.saved"
-                : "settings.ompModelRoles.created",
-            })}
-          </span>
-        ) : null}
         {!inline ? (
-          <Button variant="ghost" onClick={() => onOpenChange?.(false)}>
-            {intl.formatMessage({ id: "common.close" })}
-          </Button>
+          <div className="flex items-center justify-end gap-2">
+            <Button variant="ghost" onClick={() => onOpenChange?.(false)}>
+              {intl.formatMessage({ id: "common.close" })}
+            </Button>
+          </div>
         ) : null}
-        <Button disabled={saving || loadError !== null || !dirty} onClick={() => void handleSave()}>
-          {saving
-            ? intl.formatMessage({ id: "settings.ompModelRoles.saving" })
-            : intl.formatMessage({ id: "settings.ompModelRoles.save" })}
-        </Button>
-      </div>
-    </>
-  );
+      </>
+    ) : source === "fallback" ? (
+      <OmpModelRolesFallbackFields
+        catalogEntries={catalogEntries}
+        inline={inline}
+        onOpenChange={onOpenChange}
+      />
+    ) : null;
 
   if (inline) {
     return (

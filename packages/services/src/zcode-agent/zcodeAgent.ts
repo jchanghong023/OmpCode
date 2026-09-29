@@ -120,6 +120,10 @@ import type {
   ZCodeAgentPluginViewParams,
   ZCodeAgentPluginReferenceCatalogParams,
   ZCodeAgentSkillReferenceCatalogParams,
+  ZCodeAgentCompleteOmpCommandParams,
+  ZCodeAgentOmpModelRolesParams,
+  ZCodeAgentOmpSetModelRoleParams,
+  ZCodeAgentControlSubagentParams,
   ZCodeAgentResolveSuggestedPluginReferenceParams,
   ZCodeAgentRemovePluginMarketplaceParams,
   ZCodeAgentRestoreBuiltinPluginParams,
@@ -617,6 +621,22 @@ export interface IZCodeAgentService {
   getSkillReferenceCatalog(
     params: ZCodeAgentSkillReferenceCatalogParams,
   ): Promise<ZCodeSkillsReferenceCatalogResult>;
+  /** Fork：OMP 项目模式动态命令补全（complete_command；无执行副作用）。 */
+  completeOmpCommand(
+    params: ZCodeAgentCompleteOmpCommandParams,
+  ): Promise<import("@zcode/shared").ZCodeOmpCompleteCommandResult>;
+  /** Fork：OMP 全部可配置模型角色（get_model_roles；含未配置项与来源）。 */
+  getOmpModelRoles(
+    params: ZCodeAgentOmpModelRolesParams,
+  ): Promise<import("@zcode/shared").ZCodeOmpModelRolesResult>;
+  /** Fork：逐 role 持久保存（set_model_role；等待 OMP 落盘后返回）。 */
+  setOmpModelRole(
+    params: ZCodeAgentOmpSetModelRoleParams,
+  ): Promise<import("@zcode/shared").ZCodeOmpSetModelRoleResult>;
+  /** Fork：子代理显式控制（control_subagent：send_message/stop）。 */
+  controlSubagent(
+    params: ZCodeAgentControlSubagentParams,
+  ): Promise<import("@zcode/shared").ZCodeControlSubagentResult>;
   // 已保存工作流的 GUI 中枢：workspace 级、无会话，每次调用现扫 `<cwd>/.zcode/workflows/`。
   // 全局档传 `scope: "global"`：带 workspace 就用它当载体，不带则由 services 层自选本机载体运行时。
   listSavedWorkflows(params: ZCodeAgentListSavedWorkflowsParams): Promise<ZCodeWorkflowsListResult>;

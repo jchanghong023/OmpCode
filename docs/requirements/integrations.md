@@ -61,7 +61,7 @@ omp task / 子代理事件 → OmpProcess 校验 → ConversationEngine 权威�
 
 - 会话中隐藏 omp 无法持久化的赞/踩反馈入口，保留复制等其他回复操作。
 - ZCode 插件安装/市场不可用，市场入口隐藏；旧 plugins/referenceCatalog 返回合法空目录，桌面不内嵌 ZCode 官方插件运行时与内置技能包。技能的独立需求见 [skills.md](skills.md)。
-- omp 子代理 ID 不等价于 ZCode child session：目录项不提供子会话下钻，父会话内可展开记录；backgroundWorks 中的其他旧任务仍未发起。
+- omp 子代理的详细过程查看按拓扑区分（见 [omp-project-mode.md](omp-project-mode.md)）：项目模式下目录项提供只读子会话下钻（合成 childSessionId，内容为 `get_subagent_messages` 记录 + 实时事件）与 `control_subagent` 显式控制入口；旧「每会话一进程」拓扑下 omp 子代理 ID 仍不等价于 ZCode child session，不提供下钻，父会话内可展开记录。backgroundWorks 中的其他旧任务仍未发起。
 - 错峰任务仍不可用；自动化验收须跑通创建、立即运行、运行记录、暂停与恢复。
 
 ## 图片附件转发
