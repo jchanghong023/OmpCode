@@ -5,7 +5,7 @@ import { createInterface } from "node:readline";
 import { appendFileSync } from "node:fs";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { encodeJsonlLine } from "../domain/jsonlFraming.js";
-import type { HostGateway, HostUserInputAnswer } from "../app/ports.js";
+import type { HostGateway, HostPermissionAnswer, HostUserInputAnswer } from "../app/ports.js";
 import { logger } from "./logger.js";
 
 // OMP_AGENT_DEBUG_LOG：开发诊断用帧日志（dev 回环临时开启；生产不设置即零开销）。
@@ -254,6 +254,7 @@ export class ProtocolServer implements HostGateway {
     sessionId: string;
     prompt: string;
     options?: { optionId: string; label: string }[];
+    questions?: unknown[];
   }): Promise<HostUserInputAnswer> {
     return new Promise<HostUserInputAnswer>((resolve, reject) => {
       if (this.closed) {
@@ -278,6 +279,53 @@ export class ProtocolServer implements HostGateway {
           sessionId: params.sessionId,
           prompt: params.prompt,
           ...(params.options ? { input: { options: params.options } } : {}),
+          // 富问答（AskUserQuestion 形态）：完整问题集随反向请求下发。
+          ...(params.questions ? { questions: params.questions } : {}),
+        },
+      });
+    });
+  }
+
+  /** v3 结构化审批的反向请求；应答按 zcodePermissionResponseSchema 语义收敛，缺省 deny。 */
+  requestPermission(params: {
+    requestId: string;
+    sessionId: string;
+    toolCallId: string;
+    toolName: string;
+    reason: string;
+    riskLevel: "low" | "medium" | "high" | "critical";
+    input: unknown;
+    origin?: unknown;
+    options: unknown[];
+  }): Promise<HostPermissionAnswer> {
+    return new Promise<HostPermissionAnswer>((resolve, reject) => {
+      if (this.closed) {
+        reject(new Error("host transport closed"));
+        return;
+      }
+      const timer = setTimeout(() => {
+        this.pending.delete(params.requestId);
+        reject(new Error("host permission timeout"));
+      }, 170_000);
+      timer.unref?.();
+      this.pending.set(params.requestId, {
+        resolve: (result) => resolve(permissionAnswerOf(result)),
+        reject,
+        timer,
+      });
+      this.write({
+        id: params.requestId,
+        method: "interaction/requestPermission",
+        params: {
+          requestId: params.requestId,
+          sessionId: params.sessionId,
+          toolCallId: params.toolCallId,
+          toolName: params.toolName,
+          reason: params.reason,
+          riskLevel: params.riskLevel,
+          input: params.input,
+          ...(params.origin ? { origin: params.origin } : {}),
+          options: params.options,
         },
       });
     });
@@ -295,19 +343,39 @@ function userInputAnswerOf(result: unknown): HostUserInputAnswer {
   const record = result as { action?: unknown; content?: unknown };
   if (record.action === "accept" || record.action === "decline" || record.action === "cancel") {
     const content =
-      typeof record.content === "object" && record.content !== null
+      typeof record.content === "object" && record.content !== null && !Array.isArray(record.content)
         ? (record.content as Record<string, unknown>)
-        : {};
-    const optionId = typeof content.optionId === "string" ? content.optionId : undefined;
+        : undefined;
+    const optionId = typeof content?.optionId === "string" ? content.optionId : undefined;
     const freeText =
-      typeof content.freeText === "string"
+      typeof content?.freeText === "string"
         ? content.freeText
-        : typeof content.value === "string"
+        : typeof content?.value === "string"
           ? content.value
           : undefined;
     return record.action === "accept"
-      ? { action: "accept", optionId, freeText }
+      ? { action: "accept", optionId, freeText, ...(content ? { content } : {}) }
       : { action: record.action };
   }
   return { action: "cancel" };
+}
+
+/** 权限反向请求应答：{decision, reason?}；未知形态按 deny 收口（fail-closed）。 */
+function permissionAnswerOf(result: unknown): HostPermissionAnswer {
+  if (typeof result !== "object" || result === null) {
+    return { decision: "deny" };
+  }
+  const record = result as { decision?: unknown; reason?: unknown };
+  if (
+    record.decision === "allow" ||
+    record.decision === "deny" ||
+    record.decision === "escalate" ||
+    record.decision === "modify"
+  ) {
+    return {
+      decision: record.decision,
+      ...(typeof record.reason === "string" ? { reason: record.reason } : {}),
+    };
+  }
+  return { decision: "deny" };
 }

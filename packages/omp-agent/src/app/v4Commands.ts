@@ -263,9 +263,13 @@ export class V4CommandService {
         // omp 队列始终自动排空；该命令在空队列上幂等成立。
         this.requireSessionEngine(envelope.sessionId);
         return this.ack(envelope, "accepted");
-      case "snoozeInteractionAutoResolution":
-        this.requireSessionEngine(envelope.sessionId);
+      case "snoozeInteractionAutoResolution": {
+        // ask 首次交互 → omp ask_pause（幂等暂停服务端倒计时）+ 投影 snoozed。
+        const payload = envelope.payload as CommandPayloadMap["snoozeInteractionAutoResolution"];
+        const engine = this.requireSessionEngine(envelope.sessionId);
+        engine.snoozeInteractionAutoResolution(payload.interactionId);
         return this.ack(envelope, "accepted");
+      }
       case "cancelBackgroundWork":
         return this.ack(envelope, "rejected", {
           reasonCode: "fault.command.backgroundWorkCancelRejected.not_found",
@@ -327,14 +331,20 @@ export class V4CommandService {
 function interactionAnswerOf(
   answer: import("@zcode/shared/zcode-protocol-v4").CommandPayloadMap["resolveInteraction"]["answer"],
 ):
-  | { action: "accept"; optionId?: string; freeText?: string }
+  | { action: "accept"; optionId?: string; freeText?: string; content?: Record<string, unknown> }
   | { action: "decline" }
   | { action: "cancel" } {
   if (answer.action === "decline" || answer.action === "cancel") {
     return { action: answer.action };
   }
   if (answer.action === "accept") {
-    return { action: "accept", optionId: answer.optionId, freeText: answer.freeText };
+    // content 无损携带富问答的多题 answers/annotations（AskUserQuestion 回执收敛路径）。
+    return {
+      action: "accept",
+      optionId: answer.optionId,
+      freeText: answer.freeText,
+      ...(answer.content ? { content: answer.content } : {}),
+    };
   }
   if (answer.optionId !== undefined) {
     return { action: "accept", optionId: answer.optionId };

@@ -19,7 +19,7 @@ import {
 import { createLogEpoch } from "./ids.js";
 import { initialAState, type ProjectionAState, type TurnOutcome } from "./projectionTypes.js";
 import { TurnFileFacts } from "./fileFacts.js";
-import { contextWindowPatch, modelConfigPatch, runningControlPatch, terminalControlPatch, usagePatch } from "./projectionStatePatches.js";
+import { contextWindowPatch, modelConfigPatch, runningControlPatch, snoozePendingInteractions, terminalControlPatch, usagePatch } from "./projectionStatePatches.js";
 import { mergeDeltas, type LoggedDelta } from "./deltaMerge.js";
 import { OmpSubagentProjection } from "./ompSubagentDirectory.js";
 import { readProjectionFileChanges } from "./projectionFileChanges.js";
@@ -27,6 +27,7 @@ import { finalizeFailedQueuedTurn, finalizeTurnContexts } from "./projectionTurn
 import { applyProjectionToolCallUpdate } from "./projectionToolCallUpdate.js";
 import { bufferStreamText, materializeStreamTextRow } from "./projectionStreamText.js";
 import {
+  conversationRowIdOfToolCall,
   createMarkerRow,
   createStreamingRow,
   createTurnHeaderRow,
@@ -280,6 +281,17 @@ export class ConversationProjection {
 
   resolvePendingInteraction(interactionId: string): void {
     this.patchState({ pendingInteractions: this.state.pendingInteractions.filter((item) => item.interactionId !== interactionId) });
+  }
+
+  /** AskUserQuestion 首次交互暂停倒计时：autoResolution 置 snoozed（omp 侧 ask_pause 由交互代理发送）。 */
+  snoozeInteractionAutoResolution(interactionId: string): void {
+    const pendingInteractions = snoozePendingInteractions(this.state.pendingInteractions, interactionId);
+    if (pendingInteractions) this.patchState({ pendingInteractions });
+  }
+
+  /** 权限卡锚定：按 omp toolCallId 找最近一条工具行（找不到返回 null）。 */
+  rowIdOfToolCall(toolCallId: string): number | null {
+    return conversationRowIdOfToolCall(this.rows, this.rowIds, toolCallId);
   }
 
   addTimelineMarker(marker: TimelineMarkerPayload): void {

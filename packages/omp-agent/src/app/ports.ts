@@ -3,12 +3,16 @@
 import type {
   OmpCommandFrame,
   OmpConfigUpdateFrame,
-  OmpExtensionUiResponseFrame,
   OmpPromptResultFrame,
   OmpSessionEventFrame,
   OmpSessionInfoUpdateFrame,
   OmpSubagentFrame,
 } from "../domain/ompFrames.js";
+import type {
+  OmpAskRequestFrame,
+  OmpBypassFrame,
+  OmpPermissionRequestFrame,
+} from "../domain/ompForkFrames.js";
 import type { OmpStateData } from "../domain/ompFrames.js";
 import type { OmpContextReport } from "../domain/ompContextReport.js";
 export type { OmpStateData };
@@ -24,9 +28,11 @@ export interface OmpSessionProcess {
   readonly ompSessionFile: string | null;
   /** ready 后 set_subagent_subscription 的事实；旧测试进程可省略。 */
   readonly subagentSubscriptionAvailable?: boolean;
+  /** negotiate_protocol v3（fork surface）协商成功的事实；未协商/协商中为 false。 */
+  readonly forkSurface?: boolean;
   start(): Promise<void>;
   send(command: OmpCommandFrame): Promise<OmpCommandOutcome>;
-  respondUi(response: OmpExtensionUiResponseFrame): void;
+  respondUi(response: OmpBypassFrame): void;
   /** 拉一次 get_state；进程未就绪或失败返回 null。 */
   refreshState(): Promise<OmpStateData | null>;
   /** 空闲时读取 omp /context；输出由适配器消费，不进入聊天文本。 */
@@ -56,6 +62,10 @@ export interface OmpProcessFactory {
       resumeSessionPath?: string;
       onEvent: (event: OmpSessionEventFrame) => void;
       onUiRequest: (request: OmpUiRequest) => void;
+      /** v3：结构化工具审批请求（rpc-ui-protocol 4.1）。 */
+      onPermissionRequest?: (request: OmpPermissionRequest) => void;
+      /** v3：富 ask 答疑请求（rpc-ui-protocol 4.3）。 */
+      onAskRequest?: (request: OmpAskRequest) => void;
       onExit: (code: number | null) => void;
     } & OmpSideChannelHandlers,
   ): OmpSessionProcess;
@@ -72,8 +82,22 @@ export interface OmpUiRequest {
     options?: string[];
     optionDetails?: { description?: string }[];
     url?: string;
+    sensitive?: boolean;
   };
-  respond(response: OmpExtensionUiResponseFrame): void;
+  respond(response: OmpBypassFrame): void;
+}
+
+/** v3 结构化工具审批请求；应答经同车道旁路帧回传。 */
+export interface OmpPermissionRequest {
+  frame: OmpPermissionRequestFrame;
+  respond(response: OmpBypassFrame): void;
+}
+
+/** v3 富 ask 请求；pause 幂等暂停服务端倒计时。 */
+export interface OmpAskRequest {
+  frame: OmpAskRequestFrame;
+  respond(response: OmpBypassFrame): void;
+  pause(): void;
 }
 
 export interface OmpStoreSessionSummary {
@@ -97,11 +121,25 @@ export interface OmpStorePort {
   deleteSession(sessionPath: string): Promise<boolean>;
 }
 
-/** omp 反向 UI 请求经宿主呈现的应答。 */
+/** omp 反向 UI 请求经宿主呈现的应答；content 无损承载多题 answers/annotations。 */
 export type HostUserInputAnswer =
-  | { action: "accept"; optionId?: string; freeText?: string }
+  | { action: "accept"; optionId?: string; freeText?: string; content?: Record<string, unknown> }
   | { action: "decline" }
   | { action: "cancel" };
+
+/** 宿主权限反向请求（interaction/requestPermission）的应答。 */
+export type HostPermissionAnswer = {
+  decision: "allow" | "deny" | "escalate" | "modify";
+  reason?: string;
+};
+
+/** v4 userInput 反向请求可携带的富问题集（wire schema zcodeUserInputRequestParamsSchema.questions）。 */
+export interface HostUserInputQuestion {
+  question: string;
+  header: string;
+  options: { value: string; label: string; description?: string; preview?: string }[];
+  multiSelect?: boolean;
+}
 
 export interface HostGateway {
   /** 发送 v4/conversation/frame 通知（params = 物理 wire 帧）。 */
@@ -112,5 +150,18 @@ export interface HostGateway {
     sessionId: string;
     prompt: string;
     options?: { optionId: string; label: string }[];
+    questions?: HostUserInputQuestion[];
   }): Promise<HostUserInputAnswer>;
+  /** 反向请求 interaction/requestPermission，等待宿主应答；缺省实现可省略（走 v4 resolveInteraction）。 */
+  requestPermission?(params: {
+    requestId: string;
+    sessionId: string;
+    toolCallId: string;
+    toolName: string;
+    reason: string;
+    riskLevel: "low" | "medium" | "high" | "critical";
+    input: unknown;
+    origin?: unknown;
+    options: { optionId: string; kind: string; name: string; description?: string; response: unknown }[];
+  }): Promise<HostPermissionAnswer>;
 }

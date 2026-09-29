@@ -1,9 +1,29 @@
 // A 区状态的纯 patch 构造器（键级整体替换）。从 conversationProjection 拆出
 // （架构 maxFileLines=400）；输入旧状态，输出新键值，不改状态机本身。
 
-import type { SessionConfigState, StatePatch } from "@zcode/shared/zcode-protocol-v4";
+import type { PendingInteraction, SessionConfigState, StatePatch } from "@zcode/shared/zcode-protocol-v4";
 import type { ProjectionAState, TurnOutcome } from "./projectionTypes.js";
 import type { OmpContextReport } from "./ompContextReport.js";
+
+/** AskUserQuestion 首次交互暂停倒计时：autoResolution 置 snoozed；未登记或已暂停返回 null。 */
+export function snoozePendingInteractions(
+  interactions: PendingInteraction[],
+  interactionId: string,
+): PendingInteraction[] | null {
+  const current = interactions.find((item) => item.interactionId === interactionId);
+  if (!current?.autoResolution || current.autoResolution.state === "snoozed") {
+    return null;
+  }
+  const next: PendingInteraction = {
+    ...current,
+    autoResolution: {
+      state: "snoozed",
+      startedAt: current.autoResolution.startedAt,
+      snoozedAt: Date.now(),
+    },
+  };
+  return interactions.map((item) => (item.interactionId === interactionId ? next : item));
+}
 
 export function runningControlPatch(): StatePatch {
   return {

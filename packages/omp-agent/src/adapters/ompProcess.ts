@@ -9,9 +9,7 @@ import {
   ompAvailableCommandsFrameSchema,
   ompCommandOutputFrameSchema,
   ompConfigUpdateFrameSchema,
-  ompExtensionUiRequestFrameSchema,
   ompPromptResultFrameSchema,
-  ompReadyFrameSchema,
   ompResponseFrameSchema,
   ompRpcChunkFrameSchema,
   ompSessionEventFrameSchema,
@@ -19,15 +17,25 @@ import {
   ompStateDataSchema,
   ompSubagentFrameSchema,
   type OmpCommandFrame,
-  type OmpExtensionUiResponseFrame,
 } from "../domain/ompFrames.js";
+import type { OmpBypassFrame } from "../domain/ompForkFrames.js";
 import { encodeJsonlLine } from "../domain/jsonlFraming.js";
-import type { OmpCommandOutcome, OmpProcessFactory, OmpSessionProcess, OmpStateData, OmpUiRequest } from "../app/ports.js";
+import { awaitOmpReady } from "./ompReady.js";
+import { dispatchOmpUiFrame } from "./ompUiFrames.js";
+import { parseJson } from "./jsonl.js";
+import type {
+  OmpCommandOutcome,
+  OmpProcessFactory,
+  OmpSessionProcess,
+  OmpStateData,
+  OmpAskRequest,
+  OmpPermissionRequest,
+  OmpUiRequest,
+} from "../app/ports.js";
 import type { OmpSideChannelHandlers } from "../app/ports.js";
 import { logger } from "./logger.js";
 import { PromptResultTracker } from "../domain/promptResultTracker.js";
 
-const READY_TIMEOUT_MS = 60_000;
 const COMMAND_TIMEOUT_MS = 120_000;
 
 interface PendingCommand {
@@ -47,6 +55,7 @@ export function createOmpProcessFactory(binaryPath: string, extraArgs: string[] 
 class OmpChildProcess implements OmpSessionProcess {
   ompSessionFile: string | null = null;
   subagentSubscriptionAvailable: boolean | undefined;
+  forkSurface: boolean | undefined;
   private child: ChildProcessWithoutNullStreams | null = null;
   private assembler = new OmpFrameAssembler();
   private pending = new Map<string, PendingCommand>();
@@ -63,7 +72,15 @@ class OmpChildProcess implements OmpSessionProcess {
   constructor(
     private readonly binaryPath: string,
     private readonly extraArgs: string[],
-    private readonly options: { cwd: string; resumeSessionPath?: string; onEvent: (event: import("../domain/ompFrames.js").OmpSessionEventFrame) => void; onUiRequest: (request: OmpUiRequest) => void; onExit: (code: number | null) => void } & OmpSideChannelHandlers,
+    private readonly options: {
+      cwd: string;
+      resumeSessionPath?: string;
+      onEvent: (event: import("../domain/ompFrames.js").OmpSessionEventFrame) => void;
+      onUiRequest: (request: OmpUiRequest) => void;
+      onPermissionRequest?: (request: OmpPermissionRequest) => void;
+      onAskRequest?: (request: OmpAskRequest) => void;
+      onExit: (code: number | null) => void;
+    } & OmpSideChannelHandlers,
   ) {}
 
   async start(): Promise<void> {
@@ -83,37 +100,12 @@ class OmpChildProcess implements OmpSessionProcess {
         logger.debug("omp stderr", { text: text.slice(0, 2000) });
       }
     });
-    const ready = new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error("omp core ready timeout")), READY_TIMEOUT_MS);
-      const onLine = (line: string) => {
-        const frame = parseJson(line);
-        if (!frame || typeof frame !== "object") {
-          return;
-        }
-        const readyParsed = ompReadyFrameSchema.safeParse(frame);
-        if (readyParsed.success) {
-          clearTimeout(timer);
-          if (readyParsed.data.supportedProtocolVersions?.includes(2)) {
-            this.request({ type: "negotiate_protocol", protocolVersion: 2 }).catch((error) => {
-              logger.warn("omp v2 协商失败，回落 v1", { error: String(error) });
-            });
-          }
-          readline.removeListener("line", onLine);
-          resolve();
-        }
-      };
-      const readline = createInterface({ input: child.stdout });
-      readline.on("line", onLine);
-      readline.once("close", () => {
-        clearTimeout(timer);
-        reject(new Error("omp core stdout closed before ready"));
-      });
-      child.once("exit", (code) => {
-        clearTimeout(timer);
-        reject(new Error(`omp core exited before ready (code ${code ?? "null"})`));
-      });
+    await awaitOmpReady(child, {
+      request: (command) => this.request(command),
+      onForkSurface: () => {
+        this.forkSurface = true;
+      },
     });
-    await ready;
     this.wireStdout(child);
     const subscription = await this.request({ type: "set_subagent_subscription", level: "events" }, 10_000).catch((error) => ({ success: false, error: String(error) }));
     this.subagentSubscriptionAvailable = subscription.success;
@@ -226,15 +218,16 @@ class OmpChildProcess implements OmpSessionProcess {
         else logger.warn("invalid omp subagent frame", { issues: parsed.error.issues.length });
         return;
       }
-      case "extension_ui_request": {
-        const parsed = ompExtensionUiRequestFrameSchema.safeParse(record);
-        if (!parsed.success) {
-          logger.warn("invalid extension_ui_request", { issues: parsed.error.issues.length });
-          return;
-        }
-        this.options.onUiRequest({ frame: parsed.data, respond: (response) => this.respondUi(response) });
+      case "extension_ui_request":
+      case "permission_request":
+      case "ask_request":
+        dispatchOmpUiFrame(record, {
+          onUiRequest: this.options.onUiRequest,
+          onPermissionRequest: this.options.onPermissionRequest,
+          onAskRequest: this.options.onAskRequest,
+          respond: (response) => this.respondUi(response),
+        });
         return;
-      }
       default: {
         const parsed = ompSessionEventFrameSchema.safeParse(record);
         if (parsed.success) {
@@ -320,7 +313,7 @@ class OmpChildProcess implements OmpSessionProcess {
     clearTimeout(pending.timer);
     pending.resolve({ success, data: data.data, error: data.error });
   }
-  respondUi(response: OmpExtensionUiResponseFrame): void {
+  respondUi(response: OmpBypassFrame): void {
     const child = this.child;
     if (!child || child.killed || !child.stdin.writable) return;
     child.stdin.write(encodeJsonlLine(response), (error) => {
@@ -381,14 +374,3 @@ class OmpChildProcess implements OmpSessionProcess {
   }
 }
 
-function parseJson(line: string): unknown {
-  const trimmed = line.trim();
-  if (trimmed.length === 0) {
-    return null;
-  }
-  try {
-    return JSON.parse(trimmed);
-  } catch {
-    return null;
-  }
-}

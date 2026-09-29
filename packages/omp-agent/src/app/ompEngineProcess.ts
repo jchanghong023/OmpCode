@@ -11,6 +11,8 @@ import type {
 } from "../domain/ompFrames.js";
 import type { OmpProcessFactory, OmpSessionProcess } from "./ports.js";
 import type { OmpContextReport } from "../domain/ompContextReport.js";
+import type { OmpInteractionProxy } from "./ompInteractionProxy.js";
+import type { ConversationProjection } from "../domain/conversationProjection.js";
 
 /** 从会话自己的 omp 进程读取当前可执行命令，避免以工作区目录代替会话事实。 */
 export async function readOmpSkillCommands(process: OmpSessionProcess): Promise<unknown> {
@@ -23,9 +25,45 @@ export async function readOmpSkillCommands(process: OmpSessionProcess): Promise<
   return record.commands;
 }
 
+/** 活动后状态回读（agent_end 等）：回读失败不覆盖既有投影，同一进程才应用。 */
+export async function refreshEngineStateAfterActivity(
+  process: OmpSessionProcess | null,
+  isCurrent: (process: OmpSessionProcess) => boolean,
+  applyState: (state: OmpStateData | null) => void,
+): Promise<void> {
+  if (!process) return;
+  const state = await process.refreshState().catch(() => null);
+  if (isCurrent(process)) applyState(state);
+}
+
+/** 真实 omp 的 model_changed 无载荷：回读 get_state 落配置，模型变化补 modelChange 标记。 */
+export async function refreshEngineModelAfterChange(
+  process: OmpSessionProcess | null,
+  projection: ConversationProjection,
+  applyState: (state: OmpStateData) => void,
+  scheduleFlush: () => void,
+): Promise<void> {
+  if (!process) {
+    return;
+  }
+  const state = await process.refreshState().catch(() => null);
+  if (!state) {
+    return;
+  }
+  const previous = projection.stateSnapshot.config;
+  const nextProvider = state.model?.provider ?? previous.provider;
+  const nextModel = state.model?.id ?? previous.model;
+  applyState(state);
+  if (previous.provider !== nextProvider || previous.model !== nextModel) {
+    projection.addTimelineMarker({ type: "modelChange", fromProvider: previous.provider, fromModel: previous.model, toProvider: nextProvider, toModel: nextModel, toThought: state.thinkingLevel ?? "" });
+  }
+  scheduleFlush();
+}
+
 export interface EngineProcessHooks {
   onEvent: Parameters<import("./ports.js").OmpProcessFactory["create"]>[0]["onEvent"];
-  onUiRequest: Parameters<import("./ports.js").OmpProcessFactory["create"]>[0]["onUiRequest"];
+  /** 三类反向交互请求（extension_ui / permission / ask）统一由交互代理应答。 */
+  interaction: OmpInteractionProxy;
   onExit: (code: number | null) => void;
   /** 本地命令输出 → 当前轮助手文本。 */
   onCommandOutput: (frame: { text: string }) => void;
@@ -51,7 +89,9 @@ export function createEngineOmpProcess(
     cwd: options.cwd,
     resumeSessionPath: options.resumeSessionPath,
     onEvent: hooks.onEvent,
-    onUiRequest: hooks.onUiRequest,
+    onUiRequest: (request) => void hooks.interaction.handle(request),
+    onPermissionRequest: (request) => void hooks.interaction.handlePermission(request),
+    onAskRequest: (request) => void hooks.interaction.handleAsk(request),
     onExit: hooks.onExit,
     onCommandOutput: hooks.onCommandOutput,
     onPromptResult: hooks.onPromptResult,

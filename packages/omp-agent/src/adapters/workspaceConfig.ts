@@ -1,15 +1,28 @@
 // workspace-config 目录构建：用一个常驻 omp 进程查询模型目录与思考档位。
 // omp 的 provider/model 注册表是进程级的；每个会话进程重复查询代价高且无必要。
+// v3 fork surface 的工作区级查询（test_model / list_mcp_servers）也复用该进程。
 
 import type { WorkspaceConfigState } from "@zcode/shared/zcode-protocol-v4";
 import type { OmpProcessFactory } from "../app/ports.js";
 import { slashCommandsOfResponse } from "../domain/ompCommands.js";
 import { ompModelCatalogEntrySchema } from "../domain/ompFrames.js";
+import {
+  ompMcpServerRowSchema,
+  ompModelTestResultSchema,
+  type OmpForkQueryCommand,
+  type OmpMcpServerRow,
+  type OmpModelTestResult,
+} from "../domain/ompForkFrames.js";
 import { logger } from "./logger.js";
 
 export interface WorkspaceConfigLoaderOptions {
   /** 命令目录变化推送（available_commands_update；目录进程常驻监听）；载荷为 omp 原始命令数组。 */
   onCommandsUpdate?: (commands: unknown) => void;
+}
+
+/** 未协商 v3 的 omp 对 fork 命令的拒绝文案（rpc-ui-protocol 4.0 既有行为）。 */
+function isUnknownCommand(error: string | undefined): boolean {
+  return typeof error === "string" && /unknown command/i.test(error);
 }
 
 export function createWorkspaceConfigLoader(
@@ -123,7 +136,58 @@ export function createWorkspaceConfigLoader(
     return record.commands;
   }
 
-  return { loadWorkspaceConfig, loadSkillCommands };
+  /**
+   * v3 fork surface 工作区级查询。协商顺序由 omp 串行 stdin 保证（negotiate_protocol
+   * 先于本命令写入），因此到达时 v3 门控已定：未协商二进制回 Unknown command → 返回
+   * null（能力缺失，调用方按既有降级语义处理），其余失败如实抛出。
+   */
+  async function sendForkQuery(command: OmpForkQueryCommand): Promise<unknown | null> {
+    const processHandle = await ensureProcess();
+    const outcome = await processHandle.send(command);
+    if (!outcome.success) {
+      if (isUnknownCommand(outcome.error)) {
+        return null;
+      }
+      throw new Error(outcome.error ?? `omp ${command.type} failed`);
+    }
+    return outcome.data;
+  }
+
+  /** provider/testModelConnectivity 后端：实测连通性，六类失败归因随载荷返回。 */
+  async function testModel(provider: string, modelId: string): Promise<OmpModelTestResult | null> {
+    const data = await sendForkQuery({ type: "test_model", provider, modelId });
+    if (data === null) {
+      return null;
+    }
+    const parsed = ompModelTestResultSchema.safeParse(data);
+    if (!parsed.success) {
+      logger.warn("omp test_model 响应不合法", { issues: parsed.error.issues.length });
+      throw new Error("omp test_model returned an invalid payload");
+    }
+    return parsed.data;
+  }
+
+  /** mcp/list 后端：omp 配置的 MCP 服务器与尽力连接状态。 */
+  async function listMcpServers(): Promise<OmpMcpServerRow[] | null> {
+    const data = await sendForkQuery({ type: "list_mcp_servers" });
+    if (data === null) {
+      return null;
+    }
+    const record = typeof data === "object" && data !== null ? (data as { servers?: unknown }) : {};
+    const rows = Array.isArray(record.servers) ? record.servers : [];
+    const servers: OmpMcpServerRow[] = [];
+    for (const row of rows) {
+      const parsed = ompMcpServerRowSchema.safeParse(row);
+      if (parsed.success) {
+        servers.push(parsed.data);
+      } else {
+        logger.warn("omp list_mcp_servers 行不合法", { issues: parsed.error.issues.length });
+      }
+    }
+    return servers;
+  }
+
+  return { loadWorkspaceConfig, loadSkillCommands, testModel, listMcpServers };
 }
 
 function parseModels(data: unknown): {

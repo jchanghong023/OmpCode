@@ -26,7 +26,6 @@ export const UNSUPPORTED_METHODS = new Set<string>([
   zcodeProtocolMethods.workflowsMove,
   zcodeProtocolMethods.workspaceGenerateText,
   zcodeProtocolMethods.workspaceCancelGenerateText,
-  zcodeProtocolMethods.providerTestModelConnectivity,
   zcodeProtocolMethods.workspaceHookTrustGrant,
   zcodeProtocolMethods.sessionDebug,
   zcodeProtocolMethods.sessionFork,

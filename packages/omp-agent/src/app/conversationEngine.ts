@@ -8,7 +8,7 @@ import type { OmpSessionEventFrame, OmpStateData } from "../domain/ompFrames.js"
 import type { HostGateway, HostUserInputAnswer, OmpProcessFactory, OmpSessionProcess } from "./ports.js";
 import { ConversationTopicPublisher, type SubscribeOptions } from "./topicPublisher.js";
 import { OmpInteractionProxy } from "./ompInteractionProxy.js";
-import { applyEngineAutoCompaction, applyEngineCompaction, applyEngineSetModel, applyEngineThoughtLevel, createEngineOmpProcess, projectEngineContextWindow, readOmpSkillCommands } from "./ompEngineProcess.js";
+import { applyEngineAutoCompaction, applyEngineCompaction, applyEngineSetModel, applyEngineThoughtLevel, createEngineOmpProcess, projectEngineContextWindow, readOmpSkillCommands, refreshEngineModelAfterChange, refreshEngineStateAfterActivity } from "./ompEngineProcess.js";
 import { dispatchOmpText } from "./ompPromptDispatch.js";
 import { TrailingThrottle } from "./trailingThrottle.js";
 import { deriveTitle, agentInvokedOf } from "../domain/titleText.js";
@@ -67,6 +67,8 @@ export class ConversationEngine {
       addPendingInteraction: (interaction) => this.projection.addPendingInteraction(interaction),
       resolvePendingInteraction: (interactionId) => this.projection.resolvePendingInteraction(interactionId),
       scheduleFlush: () => this.scheduleFlush(),
+      // 权限卡锚定到 omp 工具行（tool_execution_start 已建行时）。
+      anchorRowIdOf: (toolCallId) => this.projection.rowIdOfToolCall(toolCallId),
     });
     this.publisher = new ConversationTopicPublisher(init.sessionId, this.projection, init.gateway);
     this.titleInitialized = Boolean(init.initialTitle);
@@ -103,7 +105,7 @@ export class ConversationEngine {
       { cwd: this.workspacePath, resumeSessionPath: this.resumeSessionPath },
       {
         onEvent: (event) => this.handleOmpEvent(event),
-        onUiRequest: (request) => void this.interactionProxy.handle(request),
+        interaction: this.interactionProxy,
         onExit: (code) => this.handleOmpExit(code, process),
         onCommandOutput: ({ text }) => {
           if (!this.projector.isStreaming) this.projection.activateQueuedTurn();
@@ -181,7 +183,7 @@ export class ConversationEngine {
     // 真实 omp 的 model_changed 不带载荷（#emit({type}) 无字段）：回读 get_state 再落
     // 配置与 modelChange 标记，避免 UI 出现空 provider/model 的占位标记。
     if (event.type === "model_changed" && !event.model) {
-      void this.refreshModelAfterChange();
+      void refreshEngineModelAfterChange(this.ompProcess, this.projection, (state) => this.applyOmpState(state), () => this.scheduleFlush());
       return;
     }
     this.projector.handleEvent(event);
@@ -193,36 +195,23 @@ export class ConversationEngine {
     }
     this.scheduleFlush();
     if (event.type === "agent_end" && event.isTerminal !== false) {
-      void this.refreshStateAfterActivity();
+      void refreshEngineStateAfterActivity(this.ompProcess, (process) => this.ompProcess === process, (state) => this.applyOmpState(state));
     }
   }
   private async refreshStateAfterActivity(): Promise<void> {
-    const process = this.ompProcess;
-    if (!process) return;
-    const state = await process.refreshState().catch(() => null);
-    if (this.ompProcess === process) this.applyOmpState(state);
-  }
-  private async refreshModelAfterChange(): Promise<void> {
-    const process = this.ompProcess;
-    if (!process) {
-      return;
-    }
-    const state = await process.refreshState().catch(() => null);
-    if (!state) {
-      return;
-    }
-    const previous = this.projection.stateSnapshot.config;
-    const nextProvider = state.model?.provider ?? previous.provider;
-    const nextModel = state.model?.id ?? previous.model;
-    this.applyOmpState(state);
-    if (previous.provider !== nextProvider || previous.model !== nextModel) {
-      this.projection.addTimelineMarker({ type: "modelChange", fromProvider: previous.provider, fromModel: previous.model, toProvider: nextProvider, toModel: nextModel, toThought: state.thinkingLevel ?? "" });
-    }
-    this.scheduleFlush();
+    await refreshEngineStateAfterActivity(this.ompProcess, (process) => this.ompProcess === process, (state) => this.applyOmpState(state));
   }
   /** v4 resolveInteraction 命令入口：把 UI 应答汇入等待中的交互。 */
   settleInteraction(interactionId: string, answer: HostUserInputAnswer): boolean {
     return this.interactionProxy.settle(interactionId, answer);
+  }
+
+  /** v4 snoozeInteractionAutoResolution：ask 首次交互暂停倒计时（omp ask_pause + 投影 snoozed）。 */
+  snoozeInteractionAutoResolution(interactionId: string): boolean {
+    const paused = this.interactionProxy.snooze(interactionId);
+    this.projection.snoozeInteractionAutoResolution(interactionId);
+    this.scheduleFlush();
+    return paused;
   }
   private handleOmpExit(code: number | null, process: OmpSessionProcess): void {
     if (this.ompProcess !== process) return;

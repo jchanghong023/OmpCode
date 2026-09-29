@@ -64,6 +64,8 @@ export const ompExtensionUiRequestFrameSchema = z.object({
   launchUrl: z.string().optional(),
   instructions: z.string().optional(),
   timeout: z.number().optional(),
+  // v3（rpc-ui-protocol 4.3）：input/editor 的密码框渲染标记；login secret 输入解禁。
+  sensitive: z.boolean().optional(),
 });
 export type OmpExtensionUiRequestFrame = z.infer<typeof ompExtensionUiRequestFrameSchema>;
 
@@ -330,6 +332,8 @@ export type OmpCommandFrame =
   | { id?: string; type: "abort_bash" }
   | { id?: string; type: "set_subagent_subscription"; level: "off" | "progress" | "events" }
   | { id?: string; type: "get_subagents" }
+  // v3 fork surface 工作区级查询（未协商 v3 的 omp 回 Unknown command，调用方降级）。
+  | import("./ompForkFrames.js").OmpForkQueryCommand
   | {
       id?: string;
       type: "get_subagent_messages";

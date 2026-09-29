@@ -88,11 +88,17 @@ export async function runCliMain(
       requestUserInput: (params) =>
         gatewayRef.server?.requestUserInput(params) ??
         Promise.resolve({ action: "cancel" as const }),
+      requestPermission: (params) =>
+        gatewayRef.server?.requestPermission(params) ??
+        Promise.resolve({ decision: "deny" as const }),
     },
     workspacePath,
     workspaceKey,
     loadWorkspaceConfig: workspaceCatalog.loadWorkspaceConfig,
     loadWorkspaceSkillCommands: workspaceCatalog.loadSkillCommands,
+    // v3 fork surface 工作区级查询（模型连通性实测、MCP 状态）复用同一目录 omp 进程。
+    testModelConnectivity: workspaceCatalog.testModel,
+    listMcpServers: workspaceCatalog.listMcpServers,
   });
   appRef.app = app;
   const protocolServer = new ProtocolServer({

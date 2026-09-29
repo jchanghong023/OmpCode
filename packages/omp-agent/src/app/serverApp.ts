@@ -6,6 +6,7 @@ import { zcodeProtocolMethods, zcodeSkillsReferenceCatalogParamsSchema } from "@
 import { createLegacyHandlers } from "./legacyMethods.js";
 import { normalizeOmpSlashCommands } from "../domain/ompCommands.js";
 import { skillCatalogOfCommands } from "../domain/ompSkills.js";
+import type { OmpMcpServerRow, OmpModelTestResult } from "../domain/ompForkFrames.js";
 import { ProtocolError } from "./errors.js";
 import { UNSUPPORTED_METHODS } from "./unsupportedMethods.js";
 import { SessionRegistry } from "./sessionRegistry.js";
@@ -23,6 +24,9 @@ export interface ServerAppDeps {
   /** 模型目录来源（registry omp 进程的查询结果，由 adapter 层提供）。 */
   loadWorkspaceConfig: () => Promise<WorkspaceConfigState>;
   loadWorkspaceSkillCommands: () => Promise<unknown>;
+  /** v3 fork surface 工作区级查询（目录 omp 进程）；omp 未协商 v3 时返回 null 按能力缺失降级。 */
+  testModelConnectivity?: (provider: string, modelId: string) => Promise<OmpModelTestResult | null>;
+  listMcpServers?: () => Promise<OmpMcpServerRow[] | null>;
 }
 
 export class ServerApp {
@@ -46,6 +50,8 @@ export class ServerApp {
       workspaceIdentity: deps.workspaceIdentity,
       deliveredAccountConfigRevision: null,
       loadWorkspaceConfig: () => this.getWorkspaceConfig(),
+      testModelConnectivity: deps.testModelConnectivity,
+      listMcpServers: deps.listMcpServers,
     });
   }
 
