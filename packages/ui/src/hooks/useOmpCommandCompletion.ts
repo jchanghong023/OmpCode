@@ -22,8 +22,9 @@ const EMPTY: OmpCommandCompletionState = { items: [], loading: false };
 
 /**
  * Fork（omp-project-mode.md）：OMP 项目模式动态命令补全（complete_command）。
- * 无执行副作用；调用方按输入丢弃过期响应。能力缺失（旧核/远端不支持）时返回空表，
- * 面板回落本地目录过滤，不报错打断输入。
+ * 无执行副作用；调用方按输入丢弃过期响应。能力缺失（旧核/远端不支持，-32601
+ * "not supported by omp core"）时记入 ref，后续 Effect 跳过请求（loading 不再置真），
+ * 返回空表，面板回落本地目录过滤，不报错打断输入。
  */
 export function useOmpCommandCompletion(
   options: UseOmpCommandCompletionOptions,
@@ -38,9 +39,17 @@ export function useOmpCommandCompletion(
   const [state, setState] = useState<OmpCommandCompletionState>(EMPTY);
   const seqRef = useRef(0);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // 能力缺失记忆：避免旧核每键一次注定失败的 RPC 与空面板闪烁；换工作区/远端会话/服务后重置。
+  const capabilityMissingRef = useRef(false);
   const text = options.text;
   const enabled = options.enabled && text !== null && text.startsWith("/");
   const remoteSessionId = resolution.remoteSessionId ?? options.remoteSessionId;
+
+  // workspaceKey（workspacePath + workspaceIdentity）、remoteSessionId 或 services 变化时
+  // 重置能力缺失记忆：新目标可能支持 complete_command。
+  useEffect(() => {
+    capabilityMissingRef.current = false;
+  }, [services, remoteSessionId, options.workspacePath, options.workspaceIdentity]);
 
   useEffect(() => {
     if (debounceRef.current) {
@@ -48,6 +57,13 @@ export function useOmpCommandCompletion(
       debounceRef.current = null;
     }
     if (!enabled || !rpcReady || !text) {
+      const seq = ++seqRef.current;
+      void seq;
+      setState(EMPTY);
+      return;
+    }
+    // 能力缺失（旧核）后跳过请求：loading 不置真，面板回落本地目录过滤。
+    if (capabilityMissingRef.current) {
       const seq = ++seqRef.current;
       void seq;
       setState(EMPTY);
@@ -72,8 +88,11 @@ export function useOmpCommandCompletion(
         })
         .catch((error: unknown) => {
           if (seq !== seqRef.current) return;
-          // 能力缺失是合法回落（旧核 -32601）；其余仅记录，不打断输入。
+          // 能力缺失是合法回落（旧核 -32601）；记入 ref 跳过后续请求。其余仅记录，不打断输入。
           const message = error instanceof Error ? error.message : String(error);
+          if (message.includes("not supported by omp core")) {
+            capabilityMissingRef.current = true;
+          }
           logger.debug("[useOmpCommandCompletion] 动态补全不可用", { error: message });
           setState({ items: [], loading: false });
         });

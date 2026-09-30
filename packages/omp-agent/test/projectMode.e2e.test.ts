@@ -331,6 +331,12 @@ test("Z03/O32: 斜杠输入走 execute_command；未知命令报错不进模型"
         JSON.stringify(row).includes("fake help: try /model"),
       );
     });
+    // 修复（G12）：fake help 为本地命令（agentInvoked=false），输出可见后该轮次必须
+    // 异步收口为 completedSuccess，不得永久挂起。
+    await harness.waitUntil(() => {
+      const state = harness.collectState(topic) as { control?: { phase?: string } };
+      return state.control?.phase === "completedSuccess" ? state.control : undefined;
+    }, 30000);
     await sendText(harness, sessionId, "send-unknown", "/definitely-not-a-command");
     await harness.waitUntil(() =>
       JSON.stringify(harness.collectState(topic)).includes("Unknown command"),
@@ -431,6 +437,81 @@ test("Z09/Z10/Z15: 子代理过程卡片、只读详情、目录与控制入口"
       action: "stop",
     })) as { result: { status: string } };
     assert.equal(control.result.status, "stopped");
+  } finally {
+    harness.endStdin();
+    await harness.exited;
+  }
+});
+
+test("Z09b: 子代理只读详情实时增长——subagent_event 触发重读合并且不产生重复行", async () => {
+  const { harness } = await startAdapter();
+  try {
+    const sessionId = await createSession(harness, "create-sub-live", "spawn subagent please");
+    const topic = `conversation/${sessionId}`;
+    await subscribe(harness, topic, "z09b");
+    await harness.waitUntil(() => {
+      const state = harness.collectState(topic);
+      const subagents = (state as { subagents?: { childSessionIds?: string[] } }).subagents;
+      return Array.isArray(subagents?.childSessionIds) && subagents.childSessionIds.length > 0;
+    });
+    const viewId = ((harness.collectState(topic) as { subagents?: { childSessionIds?: string[] } })
+      .subagents?.childSessionIds ?? [])[0];
+    const viewTopic = `conversation/${viewId}`;
+    await subscribe(harness, viewTopic, "z09b-view");
+    await harness.waitUntil(() => {
+      const rows = harness.collectRows(viewTopic);
+      return [...rows.values()].some((row) => JSON.stringify(row).includes("scanned 3 files"));
+    });
+    const before = harness.collectRows(viewTopic);
+    assert.equal(before.size, 2, `首轮水合应恰 2 行：${JSON.stringify([...before.values()])}`);
+    // 第二轮 spawn（同一 subagentId）：fake 在记录中追加尾条目并重发 subagent_event；
+    // 详情视图必须经重读合并实时增长，且旧行内容与 row.appended 次数保持不变。
+    await sendText(harness, sessionId, "spawn-again", "spawn subagent please");
+    await harness.waitUntil(() => {
+      const rows = harness.collectRows(viewTopic);
+      return (
+        rows.size >= 3 &&
+        [...rows.values()].some((row) =>
+          String(row.text ?? "").includes("scanned 3 files in run 2"),
+        )
+      );
+    });
+    const after = harness.collectRows(viewTopic);
+    assert.equal(
+      after.size,
+      3,
+      `增长后应恰 3 个不同 rowId：${JSON.stringify([...after.values()])}`,
+    );
+    assert.deepEqual(after.get(1), before.get(1), "旧行 1 内容不得变化");
+    assert.deepEqual(after.get(2), before.get(2), "旧行 2 内容不得变化");
+    // 不重复：无论增量还是恢复快照承载（事件转发的 state op 与合并同批 conflat 时协议
+    // 会对水位缺口回整快照，属既有语义），每帧行窗口内 rowId 均不得重复，行 3 恰出现一次。
+    const windowDuplicateRows: number[] = [];
+    const row3Deliveries: string[] = [];
+    for (const frame of harness.topicFrames(viewTopic)) {
+      if (frame.payload.kind === "snapshot") {
+        const window = (frame.payload.snapshot?.rows?.window ?? []) as { rowId: number }[];
+        const seen = new Set<number>();
+        for (const row of window) {
+          if (seen.has(row.rowId)) windowDuplicateRows.push(row.rowId);
+          seen.add(row.rowId);
+          if (row.rowId === 3)
+            row3Deliveries.push(`snapshot@${frame.payload.snapshot?.seq ?? "?"}`);
+        }
+      } else {
+        for (const delta of frame.payload.deltas as { op?: string; row?: { rowId?: number } }[]) {
+          if (delta.op === "row.appended" && delta.row?.rowId === 3) {
+            row3Deliveries.push(`appended@${delta.row.rowId}`);
+          }
+        }
+      }
+    }
+    assert.deepEqual(windowDuplicateRows, [], "快照行窗口不得出现重复 rowId");
+    assert.equal(
+      row3Deliveries.length,
+      1,
+      `新行 3 应恰投递一次：${JSON.stringify(row3Deliveries)}`,
+    );
   } finally {
     harness.endStdin();
     await harness.exited;

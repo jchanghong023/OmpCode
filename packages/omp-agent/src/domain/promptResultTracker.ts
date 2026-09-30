@@ -13,9 +13,10 @@ export class PromptResultTracker {
     if (
       frame.id &&
       // execute_command 仅项目模式出现（严格分发的本地命令同样可能异步收口）。
-      (frame.command === "prompt" ||
-        frame.command === "follow_up" ||
-        frame.command === "execute_command") &&
+      // 修复（G11）：移除 follow_up 登记——已核对真实 omp（rpc-session-host.ts /
+      // rpc-prompt-results.ts）：steer/follow_up 从不开 prompt ticket、永不发
+      // prompt_result；登记其 response 只会让 id 滞留本集合泄漏。
+      (frame.command === "prompt" || frame.command === "execute_command") &&
       frame.success &&
       agentInvokedOf(frame.data) === null
     ) {

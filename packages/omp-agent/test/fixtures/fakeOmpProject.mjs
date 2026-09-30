@@ -86,6 +86,9 @@ function streamAssistantTurn(sessionId, promptId, text) {
 }
 
 function streamSubagentTurn(sessionId, promptId) {
+  // 每轮 spawn 计数：get_subagent_messages 的记录随之增长（见 fakeOmpProjectCatalog.subagentEntries），
+  // 供「详情视图实时增长」用例在第二轮 spawn 后断言新增行。
+  facts.subagentSpawns = (facts.subagentSpawns ?? 0) + 1;
   const session = ensureSession(sessionId);
   session.streaming = true;
   sessionOut(sessionId, { type: "agent_start" });
@@ -202,17 +205,17 @@ function handleSessionCommand(command) {
       }
       if (message.includes("spawn subagent")) {
         setImmediate(() => streamSubagentTurn(sessionId, id));
-        return response(id, command.type, true, { agentInvoked: true });
+        return response(id, command.type, true);
       }
       setImmediate(() => streamAssistantTurn(sessionId, id, `echo:${message}`));
-      return response(id, command.type, true, { agentInvoked: true });
+      return response(id, command.type, true);
     }
     case "steer":
     case "follow_up":
       setImmediate(() =>
         streamAssistantTurn(sessionId, id, `queued:${String(command.message ?? "")}`),
       );
-      return response(id, command.type, true, { agentInvoked: true });
+      return response(id, command.type, true);
     case "abort":
       return response(id, command.type, true, {});
     case "get_state":
@@ -333,9 +336,9 @@ readline.on("line", (line) => {
   const result = PROJECT_COMMANDS.has(command.type)
     ? handleProjectCommand(command)
     : handleSessionCommand(command);
-  // 会话命令的 response 带 sessionId 戳（真实 omp 由会话宿主输出）；客户端据此登记
-  // 本地命令异步收口 tracker。
-  out(typeof command.sessionId === "string" ? stamp(result, command.sessionId) : result);
+  // 真实 omp 的会话 response 不带 sessionId 戳；客户端进程层按发送记录（命令
+  // id→sessionId）路由回会话通道（见 OmpProjectProcess.dispatchFrame）。
+  out(result);
 });
 readline.once("close", () => {
   if (markerPath) appendFileSync(markerPath, `exit ${process.pid}\n`);

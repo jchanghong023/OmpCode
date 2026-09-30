@@ -1,9 +1,8 @@
-// 会话投影状态机：把「输入/流式/工具/状态」变化折叠成 v4 conversation 的 rows+state，
-// 并产出 snapshot / deltas。纯内存、无 IO；权威 schema 校验发生在发送边界（adapters）。
-//
-// seq 语义：每个增量 op 在产生时立即分配 seq（帧区间 (fromSeq, toSeq] 的记账基础）；
-// pending 列表只是「尚未进入 delta log 的 op」；以 watermark=seq 收快照后只会收到更大 seq 的 op。
-// 行对象组装在 projectionRows.ts；增量合并在 deltaMerge.ts（架构 maxFileLines=400）。
+// 会话投影状态机：把「输入/流式/工具/状态」变化折叠成 v4 conversation 的 rows+state 并产出
+// snapshot / deltas；纯内存、无 IO，权威 schema 校验发生在发送边界（adapters）。seq 语义：每个
+// 增量 op 在产生时立即分配 seq（帧区间 (fromSeq, toSeq] 的记账基础），pending 是「尚未进入
+// delta log 的 op」，以 watermark=seq 收快照后只会收到更大 seq 的 op；行组装在 projectionRows.ts。
+// 增量合并在 deltaMerge.ts（架构 maxFileLines=400）。
 
 import {
   PROTOCOL_V4_LIMITS,
@@ -19,16 +18,15 @@ import { initialAState, type ProjectionAState, type TurnOutcome } from "./projec
 import { TurnFileFacts } from "./fileFacts.js";
 import { contextWindowPatch, modelConfigPatch, runningControlPatch, snoozePendingInteractions, terminalControlPatch, usagePatch } from "./projectionStatePatches.js";
 import { mergeDeltas, type LoggedDelta } from "./deltaMerge.js";
+import { mergeProjectionRows } from "./projectionRowMerge.js";
 import { OmpSubagentProjection } from "./ompSubagentDirectory.js";
-import { buildOmpSubagentViewId } from "./ompProjectFrames.js";
 import { readProjectionFileChanges } from "./projectionFileChanges.js";
 import { finalizeFailedQueuedTurn, finalizeTurnContexts } from "./projectionTurnFinalizer.js";
 import { applyProjectionToolCallUpdate } from "./projectionToolCallUpdate.js";
-import { bufferStreamText, materializeStreamTextRow } from "./projectionStreamText.js";
+import { appendProjectionStreamDelta, closeProjectionStreamingRows, materializeStreamTextRow, type ProjectionStreamHost } from "./projectionStreamText.js";
 import {
   conversationRowIdOfToolCall,
   createMarkerRow,
-  createStreamingRow,
   createTurnHeaderRow,
   createUserInputRow,
   buildConversationSnapshot,
@@ -61,9 +59,22 @@ export class ConversationProjection {
   private suspendedTurns: TurnContext[] = [];
   private queuedTurns: TurnContext[] = [];
   private turnFacts = new Map<string, TurnFileFacts>();
+  /** 流式行操作的统一写出口（append/关闭共用；惰性箭头读写实例状态，eager 项须声明在其字段之后）。 */
+  private readonly streamHost: ProjectionStreamHost = {
+    rows: this.rows,
+    pendingStreamTextByRowId: this.pendingStreamTextByRowId,
+    turn: () => this.turn,
+    sequence: () => this.sequence,
+    nextRowId: () => this.nextRowId++,
+    appendRow: (row) => this.appendRow(row),
+    upsertRow: (row) => this.upsertRow(row),
+    pushPending: (delta) => this.pushPending(delta),
+  };
   private lastErrorValue: { code: string; message: string } | null = null;
   private readonly subagents: OmpSubagentProjection;
-  constructor(sessionId: string) {
+  // viewIdOf 默认旧格式 omp-subagent:<id>：旧「每会话一进程」拓扑没有 SubagentViewStore 承接
+  // @parent 地址订阅，UI 据此禁用下钻；项目模式经 EngineInit 显式传 buildOmpSubagentViewId。
+  constructor(sessionId: string, viewIdOf: (subagentId: string) => string = (id) => `omp-subagent:${id}`) {
     this.sessionId = sessionId;
     this.state = initialAState({});
     this.subagents = new OmpSubagentProjection({
@@ -77,7 +88,7 @@ export class ConversationProjection {
       state: () => this.state.subagents,
       upsertRow: (row) => this.upsertRow(row),
       patchState: (subagents) => this.patchState({ subagents }),
-      viewIdOf: (id) => buildOmpSubagentViewId(sessionId, id),
+      viewIdOf,
     });
   }
   get seq(): number {
@@ -119,7 +130,7 @@ export class ConversationProjection {
     } else {
       if (input.routing === "guide" && this.turn) {
         // steer 在当前 agent 内生效；保留旧轮供同一 agent_end 收口。
-        this.closeStreamingRows("complete");
+        closeProjectionStreamingRows(this.streamHost, "complete", this.turn);
         this.suspendedTurns.push(this.turn);
       }
       this.turn = nextTurn;
@@ -172,7 +183,7 @@ export class ConversationProjection {
       outcome,
       rowAt: (rowId) => this.rows.get(rowId),
       upsertRow: (row) => this.upsertRow(row),
-      closeStreamingRows: (active) => this.closeStreamingRows(outcome === "failed" ? "failed" : outcome === "interrupted" ? "interrupted" : "complete", active),
+      closeStreamingRows: (active) => closeProjectionStreamingRows(this.streamHost, outcome === "failed" ? "failed" : outcome === "interrupted" ? "interrupted" : "complete", active),
       turnFacts: this.turnFacts,
     });
     if (outcome === "failed") {
@@ -190,49 +201,15 @@ export class ConversationProjection {
     this.appendStreamDelta(delta, "reasoning");
   }
   private appendStreamDelta(delta: string, kind: "assistantText" | "reasoning"): void {
-    if (!this.turn || delta.length === 0) {
-      return;
-    }
-    const anchorKey = kind === "assistantText" ? "streamingTextRow" : "streamingReasoningRow";
-    if (!this.turn[anchorKey]) {
-      this.turn.responseCounter += 1;
-      const rowId = this.nextRowId++;
-      this.appendRow(
-        createStreamingRow({ rowId, turnId: this.turn.turnId, productTurnId: this.turn.productTurnId, createdAtSeq: this.sequence + 1, kind, responseCounter: this.turn.responseCounter }),
-      );
-      this.turn[anchorKey] = { rowId, entityId: `resp-${this.turn.turnId}-${this.turn.responseCounter}-${kind === "assistantText" ? "text" : "reasoning"}` };
-    }
-    const anchor = this.turn[anchorKey]!;
-    // 逐 chunk 拼接整行会让长回复产生 O(n²) 拷贝；只在读快照或收口时物化。
-    bufferStreamText(this.pendingStreamTextByRowId, anchor.rowId, delta);
-    this.pushPending({ op: "row.delta", rowId: anchor.rowId, path: "text", append: delta });
+    appendProjectionStreamDelta(this.streamHost, delta, kind);
   }
   // 模型响应结束（message_end）：关闭本响应的流式行；下一次文本增量开新行。
   closeAssistantResponse(): void {
-    this.closeStreamingRows("complete");
-    if (this.turn) {
-      this.turn.streamingTextRow = null;
-      this.turn.streamingReasoningRow = null;
-    }
-  }
-
-  private closeStreamingRows(finalState: "complete" | "interrupted" | "failed", turn = this.turn): void {
-    if (!turn) {
-      return;
-    }
-    for (const anchor of [turn.streamingTextRow, turn.streamingReasoningRow]) {
-      if (!anchor) {
-        continue;
-      }
-      const row = this.materializeStreamTextRow(anchor.rowId);
-      if (!row) {
-        continue;
-      }
-      if (row.kind === "assistantText" && row.state === "streaming") {
-        this.upsertRow({ ...row, state: finalState });
-      } else if (row.kind === "reasoning" && row.state === "streaming" && finalState !== "failed") {
-        this.upsertRow({ ...row, state: finalState });
-      }
+    closeProjectionStreamingRows(this.streamHost, "complete", this.turn);
+    const turn = this.turn;
+    if (turn) {
+      turn.streamingTextRow = null;
+      turn.streamingReasoningRow = null;
     }
   }
 
@@ -332,10 +309,15 @@ export class ConversationProjection {
     for (const row of rows) {
       this.rows.set(row.rowId, row);
       this.rowIds.push(row.rowId);
-      this.nextRowId = Math.max(this.nextRowId, row.rowId + 1);
+      this.claimRowId(row.rowId);
     }
     this.rowIds.sort((a, b) => a - b);
     this.state = { ...this.state, subagents: this.subagents.hydrate(rows) };
+  }
+
+  /** 只读详情视图的事件驱动重水合：全量重读行幂等合并（新行 append、同 rowId 内容变化才 upsert），订阅端实时增长且无重复行。 */
+  mergeRows(rows: ConversationRow[]): void {
+    mergeProjectionRows({ rows: this.rows, claimRowId: (rowId) => this.claimRowId(rowId), appendRow: (row) => this.appendRow(row), upsertRow: (row) => this.upsertRow(row) }, rows);
   }
 
   /** pending → delta log（合并连续同构 op）；返回合并后的列表。 */
@@ -365,6 +347,11 @@ export class ConversationProjection {
     this.rows.set(row.rowId, row);
     this.rowIds.push(row.rowId);
     this.pushPending({ op: "row.appended", row });
+  }
+
+  /** 水合/合并行自带稳定 rowId：只抬升分配下界，不回收编号。 */
+  private claimRowId(rowId: number): void {
+    this.nextRowId = Math.max(this.nextRowId, rowId + 1);
   }
 
   private upsertRow(row: ConversationRow): void {

@@ -21,6 +21,8 @@ export interface OmpCommandOutcome {
   success: boolean;
   data?: unknown;
   error?: string;
+  /** omp 错误码（响应帧的 code 字段，如 omp_command_failed）；仅失败时由适配器透传。 */
+  code?: string;
 }
 
 export interface OmpSessionProcess {
@@ -30,7 +32,7 @@ export interface OmpSessionProcess {
   readonly subagentSubscriptionAvailable?: boolean;
   /** negotiate_protocol v3（fork surface）协商成功的事实；未协商/协商中为 false。 */
   readonly forkSurface?: boolean;
-  /** 项目模式通道事实：prompt 默认 text、/xxx 走 execute_command、帧带 sessionId 戳。 */
+  /** 项目模式通道事实：prompt 默认 text、/xxx 走 execute_command、会话帧按 sessionId 路由。 */
   readonly projectMode?: boolean;
   start(): Promise<void>;
   send(command: OmpCommandFrame): Promise<OmpCommandOutcome>;

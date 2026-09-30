@@ -123,13 +123,14 @@ export function SlashCommandPlugin({
   });
   const dynamicCommandSuggestions = useMemo(() => {
     const seen = new Set(commandSuggestions.map((item) => normalizeSlashCommandValue(item.value)));
-    return ompCompletionItems.flatMap((item) => {
+    return ompCompletionItems.flatMap((item, index) => {
       if (item.kind === "argument" || item.kind === "subcommand") return [];
       const value = item.insertText.replace(/^\//, "").trim();
       if (!value || seen.has(normalizeSlashCommandValue(value))) return [];
       return [
         {
-          id: `omp-cmd:${ompCompletionDedupeKey(item)}`,
+          // id 带序号：omp 可能返回同 insertText 的多条候选（不同替换区间/描述）。
+          id: `omp-cmd:${index}:${ompCompletionDedupeKey(item)}`,
           trigger: "/" as const,
           value,
           label: item.label || item.insertText,
@@ -141,12 +142,12 @@ export function SlashCommandPlugin({
   }, [commandSuggestions, ompCompletionItems]);
   const dynamicArgumentSuggestions = useMemo(
     () =>
-      ompCompletionItems.flatMap((item) => {
+      ompCompletionItems.flatMap((item, index) => {
         if (item.kind !== "argument" && item.kind !== "subcommand") return [];
         if (!item.insertText.trim()) return [];
         return [
           {
-            id: `omp-arg:${ompCompletionDedupeKey(item)}`,
+            id: `omp-arg:${index}:${ompCompletionDedupeKey(item)}`,
             trigger: "/" as const,
             value: item.insertText.trim(),
             label: item.label || item.insertText,
@@ -218,7 +219,11 @@ export function SlashCommandPlugin({
     () => getPromptInputTriggerSignature(activeTrigger),
     [activeTrigger],
   );
-  const isOpen = !disabled && activeTrigger !== null;
+  // 参数模式（query 含空格）只有 complete_command 动态候选：候选到达才开面板。
+  // 能力缺失由 useOmpCommandCompletion 记忆（不再发请求、loading 不置真），避免
+  // 旧核每键空面板闪烁；能力可用时 loading 期的短暂等待好过空面板闪烁。
+  const isOpen =
+    !disabled && activeTrigger !== null && (!argumentMode || dynamicArgumentSuggestions.length > 0);
 
   useEffect(() => {
     activeSignatureRef.current = activeSignature;

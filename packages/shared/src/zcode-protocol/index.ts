@@ -2691,19 +2691,20 @@ export type ZCodeSkillsReferenceCatalogResult = z.infer<
 // ── Fork：OMP 项目模式能力入口（docs/requirements/omp-project-mode.md）──
 // 命令补全（complete_command）、模型角色目录/保存（get_model_roles/set_model_role）
 // 与子代理控制（control_subagent）。omp 未提供项目模式时按能力缺失显式报错。
+// 读向 schema 不加 .strict()（zod 默认 strip 未知键：声明字段仍校验、未知字段
+// 安全剥离），与适配层「未知字段透传不拒帧」哲学同构——上游 OMP 给结果对象加
+// 任一新字段时不致整体拒帧导致能力被误判为缺失；Params 是我方发送侧，保持 .strict()。
 
-export const zcodeOmpCommandCompletionItemSchema = z
-  .object({
-    label: nonEmptyString,
-    insertText: nonEmptyString,
-    // UTF-16 替换区间（左闭右开）；越界由调用方丢弃。
-    replaceStart: z.number().int().nonnegative(),
-    replaceEnd: z.number().int().nonnegative(),
-    kind: z.string().optional(),
-    description: z.string().optional(),
-    hint: z.string().optional(),
-  })
-  .strict();
+export const zcodeOmpCommandCompletionItemSchema = z.object({
+  label: nonEmptyString,
+  insertText: nonEmptyString,
+  // UTF-16 替换区间（左闭右开）；越界由调用方丢弃。
+  replaceStart: z.number().int().nonnegative(),
+  replaceEnd: z.number().int().nonnegative(),
+  kind: z.string().optional(),
+  description: z.string().optional(),
+  hint: z.string().optional(),
+});
 export type ZCodeOmpCommandCompletionItem = z.infer<typeof zcodeOmpCommandCompletionItemSchema>;
 
 export const zcodeOmpCompleteCommandParamsSchema = z
@@ -2715,38 +2716,33 @@ export const zcodeOmpCompleteCommandParamsSchema = z
   })
   .strict();
 export type ZCodeOmpCompleteCommandParams = z.infer<typeof zcodeOmpCompleteCommandParamsSchema>;
-export const zcodeOmpCompleteCommandResultSchema = z
-  .object({
-    items: z.array(zcodeOmpCommandCompletionItemSchema),
-    revision: z.string().optional(),
-  })
-  .strict();
+export const zcodeOmpCompleteCommandResultSchema = z.object({
+  items: z.array(zcodeOmpCommandCompletionItemSchema),
+  revision: z.string().optional(),
+});
 export type ZCodeOmpCompleteCommandResult = z.infer<typeof zcodeOmpCompleteCommandResultSchema>;
 
-export const zcodeOmpModelRoleSchema = z
-  .object({
-    roleId: nonEmptyString,
-    name: z.string().optional(),
-    description: z.string().optional(),
-    configurable: z.boolean().optional(),
-    nonConfigurableReason: z.string().optional(),
-    explicitValue: z.string().optional(),
-    effectiveModel: z
-      .object({
-        provider: z.string().optional(),
-        modelId: z.string().optional(),
-        thinkingLevel: z.string().optional(),
-      })
-      .strict()
-      .optional(),
-    unresolvedReason: z.string().optional(),
-    source: z.string().optional(),
-    writableScopes: z.array(z.string()).optional(),
-    hidden: z.boolean().optional(),
-    section: z.string().optional(),
-    revision: z.string().optional(),
-  })
-  .strict();
+export const zcodeOmpModelRoleSchema = z.object({
+  roleId: nonEmptyString,
+  name: z.string().optional(),
+  description: z.string().optional(),
+  configurable: z.boolean().optional(),
+  nonConfigurableReason: z.string().optional(),
+  explicitValue: z.string().optional(),
+  effectiveModel: z
+    .object({
+      provider: z.string().optional(),
+      modelId: z.string().optional(),
+      thinkingLevel: z.string().optional(),
+    })
+    .optional(),
+  unresolvedReason: z.string().optional(),
+  source: z.string().optional(),
+  writableScopes: z.array(z.string()).optional(),
+  hidden: z.boolean().optional(),
+  section: z.string().optional(),
+  revision: z.string().optional(),
+});
 export type ZCodeOmpModelRole = z.infer<typeof zcodeOmpModelRoleSchema>;
 
 export const zcodeOmpModelRolesParamsSchema = z
@@ -2756,23 +2752,19 @@ export const zcodeOmpModelRolesParamsSchema = z
   })
   .strict();
 export type ZCodeOmpModelRolesParams = z.infer<typeof zcodeOmpModelRolesParamsSchema>;
-export const zcodeOmpModelRolesResultSchema = z
-  .object({
-    roles: z.array(zcodeOmpModelRoleSchema),
-    revision: z.string().optional(),
-    sessionModel: z
-      .object({
-        sessionId: z.string(),
-        sessionGeneration: z.string().optional(),
-        model: z
-          .object({ provider: z.string().optional(), modelId: z.string().optional() })
-          .strict()
-          .optional(),
-      })
-      .strict()
-      .optional(),
-  })
-  .strict();
+export const zcodeOmpModelRolesResultSchema = z.object({
+  roles: z.array(zcodeOmpModelRoleSchema),
+  revision: z.string().optional(),
+  sessionModel: z
+    .object({
+      sessionId: z.string(),
+      sessionGeneration: z.string().optional(),
+      model: z
+        .object({ provider: z.string().optional(), modelId: z.string().optional() })
+        .optional(),
+    })
+    .optional(),
+});
 export type ZCodeOmpModelRolesResult = z.infer<typeof zcodeOmpModelRolesResultSchema>;
 
 export const zcodeOmpModelRoleSelectionSchema = z.union([
@@ -2804,14 +2796,12 @@ export const zcodeOmpSetModelRoleParamsSchema = z
   .strict();
 export type ZCodeOmpSetModelRoleParams = z.infer<typeof zcodeOmpSetModelRoleParamsSchema>;
 
-export const zcodeOmpSetModelRoleResultSchema = z
-  .object({
-    role: zcodeOmpModelRoleSchema,
-    revision: z.string().optional(),
-    persisted: z.literal(true),
-    effectiveNote: z.string().optional(),
-  })
-  .strict();
+export const zcodeOmpSetModelRoleResultSchema = z.object({
+  role: zcodeOmpModelRoleSchema,
+  revision: z.string().optional(),
+  persisted: z.literal(true),
+  effectiveNote: z.string().optional(),
+});
 export type ZCodeOmpSetModelRoleResult = z.infer<typeof zcodeOmpSetModelRoleResultSchema>;
 
 export const zcodeControlSubagentParamsSchema = z
@@ -2824,14 +2814,12 @@ export const zcodeControlSubagentParamsSchema = z
   })
   .strict();
 export type ZCodeControlSubagentParams = z.infer<typeof zcodeControlSubagentParamsSchema>;
-export const zcodeControlSubagentResultSchema = z
-  .object({
-    subagentId: z.string(),
-    action: z.enum(["send_message", "stop"]),
-    status: z.enum(["sent", "queued", "stopped", "stopping", "accepted"]),
-    detail: z.string().optional(),
-  })
-  .strict();
+export const zcodeControlSubagentResultSchema = z.object({
+  subagentId: z.string(),
+  action: z.enum(["send_message", "stop"]),
+  status: z.enum(["sent", "queued", "stopped", "stopping", "accepted"]),
+  detail: z.string().optional(),
+});
 export type ZCodeControlSubagentResult = z.infer<typeof zcodeControlSubagentResultSchema>;
 
 // ── 已保存工作流的 GUI 中枢──

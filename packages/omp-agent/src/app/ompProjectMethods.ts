@@ -26,6 +26,14 @@ function requireProject(deps: OmpProjectMethodDeps, method: string): OmpProjectG
   return deps.project;
 }
 
+/**
+ * 修复（G4）：命令失败消息尾部附 omp 错误码 `[code]`（存在时），宿主 UI 可据此
+ * 归因具体失败类别，而不是只看到无类别的 error 文案。
+ */
+function outcomeMessage(outcome: { error?: string; code?: string }, fallback: string): string {
+  return `${outcome.error ?? fallback}${outcome.code ? ` [${outcome.code}]` : ""}`;
+}
+
 export function createOmpProjectMethodHandlers(
   deps: OmpProjectMethodDeps,
 ): Record<string, (params: unknown) => Promise<unknown>> {
@@ -49,7 +57,7 @@ export function createOmpProjectMethodHandlers(
         ...(parsed.data.sessionId ? { sessionId: parsed.data.sessionId } : {}),
       });
       if (!outcome.success) {
-        throw new ProtocolError(-32000, outcome.error ?? "complete_command failed");
+        throw new ProtocolError(-32000, outcomeMessage(outcome, "complete_command failed"));
       }
       const record = (outcome.data ?? {}) as { items?: unknown[]; revision?: unknown };
       return {
@@ -74,7 +82,7 @@ export function createOmpProjectMethodHandlers(
         ...(parsed.data.sessionId ? { sessionId: parsed.data.sessionId } : {}),
       });
       if (!outcome.success) {
-        throw new ProtocolError(-32000, outcome.error ?? "get_model_roles failed");
+        throw new ProtocolError(-32000, outcomeMessage(outcome, "get_model_roles failed"));
       }
       const record = (outcome.data ?? {}) as {
         roles?: unknown[];
@@ -109,7 +117,7 @@ export function createOmpProjectMethodHandlers(
           : {}),
       });
       if (!outcome.success) {
-        throw new ProtocolError(-32000, outcome.error ?? "set_model_role failed");
+        throw new ProtocolError(-32000, outcomeMessage(outcome, "set_model_role failed"));
       }
       return outcome.data ?? {};
     },
@@ -118,6 +126,13 @@ export function createOmpProjectMethodHandlers(
       if (!parsed.success || parsed.data.workspace.workspaceKey !== deps.workspaceKey) {
         throw new ProtocolError(-32602, "invalid subagent control target");
       }
+      requireProject(deps, "session/controlSubagent");
+      if (!(await deps.registry.projectAvailable())) {
+        throw new ProtocolError(
+          -32601,
+          "method not supported by omp core: session/controlSubagent",
+        );
+      }
       const outcome = await deps.registry.controlSubagent(
         parsed.data.sessionId,
         parsed.data.subagentId,
@@ -125,7 +140,7 @@ export function createOmpProjectMethodHandlers(
         parsed.data.message,
       );
       if (!outcome.success) {
-        throw new ProtocolError(-32000, outcome.error ?? "control_subagent failed");
+        throw new ProtocolError(-32000, outcomeMessage(outcome, "control_subagent failed"));
       }
       const record = (outcome.data ?? {}) as Record<string, unknown>;
       return {

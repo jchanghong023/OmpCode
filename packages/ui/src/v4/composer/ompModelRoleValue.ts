@@ -36,7 +36,16 @@ export function selectOmpRoleModelValue(
     (candidate) => `${candidate.providerId}/${candidate.modelId}` === modelPart,
   );
   if (!entry) return currentValue;
-  const level = highestOmpThoughtLevel(entry);
+  // models-and-commands.md：切换模型时保留新模型也支持的原等级；不支持时用新模型
+  // 缺省等级，未设置缺省则不写档位后缀。
+  const previous = parseOmpRoleValue(currentValue, catalog).levelSuffix;
+  const levels = entry.thoughtLevels ?? [];
+  const level =
+    previous && levels.includes(previous)
+      ? previous
+      : levels.includes(entry.defaultThoughtLevel ?? "")
+        ? entry.defaultThoughtLevel
+        : null;
   return level ? `${modelPart}:${level}` : modelPart;
 }
 

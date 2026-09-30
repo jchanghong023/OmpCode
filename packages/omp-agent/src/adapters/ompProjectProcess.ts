@@ -41,6 +41,9 @@ export class OmpProjectProcess {
   private child: ChildProcessWithoutNullStreams | null = null;
   private assembler = new OmpFrameAssembler();
   private pending = new Map<string, PendingCommand>();
+  /** 会话命令发送记录（命令 id→sessionId）：真实 omp 的 response 不带 sessionId 戳，
+   * dispatchFrame 据此把 response 路由回会话通道；请求结束（response/超时/退出）即清理。 */
+  private readonly requestSessionById = new Map<string, string>();
   private commandCounter = 0;
   private readonly channels = new Map<string, OmpProjectChannelLike>();
   private readonly hooks: OmpProjectProcessHooks;
@@ -66,7 +69,8 @@ export class OmpProjectProcess {
     return this.instanceIdRef.value;
   }
 
-  /** 启动并完成 ready/项目模式检查与 v3 协商；非项目模式返回 false（进程已回收）。 */
+  /** 启动并完成 ready/项目模式检查与 v3 协商；ready 无项目模式返回 false（进程已回收，
+   * 调用方永久回落旧拓扑）；v3 协商失败抛错（调用方按可重试的启动失败处理）。 */
   async start(): Promise<boolean> {
     const args = [...this.extraArgs, "--mode", "rpc-ui", "--rpc-project"];
     logger.info("spawn omp project core", { binary: this.binaryPath, cwd: this.cwd });
@@ -77,6 +81,12 @@ export class OmpProjectProcess {
     }) as ChildProcessWithoutNullStreams;
     this.child = child;
     child.once("exit", (code) => this.handleExit(code));
+    // 修复（G6）：omp 进程意外退出后继续写 stdin 会触发 EPIPE，若无人监听将以
+    // uncaught 'error' 事件崩溃宿主。挂常驻 debug 监听兜底；真实失败仍由
+    // exit 事件与 pending 命令失败路径上报，不在此扩大处理。
+    child.stdin.on("error", (error) => {
+      logger.debug("omp project stdin error", { error: String(error) });
+    });
     child.stderr.on("data", (chunk: Buffer) => {
       const text = chunk.toString("utf8").trim();
       if (text.length > 0) logger.debug("omp project stderr", { text: text.slice(0, 2000) });
@@ -92,11 +102,13 @@ export class OmpProjectProcess {
       10_000,
     ).catch((error) => ({ success: false, error: String(error) }) as OmpCommandOutcome);
     if (!negotiation.success) {
-      logger.warn("omp 项目模式 v3 协商失败，回落旧拓扑", {
-        error: negotiation.error ?? "unknown",
-      });
+      // 协商失败不得与「ready 无项目模式」同路降级（那会让 gateway 永久 capability=false）：
+      // 抛错让 gateway startProcess 的 catch 走 capability=null 可重试分支。
+      logger.warn("omp 项目模式 v3 协商失败", { error: negotiation.error ?? "unknown" });
       await this.killChild();
-      return false;
+      throw new Error(
+        `omp project core negotiate_protocol failed: ${negotiation.error ?? "unknown"}`,
+      );
     }
     logger.info("omp 项目模式就绪", { processInstanceId: this.instanceIdRef.value, cwd: this.cwd });
     return true;
@@ -180,13 +192,15 @@ export class OmpProjectProcess {
         this.settleCommand(
           id,
           record.success === true,
-          record as { data?: unknown; error?: string },
+          record as { data?: unknown; error?: string; code?: unknown },
         );
-      }
-      // 会话命令的 response 也带 sessionId 戳：通道用它登记本地命令异步收口 tracker。
-      const sessionId = typeof record.sessionId === "string" ? record.sessionId : null;
-      if (sessionId) {
-        this.channels.get(sessionId)?.handleFrame(record);
+        // 真实 omp 的会话 response 不带 sessionId 戳：按发送记录（命令 id→sessionId）
+        // 路由回会话通道，通道用它登记本地命令异步收口 tracker；转交后即清理映射。
+        const sessionId = this.requestSessionById.get(id);
+        if (sessionId !== undefined) {
+          this.requestSessionById.delete(id);
+          this.channels.get(sessionId)?.handleFrame(record);
+        }
       }
       return;
     }
@@ -239,16 +253,20 @@ export class OmpProjectProcess {
     this.channels.delete(sessionId);
   }
 
-  /** 通道发送会话级命令：补 sessionId 后走同一关联管线。 */
+  /** 通道发送会话级命令：补 sessionId 后走同一关联管线，并记录 id→sessionId 供 response 路由。 */
   sendSessionCommand(
     sessionId: string,
     command: Record<string, unknown>,
     timeoutMs = COMMAND_TIMEOUT_MS,
   ): Promise<OmpCommandOutcome> {
-    return this.request(
-      { ...command, sessionId } as OmpProjectCommand & Record<string, unknown>,
-      timeoutMs,
-    );
+    // 显式确定命令 id（request 复用已有 id）：先记发送记录再发送，避免 response 早到无主。
+    const id =
+      typeof command.id === "string" && command.id.length > 0
+        ? command.id
+        : this.reserveRequestId();
+    this.requestSessionById.set(id, sessionId);
+    const payload = { ...command, sessionId, id } as Record<string, unknown>;
+    return this.request(payload as OmpProjectCommand & Record<string, unknown>, timeoutMs);
   }
 
   /** 预留请求 id（contextRead 等需要先记 id 再发帧的侧信道）。 */
@@ -270,6 +288,8 @@ export class OmpProjectProcess {
     return new Promise<OmpCommandOutcome>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
+        // 超时即请求结束：同步清理会话发送记录，避免映射泄漏。
+        this.requestSessionById.delete(id);
         reject(new Error(`omp command timeout: ${String(command.type)}`));
       }, timeoutMs);
       timer.unref?.();
@@ -277,6 +297,7 @@ export class OmpProjectProcess {
       child.stdin.write(encodeJsonlLine(payload), (error) => {
         if (error) {
           this.pending.delete(id);
+          this.requestSessionById.delete(id);
           clearTimeout(timer);
           reject(error);
         }
@@ -299,7 +320,7 @@ export class OmpProjectProcess {
   private settleCommand(
     id: string,
     success: boolean,
-    data: { data?: unknown; error?: string },
+    data: { data?: unknown; error?: string; code?: unknown },
   ): void {
     const pending = this.pending.get(id);
     if (!pending) {
@@ -307,7 +328,13 @@ export class OmpProjectProcess {
     }
     this.pending.delete(id);
     clearTimeout(pending.timer);
-    pending.resolve({ success, data: data.data, error: data.error });
+    // 修复（G4）：omp 响应帧的错误码（code）透传给调用方，供宿主 UI 归因具体失败类别。
+    pending.resolve({
+      success,
+      data: data.data,
+      error: data.error,
+      ...(typeof data.code === "string" ? { code: data.code } : {}),
+    });
   }
 
   private handleExit(code: number | null): void {
@@ -323,6 +350,7 @@ export class OmpProjectProcess {
       });
     }
     this.pending.clear();
+    this.requestSessionById.clear();
     const channels = [...this.channels.values()];
     this.channels.clear();
     for (const channel of channels) channel.notifyExit(code);

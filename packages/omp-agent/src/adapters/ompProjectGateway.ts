@@ -1,7 +1,8 @@
 // OmpProjectGateway：OMP 项目进程生命周期的唯一所有者（懒启动、能力判定、崩溃重启、
 // 会话通道缓存）。属适配层（直接编排 OmpProjectProcess 与会话通道）；app 层经 ports 的
-// OmpProjectGatewayPort 消费。available === null 表示 omp 未提供项目模式（旧内嵌核），
-// 调用方整体回落旧拓扑；进程意外退出后能力判定不变，下一次 ensure() 重启进程。
+// OmpProjectGatewayPort 消费。capability=false 仅当 ready 无 mode:"rpc-ui-project"
+// （旧内嵌核）才成立，调用方整体永久回落旧拓扑；启动/v3 协商失败 capability 回到 null
+// （available() 暂为 false，下一次 ensure() 重新拉起）；进程意外退出后能力判定不变。
 
 import {
   ompProjectSessionSummarySchema,
@@ -30,8 +31,13 @@ export class OmpProjectGateway {
   private process: OmpProjectProcess | null = null;
   private readonly channels = new Map<string, OmpProjectSessionChannel>();
   private starting: Promise<OmpProjectProcess | null> | null = null;
-  /** null = 未判定；true/false = 首次启动后的能力事实（进程崩溃不改变）。 */
+  /** null = 未判定/启动失败（可重试）；false = ready 无 rpc-ui-project（永久回落旧拓扑）。 */
   private capability: boolean | null = null;
+  /** dispose 已置位：竞态中完成启动的进程必须丢弃，不写回 this.process。 */
+  private disposed = false;
+  /** 启动失败后的退避截止时间（ms 时间戳）；成功启动不重置，进程退出后允许立即重启。 */
+  private nextRetryAt = 0;
+  private static readonly START_RETRY_BACKOFF_MS = 10_000;
   private readonly deps: OmpProjectGatewayDeps;
 
   constructor(deps: OmpProjectGatewayDeps) {
@@ -52,6 +58,9 @@ export class OmpProjectGateway {
     if (this.capability === false) return null;
     if (this.process?.running) return this.process;
     if (this.starting) return this.starting;
+    // 启动失败退避：旧核/坏二进制在 ready 前退出会反复 spawn-退出；退避窗口内直接
+    // 返回 null（按能力缺失回落），避免每次目录查询都拉起一个注定失败的进程。
+    if (Date.now() < this.nextRetryAt) return null;
     this.starting = this.startProcess().finally(() => {
       this.starting = null;
     });
@@ -75,6 +84,11 @@ export class OmpProjectGateway {
     });
     try {
       const supported = await attempt.start();
+      // dispose 竞态：启动期间网关已销毁——丢弃新进程，不写回 this.process/capability。
+      if (this.disposed) {
+        await attempt.dispose().catch(() => {});
+        return null;
+      }
       this.capability = supported;
       if (!supported) {
         logger.info("omp 未提供项目模式（ready 无 rpc-ui-project），回落每会话一进程");
@@ -83,10 +97,12 @@ export class OmpProjectGateway {
       this.process = attempt;
       return attempt;
     } catch (error) {
-      // 启动失败按能力缺失处理一次；不永久封死（下次 ensure 重新尝试拉起）。
+      // 启动失败按能力缺失处理一次；退避窗口内不再重试，窗口过后允许重新拉起。
       this.capability = null;
+      this.nextRetryAt = Date.now() + OmpProjectGateway.START_RETRY_BACKOFF_MS;
       logger.warn("omp 项目进程启动失败", {
         error: error instanceof Error ? error.message : String(error),
+        retryInMs: OmpProjectGateway.START_RETRY_BACKOFF_MS,
       });
       await attempt.dispose().catch(() => {});
       return null;
@@ -156,6 +172,8 @@ export class OmpProjectGateway {
   }
 
   async dispose(): Promise<void> {
+    // 先置 disposed 再杀进程：startProcess 若仍在拉起，完成时按 disposed 丢弃新进程。
+    this.disposed = true;
     const process = this.process;
     this.process = null;
     this.channels.clear();

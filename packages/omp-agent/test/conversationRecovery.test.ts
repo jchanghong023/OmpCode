@@ -59,10 +59,10 @@ test("core exit closes active and queued turns", () => {
   );
 });
 
-test("queued follow_up local completion is associated with its request", () => {
+test("follow_up 响应不登记收口（真实 omp 从不发 follow_up 的 prompt_result，登记只会滞留泄漏）", () => {
   const tracker = new PromptResultTracker();
   tracker.noteResponse({ id: "follow-up", command: "follow_up", success: true, data: {} });
-  assert.equal(tracker.shouldFinish({ id: "follow-up", agentInvoked: false }), true);
+  assert.equal(tracker.shouldFinish({ id: "follow-up", agentInvoked: false }), false);
 });
 
 test("rejected omp send ends the submitted turn", async () => {

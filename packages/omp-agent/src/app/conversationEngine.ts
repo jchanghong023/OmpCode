@@ -47,7 +47,7 @@ export class ConversationEngine {
     this.onIndexChange = init.onIndexChange;
     this.onCommandsUpdate = init.onCommandsUpdate;
     this.resumeSessionPath = init.resumeSessionPath;
-    this.projection = new ConversationProjection(init.sessionId);
+    this.projection = new ConversationProjection(init.sessionId, init.viewIdOf);
     this.subagents = new OmpSubagentBridge(
       this.projection,
       () => this.ompProcess,
@@ -390,9 +390,10 @@ export class ConversationEngine {
     this.onIndexChange(this);
   }
 
-  /** 冷恢复：把历史行放入投影（订阅建立前调用）；订阅后补入时触发一次下发。 */
-  hydrateRows(rows: ConversationRow[]): void {
-    this.projection.hydrateRows(rows);
+  /** 冷恢复水合（订阅建立前，不产生 delta）；merge=true 为只读详情视图的事件驱动重水合：幂等合并并产生增量下发。 */
+  hydrateRows(rows: ConversationRow[], merge = false): void {
+    if (merge) this.projection.mergeRows(rows);
+    else this.projection.hydrateRows(rows);
     this.scheduleFlush();
   }
 }

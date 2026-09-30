@@ -52,7 +52,15 @@ export function createWorkspaceConfigLoader(
       // 命令目录热更新（marketplace 安装、插件启停等）：立即推送，UI 补全菜单随之刷新。
       onCommandsUpdate: (commands) => options.onCommandsUpdate?.(commands),
     });
-    await processHandle.start();
+    try {
+      await processHandle.start();
+    } catch (error) {
+      // 修复（G5）：start 失败（ready 超时/协商失败/进程立即退出）时必须回收子进程
+      // 句柄，避免留下僵尸 omp 进程；回收后按原语义重新抛出，调用方
+      // loadWorkspaceConfig 仍走既有「目录加载失败降级为空」路径。
+      await processHandle.dispose().catch(() => {});
+      throw error;
+    }
     catalogProcess = processHandle;
     return processHandle;
   }

@@ -104,7 +104,7 @@ export function OmpModelRolesDialog(props: OmpModelRolesDialogProps) {
 
   /** RPC 模式：选定模型/档位即自动保存（逐 role 修订；失败保留待保存选择）。 */
   const saveRpcRole = useCallback(
-    async (roleId: string, catalogValue: string, clear: boolean) => {
+    async (roleId: string, catalogValue: string, clear: boolean, level?: string) => {
       const selection =
         clear || !catalogValue || catalogValue === "auto"
           ? catalogValue === "auto"
@@ -115,10 +115,7 @@ export function OmpModelRolesDialog(props: OmpModelRolesDialogProps) {
               const provider = catalogValue.slice(0, slash);
               const modelId = catalogValue.slice(slash + 1);
               if (!provider || !modelId) return null;
-              const level =
-                rpcPending[`${roleId}#level`] && rpcPending[`${roleId}#level`] !== ""
-                  ? rpcPending[`${roleId}#level`]
-                  : undefined;
+              // 档位由调用方显式传入（空串/undefined = 不带 thinkingLevel，即清除档位后缀）。
               return {
                 kind: "model" as const,
                 model: { provider, modelId, ...(level ? { thinkingLevel: level } : {}) },
@@ -142,7 +139,6 @@ export function OmpModelRolesDialog(props: OmpModelRolesDialogProps) {
         setRpcPending((current) => {
           const next = { ...current };
           delete next[roleId];
-          delete next[`${roleId}#level`];
           return next;
         });
         setRpcRowState((current) => ({
@@ -151,19 +147,29 @@ export function OmpModelRolesDialog(props: OmpModelRolesDialogProps) {
         }));
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        setRpcPending((current) => ({ ...current, [roleId]: catalogValue }));
+        // 失败回显完整尝试值（模型 + 档位）：parseOmpRoleValue 按目录把冒号后缀解析为
+        // 档位，重试语义完整；模型 ID 含冒号时由目录校验兜底，不会误拆。
+        setRpcPending((current) => ({
+          ...current,
+          [roleId]: level ? `${catalogValue}:${level}` : catalogValue,
+        }));
         setRpcRowState((current) => ({
           ...current,
           [roleId]: { saving: false, savedAt: null, error: message },
         }));
       }
     },
-    [rpcPending, services, workspaceIdentity, workspacePath],
+    [services, workspaceIdentity, workspacePath],
   );
 
-  const handleRpcLevelChange = useCallback((roleId: string, level: string) => {
-    setRpcPending((current) => ({ ...current, [`${roleId}#level`]: level }));
-  }, []);
+  // 档位与模型一致「选定即保存」（旧 #level pending 既导致回弹也无保存路径）；
+  // modelPart 取当前展示值解析出的模型段，空档位 = 清除后缀（不带 thinkingLevel）。
+  const handleRpcLevelChange = useCallback(
+    (roleId: string, modelPart: string, level: string) => {
+      void saveRpcRole(roleId, modelPart, false, level);
+    },
+    [saveRpcRole],
+  );
 
   if (!open && !inline) return null;
 
@@ -180,7 +186,10 @@ export function OmpModelRolesDialog(props: OmpModelRolesDialogProps) {
               ? `${role.effectiveModel.provider ?? ""}/${role.effectiveModel.modelId ?? ""}`
               : "";
             const pending = rpcPending[role.roleId];
-            const displayValue = pending ?? role.explicitValue ?? "";
+            // OMP 把 {kind:"auto"} 持久为 explicitValue "*"（DEFAULT_MODEL_ROLE_ALIAS）；
+            // 读侧归一为 "auto" 才能命中已有 auto 选项，否则已存 auto 显示成未配置态。
+            const explicitValue = role.explicitValue === "*" ? "auto" : role.explicitValue;
+            const displayValue = pending ?? explicitValue ?? "";
             const parsed = parseOmpRoleValue(displayValue, catalogEntries);
             const entry = catalogByModelPart.get(parsed.modelPart);
             const overridden =
@@ -204,9 +213,22 @@ export function OmpModelRolesDialog(props: OmpModelRolesDialogProps) {
                     className="h-8 min-w-0 flex-1 rounded-md border border-border bg-surface px-2 text-ui-base text-foreground disabled:opacity-60"
                     value={parsed.modelPart || (displayValue === "auto" ? "auto" : "")}
                     disabled={row?.saving || role.configurable === false}
-                    onChange={(event) =>
-                      void saveRpcRole(role.roleId, event.target.value, event.target.value === "")
-                    }
+                    onChange={(event) => {
+                      const nextValue = event.target.value;
+                      // 档位跟随（models-and-commands.md）：新模型支持原等级则保留；
+                      // 不支持时用其缺省档位（defaultThoughtLevel，来自
+                      // modelDefaultThoughtLevel）；无缺省则不写档位后缀。
+                      const nextEntry = catalogByModelPart.get(nextValue);
+                      let nextLevel: string | undefined;
+                      if (nextEntry) {
+                        nextLevel =
+                          parsed.levelSuffix &&
+                          nextEntry.thoughtLevels?.includes(parsed.levelSuffix)
+                            ? parsed.levelSuffix
+                            : nextEntry.defaultThoughtLevel;
+                      }
+                      void saveRpcRole(role.roleId, nextValue, nextValue === "", nextLevel);
+                    }}
                   >
                     <option value="">
                       {intl.formatMessage({ id: "ompModelRoles.notConfigured" })}
@@ -219,6 +241,11 @@ export function OmpModelRolesDialog(props: OmpModelRolesDialogProps) {
                     <option value="auto">
                       {intl.formatMessage({ id: "ompModelRoles.autoOption" })}
                     </option>
+                    {/* 目录外 explicitValue 兜底（仿回落分支 !known）：额外 option 保证
+                        已配置值可见且显示与磁盘一致，而不是显示成未配置态。 */}
+                    {!entry && displayValue && displayValue !== "auto" ? (
+                      <option value={displayValue}>{displayValue}</option>
+                    ) : null}
                     {providerGroups.map((group) => (
                       <optgroup key={group.label} label={group.label}>
                         {group.models.map((model) => (
@@ -232,9 +259,12 @@ export function OmpModelRolesDialog(props: OmpModelRolesDialogProps) {
                   {entry?.thoughtLevels?.length ? (
                     <select
                       aria-label={`${role.roleId} ${intl.formatMessage({ id: "settings.ompModelRoles.thinkingLevel" })}`}
-                      className="h-8 w-28 shrink-0 rounded-md border border-border bg-surface px-2 text-ui-base text-foreground"
+                      className="h-8 w-28 shrink-0 rounded-md border border-border bg-surface px-2 text-ui-base text-foreground disabled:opacity-60"
                       value={parsed.levelSuffix ?? ""}
-                      onChange={(event) => handleRpcLevelChange(role.roleId, event.target.value)}
+                      disabled={row?.saving || role.configurable === false}
+                      onChange={(event) =>
+                        handleRpcLevelChange(role.roleId, parsed.modelPart, event.target.value)
+                      }
                     >
                       <option value="">
                         {intl.formatMessage({ id: "settings.ompModelRoles.levelDefault" })}

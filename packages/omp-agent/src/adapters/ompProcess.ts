@@ -92,6 +92,10 @@ class OmpChildProcess implements OmpSessionProcess {
         logger.debug("omp stderr", { text: text.slice(0, 2000) });
       }
     });
+    // 子进程死亡到 exit 事件之间的在途写会向 stdin emit error；无监听即 uncaught。
+    child.stdin.on("error", (error) => {
+      logger.debug("omp stdin write failed", { error: String(error) });
+    });
     await awaitOmpReady(child, {
       request: (command) => this.request(command),
       onForkSurface: () => {

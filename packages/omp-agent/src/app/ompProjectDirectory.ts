@@ -59,13 +59,16 @@ export async function projectSubagentDirectory(
       },
     ];
   });
-  const hasMore = data?.nextCursor !== undefined && data.nextCursor !== null;
+  // 修复（交叉复审）：OMP 响应带 nextCursor 时透传（权威分页游标）；缺失即无下一页，
+  // 不得伪造游标（伪造会让 UI 以游标续拉同一页，形成无限请求循环）。
+  const ompCursor = data?.nextCursor;
+  const hasMore = ompCursor !== undefined && ompCursor !== null;
   return {
     ...(projectionDirectory as Record<string, unknown>),
     ended: {
       total: offset + items.length + (hasMore ? 1 : 0),
       items,
-      ...(hasMore ? { nextCursor: String(offset + items.length) } : {}),
+      ...(hasMore ? { nextCursor: String(ompCursor) } : {}),
     },
   };
 }

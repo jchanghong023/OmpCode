@@ -1,6 +1,7 @@
 // OMP 项目模式的会话通道：实现 OmpSessionProcess 端口，把会话级命令补上 sessionId
 // 后经共享项目进程发送，并接收按 sessionId 路由来的帧。帧分发逻辑与 OmpChildProcess
-// 的会话帧分支同构（response 在进程层关联，不进入通道）。
+// 的会话帧分支同构：response 由进程层按「命令 id→sessionId」发送记录路由进入本通道
+//（真实 omp 的 response 不带 sessionId 戳），这里用它登记本地命令异步收口 tracker。
 
 import type {
   OmpCommandOutcome,

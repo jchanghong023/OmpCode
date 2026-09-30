@@ -27,4 +27,10 @@ export interface EngineInit<TEngine = unknown> {
   acquireProjectProcess?: (handlers: OmpSessionProcessHandlers) => Promise<OmpSessionProcess>;
   /** 原始子代理帧旁路出口（只读详情视图的实时事件源）；帧仍照常进入本引擎投影。 */
   forwardSubagentFrame?: (frame: import("../domain/ompFrames.js").OmpSubagentFrame) => void;
+  /**
+   * 子代理只读详情的 UI 地址构建器（透传给 ConversationProjection）。缺省用旧拓扑格式
+   * omp-subagent:<id>：旧「每会话一进程」没有 SubagentViewStore 承接 @parent 地址订阅，
+   * UI 据此禁用下钻；项目模式显式传 buildOmpSubagentViewId（omp-subagent:<id>@<session>）。
+   */
+  viewIdOf?: (subagentId: string) => string;
 }

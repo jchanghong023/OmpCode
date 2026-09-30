@@ -95,16 +95,39 @@ export function createProjectCommandHandler(deps) {
   };
 
   function subagentEntries() {
-    return [
+    // 条目带固定时间戳：真实 omp 记录携带时间戳；缺时间戳会让 rowsFromOmpEntries 回退
+    // Date.now()，使全量重读的确定性重建产生 createdAt 漂移（重读即触发全量 upsert）。
+    const entries = [
       {
         type: "message",
-        message: { role: "user", content: [{ type: "text", text: "scan the repo" }] },
+        message: {
+          role: "user",
+          timestamp: 1727500000000,
+          content: [{ type: "text", text: "scan the repo" }],
+        },
       },
       {
         type: "message",
-        message: { role: "assistant", content: [{ type: "text", text: "scanned 3 files" }] },
+        message: {
+          role: "assistant",
+          timestamp: 1727500000001,
+          content: [{ type: "text", text: "scanned 3 files" }],
+        },
       },
     ];
+    // 同一 subagentId 的第 2+ 轮运行各追加一条尾记录（确定性内容）：驱动子代理详情视图
+    // 的实时重读合并断言——重读返回的行数必须随记录增长，且旧行内容保持不变。
+    for (let run = 2; run <= (facts.subagentSpawns ?? 0); run += 1) {
+      entries.push({
+        type: "message",
+        message: {
+          role: "assistant",
+          timestamp: 1727500000000 + run,
+          content: [{ type: "text", text: `scanned ${1 + run} files in run ${run}` }],
+        },
+      });
+    }
+    return entries;
   }
 
   return function handleProjectCommand(command) {
@@ -222,35 +245,24 @@ export function createProjectCommandHandler(deps) {
         const name = String(command.text ?? "")
           .trim()
           .split(/\s+/)[0];
-        // 侧信道帧（command_output/prompt_result）必须晚于 response（真实 omp 由会话宿主
-        // 先回 response 再异步输出）；否则客户端的本地命令 tracker 登记不到请求 id。
+        // 本地命令（/help、/model）与真实核同构：侧信道帧（command_output/config_update）
+        // 先于 response 同步输出（参照单会话 fakeOmp.mjs），response 以 data.agentInvoked=false
+        // 同步收口，不补发 prompt_result（真实核仅 completeLocal 在 response 无 data 时异步发）。
         if (name === "/help") {
-          setImmediate(() => {
-            sessionOut(command.sessionId, {
-              type: "command_output",
-              text: "fake help: try /model, /skill:greet",
-            });
-            sessionOut(command.sessionId, { type: "prompt_result", id, agentInvoked: false });
+          sessionOut(command.sessionId, {
+            type: "command_output",
+            text: "fake help: try /model, /skill:greet",
           });
-          return response(id, command.type, true, {
-            completed: true,
-            output: "fake help: try /model, /skill:greet",
-          });
+          return response(id, command.type, true, { agentInvoked: false });
         }
         if (name === "/model") {
           const session = ensureSession(command.sessionId);
-          setImmediate(() => {
-            sessionOut(command.sessionId, {
-              type: "config_update",
-              model: session.model,
-              thinkingLevel: "low",
-            });
-            sessionOut(command.sessionId, { type: "prompt_result", id, agentInvoked: false });
+          sessionOut(command.sessionId, {
+            type: "config_update",
+            model: session.model,
+            thinkingLevel: "low",
           });
-          return response(id, command.type, true, {
-            completed: true,
-            output: `model ${session.model.provider}/${session.model.id}`,
-          });
+          return response(id, command.type, true, { agentInvoked: false });
         }
         if (name === "/skill:greet") {
           setImmediate(() => streamAssistantTurn(command.sessionId, id, "greet skill invoked"));

@@ -151,7 +151,10 @@ export function createLegacyHandlers(context: LegacyMethodContext) {
     [zcodeProtocolMethods.sessionSubagents]: async (params) => {
       const record = asRecord(params);
       const sessionId = requiredString(record, "sessionId");
-      const offset = typeof record?.cursor === "string" ? Number.parseInt(record.cursor, 10) : 0;
+      // 协议分页字段是 endedCursor（zcodeSessionSubagentsParamsSchema）；旧字段名
+      // cursor 恒解析失败使 offset 停在 0，「加载更多」永远翻回第一页。
+      const rawCursor = record?.endedCursor ?? record?.cursor;
+      const offset = typeof rawCursor === "string" ? Number.parseInt(rawCursor, 10) : 0;
       const normalizedOffset = Number.isFinite(offset) && offset >= 0 ? offset : 0;
       // 项目模式：ended 以 OMP 持久目录为准（重启后仍可发现）；不可用时回落投影目录。
       const projectDirectory = await context.listSubagents?.(sessionId, normalizedOffset);
