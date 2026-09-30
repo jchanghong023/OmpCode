@@ -299,17 +299,21 @@ const PROJECT_COMMANDS = new Set([
   "control_subagent",
 ]);
 
+// FAKE_OMP_NO_PROJECT_MODE=1：模拟旧内嵌核（ready 无 rpc-ui-project）——网关应整体
+// 永久回落旧拓扑，项目方法按 -32601 能力缺失报错（区别于启动失败的 -32000 可重试）。
+const noProjectMode = process.env.FAKE_OMP_NO_PROJECT_MODE === "1";
+
 out({
   type: "ready",
   protocolVersion: 1,
   supportedProtocolVersions: [1, 2, 3],
   maxFrameBytes: 2_097_152,
   maxReassembledFrameBytes: 16_777_216,
-  mode: "rpc-ui-project",
+  ...(noProjectMode ? {} : { mode: "rpc-ui-project" }),
   projectIdentity: { projectRoot: process.cwd() },
   processInstanceId,
   capabilities: {
-    projectMode: true,
+    projectMode: !noProjectMode,
     multiSession: true,
     commandCompletion: true,
     executeCommand: true,

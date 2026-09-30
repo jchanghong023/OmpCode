@@ -1,6 +1,8 @@
 // Fork（omp-project-mode.md）：OMP 项目模式 legacy 方法处理器。
 // workspace/completeOmpCommand、workspace/ompModelRoles、workspace/ompSetModelRole、
 // session/controlSubagent；omp 未提供项目模式时按能力缺失显式报错（-32601），不伪造。
+// 项目进程暂时不可用（启动失败/退避窗口）与「核不支持」语义不同：报 -32000 可重试错误，
+// 不冒充能力缺失——宿主 UI 对 -32601 会永久停用动态补全，一次瞬时失败不应造成该后果。
 
 import {
   zcodeControlSubagentParamsSchema,
@@ -18,12 +20,22 @@ export interface OmpProjectMethodDeps {
   workspaceKey: string;
 }
 
-function requireProject(deps: OmpProjectMethodDeps, method: string): OmpProjectGatewayPort {
-  void deps.registry.projectAvailable();
+async function requireProject(
+  deps: OmpProjectMethodDeps,
+  method: string,
+): Promise<OmpProjectGatewayPort> {
+  // 网关未注入 = 本端点根本未启用项目模式，等价于永久不支持。
   if (!deps.project) {
     throw new ProtocolError(-32601, `method not supported by omp core: ${method}`);
   }
-  return deps.project;
+  const availability = await deps.registry.projectAvailability();
+  if (availability === "available") {
+    return deps.project;
+  }
+  if (availability === "unsupported") {
+    throw new ProtocolError(-32601, `method not supported by omp core: ${method}`);
+  }
+  throw new ProtocolError(-32000, `omp project process unavailable: ${method}`);
 }
 
 /**
@@ -43,13 +55,7 @@ export function createOmpProjectMethodHandlers(
       if (!parsed.success || parsed.data.workspace.workspaceKey !== deps.workspaceKey) {
         throw new ProtocolError(-32602, "invalid completion request target");
       }
-      const project = requireProject(deps, "workspace/completeOmpCommand");
-      if (!(await deps.registry.projectAvailable())) {
-        throw new ProtocolError(
-          -32601,
-          "method not supported by omp core: workspace/completeOmpCommand",
-        );
-      }
+      const project = await requireProject(deps, "workspace/completeOmpCommand");
       const outcome = await project.sendProject({
         type: "complete_command",
         text: parsed.data.text,
@@ -70,13 +76,7 @@ export function createOmpProjectMethodHandlers(
       if (!parsed.success || parsed.data.workspace.workspaceKey !== deps.workspaceKey) {
         throw new ProtocolError(-32602, "invalid model roles request target");
       }
-      const project = requireProject(deps, "workspace/ompModelRoles");
-      if (!(await deps.registry.projectAvailable())) {
-        throw new ProtocolError(
-          -32601,
-          "method not supported by omp core: workspace/ompModelRoles",
-        );
-      }
+      const project = await requireProject(deps, "workspace/ompModelRoles");
       const outcome = await project.sendProject({
         type: "get_model_roles",
         ...(parsed.data.sessionId ? { sessionId: parsed.data.sessionId } : {}),
@@ -100,13 +100,7 @@ export function createOmpProjectMethodHandlers(
       if (!parsed.success || parsed.data.workspace.workspaceKey !== deps.workspaceKey) {
         throw new ProtocolError(-32602, "invalid model role save target");
       }
-      const project = requireProject(deps, "workspace/ompSetModelRole");
-      if (!(await deps.registry.projectAvailable())) {
-        throw new ProtocolError(
-          -32601,
-          "method not supported by omp core: workspace/ompSetModelRole",
-        );
-      }
+      const project = await requireProject(deps, "workspace/ompSetModelRole");
       const outcome = await project.sendProject({
         type: "set_model_role",
         roleId: parsed.data.roleId,
@@ -126,13 +120,7 @@ export function createOmpProjectMethodHandlers(
       if (!parsed.success || parsed.data.workspace.workspaceKey !== deps.workspaceKey) {
         throw new ProtocolError(-32602, "invalid subagent control target");
       }
-      requireProject(deps, "session/controlSubagent");
-      if (!(await deps.registry.projectAvailable())) {
-        throw new ProtocolError(
-          -32601,
-          "method not supported by omp core: session/controlSubagent",
-        );
-      }
+      await requireProject(deps, "session/controlSubagent");
       const outcome = await deps.registry.controlSubagent(
         parsed.data.sessionId,
         parsed.data.subagentId,

@@ -51,6 +51,7 @@ import {
   getTextAroundCursor,
   isAppSlashCommandSuggestion,
   normalizeSlashCommandValue,
+  slashComposingQueryOf,
   type SlashCommandPluginProps,
 } from "./slashCommandHelpers.js";
 import { useSlashCommandMentionPanelSections } from "./slashCommandPanelSections.js";
@@ -124,7 +125,11 @@ export function SlashCommandPlugin({
   const dynamicCommandSuggestions = useMemo(() => {
     const seen = new Set(commandSuggestions.map((item) => normalizeSlashCommandValue(item.value)));
     return ompCompletionItems.flatMap((item, index) => {
-      if (item.kind === "argument" || item.kind === "subcommand") return [];
+      // skill 命令已由技能分组（skillsReferenceCatalog）提供，这里再放入命令组会
+      // 同名显示两行——与静态投影（ompCommands.ts）排除 skill 源的规则一致。
+      if (item.kind === "argument" || item.kind === "subcommand" || item.kind === "skill") {
+        return [];
+      }
       const value = item.insertText.replace(/^\//, "").trim();
       if (!value || seen.has(normalizeSlashCommandValue(value))) return [];
       return [
@@ -381,11 +386,15 @@ export function SlashCommandPlugin({
           const before = selectionState.textBeforeCursor;
           const lastSpace = before.lastIndexOf(" ");
           const argumentStart = lastSpace + 1;
+          // 光标停在参数词中间时（方向键/点击移动后接受候选），把光标后的词尾一并纳入
+          // 替换区间，否则残留半个词（如 `/security ver|se` 接受 `--verbose` 得
+          // `--verbose se`）；语义与名称分支消费 token tail 一致。
+          const tailLength = /^\S+/.exec(selectionState.textAfterCursor)?.[0].length ?? 0;
           selectionState.selection.setTextNodeRange(
             selectionState.node,
             argumentStart,
             selectionState.node,
-            selectionState.cursorOffset,
+            selectionState.cursorOffset + tailLength,
           );
           const replacement = $createTextNode(`${suggestion.value} `);
           selectionState.selection.insertNodes([replacement]);
@@ -592,13 +601,4 @@ export function SlashCommandPlugin({
     />,
     container,
   );
-}
-
-/** Fork（omp-project-mode.md）：单行 "/" 命令且已含空格时的编辑态 query；否则 null。 */
-function slashComposingQueryOf(textBeforeCursor: string): string | null {
-  // 单行、以 "/" 开头、已出现空格（命令名后正在补参数）。
-  if (!/^\/\S*\s\S.*$/.test(textBeforeCursor)) {
-    return null;
-  }
-  return textBeforeCursor.slice(1);
 }

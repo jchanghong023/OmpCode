@@ -240,7 +240,6 @@ const ompEnUSOverrides: Record<string, string> = {
   "ompSubagentControl.sendPlaceholder": "Send a message to this subagent…",
   "ompSubagentControl.status": "Result",
   "ompSubagentControl.failed": "Failed",
-  "ompModelRoles.dialogTitle": "OMP model roles",
   "ompModelRoles.fromAgent":
     "Full role catalog from the OMP runtime (unconfigured roles included); saving is automatic on selection.",
   "ompModelRoles.saveFailed": "Save failed",
@@ -248,8 +247,6 @@ const ompEnUSOverrides: Record<string, string> = {
   "ompModelRoles.saved": "Saved",
   "ompModelRoles.notConfigured": "Not configured",
   "ompModelRoles.overridden": "User config saved but currently overridden by another source",
-  "ompModelRoles.unresolved": "Unresolved",
-  "ompModelRoles.loadFailedRpc": "Failed to load OMP role catalog",
   "ompModelRoles.autoOption": "Auto",
 };
 

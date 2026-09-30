@@ -88,6 +88,20 @@ export function normalizeSlashCommandValue(name: string): string {
   return name.trim().replace(/^\/+/, "");
 }
 
+/**
+ * Fork（omp-project-mode.md）：单行 "/" 命令且已含空格时的编辑态 query；否则 null。
+ */
+export function slashComposingQueryOf(textBeforeCursor: string): string | null {
+  // 单行、以 "/" 开头、命令名后已出现空白。允许连续空白与尾随空白：OMP complete_command
+  // 在 `/name `（刚敲空格）与 `/name  a`（多空格）形态下也提供参数候选，旧正则
+  // （要求空格后紧跟非空白字符）会把这两种形态的参数补全整体关掉；`[^\n]*$`
+  // 保留旧正则经 `.` 不跨行的单行约束（多行输入不是命令编辑态）。
+  if (!/^\/\S*\s[^\n]*$/.test(textBeforeCursor)) {
+    return null;
+  }
+  return textBeforeCursor.slice(1);
+}
+
 export function buildSlashSuggestions(commands: ZCodeSlashCommand[]): PromptInputSuggestionItem[] {
   return commands.flatMap((command) => {
     const value = normalizeSlashCommandValue(command.name);

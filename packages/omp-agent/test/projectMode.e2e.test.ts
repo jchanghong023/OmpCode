@@ -598,3 +598,47 @@ test("Z05: 删除会话反映到 sessions-index；EOF 有序退出", async () =>
     assert.ok(code === 0 || code === null, `adapter exit code ${code}`);
   }
 });
+
+test("项目方法错误语义：旧核 -32601 永久缺失；进程启动失败 -32000 可重试", async () => {
+  // (a) 旧核（ready 无 rpc-ui-project）：能力永久缺失，按 -32601 报错，不伪造结果。
+  const oldCore = await startAdapter({ FAKE_OMP_NO_PROJECT_MODE: "1" });
+  try {
+    const unsupported = (await oldCore.harness.request("workspace/completeOmpCommand", {
+      workspace: { workspacePath: packageRoot, workspaceKey: "test-workspace" },
+      text: "/he",
+      cursor: 3,
+    })) as { error?: { code: number; message: string } };
+    assert.ok(unsupported.error, JSON.stringify(unsupported));
+    assert.equal(unsupported.error.code, -32601);
+    assert.match(unsupported.error.message, /not supported by omp core/);
+  } finally {
+    oldCore.harness.endStdin();
+    await oldCore.harness.exited;
+  }
+
+  // (b) 二进制缺失（spawn 失败）：与旧核不同，这是暂时不可用——按 -32000 报可重试
+  // 错误且不打崩适配器；退避窗口内重复调用同样快速失败，不反复拉起进程。
+  const broken = await startAdapter({
+    OMP_RPC_BINARY_PATH: join(scratchRoot, "missing-omp-binary.exe"),
+  });
+  try {
+    const transient = (await broken.harness.request("workspace/completeOmpCommand", {
+      workspace: { workspacePath: packageRoot, workspaceKey: "test-workspace" },
+      text: "/he",
+      cursor: 3,
+    })) as { error?: { code: number; message: string } };
+    assert.ok(transient.error, JSON.stringify(transient));
+    assert.equal(transient.error.code, -32000);
+    assert.match(transient.error.message, /omp project process unavailable/);
+    const again = (await broken.harness.request("workspace/ompModelRoles", {
+      workspace: { workspacePath: packageRoot, workspaceKey: "test-workspace" },
+    })) as { error?: { code: number; message: string } };
+    assert.ok(again.error, JSON.stringify(again));
+    assert.equal(again.error.code, -32000);
+    assert.match(again.error.message, /omp project process unavailable/);
+  } finally {
+    broken.harness.endStdin();
+    const code = await broken.harness.exited;
+    assert.ok(code === 0 || code === null, `adapter exit code ${code}`);
+  }
+});

@@ -10,7 +10,7 @@ import { deleteColdSession } from "./deleteColdSession.js";
 import { deleteLoadedSession } from "./deleteLoadedSession.js";
 import { listLegacySessions } from "./legacySessionList.js";
 import { ProtocolError } from "./errors.js";
-import type { HostGateway, OmpProjectGatewayPort, OmpProcessFactory, OmpStorePort } from "./ports.js";
+import type { HostGateway, OmpProjectAvailability, OmpProjectGatewayPort, OmpProcessFactory, OmpStorePort } from "./ports.js";
 import { controlSubagent, projectSubagentDirectory } from "./ompProjectDirectory.js";
 import { createProjectSession, hydrateEngineFromCold as hydrateLifecycleCold, resumeProjectSession } from "./projectSessionLifecycle.js";
 import type { ProjectSessionHost } from "./projectSessionLifecycle.js";
@@ -61,6 +61,14 @@ export class SessionRegistry {
   /** 项目模式能力事实（OMP 未提供项目模式时恒为 false，调用方回落旧拓扑）。 */
   async projectAvailable(): Promise<boolean> {
     return this.project ? this.project.available() : Promise.resolve(false);
+  }
+
+  /**
+   * 项目模式三态可用性：网关未注入按「永久不支持」；否则透传网关判定。
+   * 报错语义（永久 -32601 / 暂时 -32000）以本方法为准，拓扑回落仍用 projectAvailable。
+   */
+  async projectAvailability(): Promise<OmpProjectAvailability> {
+    return this.project ? this.project.availability() : Promise.resolve("unsupported");
   }
 
   /** 项目生命周期 host（projectSessionLifecycle 的回写接口）。 */

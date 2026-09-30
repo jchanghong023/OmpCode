@@ -11,6 +11,7 @@ import {
 } from "../domain/ompProjectFrames.js";
 import type {
   OmpCommandOutcome,
+  OmpProjectAvailability,
   OmpSessionProcess,
   OmpSessionProcessHandlers,
 } from "../app/ports.js";
@@ -112,6 +113,16 @@ export class OmpProjectGateway {
   /** 能力判定（app 层端口）：true = 项目模式可用。 */
   async available(): Promise<boolean> {
     return (await this.ensure()) !== null;
+  }
+
+  /**
+   * 三态可用性（app 层端口）：区分「ready 未声明项目模式（旧核，永久）」与
+   * 「启动失败/退避窗口（可重试）」；available() 只能给拓扑回落的布尔事实，
+   * 报错语义（-32601 永久 vs -32000 暂时）必须由本方法区分。
+   */
+  async availability(): Promise<OmpProjectAvailability> {
+    if (await this.ensure()) return "available";
+    return this.capability === false ? "unsupported" : "unavailable";
   }
 
   async sendProject(command: OmpProjectCommand): Promise<OmpCommandOutcome> {

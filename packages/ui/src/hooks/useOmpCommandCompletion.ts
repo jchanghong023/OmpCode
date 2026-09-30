@@ -25,6 +25,8 @@ const EMPTY: OmpCommandCompletionState = { items: [], loading: false };
  * 无执行副作用；调用方按输入丢弃过期响应。能力缺失（旧核/远端不支持，-32601
  * "not supported by omp core"）时记入 ref，后续 Effect 跳过请求（loading 不再置真），
  * 返回空表，面板回落本地目录过滤，不报错打断输入。
+ * 项目进程暂时不可用（启动失败/退避，omp-agent 报 -32000 "omp project process
+ * unavailable"）不记忆：与旧核的永久缺失不同，下一次输入会在退避窗口后重试。
  */
 export function useOmpCommandCompletion(
   options: UseOmpCommandCompletionOptions,
@@ -50,6 +52,18 @@ export function useOmpCommandCompletion(
   useEffect(() => {
     capabilityMissingRef.current = false;
   }, [services, remoteSessionId, options.workspacePath, options.workspaceIdentity]);
+
+  // agent runtime 重建后（omp-agent 进程重启/换核）能力事实可能变化，旧核时期记下的
+  // 能力缺失不再成立；对齐 useSkills 的 onAgentRuntimeRestarted 失效模式。
+  const workspaceKey = options.workspaceIdentity?.trim() || options.workspacePath;
+  useEffect(() => {
+    if (typeof services.zcodeAgentService.onAgentRuntimeRestarted !== "function") return;
+    const subscription = services.zcodeAgentService.onAgentRuntimeRestarted((event) => {
+      if (event.workspaceKey !== workspaceKey) return;
+      capabilityMissingRef.current = false;
+    });
+    return () => subscription.dispose();
+  }, [services, workspaceKey]);
 
   useEffect(() => {
     if (debounceRef.current) {

@@ -86,6 +86,12 @@ class OmpChildProcess implements OmpSessionProcess {
     this.child = child;
     this.exitListener = (code) => this.handleExit(code);
     child.once("exit", this.exitListener);
+    // spawn 失败（如二进制缺失/不可执行）不触发 exit，未监听的 'error' 会以 uncaught
+    // exception 打崩宿主；收口到 handleExit(null)，与下方 stdin error 兜底同源。
+    child.once("error", (error) => {
+      logger.debug("omp spawn error", { error: String(error) });
+      this.handleExit(null);
+    });
     child.stderr.on("data", (chunk: Buffer) => {
       const text = chunk.toString("utf8").trim();
       if (text.length > 0) {

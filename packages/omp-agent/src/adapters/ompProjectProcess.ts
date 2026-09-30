@@ -81,6 +81,12 @@ export class OmpProjectProcess {
     }) as ChildProcessWithoutNullStreams;
     this.child = child;
     child.once("exit", (code) => this.handleExit(code));
+    // spawn 失败（如二进制缺失/不可执行）不触发 exit，未监听的 'error' 会以 uncaught
+    // exception 打崩宿主；收口到 handleExit(null)，与 G6 的 stdin error 兜底同源。
+    child.once("error", (error) => {
+      logger.warn("omp project spawn error", { error: String(error) });
+      this.handleExit(null);
+    });
     // 修复（G6）：omp 进程意外退出后继续写 stdin 会触发 EPIPE，若无人监听将以
     // uncaught 'error' 事件崩溃宿主。挂常驻 debug 监听兜底；真实失败仍由
     // exit 事件与 pending 命令失败路径上报，不在此扩大处理。
@@ -148,6 +154,10 @@ export class OmpProjectProcess {
       child.once("exit", (code) => {
         clearTimeout(timer);
         reject(new Error(`omp project core exited before ready (code ${code ?? "null"})`));
+      });
+      child.once("error", (error) => {
+        clearTimeout(timer);
+        reject(error instanceof Error ? error : new Error(String(error)));
       });
     });
   }

@@ -73,6 +73,10 @@ export function awaitOmpReady(
       clearTimeout(timer);
       reject(new Error(`omp core exited before ready (code ${code ?? "null"})`));
     });
+    child.once("error", (error) => {
+      clearTimeout(timer);
+      reject(error instanceof Error ? error : new Error(String(error)));
+    });
   });
 }
 

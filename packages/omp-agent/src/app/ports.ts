@@ -191,12 +191,21 @@ export interface OmpProjectSessionSummaryPort {
 }
 
 /**
+ * 项目模式可用性三态：available = 项目进程可用；unsupported = ready 未声明项目模式
+ * （旧核，本进程生命周期内不会变化，永久回落）；unavailable = 启动失败/退避窗口中
+ * （可重试，与「核本身不支持」必须区分，供调用方决定报错语义与重试策略）。
+ */
+export type OmpProjectAvailability = "available" | "unsupported" | "unavailable";
+
+/**
  * OMP 项目模式网关端口（实现 = adapters/ompProjectGateway.ts）。app 层经此消费进程
  * 生命周期与会话通道，不直接依赖适配层；omp 未提供项目模式时 available() 为 false，
  * 调用方整体回落「每会话一进程」旧拓扑。
  */
 export interface OmpProjectGatewayPort {
   available(): Promise<boolean>;
+  /** 三态可用性：区分「旧核永久不支持」与「进程暂时不可用（可重试）」。 */
+  availability(): Promise<OmpProjectAvailability>;
   createSession(params: { name?: string }): Promise<OmpProjectSessionSummaryPort>;
   resumeSession(sessionId: string): Promise<OmpProjectSessionSummaryPort>;
   deleteSession(sessionId: string): Promise<OmpCommandOutcome>;
