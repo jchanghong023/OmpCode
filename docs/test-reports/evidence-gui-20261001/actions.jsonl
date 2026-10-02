@@ -1,0 +1,12 @@
+{"t":"2026-10-01T22:50Z","action":"env-check","detail":"ports 9230/5194 free; no electron running; user omp processes untouched"}
+{"t":"2026-10-01T22:52Z","action":"launch","detail":"pnpm dev:desktop background; CDP ready ~40s"}
+{"t":"2026-10-01T23:07Z","action":"reproduce-defect1","detail":"click aux-chat entry; no visible feedback; console fault.command.unsupportedByOmpCore (host log + agent-browser console)"}
+{"t":"2026-10-01T23:20Z","action":"fix-defect1","detail":"SessionPane toast on both side-chat create paths; i18n zh/en; FORK.md diff-4 updated"}
+{"t":"2026-10-01T23:5x","action":"discover-defect2","detail":"phantom 'New session' rows accumulate per renderer load; sqlite tasks-index + omp empty 722B session files confirmed; isDraftSession filter missing in omp-agent"}
+{"t":"2026-10-02T00:3x","action":"fix-defect2","detail":"draftPrewarm flag + project-mode rejection + sessionIndexTopics/legacySessionList draft filters; e2e red-green verified"}
+{"t":"2026-10-02T01:0x","action":"retest-defect1","detail":"toast shown on real click (e03)"}
+{"t":"2026-10-02T01:2x","action":"discover-defect3","detail":"create-on-send first message: session runs in omp but pane permanently blank; probe chain (engines.set/getEngine/resume-entry) pinned concurrent resume clobber during create registration window"}
+{"t":"2026-10-02T02:4x","action":"fix-defect3","detail":"registry: settlePendingCreates barrier + pendingResumes dedup + no-clobber on cold-load completion"}
+{"t":"2026-10-02T02:45Z","action":"verify-defect3","detail":"subscribe hits live engine rows=3 running -> completedSuccess; pane renders full turn (e12)"}
+{"t":"2026-10-02T02:5x","action":"clean-rebuild-retest","detail":"all probes removed; typecheck/lint/fmt green; omp-agent 140/140; FINAL-OK full-chain render on clean build (e13); zero new phantom rows"}
+{"t":"2026-10-02T02:5x","action":"z04-minimal","detail":"in-session streaming queue B2->B3 serialized per session, no cross-talk"}

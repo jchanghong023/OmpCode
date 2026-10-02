@@ -61,11 +61,12 @@ export class SessionIndexTopics {
     this.host = host;
   }
 
-  /** 引擎摘要入索引（含临时 ID → omp 文件 UUID 的身份迁移；Host 自动化按创建时 task ID 监听终态）。 */
+  /** 引擎摘要入索引（含临时 ID → omp 文件 UUID 身份迁移；Host 按创建时 task ID 监听终态）。draft 相位不入索引：上游 isDraftSession 过滤（v4-gateway.ts publishCurrentSummaryToIndex）的换核等价实现，缺失会让预热 draft 以「New session」漏进 sessions-index、宿主 task-index 留下幽灵行（见 omp-project-mode.md「草稿预热禁用」）；首发提升为 running 后经 notifyIndexChange 正常入索引。 */
   upsertEngineSummary(
     engine: ConversationEngine,
     overrides?: { createdAt?: number; lastActivityAt?: number },
   ): void {
+    if (engine.projection.stateSnapshot.control.phase === "draft") return;
     const index = this.ensureIndex(engine.workspaceId);
     const state = engine.projection.stateSnapshot;
     const persistedId = ompSessionIdOfFilePath(engine.ompSessionFile) ?? engine.sessionId;

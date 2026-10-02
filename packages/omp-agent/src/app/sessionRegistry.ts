@@ -30,6 +30,10 @@ export interface RegistryDeps {
 
 export class SessionRegistry {
   private engines = new Map<string, ConversationEngine>();
+  /** 并发 resume 去重：同 sessionId 只允许一次冷加载（见 resumeSession 修复说明）。 */
+  private pendingResumes = new Map<string, Promise<ConversationEngine>>();
+  /** 在途 createSession：resume/read 必须等其登记完成，否则会在注册空窗期构建冷引擎并覆盖活引擎（GUI 实测缺陷）。 */
+  private pendingCreates = new Set<Promise<unknown>>();
   private primaryWorkspace: { id: string; path: string } | null = null;
   private readonly rekeyedEngineIds = new Set<string>();
   private readonly ompFactory: OmpProcessFactory;
@@ -114,7 +118,22 @@ export class SessionRegistry {
     for (const engine of this.engines.values()) engine.setConnectionFlowState(connectionId, state);
   }
 
-  async createSession(params: { sessionId?: string; workspaceId: string; workspacePath: string; title?: string }): Promise<ConversationEngine> {
+  createSession(params: { sessionId?: string; workspaceId: string; workspacePath: string; title?: string }): Promise<ConversationEngine> {
+    const create = this.createSessionInner(params);
+    this.pendingCreates.add(create);
+    return create.finally(() => {
+      this.pendingCreates.delete(create);
+    });
+  }
+
+  /** resume/read 到达早于 createSession 登记时的串行屏障（GUI 实测竞态，见 resumeSession）。 */
+  private async settlePendingCreates(): Promise<void> {
+    while (this.pendingCreates.size > 0) {
+      await Promise.all(Array.from(this.pendingCreates));
+    }
+  }
+
+  private async createSessionInner(params: { sessionId?: string; workspaceId: string; workspacePath: string; title?: string }): Promise<ConversationEngine> {
     this.primaryWorkspace = { id: params.workspaceId, path: params.workspacePath };
     if (this.project && (await this.projectAvailable())) {
       return createProjectSession(this.projectHost(), params);
@@ -135,15 +154,45 @@ export class SessionRegistry {
     return engine;
   }
 
-  /** 恢复会话：冷历史行先行入投影；项目模式经 resume_session 加载，旧拓扑按 --resume 启动。 */
+  /**
+   * 恢复会话：冷历史行先行入投影；项目模式经 resume_session 加载，旧拓扑按 --resume 启动。
+   * 修复依据：同一会话的并发 resume（如会话创建 ACK 后宿主 readSession 与 task-index 回源
+   * 同时到达）会各自构建冷引擎并相互覆盖注册表，把正在运行回合的活引擎顶成 0 行冷引擎，
+   * 会话面板因此永久空白（GUI 实测缺陷）。此处按 sessionId 去重并发加载；加载完成后若
+   * 已有更早登记的引擎（并发 createProjectSession 或先完成的加载），一律返回已登记引擎，
+   * 丢弃本次冷恢复结果（冷恢复引擎惰性挂载、无子进程，丢弃无副作用）。
+   */
   async resumeSession(params: { sessionId: string; workspaceId: string; workspacePath: string }): Promise<ConversationEngine> {
     this.primaryWorkspace = { id: params.workspaceId, path: params.workspacePath };
+    await this.settlePendingCreates();
     const existing = this.getEngine(params.sessionId);
     if (existing) {
       return existing;
     }
+    const pending = this.pendingResumes.get(params.sessionId);
+    if (pending) {
+      return pending;
+    }
+    const load = this.loadSessionForResume(params).finally(() => {
+      this.pendingResumes.delete(params.sessionId);
+    });
+    this.pendingResumes.set(params.sessionId, load);
+    return load;
+  }
+
+  private async loadSessionForResume(params: { sessionId: string; workspaceId: string; workspacePath: string }): Promise<ConversationEngine> {
+    // 排队期间可能已有并发加载/create 完成：再查一次，绝不覆盖已登记引擎。
+    const raced = this.getEngine(params.sessionId);
+    if (raced) {
+      return raced;
+    }
     if (this.project && (await this.projectAvailable())) {
-      return resumeProjectSession(this.projectHost(), params);
+      const engine = await resumeProjectSession(this.projectHost(), params);
+      const winner = this.getEngine(params.sessionId);
+      if (winner && winner !== engine) {
+        return winner;
+      }
+      return engine;
     }
     const cold = this.store.findSession
       ? await this.store.findSession(params.workspacePath, params.sessionId)
@@ -152,6 +201,10 @@ export class SessionRegistry {
       // 未知会话必须显式拒绝；继续创建会凭空产出幽灵引擎（订阅 conversation/undefined
       // 实测会在侧栏多出一行永不收敛的空会话）。
       throw new ProtocolError(-32004, `session unavailable: ${params.sessionId}`);
+    }
+    const racedAfterCold = this.getEngine(params.sessionId);
+    if (racedAfterCold) {
+      return racedAfterCold;
     }
     const engine = new ConversationEngine({
       sessionId: params.sessionId,
@@ -166,6 +219,10 @@ export class SessionRegistry {
     });
     // 旧拓扑冷行水合复用 lifecycle 的行投影（project 字段不会被旧路径触碰）。
     await hydrateLifecycleCold(this.projectHost(), engine, cold.sessionPath, cold.createdAt, cold.updatedAt);
+    const winner = this.getEngine(params.sessionId);
+    if (winner && winner !== engine) {
+      return winner;
+    }
     return engine;
   }
 

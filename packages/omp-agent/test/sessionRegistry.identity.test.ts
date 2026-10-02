@@ -41,6 +41,13 @@ test("omp 稳定会话 ID 绑定后，legacy 列表与引擎查找不重复", as
     workspacePath: "C:/work",
   });
   await engine.ensureOmpStarted();
+  // draft 相位不再进 legacy 列表（isDraftSession 过滤）；身份语义测试需真实会话相位。
+  engine.projection.beginUserTurn({
+    text: "x",
+    inputId: "t1",
+    sourceCommandId: "c1",
+    clientId: "test",
+  });
   const sessions = await registry.listLegacySessions("C:/work", "ws");
   assert.deepEqual(
     sessions.map((item) => item.sessionId),
@@ -180,6 +187,13 @@ test("sessions-index 与 workspace-config 恢复后从当前水位继续发 delt
     gateway: { emitFrame: (frame: Wire) => frames.push(frame) } as unknown as HostGateway,
   });
   const engine = await registry.createSession({ workspaceId: "ws", workspacePath: "C:/work" });
+  // draft 相位不入 sessions-index（isDraftSession 过滤）；本测试验证恢复水位，需非 draft 相位。
+  engine.projection.beginUserTurn({
+    text: "x",
+    inputId: "t1",
+    sourceCommandId: "c1",
+    clientId: "test",
+  });
   const index = await registry.subscribeSessionsIndex({
     workspaceId: "ws",
     workspacePath: "C:/work",

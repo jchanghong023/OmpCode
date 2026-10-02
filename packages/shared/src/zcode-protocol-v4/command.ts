@@ -63,6 +63,10 @@ export const commandPayloadSchemas = {
     offPeakToolEnabled: z.boolean().optional(),
     // 动态工作流灰度 flag，与 offPeakToolEnabled 同一模式。
     dynamicWorkflowEnabled: z.boolean().optional(),
+    // 渲染器草稿预热标记（additive）。omp 项目模式的 create_session 立即落盘会话文件，
+    // 与「draft 纯内存不落盘」契约冲突；omp-agent 项目模式据此拒绝预热创建、回落
+    // 无预热路径，旧拓扑（惰性进程、真内存 draft）照常接受。
+    draftPrewarm: z.boolean().optional(),
   }),
   // 父会话由 envelope.sessionId 指定；服务端从父 record 派生完整运行配置。
   // firstInput 存在时，child 创建完成后立即启动首条普通输入；缺省则保持空副屏。

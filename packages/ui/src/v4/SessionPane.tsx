@@ -1940,16 +1940,28 @@ export function SessionPane({
           });
         }
       } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
         logger.warn("[v4-pane] 创建框选副屏会话失败", {
-          error: error instanceof Error ? error.message : String(error),
+          error: message,
           parentSessionId: sessionId,
           workspaceKey,
         });
+        // Fork 约束（FORK.md 已知差异）：核心不提供的能力入口必须显式反馈，
+        // 不得静默无反应；omp 适配层对本命令返回 fault.command.unsupportedByOmpCore。
+        toast(
+          intl.formatMessage(
+            message.includes("unsupportedByOmpCore")
+              ? { id: "chat.selections.sideUnsupported" }
+              : { id: "chat.selections.sideCreateFailed" },
+            message.includes("unsupportedByOmpCore") ? undefined : { error: message },
+          ),
+        );
       }
     },
     [
       activeSelectionSideChatSessionId,
       dispatchCommand,
+      intl,
       onOpenSelectionSideChat,
       remoteSessionId,
       selectionSideChatKey,
@@ -1976,34 +1988,50 @@ export function SessionPane({
       // 参数命令每次都是新 child；同一条文本在 ACK 未回时重试仍复用 pending，
       // 不同文本则不能与 bare `/side` 或另一条 prompt 合并。
       const pendingKey = `${selectionSideChatKey}\u0000prompt\u0000${text}`;
-      const childSessionId = await createSelectionSideChat(pendingKey, async () => {
-        const ack = await dispatchCommand(
-          "createSelectionSideSession",
-          { firstInput: { text, ...(modelSelection ? { modelSelection } : {}) } },
-          sessionId,
-          undefined,
-          undefined,
-          telemetrySeed,
+      try {
+        const childSessionId = await createSelectionSideChat(pendingKey, async () => {
+          const ack = await dispatchCommand(
+            "createSelectionSideSession",
+            { firstInput: { text, ...(modelSelection ? { modelSelection } : {}) } },
+            sessionId,
+            undefined,
+            undefined,
+            telemetrySeed,
+          );
+          if (
+            (ack.status !== "accepted" && ack.status !== "duplicate") ||
+            ack.result?.type !== "createSelectionSideSession"
+          ) {
+            throw new Error(ack.reasonCode ?? "createSelectionSideSession 被拒绝");
+          }
+          return ack.result.sessionId;
+        });
+        onOpenSelectionSideChat({
+          workspacePath,
+          ...(workspaceIdentity ? { workspaceIdentity } : {}),
+          ...(remoteSessionId ? { remoteSessionId } : {}),
+          parentSessionId: sessionId,
+          childSessionId,
+        });
+      } catch (error) {
+        // `/side` 失败返回 blocked 保留草稿；提示语义与无参数入口一致（FORK.md 已知差异：
+        // omp 核心不支持时必须显式反馈，不得静默或伪装发送成功）。
+        const message = error instanceof Error ? error.message : String(error);
+        toast(
+          intl.formatMessage(
+            message.includes("unsupportedByOmpCore")
+              ? { id: "chat.selections.sideUnsupported" }
+              : { id: "chat.selections.sideCreateFailed" },
+            message.includes("unsupportedByOmpCore") ? undefined : { error: message },
+          ),
         );
-        if (
-          (ack.status !== "accepted" && ack.status !== "duplicate") ||
-          ack.result?.type !== "createSelectionSideSession"
-        ) {
-          throw new Error(ack.reasonCode ?? "createSelectionSideSession 被拒绝");
-        }
-        return ack.result.sessionId;
-      });
-      onOpenSelectionSideChat({
-        workspacePath,
-        ...(workspaceIdentity ? { workspaceIdentity } : {}),
-        ...(remoteSessionId ? { remoteSessionId } : {}),
-        parentSessionId: sessionId,
-        childSessionId,
-      });
+        return false;
+      }
       return true;
     },
     [
       dispatchCommand,
+      intl,
       modelSelectionView,
       recommendStartPlan,
       onOpenSelectionSideChat,

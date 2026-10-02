@@ -7,7 +7,11 @@
 // session 则服务端已有会话实体」）——本模块在 pane 未绑定会话时后台建一个
 // draft session 作预热载体：配置写走 v4 CAS 命令直达会话、首发 sendText 复用、
 // 未使用则清理。纯内存不落盘，CLI 重启即消失；gateway isDraftSession 过滤保证
-// 它不会以「新任务」漏进 sessions-index 侧栏。
+// 它不会以「新任务」漏进 sessions-index 侧栏（omp-agent 换核后由
+// SessionIndexTopics/legacySessionList 的 draft 过滤等价实现）。
+// 例外：omp 项目模式的 create_session 立即落盘会话文件，预热创建被适配层拒绝
+// （draftPrewarm 标记 + fault.command.draftPrewarmUnsupportedByOmpCore），自动回落
+// 无预热路径——首发现场 createSession，代价为一次本地 RPC，不产生残留文件。
 //
 // 结构：生命周期收敛在纯控制器 startDraftSessionPrewarm（可单测，无 React 依赖），
 // useDraftSessionPrewarm 只做 effect 接线与 owner-scoped binding 暴露。
@@ -68,6 +72,9 @@ function startDraftSessionPrewarm(params: {
 
   const createPayload = () => {
     const createPayload: Record<string, unknown> = { workspaceId: workspaceKey };
+    // 显式预热标记：omp 项目模式的 create_session 立即落盘，适配层据此拒绝预热创建
+    // （回落无预热路径）；旧拓扑照常接受。见 omp-project-mode.md 与 FORK.md 已知差异。
+    createPayload.draftPrewarm = true;
     const initialConfig = resolveInitialConfig?.();
     if (initialConfig && Object.keys(initialConfig).length > 0) {
       // 预热会话首帧即用全局模型（CLI 归并 createSession.config），不闪 workspace 缺省。

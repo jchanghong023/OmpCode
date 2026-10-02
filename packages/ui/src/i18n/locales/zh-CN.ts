@@ -928,6 +928,8 @@ const zhCN: Record<string, string> = {
   "chat.selections.addToTask": "添加到当前任务",
   "chat.selections.askInSideChat": "在辅助对话中提问",
   "chat.selections.sideBlocked": "请先处理辅助对话中的待处理请求。",
+  "chat.selections.sideCreateFailed": "辅助对话创建失败：{error}",
+  "chat.selections.sideUnsupported": "当前 Agent 核心不支持辅助对话。",
   "chat.selections.count": "{count} 条对话引用",
   "chat.selections.remove": "移除对话引用",
   "chat.selections.type.user": "用户消息",

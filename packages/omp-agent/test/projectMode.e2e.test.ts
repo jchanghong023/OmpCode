@@ -568,19 +568,38 @@ test("Z11/Z12/Z13: 临时切模型按会话隔离；role 目录与逐 role 持�
   }
 });
 
-test("Z05: 删除会话反映到 sessions-index；EOF 有序退出", async () => {
+test("Z05: 删除会话反映到 sessions-index；draft 不进索引；EOF 有序退出", async () => {
   const { harness } = await startAdapter();
   try {
-    const sessionId = await createSession(harness, "create-delete");
+    // draft（无 firstInput 的预热会话）不得进入 sessions-index：上游 isDraftSession
+    // 网关过滤的换核等价实现。漏进索引会让宿主 task-index 留下「New session」幽灵行。
+    // 先建订阅再建 draft，泄漏才会以 session.upserted delta 暴露给观察者。
     await harness.request("v4/conversation/subscribe", {
       topic: "sessions-index/test-workspace",
       connectionId: "z05-index",
       clientMode: "desktop-continuous",
     });
+    const draftId = await createSession(harness, "create-draft");
+    await new Promise((sleep) => setTimeout(sleep, 150));
+    const upsertedIds = () =>
+      harness
+        .indexDeltas()
+        .map((delta) =>
+          delta.op === "session.upserted"
+            ? (delta as { session?: { sessionId?: string } }).session?.sessionId
+            : delta.sessionId,
+        )
+        .filter((id): id is string => typeof id === "string");
+    const draftUpserts = upsertedIds().filter((sessionId) => sessionId === draftId);
+    assert.equal(draftUpserts.length, 0, "draft 会话不得出现在 sessions-index");
+
+    // 首发提升后（draft→running）才可入索引；删除反映为 session.removed。
+    await sendText(harness, draftId, "promote-draft", "hello draft");
+    await harness.waitUntil(() => upsertedIds().includes(draftId));
     const removed = (await harness.request("v4/command", {
       commandId: "delete-session",
       clientId: "test-client",
-      sessionId,
+      sessionId: draftId,
       type: "deleteSession",
       payload: {},
       issuedAt: Date.now(),
@@ -590,13 +609,62 @@ test("Z05: 删除会话反映到 sessions-index；EOF 有序退出", async () =>
     await harness.waitUntil(() =>
       harness
         .indexDeltas()
-        .some((delta) => delta.op === "session.removed" && delta.sessionId === sessionId),
+        .some((delta) => delta.op === "session.removed" && delta.sessionId === draftId),
     );
+
+    // legacy session/list 同样不得泄漏 draft。
+    const listed = (await harness.request("session/list", {})) as {
+      result?: { sessions?: { sessionId: string }[] };
+    };
+    const legacyIds = listed.result?.sessions?.map((session) => session.sessionId) ?? [];
+    assert.ok(!legacyIds.includes(draftId), "draft 会话不得出现在 legacy session/list");
   } finally {
     harness.endStdin();
     const code = await harness.exited;
     assert.ok(code === 0 || code === null, `adapter exit code ${code}`);
   }
+});
+
+test("项目模式拒绝预热创建（create_session 立即落盘）；旧拓扑预热照常接受", async () => {
+  // (a) 项目模式：draftPrewarm 标记的 createSession 被拒绝，不产生 omp 会话。
+  const { harness, markerPath } = await startAdapter();
+  try {
+    const rejected = (await harness.request("v4/command", {
+      commandId: "create-prewarm",
+      clientId: "test-client",
+      sessionId: null,
+      type: "createSession",
+      payload: { workspaceId: "test-workspace", draftPrewarm: true },
+      issuedAt: Date.now(),
+    })) as { result: unknown };
+    const ack = commandAckSchema.parse(rejected.result);
+    assert.equal(ack.status, "rejected", JSON.stringify(rejected));
+    assert.equal(ack.reasonCode, "fault.command.draftPrewarmUnsupportedByOmpCore");
+    // 携带 firstInput 的真实创建不受影响。
+    const realId = await createSession(harness, "create-real", "hello after prewarm reject");
+    assert.ok(realId);
+  } finally {
+    harness.endStdin();
+    await harness.exited;
+  }
+  // (b) 旧核（无项目模式）：惰性进程保证 draft 不落盘，预热创建照常接受。
+  const legacy = await startAdapter({ FAKE_OMP_NO_PROJECT_MODE: "1" });
+  try {
+    const accepted = (await legacy.harness.request("v4/command", {
+      commandId: "create-prewarm-legacy",
+      clientId: "test-client",
+      sessionId: null,
+      type: "createSession",
+      payload: { workspaceId: "test-workspace", draftPrewarm: true },
+      issuedAt: Date.now(),
+    })) as { result: unknown };
+    const ack = commandAckSchema.parse(accepted.result);
+    assert.equal(ack.status, "accepted", JSON.stringify(accepted));
+  } finally {
+    legacy.harness.endStdin();
+    await legacy.harness.exited;
+  }
+  assert.ok(markerPath);
 });
 
 test("项目方法错误语义：旧核 -32601 永久缺失；进程启动失败 -32000 可重试", async () => {

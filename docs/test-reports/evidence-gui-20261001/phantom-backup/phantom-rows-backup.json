@@ -1,0 +1,107 @@
+[
+  {
+    "taskId": "01a0f026-996a-7488-9dcb-3d5289f7354d",
+    "created": "2026-09-30 10:30:56",
+    "workspace": "C:\\Users\\jiang\\.ompcode\\workspace\\default",
+    "ompFile": null,
+    "emptySession": null
+  },
+  {
+    "taskId": "01a0f052-3196-715b-af5e-2711c23b87c6",
+    "created": "2026-09-30 11:18:33",
+    "workspace": "D:\\code1111111111\\forkZcode",
+    "ompFile": null,
+    "emptySession": null
+  },
+  {
+    "taskId": "01a0f064-2d31-7127-9073-444bc42f06ad",
+    "created": "2026-09-30 11:38:12",
+    "workspace": "D:\\code1111111111\\forkZcode",
+    "ompFile": null,
+    "emptySession": null
+  },
+  {
+    "taskId": "01a0f7f3-b170-70b5-ab57-d7b5c24a9ef1",
+    "created": "2026-10-01 22:52:19",
+    "workspace": "D:\\code1111111111\\forkZcode",
+    "ompFile": null,
+    "emptySession": null
+  },
+  {
+    "taskId": "01a0f801-db51-72c6-9543-4a10db833590",
+    "created": "2026-10-01 23:07:46",
+    "workspace": "D:\\code1111111111\\forkZcode",
+    "ompFile": null,
+    "emptySession": null
+  },
+  {
+    "taskId": "01a0f806-17fc-7276-a0e8-cd16a519550d",
+    "created": "2026-10-01 23:12:24",
+    "workspace": "D:\\code1111111111\\forkZcode",
+    "ompFile": null,
+    "emptySession": null
+  },
+  {
+    "taskId": "01a0f831-5b03-740e-b2e5-b5ff2cf526d2",
+    "created": "2026-10-01 23:59:39",
+    "workspace": "D:\\code1111111111\\forkZcode",
+    "ompFile": "C:\\Users\\jiang\\.omp\\agent\\sessions\\--D--code1111111111-forkZcode--\\2026-10-01T15-59-39-267Z_01a0f831-5b03-740e-b2e5-b5ff2cf526d2.jsonl",
+    "emptySession": true
+  },
+  {
+    "taskId": "01a0f83c-ff46-7291-970f-6ed8a2c097a0",
+    "created": "2026-10-02 00:12:24",
+    "workspace": "D:\\code1111111111\\forkZcode",
+    "ompFile": "C:\\Users\\jiang\\.omp\\agent\\sessions\\--D--code1111111111-forkZcode--\\2026-10-01T16-12-22-214Z_01a0f83c-ff46-7291-970f-6ed8a2c097a0.jsonl",
+    "emptySession": true
+  },
+  {
+    "taskId": "01a0f83f-7c3e-70ca-8c89-a7a1401ed479",
+    "created": "2026-10-02 00:15:05",
+    "workspace": "D:\\code1111111111\\forkZcode",
+    "ompFile": "C:\\Users\\jiang\\.omp\\agent\\sessions\\--D--code1111111111-forkZcode--\\2026-10-01T16-15-05-278Z_01a0f83f-7c3e-70ca-8c89-a7a1401ed479.jsonl",
+    "emptySession": true
+  },
+  {
+    "taskId": "01a0f845-d05f-76aa-8b72-d1e09a91b860",
+    "created": "2026-10-02 00:22:00",
+    "workspace": "D:\\code1111111111\\forkZcode",
+    "ompFile": "C:\\Users\\jiang\\.omp\\agent\\sessions\\--D--code1111111111-forkZcode--\\2026-10-01T16-22-00-031Z_01a0f845-d05f-76aa-8b72-d1e09a91b860.jsonl",
+    "emptySession": true
+  },
+  {
+    "taskId": "01a0f848-4f00-70a3-866d-b54915271189",
+    "created": "2026-10-02 00:24:43",
+    "workspace": "D:\\code1111111111\\forkZcode",
+    "ompFile": "C:\\Users\\jiang\\.omp\\agent\\sessions\\--D--code1111111111-forkZcode--\\2026-10-01T16-24-43-520Z_01a0f848-4f00-70a3-866d-b54915271189.jsonl",
+    "emptySession": true
+  },
+  {
+    "taskId": "01a0f84b-be9b-758f-8dd9-241cc42b5ab9",
+    "created": "2026-10-02 00:28:28",
+    "workspace": "D:\\code1111111111\\forkZcode",
+    "ompFile": "C:\\Users\\jiang\\.omp\\agent\\sessions\\--D--code1111111111-forkZcode--\\2026-10-01T16-28-28-699Z_01a0f84b-be9b-758f-8dd9-241cc42b5ab9.jsonl",
+    "emptySession": true
+  },
+  {
+    "taskId": "01a0f850-db34-7396-b5f7-b7be4f842e40",
+    "created": "2026-10-02 00:34:04",
+    "workspace": "D:\\code1111111111\\forkZcode",
+    "ompFile": null,
+    "emptySession": null
+  },
+  {
+    "taskId": "01a0f85b-02fd-749b-a66f-21d83dc571c9",
+    "created": "2026-10-02 00:45:09",
+    "workspace": "D:\\code1111111111\\forkZcode",
+    "ompFile": "C:\\Users\\jiang\\.omp\\agent\\sessions\\--D--code1111111111-forkZcode--\\2026-10-01T16-45-09-245Z_01a0f85b-02fd-749b-a66f-21d83dc571c9.jsonl",
+    "emptySession": true
+  },
+  {
+    "taskId": "01a0f85b-0992-70ee-961e-b4d3f2c6464f",
+    "created": "2026-10-02 00:45:11",
+    "workspace": "D:\\code1111111111\\forkZcode",
+    "ompFile": null,
+    "emptySession": null
+  }
+]

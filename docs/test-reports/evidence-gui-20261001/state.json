@@ -1,0 +1,36 @@
+{
+  "runId": "gui-e2e-20261001-225016",
+  "target": "OmpCode Windows desktop (pnpm dev:desktop, CDP 9230)",
+  "driver": "agent-browser 0.38.1 --cdp 9230",
+  "model": "zhipu-coding-plan/glm-5.3-flash (user omp config, yolo)",
+  "codeBaseline": "main @ 097ff67 (与 origin 同步) + 本轮修复（未提交）",
+  "scenarios": {
+    "defect1_aux_chat_silent": "fixed-verified",
+    "defect2_draft_leak_sidebar_index": "fixed-verified",
+    "defect3_create_on_send_blank_pane": "fixed-verified",
+    "z04_parallel_queue_minimal": "partial-pass (queue cross verified in-session; approval cross n/a under yolo)",
+    "regression_clean_build_first_send": "pass (e13)",
+    "regression_no_new_phantom_rows": "pass (zero accumulation after fix)",
+    "phantom_cleanup": "done-verified (0 rows, 0 files, no re-seed after reboot, e14)"
+  },
+  "leftovers": [
+    "15 phantom rows + 8 empty omp files cleaned 2026-10-02 (backup in phantom-backup/, verified no resurrection after reboot)",
+    "/side submit path GUI verification blocked by synthetic input limits (code path shared with verified entry)"
+  ],
+  "evidence": [
+    "e00-desktop-initial.png",
+    "e01-session-sidepane.png",
+    "e02-auxchat-toast.png",
+    "e03-auxchat-toast.png",
+    "e04-slash-side-menu.png",
+    "e05-slash-side-result.png",
+    "e06-composer-state.png",
+    "e07-regression-send.png",
+    "e08-regression-reply.png",
+    "e09-open-new-task.png",
+    "e10-task-reopen.png",
+    "e11-old-task.png",
+    "e12-createsend-fixed.png",
+    "e13-final-clean-build.png"
+  ]
+}

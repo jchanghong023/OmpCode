@@ -1,0 +1,4 @@
+{"type":"title","v":1,"title":"","updatedAt":"2026-10-01T16:15:05.278Z","pad":"                                                                                                                                                                              "}
+{"type":"session","version":3,"id":"01a0f83f-7c3e-70ca-8c89-a7a1401ed479","timestamp":"2026-10-01T16:15:05.278Z","cwd":"D:\\code1111111111\\forkZcode"}
+{"type":"model_change","id":"ace1e16a","parentId":null,"timestamp":"2026-10-01T16:15:05.390Z","model":"openai-codex/gpt-6.1-sol","resolvedModelIsFallback":false}
+{"type":"thinking_level_change","id":"87bfa3ac","parentId":"ace1e16a","timestamp":"2026-10-01T16:15:05.390Z","thinkingLevel":"xhigh","configured":null}

@@ -1007,6 +1007,8 @@ const enUS: Record<string, string> = {
   "chat.selections.askInSideChat": "Add in side chat",
   "chat.selections.sideBlocked":
     "Resolve the side conversation request before adding another selection.",
+  "chat.selections.sideCreateFailed": "Failed to create a side conversation: {error}",
+  "chat.selections.sideUnsupported": "The current Agent core does not support side conversations.",
   "chat.selections.count": "{count} conversation selections",
   "chat.selections.remove": "Remove conversation selection",
   "chat.selections.type.user": "User message",

@@ -15,6 +15,9 @@ export async function listLegacySessions(input: {
   const sessions: Record<string, unknown>[] = [];
   const seen = new Set<string>();
   for (const engine of input.engines) {
+    // 与上游 isDraftSession 语义对齐：draft（预热未首发）不出现在 legacy session/list，
+    // 避免宿主把纯内存 draft 当存量会话落 task index（同 sessionIndexTopics 的过滤依据）。
+    if (engine.projection.stateSnapshot.control.phase === "draft") continue;
     const stableId = ompSessionIdOfFilePath(engine.ompSessionFile) ?? engine.sessionId;
     const indexId = input.rekeyedEngineIds.has(engine.sessionId) ? stableId : engine.sessionId;
     seen.add(stableId);

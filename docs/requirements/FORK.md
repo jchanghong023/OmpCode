@@ -93,7 +93,7 @@
 1. **插件与技能市场**：见 [原生集成](integrations.md) 与 [可执行技能](skills.md)。
 2. **工作流中枢与动态工作流**：已保存工作流 GUI（`workflows/*`）、`v4/conversation/workflowRun*` 全族、`startSavedWorkflow`/`resumeWorkflowRun`/`amendWorkflowRunSettings` 不可用。替代行为：无（omp 无等价工作流引擎）。
 3. **automation / Off-Peak**：见 [原生集成](integrations.md)。
-4. **会话内编辑类操作**：fork 某轮（`forkAssistant`）、重试（`retryTurn`）、编辑已发送消息（`editUserQuery`）、工作区文件回滚（`applyFileRewind`/`fileRewindPreview`）不可用。替代行为：无（omp 会话树的 `branch` 能力未进本适配层首版）。
+4. **会话内编辑类操作**：fork 某轮（`forkAssistant`）、重试（`retryTurn`）、编辑已发送消息（`editUserQuery`）、工作区文件回滚（`applyFileRewind`/`fileRewindPreview`）、框选副屏会话（`createSelectionSideSession`；含 `/side` 斜杠命令与侧栏「辅助对话」入口）不可用。替代行为：无（omp 会话树的 `branch` 能力未进本适配层首版）；副屏会话入口触发时必须以明确失败提示反馈，不得静默无反应。
 5. **协作模式切换与 goal 循环**：`switchCollaborationMode`（build/edit/plan/yolo）、`sendGoalCommand`、`pauseGoal`/`resumeGoal` 不可用（v4 命令面显式拒绝）。替代行为：会话固定等效于上游 `build` 模式；omp ACP 目录分发的命令（`/model`、`/switch` 等）按 omp 语义透传执行（命令路由详见 [模型与命令](models-and-commands.md)），`/plan`、`/goal` 未进 omp ACP 目录，仍按本地语义处理。
 6. **输入队列编辑**：队列项编辑/重排/删除/立即发送（`editQueueItem` 等）不可用。替代行为：followup 模式等价保留——`guide` 映射 omp `steer`（本轮引导，工具间生效），`queue` 映射 omp `follow_up`（轮后队列），两个 omp 队列均为 one-at-a-time（每轮一条），与上游「每轮一条」语义一致；流式中发送即按当前模式路由。
 7. **用量统计**：app 级用量（`v4/usage/stats`）返回合法空快照；会话级 `v4/conversation/usage` 返回本会话累计值。替代行为：历史聚合统计暂缺（数据源在 omp 会话库，未做聚合）。
@@ -109,7 +109,7 @@
 17. **与上游共享的安装级标识**：深链 scheme `zcode://`、Windows AUMID/appId（`dev.zcode.app`）、Linux 包名按「内部标识不动」约定保留，双装时 scheme 由最后注册方接管、任务栏按 appId 分组——属链接路由与安装身份冲突，非数据/端口共享；数据与端口须遵守本文件隔离要求。
 18. **回复反馈**：见 [原生集成](integrations.md)。
 
-会话分支、重试、编辑与文件回滚当前仍不可用；将来开放的前提是基于 omp 原生会话树与 Host 会话操作，文件回滚必须能可靠映射文件变更，不能仅修改 GUI 消息。此边界不表示新增实现承诺。
+会话分支、副屏会话、重试、编辑与文件回滚当前仍不可用；将来开放的前提是基于 omp 原生会话树与 Host 会话操作，文件回滚必须能可靠映射文件变更，不能仅修改 GUI 消息。此边界不表示新增实现承诺。
 
 验收上述不可用能力时检查明确拒绝或规定替代行为，并确认主对话不受影响；功能同名、补丁消失或静态检查通过均不表示上游已等价满足。
 
