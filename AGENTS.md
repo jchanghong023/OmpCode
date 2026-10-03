@@ -47,6 +47,7 @@
 - `packages/omp-agent`：omp RPC 核心适配器（对 host 讲 ZCode Protocol/v4，对内嵌 omp 二进制讲 omp RPC；本 Fork 的本地 Agent 核心）。
 - `packages/omp-agent/src/adapters/cliMain.ts`：Host 启动的 Agent stdio 入口。
 - `apps/zcode-cli`：保留的上游源码快照，不在根 workspace 中；运行时边界见 `docs/requirements/FORK.md`，未经用户要求不得接回产品。
+- 子目录规则注册表（全仓唯一）：[apps/zcode-cli/AGENTS.md](apps/zcode-cli/AGENTS.md)——独立 workspace 的上游 CLI 源码快照，承载 CLI 专属工作规范、跨平台与接口契约约束及 `pnpm --dir apps/zcode-cli typecheck/lint` 本地验证入口；其余目录不另设子目录 `AGENTS.md`，通用规则统一由本文件维护。
 - `CONTEXT.md`：插件商店领域词汇；修改相关 UI 前阅读。
 - `DESIGN.md`：UI 设计规范；修改 UI 前阅读。
 
