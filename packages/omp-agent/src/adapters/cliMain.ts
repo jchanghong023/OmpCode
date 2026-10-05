@@ -45,6 +45,58 @@ function parseArgs(argv: string[]) {
   return { flags, cwd, positional };
 }
 
+/** 项目目录刷新的目标面（ServerApp 的既有方法签名）。 */
+export interface ProjectCatalogRefreshTarget {
+  updateSlashCommands(rawCommands: unknown): void;
+  invalidateWorkspaceConfigCache(): void;
+}
+
+/**
+ * 修复（B3）：项目模式 command_catalog_changed / skills_changed（reload_skills、技能
+ * 启停/复制/删除等操作后发出，rpc-project.ts/rpc-project-skills.ts）此前只失效缓存，
+ * 已订阅 workspace-config 的 `/` 面板不会即时刷新。现与旧拓扑 available_commands_update
+ * 同路：重读 omp 命令目录（loadSkillCommands，失败抛错）→ 经 updateSlashCommands 合并
+ * 推送 → 失效缓存令 configOptions（模型等）下次查询重建。进程暂不可用等失败保持缓存
+ * 不推送（logger.debug）；变化风暴用 in-flight 去重，在途期间的新事件合并为完成后补一轮。
+ */
+export function createProjectCatalogRefresh(deps: {
+  loadSkillCommands: () => Promise<unknown>;
+  getApp: () => ProjectCatalogRefreshTarget | null;
+}): () => void {
+  let inFlight: Promise<void> | null = null;
+  let queued = false;
+  const refreshOnce = async (): Promise<void> => {
+    const app = deps.getApp();
+    if (!app) return;
+    try {
+      const commands = await deps.loadSkillCommands();
+      if (!Array.isArray(commands)) {
+        // 载荷异常不推送空目录（会把 `/` 面板清空），保持缓存待下次事件重读。
+        logger.debug("omp 项目目录重读载荷异常，跳过推送", { type: typeof commands });
+        return;
+      }
+      app.updateSlashCommands(commands);
+      app.invalidateWorkspaceConfigCache();
+    } catch (error) {
+      logger.debug("omp 项目目录变化推送失败，保留缓存", { error: String(error) });
+    }
+  };
+  return () => {
+    if (inFlight) {
+      queued = true;
+      return;
+    }
+    inFlight = (async () => {
+      do {
+        queued = false;
+        await refreshOnce();
+      } while (queued);
+    })().finally(() => {
+      inFlight = null;
+    });
+  };
+}
+
 export async function runCliMain(
   argv: string[],
   env: NodeJS.ProcessEnv = process.env,
@@ -79,14 +131,16 @@ export async function runCliMain(
   // 构造顺序上 loader 先于 app，用 ref 解引用。
   const appRef: { app: ServerApp | null } = { app: null };
   // OMP 项目模式网关（omp-project-mode.md）：懒启动；ready 无项目模式时整体回落旧拓扑。
+  // 修复（B3）：项目模式 command_catalog_changed / skills_changed 与旧拓扑
+  // available_commands_update 同路推送（重读目录 + updateSlashCommands），`/` 面板
+  // 静态目录即时刷新。刷新回调延后绑定（loader 构造需要 gateway，刷新需要 loader）。
+  let refreshProjectCatalog: () => void = () => {};
   const projectGateway = new OmpProjectGateway({
     binaryPath: ompBinaryPath,
     extraArgs: ompExtraArgs,
     cwd: workspacePath,
-    onCatalogChanged: () => {
-      // 命令目录失效：清缓存重读（下一次 loadWorkspaceConfig/技能目录查询取新值）。
-      appRef.app?.invalidateWorkspaceConfigCache();
-    },
+    onCatalogChanged: () => refreshProjectCatalog(),
+    onSkillsChanged: () => refreshProjectCatalog(),
   });
   // sessions_changed：OMP 目录事实变化 → 重扫冷会话并推送 sessions-index 增量。
   // 进程退出 → 清理注册表通道登记（引擎已按各自通道 onExit 终结轮次）。
@@ -98,6 +152,11 @@ export async function runCliMain(
   const workspaceCatalog = createWorkspaceConfigLoader(ompFactory, workspacePath, {
     onCommandsUpdate: (commands) => appRef.app?.updateSlashCommands(commands),
     project: projectGateway,
+  });
+  // 修复（B3）：项目模式目录/技能变化 → 重读命令目录并推送（绑定点在 loader 构造之后）。
+  refreshProjectCatalog = createProjectCatalogRefresh({
+    loadSkillCommands: () => workspaceCatalog.loadSkillCommands(),
+    getApp: () => appRef.app,
   });
   const app = new ServerApp({
     ompFactory,

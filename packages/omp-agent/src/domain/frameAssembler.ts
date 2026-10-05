@@ -1,6 +1,15 @@
 // omp RPC v2 无损分片重组（rpc_chunk → 逻辑帧）。
-// 校验规则按 docs/rpc.md：chunkId/index/count/byteLength 全验证，拒绝交错与中断序列，
-// 重组上限使用 ready 帧通告的 maxReassembledFrameBytes（缺省 64MiB）。
+// 校验规则按 docs/rpc.md：index/count/byteLength 范围校验，chunkId 用于检测序列交错；
+// 缺首片、重复分片、交错序列整体拒绝；count=1 的单片序列同样走本重组管线。
+// 重组上限缺省 64MiB，可经构造传入，或由进程层按 ready 帧通告的
+// maxReassembledFrameBytes 更新（见 ompProcess/ompProjectProcess 的接线）。
+// 修复（S3-4，对齐 omp 参考实现 RpcFrameDecoder）：
+// ① 每片独立做严格 base64 解码（omp 发送端逐片 toString("base64")，各片自带 padding，
+//    不可再按「拼合 base64 字符串」整体解码——256KiB 整块片的尾 padding 会让拼合串
+//    中部出现 "=" 而被误拒）；② 完成校验实收分片字节总和 === 声明 byteLength；
+// ③ 合并字节以 fatal TextDecoder 严格 UTF-8 解码（docs/rpc.md「decode them as strict
+//    UTF-8」），坏字节拒绝该帧而非 U+FFFD 照常 JSON.parse。
+// 宽容方向保持：不加 chunkId 1..128、单片 256KiB、count≥2 等 omp 上限，避免未来核演进被拒帧。
 
 import type { OmpRpcChunkFrame } from "./ompFrames.js";
 
@@ -13,7 +22,7 @@ interface PendingChunkSequence {
   chunkId: string;
   count: number;
   byteLength: number;
-  received: (string | undefined)[];
+  received: (Buffer | undefined)[];
   receivedBytes: number;
 }
 
@@ -21,9 +30,18 @@ const DEFAULT_MAX_REASSEMBLED_BYTES = 64 * 1024 * 1024;
 
 export class OmpFrameAssembler {
   private pending: PendingChunkSequence | null = null;
-  private remainingSequences = 0;
+  private maxReassembledBytes: number;
 
-  constructor(private readonly maxReassembledBytes: number = DEFAULT_MAX_REASSEMBLED_BYTES) {}
+  constructor(maxReassembledBytes: number = DEFAULT_MAX_REASSEMBLED_BYTES) {
+    this.maxReassembledBytes = maxReassembledBytes;
+  }
+
+  /** 进程层按 ready 帧通告的 maxReassembledFrameBytes 更新上限；非法值忽略保持现值。 */
+  updateMaxReassembledBytes(bytes: number): void {
+    if (Number.isFinite(bytes) && bytes > 0) {
+      this.maxReassembledBytes = bytes;
+    }
+  }
 
   /** 处理一个 rpc_chunk；在最后一个分片到达时返回 assembled。 */
   push(chunk: OmpRpcChunkFrame): FrameAssembleResult {
@@ -49,7 +67,7 @@ export class OmpFrameAssembler {
         chunkId: chunk.chunkId,
         count: chunk.count,
         byteLength: chunk.byteLength,
-        received: Array<string | undefined>(chunk.count).fill(undefined),
+        received: Array<Buffer | undefined>(chunk.count).fill(undefined),
         receivedBytes: 0,
       };
     }
@@ -57,19 +75,34 @@ export class OmpFrameAssembler {
     if (pending.received[chunk.index] !== undefined) {
       return { kind: "rejected", reason: "duplicate rpc_chunk fragment" };
     }
-    pending.received[chunk.index] = chunk.data;
-    pending.receivedBytes += chunk.byteLength / chunk.count;
+    // 逐片严格 base64：本片载荷非法时立即拒绝该序列（对齐 RpcFrameDecoder.decodeBase64）。
+    const bytes = decodeBase64Strict(chunk.data);
+    if (bytes === null) {
+      this.pending = null;
+      return { kind: "rejected", reason: "rpc_chunk payload is not valid base64" };
+    }
+    pending.received[chunk.index] = bytes;
+    pending.receivedBytes += bytes.byteLength;
     const complete = pending.received.every((part) => part !== undefined);
     if (!complete) {
       return { kind: "pending" };
     }
     this.pending = null;
-    const base64 = pending.received.join("");
-    const decoded = decodeBase64Strict(base64);
-    if (decoded === null) {
-      return { kind: "rejected", reason: "rpc_chunk payload is not valid base64" };
+    // 修复（S3-4②）：完成校验用实收字节总和，而非 byteLength/count 估算值。
+    if (pending.receivedBytes !== pending.byteLength) {
+      return {
+        kind: "rejected",
+        reason: "reassembled fragment bytes do not match declared byteLength",
+      };
     }
-    const text = decoded.toString("utf8");
+    const decoded = Buffer.concat(pending.received as Buffer[]);
+    let text: string;
+    try {
+      // 修复（S3-4①）：严格 UTF-8（fatal）——坏字节拒绝整帧，不允许 U+FFFD 静默替换。
+      text = new TextDecoder("utf-8", { fatal: true }).decode(decoded);
+    } catch {
+      return { kind: "rejected", reason: "reassembled frame is not valid UTF-8" };
+    }
     try {
       return { kind: "assembled", frame: JSON.parse(text) };
     } catch {

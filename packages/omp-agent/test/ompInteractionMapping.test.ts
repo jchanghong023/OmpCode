@@ -12,7 +12,14 @@ import {
   permissionResponseOf,
   permissionRiskLevelOf,
 } from "../src/app/ompInteractionMapping.js";
-import type { OmpAskRequestFrame, OmpPermissionRequestFrame } from "../src/domain/ompForkFrames.js";
+import { OmpInteractionProxy } from "../src/app/ompInteractionProxy.js";
+import { ompExtensionUiRequestFrameSchema } from "../src/domain/ompFrames.js";
+import {
+  ompPermissionRequestFrameSchema,
+  type OmpAskRequestFrame,
+  type OmpBypassFrame,
+  type OmpPermissionRequestFrame,
+} from "../src/domain/ompForkFrames.js";
 
 function permissionFrame(
   overrides: Partial<OmpPermissionRequestFrame> = {},
@@ -135,7 +142,7 @@ test("permissionRiskLevelOf 与 ompOriginToZcode：tier 分级与子代理来源
   assert.equal(permissionRiskLevelOf("read"), "low");
   assert.equal(permissionRiskLevelOf("write"), "medium");
   assert.equal(permissionRiskLevelOf("exec"), "high");
-  assert.equal(ompOriginToZcode(undefined, "session-1"), undefined);
+  assert.deepEqual(ompOriginToZcode(undefined, "session-1"), undefined);
   assert.deepEqual(ompOriginToZcode({ subagentId: "child-9", agentType: "scout" }, "session-1"), {
     kind: "subagent",
     agentId: "child-9",
@@ -143,6 +150,87 @@ test("permissionRiskLevelOf 与 ompOriginToZcode：tier 分级与子代理来源
     childSessionId: "child-9",
     parentSessionId: "session-1",
   });
+});
+
+// ── A7：schema 放宽 + fail-closed ──
+
+test("A7：未知 tier/approvalMode/缺失 details 的权限帧 parse 成功（tier 映射走保守分支）", () => {
+  const parsed = ompPermissionRequestFrameSchema.safeParse({
+    type: "permission_request",
+    id: "perm-x",
+    toolCallId: "toolu-x",
+    toolName: "bash",
+    tier: "admin", // omp 演进新增档位：不拒帧
+    approvalMode: "future-mode",
+    input: { command: "rm -rf /" },
+  });
+  assert.equal(parsed.success, true);
+  if (!parsed.success) return;
+  assert.equal(parsed.data.tier, "admin");
+  assert.deepEqual(parsed.data.details, []); // 线格式可选，缺省补 []
+  // 未知档位按最高风险呈现（fail-closed：绝不降级为 low）。
+  assert.equal(permissionRiskLevelOf(parsed.data.tier), "high");
+  assert.equal(permissionRiskLevelOf("exec"), "high");
+});
+
+test("A7：未知 method 的 extension_ui_request 帧 parse 成功且交互代理按取消回执（不放行）", async () => {
+  // omp 真实值 "ask"（rpc-types.ts RpcExtensionUIRequest）与未来演进值都必须可解析。
+  for (const method of ["ask", "setWidget", "future-method"]) {
+    const parsed = ompExtensionUiRequestFrameSchema.safeParse({
+      type: "extension_ui_request",
+      id: "ui-1",
+      method,
+    });
+    assert.equal(parsed.success, true, method);
+  }
+  // 交互代理对未知 method 的保守路径：立即按 cancelled 回执，不让 omp 挂起、不自动放行。
+  const responses: OmpBypassFrame[] = [];
+  const proxy = new OmpInteractionProxy({
+    sessionId: "s",
+    gateway: {
+      emitFrame() {},
+      requestUserInput: async () => ({ action: "accept", freeText: "应当不被使用" }),
+    },
+    addPendingInteraction() {},
+    resolvePendingInteraction() {},
+    scheduleFlush() {},
+  });
+  await proxy.handle({
+    frame: { id: "ui-2", method: "ask", title: "哪种数据库？" },
+    respond: (response) => {
+      responses.push(response);
+    },
+  });
+  assert.deepEqual(responses, [{ type: "extension_ui_response", id: "ui-2", cancelled: true }]);
+});
+
+// S5-2/S5-4：omp 主动取消帧与 editor prefill 的线格式字段必须 parse 保留
+// （rpc-types.ts RpcExtensionUIRequest：cancel 变体 targetId、editor 变体 prefill；
+// 此前 zod 剥离导致代理无法定位等待交互、宿主编辑框丢初始文本）。
+test("S5-2/S5-4：cancel.targetId 与 editor.prefill 帧字段 parse 保留", () => {
+  const cancel = ompExtensionUiRequestFrameSchema.safeParse({
+    type: "extension_ui_request",
+    id: "cancel-1",
+    method: "cancel",
+    targetId: "omp-ui-9",
+  });
+  assert.equal(cancel.success, true);
+  if (cancel.success) {
+    assert.equal(cancel.data.method, "cancel");
+    assert.equal(cancel.data.targetId, "omp-ui-9");
+  }
+  const editor = ompExtensionUiRequestFrameSchema.safeParse({
+    type: "extension_ui_request",
+    id: "omp-ui-4",
+    method: "editor",
+    title: "补充说明",
+    prefill: "草稿内容",
+    promptStyle: true,
+  });
+  assert.equal(editor.success, true);
+  if (editor.success) {
+    assert.equal(editor.data.prefill, "草稿内容");
+  }
 });
 
 test("askResponseOf：content.answers 与 answer_N 双格式解析，含多选、其他与空提交", () => {

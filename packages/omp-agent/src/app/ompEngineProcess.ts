@@ -12,7 +12,6 @@ import type {
   OmpSubagentFrame,
 } from "../domain/ompFrames.js";
 import type { OmpProcessFactory, OmpSessionProcess, OmpSessionProcessHandlers } from "./ports.js";
-import type { OmpContextReport } from "../domain/ompContextReport.js";
 import type { OmpInteractionProxy } from "./ompInteractionProxy.js";
 import type { ConversationProjection } from "../domain/conversationProjection.js";
 
@@ -91,6 +90,12 @@ export interface EngineProcessStartHost {
   bootstrap: (process: OmpSessionProcess) => Promise<void>;
 }
 
+/** 项目通道的存活事实（OmpProjectSessionChannel.alive；端口未声明，按结构读取：
+ * false = 通道已随共享项目进程死亡/卸载，undefined = 不携带该事实视为存活）。 */
+interface OmpChannelLiveness {
+  readonly alive?: boolean;
+}
+
 /**
  * 引擎进程启动（从 conversationEngine.ts 拆出）：项目模式取共享进程通道（失败不清空，
  * 可重试），旧拓扑按 factory 拉起独立进程（失败回收并允许下次重试）。
@@ -113,10 +118,33 @@ export async function startEngineProcess(host: EngineProcessStartHost): Promise<
     onSubagentFrame: host.onSubagentFrame,
   };
   if (host.acquireProjectProcess) {
-    const process = await host.acquireProjectProcess(handlers);
-    host.setProcess(process);
-    // 失败不清空：通道与会话仍在（OMP 侧已加载），下一次调用可重试。
-    await host.bootstrap(process);
+    // 修复（S7-1）：共享项目进程可能在「通道获取 → setProcess」窗口内死亡，此时引擎
+    // 尚未 setProcess，exit 事件被上方 current 守卫吞掉；bootstrap 随后在死通道上
+    // “成功”完成（start/refreshState 均吞错），引擎从此永久绑定死通道——之后一切请求
+    // 返回 "omp project core is not running"，直到适配器重启。依据 rpc-ui-protocol
+    // §13.3（进程意外退出属可重试失败，重启后幂等重建），bootstrap 完成后校验通道
+    // alive 事实：死通道按旧拓扑失败同语义清理（setProcess(null) + dispose 通道）并
+    // 按可重试失败抛出，下次调用经 gateway.acquireSessionChannel 幂等重建。
+    let process: OmpSessionProcess | null = null;
+    try {
+      process = await host.acquireProjectProcess(handlers);
+      host.setProcess(process);
+      // 失败不清空：通道与会话仍在（OMP 侧已加载），下一次调用可重试。
+      await host.bootstrap(process);
+    } catch (error) {
+      // bootstrap 抛错且通道已死（进程死亡是常见根因）：同语义清理后按可重试失败抛出；
+      // 活通道保持「不清空、可重试」的既有语义。
+      if (process && (process as OmpChannelLiveness).alive === false) {
+        if (host.currentProcess() === process) host.setProcess(null);
+        await process.dispose().catch(() => {});
+      }
+      throw error;
+    }
+    if ((process as OmpChannelLiveness).alive === false) {
+      if (host.currentProcess() === process) host.setProcess(null);
+      await process.dispose().catch(() => {});
+      throw new Error("omp project core exited while bootstrapping session channel");
+    }
     return;
   }
   if (!host.ompFactory) {
@@ -199,47 +227,7 @@ export interface EngineModelSelection {
   thought?: string;
 }
 
-/** /context 只补充估算分项；应用前由引擎再次核对会话、总量和轮次。 */
-export function readEngineContextDetails(
-  process: OmpSessionProcess,
-  isCurrent: () => boolean,
-  apply: (report: OmpContextReport) => void,
-): void {
-  void process
-    .readContextReport()
-    .then((report) => {
-      if (report && isCurrent()) apply(report);
-    })
-    .catch(() => {});
-}
-
-/** 状态回读是完整窗口事实；异步 /context 仅在同一进程、轮次和用量仍相符时补充。 */
-export function projectEngineContextWindow(input: {
-  state: OmpStateData;
-  projection: import("../domain/conversationProjection.js").ConversationProjection;
-  process: OmpSessionProcess | null;
-  isCurrentProcess: (process: OmpSessionProcess) => boolean;
-  onReport: () => void;
-}): void {
-  const { state, projection, process } = input;
-  if (!state.contextUsage || typeof state.contextUsage.contextWindow !== "number") return;
-  const used = state.contextUsage.tokens ?? 0;
-  const size = state.contextUsage.contextWindow;
-  projection.setContextWindow(used, size);
-  if (!process || projection.stateSnapshot.control.phase === "running") return;
-  readEngineContextDetails(
-    process,
-    () =>
-      input.isCurrentProcess(process) &&
-      projection.stateSnapshot.control.phase !== "running" &&
-      projection.stateSnapshot.usage.contextWindow?.usedTokens === used &&
-      projection.stateSnapshot.usage.contextWindow?.maxTokens === size,
-    (report) => {
-      projection.setContextWindow(used, size, report);
-      input.onReport();
-    },
-  );
-}
+export { readEngineContextDetails, projectEngineContextWindow } from "./ompEngineContextWindow.js";
 
 export async function applyEngineThoughtLevel(
   level: string,
@@ -326,6 +314,27 @@ export async function applyEngineModelSelection(
     await process.send({ type: "set_thinking_level", level: selection.thought });
   }
   return null;
+}
+
+/** UI 提交的 ModelSelection（providerId/modelId/options.reasoningLevel）→ omp set_model 参数；
+ *  provider/model 缺失或空串（未选定）不构成有效选择，返回 undefined 由调用方回落会话冻结配置。 */
+export function engineModelSelectionOf(
+  selection:
+    | { providerId?: string; modelId?: string; options?: { reasoningLevel?: string } }
+    | undefined
+    | null,
+): EngineModelSelection | undefined {
+  if (
+    !selection ||
+    typeof selection.providerId !== "string" ||
+    typeof selection.modelId !== "string"
+  ) {
+    return undefined;
+  }
+  if (selection.providerId.length === 0 || selection.modelId.length === 0) return undefined;
+  const reasoning = selection.options?.reasoningLevel;
+  const thought = typeof reasoning === "string" && reasoning.length > 0 ? reasoning : undefined;
+  return { provider: selection.providerId, model: selection.modelId, thought };
 }
 
 /** 自动压缩由 omp 持有；切换后回读状态，不能把请求值当作最终事实。 */

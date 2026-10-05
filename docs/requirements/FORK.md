@@ -42,7 +42,8 @@
 
 - 来源：本人维护的 fork `jchanghong023/oh-my-pi`（本地工作目录 `D:\code1111111111\oh-my-pi`；上游为 `can1357/oh-my-pi`）。
 - 接入形态：`omp --mode rpc-ui` 启动的核心——stdio 上的 newline-delimited JSON 协议，含 ready 帧、协议版本协商、命令/响应关联、会话事件、工具交互 UI 请求与 host 工具请求。
-- 接口参考与测试基线：接口与协议开发参考本地源码 `D:\code1111111111\oh-my-pi`（协议细节含该仓库 `docs/rpc.md`）；实际测试（含换核验收 E2E）使用 releases 实际内嵌的发布版本二进制执行，不以本地源码的未发布改动为测试对象。
+- omp 权威文档（固定，均在 omp 仓库内）：rpc 需求唯一权威为 `docs-zh-CN/requirements/rpc-ui-protocol.md`（rpc-ui 协议扩展与 RPC 项目运行服务需求）；`docs-zh-CN/requirements/fork.md` 的「预采纳的上游 PR」一节维护三条 RPC 条目（#13802、#13689、#14110，上游合并后按该节规则删除条目）；`docs-zh-CN/requirements/README.md` 为该需求目录索引。上游英文协议文档 `docs/rpc.md` 仅保留个别 fork 文案段；SDK 参阅上游自带的 `sdk/python/omp-rpc/README.md`、`sdk/go/omp-rpc/README.md`、`sdk/rust/omp-rpc/README.md`。
+- 接口参考与测试基线：接口与协议开发参考本地源码 `D:\code1111111111\oh-my-pi` 与上述 omp 权威文档；实际测试（含换核验收 E2E）使用 releases 实际内嵌的发布版本二进制执行，不以本地源码的未发布改动为测试对象。
 - 分发：随 ZCode 安装包内嵌——打包时取该 fork GitHub releases 页面（`https://github.com/jchanghong023/oh-my-pi/releases`）的最新版本二进制，内嵌进应用资源并由应用拉起；用户无需单独安装 omp。不依赖上游 oh-my-pi 的 npm / Homebrew / Nix / `omp.sh` 分发。
 - Windows x64 桌面版通过 GitHub Actions 手动发布：从 `main` 输入与当前版本匹配的唯一 OmpCode 标签，打包后将安装 EXE 与 SHA256 校验文件上传到本仓库 GitHub Release；发布流水线不单独运行测试。
 - 内嵌 omp 的配置与边界：内嵌拷贝与用户已安装的 omp 使用完全相同的配置（同一配置、凭据与会话数据来源），行为与用户日常使用的 omp 保持一致；NEVER 覆盖、替换、修改或代为安装用户已安装的 omp，内嵌拷贝只存在于 ZCode 应用资源目录内。

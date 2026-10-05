@@ -2,7 +2,7 @@
 // snapshot / deltas；纯内存、无 IO，权威 schema 校验发生在发送边界（adapters）。seq 语义：每个
 // 增量 op 在产生时立即分配 seq（帧区间 (fromSeq, toSeq] 的记账基础），pending 是「尚未进入
 // delta log 的 op」，以 watermark=seq 收快照后只会收到更大 seq 的 op；行组装在 projectionRows.ts。
-// 增量合并在 deltaMerge.ts（架构 maxFileLines=400）。
+// 轮生命周期/队列对账在 queuedTurnReconcile.ts，增量合并在 deltaMerge.ts（架构 maxFileLines=400）。
 
 import {
   PROTOCOL_V4_LIMITS,
@@ -16,32 +16,30 @@ import {
 import { createLogEpoch } from "./ids.js";
 import { initialAState, type ProjectionAState, type TurnOutcome } from "./projectionTypes.js";
 import { TurnFileFacts } from "./fileFacts.js";
-import { contextWindowPatch, modelConfigPatch, runningControlPatch, snoozePendingInteractions, terminalControlPatch, usagePatch } from "./projectionStatePatches.js";
+import { contextWindowPatch, modelConfigPatch, snoozePendingInteractions, usagePatch } from "./projectionStatePatches.js";
 import { mergeDeltas, type LoggedDelta } from "./deltaMerge.js";
 import { mergeProjectionRows } from "./projectionRowMerge.js";
 import { OmpSubagentProjection } from "./ompSubagentDirectory.js";
 import { readProjectionFileChanges } from "./projectionFileChanges.js";
-import { finalizeFailedQueuedTurn, finalizeTurnContexts } from "./projectionTurnFinalizer.js";
+import {
+  activateQueuedTurnOf,
+  beginUserTurnOf,
+  failAllTurnsOf,
+  failCommandTurnOf,
+  finishQueuedLocalOnlyTurnOf,
+  finishTurnOf,
+  mergeQueuedTurnsIntoActiveOf,
+  reconcileQueuedTurnsOf,
+  requeueActiveTurnAsQueuedOf,
+  type BeginTurnInput,
+  type QueuedTurnReconcileHost,
+} from "./queuedTurnReconcile.js";
 import { applyProjectionToolCallUpdate } from "./projectionToolCallUpdate.js";
 import { appendProjectionStreamDelta, closeProjectionStreamingRows, materializeStreamTextRow, type ProjectionStreamHost } from "./projectionStreamText.js";
-import {
-  conversationRowIdOfToolCall,
-  createMarkerRow,
-  createTurnHeaderRow,
-  createUserInputRow,
-  buildConversationSnapshot,
-  conversationRowsRange,
-  type ToolCallUpsert,
-  type TurnContext,
-} from "./projectionRows.js";
+import { conversationRowIdOfToolCall, createMarkerRow, buildConversationSnapshot, conversationRowsRange, type ToolCallUpsert, type TurnContext } from "./projectionRows.js";
 
-export interface BeginTurnInput {
-  text: string;
-  inputId: string;
-  sourceCommandId: string;
-  clientId: string;
-  routing?: "startNow" | "guide" | "queue";
-}
+// 输入轮载荷类型随轮生命周期移入 queuedTurnReconcile；re-export 保住既有 import 路径。
+export type { BeginTurnInput } from "./queuedTurnReconcile.js";
 
 export class ConversationProjection {
   readonly sessionId: string;
@@ -59,6 +57,29 @@ export class ConversationProjection {
   private suspendedTurns: TurnContext[] = [];
   private queuedTurns: TurnContext[] = [];
   private turnFacts = new Map<string, TurnFileFacts>();
+  /** 各轮输入文本（turnId → text）：队列对账（A3）匹配 omp 队列快照用；轮收口时清理。 */
+  private inputTextByTurnId = new Map<string, string>();
+  /** 轮生命周期/排队轮对账（A3/A4/A5）的委托宿主（惰性箭头读写实例状态，eager 项已声明在前）。 */
+  private readonly queuedReconcileHost: QueuedTurnReconcileHost = {
+    queuedTurns: this.queuedTurns,
+    inputTextByTurnId: this.inputTextByTurnId,
+    rowIds: this.rowIds,
+    rowAt: (rowId) => this.rows.get(rowId),
+    upsertRow: (row) => this.upsertRow(row),
+    turnFacts: this.turnFacts,
+    activeTurn: () => this.turn,
+    setActiveTurn: (turn) => {
+      this.turn = turn;
+    },
+    suspendedTurns: () => this.suspendedTurns,
+    patchState: (patch) => this.patchState(patch),
+    state: () => this.state,
+    seq: () => this.sequence,
+    nextRowId: () => this.nextRowId++,
+    appendRow: (row) => this.appendRow(row),
+    setLastError: (error) => (this.lastErrorValue = error),
+    closeStreamingRows: (finalState, turn) => closeProjectionStreamingRows(this.streamHost, finalState, turn),
+  };
   /** 流式行操作的统一写出口（append/关闭共用；惰性箭头读写实例状态，eager 项须声明在其字段之后）。 */
   private readonly streamHost: ProjectionStreamHost = {
     rows: this.rows,
@@ -103,67 +124,29 @@ export class ConversationProjection {
   get lastError(): { code: string; message: string } | null {
     return this.lastErrorValue;
   }
-  // ── 轮次与输入 ──
+  // ── 轮次与输入（语义在 queuedTurnReconcile.ts，投影侧委托）──
   beginUserTurn(input: BeginTurnInput): void {
-    this.lastErrorValue = null;
-    const turnNumber = this.rowIds.filter((id) => this.rows.get(id)?.kind === "turnHeader").length + 1;
-    const turnId = `turn-${turnNumber}-${input.inputId}`;
-    const init = { turnId, productTurnId: turnId, createdAtSeq: this.sequence + 1 };
-    const headerRowId = this.nextRowId++;
-    const userRowId = this.nextRowId++;
-    this.appendRow(createTurnHeaderRow({ ...init, rowId: headerRowId, sourceCommandId: input.sourceCommandId, historyRoundCount: turnNumber - 1 }));
-    this.appendRow(createUserInputRow({ ...init, rowId: userRowId, text: input.text, sourceCommandId: input.sourceCommandId, clientId: input.clientId }));
-    const nextTurn: TurnContext = {
-      turnId,
-      sourceCommandId: input.sourceCommandId,
-      productTurnId: turnId,
-      headerRowId,
-      fileFacts: new TurnFileFacts(),
-      responseCounter: 0,
-      streamingTextRow: null,
-      streamingReasoningRow: null,
-    };
-    // 冷启动双投递都可能标成 startNow；有活跃轮时须排队，避免覆盖旧 TurnContext。
-    if (this.turn && input.routing !== "guide") {
-      // omp follow_up 只在当前 agent_end 之后启动；现有输出仍归原轮。
-      this.queuedTurns.push(nextTurn);
-    } else {
-      if (input.routing === "guide" && this.turn) {
-        // steer 在当前 agent 内生效；保留旧轮供同一 agent_end 收口。
-        closeProjectionStreamingRows(this.streamHost, "complete", this.turn);
-        this.suspendedTurns.push(this.turn);
-      }
-      this.turn = nextTurn;
-      this.patchState(runningControlPatch());
-    }
+    beginUserTurnOf(this.queuedReconcileHost, input);
   }
   activateQueuedTurn(): void {
-    if (this.turn || this.queuedTurns.length === 0) return;
-    this.turn = this.queuedTurns.shift() ?? null;
-    if (this.turn) this.patchState(runningControlPatch());
+    activateQueuedTurnOf(this.queuedReconcileHost);
   }
   /** 本地命令没有 agent_start；上一轮结束后由完成事实激活并收口队首。 */
   finishQueuedLocalOnlyTurn(): boolean {
-    if (this.turn) return false;
-    this.activateQueuedTurn();
-    if (!this.turn) return false;
-    this.closeAssistantResponse();
-    this.finishTurn("success");
-    return true;
+    return finishQueuedLocalOnlyTurnOf(
+      this.queuedReconcileHost,
+      () => this.closeAssistantResponse(),
+      (outcome) => this.finishTurn(outcome),
+    );
   }
   failCommandTurn(sourceCommandId: string, error: { code: string; message: string }): void {
-    if (finalizeFailedQueuedTurn({ queuedTurns: this.queuedTurns, sourceCommandId, turnFacts: this.turnFacts, rowAt: (rowId) => this.rows.get(rowId), upsertRow: (row) => this.upsertRow(row) }))
-      return;
-    this.recordTurnError(error);
-    this.finishTurn("failed", error);
+    failCommandTurnOf(this.queuedReconcileHost, sourceCommandId, error, (failure) => {
+      this.recordTurnError(failure);
+      this.finishTurn("failed", failure);
+    });
   }
   failAllTurns(error: { code: string; message: string }): void {
-    this.failCommandTurn(this.turn?.sourceCommandId ?? "", error);
-    while (this.queuedTurns.length > 0) {
-      const next = this.queuedTurns[0];
-      if (!next) break;
-      this.failCommandTurn(next.sourceCommandId, error);
-    }
+    failAllTurnsOf(this.queuedReconcileHost, error, (sourceCommandId, failure) => this.failCommandTurn(sourceCommandId, failure));
   }
   markStopRequested(): void {
     if (this.state.control.phase !== "running") {
@@ -176,22 +159,32 @@ export class ConversationProjection {
     this.lastErrorValue = error;
   }
   finishTurn(outcome: TurnOutcome, error?: { code: string; message: string }): void {
-    const turn = this.turn;
-    if (!turn && this.suspendedTurns.length === 0) return;
-    finalizeTurnContexts({
-      turns: [...this.suspendedTurns, ...(turn ? [turn] : [])],
-      outcome,
-      rowAt: (rowId) => this.rows.get(rowId),
-      upsertRow: (row) => this.upsertRow(row),
-      closeStreamingRows: (active) => closeProjectionStreamingRows(this.streamHost, outcome === "failed" ? "failed" : outcome === "interrupted" ? "interrupted" : "complete", active),
-      turnFacts: this.turnFacts,
-    });
-    if (outcome === "failed") {
-      this.lastErrorValue = error ?? { code: "runtime", message: "turn failed" };
-    }
-    this.patchState(terminalControlPatch(this.state, outcome, error));
-    this.turn = null;
-    this.suspendedTurns = [];
+    finishTurnOf(this.queuedReconcileHost, outcome, error);
+  }
+  // ── 队列对账与竞态收口（A3/A4/A5）──
+  /** 是否存在本地排队轮（A3 对账触发条件）。 */
+  hasQueuedTurns(): boolean {
+    return this.queuedTurns.length > 0;
+  }
+  /**
+   * 队列对账（A3）：判定与收口逻辑在 queuedTurnReconcile.ts（对账语义注释见该模块）；
+   * 返回收口数。
+   */
+  reconcileQueuedTurns(queueTexts: string[] | null): number {
+    return reconcileQueuedTurnsOf(this.queuedReconcileHost, queueTexts);
+  }
+  /** agent_start 合并收口（A4）：合并语义与显示失真备注见 queuedTurnReconcile.ts。 */
+  mergeQueuedTurnsIntoActive(): void {
+    if (this.turn === null) return;
+    mergeQueuedTurnsIntoActiveOf(this.queuedReconcileHost);
+  }
+  /** 当前活跃轮的 sourceCommandId（无活跃轮为 null；A5 steer 在途判定用）。 */
+  activeTurnSourceCommandId(): string | null {
+    return this.turn?.sourceCommandId ?? null;
+  }
+  /** steer 在途竞态（A5）：完整竞态语义与时序见 queuedTurnReconcile.ts；返回 false 时调用方按常规 agent_end 收口。 */
+  requeueActiveTurnAsQueued(outcome: TurnOutcome, error?: { code: string; message: string }): boolean {
+    return requeueActiveTurnAsQueuedOf(this.queuedReconcileHost, outcome, error);
   }
   // ── 流式文本与思考 ──
   appendAssistantText(delta: string): void {

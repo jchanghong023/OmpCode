@@ -1401,6 +1401,176 @@ test("供应商错误（stopReason=error）以 failed 收口并携带错误事�
   }
 });
 
+test("prompt_result{status:aborted}（模型回合前取消）按 interrupted 收口且会话可继续对话", async () => {
+  // 协议条款 §14.4：被输入门取消的 prompt 以 success ACK（无 data）+ 恰一个
+  // prompt_result{status:"aborted", agentInvoked:true} 收尾，不启动模型回合。
+  // ACK 无 data 使 PromptResultTracker 登记该 id（真实核 ticket 语义），aborted 帧经
+  // onPromptResult 上抛，引擎按 interrupted 收口该轮。
+  const harness = await startAdapter();
+  try {
+    const created = await harness.request("v4/command", {
+      commandId: "cmd-aborted-create",
+      clientId: "test-client",
+      sessionId: null,
+      type: "createSession",
+      payload: { workspaceId: "test-workspace" },
+      issuedAt: Date.now(),
+    });
+    const createAck = commandAckSchema.parse((created as { result: unknown }).result);
+    assert.equal(createAck.status, "accepted");
+    const sessionId = (createAck.result as { sessionId: string }).sessionId;
+    await harness.request("v4/conversation/subscribe", {
+      topic: `conversation/${sessionId}`,
+      connectionId: "conn-aborted",
+      clientMode: "desktop-continuous",
+    });
+    const sent = await harness.request("v4/command", {
+      commandId: "cmd-aborted-send",
+      clientId: "test-client",
+      sessionId,
+      type: "sendText",
+      payload: { text: "ABORT_AT_START" },
+      issuedAt: Date.now(),
+    });
+    assert.equal(commandAckSchema.parse((sent as { result: unknown }).result).status, "accepted");
+    // 该轮按 interrupted 收口，且不产生任何模型内容行（无 agent 回合）。
+    await harness.waitUntil(() =>
+      [...harness.collectRows().values()].some(
+        (row) => row.kind === "turnHeader" && row.state === "completedInterrupted",
+      ),
+    );
+    assert.equal(
+      [...harness.collectRows().values()].filter((row) => row.kind === "assistantText").length,
+      0,
+      "被取消的轮不得产生模型内容行",
+    );
+    // 后续会话可继续正常对话：本地命令照常收口。
+    const followup = await harness.request("v4/command", {
+      commandId: "cmd-aborted-followup",
+      clientId: "test-client",
+      sessionId,
+      type: "sendText",
+      payload: { text: "/help" },
+      issuedAt: Date.now(),
+    });
+    assert.equal(
+      commandAckSchema.parse((followup as { result: unknown }).result).status,
+      "accepted",
+    );
+    await harness.waitUntil(() =>
+      [...harness.collectRows().values()].some(
+        (row) => row.kind === "assistantText" && String(row.text).includes("Fake help output"),
+      ),
+    );
+    await harness.waitUntil(() =>
+      [...harness.collectRows().values()].some(
+        (row) => row.kind === "turnHeader" && row.state === "completedSuccess",
+      ),
+    );
+  } finally {
+    await harness.close();
+  }
+});
+
+// ── D1 新帧容忍：omp 协议演进（goal/fork 会话命令/live voice 等）下发的未知帧与
+// 新字段不得破坏适配器——未知会话帧优雅忽略、后续正常帧照常消费；get_state 新字段
+// 不拒帧、原字段消费不变。注入经 fake omp 文本标记与环境旗标（fakeOmp.mjs）。
+
+test("未知类型的会话帧被优雅忽略，后续正常事件仍被消费", async () => {
+  const harness = await startAdapter();
+  try {
+    const created = await harness.request("v4/command", {
+      commandId: "cmd-unknown-frames-create",
+      clientId: "test-client",
+      sessionId: null,
+      type: "createSession",
+      payload: { workspaceId: "test-workspace", firstInput: { text: "UNKNOWN_SESSION_FRAMES" } },
+      issuedAt: Date.now(),
+    });
+    const createAck = commandAckSchema.parse((created as { result: unknown }).result);
+    assert.equal(createAck.status, "accepted");
+    const sessionId = (createAck.result as { sessionId: string }).sessionId;
+    await harness.request("v4/conversation/subscribe", {
+      topic: `conversation/${sessionId}`,
+      connectionId: "conn-unknown-frames",
+      clientMode: "desktop-continuous",
+    });
+    // fake 先下发 goal_updated / live_voice_state（适配器未接入的新核帧），再走正常
+    // 文本轮：轮次必须照常完成，未知帧不得打断事件流或误置状态。
+    await harness.waitUntil(() =>
+      [...harness.collectRows().values()].some(
+        (row) => row.kind === "turnHeader" && row.state === "completedSuccess",
+      ),
+    );
+    const rows = [...harness.collectRows().values()];
+    assert.ok(
+      rows.some(
+        (row) =>
+          row.kind === "assistantText" && String(row.text).includes("UNKNOWN_FRAMES_TOLERATED"),
+      ),
+      "未知帧后的正常 message 事件必须仍被投影",
+    );
+    assert.equal(
+      (harness.collectState().control as { phase?: string } | undefined)?.phase,
+      "completedSuccess",
+      "未知帧不得误置会话状态",
+    );
+    // 适配器存活且下行 wire 帧全部合法（含携带新核字段的 prompt_result no-op 路径）。
+    for (const frame of harness.frames.filter(
+      (item) => (item as { method?: string }).method === "v4/conversation/frame",
+    )) {
+      const parsed = conversationTopicWireFrameSchema.safeParse(
+        (frame as { params: unknown }).params,
+      );
+      assert.ok(
+        parsed.success,
+        `v4 frame 不合法: ${JSON.stringify(parsed.error?.issues.slice(0, 3))}`,
+      );
+    }
+  } finally {
+    await harness.close();
+  }
+});
+
+test("get_state 响应携带新核字段（queuedMessages/liveSteered/goal）不破坏原字段消费", async () => {
+  const harness = await startAdapter({ FAKE_OMP_GET_STATE_NEW_FIELDS: "1" });
+  try {
+    const created = await harness.request("v4/command", {
+      commandId: "cmd-newstate-create",
+      clientId: "test-client",
+      sessionId: null,
+      type: "createSession",
+      payload: { workspaceId: "test-workspace", firstInput: { text: "/help" } },
+      issuedAt: Date.now(),
+    });
+    const createAck = commandAckSchema.parse((created as { result: unknown }).result);
+    assert.equal(createAck.status, "accepted");
+    const sessionId = (createAck.result as { sessionId: string }).sessionId;
+    await harness.request("v4/conversation/subscribe", {
+      topic: `conversation/${sessionId}`,
+      connectionId: "conn-newstate",
+      clientMode: "desktop-continuous",
+    });
+    // 引擎 bootstrap 即回读 get_state（fake 响应混入 queuedMessages/liveSteered/goal），
+    // schema passthrough 不得拒帧：配置与用量等原字段照常落投影。
+    await harness.waitUntil(() =>
+      [...harness.collectRows().values()].some(
+        (row) => row.kind === "turnHeader" && row.state === "completedSuccess",
+      ),
+    );
+    const state = harness.collectState();
+    assert.equal((state.config as { model?: string } | undefined)?.model, "mock-1");
+    assert.equal((state.config as { thought?: string } | undefined)?.thought, "max");
+    assert.deepEqual((state.usage as { contextWindow?: unknown } | undefined)?.contextWindow, {
+      usedTokens: 512,
+      maxTokens: 200000,
+      autoCompactThresholdTokens: null,
+    });
+  } finally {
+    await harness.close();
+  }
+});
+
 // ── v3 fork surface（rpc-ui-protocol 4.0/4.1/4.3 + 5.6 A）：fake omp 公告 [1,2,3] ──
 // 覆盖：v3 协商后的结构化审批（六档选项/拒绝理由/前缀档/子代理来源）、富 ask（多题/
 // 取消/转对话/倒计时暂停）、sensitive 输入、test_model 与 list_mcp_servers 查询映射，

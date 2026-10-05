@@ -6,8 +6,6 @@
 
 import { createId, ompSessionIdOfFilePath } from "../domain/ids.js";
 import { ConversationEngine } from "./conversationEngine.js";
-import { deleteColdSession } from "./deleteColdSession.js";
-import { deleteLoadedSession } from "./deleteLoadedSession.js";
 import { listLegacySessions } from "./legacySessionList.js";
 import { ProtocolError } from "./errors.js";
 import type { HostGateway, OmpProjectAvailability, OmpProjectGatewayPort, OmpProcessFactory, OmpStorePort } from "./ports.js";
@@ -15,6 +13,7 @@ import { controlSubagent, projectSubagentDirectory } from "./ompProjectDirectory
 import { createProjectSession, hydrateEngineFromCold as hydrateLifecycleCold, resumeProjectSession } from "./projectSessionLifecycle.js";
 import type { ProjectSessionHost } from "./projectSessionLifecycle.js";
 import { SessionIndexTopics } from "./sessionIndexTopics.js";
+import { closeSessionWith, deleteSessionWith, SessionRegistryGates, type SessionTeardownHost } from "./sessionRegistryGates.js";
 
 export interface RegistryDeps {
   ompFactory: OmpProcessFactory;
@@ -34,6 +33,7 @@ export class SessionRegistry {
   private pendingResumes = new Map<string, Promise<ConversationEngine>>();
   /** 在途 createSession：resume/read 必须等其登记完成，否则会在注册空窗期构建冷引擎并覆盖活引擎（GUI 实测缺陷）。 */
   private pendingCreates = new Set<Promise<unknown>>();
+  private readonly gates: SessionRegistryGates;
   private primaryWorkspace: { id: string; path: string } | null = null;
   private readonly rekeyedEngineIds = new Set<string>();
   private readonly ompFactory: OmpProcessFactory;
@@ -60,6 +60,11 @@ export class SessionRegistry {
       primaryWorkspacePath: () => this.primaryWorkspace?.path ?? null,
       rekeyedEngineIds: this.rekeyedEngineIds,
     });
+    this.gates = new SessionRegistryGates({
+      engines: this.engines,
+      getEngine: (sessionId) => this.getEngine(sessionId),
+      removeIndexSession: (workspaceId, sessionId) => this.indexTopics.removeSession(workspaceId, sessionId),
+    });
   }
 
   /** 项目模式能力事实（OMP 未提供项目模式时恒为 false，调用方回落旧拓扑）。 */
@@ -73,6 +78,23 @@ export class SessionRegistry {
    */
   async projectAvailability(): Promise<OmpProjectAvailability> {
     return this.project ? this.project.availability() : Promise.resolve("unsupported");
+  }
+
+  /**
+   * 项目模式生命周期拓扑路由（修复 S1-2）：区分能力事实与瞬时失败。
+   * - available → 项目拓扑；unsupported（旧核能力事实，永久）→ 返回 null 回落旧拓扑；
+   * - unavailable（启动失败/退避窗口，含尚未判定）→ 抛 -32000 可重试错误。
+   * 依据 rpc-ui-protocol §13.3「启动或协商失败展示原始可诊断原因，不自动为每个会话
+   * 退回独立进程」：瞬时失败期间静默走旧拓扑会让同 workspace 混用两种会话拓扑。
+   * 与 ompProjectMethods.requireProject 的三态语义一致；delete/rename 等读路径仍用
+   * projectAvailable（布尔事实）维持现状。
+   */
+  private async projectRouteForLifecycle(): Promise<OmpProjectGatewayPort | null> {
+    if (!this.project) return null;
+    const availability = await this.projectAvailability();
+    if (availability === "available") return this.project;
+    if (availability === "unsupported") return null;
+    throw new ProtocolError(-32000, "omp project process unavailable: session lifecycle");
   }
 
   /** 项目生命周期 host（projectSessionLifecycle 的回写接口）。 */
@@ -129,13 +151,18 @@ export class SessionRegistry {
   /** resume/read 到达早于 createSession 登记时的串行屏障（GUI 实测竞态，见 resumeSession）。 */
   private async settlePendingCreates(): Promise<void> {
     while (this.pendingCreates.size > 0) {
-      await Promise.all(Array.from(this.pendingCreates));
+      // 屏障只需「等待在途 create 结束」，不传播其失败：create 的错误已由 create 调用方
+      // 自己收到；Promise.all 会让无关会话的 resume/read 连坐拒绝（如预热创建被拒后，
+      // 用户继续打开既有会话也被同一错误打断）。
+      await Promise.allSettled(Array.from(this.pendingCreates));
     }
   }
 
   private async createSessionInner(params: { sessionId?: string; workspaceId: string; workspacePath: string; title?: string }): Promise<ConversationEngine> {
     this.primaryWorkspace = { id: params.workspaceId, path: params.workspacePath };
-    if (this.project && (await this.projectAvailable())) {
+    // 修复（S1-2）：拓扑路由区分能力事实与瞬时失败——unavailable（启动失败/退避窗）
+    // 抛 -32000 可重试错误，不再静默回落旧拓扑 spawn 单会话进程。
+    if (await this.projectRouteForLifecycle()) {
       return createProjectSession(this.projectHost(), params);
     }
     const sessionId = params.sessionId ?? createId("omp-session");
@@ -186,13 +213,12 @@ export class SessionRegistry {
     if (raced) {
       return raced;
     }
-    if (this.project && (await this.projectAvailable())) {
+    // 修复（S1-2）：同 createSession——unavailable 抛 -32000 可重试，不静默回落旧拓扑。
+    if (await this.projectRouteForLifecycle()) {
       const engine = await resumeProjectSession(this.projectHost(), params);
-      const winner = this.getEngine(params.sessionId);
-      if (winner && winner !== engine) {
-        return winner;
-      }
-      return engine;
+      // 修复（S2-2/S7-4）：登记统一走登记门（墓碑 + winner 判定）；hydrateEngineFromCold
+      // 不再自行登记，原「先覆盖注册表再检查」的死代码检查由此恢复实效。
+      return this.gates.settleColdHydration(params.sessionId, engine);
     }
     const cold = this.store.findSession
       ? await this.store.findSession(params.workspacePath, params.sessionId)
@@ -217,69 +243,56 @@ export class SessionRegistry {
       resumeSessionPath: cold.sessionPath,
       initialTitle: cold.title ?? undefined,
     });
-    // 旧拓扑冷行水合复用 lifecycle 的行投影（project 字段不会被旧路径触碰）。
+    // 旧拓扑冷行水合复用 lifecycle 的行投影（project 字段不会被旧路径触碰）；
+    // 修复（S2-2/S7-4）：水合不再自行登记，登记统一走登记门。
     await hydrateLifecycleCold(this.projectHost(), engine, cold.sessionPath, cold.createdAt, cold.updatedAt);
-    const winner = this.getEngine(params.sessionId);
-    if (winner && winner !== engine) {
-      return winner;
-    }
-    return engine;
+    return this.gates.settleColdHydration(params.sessionId, engine);
   }
 
   async deleteSession(sessionId: string): Promise<void> {
-    if (this.project && (await this.projectAvailable())) {
-      // 项目模式：先卸载引擎（close_session），删除结果以 OMP 为准（文件由 OMP 删除）。
-      const engine = this.getEngine(sessionId);
-      if (engine) {
-        await engine.dispose();
-        this.engines.delete(engine.sessionId);
-      }
-      const outcome = await this.project.deleteSession(sessionId);
-      if (!outcome.success) {
-        throw new ProtocolError(-32004, outcome.error ?? `session deletion failed: ${sessionId}`);
-      }
-      const workspaceId = engine?.workspaceId ?? this.primaryWorkspace?.id;
-      if (workspaceId) {
-        this.indexTopics.removeSession(workspaceId, sessionId);
-      }
-      return;
-    }
-    const engine = this.getEngine(sessionId);
-    if (engine) {
-      const stableId = await deleteLoadedSession(engine, this.store, sessionId);
-      this.engines.delete(engine.sessionId);
-      for (const id of new Set([engine.sessionId, sessionId, stableId].filter((id): id is string => Boolean(id)))) {
-        this.indexTopics.removeSession(engine.workspaceId, id);
-      }
-      this.rekeyedEngineIds.delete(engine.sessionId);
-      return;
-    }
-    // 冷会话文件与索引同步删除；没有找到时保持明确的 unavailable 错误。
-    if (
-      await deleteColdSession({
-        store: this.store,
-        workspace: this.primaryWorkspace,
-        sessionId,
-        onDeleted: (workspaceId, id) => {
-          this.indexTopics.removeSession(workspaceId, id);
-        },
-      })
-    )
-      return;
-    throw new ProtocolError(-32004, `session unavailable: ${sessionId}`);
+    await deleteSessionWith(this.teardownHost(), sessionId);
   }
 
   async closeSession(sessionId: string): Promise<void> {
-    const engine = this.getEngine(sessionId);
-    if (!engine) return;
-    const persistedPath = engine.ompSessionFile;
-    engine.projection.failAllTurns({ code: "session_closed", message: "session closed" });
-    if (persistedPath) this.upsertEngineSummary(engine);
-    await engine.dispose();
-    this.engines.delete(engine.sessionId);
-    if (!persistedPath) {
-      this.indexTopics.removeSession(engine.workspaceId, engine.sessionId);
+    await closeSessionWith(this.teardownHost(), sessionId);
+  }
+
+  private teardownHost(): SessionTeardownHost {
+    return {
+      gates: this.gates,
+      project: this.project,
+      projectAvailable: () => this.projectAvailable(),
+      getEngine: (sessionId) => this.getEngine(sessionId),
+      dropEngine: (sessionId) => this.engines.delete(sessionId),
+      removeIndexSession: (workspaceId, sessionId) => this.indexTopics.removeSession(workspaceId, sessionId),
+      store: this.store,
+      primaryWorkspace: () => this.primaryWorkspace,
+      forgetRekeyed: (sessionId) => this.rekeyedEngineIds.delete(sessionId),
+      upsertEngineSummary: (engine) => this.upsertEngineSummary(engine),
+    };
+  }
+
+  /**
+   * 项目模式冷会话（无引擎）改名：真实 omp 的 rename_session 支持未加载（H）会话按稳定 ID
+   * 改名（rpc-project-sessions.rename：locateListed 定位文件后原地改标题槽），适配器此前只走
+   * engine.rename，冷会话改名被 -32004 拒。成功后同步本地 sessions-index 标题——与
+   * engine.rename 的 notifyIndexChange 等价实现：omp 已把新标题落盘，先移除旧摘要再触发冷会话
+   * 重扫（onProjectSessionsChanged 只补缺，不刷新已存在行），重扫即写入新标题。
+   * 项目模式不可用（旧核）返回 unsupported，调用方维持既有错误语义。
+   */
+  async renameColdSession(sessionId: string, title: string): Promise<{ ok: true } | { ok: false; unsupported: boolean; error?: string; code?: string }> {
+    if (!this.project || !(await this.projectAvailable())) {
+      return { ok: false, unsupported: true };
     }
+    const outcome = await this.project.sendProject({ type: "rename_session", sessionId, name: title });
+    if (!outcome.success) {
+      return { ok: false, unsupported: false, error: outcome.error, code: outcome.code };
+    }
+    const workspaceId = this.primaryWorkspace?.id;
+    if (workspaceId && this.indexTopics.removeSession(workspaceId, sessionId)) {
+      await this.indexTopics.onProjectSessionsChanged();
+    }
+    return { ok: true };
   }
 
   upsertEngineSummary(engine: ConversationEngine, overrides?: { createdAt?: number; lastActivityAt?: number }): void {
@@ -299,7 +312,7 @@ export class SessionRegistry {
   }
 
   /** 项目模式子代理目录（omp-project-mode.md）：委托 OMP 持久目录 + 父会话投影合并。 */
-  async projectSubagentDirectory(sessionId: string, offset: number): Promise<Record<string, unknown> | null> {
+  async projectSubagentDirectory(sessionId: string, offset: number, limit?: number): Promise<Record<string, unknown> | null> {
     return projectSubagentDirectory(
       {
         project: this.project,
@@ -311,6 +324,7 @@ export class SessionRegistry {
       },
       sessionId,
       offset,
+      limit,
     );
   }
 
@@ -341,6 +355,9 @@ export class SessionRegistry {
   }
 
   async dispose(): Promise<void> {
+    // 修复（S7-4）：先置 disposing 作废在途 create/resume 的登记（登记门检查），
+    // 再销毁引擎——销毁期间/之后完成的冷恢复不得把引擎重新登记进已清空的注册表。
+    this.gates.beginDispose();
     this.indexTopics.dispose();
     this.rekeyedEngineIds.clear();
     await Promise.all([...this.engines.values()].map((engine) => engine.dispose()));

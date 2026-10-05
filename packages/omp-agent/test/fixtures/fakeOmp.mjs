@@ -3,222 +3,28 @@
 // v3 fork surface 行为（结构化审批/富 ask/fork 查询）在 fakeOmpV3.mjs。
 
 import { createInterface } from "node:readline";
-import { createV3Surface, PROMPT_SCENARIOS } from "./fakeOmpV3.mjs";
+import { newStateFields } from "./fakeOmpNewCoreFrames.mjs";
+import { localCommandMessage, out, pendingUi, respond, runLocalCommand, runPromptTurn, shared, v3 } from "./fakeOmpHelpers.mjs";
 
-if (process.argv.slice(2).join(" ") !== "--mode rpc-ui") {
-  throw new Error(`fake omp requires --mode rpc-ui, got: ${process.argv.slice(2).join(" ")}`);
+// 镜像真实 omp cli 的 flag 解析形状（args.ts reportUnrecognizedFlags → main.ts exit 2）：
+// 本 fake 只识别 --mode rpc-ui。适配器项目能力探测（S1-2 拓扑路由）会追加 --rpc-project
+// 拉起本 fake——对单会话 fake 这是未知 flag，必须 stderr 报 unknown flag 并 exit 2
+// （ompProjectReadyGate 据此判真旧核，网关永久回落旧拓扑）；普通 throw（exit 1）会被
+// 判为可重试 unavailable，卡死全部单会话会话创建。
+const fakeArgv = process.argv.slice(2);
+const unknownFlag = fakeArgv.find((arg) => arg.startsWith("--") && arg !== "--mode");
+if (unknownFlag) {
+  process.stderr.write(`Error: unknown flag: ${unknownFlag}\n`);
+  process.stderr.write("Run `omp --help` for available flags.\n");
+  process.exit(2);
+}
+if (fakeArgv.join(" ") !== "--mode rpc-ui") {
+  throw new Error(`fake omp requires --mode rpc-ui, got: ${fakeArgv.join(" ")}`);
 }
 
-const out = (frame) => process.stdout.write(`${JSON.stringify(frame)}\n`);
-let counter = 0;
-const nextId = () => `fake-${++counter}`;
-let sessionFile = null;
-const deniedTools = new Set();
-
-// v3 fork surface 模式（rpc-ui-protocol 4.0）：ready 公告 [1,2,3]，协商成功后审批走
-// permission_request、ask 走 ask_request、fork 查询命令可用；未协商时镜像真实 omp 的
-// Unknown command 拒绝与 legacy extension_ui select 降级。
 const v3Announced = process.env.FAKE_OMP_PROTOCOL_V3 === "1";
-const v3 = createV3Surface({ out, nextId });
 
 out({ type: "ready", protocolVersion: 1, supportedProtocolVersions: v3Announced ? v3.announce() : [1, 2], maxFrameBytes: 1048576, maxReassembledFrameBytes: 67108864 });
-
-/** 文本轮：流式 delta（message_update）→ message_end 收口（投影器文本只来自 delta）。 */
-function emitTextTurn(text) {
-  out({ type: "message_start", message: { role: "assistant", content: [] } });
-  out({
-    type: "message_update",
-    message: { role: "assistant", content: [] },
-    assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: text, partial: { role: "assistant", content: [] } },
-  });
-  out({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text }] } });
-  out({ type: "agent_end", messages: [], isTerminal: true });
-}
-
-function respond(id, command, success, data) {
-  out({ ...(id ? { id } : {}), type: "response", command, success, ...(data !== undefined ? { data } : {}) });
-}
-
-// HOLD 前缀：进入流式保持态（agent_start + 首段文本，不收口），用于测试 steer/follow_up 路由。
-let holding = false;
-// SLOW_TOOL_HOLD：工具在途保持态（tool_execution_start 后不收口），abort 时镜像真实 omp
-// v18.3.5+fork.265 的中断序列（P2 验收 D1）：end(isError) → 尾随 update → agent_end。
-let slowToolCallId = null;
-let setModelCalls = 0;
-let currentModel = { provider: "mock", id: "mock-1" };
-let autoCompactionEnabled = true;
-let subagentSubscription = "off";
-let subagents = [];
-
-function runLocalCommand(message) {
-  const report = v3.localReport(message);
-  if (report) return report;
-  if (message === "/model-report") {
-    out({ type: "command_output", text: `set_model calls: ${setModelCalls}` });
-    return { agentInvoked: false };
-  }
-  if (message.startsWith("/title ")) {
-    const title = message.slice("/title ".length).trim();
-    out({ type: "session_info_update", title, sessionId: "fake-session-1" });
-    out({ type: "command_output", text: `title set to ${title}` });
-    return { agentInvoked: false };
-  }
-  if (message === "/config-new") {
-    out({ type: "config_update", model: { provider: "mock", id: "mock-9" }, thinkingLevel: "high" });
-    out({ type: "command_output", text: "config updated" });
-    return { agentInvoked: false };
-  }
-  if (message === "/install-ship2") {
-    out({ type: "command_output", text: "installed ship2" });
-    out({
-      type: "available_commands_update",
-      commands: [
-        { name: "help", source: "builtin", description: "Show help" },
-        { name: "ship", source: "extension", description: "Ship changes", input: { hint: "target" } },
-        { name: "ship2", source: "extension", description: "Ship twice" },
-      ],
-    });
-    return { agentInvoked: false };
-  }
-  return null;
-}
-
-async function runPromptTurn(message, promptId) {
-  out({ type: "agent_start" });
-  if (message === "ASK_ME") {
-    if (v3.isV3()) {
-      await v3.runAskTurn(emitTextTurn);
-      return;
-    }
-    // 未协商 v3：ask 降级路径（4.0/4.3）——真实 omp 走逐题 select，这里以文本收口即可。
-    emitTextTurn("legacy ask degraded");
-    return;
-  }
-  if (message === "SECRET_INPUT") {
-    if (v3.isV3()) {
-      const token = await new Promise((resolve) => {
-        const id = nextId();
-        pendingUi.set(id, (cmd) => resolve(cmd.value));
-        out({ type: "extension_ui_request", id, method: "input", title: "Login", message: "Enter access token", sensitive: true });
-      });
-      emitTextTurn(`token received: ${token}`);
-      return;
-    }
-    // v1/v2 不携带 sensitive（4.3：login secret 输入 v3 解禁）；回落普通文本轮。
-    emitTextTurn("legacy secret rejected");
-    return;
-  }
-  if (message === "CUSTOM_TERMINAL_MESSAGE") {
-    out({ type: "message_start", message: { role: "assistant", content: [] } });
-    out({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "Skill completed" }] } });
-    out({
-      type: "agent_end",
-      messages: [
-        { role: "custom", content: "Skill invocation context" },
-        { role: "assistant", content: [{ type: "text", text: "Skill completed" }] },
-      ],
-      isTerminal: true,
-    });
-    return;
-  }
-  if (message === "SUBAGENT_REPORT") {
-    const agent = { id: "fake-child-1", index: 0, agent: "scout", agentSource: "bundled", description: "Inspect project", status: "active", lastUpdate: Date.now(), parentToolCallId: "task-parent" };
-    subagents = [agent];
-    if (subagentSubscription !== "off") {
-      out({ type: "subagent_lifecycle", payload: { ...agent, status: "started" } });
-      out({
-        type: "subagent_progress",
-        payload: {
-          index: 0,
-          agent: "scout",
-          agentSource: "bundled",
-          task: "Inspect project",
-          parentToolCallId: "task-parent",
-          progress: { id: agent.id, status: "running", recentOutput: ["reading files"] },
-        },
-      });
-    }
-    await new Promise((resolve) => setTimeout(resolve, 30));
-    subagents = [{ ...agent, status: "completed", lastUpdate: Date.now() }];
-    if (subagentSubscription !== "off") {
-      out({ type: "subagent_lifecycle", payload: { ...agent, status: "completed" } });
-      out({ type: "subagent_lifecycle", payload: { ...agent, status: "completed" } });
-    }
-    out({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "Subagent done" }] } });
-    out({ type: "agent_end", messages: [], isTerminal: true });
-    return;
-  }
-  if (message === "/failmodel") {
-    out({ type: "message_start", message: { role: "assistant", content: [] } });
-    out({ type: "message_end", message: { role: "assistant", content: [], stopReason: "error", errorStatus: 401, errorMessage: "401 Model not supported" } });
-    out({ type: "agent_end", messages: [], isTerminal: true });
-    out({ type: "prompt_result", id: promptId, agentInvoked: true });
-    return;
-  }
-  if (typeof message === "string" && message.startsWith("HOLD")) {
-    holding = true;
-    out({ type: "message_start", message: { role: "assistant", content: [] } });
-    out({
-      type: "message_update",
-      message: { role: "assistant", content: [] },
-      assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "holding", partial: { role: "assistant", content: [] } },
-    });
-    return;
-  }
-  if (message === "SLOW_TOOL_HOLD") {
-    slowToolCallId = `toolu-${nextId()}`;
-    out({ type: "tool_execution_start", toolCallId: slowToolCallId, toolName: "bash", args: { command: "sleep 60" } });
-    return;
-  }
-  if (typeof message === "string" && message.startsWith("FOLLOWEDUP:")) {
-    out({ type: "message_start", message: { role: "assistant", content: [] } });
-    out({ type: "message_update", message: { role: "assistant", content: [] }, assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: message } });
-    out({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: message }] } });
-    out({ type: "agent_end", messages: [], isTerminal: true });
-    return;
-  }
-  const scenario = PROMPT_SCENARIOS[message] ?? PROMPT_SCENARIOS.default;
-  out({ type: "message_start", message: { role: "assistant", content: [] } });
-  for (const delta of ["Hello", " wor", "ld!"]) {
-    out({ type: "message_update", message: { role: "assistant", content: [] }, assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta, partial: { role: "assistant", content: [] } } });
-  }
-  const toolCallId = `toolu-${nextId()}`;
-  if (!sessionFile) {
-    sessionFile = `${process.cwd()}/.fake-omp-sessions/session-1.jsonl`;
-  }
-  out({ type: "tool_execution_start", toolCallId, toolName: scenario.toolName, args: scenario.args });
-  const approved = await requestApproval(toolCallId, scenario);
-  if (approved) {
-    out({ type: "tool_execution_end", toolCallId, toolName: scenario.toolName, result: { content: [{ type: "text", text: "wrote 2 lines" }] }, isError: false });
-    out({
-      type: "message_update",
-      message: { role: "assistant", content: [] },
-      assistantMessageEvent: { type: "text_delta", contentIndex: 1, delta: " Done.", partial: { role: "assistant", content: [] } },
-    });
-  } else {
-    out({ type: "tool_execution_end", toolCallId, toolName: scenario.toolName, result: { content: [{ type: "text", text: "denied by user" }] }, isError: true });
-    deniedTools.add(toolCallId);
-  }
-  out({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "Hello world! Done." }], usage: { input: 120, output: 30 } } });
-  out({ type: "agent_end", messages: [], isTerminal: true });
-}
-
-function requestApproval(toolCallId, scenario) {
-  if (v3.isV3()) {
-    return v3.requestApproval(toolCallId, scenario);
-  }
-  return requestLegacyApproval(toolCallId);
-}
-
-function requestLegacyApproval(toolCallId) {
-  return new Promise((resolve) => {
-    const id = nextId();
-    pendingUi.set(id, (cmd) => resolve(cmd.value === "Approve"));
-    out({ type: "extension_ui_request", id, method: "select", title: "Tool approval", message: `Approve write to greeting.txt? (toolCallId=${toolCallId})`, options: ["Approve", "Deny"] });
-  });
-}
-
-const pendingUi = new Map();
 
 const readline = createInterface({ input: process.stdin });
 readline.on("line", (line) => {
@@ -246,14 +52,17 @@ readline.on("line", (line) => {
       return;
     case "get_state":
       respond(command.id, "get_state", true, {
-        model: currentModel,
+        model: shared.currentModel,
         thinkingLevel: "max",
-        autoCompactionEnabled,
+        autoCompactionEnabled: shared.autoCompactionEnabled,
         isStreaming: false,
-        sessionFile,
+        sessionFile: shared.sessionFile,
         sessionId: "fake-session-1",
         sessionName: null,
         contextUsage: { tokens: 512, contextWindow: 200000, percent: 0.25 },
+        // D1 新帧容忍：新核 get_state 新字段（queuedMessages/goal）由
+        // fakeOmpNewCoreFrames.mjs 按 FAKE_OMP_GET_STATE_NEW_FIELDS 注入。
+        ...newStateFields(),
       });
       return;
     case "set_subagent_subscription":
@@ -261,11 +70,11 @@ readline.on("line", (line) => {
         respond(command.id, "set_subagent_subscription", false, { error: "subscription unavailable" });
         return;
       }
-      subagentSubscription = command.level;
+      shared.subagentSubscription = command.level;
       respond(command.id, "set_subagent_subscription", true, { level: command.level });
       return;
     case "get_subagents":
-      respond(command.id, "get_subagents", true, { subagents });
+      respond(command.id, "get_subagents", true, { subagents: shared.subagents });
       return;
     case "get_subagent_messages":
       respond(command.id, "get_subagent_messages", true, {
@@ -296,7 +105,8 @@ readline.on("line", (line) => {
       respond(command.id, "get_available_thinking_levels", true, { levels: ["off", "low", "high", "max"] });
       return;
     case "prompt": {
-      if (command.message === "/context") {
+      const commandText = localCommandMessage(command.message);
+      if (commandText === "/context") {
         out({
           type: "command_output",
           text: "Context window: 200000 tokens (0% used)\n  System prompt [░░░░] 0%  200 tokens\n  Messages [░░░░] 0%  312 tokens\n  Free [████] 84%  169488 tokens\n  Auto-compact buf [████] 15%  30000 tokens",
@@ -304,28 +114,28 @@ readline.on("line", (line) => {
         respond(command.id, "prompt", true, { agentInvoked: false });
         return;
       }
-      if (command.message.startsWith("/image-report ")) {
-        const label = command.message.slice("/image-report ".length);
+      if (commandText.startsWith("/image-report ")) {
+        const label = commandText.slice("/image-report ".length);
         out({ type: "command_output", text: `IMAGE_REPORT:${label}:${JSON.stringify({ hasImages: Object.hasOwn(command, "images"), images: command.images ?? [] })}` });
         respond(command.id, "prompt", true, { agentInvoked: false });
         return;
       }
-      if (command.message.startsWith("/text-report ")) {
+      if (commandText.startsWith("/text-report ")) {
         out({ type: "command_output", text: `TEXT_REPORT:${JSON.stringify({ message: command.message, images: command.images ?? [] })}` });
         respond(command.id, "prompt", true, { agentInvoked: false });
         return;
       }
-      const local = runLocalCommand(command.message);
+      const local = runLocalCommand(commandText);
       if (local) {
         respond(command.id, "prompt", true, local);
         return;
       }
-      if (command.message === "/help") {
+      if (commandText === "/help") {
         out({ type: "command_output", text: "Fake help output" });
         respond(command.id, "prompt", true, { agentInvoked: false });
         return;
       }
-      if (command.message === "/later") {
+      if (commandText === "/later") {
         respond(command.id, "prompt", true, {});
         setTimeout(() => {
           out({ type: "command_output", text: "Delayed output" });
@@ -333,17 +143,30 @@ readline.on("line", (line) => {
         }, 10);
         return;
       }
-      respond(command.id, "prompt", true, { agentInvoked: true });
+      if (command.message === "ABORT_AT_START") {
+        // 协议条款 §14.4 / rpc-prompt-results.ts：被输入门取消的 prompt（abort 抢先于
+        // dispatch，Idle with no run since acceptance）——success ACK 后不启动模型回合，
+        // 仅补发恰一个 prompt_result{status:"aborted", agentInvoked:true, sessionSettled}。
+        respond(command.id, "prompt", true);
+        setTimeout(() => {
+          out({ type: "prompt_result", id: command.id, agentInvoked: true, status: "aborted", sessionSettled: true });
+        }, 10);
+        return;
+      }
+      // 真实核（rpc-session-host.ts success(id,"prompt")）：agent 回合的 prompt 成功响应
+      // 不带 data（本地命令才回 data.agentInvoked）。
+      respond(command.id, "prompt", true);
       setTimeout(() => {
         void runPromptTurn(command.message, command.id);
       }, 10);
       return;
     }
     case "steer":
-      respond(command.id, "steer", true, { agentInvoked: true });
-      if (holding) {
+      // 真实核 steer 成功响应不带 data。
+      respond(command.id, "steer", true);
+      if (shared.holding) {
         const steeredText = `STEERED:${command.message}${command.images?.length ? `|IMAGES:${JSON.stringify(command.images)}` : ""}`;
-        holding = false;
+        shared.holding = false;
         out({ type: "message_start", message: { role: "assistant", content: [] } });
         out({
           type: "message_update",
@@ -355,42 +178,43 @@ readline.on("line", (line) => {
       }
       return;
     case "follow_up":
-      if (holding) {
-        respond(command.id, "follow_up", true, {});
-        holding = false;
+      if (shared.holding) {
+        respond(command.id, "follow_up", true);
+        shared.holding = false;
         out({ type: "agent_end", messages: [], isTerminal: true });
         setTimeout(() => {
           void runPromptTurn(`FOLLOWEDUP:${command.message}${command.images?.length ? `|IMAGES:${JSON.stringify(command.images)}` : ""}`);
         }, 10);
         return;
       }
-      respond(command.id, "follow_up", true, { agentInvoked: true });
+      respond(command.id, "follow_up", true);
       setTimeout(() => {
         void runPromptTurn(command.message);
       }, 10);
       return;
     case "abort":
-      respond(command.id, "abort", true, {});
-      if (slowToolCallId) {
+      // 真实核 abort 成功响应不带 data。
+      respond(command.id, "abort", true);
+      if (shared.slowToolCallId) {
         // 镜像真实 omp v18.3.5+fork.265 中断序列（P2 验收 D1）：
         // 先 end(isError:true)，再补一条带 partialResult 的尾随 tool_execution_update。
-        out({ type: "tool_execution_end", toolCallId: slowToolCallId, toolName: "bash", result: { content: [{ type: "text", text: "Command aborted" }] }, isError: true });
+        out({ type: "tool_execution_end", toolCallId: shared.slowToolCallId, toolName: "bash", result: { content: [{ type: "text", text: "Command aborted" }] }, isError: true });
         out({
           type: "tool_execution_update",
-          toolCallId: slowToolCallId,
+          toolCallId: shared.slowToolCallId,
           toolName: "bash",
           args: { command: "sleep 60" },
           partialResult: { content: [{ type: "text", text: "[Command cancelled]\n" }] },
         });
-        slowToolCallId = null;
+        shared.slowToolCallId = null;
       }
       out({ type: "agent_end", messages: [], isTerminal: true });
       return;
     case "set_model":
-      setModelCalls += 1;
-      currentModel = { provider: command.provider, id: command.modelId };
+      shared.setModelCalls += 1;
+      shared.currentModel = { provider: command.provider, id: command.modelId };
       respond(command.id, "set_model", true, {});
-      out({ type: "model_changed", model: currentModel });
+      out({ type: "model_changed", model: shared.currentModel });
       return;
     case "set_thinking_level":
       respond(command.id, "set_thinking_level", true, {});
@@ -400,7 +224,7 @@ readline.on("line", (line) => {
       respond(command.id, "compact", true, {});
       return;
     case "set_auto_compaction":
-      autoCompactionEnabled = command.enabled;
+      shared.autoCompactionEnabled = command.enabled;
       respond(command.id, "set_auto_compaction", true, {});
       return;
     case "set_session_name":

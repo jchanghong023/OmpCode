@@ -64,6 +64,35 @@ test("项目模式 + 斜杠命令 + 带图片 → 不发送并明确失败（omp
   assert.match(outcome.error ?? "", /斜杠命令暂不支持同时发送图片附件/);
 });
 
+// A6：文本附件由 ompAttachmentInput 拼进 prompt 文本（v4Commands 层拿不到 projectMode），
+// "/xxx"+文本附件的 <attached_file> 块会污染 execute_command 命令文本；dispatch 层按
+// 拼接标记识别并拒绝（错误码沿用图片版）。
+const SLASH_WITH_TEXT_ATTACHMENT = [
+  "/compact",
+  `<attached_file name="notes.md" mime="text/markdown">`,
+  "内容",
+  "</attached_file>",
+].join("\n\n");
+
+test("项目模式 + 斜杠命令 + 拼接文本附件 → 拒绝（omp_command_attachments_unsupported）", async () => {
+  const process = new StubProcess(true);
+  const outcome = await dispatch(process, { text: SLASH_WITH_TEXT_ATTACHMENT });
+  assert.equal(process.sent.length, 0);
+  assert.equal(outcome.success, false);
+  assert.equal(outcome.code, "omp_command_attachments_unsupported");
+  assert.match(outcome.error ?? "", /斜杠命令暂不支持同时发送文本附件/);
+});
+
+test("项目模式 + 普通消息 + 拼接文本附件 → 照常作为 prompt 文本发送", async () => {
+  const process = new StubProcess(true);
+  const outcome = await dispatch(process, {
+    text: `总结一下\n\n<attached_file name="a.txt" mime="text/plain">\nx\n</attached_file>`,
+  });
+  assert.equal(outcome.success, true);
+  assert.equal(process.sent.length, 1);
+  assert.equal(process.sent[0]?.type, "prompt");
+});
+
 test("项目模式 + 普通文本 → prompt 携带 inputMode text 与 images", async () => {
   const process = new StubProcess(true);
   const outcome = await dispatch(process, { text: "总结一下", images: [IMAGE] });

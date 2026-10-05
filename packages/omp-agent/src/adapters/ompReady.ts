@@ -3,7 +3,7 @@
 
 import { createInterface } from "node:readline";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
-import { ompReadyFrameSchema } from "../domain/ompFrames.js";
+import { ompReadyFrameSchema, type OmpReadyFrame } from "../domain/ompFrames.js";
 import type { OmpCommandOutcome } from "../app/ports.js";
 import { logger } from "./logger.js";
 import { parseJson } from "./jsonl.js";
@@ -21,14 +21,15 @@ export interface OmpNegotiationHooks {
 }
 
 /**
- * 等待 omp ready 帧并触发协议协商。resolve 于 ready 到达；协商 fire-and-forget——
+ * 等待 omp ready 帧并触发协议协商。resolve 于 ready 到达，携带解析后的 ready 帧
+ * （进程层据此接线 v2 分片重组上限 maxReassembledFrameBytes）；协商 fire-and-forget——
  * omp 侧对 fork 命令/帧按协商结果门控，本函数只记录能力事实，不阻塞启动。
  */
 export function awaitOmpReady(
   child: ChildProcessWithoutNullStreams,
   hooks: OmpNegotiationHooks,
-): Promise<void> {
-  return new Promise<void>((resolve, reject) => {
+): Promise<OmpReadyFrame> {
+  return new Promise<OmpReadyFrame>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error("omp core ready timeout")), READY_TIMEOUT_MS);
     const onLine = (line: string) => {
       const frame = parseJson(line);
@@ -61,7 +62,7 @@ export function awaitOmpReady(
         void negotiateV2(hooks, versions);
       }
       readline.removeListener("line", onLine);
-      resolve();
+      resolve(readyParsed.data);
     };
     const readline = createInterface({ input: child.stdout });
     readline.on("line", onLine);

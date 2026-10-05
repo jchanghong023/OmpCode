@@ -1,6 +1,12 @@
 // fake omp 项目模式的项目级命令（从 fakeOmpProject.mjs 拆出，架构 max-file-lines）：
 // 会话生命周期、目录/补全/执行、技能、模型角色、子代理目录与控制。
 
+import {
+  createSubagentEntries,
+  DURABLE_SUBAGENTS,
+  handleSubagentMessagesCommand,
+} from "./fakeOmpProjectSubagentRecords.mjs";
+
 export function createProjectCommandHandler(deps) {
   const {
     sessions,
@@ -78,57 +84,7 @@ export function createProjectCommandHandler(deps) {
     },
   ];
 
-  const SUBAGENTS = {
-    finished: [
-      {
-        subagentId: "sa-done",
-        name: "scout",
-        description: "finished scout",
-        task: "scan",
-        status: "completed",
-        recordReadable: true,
-        parentToolCallId: "tc-0",
-        lastUpdate: "2026-09-29T00:00:00.000Z",
-        availableActions: [],
-      },
-    ],
-  };
-
-  function subagentEntries() {
-    // 条目带固定时间戳：真实 omp 记录携带时间戳；缺时间戳会让 rowsFromOmpEntries 回退
-    // Date.now()，使全量重读的确定性重建产生 createdAt 漂移（重读即触发全量 upsert）。
-    const entries = [
-      {
-        type: "message",
-        message: {
-          role: "user",
-          timestamp: 1727500000000,
-          content: [{ type: "text", text: "scan the repo" }],
-        },
-      },
-      {
-        type: "message",
-        message: {
-          role: "assistant",
-          timestamp: 1727500000001,
-          content: [{ type: "text", text: "scanned 3 files" }],
-        },
-      },
-    ];
-    // 同一 subagentId 的第 2+ 轮运行各追加一条尾记录（确定性内容）：驱动子代理详情视图
-    // 的实时重读合并断言——重读返回的行数必须随记录增长，且旧行内容保持不变。
-    for (let run = 2; run <= (facts.subagentSpawns ?? 0); run += 1) {
-      entries.push({
-        type: "message",
-        message: {
-          role: "assistant",
-          timestamp: 1727500000000 + run,
-          content: [{ type: "text", text: `scanned ${1 + run} files in run ${run}` }],
-        },
-      });
-    }
-    return entries;
-  }
+  const subagentEntries = createSubagentEntries(facts);
 
   return function handleProjectCommand(command) {
     const id = command.id;
@@ -151,8 +107,10 @@ export function createProjectCommandHandler(deps) {
         });
       }
       case "list_sessions":
+        // 真实核只回 sessions 键（rpc-project-sessions.ts RpcProjectSessionListResult），
+        // 不带 items；载荷结构与分页修订不变。
         return response(id, command.type, true, {
-          items: [...sessions.entries()].map(([sessionId, session]) => ({
+          sessions: [...sessions.entries()].map(([sessionId, session]) => ({
             sessionId,
             loadState: "loaded",
             runState: session.streaming ? "streaming" : "idle",
@@ -195,13 +153,29 @@ export function createProjectCommandHandler(deps) {
           revision,
         });
       }
-      case "rename_session":
+      case "rename_session": {
+        // 真实语义（rpc-project-sessions.rename）：按稳定 ID 改名，loaded 与未 loaded 都支持；
+        // 未知会话 not_found。记录事实供 E2E 断言冷会话改名确实下发了 rename_session。
+        facts.renames.push({ sessionId: command.sessionId, name: command.name });
+        if (!sessions.has(command.sessionId)) {
+          return response(
+            id,
+            command.type,
+            false,
+            undefined,
+            `Unknown session: ${command.sessionId}`,
+            "not_found",
+          );
+        }
+        const session = ensureSession(command.sessionId);
+        if (typeof command.name === "string") session.name = command.name;
         return response(id, command.type, true, {
           sessionId: command.sessionId,
           name: command.name,
-          loadState: sessions.has(command.sessionId) ? "loaded" : "not_loaded",
+          loadState: "loaded",
           revision,
         });
+      }
       case "get_available_commands":
         return response(id, command.type, true, { commands: COMMAND_CATALOG, revision });
       case "complete_command": {
@@ -353,21 +327,43 @@ export function createProjectCommandHandler(deps) {
             "invalid_params",
           );
         }
-        if (command.status === "finished") {
-          return response(id, command.type, true, { items: SUBAGENTS.finished, revision });
+        // 事实记录：E2E 在 fake 进程退出后读 facts.json，断言适配器透传的 status/cursor/limit。
+        facts.subagentLists.push({
+          sessionId: command.sessionId,
+          status: command.status ?? null,
+          cursor: command.cursor ?? null,
+          limit: command.limit ?? null,
+        });
+        // 真实语义（rpc-project-subagents.list）：status="running" 只回 live 行（fake 无项目级
+        // live 注册表，恒空）；status="finished" 或缺省回 durable 目录（live+durable 合并目录
+        // 的 durable 部分）。durable 目录支持 cursor/limit 分页（默认页 20，返回 nextCursor）。
+        if (command.status === "running") {
+          return response(id, command.type, true, { items: [], revision });
         }
-        return response(id, command.type, true, { items: [], revision });
+        const offset =
+          Number.isFinite(Number(command.cursor)) && Number(command.cursor) > 0
+            ? Math.trunc(Number(command.cursor))
+            : 0;
+        const limit =
+          Number.isFinite(Number(command.limit)) && Number(command.limit) > 0
+            ? Math.trunc(Number(command.limit))
+            : 20;
+        const page = DURABLE_SUBAGENTS.finished.slice(offset, offset + limit);
+        const hasMore = offset + page.length < DURABLE_SUBAGENTS.finished.length;
+        return response(id, command.type, true, {
+          items: page,
+          ...(hasMore ? { nextCursor: String(offset + page.length) } : {}),
+          revision,
+        });
       }
       case "get_subagent_messages":
-        return response(id, command.type, true, {
-          subagentId: command.subagentId,
-          sessionFile: sessionFileOf(`${command.sessionId}-${command.subagentId}`),
-          fromByte: 0,
-          nextByte: 512,
-          reset: false,
-          hasMore: false,
-          entries: subagentEntries(),
-          messages: subagentEntries().map((entry) => entry.message),
+        return handleSubagentMessagesCommand({
+          id,
+          command,
+          response,
+          facts,
+          subagentEntries,
+          sessionFileOf,
         });
       case "control_subagent": {
         facts.controls.push({
@@ -376,10 +372,13 @@ export function createProjectCommandHandler(deps) {
           action: command.action,
           message: command.message,
         });
+        // 真值（rpc-project-subagents.control）：stop → "stopping"（中止已请求，非同步完成）；
+        // send_message → "sent" + receipts（送达回执；送达 ≠ 已处理）。
         return response(id, command.type, true, {
           subagentId: command.subagentId,
           action: command.action,
-          status: command.action === "stop" ? "stopped" : "sent",
+          status: command.action === "stop" ? "stopping" : "sent",
+          detail: command.action === "stop" ? "abort requested" : undefined,
           receipts:
             command.action === "send_message"
               ? [{ to: command.subagentId, outcome: "delivered" }]

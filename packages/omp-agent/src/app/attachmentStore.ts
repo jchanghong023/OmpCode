@@ -139,10 +139,13 @@ export class AttachmentStore {
   ompImagesOf(ref: string): { type: "image"; data: string; mimeType: string }[] {
     const attachment = this.committed.get(ref);
     const bytes = this.bytesOf(ref);
-    if (!attachment || !bytes || !attachment.mime.startsWith("image/")) {
+    // S5-7 依据：与 ompAttachmentInput 文本路径一致，规范化 mimeType 参数后缀
+    // （如 "image/png;charset=binary" → "image/png"），不把带参数的 mime 原样透传 omp。
+    const mime = attachment?.mime.split(";", 1)[0]?.trim().toLowerCase() ?? "";
+    if (!attachment || !bytes || !mime.startsWith("image/")) {
       return [];
     }
-    return [{ type: "image", data: bytes.toString("base64"), mimeType: attachment.mime }];
+    return [{ type: "image", data: bytes.toString("base64"), mimeType: mime }];
   }
 
   private refOf(uploadId: string): string {

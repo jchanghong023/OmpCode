@@ -43,11 +43,14 @@ export const ompProjectSessionSummarySchema = z
   .passthrough();
 export type OmpProjectSessionSummary = z.infer<typeof ompProjectSessionSummarySchema>;
 
-/** 分页信封（list_sessions / get_subagents 共用）。 */
+/** 分页信封（list_sessions / get_subagents 共用）。
+ * 修复（协议对比）：真实 omp list_sessions 返回 sessions 键、get_subagents 返回
+ * items 键（rpc-project-sessions.ts / rpc-project-subagents.ts），两键都声明。 */
 export const ompProjectPageSchema = <T extends z.ZodTypeAny>(item: T) =>
   z
     .object({
       items: z.array(item).optional(),
+      sessions: z.array(item).optional(),
       nextCursor: z.union([z.string(), z.number()]).optional(),
     })
     .passthrough();

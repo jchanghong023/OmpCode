@@ -242,6 +242,8 @@ const ompEnUSOverrides: Record<string, string> = {
   "ompSubagentControl.failed": "Failed",
   "ompModelRoles.fromAgent":
     "Full role catalog from the OMP runtime (unconfigured roles included); saving is automatic on selection.",
+  "ompModelRoles.loadUnavailable":
+    "OMP role catalog is temporarily unavailable: the project process may be starting or unavailable",
   "ompModelRoles.saveFailed": "Save failed",
   "ompModelRoles.saving": "Saving…",
   "ompModelRoles.saved": "Saved",

@@ -3,6 +3,10 @@ import type { AttachmentStore } from "./attachmentStore.js";
 
 const MAX_TEXT_FILE_BYTES = 256 * 1024;
 const MAX_TEXT_TOTAL_BYTES = 512 * 1024;
+// S5-5 依据：omp rpc-fork-attachments MAX_ATTACHMENTS=8（resolveRpcAttachments 超限抛
+// RpcAttachmentError "attachment_limit"）——该上限约束 v3 attachments 数组；本适配器经
+// images 载体发送（omp 侧无数量检查），此处为对齐同一上限的本地保守预检，给明确错误。
+const MAX_TOTAL_ATTACHMENTS = 8;
 
 type OmpImage = { type: "image"; data: string; mimeType: string };
 type PreparedInput = { ok: true; text: string; images: OmpImage[] } | { ok: false; error: string };
@@ -26,6 +30,13 @@ export function prepareOmpAttachmentInput(
   refs: readonly AttachmentRef[] | undefined,
   store: AttachmentStore,
 ): PreparedInput {
+  // S5-5：附件总数（image+text 合计）预检；超限整条 prompt 在 omp 侧必被拒。
+  if ((refs?.length ?? 0) > MAX_TOTAL_ATTACHMENTS) {
+    return {
+      ok: false,
+      error: `too many attachments: ${refs!.length} (limit ${MAX_TOTAL_ATTACHMENTS})`,
+    };
+  }
   const sections: string[] = [];
   const images: OmpImage[] = [];
   let textBytes = 0;
@@ -66,7 +77,10 @@ export function prepareOmpAttachmentInput(
   }
   return {
     ok: true,
-    text: sections.length ? `${prompt}\n\n${sections.join("\n\n")}` : prompt,
+    // 优化项（S5-8）依据：omp 语义为 `${textPrefix}${message}`（rpc-session-host
+    // #resolveCommandAttachments → resolveRpcAttachments 的 textPrefix 以 "\n\n" 结尾前置），
+    // 附件上下文先于用户消息；此前后置拼接与 omp 原生顺序不一致。
+    text: sections.length ? `${sections.join("\n\n")}\n\n${prompt}` : prompt,
     images,
   };
 }

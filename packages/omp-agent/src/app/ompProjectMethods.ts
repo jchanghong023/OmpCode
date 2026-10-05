@@ -131,16 +131,29 @@ export function createOmpProjectMethodHandlers(
         throw new ProtocolError(-32000, outcomeMessage(outcome, "control_subagent failed"));
       }
       const record = (outcome.data ?? {}) as Record<string, unknown>;
+      // 状态白名单对齐真值（rpc-project-subagents.control）：stop→"stopping"、send_message→
+      // "sent"；未知词回落 "accepted"（适配器不得伪造同步完成的 "stopped"）。
+      // receipts（send_message 送达回执，Delivery ≠ processing）最小透传，供宿主呈现送达详情。
+      const receipts = Array.isArray(record.receipts)
+        ? record.receipts.filter(
+            (item): item is { to: string; outcome: string; error?: string } => {
+              if (typeof item !== "object" || item === null) return false;
+              const row = item as { to?: unknown; outcome?: unknown };
+              return typeof row.to === "string" && typeof row.outcome === "string";
+            },
+          )
+        : undefined;
       return {
         subagentId:
           typeof record.subagentId === "string" ? record.subagentId : parsed.data.subagentId,
         action: parsed.data.action,
-        status: (["sent", "queued", "stopped", "stopping", "accepted"] as const).includes(
+        status: (["sent", "queued", "stopping", "accepted"] as const).includes(
           record.status as never,
         )
-          ? (record.status as "sent" | "queued" | "stopped" | "stopping" | "accepted")
+          ? (record.status as "sent" | "queued" | "stopping" | "accepted")
           : "accepted",
         ...(typeof record.detail === "string" ? { detail: record.detail } : {}),
+        ...(receipts && receipts.length > 0 ? { receipts } : {}),
       };
     },
   };

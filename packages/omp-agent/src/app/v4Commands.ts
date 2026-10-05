@@ -16,6 +16,7 @@ import { ProtocolError } from "./errors.js";
 import type { SessionRegistry } from "./sessionRegistry.js";
 import type { ConversationEngine } from "./conversationEngine.js";
 import { prepareOmpAttachmentInput } from "./ompAttachmentInput.js";
+import { engineModelSelectionOf } from "./ompEngineProcess.js";
 
 const UNSUPPORTED = "fault.command.unsupportedByOmpCore";
 const CAP = PROTOCOL_V4_LIMITS.idempotencyTablePerSession;
@@ -259,10 +260,24 @@ export class V4CommandService {
         });
       }
       case "renameSession": {
-        const payload =
-          envelope.payload as import("@zcode/shared/zcode-protocol-v4").CommandPayloadMap["renameSession"];
-        const engine = this.requireSessionEngine(envelope.sessionId);
-        await engine.rename(payload.title);
+        const payload = envelope.payload as CommandPayloadMap["renameSession"];
+        const sessionId = this.requireSessionId(envelope.sessionId);
+        const engine = this.context.registry.getEngine(sessionId);
+        if (engine) {
+          await engine.rename(payload.title);
+          return this.ack(envelope, "accepted");
+        }
+        // 冷会话（无引擎）改名：真实 omp 的 rename_session 支持未加载会话按稳定 ID 改名
+        // （rpc-project-sessions.rename），此前冷会话被 -32004 拒；项目模式不可用（旧核）
+        // 维持既有错误语义，omp 失败透传错误码（如 not_found）。
+        const outcome = await this.context.registry.renameColdSession(sessionId, payload.title);
+        if (!outcome.ok) {
+          if (outcome.unsupported) this.requireSessionEngine(envelope.sessionId);
+          throw new ProtocolError(
+            -32004,
+            `session rename failed: ${outcome.error ?? "unknown error"}${outcome.code ? ` [${outcome.code}]` : ""}`,
+          );
+        }
         return this.ack(envelope, "accepted");
       }
       case "deleteSession": {
@@ -363,31 +378,6 @@ function interactionAnswerOf(
     };
   }
   return { action: "cancel" };
-}
-
-/** UI 提交的 ModelSelection（providerId/modelId/options.reasoningLevel）→ omp set_model 参数。 */
-function engineModelSelectionOf(
-  selection:
-    | { providerId?: string; modelId?: string; options?: { reasoningLevel?: string } }
-    | undefined
-    | null,
-): { provider: string; model: string; thought?: string } | undefined {
-  if (
-    !selection ||
-    typeof selection.providerId !== "string" ||
-    typeof selection.modelId !== "string"
-  ) {
-    return undefined;
-  }
-  if (selection.providerId.length === 0 || selection.modelId.length === 0) {
-    return undefined;
-  }
-  const thought =
-    typeof selection.options?.reasoningLevel === "string" &&
-    selection.options.reasoningLevel.length > 0
-      ? selection.options.reasoningLevel
-      : undefined;
-  return { provider: selection.providerId, model: selection.modelId, thought };
 }
 
 export { commandPayloadSchemas };

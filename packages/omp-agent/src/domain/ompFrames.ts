@@ -1,8 +1,12 @@
 // omp RPC-UI 线协议帧 schema（对端 = 内嵌 omp 二进制，`omp --mode rpc-ui`）。
 // 契约来源：oh-my-pi 仓库 docs/rpc.md 与 packages/coding-agent/src/modes/rpc/rpc-types.ts。
 // 事件载荷允许透传未知字段（omp 自身演进不应导致适配器拒帧），但我们消费的字段全部显式声明。
+// 本轮新增的事件类 schema 在 ompEventFrames.ts（架构 maxFileLines=400）；此处转出保路径。
 
 import { z } from "zod";
+import { ompAutoCompactionEndEventSchema, ompQueueUpdateEventSchema } from "./ompEventFrames.js";
+
+export * from "./ompEventFrames.js";
 
 // ── 启动帧 ──
 export const ompReadyFrameSchema = z.object({
@@ -41,19 +45,10 @@ export type OmpResponseFrame = z.infer<typeof ompResponseFrameSchema>;
 export const ompExtensionUiRequestFrameSchema = z.object({
   type: z.literal("extension_ui_request"),
   id: z.string(),
-  method: z.enum([
-    "select",
-    "confirm",
-    "input",
-    "editor",
-    "cancel",
-    "notify",
-    "setStatus",
-    "setWidget",
-    "setTitle",
-    "set_editor_text",
-    "open_url",
-  ]),
+  // method 放宽为字符串（修复 A7）：封闭枚举缺 omp 真实值 "ask"（rpc-types.ts
+  // RpcExtensionUIRequest，set_ask_dialog 后下发）且 omp 会继续演进新增 method；
+  // 未知 method 由交互代理按取消回执（fail-closed），绝不因放宽而放行。
+  method: z.string(),
   title: z.string().optional(),
   message: z.string().optional(),
   prompt: z.string().optional(),
@@ -66,6 +61,14 @@ export const ompExtensionUiRequestFrameSchema = z.object({
   timeout: z.number().optional(),
   // v3（rpc-ui-protocol 4.3）：input/editor 的密码框渲染标记；login secret 输入解禁。
   sensitive: z.boolean().optional(),
+  // S5-2 依据：omp 主动取消帧 {type:"extension_ui_request", id:<新id>, method:"cancel",
+  // targetId:<原请求id>}（rpc-types.ts RpcExtensionUIRequest cancel 变体；rpc-session-host
+  // 的 cancelHostDialog/requestRpcEditor onAbort 与 rpc-fork-ask 的 onAbort 均发该帧）。
+  // 此前 zod 剥离 targetId，代理无法按原请求 id 定位等待中的交互，宿主交互卡残留至本地兜底超时。
+  targetId: z.string().optional(),
+  // S5-4 依据：requestRpcEditor 发 {method:"editor", title, prefill, promptStyle}
+  // （rpc-session-host.ts），prefill 是编辑器初始文本；剥离会让宿主弹空框。
+  prefill: z.string().optional(),
 });
 export type OmpExtensionUiRequestFrame = z.infer<typeof ompExtensionUiRequestFrameSchema>;
 
@@ -180,7 +183,7 @@ export const ompSessionEventFrameSchema = z.discriminatedUnion("type", [
     isError: z.boolean().optional(),
   }),
   z.object({ type: z.literal("auto_compaction_start") }),
-  z.object({ type: z.literal("auto_compaction_end") }),
+  ompAutoCompactionEndEventSchema,
   z.object({
     type: z.literal("model_changed"),
     model: z
@@ -194,15 +197,9 @@ export const ompSessionEventFrameSchema = z.discriminatedUnion("type", [
     level: z.string().optional(),
     message: z.string().optional(),
   }),
+  ompQueueUpdateEventSchema,
 ]);
 export type OmpSessionEventFrame = z.infer<typeof ompSessionEventFrameSchema>;
-
-export const ompPromptResultFrameSchema = z.object({
-  type: z.literal("prompt_result"),
-  id: z.string().optional(),
-  agentInvoked: z.boolean().optional(),
-});
-export type OmpPromptResultFrame = z.infer<typeof ompPromptResultFrameSchema>;
 
 // ── 内置斜杠命令侧信道（docs/rpc.md「Builtin slash-command side channels」）──
 // 本地命令（/help、/title 等）不产生 agent 生命周期事件：输出走 command_output，
@@ -256,7 +253,10 @@ export const ompSubagentFrameSchema = z.discriminatedUnion("type", [
       .object({
         id: z.string().min(1),
         agent: z.string().min(1),
-        status: z.enum(["started", "completed", "failed", "aborted"]),
+        // omp 会继续演进新增状态词（同 A7 放宽理由），封闭枚举会让整帧被丢弃、目录状态
+        // 滞留上一态；放宽为字符串，未知词由消费侧（ompSubagentBridge.subagentStatus）
+        // 按 C2 规则收敛到终态，绝不误标 running。
+        status: z.string().min(1),
         description: z.string().optional(),
         sessionFile: z.string().optional(),
         parentToolCallId: z.string().optional(),
@@ -362,6 +362,16 @@ export const ompStateDataSchema = z
     sessionName: z.string().nullable().optional(),
     messageCount: z.number().optional(),
     autoCompactionEnabled: z.boolean().optional(),
+    // omp 队列事实（rpc-types.ts RpcSessionState.queuedMessages）：steering/followUp 队列
+    // 文本快照。字段 optional 兼容旧核；消费侧做队列对账，形状不明时跳过（绝不误关）。
+    queuedMessages: z
+      .object({
+        steering: z.array(z.string()).optional(),
+        followUp: z.array(z.string()).optional(),
+        liveSteered: z.number().optional(),
+      })
+      .passthrough()
+      .optional(),
     contextUsage: z
       .object({
         tokens: z.number().optional(),

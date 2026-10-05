@@ -1,8 +1,9 @@
 // omp 会话存储只读扫描：当前 profile 的 agent/sessions/<encoded-cwd>/*.jsonl。
 // 目录名编码与 oh-my-pi session-paths.ts 保持一致（home 前缀 `-`、tmp 前缀 `-tmp-`、绝对路径 `--…--`）。
-// PI_CONFIG_DIR 可整体重定位（omp 同源），生产不设置。
+// PI_CONFIG_DIR 可整体重定位（omp 同源），生产不设置；POSIX 上 $XDG_DATA_HOME/omp
+// 迁移目录存在时 sessions 根对齐 omp DirResolver XDG 规则（见 ompSessionsRoot）。
 
-import { createReadStream } from "node:fs";
+import { createReadStream, existsSync } from "node:fs";
 import { readdir, realpath, rm, stat } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
@@ -12,18 +13,53 @@ import type { OmpStorePort, OmpStoreSessionSummary } from "../app/ports.js";
 import { titleFromOmpEntries } from "../domain/coldHistory.js";
 import { logger } from "./logger.js";
 
-function configDir(env: NodeJS.ProcessEnv): string {
+function configDirFor(env: NodeJS.ProcessEnv, home: string): string {
   const configured = env.PI_CONFIG_DIR?.trim();
   // omp 把相对 PI_CONFIG_DIR 解析在用户主目录下；Node 的相对 join 原先却
   // 解析在 workspace cwd 下，导致模型运行成功而冷会话扫描永久找不到文件。
-  return configured ? resolve(homedir(), configured) : join(homedir(), ".omp");
+  return configured ? resolve(home, configured) : join(home, ".omp");
+}
+
+/**
+ * omp sessions 目录解析（S1-3，对齐 omp DirResolver XDG 规则，v18.4.8+fork.278
+ * packages/utils/src/dirs.ts）。platform/home/exists 注入仅供 UT；生产路径与本函数唯一。
+ * omp 精确条件（已按 git show 核对）：
+ * - 仅 linux/darwin 参与 XDG，win32 不受影响；
+ * - 仅 $XDG_DATA_HOME（data 类别；sessions 归 data）非空时参与，无 trim；
+ * - 默认 profile 锚定 $XDG_DATA_HOME/omp，命名 profile 锚定 $XDG_DATA_HOME/omp/profiles/<profile>，
+ *   且锚点目录必须真实存在（omp config init-xdg 迁移完成后才生效），否则回退 ~/.omp 布局；
+ * - XDG 生效时扁平化 agent/ 前缀：sessions 目录直接挂在锚点下（$XDG_DATA_HOME/omp/sessions）。
+ * PI_CODING_AGENT_DIR 覆盖会关闭 omp 的 XDG 分支，但本适配层历来未消费该变量，维持现状不扩scope。
+ */
+export function ompSessionsRoot(options: {
+  env: NodeJS.ProcessEnv;
+  platform: NodeJS.Platform;
+  home: string;
+  exists: (path: string) => boolean;
+}): string {
+  const { env, platform, home, exists } = options;
+  const profile = resolveOmpProfileFromEnv(env);
+  const xdgDataHome = env.XDG_DATA_HOME;
+  if ((platform === "linux" || platform === "darwin") && xdgDataHome) {
+    const appRoot = join(xdgDataHome, "omp");
+    const anchor = profile === "default" ? appRoot : join(appRoot, "profiles", profile);
+    if (exists(anchor)) {
+      return join(anchor, "sessions");
+    }
+  }
+  const configRoot = configDirFor(env, home);
+  return profile === "default"
+    ? join(configRoot, "agent", "sessions")
+    : join(configRoot, "profiles", profile, "agent", "sessions");
 }
 
 function sessionsRoot(env: NodeJS.ProcessEnv): string {
-  const profile = resolveOmpProfileFromEnv(env);
-  return profile === "default"
-    ? join(configDir(env), "agent", "sessions")
-    : join(configDir(env), "profiles", profile, "agent", "sessions");
+  return ompSessionsRoot({
+    env,
+    platform: process.platform,
+    home: homedir(),
+    exists: (path) => existsSync(path),
+  });
 }
 
 async function resolveEquivalentPath(value: string): Promise<string> {
@@ -184,15 +220,6 @@ function sessionIdOfFileName(name: string): string | null {
   // 字符类必须包含 Z，否则所有会话在冷扫描中被静默跳过（GUI 恢复会话 recoveryFailed 根因）。
   const match = /^[0-9T:.+-Z]+_(.+)\.jsonl$/.exec(name);
   return match?.[1] ?? null;
-}
-
-/** 读标题（title_change / 首条用户消息）；失败返回原文 null。 */
-export async function readSessionTitle(sessionPath: string): Promise<string | null> {
-  try {
-    return titleFromOmpEntries(await readEntries(sessionPath, 200));
-  } catch {
-    return null;
-  }
 }
 
 /** JSONL 文件只保留解析后的对象；limit 用于标题读取，完整历史不截断。 */

@@ -1,13 +1,21 @@
 // omp AgentSessionEvent → ConversationProjection 的翻译器。
 // 纯逻辑：不持有 IO；交互请求（extension_ui_request）不在此处理，由引擎层接管。
 
-import type { OmpSessionEventFrame, OmpAssistantMessageEvent } from "./ompFrames.js";
+import type { OmpSessionEventFrame, OmpAssistantMessageEvent, OmpStateData } from "./ompFrames.js";
 import type { ConversationProjection } from "./conversationProjection.js";
 
 interface ToolCallRuntime {
   toolCallId: string;
   inputJsonText: string;
   status: "inputStreaming" | "running" | "pendingApproval" | "success" | "error" | "cancelled";
+}
+
+/** 引擎侧竞态/对账钩子（A3/A5）：projector 只翻译帧，时序事实由引擎持有。 */
+export interface OmpProjectorHooks {
+  /** A5：返回在途 steer 的 guide 轮 sourceCommandId（无在途或非当前活跃轮为 null）。 */
+  steerGuideCommandId?: () => string | null;
+  /** A3：queue_update 事件到达（引擎 debounce 后回读 get_state 对账本地排队轮）。 */
+  onQueueUpdate?: () => void;
 }
 
 export class OmpEventProjector {
@@ -17,7 +25,10 @@ export class OmpEventProjector {
   private streaming = false;
   private stopRequested = false;
 
-  constructor(private readonly projection: ConversationProjection) {}
+  constructor(
+    private readonly projection: ConversationProjection,
+    private readonly hooks: OmpProjectorHooks = {},
+  ) {}
 
   get isStreaming(): boolean {
     return this.streaming;
@@ -48,6 +59,10 @@ export class OmpEventProjector {
     switch (event.type) {
       case "agent_start":
         this.projection.activateQueuedTurn();
+        // 修复（A4）：当前轮已占位而仍有排队轮——omp 核心把它们合并进本 run（停止边界
+        // dequeue followUp，见 agent-loop.ts/agent-session.ts），不会再有独立 agent_start，
+        // 必须收口为合并终态，否则永久 running。
+        this.projection.mergeQueuedTurnsIntoActive();
         this.streaming = true;
         this.stopRequested = false;
         return;
@@ -58,11 +73,23 @@ export class OmpEventProjector {
         }
         this.streaming = false;
         this.failOpenToolRows();
+        const failure = this.projection.lastError;
+        const outcome = this.stopRequested ? "interrupted" : failure ? "failed" : "success";
+        // 修复（A5）：engine 在发送 steer 的窗口内（beginUserTurn(guide) 后、响应返回前）
+        // terminal agent_end 到达时，无内容行的 guide 轮转回 queuedTurns（steer 已入 omp
+        // steering 队列，由下一个 agent_start 激活承接），仅收口被挂起的旧轮。
+        const steerGuide = this.hooks.steerGuideCommandId?.() ?? null;
+        if (
+          steerGuide !== null &&
+          this.projection.requeueActiveTurnAsQueued(outcome, failure ?? undefined)
+        ) {
+          this.stopRequested = false;
+          return;
+        }
         if (this.stopRequested) {
           this.stopRequested = false;
           this.projection.finishTurn("interrupted");
         } else {
-          const failure = this.projection.lastError;
           this.projection.finishTurn(failure ? "failed" : "success", failure ?? undefined);
         }
         return;
@@ -172,8 +199,30 @@ export class OmpEventProjector {
       case "auto_compaction_start":
         this.projection.addTimelineMarker({ type: "compact", origin: "auto", status: "running" });
         return;
-      case "auto_compaction_end":
-        this.projection.addTimelineMarker({ type: "compact", origin: "auto", status: "success" });
+      case "auto_compaction_end": {
+        // 修复（A2）：auto_compaction_end 携带结果事实（agent-session-events.ts：
+        // aborted/willRetry/errorMessage/skipped），无条件 success 会把失败/中止的自动
+        // 压缩标成成功。aborted 或带 errorMessage → failed；skipped（良性跳过）→ noop；
+        // 否则 success。aborted+willRetry → running 是前向兼容防御分支：已核对当前 omp
+        // 全部发射点（session-maintenance.ts 8 处）aborted:true 时 willRetry 恒 false，
+        // 现行行为不会进入该分支；仅当未来核引入「中止后自动重试」语义时按重试中标记
+        // （由下一次 auto_compaction_end 收口），避免把重试中的压缩误标为终态。
+        let status: "running" | "success" | "failed" | "noop";
+        if (event.aborted === true && event.willRetry === true) {
+          status = "running";
+        } else if (event.aborted === true || event.errorMessage !== undefined) {
+          status = "failed";
+        } else if (event.skipped === true) {
+          status = "noop";
+        } else {
+          status = "success";
+        }
+        this.projection.addTimelineMarker({ type: "compact", origin: "auto", status });
+        return;
+      }
+      case "queue_update":
+        // A3：队列快照事件只作对账触发器；事实以引擎 debounce 后回读的 get_state 为准。
+        this.hooks.onQueueUpdate?.();
         return;
       case "notice":
         if (event.level === "error") {
@@ -242,6 +291,22 @@ function assistantErrorOf(message: {
     code: `omp_provider_${message.errorStatus ?? "error"}`,
     message: message.errorMessage ?? `model request failed (${message.errorStatus ?? "no status"})`,
   };
+}
+
+/**
+ * get_state.queuedMessages 的防御式解析（A3）：followUp 必须是纯字符串数组（本地排队轮
+ * 对账的主队列）；steering 可选并入（A5 转回排队的 guide 轮按 steering 队列对账）。
+ * 快照缺失或形状不明返回 null——对账跳过（不确定→不动，绝不误关）。
+ */
+export function ompQueueTextsOf(state: OmpStateData): string[] | null {
+  const queued = state.queuedMessages;
+  if (!queued || typeof queued !== "object" || !Array.isArray(queued.followUp)) return null;
+  if (queued.followUp.some((text) => typeof text !== "string")) return null;
+  const texts = [...queued.followUp];
+  if (Array.isArray(queued.steering) && !queued.steering.some((text) => typeof text !== "string")) {
+    texts.unshift(...queued.steering);
+  }
+  return texts;
 }
 
 function usageOf(

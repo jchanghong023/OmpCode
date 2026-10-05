@@ -58,6 +58,15 @@ function requestQueueKey(params: unknown): string {
   return "workspace";
 }
 
+// S5-3 依据：本服务端仅发出两类反向请求——interaction/requestUserInput 与
+// interaction/requestPermission，均为交互应答类（无非交互类反向请求经过 pending 表）。
+// omp 侧权限门 await 无超时（Promise.withResolvers，仅 abort/dispose 可解）、login secret
+// 输入 timeout 600_000（rpc-session-host.ts）、ask 的 snooze（ask_pause）表示用户继续作答；
+// 原 170s 预算会在这些业务时序内把用户正在处理的审批/登录/表单自动超时，违反协议
+// §7.3「截止与暂停等已存在的业务语义归 OMP」。放宽为与 OmpInteractionProxy 的
+// INTERACTION_WAIT_BUDGET_MS 一致的宽裕兜底预算（仅防泄漏；主收口是 dispose/close）。
+const INTERACTION_REVERSE_REQUEST_TIMEOUT_MS = 30 * 60_000;
+
 export class ProtocolServer implements HostGateway {
   private readonly options: ProtocolServerOptions;
   private pending = new Map<string, PendingReverseRequest>();
@@ -264,7 +273,7 @@ export class ProtocolServer implements HostGateway {
       const timer = setTimeout(() => {
         this.pending.delete(params.requestId);
         reject(new Error("host interaction timeout"));
-      }, 170_000);
+      }, INTERACTION_REVERSE_REQUEST_TIMEOUT_MS);
       timer.unref?.();
       this.pending.set(params.requestId, {
         resolve: (result) => resolve(userInputAnswerOf(result)),
@@ -306,7 +315,7 @@ export class ProtocolServer implements HostGateway {
       const timer = setTimeout(() => {
         this.pending.delete(params.requestId);
         reject(new Error("host permission timeout"));
-      }, 170_000);
+      }, INTERACTION_REVERSE_REQUEST_TIMEOUT_MS);
       timer.unref?.();
       this.pending.set(params.requestId, {
         resolve: (result) => resolve(permissionAnswerOf(result)),

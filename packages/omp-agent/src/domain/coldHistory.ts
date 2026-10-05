@@ -102,11 +102,72 @@ export function transcriptFromOmpEntries(entries: readonly unknown[]): string {
   return parts.join("\n\n").slice(0, 20_000);
 }
 
+/**
+ * S7-3 预扫描：文件内全部 assistant toolCall id 与已落盘 toolResult id（完成事实）。
+ * 配对只承认「结果已写盘」；进程崩溃时文件里只有 toolCall 没有 toolResult。
+ */
+function collectToolCallPairing(entries: readonly unknown[]): {
+  calledIds: Set<string>;
+  resultIds: Set<string>;
+} {
+  const calledIds = new Set<string>();
+  const resultIds = new Set<string>();
+  for (const entry of entries) {
+    const record = object(entry);
+    if (record?.type !== "message") continue;
+    const message = object(record.message);
+    if (!message) continue;
+    if (message.role === "assistant" && Array.isArray(message.content)) {
+      for (const raw of message.content) {
+        const block = object(raw);
+        if (block?.type === "toolCall" && typeof block.id === "string") calledIds.add(block.id);
+      }
+    } else if (message.role === "toolResult" && typeof message.toolCallId === "string") {
+      resultIds.add(message.toolCallId);
+    }
+  }
+  return { calledIds, resultIds };
+}
+
+/**
+ * S7-3 消费 omp 崩溃退出诊断（exit-diagnostics.ts 语义）：最后一条 session_exit custom
+ * 条目的 data.pendingToolCalls。agent-session.ts teardown 时以 collectPendingToolCalls
+ * 全分支回放写入，且只在非空时落盘（正常收尾无该字段）。
+ */
+function collectExitPendingToolCallIds(entries: readonly unknown[]): Set<string> {
+  const ids = new Set<string>();
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const record = object(entries[index]);
+    if (record?.type !== "custom" || record.customType !== "session_exit") continue;
+    const data = object(record.data);
+    const pending = Array.isArray(data?.pendingToolCalls) ? data.pendingToolCalls : [];
+    for (const raw of pending) {
+      const item = object(raw);
+      if (item && typeof item.toolCallId === "string") ids.add(item.toolCallId);
+    }
+    return ids;
+  }
+  return ids;
+}
+
 export function rowsFromOmpEntries(
   entries: unknown[],
   subagentTranscripts: ReadonlyMap<string, string> = new Map(),
 ): ConversationRow[] {
+  // 修复（S7-3，§8.2/§15.2(5)）：中断集合 = omp 显式退出诊断（session_exit.pendingToolCalls
+  // 可消费则优先并入）∪ 配对扫描出的无完成事实调用。已落盘 toolResult 的完成事实恒胜出
+  // （成功/失败按 isError）；无完成事实一律收尾为中断终态 cancelled——原先硬编码 success
+  // 会把崩溃时从未执行完的命令冷恢复成绿色成功。选 cancelled 对齐 fork 既有约定
+  // （ompProjectChannel C2：interrupted/aborted 无完成事实 → cancelled）与 omp 恢复语义
+  // （createInterruptedTurnAbortMessage 的「上一进程在完成前退出」= stopReason aborted）。
+  const { calledIds, resultIds } = collectToolCallPairing(entries);
+  const interruptedIds = collectExitPendingToolCallIds(entries);
+  for (const id of calledIds) {
+    if (!resultIds.has(id)) interruptedIds.add(id);
+  }
   const rows: ConversationRow[] = [];
+  // toolResult 配对从 O(n²) rows.find 改为 Map（行为等价）。
+  const toolRows = new Map<string, Extract<ConversationRow, { kind: "toolCall" }>>();
   const agents = coldSubagents(entries);
   const context: ColdContext = { sessionId: "cold", nextRowId: 1, createdAtSeq: 1, turnCounter: 0 };
   let currentTurnId = "turn-cold-0";
@@ -178,22 +239,22 @@ export function rowsFromOmpEntries(
               ),
             );
           } else if (block.type === "toolCall" && typeof block.id === "string") {
-            rows.push(
-              makeRow(
-                context,
-                currentTurnId,
-                `tool-${block.id}`,
-                {
-                  kind: "toolCall",
-                  toolCallId: block.id,
-                  toolName: typeof block.name === "string" ? block.name : "unknown",
-                  status: "success",
-                  inputText: safeStringify(block.arguments),
-                  input: isJsonObject(block.arguments) ? block.arguments : undefined,
-                },
-                timestamp,
-              ),
-            );
+            const toolRow = makeRow(
+              context,
+              currentTurnId,
+              `tool-${block.id}`,
+              {
+                kind: "toolCall",
+                toolCallId: block.id,
+                toolName: typeof block.name === "string" ? block.name : "unknown",
+                status: interruptedIds.has(block.id) ? "cancelled" : "success",
+                inputText: safeStringify(block.arguments),
+                input: isJsonObject(block.arguments) ? block.arguments : undefined,
+              },
+              timestamp,
+            ) as Extract<ConversationRow, { kind: "toolCall" }>;
+            rows.push(toolRow);
+            toolRows.set(block.id, toolRow);
           }
         }
         continue;
@@ -203,10 +264,7 @@ export function rowsFromOmpEntries(
           .filter((block) => block.type === "text")
           .map((block) => block.text ?? "")
           .join("\n");
-        const existing = rows.find(
-          (row): row is Extract<ConversationRow, { kind: "toolCall" }> =>
-            row.kind === "toolCall" && row.toolCallId === message.toolCallId,
-        );
+        const existing = toolRows.get(message.toolCallId);
         if (existing) {
           existing.status = message.isError === true ? "error" : "success";
           const plan = message.toolName === "todo" ? ompTodoPlan(message.details) : null;
@@ -280,39 +338,4 @@ function isJsonObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-/** 从条目中提取标题（title_change 优先，其后首条用户消息截断）。 */
-export function titleFromOmpEntries(entries: unknown[]): string | null {
-  let firstUserText: string | null = null;
-  for (const entry of entries) {
-    if (typeof entry !== "object" || entry === null) {
-      continue;
-    }
-    const record = entry as Record<string, unknown>;
-    if (
-      record.type === "title_change" &&
-      typeof record.title === "string" &&
-      record.title.length > 0
-    ) {
-      return record.title;
-    }
-    if (
-      firstUserText === null &&
-      record.type === "message" &&
-      typeof record.message === "object" &&
-      record.message !== null &&
-      (record.message as { role?: string }).role === "user"
-    ) {
-      const content =
-        (record.message as { content?: { type?: string; text?: string }[] }).content ?? [];
-      const text = content
-        .filter((block) => block.type === "text")
-        .map((block) => block.text ?? "")
-        .join(" ")
-        .trim();
-      if (text.length > 0) {
-        firstUserText = text;
-      }
-    }
-  }
-  return firstUserText;
-}
+export { titleFromOmpEntries } from "./coldSessionTitle.js";

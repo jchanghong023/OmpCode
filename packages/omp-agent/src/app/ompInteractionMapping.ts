@@ -62,9 +62,12 @@ export function permissionOptionsResponseOf(option: PermissionOptionProjection):
 export function permissionRiskLevelOf(
   tier: OmpPermissionRequestFrame["tier"],
 ): "low" | "medium" | "high" {
-  // omp tier（read/write/exec）→ ZCode riskLevel；critical 保留给宿主侧更高危场景。
-  if (tier === "exec") return "high";
-  return tier === "write" ? "medium" : "low";
+  // 修复（A7）：帧 schema 的 tier 已放宽为字符串（omp 演进新增档位不应拒帧）；
+  // 未知档位按最高风险呈现（fail-closed：宁可让用户多看一眼，绝不降级为 low）。
+  // critical 保留给宿主侧更高危场景。
+  if (tier === "read") return "low";
+  if (tier === "write") return "medium";
+  return "high";
 }
 
 export function ompOriginToZcode(

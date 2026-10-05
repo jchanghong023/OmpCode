@@ -1,7 +1,9 @@
 // omp 换核（FORK.md / omp-project-mode.md）：模型管理事实源在 omp 侧。角色目录与保存
 // 优先走 OMP 项目模式 RPC（get_model_roles / set_model_role）：全部可配置 role 始终可见
-// （含未配置项），选定即自动保存（含保存中/失败/被覆盖状态）；OMP 未提供项目模式时
-// 回落主进程读写用户 omp 配置 modelRoles（OmpModelRolesFallbackFields）。
+// （含未配置项），选定即自动保存（含保存中/失败/被覆盖状态）。回落主进程读写用户 omp
+// 配置 modelRoles（OmpModelRolesFallbackFields）的唯一触发条件是旧核永久缺失项目模式
+//（-32601，omp-project-mode.md 三态语义）；rpc 未就绪与 -32000 暂时不可用停留错误态
+// 提供重试，不绕过 omp 直写用户配置（协议 §8.3）。判定逻辑见 ompModelRolesFallback.ts。
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { ZCodeOmpModelRole } from "@zcode/shared";
@@ -17,6 +19,13 @@ import {
 } from "@/components/ui/dialog.js";
 import { logger } from "@/logger.js";
 import type { OmpModelCatalogEntry } from "./ompModelCatalog.js";
+import {
+  classifyOmpRoleSaveFailure,
+  isOmpRoleOverridden,
+  ompRoleEffectiveNote,
+  resolveOmpRolesLoadOutcome,
+  type OmpRolesLoadOutcome,
+} from "./ompModelRolesFallback.js";
 import { parseOmpRoleValue } from "./ompModelRoleValue.js";
 import { OmpModelRolesFallbackFields } from "./OmpModelRolesFallbackFields.js";
 
@@ -37,6 +46,8 @@ interface RpcRowState {
   saving: boolean;
   savedAt: number | null;
   error: string | null;
+  // §8.3：保存成功后 omp 返回的实际生效说明（effectiveNote），行内透传展示。
+  effectiveNote: string | null;
 }
 
 export function OmpModelRolesDialog(props: OmpModelRolesDialogProps) {
@@ -57,9 +68,18 @@ export function OmpModelRolesDialog(props: OmpModelRolesDialogProps) {
   const [rpcRowState, setRpcRowState] = useState<Record<string, RpcRowState>>({});
   // 本地待保存选择（保存失败时保留，供重试；Z12）。
   const [rpcPending, setRpcPending] = useState<Record<string, string>>({});
+  // 目录加载失败信息（null=无失败）；值为展示用的原始错误细节，空串=无细节（rpc 未就绪）。
+  const [loadFailure, setLoadFailure] = useState<string | null>(null);
 
-  const loadRpcRoles = useCallback(async () => {
-    if (!resolution.rpcReady) return false;
+  const loadRpcRoles = useCallback(async (): Promise<OmpRolesLoadOutcome> => {
+    // 回落分流（S8-1，协议 §8.3）：rpc 未就绪（agent 启动中/远端等待）与 -32000
+    //（项目进程暂时不可用，可重试）一律不回落直写用户 omp config.yml；只有旧核
+    // 永久缺失项目模式（-32601，"not supported by omp core"，与
+    // useOmpCommandCompletion 同判据）才回落主进程读写本地配置。
+    if (!resolution.rpcReady) {
+      setLoadFailure("");
+      return resolveOmpRolesLoadOutcome({ rpcReady: false, error: undefined });
+    }
     try {
       const result = await services.zcodeAgentService.getOmpModelRoles({
         workspacePath,
@@ -67,21 +87,30 @@ export function OmpModelRolesDialog(props: OmpModelRolesDialogProps) {
       });
       setRpcRoles(result.roles);
       setSource("rpc");
-      return true;
+      setLoadFailure(null);
+      return "loaded";
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      logger.debug("[omp-model-roles] RPC 目录不可用，回落本地配置", { error: message });
-      return false;
+      const outcome = resolveOmpRolesLoadOutcome({ rpcReady: true, error });
+      logger.debug("[omp-model-roles] RPC 角色目录不可用", { error: message, outcome });
+      if (outcome === "unavailable") setLoadFailure(message);
+      return outcome;
     }
   }, [resolution.rpcReady, services, workspaceIdentity, workspacePath]);
 
+  // 统一的加载入口：Effect 与手动重试共用；仅 -32601 判定回落，其余停留错误态。
+  const runRpcLoad = useCallback(() => {
+    setSource("loading");
+    setLoadFailure(null);
+    void loadRpcRoles().then((outcome) => {
+      if (outcome === "fallback") setSource("fallback");
+    });
+  }, [loadRpcRoles]);
+
   useEffect(() => {
     if (!open && !inline) return;
-    setSource("loading");
-    void loadRpcRoles().then((ok) => {
-      if (!ok) setSource("fallback");
-    });
-  }, [inline, loadRpcRoles, open]);
+    runRpcLoad();
+  }, [inline, runRpcLoad, open]);
 
   const catalogByModelPart = useMemo(() => {
     const map = new Map<string, OmpModelCatalogEntry>();
@@ -123,7 +152,7 @@ export function OmpModelRolesDialog(props: OmpModelRolesDialogProps) {
             })();
       setRpcRowState((current) => ({
         ...current,
-        [roleId]: { saving: true, savedAt: null, error: null },
+        [roleId]: { saving: true, savedAt: null, error: null, effectiveNote: null },
       }));
       try {
         const result = await services.zcodeAgentService.setOmpModelRole({
@@ -143,10 +172,32 @@ export function OmpModelRolesDialog(props: OmpModelRolesDialogProps) {
         });
         setRpcRowState((current) => ({
           ...current,
-          [roleId]: { saving: false, savedAt: Date.now(), error: null },
+          [roleId]: {
+            saving: false,
+            savedAt: Date.now(),
+            error: null,
+            // §8.3：透传 omp 返回的实际生效说明（如被 runtime/项目层覆盖的精确来源）。
+            effectiveNote: ompRoleEffectiveNote(result),
+          },
         }));
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
+        // 保存失败同样按三态分流（S8-1）：只有旧核永久缺失（-32601）才允许转本地
+        // 回落保存（切换到回落编辑器直写用户 config.yml）；-32000 等暂时不可用保留
+        // 待保存选择显示失败供重试，绝不静默降级直写用户配置。
+        if (classifyOmpRoleSaveFailure(error) === "capabilityMissing") {
+          logger.info("[omp-model-roles] 保存遇旧核能力缺失，转本地回落编辑", {
+            roleId,
+            error: message,
+          });
+          setRpcPending((current) => {
+            const next = { ...current };
+            delete next[roleId];
+            return next;
+          });
+          setSource("fallback");
+          return;
+        }
         // 失败回显完整尝试值（模型 + 档位）：parseOmpRoleValue 按目录把冒号后缀解析为
         // 档位，重试语义完整；模型 ID 含冒号时由目录校验兜底，不会误拆。
         setRpcPending((current) => ({
@@ -155,7 +206,7 @@ export function OmpModelRolesDialog(props: OmpModelRolesDialogProps) {
         }));
         setRpcRowState((current) => ({
           ...current,
-          [roleId]: { saving: false, savedAt: null, error: message },
+          [roleId]: { saving: false, savedAt: null, error: message, effectiveNote: null },
         }));
       }
     },
@@ -192,12 +243,10 @@ export function OmpModelRolesDialog(props: OmpModelRolesDialogProps) {
             const displayValue = pending ?? explicitValue ?? "";
             const parsed = parseOmpRoleValue(displayValue, catalogEntries);
             const entry = catalogByModelPart.get(parsed.modelPart);
-            const overridden =
-              role.explicitValue !== undefined &&
-              role.source !== undefined &&
-              role.source !== "global" &&
-              role.source !== "default" &&
-              role.source !== "runtime";
+            // 被覆盖判定（S8-4）：runtime 是覆盖层（omp rpc-project-models
+            // #effectiveNote），runtime 覆盖时也必须提示「已保存但被覆盖」，
+            // 不能并入 global/default 视为生效来源。
+            const overridden = isOmpRoleOverridden(role);
             return (
               <div
                 key={role.roleId}
@@ -290,6 +339,9 @@ export function OmpModelRolesDialog(props: OmpModelRolesDialogProps) {
                       {overridden
                         ? ` · ${intl.formatMessage({ id: "ompModelRoles.overridden" })}`
                         : ""}
+                      {/* §8.3：行内透传 omp effectiveNote 原文（omp 侧精确生效说明，
+                          不翻译），样式与既有行内说明一致。 */}
+                      {row.effectiveNote ? ` · ${row.effectiveNote}` : ""}
                     </span>
                   ) : role.configurable === false ? (
                     <span>{role.nonConfigurableReason ?? ""}</span>
@@ -306,6 +358,23 @@ export function OmpModelRolesDialog(props: OmpModelRolesDialogProps) {
             </Button>
           </div>
         ) : null}
+      </>
+    ) : loadFailure !== null ? (
+      // 目录加载失败（rpc 未就绪 / -32000 暂时不可用 / 其他错误）：停留错误态并提供
+      // 重试入口，不回落直写用户配置（S8-1）；错误框样式对齐 SkillsSection 失败态。
+      <>
+        <div className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-ui-base text-destructive">
+          {intl.formatMessage({ id: "ompModelRoles.loadUnavailable" })}
+          {loadFailure ? `: ${loadFailure}` : ""}
+        </div>
+        <div className="flex items-center justify-end gap-2">
+          {!inline ? (
+            <Button variant="ghost" onClick={() => onOpenChange?.(false)}>
+              {intl.formatMessage({ id: "common.close" })}
+            </Button>
+          ) : null}
+          <Button onClick={runRpcLoad}>{intl.formatMessage({ id: "common.retry" })}</Button>
+        </div>
       </>
     ) : source === "fallback" ? (
       <OmpModelRolesFallbackFields

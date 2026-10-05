@@ -5,30 +5,28 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createInterface } from "node:readline";
 import { OmpFrameAssembler } from "../domain/frameAssembler.js";
 import { parseOmpContextReport, type OmpContextReport } from "../domain/ompContextReport.js";
-import {
-  ompAvailableCommandsFrameSchema,
-  ompCommandOutputFrameSchema,
-  ompConfigUpdateFrameSchema,
-  ompPromptResultFrameSchema,
-  ompResponseFrameSchema,
-  ompRpcChunkFrameSchema,
-  ompSessionEventFrameSchema,
-  ompSessionInfoUpdateFrameSchema,
-  ompStateDataSchema,
-  ompSubagentFrameSchema,
-  type OmpCommandFrame,
-} from "../domain/ompFrames.js";
+import { ompRpcChunkFrameSchema, ompStateDataSchema, type OmpCommandFrame } from "../domain/ompFrames.js";
 import type { OmpBypassFrame } from "../domain/ompForkFrames.js";
 import { encodeJsonlLine } from "../domain/jsonlFraming.js";
 import { awaitOmpReady } from "./ompReady.js";
-import { dispatchOmpUiFrame } from "./ompUiFrames.js";
+import { dispatchOmpFrame } from "./ompFrameDispatch.js";
 import { parseJson } from "./jsonl.js";
-import type { OmpCommandOutcome, OmpProcessFactory, OmpSessionProcess, OmpStateData, OmpAskRequest, OmpPermissionRequest, OmpUiRequest } from "../app/ports.js";
-import type { OmpSideChannelHandlers } from "../app/ports.js";
+import type { OmpCommandOutcome, OmpProcessFactory, OmpSessionProcess, OmpStateData, OmpAskRequest, OmpPermissionRequest, OmpUiRequest, OmpSideChannelHandlers } from "../app/ports.js";
 import { logger } from "./logger.js";
 import { PromptResultTracker } from "../domain/promptResultTracker.js";
 
 const COMMAND_TIMEOUT_MS = 120_000;
+
+// 修复（A8）：用户输入类命令（prompt/steer/follow_up/abort_and_prompt）的响应在 omp 输入门 admission 前有意挂起，可跨分钟
+// （图像规范化/视觉描述、rpc-fork-permission 权限门 await 无超时）；固定 120s 会误判在途 prompt 失败，放宽到 10 分钟，
+// 进程死亡由 handleExit 的 pending 结算兜底，超时不承担存活探测职责。
+const USER_INPUT_COMMAND_TIMEOUT_MS = 600_000;
+const USER_INPUT_COMMAND_TYPES: ReadonlySet<string> = new Set(["prompt", "steer", "follow_up", "abort_and_prompt"]);
+
+/** 按命令类型选择请求超时（项目模式进程共用；UT 覆盖映射矩阵）。 */
+export function ompCommandTimeoutMs(command: { type?: unknown }): number {
+  return typeof command.type === "string" && USER_INPUT_COMMAND_TYPES.has(command.type) ? USER_INPUT_COMMAND_TIMEOUT_MS : COMMAND_TIMEOUT_MS;
+}
 
 interface PendingCommand {
   resolve: (outcome: OmpCommandOutcome) => void;
@@ -86,8 +84,7 @@ class OmpChildProcess implements OmpSessionProcess {
     this.child = child;
     this.exitListener = (code) => this.handleExit(code);
     child.once("exit", this.exitListener);
-    // spawn 失败（如二进制缺失/不可执行）不触发 exit，未监听的 'error' 会以 uncaught
-    // exception 打崩宿主；收口到 handleExit(null)，与下方 stdin error 兜底同源。
+    // spawn 失败（如二进制缺失/不可执行）不触发 exit，未监听的 'error' 会以 uncaught exception 打崩宿主；收口到 handleExit(null)，与下方 stdin 兜底同源。
     child.once("error", (error) => {
       logger.debug("omp spawn error", { error: String(error) });
       this.handleExit(null);
@@ -102,12 +99,7 @@ class OmpChildProcess implements OmpSessionProcess {
     child.stdin.on("error", (error) => {
       logger.debug("omp stdin write failed", { error: String(error) });
     });
-    await awaitOmpReady(child, {
-      request: (command) => this.request(command),
-      onForkSurface: () => {
-        this.forkSurface = true;
-      },
-    });
+    await this.awaitReadyAndNegotiate(child);
     this.wireStdout(child);
     const subscription = await this.request({ type: "set_subagent_subscription", level: "events" }, 10_000).catch((error) => ({ success: false, error: String(error) }));
     this.subagentSubscriptionAvailable = subscription.success;
@@ -119,6 +111,23 @@ class OmpChildProcess implements OmpSessionProcess {
     const readline = createInterface({ input: child.stdout });
     readline.on("line", (line) => this.handleLine(line));
   }
+
+  /** ready 等待 + 协商；ready 通告的 v2 重组上限接线到分片重组器。 */
+  private async awaitReadyAndNegotiate(child: ChildProcessWithoutNullStreams): Promise<void> {
+    const ready = await awaitOmpReady(child, {
+      request: (command) => this.request(command),
+      onForkSurface: () => {
+        this.forkSurface = true;
+      },
+    });
+    // 修复（B6）：重组上限按 ready 通告值更新（缺失/非法保持默认 64MiB）；
+    // rpc_chunk 只在 v2/v3 协商成功后出现，ready 即接线时机安全。
+    const limit = ready.maxReassembledFrameBytes;
+    if (typeof limit === "number" && limit > 0) {
+      this.assembler.updateMaxReassembledBytes(limit);
+    }
+  }
+
   private handleLine(line: string): void {
     const frame = parseJson(line);
     if (!frame || typeof frame !== "object") {
@@ -142,97 +151,7 @@ class OmpChildProcess implements OmpSessionProcess {
     this.dispatchFrame(record);
   }
   private dispatchFrame(frame: unknown): void {
-    if (typeof frame !== "object" || frame === null) {
-      return;
-    }
-    const record = frame as Record<string, unknown>;
-    switch (record.type) {
-      case "response": {
-        const parsed = ompResponseFrameSchema.safeParse(record);
-        if (!parsed.success) {
-          return;
-        }
-        if (parsed.data.id) {
-          this.promptResults.noteResponse(parsed.data);
-          this.settleCommand(parsed.data.id, parsed.data.success, parsed.data);
-        }
-        return;
-      }
-      case "prompt_result": {
-        const parsed = ompPromptResultFrameSchema.safeParse(record);
-        if (parsed.success) {
-          if (parsed.data.id && parsed.data.id === this.contextResult?.id) {
-            this.contextResult.resolve(parsed.data.agentInvoked === false);
-            return;
-          }
-          if (this.promptResults.shouldFinish(parsed.data)) {
-            this.options.onPromptResult?.(parsed.data);
-          }
-        }
-        return;
-      }
-      case "available_commands_update": {
-        const parsed = ompAvailableCommandsFrameSchema.safeParse(record);
-        if (parsed.success) {
-          this.options.onCommandsUpdate?.(parsed.data.commands);
-        } else {
-          logger.warn("invalid available_commands_update", { issues: parsed.error.issues.length });
-        }
-        return;
-      }
-      case "command_output": {
-        const parsed = ompCommandOutputFrameSchema.safeParse(record);
-        if (parsed.success) {
-          if (this.contextOutput) {
-            this.contextOutput.push(parsed.data.text);
-            return;
-          }
-          this.options.onCommandOutput?.({ text: parsed.data.text });
-        }
-        return;
-      }
-      case "session_info_update": {
-        const parsed = ompSessionInfoUpdateFrameSchema.safeParse(record);
-        if (parsed.success) {
-          this.options.onSessionInfoUpdate?.(parsed.data);
-        }
-        return;
-      }
-      case "config_update": {
-        const parsed = ompConfigUpdateFrameSchema.safeParse(record);
-        if (parsed.success) {
-          this.options.onConfigUpdate?.(parsed.data);
-        }
-        return;
-      }
-      case "extension_error":
-      case "host_tool_call":
-      case "host_tool_cancel":
-      case "host_uri_request":
-      case "host_uri_cancel":
-      case "ready":
-        return;
-      case "subagent_lifecycle":
-      case "subagent_progress":
-      case "subagent_event": {
-        const parsed = ompSubagentFrameSchema.safeParse(record);
-        if (parsed.success) this.options.onSubagentFrame?.(parsed.data);
-        else logger.warn("invalid omp subagent frame", { issues: parsed.error.issues.length });
-        return;
-      }
-      case "extension_ui_request":
-      case "permission_request":
-      case "ask_request":
-        dispatchOmpUiFrame(record, { onUiRequest: this.options.onUiRequest, onPermissionRequest: this.options.onPermissionRequest, onAskRequest: this.options.onAskRequest, respond: (response) => this.respondUi(response) });
-        return;
-      default: {
-        const parsed = ompSessionEventFrameSchema.safeParse(record);
-        if (parsed.success) {
-          this.options.onEvent(parsed.data);
-        }
-        return;
-      }
-    }
+    dispatchOmpFrame(frame, { promptResults: this.promptResults, getContextResult: () => this.contextResult, getContextOutput: () => this.contextOutput, settleCommand: (id, success, data) => this.settleCommand(id, success, data), options: this.options, respondUi: (response) => this.respondUi(response) });
   }
   async send(command: OmpCommandFrame): Promise<OmpCommandOutcome> {
     // /context 是本地 prompt 且 command_output 没有 request id；先收口再下发其它命令。
@@ -276,7 +195,7 @@ class OmpChildProcess implements OmpSessionProcess {
     return work;
   }
 
-  private request(command: OmpCommandFrame, timeoutMs = COMMAND_TIMEOUT_MS): Promise<OmpCommandOutcome> {
+  private request(command: OmpCommandFrame, timeoutMs = ompCommandTimeoutMs(command)): Promise<OmpCommandOutcome> {
     const child = this.child;
     if (!child || child.killed) {
       return Promise.resolve({ success: false, error: "omp core is not running" });
@@ -301,14 +220,15 @@ class OmpChildProcess implements OmpSessionProcess {
     });
   }
 
-  private settleCommand(id: string, success: boolean, data: { data?: unknown; error?: string }): void {
+  private settleCommand(id: string, success: boolean, data: { data?: unknown; error?: string; code?: unknown }): void {
     const pending = this.pending.get(id);
     if (!pending) {
       return;
     }
     this.pending.delete(id);
     clearTimeout(pending.timer);
-    pending.resolve({ success, data: data.data, error: data.error });
+    // 修复（B5）：omp 响应帧的错误码（code）透传给调用方（对齐项目模式 ompProjectProcess 的 G4 修复），供宿主 UI 归因具体失败类别。
+    pending.resolve({ success, data: data.data, error: data.error, ...(typeof data.code === "string" ? { code: data.code } : {}) });
   }
   respondUi(response: OmpBypassFrame): void {
     const child = this.child;

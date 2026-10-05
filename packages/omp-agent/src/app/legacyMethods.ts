@@ -23,7 +23,11 @@ export interface LegacyMethodContext {
   testModelConnectivity?: (provider: string, modelId: string) => Promise<OmpModelTestResult | null>;
   listMcpServers?: () => Promise<OmpMcpServerRow[] | null>;
   /** 项目模式子代理目录（omp-project-mode.md）：以 OMP 持久目录为准；不可用返回 null。 */
-  listSubagents?: (sessionId: string, offset: number) => Promise<Record<string, unknown> | null>;
+  listSubagents?: (
+    sessionId: string,
+    offset: number,
+    limit?: number,
+  ) => Promise<Record<string, unknown> | null>;
 }
 
 export function createLegacyHandlers(context: LegacyMethodContext) {
@@ -156,8 +160,19 @@ export function createLegacyHandlers(context: LegacyMethodContext) {
       const rawCursor = record?.endedCursor ?? record?.cursor;
       const offset = typeof rawCursor === "string" ? Number.parseInt(rawCursor, 10) : 0;
       const normalizedOffset = Number.isFinite(offset) && offset >= 0 ? offset : 0;
+      // endedLimit 透传（协议 default 20/max 100）：host 侧 schema 校验请求，但本处理器
+      // 直接读原始 params，需自行 clamp；透传为 OMP get_subagents 的 limit。
+      const rawLimit = optionalNumber(record, "endedLimit");
+      const normalizedLimit =
+        rawLimit !== null && Number.isFinite(rawLimit)
+          ? Math.min(Math.max(Math.trunc(rawLimit), 1), 100)
+          : 20;
       // 项目模式：ended 以 OMP 持久目录为准（重启后仍可发现）；不可用时回落投影目录。
-      const projectDirectory = await context.listSubagents?.(sessionId, normalizedOffset);
+      const projectDirectory = await context.listSubagents?.(
+        sessionId,
+        normalizedOffset,
+        normalizedLimit,
+      );
       if (projectDirectory) {
         return projectDirectory;
       }

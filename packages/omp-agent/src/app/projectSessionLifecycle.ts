@@ -114,14 +114,20 @@ export async function resumeProjectSession(
   return engine;
 }
 
-/** 冷历史行入投影 + 引擎登记（行缺失时保留空投影，后续事件/重读补齐）。 */
+/**
+ * 冷历史行入投影 + 索引摘要回写（行缺失时保留空投影，后续事件/重读补齐）。
+ * 修复（S2-2）：不再自行把引擎登记进 host.engines——末尾无条件 engines.set 会让
+ * sessionRegistry 的 winner 检查成为死代码（加载完成先覆盖注册表再检查），且绕过
+ * 删除/关闭墓碑（S7-4）。返回引擎，由 sessionRegistry 在墓碑检查 + winner 判定
+ * 通过后登记；冷恢复引擎惰性挂载、无子进程，丢弃无副作用。
+ */
 export async function hydrateEngineFromCold(
   host: ProjectSessionHost,
   engine: ConversationEngine,
   sessionPath: string | null,
   createdAt?: number,
   updatedAt?: number,
-): Promise<void> {
+): Promise<ConversationEngine> {
   if (sessionPath) {
     const entries = await host.store.readSessionEntries(sessionPath);
     const transcripts = new Map(
@@ -140,9 +146,9 @@ export async function hydrateEngineFromCold(
     const rows: ConversationRow[] = rowsFromOmpEntries(entries, transcripts);
     engine.hydrateRows(rows);
   }
-  host.engines.set(engine.sessionId, engine);
   host.upsertEngineSummary(engine, {
     createdAt: createdAt ?? Date.now(),
     lastActivityAt: updatedAt ?? Date.now(),
   });
+  return engine;
 }

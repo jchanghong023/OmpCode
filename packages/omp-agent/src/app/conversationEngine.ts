@@ -3,15 +3,16 @@
 import type { ConversationRow, SessionConfigState } from "@zcode/shared/zcode-protocol-v4";
 import { ConversationProjection } from "../domain/conversationProjection.js";
 import { OmpEventProjector } from "../domain/ompProjector.js";
-import { createId } from "../domain/ids.js";
 import type { OmpSessionEventFrame, OmpStateData } from "../domain/ompFrames.js";
 import type { HostGateway, HostUserInputAnswer, OmpProcessFactory, OmpSessionProcess, OmpSessionProcessHandlers } from "./ports.js";
 import { ConversationTopicPublisher, type SubscribeOptions } from "./topicPublisher.js";
 import { OmpInteractionProxy } from "./ompInteractionProxy.js";
-import { applyEngineAutoCompaction, applyEngineCompaction, applyEngineSetModel, applyEngineThoughtLevel, projectEngineContextWindow, readOmpSkillCommands, refreshEngineModelAfterChange, refreshEngineStateAfterActivity, startEngineProcess } from "./ompEngineProcess.js";
-import { dispatchOmpText } from "./ompPromptDispatch.js";
+import { applyEngineAutoCompaction, applyEngineCompaction, applyEngineSetModel, applyEngineThoughtLevel, projectEngineContextWindow, readOmpSkillCommands, refreshEngineModelAfterChange, startEngineProcess } from "./ompEngineProcess.js";
+import { PromptQueueReconciler } from "./promptQueueReconciler.js";
+import { registerQueueDispatchAckSink } from "./ompPromptDispatch.js";
+import { EnginePromptTurnCloser } from "./promptTurnCloser.js";
 import { TrailingThrottle } from "./trailingThrottle.js";
-import { deriveTitle, agentInvokedOf } from "../domain/titleText.js";
+import { deriveTitle } from "../domain/titleText.js";
 import { OmpSubagentBridge } from "./ompSubagentBridge.js";
 import type { EngineInit } from "./engineInit.js";
 export class ConversationEngine {
@@ -33,9 +34,28 @@ export class ConversationEngine {
   private readonly indexNotify = new TrailingThrottle(500, () => this.notifyIndexChange());
   private resumeSessionPath: string | undefined;
   private followupMode: SessionConfigState["followupMode"] = "queue";
-  private pendingLocalOnlyCompletions = 0;
   private titleInitialized: boolean;
+  /** prompt 轮收口与输入分发（抽出见 promptTurnCloser.ts）：经惰性宿主回写引擎状态。 */
+  private readonly promptTurns = new EnginePromptTurnCloser({
+    projection: () => this.projection,
+    isStreaming: () => this.projector.isStreaming,
+    followupMode: () => this.followupMode,
+    ensureTitleFromText: (text) => {
+      if (!this.titleInitialized && text.trim().length > 0) {
+        this.titleInitialized = true;
+        this.projection.setTitle(deriveTitle(text), "generated");
+      }
+    },
+    markSteerInFlight: (sourceCommandId) => this.queueReconciler.markSteerInFlight(sourceCommandId),
+    clearSteerInFlight: () => this.queueReconciler.clearSteerInFlight(),
+    noteInputAccepted: () => this.queueReconciler.noteInputAccepted(),
+    ensureStarted: () => this.ensureOmpStarted(),
+    currentProcess: () => this.ompProcess,
+    flush: () => this.scheduleFlush(),
+  });
   private readonly subagents: OmpSubagentBridge;
+  /** A3/A5：队列对账（get_state 回读判定 + debounce）与 steer 在途标记的协调器。 */
+  private readonly queueReconciler: PromptQueueReconciler;
   constructor(init: EngineInit<ConversationEngine>) {
     this.sessionId = init.sessionId;
     this.workspaceId = init.workspaceId;
@@ -53,7 +73,18 @@ export class ConversationEngine {
       () => this.ompProcess,
       () => this.scheduleFlush(),
     );
-    this.projector = new OmpEventProjector(this.projection);
+    // A5：在途 steer 的 guide 轮（sourceCommandId 与当前活跃轮一致）在 terminal agent_end
+    // 收口时转回 queuedTurns，等下一个 agent_start 激活承接 drain 输出；A3：queue_update 事件
+    // 是队列对账触发点之一（debounce 后回读 get_state）。两者内聚在 PromptQueueReconciler（含 XR1 竞态守卫）。
+    this.queueReconciler = new PromptQueueReconciler({
+      projection: this.projection,
+      currentProcess: () => this.ompProcess,
+      isCurrentProcess: (process) => this.ompProcess === process,
+      applyState: (state) => this.applyOmpState(state),
+      isStreaming: () => this.projector.isStreaming,
+      scheduleFlush: () => this.scheduleFlush(),
+    });
+    this.projector = new OmpEventProjector(this.projection, { steerGuideCommandId: () => this.queueReconciler.steerGuideCommandIdOf(), onQueueUpdate: () => this.queueReconciler.scheduleQueueReconciliation() });
     this.interactionProxy = new OmpInteractionProxy({
       sessionId: init.sessionId,
       gateway: init.gateway,
@@ -103,10 +134,8 @@ export class ConversationEngine {
         this.projection.appendAssistantText(text);
         this.scheduleFlush();
       },
-      // agentInvoked=true 的完成帧紧随 agent_end，不能覆盖失败或中断终态。
-      onPromptResult: (frame) => {
-        if (frame.agentInvoked === false) this.finishLocalOnlyPrompt();
-      },
+      // prompt 响应/异步 prompt_result 的收口语义（A1，含 agentInvoked 判定）内聚在 promptTurns。
+      onPromptResult: (frame) => this.promptTurns.onPromptResult(frame),
       onSessionInfoUpdate: ({ title }) => this.applySessionTitle(title),
       onConfigUpdate: ({ model, thinkingLevel }) => {
         this.projection.setModelConfig({ ...(model?.provider !== undefined ? { provider: model.provider } : {}), ...(model?.id !== undefined ? { model: model.id } : {}), ...(thinkingLevel !== undefined ? { thought: thinkingLevel } : {}) });
@@ -121,6 +150,13 @@ export class ConversationEngine {
       currentProcess: () => this.ompProcess,
       setProcess: (process) => {
         this.ompProcess = process;
+        // F2b-P1 接线：steer/follow_up 分发 success ACK ⇒ 文本已入 omp 队列（v18.4.8 上
+        // rpc handler 在 await followUp()/steer() 后才回 ACK），到达即把分发文本登记为
+        // seen，消除「停止边界 drain 快于 250ms debounce、快照从未携带」窗口的宽限误判
+        // interrupted（语义与边界备查见 PromptQueueReconciler.noteDispatchAckSeen）。
+        if (process) {
+          registerQueueDispatchAckSink(process, (text) => this.queueReconciler.noteDispatchAckSeen(text));
+        }
       },
       bootstrap: (process) => this.bootstrapProcess(process),
     });
@@ -143,18 +179,6 @@ export class ConversationEngine {
       this.scheduleFlush();
     }
   }
-  /** 本地命令收口（prompt 响应 data.agentInvoked=false 或异步 prompt_result）。 */
-  private finishLocalOnlyPrompt(): void {
-    if (this.projector.isStreaming) {
-      this.pendingLocalOnlyCompletions += 1;
-      return;
-    }
-    if (!this.projection.finishQueuedLocalOnlyTurn()) {
-      this.projection.closeAssistantResponse();
-      this.projection.finishTurn("success");
-    }
-    this.scheduleFlush();
-  }
   private applyOmpState(state: OmpStateData | null): void {
     if (!state) {
       return;
@@ -174,43 +198,46 @@ export class ConversationEngine {
     this.scheduleFlush();
   }
   handleOmpEvent(event: OmpSessionEventFrame): void {
-    // 真实 omp 的 model_changed 不带载荷（#emit({type}) 无字段）：回读 get_state 再落
-    // 配置与 modelChange 标记，避免 UI 出现空 provider/model 的占位标记。
-    if (event.type === "model_changed" && !event.model) {
-      void refreshEngineModelAfterChange(
-        this.ompProcess,
-        this.projection,
-        (state) => this.applyOmpState(state),
-        () => this.scheduleFlush(),
-      );
-      return;
-    }
-    this.projector.handleEvent(event);
-    if (event.type === "agent_end" && event.isTerminal !== false) {
-      while (this.pendingLocalOnlyCompletions > 0) {
-        this.pendingLocalOnlyCompletions -= 1;
-        this.finishLocalOnlyPrompt();
+    // 防御（A9）：项目通道对会话事件帧是裸 cast（ompProjectChannel 不经 schema 深检），
+    // 畸形帧可在投影层抛 TypeError；单帧异常只告警并跳过该帧，不打断适配层 readline
+    // 帧循环（一次坏帧不应拖垮整条会话事件流）。
+    try {
+      // 真实 omp 的 model_changed 不带载荷（#emit({type}) 无字段）：回读 get_state 再落
+      // 配置与 modelChange 标记，避免 UI 出现空 provider/model 的占位标记。
+      if (event.type === "model_changed" && !event.model) {
+        void refreshEngineModelAfterChange(
+          this.ompProcess,
+          this.projection,
+          (state) => this.applyOmpState(state),
+          () => this.scheduleFlush(),
+        );
+        return;
       }
+      this.projector.handleEvent(event);
+      if (event.type === "agent_end" && event.isTerminal !== false) {
+        // 清流式后补收积压的本地命令完成（收口语义在 promptTurnCloser）。
+        this.promptTurns.onTerminalAgentEnd();
+        this.scheduleFlush();
+        // A3：terminal agent_end 是队列对账触发点之一（refreshAfterActivity 内
+        // 复用同一次 get_state 快照对账）；对账后仍排队且从未 seen 的轮触发一次
+        // S4-2 宽限复查（forceClose），不误关仍在入队路上的排队轮。
+        void this.queueReconciler.refreshAfterActivity({ graceRecheckAfter: true });
+        return;
+      }
+      this.scheduleFlush();
+    } catch (error) {
+      engineWarn("omp event projection failed", { type: event.type, error: error instanceof Error ? error.message : String(error) });
     }
-    this.scheduleFlush();
-    if (event.type === "agent_end" && event.isTerminal !== false) {
-      void refreshEngineStateAfterActivity(
-        this.ompProcess,
-        (process) => this.ompProcess === process,
-        (state) => this.applyOmpState(state),
-      );
-    }
-  }
-  private async refreshStateAfterActivity(): Promise<void> {
-    await refreshEngineStateAfterActivity(
-      this.ompProcess,
-      (process) => this.ompProcess === process,
-      (state) => this.applyOmpState(state),
-    );
   }
   /** 只读详情视图（子代理记录）的事件入口：与主会话共用投影器，不触发状态回读。 */
   applyViewEvent(event: OmpSessionEventFrame): void {
-    this.projector.handleEvent(event);
+    // 防御（A9）：与 handleOmpEvent 同理，单帧投影异常跳过，不断事件流。
+    try {
+      this.projector.handleEvent(event);
+    } catch (error) {
+      engineWarn("omp view event projection failed", { type: event.type, error: error instanceof Error ? error.message : String(error) });
+      return;
+    }
     this.scheduleFlush();
   }
   /** v4 resolveInteraction 命令入口：把 UI 应答汇入等待中的交互。 */
@@ -231,7 +258,9 @@ export class ConversationEngine {
     const exitedSessionFile = process.ompSessionFile;
     if (exitedSessionFile) this.resumeSessionPath = exitedSessionFile;
     this.ompProcess = null;
-    this.pendingLocalOnlyCompletions = 0;
+    this.promptTurns.reset();
+    // A5/A3 状态随进程终结：在途 steer 标记与挂起的对账不再有意义（failAllTurns 已收口）。
+    this.queueReconciler.dispose();
     this.interactionProxy.dispose();
     const error = { code: "omp_process_exit", message: `omp core exited unexpectedly (code ${code ?? "null"})` };
     this.projection.failAllTurns(error);
@@ -240,46 +269,10 @@ export class ConversationEngine {
     this.scheduleFlush();
   }
   // ── 命令翻译 ──
-  /** 发送用户输入；返回实际 delivery（omp 流式中转为 follow_up 队列）。图片附件直接进 omp prompt。 */
+  /** 发送用户输入；返回实际 delivery（omp 流式中转为 follow_up 队列）。图片附件直接进 omp prompt。
+   *  完整 dispatch 流程（排队/steer 在途标记与失败收口）在 promptTurnCloser。 */
   async sendText(text: string, sourceCommandId: string, clientId: string, images: { type: "image"; data: string; mimeType: string }[] = [], modelSelection?: { provider: string; model: string; thought?: string }): Promise<"startNow" | "queue"> {
-    if (!this.titleInitialized && text.trim().length > 0) {
-      this.titleInitialized = true;
-      this.projection.setTitle(deriveTitle(text), "generated");
-    }
-    const inputId = createId("input");
-    const streaming = this.projector.isStreaming;
-    this.projection.beginUserTurn({ text, inputId, sourceCommandId, clientId, routing: streaming ? this.followupMode : "startNow" });
-    this.scheduleFlush();
-    try {
-      await this.ensureOmpStarted();
-    } catch (error) {
-      this.failTurn(sourceCommandId, "omp_start_failed", error);
-      return streaming ? "queue" : "startNow";
-    }
-    const process = this.ompProcess;
-    if (!process) {
-      this.failTurn(sourceCommandId, "omp_unavailable", new Error("omp core failed to start"));
-      return streaming ? "queue" : "startNow";
-    }
-    try {
-      const outcome = await dispatchOmpText({ process, text, images, streaming, followupMode: this.followupMode, modelSelection, currentConfig: this.projection.stateSnapshot.config });
-      if (!outcome.success) {
-        this.failTurn(sourceCommandId, outcome.code ?? "omp_prompt_failed", new Error(outcome.error ?? "prompt rejected"));
-        return streaming ? "queue" : "startNow";
-      }
-      if (agentInvokedOf(outcome.data) === false) {
-        this.finishLocalOnlyPrompt();
-      }
-    } catch (error) {
-      // omp RPC 超时或进程退出会 reject，必须结束对应轮次。
-      this.failTurn(sourceCommandId, "omp_prompt_failed", error);
-    }
-    return streaming ? "queue" : "startNow";
-  }
-  private failTurn(sourceCommandId: string, code: string, error: unknown): void {
-    const message = error instanceof Error ? error.message : String(error);
-    this.projection.failCommandTurn(sourceCommandId, { code, message });
-    this.scheduleFlush();
+    return this.promptTurns.sendText(text, sourceCommandId, clientId, images, modelSelection);
   }
   async stop(): Promise<void> {
     this.projector.noteStopRequested();
@@ -297,7 +290,7 @@ export class ConversationEngine {
     const success = await applyEngineCompaction(
       () => this.ensureOmpStarted(),
       () => this.ompProcess,
-      () => this.refreshStateAfterActivity(),
+      () => this.queueReconciler.refreshAfterActivity(),
     );
     this.projection.addTimelineMarker({ type: "compact", origin: "manual", status: success ? "success" : "failed" });
     this.scheduleFlush();
@@ -346,6 +339,8 @@ export class ConversationEngine {
     this.indexNotify.dispose();
     this.publisher.dispose();
     this.interactionProxy.dispose();
+    // A3：销毁时清理挂起的对账定时器，避免引擎销毁后仍触发 get_state。
+    this.queueReconciler.dispose();
     const process = this.ompProcess;
     this.ompProcess = null;
     await process?.dispose();
@@ -397,3 +392,8 @@ export class ConversationEngine {
     this.scheduleFlush();
   }
 }
+
+/** app 层无 logger 依赖；与 adapters/logger.ts 同格式写 stderr（stdout 是协议通道，不用 console）。 */
+const engineWarn = (message: string, details?: Record<string, unknown>): void => {
+  process.stderr.write(`${JSON.stringify({ ts: new Date().toISOString(), level: "warn", scope: "omp-agent", message, ...details })}\n`);
+};

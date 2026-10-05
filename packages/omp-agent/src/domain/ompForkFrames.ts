@@ -6,19 +6,26 @@
 import { z } from "zod";
 
 // ── 结构化工具审批（rpc-ui-protocol 4.1）──
-export const ompPermissionRequestFrameSchema = z.object({
-  type: z.literal("permission_request"),
-  id: z.string(),
-  toolCallId: z.string(),
-  toolName: z.string(),
-  tier: z.enum(["read", "write", "exec"]),
-  reason: z.string().optional(),
-  approvalMode: z.enum(["always-ask", "write", "yolo"]),
-  details: z.array(z.string()),
-  input: z.unknown(),
-  origin: z.object({ subagentId: z.string(), agentType: z.string() }).optional(),
-  prefixSuggestion: z.string().optional(),
-});
+export const ompPermissionRequestFrameSchema = z
+  .object({
+    type: z.literal("permission_request"),
+    id: z.string(),
+    toolCallId: z.string(),
+    toolName: z.string(),
+    // 修复（A7）：tier/approvalMode 放宽为字符串（当前 omp 值 read/write/exec 与
+    // always-ask/write/yolo，见 rpc-fork-permission.ts；枚举会随 omp 演进新增）。
+    // 未知值由 ompInteractionMapping 按保守路径处理（fail-closed），绝不自动放行。
+    tier: z.string(),
+    reason: z.string().optional(),
+    approvalMode: z.string(),
+    // 修复（A7）：details 改为线格式可选（缺省补 []，输出类型保持 string[] 不变，
+    // 消费侧无需判空）。
+    details: z.array(z.string()).default([]),
+    input: z.unknown(),
+    origin: z.object({ subagentId: z.string(), agentType: z.string() }).optional(),
+    prefixSuggestion: z.string().optional(),
+  })
+  .passthrough();
 export type OmpPermissionRequestFrame = z.infer<typeof ompPermissionRequestFrameSchema>;
 
 export type OmpPermissionOptionId =

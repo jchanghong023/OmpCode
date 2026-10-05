@@ -70,7 +70,9 @@ export class ServerApp {
       loadWorkspaceConfig: () => this.getWorkspaceConfig(),
       testModelConnectivity: deps.testModelConnectivity,
       listMcpServers: deps.listMcpServers,
-      listSubagents: (sessionId, offset) => this.registry.projectSubagentDirectory(sessionId, offset),
+      // 修复（C3 接线）：legacy session/subagents 的 endedLimit 必须透传到项目目录查询，
+      // 否则调用方请求的分页大小被固定为 20。
+      listSubagents: (sessionId, offset, limit) => this.registry.projectSubagentDirectory(sessionId, offset, limit),
     });
   }
 

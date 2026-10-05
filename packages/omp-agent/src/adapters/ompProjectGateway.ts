@@ -1,7 +1,8 @@
 // OmpProjectGateway：OMP 项目进程生命周期的唯一所有者（懒启动、能力判定、崩溃重启、
 // 会话通道缓存）。属适配层（直接编排 OmpProjectProcess 与会话通道）；app 层经 ports 的
-// OmpProjectGatewayPort 消费。capability=false 仅当 ready 无 mode:"rpc-ui-project"
-// （旧内嵌核）才成立，调用方整体永久回落旧拓扑；启动/v3 协商失败 capability 回到 null
+// OmpProjectGatewayPort 消费。capability=false 当 ready 无 mode:"rpc-ui-project"（旧内嵌
+// 核）或真旧核对 --rpc-project 报 unknown flag/exit(2)（OmpProjectUnsupportedError）时
+// 成立，调用方整体永久回落旧拓扑；启动/v3 协商失败 capability 回到 null
 // （available() 暂为 false，下一次 ensure() 重新拉起）；进程意外退出后能力判定不变。
 
 import {
@@ -15,7 +16,7 @@ import type {
   OmpSessionProcess,
   OmpSessionProcessHandlers,
 } from "../app/ports.js";
-import { OmpProjectProcess } from "./ompProjectProcess.js";
+import { OmpProjectProcess, OmpProjectUnsupportedError } from "./ompProjectProcess.js";
 import { OmpProjectSessionChannel } from "./ompProjectChannel.js";
 import { logger } from "./logger.js";
 
@@ -24,6 +25,7 @@ export interface OmpProjectGatewayDeps {
   extraArgs: string[];
   cwd: string;
   onSessionsChanged?: () => void;
+  onSkillsChanged?: (scope: string | undefined) => void;
   onCatalogChanged?: () => void;
   onExit?: (code: number | null) => void;
 }
@@ -56,6 +58,9 @@ export class OmpProjectGateway {
 
   /** 懒启动并返回可用进程；无项目模式或启动失败返回 null（回落旧拓扑）。 */
   async ensure(): Promise<OmpProjectProcess | null> {
+    // 修复（S7-3）：dispose 后不得再拉起进程——目录刷新等在飞调用进入 ensure 会
+    // spawn 一个注定被 startProcess 的 disposed 检查丢弃的进程（资源泄漏 + 退出噪音）。
+    if (this.disposed) return null;
     if (this.capability === false) return null;
     if (this.process?.running) return this.process;
     if (this.starting) return this.starting;
@@ -75,6 +80,9 @@ export class OmpProjectGateway {
       cwd: this.deps.cwd,
       hooks: {
         onSessionsChanged: this.deps.onSessionsChanged,
+        // 修复（B3）：技能目录变化（reload_skills、技能启停/复制/删除后发出，
+        // rpc-project.ts/rpc-project-skills.ts）与目录变化同路透传给宿主。
+        onSkillsChanged: this.deps.onSkillsChanged,
         onCatalogChanged: this.deps.onCatalogChanged,
         onExit: (code) => {
           if (this.process === attempt) this.process = null;
@@ -98,6 +106,17 @@ export class OmpProjectGateway {
       this.process = attempt;
       return attempt;
     } catch (error) {
+      // 修复（B4）：真旧核（pre-fork.271）对 --rpc-project 报 unknown flag 并 exit(2)，
+      // 永远不会 ready——每个退避窗过后再 spawn 都注定失败。识别 OmpProjectUnsupportedError
+      // 标记后按「ready 无项目模式」同语义永久回落（capability=false，-32601 语义）。
+      if (error instanceof OmpProjectUnsupportedError) {
+        this.capability = false;
+        logger.info("omp 旧核不支持项目模式（--rpc-project unknown flag/exit 2），永久回落旧拓扑", {
+          error: error.message,
+        });
+        await attempt.dispose().catch(() => {});
+        return null;
+      }
       // 启动失败按能力缺失处理一次；退避窗口内不再重试，窗口过后允许重新拉起。
       this.capability = null;
       this.nextRetryAt = Date.now() + OmpProjectGateway.START_RETRY_BACKOFF_MS;

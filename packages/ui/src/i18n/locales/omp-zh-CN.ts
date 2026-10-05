@@ -214,6 +214,7 @@ const ompZhCNOverrides: Record<string, string> = {
   "ompSubagentControl.status": "操作结果",
   "ompSubagentControl.failed": "操作失败",
   "ompModelRoles.fromAgent": "来自 OMP 运行时的完整角色目录（含未配置项）；选择后自动保存。",
+  "ompModelRoles.loadUnavailable": "OMP 角色目录暂不可用：项目进程可能正在启动或暂时不可用",
   "ompModelRoles.saveFailed": "保存失败",
   "ompModelRoles.saving": "保存中…",
   "ompModelRoles.saved": "已保存",

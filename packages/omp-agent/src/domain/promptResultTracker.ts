@@ -24,9 +24,16 @@ export class PromptResultTracker {
     }
   }
 
-  shouldFinish(frame: { id?: string; agentInvoked?: boolean }): boolean {
+  shouldFinish(frame: { id?: string; agentInvoked?: boolean; status?: string }): boolean {
     const matched = frame.id ? this.pendingIds.delete(frame.id) : false;
-    return matched && frame.agentInvoked === false;
+    // 修复（A1）：新核（v18.4.10+ 输入门）被取消/失败的 prompt 以
+    // prompt_result(status=aborted/error, agentInvoked=true) 收尾且无模型回合（响应
+    // success 不带 data → 已在本 tracker 登记 id）；此类终态同样需要上抛
+    // （onPromptResult）供引擎收口轮次，不能只认 agentInvoked===false。
+    return (
+      matched &&
+      (frame.agentInvoked === false || frame.status === "aborted" || frame.status === "error")
+    );
   }
 
   clear(): void {

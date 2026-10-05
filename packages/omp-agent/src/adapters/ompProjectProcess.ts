@@ -1,6 +1,7 @@
 // OMP 项目进程宿主（rpc-ui-protocol.md §4/§13）：一个 workspace 一个 omp 项目进程，
-// `--mode rpc-ui --rpc-project`，承载全部会话。本文件只负责进程 IO、ready/协商、
-// 请求关联与按 sessionId 的帧路由；会话级命令包装与侧信道在 ompProjectChannel。
+// `--mode rpc-ui --rpc-project`，承载全部会话。本文件只负责进程 IO、协商、请求关联
+// 与按 sessionId 的帧路由；ready 等待/归因在 ompProjectReadyGate，会话级命令包装与
+// 侧信道在 ompProjectChannel。
 //
 // 回落约定：ready 未声明 mode:"rpc-ui-project"（旧版内嵌 omp）时 start() 返回 null，
 // 调用方整体回落「每会话一进程」拓扑，不混用。
@@ -9,15 +10,18 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createInterface } from "node:readline";
 import { OmpFrameAssembler } from "../domain/frameAssembler.js";
 import { ompRpcChunkFrameSchema } from "../domain/ompFrames.js";
-import { ompProjectReadyInfoSchema, type OmpProjectCommand } from "../domain/ompProjectFrames.js";
+import type { OmpProjectCommand } from "../domain/ompProjectFrames.js";
 import { encodeJsonlLine } from "../domain/jsonlFraming.js";
 import { parseJson } from "./jsonl.js";
+import { ompCommandTimeoutMs } from "./ompProcess.js";
+import { OmpProjectReadyGate } from "./ompProjectReadyGate.js";
 import { logger } from "./logger.js";
 import type { OmpCommandOutcome } from "../app/ports.js";
 
-const COMMAND_TIMEOUT_MS = 120_000;
-const READY_TIMEOUT_MS = 60_000;
+// 真旧核标记错误随 ready 门抽出；re-export 保住 gateway 的既有 import 路径。
+export { OmpProjectUnsupportedError } from "./ompProjectReadyGate.js";
 
+// 请求超时按命令类型选择（用户输入类放宽，见 ompProcess 的 ompCommandTimeoutMs）。
 interface PendingCommand {
   resolve: (outcome: OmpCommandOutcome) => void;
   timer: NodeJS.Timeout;
@@ -52,6 +56,13 @@ export class OmpProjectProcess {
   private readonly cwd: string;
   private disposed = false;
   private readonly instanceIdRef: { value: string | null } = { value: null };
+  /** ready 等待/归因门（抽出见 ompProjectReadyGate.ts）：ready 解析结果回写本宿主。 */
+  private readonly readyGate = new OmpProjectReadyGate({
+    onInstanceId: (instanceId) => {
+      this.instanceIdRef.value = instanceId;
+    },
+    onMaxReassembledFrameBytes: (limit) => this.assembler.updateMaxReassembledBytes(limit),
+  });
 
   constructor(options: {
     binaryPath: string;
@@ -93,11 +104,9 @@ export class OmpProjectProcess {
     child.stdin.on("error", (error) => {
       logger.debug("omp project stdin error", { error: String(error) });
     });
-    child.stderr.on("data", (chunk: Buffer) => {
-      const text = chunk.toString("utf8").trim();
-      if (text.length > 0) logger.debug("omp project stderr", { text: text.slice(0, 2000) });
-    });
-    const ready = await this.awaitProjectReady(child);
+    // stderr 尾部缓冲与 ready 前归因（修复 B4/B6）内聚在 ready 门。
+    this.readyGate.observeStderr(child);
+    const ready = await this.readyGate.awaitReady(child);
     if (!ready) {
       await this.killChild();
       return false;
@@ -118,48 +127,6 @@ export class OmpProjectProcess {
     }
     logger.info("omp 项目模式就绪", { processInstanceId: this.instanceIdRef.value, cwd: this.cwd });
     return true;
-  }
-
-  /** 解析 ready 帧：仅项目模式（mode:"rpc-ui-project"）返回 true。 */
-  private awaitProjectReady(child: ChildProcessWithoutNullStreams): Promise<boolean> {
-    return new Promise<boolean>((resolve, reject) => {
-      const timer = setTimeout(
-        () => reject(new Error("omp project core ready timeout")),
-        READY_TIMEOUT_MS,
-      );
-      const onLine = (line: string) => {
-        const frame = parseJson(line);
-        if (!frame || typeof frame !== "object" || (frame as { type?: unknown }).type !== "ready") {
-          return;
-        }
-        const parsed = ompProjectReadyInfoSchema.safeParse(frame);
-        if (!parsed.success) {
-          // 非 v3 fork surface 的旧 omp：单会话模式，整体回落。
-          clearTimeout(timer);
-          readline.removeListener("line", onLine);
-          resolve(false);
-          return;
-        }
-        this.instanceIdRef.value = parsed.data.processInstanceId;
-        clearTimeout(timer);
-        readline.removeListener("line", onLine);
-        resolve(true);
-      };
-      const readline = createInterface({ input: child.stdout });
-      readline.on("line", onLine);
-      readline.once("close", () => {
-        clearTimeout(timer);
-        reject(new Error("omp project core stdout closed before ready"));
-      });
-      child.once("exit", (code) => {
-        clearTimeout(timer);
-        reject(new Error(`omp project core exited before ready (code ${code ?? "null"})`));
-      });
-      child.once("error", (error) => {
-        clearTimeout(timer);
-        reject(error instanceof Error ? error : new Error(String(error)));
-      });
-    });
   }
 
   private wireStdout(child: ChildProcessWithoutNullStreams): void {
@@ -211,6 +178,9 @@ export class OmpProjectProcess {
           this.requestSessionById.delete(id);
           this.channels.get(sessionId)?.handleFrame(record);
         }
+      } else {
+        // 修复（B2）：无 id 的 response 帧无法关联请求，统一 debug 留痕便于排查。
+        logger.debug("project response frame without id dropped", { type: "response" });
       }
       return;
     }
@@ -225,12 +195,26 @@ export class OmpProjectProcess {
         this.hooks.onCatalogChanged?.();
         return;
       case "operation_result":
+        // 修复（B2）：显式忽略的帧统一 debug 留痕（高频诊断不落盘语义）。
+        logger.debug("project frame ignored", { type: "operation_result" });
         return;
-      case "extension_error":
+      case "extension_error": {
+        // 修复（B2）：extension_error 携带 message 时截断带上，便于定位 omp 侧扩展错误。
+        const message =
+          typeof record.message === "string" ? record.message.slice(0, 200) : undefined;
+        logger.debug("project frame ignored", {
+          type: "extension_error",
+          ...(message !== undefined ? { message } : {}),
+        });
+        return;
+      }
       case "host_tool_call":
       case "host_tool_cancel":
       case "host_uri_request":
       case "host_uri_cancel":
+        // 修复（B2）：宿主工具/URI 回调帧本适配器未注册消费，统一 debug 留痕。
+        logger.debug("project frame ignored", { type: String(record.type) });
+        return;
       case "ready":
         return;
       default: {
@@ -242,6 +226,12 @@ export class OmpProjectProcess {
           logger.debug("project frame for unattached session dropped", {
             sessionId,
             type: String(record.type),
+          });
+        } else {
+          // 修复（B2）：无 sessionId 的未知帧无法路由，debug 注明 dropped:no-session。
+          logger.debug("project frame dropped", {
+            type: String(record.type),
+            dropped: "no-session",
           });
         }
         return;
@@ -267,7 +257,7 @@ export class OmpProjectProcess {
   sendSessionCommand(
     sessionId: string,
     command: Record<string, unknown>,
-    timeoutMs = COMMAND_TIMEOUT_MS,
+    timeoutMs = ompCommandTimeoutMs(command),
   ): Promise<OmpCommandOutcome> {
     // 显式确定命令 id（request 复用已有 id）：先记发送记录再发送，避免 response 早到无主。
     const id =
@@ -287,7 +277,7 @@ export class OmpProjectProcess {
 
   request(
     command: Record<string, unknown>,
-    timeoutMs = COMMAND_TIMEOUT_MS,
+    timeoutMs = ompCommandTimeoutMs(command),
   ): Promise<OmpCommandOutcome> {
     const child = this.child;
     if (!child || child.killed) {

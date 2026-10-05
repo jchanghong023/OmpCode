@@ -109,6 +109,11 @@ export class OmpProjectSessionChannel implements OmpSessionProcess {
         task: parsed.data.task,
         sessionFile: parsed.data.sessionFile,
         parentToolCallId: parsed.data.parentToolCallId,
+        // lastUpdate 透传（ISO → 毫秒）：OmpSubagentBridge.applySnapshot 在重启 bootstrap 无
+        // prior.startedAt 时优先用它作为运行卡片 startedAt，避免每次刷新都回落 Date.now()。
+        ...(parsed.data.lastUpdate
+          ? { lastUpdate: Date.parse(parsed.data.lastUpdate) || undefined }
+          : {}),
       });
     }
     return { ...outcome, data: { ...(data as object), subagents } };
@@ -206,8 +211,26 @@ export class OmpProjectSessionChannel implements OmpSessionProcess {
           this.contextResult.resolve(agentInvoked === false);
           return;
         }
-        if (id && this.promptResults.shouldFinish({ id, agentInvoked })) {
-          this.handlers.onPromptResult?.({ type: "prompt_result", id, agentInvoked });
+        // 修复（A1 接线）：真实 omp 的 prompt_result 携带 status/sessionSettled/error
+        // （v18.3.1 起，内嵌核已在发）；新核输入门取消的 prompt 以 aborted 收尾且无模型
+        // 回合，status 必须透传给 tracker 与引擎，否则轮次永不收口。
+        const status = typeof record.status === "string" ? record.status : undefined;
+        const errorText =
+          typeof record.error === "string"
+            ? record.error
+            : record.error &&
+                typeof record.error === "object" &&
+                typeof (record.error as { message?: unknown }).message === "string"
+              ? (record.error as { message: string }).message
+              : undefined;
+        if (id && this.promptResults.shouldFinish({ id, agentInvoked, status })) {
+          this.handlers.onPromptResult?.({
+            type: "prompt_result",
+            id,
+            agentInvoked,
+            ...(status !== undefined ? { status } : {}),
+            ...(errorText !== undefined ? { error: errorText } : {}),
+          });
         }
         return;
       }
@@ -290,16 +313,28 @@ export class OmpProjectSessionChannel implements OmpSessionProcess {
   }
 }
 
-/** 项目模式状态 → OmpSubagentBridge 使用的旧状态词。 */
+/**
+ * 项目模式状态 → OmpSubagentBridge 使用的旧状态词。
+ * 修复（C2）：durable 终态还有 parked（完成后驻留）与 interrupted（崩溃中断，
+ * rpc-project-subagents.buildFinishedSubagentRow），旧 default→"running" 会把它们映射成
+ * 永不终止的运行卡片。running 是 live 词；一切未知非 live 词必须映射为终态——
+ * parked 有完成事实按 success；interrupted 无完成事实按 cancelled（与 aborted 同为
+ * 未完成终态）。目录侧 ompProjectDirectory.projectStatusToDirectory 已按 R1③ 同步为
+ * parked→success、interrupted→cancelled，两个表面词汇一致。
+ */
 function projectSubagentStatusToLegacy(status: string | undefined): string {
   switch (status) {
+    case "running":
+      return "running";
     case "completed":
       return "success";
     case "failed":
       return "failed";
     case "aborted":
-      return "aborted";
+    case "interrupted":
+      return "cancelled";
     default:
-      return "running";
+      // parked 及一切未知词：宁可收敛到终态，绝不误标 running（永不终止卡片）。
+      return status === "parked" ? "success" : "cancelled";
   }
 }

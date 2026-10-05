@@ -13,6 +13,17 @@ import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";
 import { commandAckSchema } from "@zcode/shared/zcode-protocol-v4";
+import { createLegacyHandlers } from "../src/app/legacyMethods.js";
+import { projectSubagentDirectory } from "../src/app/ompProjectDirectory.js";
+import { OmpSubagentBridge } from "../src/app/ompSubagentBridge.js";
+import { OmpProjectSessionChannel } from "../src/adapters/ompProjectChannel.js";
+import type { AttachmentStore } from "../src/app/attachmentStore.js";
+import type { SessionRegistry } from "../src/app/sessionRegistry.js";
+import type {
+  OmpCommandOutcome,
+  OmpProjectGatewayPort,
+  OmpSessionProcess,
+} from "../src/app/ports.js";
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const adapterEntry = join(packageRoot, "src", "adapters", "cliMain.ts");
@@ -179,11 +190,14 @@ interface AdapterRun {
   harness: AdapterHarness;
   /** fake 项目核的进程标记文件：`start <pid>` / `exit <pid>` 行。 */
   markerPath: string;
+  /** fake 会话目录（进程退出后写 facts.json，供断言 fake 侧收到的事实）。 */
+  sessionDir: string;
 }
 
 async function startAdapter(extraEnv: Record<string, string> = {}): Promise<AdapterRun> {
   const runDir = mkdtempSync(join(scratchRoot, "run-"));
   const markerPath = join(runDir, "marker.log");
+  const sessionDir = join(runDir, "sessions");
   const child = spawn(process.execPath, [tsxCliPath, adapterEntry, "app-server", "--stdio"], {
     cwd: packageRoot,
     env: {
@@ -193,7 +207,7 @@ async function startAdapter(extraEnv: Record<string, string> = {}): Promise<Adap
       ZCODE_WORKSPACE_IDENTITY: "test-workspace",
       PI_CONFIG_DIR: join(packageRoot, ".test-omp-home"),
       FAKE_OMP_MARKER: markerPath,
-      FAKE_OMP_SESSION_DIR: join(runDir, "sessions"),
+      FAKE_OMP_SESSION_DIR: sessionDir,
       ...extraEnv,
     },
     stdio: ["pipe", "pipe", "pipe"],
@@ -207,7 +221,21 @@ async function startAdapter(extraEnv: Record<string, string> = {}): Promise<Adap
         (frame as { params?: { phase?: string } }).params?.phase === "ready",
     ),
   );
-  return { harness, markerPath };
+  return { harness, markerPath, sessionDir };
+}
+
+/** 等 fake 项目核退出（标记文件出现 exit 行）并读取 facts.json（fake 侧收到的事实）。 */
+async function readFacts(run: AdapterRun): Promise<Record<string, unknown[]>> {
+  await run.harness.waitUntil(() => {
+    try {
+      return readFileSync(run.markerPath, "utf8")
+        .split(/\r?\n/)
+        .some((line) => line.startsWith("exit"));
+    } catch {
+      return false;
+    }
+  });
+  return JSON.parse(readFileSync(join(run.sessionDir, "facts.json"), "utf8"));
 }
 
 function markerStarts(path: string): number {
@@ -306,12 +334,12 @@ test("Z08: 普通消息流式回答、工具过程与完成态", async () => {
       const rows = harness.collectRows(topic);
       return [...rows.values()].some((row) => JSON.stringify(row).includes("echo:hello world"));
     });
-    const state = harness.collectState(topic);
-    assert.equal(
-      (state as { control?: { phase?: string } }).control?.phase,
-      "completedSuccess",
-      JSON.stringify(state.control),
-    );
+    // 行内容可见与轮次收口 patch 之间有毫秒级窗口，负载下立即断言会偶发 phase=running：
+    // 与 Z03 的 G12 断言同式，等待收口事实而非直接断言。
+    await harness.waitUntil(() => {
+      const state = harness.collectState(topic) as { control?: { phase?: string } };
+      return state.control?.phase === "completedSuccess" ? state.control : undefined;
+    });
   } finally {
     harness.endStdin();
     await harness.exited;
@@ -429,14 +457,24 @@ test("Z09/Z10/Z15: 子代理过程卡片、只读详情、目录与控制入口"
       ),
       JSON.stringify(directory.result.ended),
     );
-    // 控制入口（Z15）：send_message / stop 返回真实状态。
+    // 控制入口（Z15）：stop/send_message 返回真实状态（rpc-project-subagents.control：
+    // stop → stopping（中止已请求，非同步完成）；send_message → sent + receipts 送达回执）。
     const control = (await harness.request("session/controlSubagent", {
       workspace: { workspacePath: packageRoot, workspaceKey: "test-workspace" },
       sessionId,
       subagentId: "sa-1",
       action: "stop",
     })) as { result: { status: string } };
-    assert.equal(control.result.status, "stopped");
+    assert.equal(control.result.status, "stopping");
+    const send = (await harness.request("session/controlSubagent", {
+      workspace: { workspacePath: packageRoot, workspaceKey: "test-workspace" },
+      sessionId,
+      subagentId: "sa-1",
+      action: "send_message",
+      message: "status report",
+    })) as { result: { status: string; receipts?: { to: string; outcome: string }[] } };
+    assert.equal(send.result.status, "sent");
+    assert.equal(send.result.receipts?.[0]?.to, "sa-1", JSON.stringify(send.result));
   } finally {
     harness.endStdin();
     await harness.exited;
@@ -709,4 +747,349 @@ test("项目方法错误语义：旧核 -32601 永久缺失；进程启动失败
     const code = await broken.harness.exited;
     assert.ok(code === 0 || code === null, `adapter exit code ${code}`);
   }
+});
+
+test("C1: 子代理详情窗口分批续读——跨窗记录全量可见且 fromByte 推进", async () => {
+  // 窗口 129B = fixture 首两条记录较长行（128B）+ 换行：首窗只装得下第 1 行，
+  // 第 2 行必须经 fromByte 续读才能进视图（真实核默认 256KiB 窗口的缩小复现）。
+  const run = await startAdapter({ FAKE_OMP_SUBAGENT_WINDOW_BYTES: "129" });
+  try {
+    const sessionId = await createSession(run.harness, "create-window", "spawn subagent please");
+    const topic = `conversation/${sessionId}`;
+    await subscribe(run.harness, topic, "c1-window");
+    await run.harness.waitUntil(() => {
+      const state = run.harness.collectState(topic);
+      const subagents = (state as { subagents?: { childSessionIds?: string[] } }).subagents;
+      return Array.isArray(subagents?.childSessionIds) && subagents.childSessionIds.length > 0;
+    });
+    const viewId = ((
+      run.harness.collectState(topic) as { subagents?: { childSessionIds?: string[] } }
+    ).subagents?.childSessionIds ?? [])[0];
+    const viewTopic = `conversation/${viewId}`;
+    await subscribe(run.harness, viewTopic, "c1-window-view");
+    // 两行都必须可见：第 2 行只在第二窗返回，验证视图按游标续读后全量重建。
+    await run.harness.waitUntil(() => {
+      const rows = [...run.harness.collectRows(viewTopic).values()];
+      const texts = rows.map((row) => String(row.text ?? ""));
+      return (
+        texts.some((text) => text.includes("scan the repo")) &&
+        texts.some((text) => text.includes("scanned 3 files"))
+      );
+    });
+  } finally {
+    run.harness.endStdin();
+    await run.harness.exited;
+  }
+  // wire 事实：视图读取携带 fromByte/maxBytes，且 fromByte 严格推进（bridge 的 transcript
+  // 读取不带 maxBytes，不在此列）。
+  const facts = await readFacts(run);
+  const viewReads = (
+    facts.subagentMessages as { fromByte: number; maxBytes: number | null }[]
+  ).filter((entry) => entry.maxBytes === 1_048_576);
+  assert.ok(viewReads.length >= 2, `视图读取应至少两窗：${JSON.stringify(viewReads)}`);
+  assert.equal(viewReads[0]!.fromByte, 0, "首窗从 0 开始");
+  assert.ok(
+    viewReads.slice(1).some((entry) => entry.fromByte > 0),
+    `续读窗 fromByte 必须推进：${JSON.stringify(viewReads)}`,
+  );
+});
+
+test("C1: recordTooLarge 单条超窗——详情视图出「记录过大」标记行", async () => {
+  // 强制窗口 1B：首条记录必然超窗（真实语义：entries 空、游标不动、recordTooLarge 报大小）。
+  const run = await startAdapter({ FAKE_OMP_SUBAGENT_RECORD_TOO_LARGE: "1" });
+  try {
+    const sessionId = await createSession(run.harness, "create-too-large", "spawn subagent please");
+    const topic = `conversation/${sessionId}`;
+    await subscribe(run.harness, topic, "c1-too-large");
+    await run.harness.waitUntil(() => {
+      const state = run.harness.collectState(topic);
+      const subagents = (state as { subagents?: { childSessionIds?: string[] } }).subagents;
+      return Array.isArray(subagents?.childSessionIds) && subagents.childSessionIds.length > 0;
+    });
+    const viewId = ((
+      run.harness.collectState(topic) as { subagents?: { childSessionIds?: string[] } }
+    ).subagents?.childSessionIds ?? [])[0];
+    const viewTopic = `conversation/${viewId}`;
+    await subscribe(run.harness, viewTopic, "c1-too-large-view");
+    await run.harness.waitUntil(() =>
+      [...run.harness.collectRows(viewTopic).values()].some((row) =>
+        String(row.text ?? "").includes("记录过大"),
+      ),
+    );
+  } finally {
+    run.harness.endStdin();
+    await run.harness.exited;
+  }
+});
+
+test("C2: durable 终态（parked/interrupted）不产生永不终止 running 卡片", async () => {
+  const run = await startAdapter();
+  try {
+    const sessionId = await createSession(run.harness, "create-durable", "spawn subagent please");
+    const topic = `conversation/${sessionId}`;
+    await subscribe(run.harness, topic, "c2-durable");
+    await run.harness.waitUntil(() => {
+      const state = run.harness.collectState(topic);
+      const subagents = (state as { subagents?: { childSessionIds?: string[] } }).subagents;
+      return Array.isArray(subagents?.childSessionIds) && subagents.childSessionIds.length > 0;
+    });
+    const state = run.harness.collectState(topic) as {
+      subagents?: { childSessionIds?: string[]; running?: { agentId?: string }[] };
+    };
+    // 修复前：bridge.refresh 无过滤拉到 live+durable 合并目录，parked/interrupted 被
+    // default→running 映射成永不终止卡片。修复后 childSessionIds/running 只含真实 live 行
+    // （sa-1 完成后 running 允许为空，但绝不出现 durable 幽灵行）。
+    const ids = state.subagents?.childSessionIds ?? [];
+    assert.ok(
+      ids.length > 0 && ids.every((id) => id.includes("sa-1")),
+      `不得出现 durable 幽灵行：${JSON.stringify(ids)}`,
+    );
+    const runningIds = (state.subagents?.running ?? []).map((item) => item.agentId).filter(Boolean);
+    assert.ok(
+      runningIds.every((id) => id === "sa-1"),
+      `running 只允许真实 live 行（sa-1）：${JSON.stringify(runningIds)}`,
+    );
+    // durable 目录（session/subagents ended）：parked（完成后驻留，有完成事实）→ success、
+    // interrupted（崩溃中断）→ cancelled（R1③：ompProjectDirectory 的目录侧映射），
+    // 绝不在 running。
+    const directory = (await run.harness.request("session/subagents", {
+      workspace: { workspacePath: packageRoot, workspaceKey: "test-workspace" },
+      sessionId,
+    })) as { result: { ended: { items: { agentId: string; status: string }[] } } };
+    const byId = new Map(directory.result.ended.items.map((item) => [item.agentId, item.status]));
+    assert.equal(byId.get("sa-done"), "success");
+    assert.equal(byId.get("sa-parked"), "success");
+    assert.equal(byId.get("sa-crashed"), "cancelled");
+  } finally {
+    run.harness.endStdin();
+    await run.harness.exited;
+  }
+  // wire 事实：refresh 的 get_subagents 必须带 status:"running" 过滤（fake 无过滤时返回
+  // live+durable 合并目录，正是旧缺陷源头）。
+  const facts = await readFacts(run);
+  const lists = facts.subagentLists as { status: string | null }[];
+  assert.ok(
+    lists.some((entry) => entry.status === "running"),
+    `refresh 应带 status=running 过滤：${JSON.stringify(lists)}`,
+  );
+  assert.ok(
+    lists.every((entry) => entry.status !== null),
+    `适配器所有目录请求都应显式带 status：${JSON.stringify(lists)}`,
+  );
+});
+
+test("C6: 冷会话改名走项目级 rename_session；未知会话错误透传", async () => {
+  const run = await startAdapter();
+  try {
+    const sessionId = await createSession(run.harness, "create-cold-rename");
+    // 卸载引擎（close 保留 omp 会话）：renameSession 走冷会话路径。
+    await run.harness.request("session/close", { sessionId });
+    const renamed = (await run.harness.request("v4/command", {
+      commandId: "rename-cold",
+      clientId: "test-client",
+      sessionId,
+      type: "renameSession",
+      payload: { title: "cold renamed" },
+      issuedAt: Date.now(),
+    })) as { result: unknown };
+    const ack = commandAckSchema.parse(renamed.result);
+    assert.equal(ack.status, "accepted", JSON.stringify(renamed));
+    // 未知会话：omp not_found 错误透传（错误码随消息透出）。
+    const unknown = (await run.harness.request("v4/command", {
+      commandId: "rename-ghost",
+      clientId: "test-client",
+      sessionId: "ghost-session-not-exist",
+      type: "renameSession",
+      payload: { title: "x" },
+      issuedAt: Date.now(),
+    })) as { error?: { code: number; message: string } };
+    assert.ok(unknown.error, JSON.stringify(unknown));
+    assert.equal(unknown.error.code, -32004);
+    assert.match(unknown.error.message, /not_found/);
+  } finally {
+    run.harness.endStdin();
+    await run.harness.exited;
+  }
+  const facts = await readFacts(run);
+  const renames = facts.renames as { sessionId: string; name: string }[];
+  assert.ok(
+    renames.some((entry) => entry.name === "cold renamed"),
+    `冷会话改名必须下发 rename_session：${JSON.stringify(renames)}`,
+  );
+});
+
+test("get_state 携带新核 queuedMessages（与轮次同/不同文本）不破坏流式、收口与对账", async () => {
+  // D1 容忍用例：真实核 get_state 携带 queuedMessages（RpcSessionState.queuedMessages =
+  // { steering: string[]; followUp: string[] }，v18.4.8+fork.278）。旗标 same 回显最近
+  // 输入文本（与本地轮同文本）、diff 注入无关文本；不依赖队列对账判定语义，只断言
+  // 既有流式投影、轮次收口（含 terminal agent_end 后的对账 get_state 回读）与后续
+  // 对话不受影响。
+  for (const variant of ["same", "diff"] as const) {
+    const run = await startAdapter({ FAKE_OMP_GET_STATE_NEW_FIELDS: variant });
+    try {
+      const sessionId = await createSession(
+        run.harness,
+        `create-queued-${variant}`,
+        `hello queued ${variant}`,
+      );
+      const topic = `conversation/${sessionId}`;
+      await subscribe(run.harness, topic, `queued-${variant}`);
+      await run.harness.waitUntil(() => {
+        const rows = run.harness.collectRows(topic);
+        return [...rows.values()].some((row) =>
+          JSON.stringify(row).includes(`echo:hello queued ${variant}`),
+        );
+      });
+      // 轮次正常收口，且 get_state 原字段照常落投影（schema passthrough 不拒带
+      // queuedMessages 的响应；terminal agent_end 触发的对账回读同帧面）。
+      await run.harness.waitUntil(() => {
+        const state = run.harness.collectState(topic) as {
+          control?: { phase?: string };
+          config?: { model?: string };
+        };
+        return state.control?.phase === "completedSuccess" && state.config?.model === "fake-model"
+          ? state
+          : undefined;
+      }, 30000);
+      // 后续会话可继续正常对话。
+      await sendText(run.harness, sessionId, `send-queued-${variant}`, "alive after queue");
+      await run.harness.waitUntil(() => {
+        const rows = run.harness.collectRows(topic);
+        return [...rows.values()].some((row) =>
+          JSON.stringify(row).includes("echo:alive after queue"),
+        );
+      });
+      await run.harness.waitUntil(() => {
+        const state = run.harness.collectState(topic) as { control?: { phase?: string } };
+        return state.control?.phase === "completedSuccess" ? state : undefined;
+      }, 30000);
+    } finally {
+      run.harness.endStdin();
+      await run.harness.exited;
+    }
+  }
+});
+
+// ── 以下为项目模式子代理目录/控制链路的单元级检查（同一功能分片，不拉起子进程）──
+
+function fakeProjectPort(
+  respond: (command: unknown) => Promise<OmpCommandOutcome> | OmpCommandOutcome,
+): OmpProjectGatewayPort {
+  return {
+    available: async () => true,
+    availability: async () => "available",
+    createSession: async () => {
+      throw new Error("not expected");
+    },
+    resumeSession: async () => {
+      throw new Error("not expected");
+    },
+    deleteSession: async () => ({ success: true }),
+    sendProject: (command: unknown) => Promise.resolve(respond(command)),
+    acquireSessionChannel: async () => {
+      throw new Error("not expected");
+    },
+    dispose: async () => {},
+  } as unknown as OmpProjectGatewayPort;
+}
+
+test("C3 单元: session/subagents 的 endedLimit/cursor 解析并透传为 OMP limit", async () => {
+  const sent: Record<string, unknown>[] = [];
+  const handlers = createLegacyHandlers({
+    registry: {} as SessionRegistry,
+    attachments: {} as AttachmentStore,
+    workspacePath: packageRoot,
+    workspaceKey: "test-workspace",
+    deliveredAccountConfigRevision: null,
+    loadWorkspaceConfig: async () => ({ slashCommands: [], configOptions: [] }) as never,
+    listSubagents: (sessionId, offset, limit) =>
+      projectSubagentDirectory(
+        {
+          project: fakeProjectPort((command) => {
+            sent.push(command as Record<string, unknown>);
+            return { success: true, data: { items: [] } };
+          }),
+          projectAvailable: async () => true,
+          projectionDirectory: () => null,
+        },
+        sessionId,
+        offset,
+        limit,
+      ),
+  });
+  const subagents = handlers["session/subagents"]!;
+  await subagents({ sessionId: "s1", endedLimit: 50 });
+  assert.equal(sent.at(-1)!.limit, 50, "endedLimit=50 应透传为 OMP limit=50");
+  await subagents({ sessionId: "s1", endedLimit: 500 });
+  assert.equal(sent.at(-1)!.limit, 100, "超出协议上限应 clamp 到 100");
+  await subagents({ sessionId: "s1", endedLimit: 0 });
+  assert.equal(sent.at(-1)!.limit, 1, "低于下限应 clamp 到 1");
+  await subagents({ sessionId: "s1" });
+  assert.equal(sent.at(-1)!.limit, 20, "缺省为协议默认 20");
+  await subagents({ sessionId: "s1", endedCursor: "3" });
+  assert.equal(sent.at(-1)!.cursor, 3, "endedCursor 解析为 OMP cursor");
+  assert.equal(sent.at(-1)!.status, "finished", "目录请求固定 finished 过滤");
+});
+
+test("C5/C2 单元: 通道 normalize 透传 lastUpdate 且 durable 终态不映射 running", async () => {
+  const items = [
+    { subagentId: "sa-live", status: "running", lastUpdate: "2026-09-29T00:00:00.000Z" },
+    { subagentId: "sa-parked", status: "parked", lastUpdate: "2026-09-29T01:00:00.000Z" },
+    { subagentId: "sa-crashed", status: "interrupted", lastUpdate: "2026-09-29T02:00:00.000Z" },
+    { subagentId: "sa-unknown", status: "weird-future-status" },
+  ];
+  const channel = new OmpProjectSessionChannel(
+    {
+      sendSessionCommand: async () => ({ success: true, data: { items, revision: "r1" } }),
+    } as never,
+    "s1",
+    {} as never,
+  );
+  const outcome = await channel.send({ type: "get_subagents" });
+  assert.ok(outcome.success);
+  const subagents = (
+    outcome.data as { subagents: { id: string; status: string; lastUpdate?: number }[] }
+  ).subagents;
+  const byId = new Map(subagents.map((row) => [row.id, row]));
+  assert.equal(byId.get("sa-live")!.status, "running");
+  // parked（完成后驻留）有完成事实 → success；interrupted（崩溃中断）→ cancelled；
+  // 未知词 → cancelled：一切非 live 词都是终态，绝不产生永不终止 running 卡片。
+  assert.equal(byId.get("sa-parked")!.status, "success");
+  assert.equal(byId.get("sa-crashed")!.status, "cancelled");
+  assert.equal(byId.get("sa-unknown")!.status, "cancelled");
+  assert.equal(byId.get("sa-parked")!.lastUpdate, Date.parse("2026-09-29T01:00:00.000Z"));
+  assert.equal(byId.get("sa-unknown")!.lastUpdate, undefined, "无 lastUpdate 不伪造");
+});
+
+test("C2 单元: bridge.refresh 项目模式带 status=running 过滤（旧拓扑保持原形状）", async () => {
+  const commands: unknown[] = [];
+  const process = {
+    projectMode: true,
+    ompSessionFile: null,
+    send: async (command: unknown) => {
+      commands.push(command);
+      return { success: true, data: { subagents: [] } };
+    },
+  } as unknown as OmpSessionProcess;
+  const bridge = new OmpSubagentBridge(
+    {
+      upsertSubagent: () => {},
+      setSubagentAvailability: () => {},
+    } as never,
+    () => process,
+    () => {},
+  );
+  await bridge.refresh(process);
+  assert.deepEqual(
+    commands.at(-1),
+    { type: "get_subagents", status: "running" },
+    "项目模式 refresh 只要 live 行（durable 目录经终态映射/lost 呈现）",
+  );
+  const legacyProcess = { ...process, projectMode: undefined } as unknown as OmpSessionProcess;
+  await bridge.refresh(legacyProcess);
+  assert.deepEqual(
+    commands.at(-1),
+    { type: "get_subagents" },
+    "旧拓扑核无 status 参数，保持原命令形状",
+  );
 });

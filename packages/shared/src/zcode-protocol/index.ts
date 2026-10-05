@@ -2817,8 +2817,16 @@ export type ZCodeControlSubagentParams = z.infer<typeof zcodeControlSubagentPara
 export const zcodeControlSubagentResultSchema = z.object({
   subagentId: z.string(),
   action: z.enum(["send_message", "stop"]),
-  status: z.enum(["sent", "queued", "stopped", "stopping", "accepted"]),
+  // 真值（rpc-project-subagents.control）：stop → "stopping"（中止已请求，非同步完成）、
+  // send_message → "sent"；"stopped" 是 fake 旧假值已随 fake 对齐真值移除。
+  status: z.enum(["sent", "queued", "stopping", "accepted"]),
   detail: z.string().optional(),
+  // send_message 的送达回执（Delivery ≠ processing，§14.8）：{to, outcome, error?}。
+  receipts: z
+    .array(
+      z.object({ to: z.string(), outcome: z.string(), error: z.string().optional() }).passthrough(),
+    )
+    .optional(),
 });
 export type ZCodeControlSubagentResult = z.infer<typeof zcodeControlSubagentResultSchema>;
 

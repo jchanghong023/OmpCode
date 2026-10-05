@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { ZCodeOmpCommandCompletionItem } from "@zcode/shared";
 import { useWorkspaceServicesResolution } from "@/hooks/useWorkspaceServices.js";
+import { isOmpCapabilityMissingError } from "@/v4/composer/ompModelRolesFallback.js";
 import { logger } from "@/logger.js";
 
 export interface OmpCommandCompletionState {
@@ -104,7 +105,7 @@ export function useOmpCommandCompletion(
           if (seq !== seqRef.current) return;
           // 能力缺失是合法回落（旧核 -32601）；记入 ref 跳过后续请求。其余仅记录，不打断输入。
           const message = error instanceof Error ? error.message : String(error);
-          if (message.includes("not supported by omp core")) {
+          if (isOmpCapabilityMissingError(error)) {
             capabilityMissingRef.current = true;
           }
           logger.debug("[useOmpCommandCompletion] 动态补全不可用", { error: message });

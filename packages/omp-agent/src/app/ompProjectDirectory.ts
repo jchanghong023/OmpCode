@@ -17,11 +17,13 @@ export interface OmpProjectDirectoryDeps {
 /**
  * 项目模式子代理目录：running 来自父会话投影；ended 以 OMP 持久目录为准。
  * OMP 分页无 total 字段，以「已见条数 + 是否还有下一页」近似，不伪造精确值。
+ * endedLimit（协议 default 20/max 100，zcodeSessionSubagentsParamsSchema）透传为 OMP limit。
  */
 export async function projectSubagentDirectory(
   deps: OmpProjectDirectoryDeps,
   sessionId: string,
   offset: number,
+  limit = 20,
 ): Promise<Record<string, unknown> | null> {
   if (!deps.project || !(await deps.projectAvailable())) return null;
   const projectionDirectory = deps.projectionDirectory(sessionId) ?? {
@@ -35,7 +37,7 @@ export async function projectSubagentDirectory(
     sessionId,
     status: "finished",
     cursor: offset,
-    limit: 20,
+    limit,
   });
   if (!outcome.success) {
     return projectionDirectory;
@@ -93,18 +95,28 @@ export async function controlSubagent(
   });
 }
 
-/** OMP 项目目录状态 → legacy 目录状态词（interrupted 无恢复事实按 lost）。 */
+/**
+ * OMP 项目目录状态 → legacy 目录状态词。
+ * 修复（R1③ durable 终态映射，对齐 omp v18.4.8+fork.278 rpc-project-subagents.buildFinishedSubagentRow）：
+ * parked=已完成驻留且 availableActions=PARKED_ACTIONS=["send_message"]（可 send_message 唤醒，
+ * 注释「Parked rows can still receive IRC sends (the bus revives them)」），映射 lost 会让用户
+ * 误判结果丢失且不再尝试唤醒 → success；interrupted=崩溃中断、无完成事实，按 cancelled
+ * （与通道侧 ompProjectChannel.projectSubagentStatusToLegacy 一致，消除目录面/卡片面词汇不一致）。
+ */
 function projectStatusToDirectory(
   status: string | undefined,
 ): "success" | "failed" | "cancelled" | "lost" {
   switch (status) {
     case "completed":
+    case "parked":
       return "success";
     case "failed":
       return "failed";
     case "aborted":
+    case "interrupted":
       return "cancelled";
     default:
+      // 目录只查 status:"finished"，本就不该有 live 词；未知词收敛到终态，绝不误标 running。
       return "lost";
   }
 }
