@@ -167,8 +167,6 @@ export const PlatformChannels = {
   SelectFile: "zcode:select-file",
   /** 打开系统多文件选择框 */
   SelectFiles: "zcode:select-files",
-  /** Renderer → Main：读取手机远控内嵌中继的入口链接与连接状态 */
-  MobileRelayEntry: "zcode:mobile-relay-entry",
   /** Renderer → Main：读取离线锁定门控状态（Main 唯一所有者，W4 禁用态消费） */
   OfflineGateState: "zcode:offline-gate-state",
   /** Renderer → Main：写入宿主 ~/.ompcode 临时文本附件 */
@@ -578,31 +576,7 @@ export const HostMessageTypes = {
   /** main → host：资源管理器请求 Host 采样其后代进程（Agent / MCP / 终端）的 CPU 与内存 */
   ResourceUsageSnapshotRequest: "resource-usage-snapshot-request",
   ResourceUsageSnapshotCancel: "resource-usage-snapshot-cancel",
-  /** main → host：手机远控 bootstrap 查询当前窗口可桥接工作区列表 */
-  GetWindowBridgeableWorkspaces: "get-window-bridgeable-workspaces",
 } as const;
-
-/** 手机远控 bootstrap 的单个可桥接工作区条目（Host → main → relay → 手机）。 */
-export interface WindowBridgeableWorkspace {
-  kind: "local" | "remote";
-  workspacePath: string;
-  workspaceIdentity?: string;
-  /** remote 工作区必须携带，手机端据此判定可桥接。 */
-  remoteSessionId?: string;
-}
-
-/** 手机远控内嵌中继的入口状态（Renderer 查询用）。 */
-export interface MobileRelayEntryStatus {
-  /** 手机可打开的入口链接（固定公网 origin）。 */
-  url: string;
-  /** 当前连接的手机数。 */
-  connections: number;
-  /** 本机监听端口。 */
-  listenPort: number;
-  running: boolean;
-  /** 未运行时的原因（如端口占用）。 */
-  error?: string;
-}
 
 /** host process → main process 的反馈消息类型 */
 export const HostResponseTypes = {
@@ -698,8 +672,6 @@ export const HostResponseTypes = {
   ProviderProvisioningSourceChanged: "provider-provisioning-source-changed",
   /** host → main：一次 Remote Environment 同步执行完毕。 */
   ProviderProvisioningExecutionResult: "provider-provisioning-execution-result",
-  /** host → main：手机远控 bootstrap 的工作区列表查询结果（按 requestId 关联） */
-  WindowBridgeableWorkspacesResult: "window-bridgeable-workspaces-result",
 } as const;
 
 // ============================================================================
@@ -708,10 +680,6 @@ export const HostResponseTypes = {
 
 /** 平台频道的请求/响应类型映射 */
 export interface PlatformChannelMap {
-  [PlatformChannels.MobileRelayEntry]: {
-    request: void;
-    response: MobileRelayEntryStatus;
-  };
   [PlatformChannels.OfflineGateState]: {
     request: void;
     response: OfflineGateState;

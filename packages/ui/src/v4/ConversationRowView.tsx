@@ -1279,8 +1279,8 @@ const UserInputRowView = memo(function UserInputRowView({
           {status}
         </div>
       ) : null}
-      {/* 手机远控没有 hover，v4 迁移时漏掉了旧 UserMessage 的常显分支，
-          导致复制和编辑入口不可发现；远控直接显示，桌面端继续通过 hover/focus 降噪。 */}
+      {/* 触屏没有 hover，v4 迁移时漏掉了旧 UserMessage 的常显分支，
+          导致复制和编辑入口不可发现；触屏直接显示，桌面端继续通过 hover/focus 降噪。 */}
       <MessageActions
         className={cn(
           "mt-1",

@@ -4247,7 +4247,7 @@ export function createBotsService(
           workspaceIdentity: context.workspaceIdentity,
           taskId: context.activeTaskId,
           // Bugfix: Bot channel 使用 direct stream 语义。
-          // 手机远控 replayable 的 mirror replay / snapshot gap recovery 会改变 bot 回复边界，
+          // Web replayable 的 mirror replay / snapshot gap recovery 会改变 bot 回复边界，
           // 这里使用 bot 专属 continuous 订阅，避免远控恢复逻辑影响飞书/微信等 channel。
           deliveryKind: "bot-channel-continuous",
         })(enqueueStreamEvent)

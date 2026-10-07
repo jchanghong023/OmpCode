@@ -12,7 +12,6 @@ import type {
   MigrateLegacyCommonMcpResult,
   SaveCliMcpToUserDirectoryRequest,
 } from "./mcp.js";
-import type { MobileRelayEntryStatus } from "./channels.js";
 import type { OfflineGateState } from "./offlineGate.js";
 import type { OAuthStateRegistration } from "./oauth.js";
 import type { OmpNativeIntegrationSnapshot } from "./omp-integrations.js";
@@ -553,7 +552,7 @@ export interface IPlatformService {
 
   /**
    * 从浏览器 File 对象解析宿主本地路径；只有 Desktop preload 能安全实现。
-   * Web/手机端返回 null，避免 UI 层依赖 Electron 的非标准 File.path。
+   * Web 返回 null，避免 UI 层依赖 Electron 的非标准 File.path。
    */
   getPathForFile?(file: unknown): string | null;
 
@@ -562,18 +561,11 @@ export interface IPlatformService {
 
   /**
    * 在宿主 ~/.ompcode 临时目录创建文本附件文件。
-   * 手机远控必须通过 shared-host/platform proxy 写到桌面宿主，避免大文本进入 prompt payload。
+   * Web attachment 通过 shared-host/platform proxy 写到宿主，避免大文本进入 prompt payload。
    */
   createTempTextAttachment?(
     payload: CreateTempTextAttachmentRequest,
   ): Promise<CreateTempTextAttachmentResult>;
-
-  /**
-   * 查询手机远控内嵌中继的入口状态（入口链接、连接手机数、监听端口）。
-   * 仅 Desktop main 实现（ipcMain.handle(PlatformChannels.MobileRelayEntry)）；
-   * Web/手机端没有内嵌 relay，按接口惯例返回 running=false 的固定占位。
-   */
-  getMobileRelayEntry(): Promise<MobileRelayEntryStatus>;
 
   /**
    * 查询离线锁定门控状态（CentOS 7 启动器 `--offline`，Main 唯一所有者派生，见
@@ -631,7 +623,7 @@ export interface IPlatformService {
   /** 列出当前机器 SSH config 中可用于快速填表的 alias */
   listSSHConfigAliases(): Promise<SSHConfigAliasOption[]>;
 
-  /** 读取宿主环境中的原生 MCP 用户目录配置；手机远控通过已连接桌面 host 转发。 */
+  /** 读取宿主环境中的原生 MCP 用户目录配置；Web attachment 通过已连接 host 转发。 */
   loadMcpFromUserDirectory?(
     payload?: LoadCliMcpFromUserDirectoryRequest,
   ): Promise<LoadCliMcpFromUserDirectoryResult>;
@@ -641,7 +633,7 @@ export interface IPlatformService {
     payload: SaveCliMcpToUserDirectoryRequest,
   ): Promise<{ success: boolean; error?: string }>;
 
-  /** 迁移旧版 Common MCP 配置；仅宿主环境可执行，手机远控通过 desktop attachment 转发。 */
+  /** 迁移旧版 Common MCP 配置；仅宿主环境可执行，Web attachment 通过 host 转发。 */
   migrateLegacyCommonMcp?(
     payload?: MigrateLegacyCommonMcpRequest,
   ): Promise<MigrateLegacyCommonMcpResult>;
@@ -742,9 +734,9 @@ export interface IPlatformService {
   /** 通过宿主环境上报 ARMS 自定义事件；Web 端当前为空实现 */
   reportArmsCustomEvent(payload: ArmsCustomEventPayload): Promise<void>;
 
-  /** 读取 Desktop Renderer 用户操作 Trace 的当前灰度配置；Web/手机不实现。 */
+  /** 读取 Desktop Renderer 用户操作 Trace 的当前灰度配置；Web 不实现。 */
   getRendererActionTraceConfig?(): Promise<RendererActionTraceConfigV1>;
-  /** 订阅 Main 推送的 Renderer 用户操作 Trace 配置；Web/手机不实现。 */
+  /** 订阅 Main 推送的 Renderer 用户操作 Trace 配置；Web 不实现。 */
   onRendererActionTraceConfigChanged?(
     callback: (config: RendererActionTraceConfigV1) => void,
   ): () => void;
@@ -754,7 +746,7 @@ export interface IPlatformService {
 
   /**
    * Renderer → Main：主窗口 renderer 每 60 秒的 heap 读数，进 `renderer_main` 角色事件。单向 send、fire-and-forget；
-   * Web 端与手机远控没有桥，不实现即 no-op。
+   * Web 端没有桥，不实现即 no-op。
    */
   reportRendererHeapSample?(sample: RendererHeapSample): void;
 
@@ -1015,8 +1007,8 @@ export interface IPlatformService {
   /** 获取当前设备的稳定标识符
    *
    * - 桌面端：基于 userData 路径的 SHA-256，始终稳定且唯一
-   * - 手机端（Web 远程控制）：物理属性指纹（browserPlatform | screen.width | screen.height | colorDepth），
-   *   抗浏览器/网络/语言/时区变化，换手机才会变
+   * - Web：物理属性指纹（browserPlatform | screen.width | screen.height | colorDepth），
+   *   抗浏览器/网络/语言/时区变化，更换设备才会变
    */
   getDeviceId(): string;
 }

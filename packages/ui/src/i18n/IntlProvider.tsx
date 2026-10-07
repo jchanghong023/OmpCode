@@ -230,8 +230,8 @@ export function ZCodeIntlProvider({
         return;
       }
       if (nextPreference) {
-        // 手机远控和桌面连接到同一个 settingService，但手机浏览器本地可能残留
-        // en-US/system 偏好。远控入口必须以桌面 setting.json 为准，否则会出现桌面中文、手机英文。
+        // Web 与桌面连接到同一个 settingService，但浏览器本地可能残留
+        // en-US/system 偏好。Web attachment 必须以宿主 setting.json 为准，否则会出现语言分叉。
         setLocalePreferenceState(nextPreference);
         if (preferSettingServiceLocale) {
           persistLocalePreference(nextPreference);

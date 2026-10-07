@@ -102,7 +102,6 @@ const ompZhCNOverrides: Record<string, string> = {
     "工作区目录不存在或无法访问，当前仅可查看历史记录。恢复该目录后重启 OmpCode 即可继续使用。",
   "ssh.assetInstallModeDescription":
     "远端服务器下载可减少上传等待，但服务器需要能访问 OmpCode CDN，并具备下载、解压和校验工具。",
-  "webRemoteControl.description": "通过聊天机器人控制 OmpCode 工作区。",
   "settings.terminalFontFamilyDescription":
     "留空时自动探测系统终端配置；填写后作为 OmpCode 终端的字体覆盖。",
   "settings.zcodeInteractionBehaviorDescription":

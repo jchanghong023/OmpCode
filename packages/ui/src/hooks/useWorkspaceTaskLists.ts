@@ -378,7 +378,7 @@ export function useWorkspaceTaskLists(params: {
     () => buildWorkspaceEventSubscriptionSignature(endpointShards),
     [endpointShards],
   );
-  // 列表数据源 = sessions-index。remote shard（web/手机远控/SSH workspace）
+  // 列表数据源 = sessions-index。remote shard（Web/SSH workspace）
   // 也走 sessions-index——scope 携带 endpoint 维度与该 endpoint 的 agentService proxy；
   // 尚未解析到远端 session 的 tab（断连占位）不在 endpointShards 内，等重连后自动补订阅。
   const sessionsIndexScopes = useMemo(

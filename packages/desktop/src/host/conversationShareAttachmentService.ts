@@ -50,21 +50,21 @@ export function scopeConversationShareServiceForAttachment(
       getContinuation: (input) => service.getContinuation(input),
     };
   }
-  const rejectMobileShare = async (): Promise<never> => {
+  const rejectWebShare = async (): Promise<never> => {
     throw Object.assign(new Error("Conversation sharing is only available from Desktop"), {
       kind: "feature_disabled" as const,
     });
   };
   return {
     getCapabilities: () => service.getCapabilities(),
-    preflight: rejectMobileShare,
-    publish: rejectMobileShare,
+    preflight: rejectWebShare,
+    publish: rejectWebShare,
     onDynamicPublishProgress: () => RpcEvent.None,
-    importShare: rejectMobileShare,
+    importShare: rejectWebShare,
     onDynamicImportProgress: () => RpcEvent.None,
-    // 手机远控没有本地 workspace 副本，直接返回 null 即可（不渲染只读块）。
+    // Web attachment 没有本地 workspace 副本，直接返回 null 即可（不渲染只读块）。
     getImportedConversation: async () => null,
     getPreview: (shareCode: string) => service.getPreview(shareCode),
-    getContinuation: rejectMobileShare,
+    getContinuation: rejectWebShare,
   };
 }

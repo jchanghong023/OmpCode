@@ -14,27 +14,14 @@ export function createDesktopPlatform(options: {
     selectFile: () => window.zcode.selectFile(),
     selectFiles: () => window.zcode.selectFiles?.() ?? Promise.resolve([]),
     createTempTextAttachment: (payload) => window.zcode.createTempTextAttachment(payload),
-    getMobileRelayEntry: () =>
-      // 开发态 renderer 热更新后可能短暂运行在尚未暴露 getMobileRelayEntry 的旧 preload 上；
-      // 与 getZCodeStdioTapDevState 一样做缺省兜底，返回 running=false 占位而不是抛错，
-      // 让手机远控弹层显示“服务未运行”，避免入口查询把弹层打成错误态。
-      window.zcode.getMobileRelayEntry?.() ??
-      Promise.resolve({
-        url: "",
-        connections: 0,
-        listenPort: 0,
-        running: false,
-        error: "mobile relay entry bridge unavailable",
-      }),
     getOfflineGateState: () =>
       // 开发态热更新后可能短暂运行在尚未暴露 getOfflineGateState 的旧 preload 上；
-      // 与 getMobileRelayEntry 同样缺省兜底为未锁定（Windows/未加锁 CentOS 7 全功能），
+      // 缺省兜底为未锁定（Windows/未加锁 CentOS 7 全功能），
       // 避免离线门控查询在桥接缺失时把入口误判成禁用态。
       window.zcode.getOfflineGateState?.() ??
       Promise.resolve({
         localOnly: false,
         disabledFeatures: {
-          mobileRelay: false,
           publicUpdateCheck: false,
           publicConfig: false,
           publicHelp: false,

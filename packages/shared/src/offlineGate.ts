@@ -1,13 +1,12 @@
 import { z } from "zod";
-import type { MobileRelayEntryStatus } from "./channels.js";
 
 /**
  * 离线锁定（CentOS 7 启动器 `--offline`）的唯一门控状态接口。
  *
  * 激活链：CentOS 7 启动器解析到 `--offline` 时设置 `OMPCODE_CENTOS7_LOCAL_ONLY=1`
  * （该变量的唯一设置者，Windows 不提供），桌面 Main/Host/Renderer 读取同一运行时
- * 变量关闭各自后端（需求见 docs/requirements/centos7-release.md「离线锁定的激活链」
- * 与 mobile-relay.md「平台与离线边界」）。本模块把同一事实派生成严格类型 +
+ * 变量关闭各自后端（需求见 docs/requirements/centos7-release.md「离线锁定的激活链」）。
+ * 本模块把同一事实派生成严格类型 +
  * 运行时校验的门控状态，经 `PlatformChannels.OfflineGateState` 暴露给 renderer；
  * 被关功能的 UI 禁用态由 UI 层（W4）消费本接口呈现，入口一律保留。
  *
@@ -22,8 +21,6 @@ export const OMPCODE_LOCAL_ONLY_ENV = "OMPCODE_CENTOS7_LOCAL_ONLY";
  * 全部为 `true` 表示该功能后端已关闭；未锁定时全部为 `false`（与 Windows 全功能基准一致）。
  */
 export const offlineDisabledFeaturesSchema = z.strictObject({
-  /** 手机远控 relay：不监听、不建立桥接；手机主动连入在 TCP 层被拒绝。 */
-  mobileRelay: z.boolean(),
   /** 公网更新检查（含调度与手动检查）。 */
   publicUpdateCheck: z.boolean(),
   /** 公网配置下发（客户端 configs/灰度请求）。 */
@@ -78,24 +75,4 @@ export function resolveOfflineGateState(
 /** 运行时校验外部输入（IPC payload、持久化快照等）；非法输入抛错，不静默放行。 */
 export function parseOfflineGateState(input: unknown): OfflineGateState {
   return offlineGateStateSchema.parse(input);
-}
-
-/** 手机远控入口在离线锁定下的稳定禁用原因码（UI 可据此分支，文案归 locales）。 */
-export const MOBILE_RELAY_OFFLINE_LOCKED_ERROR = "offline-locked";
-
-/**
- * 离线锁定下的手机远控入口状态：后端整体关闭（不监听、不建立桥接），
- * 入口 IPC 仍注册并回报禁用状态；手机主动连入没有监听者，在 TCP 层被明确拒绝。
- */
-export function buildOfflineLockedMobileRelayEntryStatus(params: {
-  url: string;
-  listenPort: number;
-}): MobileRelayEntryStatus {
-  return {
-    url: params.url,
-    connections: 0,
-    listenPort: params.listenPort,
-    running: false,
-    error: MOBILE_RELAY_OFFLINE_LOCKED_ERROR,
-  };
 }

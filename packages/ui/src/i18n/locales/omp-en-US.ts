@@ -110,7 +110,6 @@ const ompEnUSOverrides: Record<string, string> = {
     "The workspace directory does not exist or cannot be accessed. You can only view history for now. Restore the directory and restart OmpCode to continue.",
   "ssh.assetInstallModeDescription":
     "Remote server download reduces upload waiting, but the server must reach the OmpCode CDN and have download, extract, and checksum tools.",
-  "webRemoteControl.description": "Control OmpCode workspaces through chat bots.",
   "chat.changeSummary.rewindDialog.description":
     "OmpCode checks current file content again before writing. If another process changed a file, no files will be written.",
   "settings.terminalFontFamilyDescription":

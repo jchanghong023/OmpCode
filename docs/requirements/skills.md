@@ -17,7 +17,7 @@ omp cwd / profile / source gates → omp 会话的技能快照
 ```
 
 - omp 拥有技能发现、启用和调用状态；`omp-agent` 仅投影命令目录，不维护第二份扫描或开关状态。Host 保留现有 workspace identity 路由。GUI 草稿和会话目录按请求代次隔离，较早异步结果不得覆盖新目标。命令/技能目录与动态补全由常驻目录进程提供（`get_available_commands`/`complete_command`，规则见 [omp-core-integration.md](omp-core-integration.md)）。
-- 目录查询失败时显示加载错误，不回退到本地扫描所得的伪运行时目录。桌面连续链路和手机恢复链路均沿用现有 Host service 请求；技能选择不修改 v4 消息序列。
+- 目录查询失败时显示加载错误，不回退到本地扫描所得的伪运行时目录。桌面连续链路和 Web 恢复链路均沿用现有 Host service 请求；技能选择不修改 v4 消息序列。
 - 技能执行向会话注入的自定义上下文可能随 omp `agent_end.messages` 返回；该历史载荷不参与实时投影校验，不能阻止终态事件收口。回复完成后输入区恢复可发送，任务索引进入完成态。
 
 ## 验收

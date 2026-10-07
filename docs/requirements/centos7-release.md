@@ -3,7 +3,7 @@
 ## 平台界面与功能边界
 
 - CentOS 7 与 Windows 使用完全一致的前端 UI；Windows 为全功能基准，CentOS 7 不删除、不隐藏任何 UI 入口。
-- CentOS 7 启动器沿用现有 `--offline` 参数作为企业离线锁定开关：传入时关闭手机远控 relay、公网更新、公网配置与遥测等后端，并透传给内嵌 omp；不传入时桌面为全功能，与 Windows 基准一致。被关闭功能的 UI 入口保留，入口触发时给出明确的禁用或失败反馈，不静默缺失。
+- CentOS 7 启动器沿用现有 `--offline` 参数作为企业离线锁定开关：传入时关闭公网更新、公网配置与遥测等后端，并透传给内嵌 omp；不传入时桌面为全功能，与 Windows 基准一致。被关闭功能的 UI 入口保留，入口触发时给出明确的禁用或失败反馈，不静默缺失。
 - 与 Windows 的差异只允许存在于底层依赖与打包：Windows 运行 Electron 44.x；CentOS 7 发布流水线在构建时切换为 Electron 28.3.3 与 Node 18 兼容依赖组合（原生 glibc 2.17 资产、启动器与离线开关）。OMP 核心、协议与 UI 代码两平台同源，桌面 Main/Host/renderer 代码不得使用 Electron 44 独有 API 而缺失 Electron 28 回退。
 
 ## Product behavior
@@ -15,7 +15,7 @@
 - CentOS 7 构建任务拥有运行时选型、ELF 兼容检查、依赖版本、ZIP 布局、符号链接、权限与校验。启动器负责进程本地的库路径与私有 XDG 设置、解析安装目录、选择 omp 启动 profile 与离线模式、直接拉起内嵌 Electron。
 - 应用与打包工具使用仓库 Node 24/pnpm 工具链构建；原生模块与搜索可执行文件在 glibc 2.17 x64 构建器上用钉住的 Node 20.19.0（glibc-217 构建）与 GCC 11 单独编译。Node 20 仅用于构建，不进 ZIP。原生阶段产物必须合入 `app.asar`/`app.asar.unpacked` 与 `resources/tools`，不得复制到 Electron 可执行文件旁。
 - 离线锁定的激活链：启动器解析到 `--offline` 时设置 `OMPCODE_CENTOS7_LOCAL_ONLY=1` 并把 `--offline` 透传给内嵌 omp 子进程；不传时二者都不发生。桌面 Main、Host 与 renderer 读取该运行时变量执行锁定；error-only 日志过滤复用同一信号（见 [centos7-performance.md](centos7-performance.md)）。该变量的唯一设置者是 CentOS 7 启动器，Windows 不提供该锁定参数。
-- 离线锁定生效时：桌面禁用互联网功能；仅内嵌 omp 可用其自身配置的企业 API 端点。内嵌浏览器可打开企业内网文档（含仅解析到私有地址的 DNS 名）。其他桌面 HTTP(S)/WebSocket 流量限制在回环。企业 SSH 工作区保持可用。不为桌面服务添加内部主机名白名单。公网配置、帮助、遥测、CDN、账号与外部浏览器流程不得运行；Main 不调度应用启动/日活遥测，Host 不启动或放行在线 bot 任务。被关闭功能的 UI 入口逐项保留：手机远控、公网更新检查、公网配置/帮助/社区/反馈、账号/分享、外部浏览器拉起——一律呈禁用态并附「离线锁定中已关闭」说明；技术上无法做禁用态的操作（如手机主动连入 relay）在触发时明确报错。桌面 Main/Renderer 与 Host 拥有该策略。启动器接受 `--profile <name>` 或 `--profile=<name>`，拒绝缺失或无效的 profile 名后才启动 Electron，其余启动参数原样转发；显式启动 profile 覆盖本次运行的 App Settings profile。
+- 离线锁定生效时：桌面禁用互联网功能；仅内嵌 omp 可用其自身配置的企业 API 端点。内嵌浏览器可打开企业内网文档（含仅解析到私有地址的 DNS 名）。其他桌面 HTTP(S)/WebSocket 流量限制在回环。企业 SSH 工作区保持可用。不为桌面服务添加内部主机名白名单。公网配置、帮助、遥测、CDN、账号与外部浏览器流程不得运行；Main 不调度应用启动/日活遥测，Host 不启动或放行在线 bot 任务。被关闭功能的 UI 入口逐项保留：公网更新检查、公网配置/帮助/社区/反馈、账号/分享、外部浏览器拉起——一律呈禁用态并附「离线锁定中已关闭」说明；技术上无法做禁用态的操作在触发时明确报错。桌面 Main/Renderer 与 Host 拥有该策略。启动器接受 `--profile <name>` 或 `--profile=<name>`，拒绝缺失或无效的 profile 名后才启动 Electron，其余启动参数原样转发；显式启动 profile 覆盖本次运行的 App Settings profile。
 - 推荐提示词只引用本地任务与内嵌图标，不需要公网站点、在线插件或下载图片。锁定模式下不调度应用启动/日活遥测、不转发远程用量与会话创建报告，Host 不启动或放行在线 bot 任务；入口与菜单项保留，触发时按上述反馈规则处理。提示词目录归 UI 所有，绝不执行网络 IO；启动器仍是桌面网络策略所有者。缺失可选视觉资源不得延迟或阻塞渲染。
 - 启动器接受 `--home <absolute-dir>`，在 Electron 启动前把全部 OmpCode 持久与临时数据置于该目录之下：创建 `<absolute-dir>/.ompcode` 与 `<absolute-dir>/.omp`，把 `~/.ompcode` 与 `~/.omp` 链接到这些目录，Electron 用户/会话数据与 XDG config、data、cache、state 及临时目录都置于其下，并在其中创建应用默认/草稿工作区。`PI_CONFIG_DIR`、`ZCODE_DATA_BASE_DIR` 与 `ZCODE_DESKTOP_HOME_DIR` 同样指向其下；shell 的 `HOME` 保持不变，SSH 与其他用户环境文件不受影响。已保存的数据目录或 Settings 变更不能覆盖显式 `--home`。指向相同目标的既有链接幂等复用；已存在目录或指向其他目标的链接保留并报明确错误；选中目录内解析到其外的受管路径被拒绝。启动器绝不移动或删除既有数据。相对路径、缺失值、`--home ~`、以及位于 `~/.ompcode` 或 `~/.omp` 内的目的地被拒绝。不带 `--home` 时保持既有数据位置。
 - 启动器对 `--help` 或 `-h` 打印自身用法并以成功码退出，先于包文件检查、Electron 启动与任何数据目录创建；帮助说明 `--home`、`--profile`、`--offline` 与其他桌面参数的转发。正常启动保持既有参数处理。
@@ -53,7 +53,7 @@ flowchart TD
 ### Package acceptance
 
 - 在 CentOS 7 x64 VM（`glibc 2.17`、内核 `3.10.0-1160.el7.x86_64`）上，非 root 用户把 ZIP 解压到 HOME 下，不安装任何内容，启动启动器并看到 OmpCode UI。宿主无 CJK 字体时，中文设置与菜单标签及任意中文会话文本显示为字形而不是空框；英文保持可读。实测内嵌 omp 会话、集成终端与原生搜索；用打包的 `ssh2` 客户端完成 SSH 握手，并确认 `app.asar` 与 `app.asar.unpacked` 均无可选原生加密加速器。
-- 以区别于已保存 App Settings profile 的命名 `--profile` 启动：内嵌 omp 收到该 profile，UI 的角色与历史读取同一命名 profile。传 `--offline` 时每个内嵌 omp 进程收到该参数，且桌面处于离线锁定：启动桌面、打开设置、显示推荐内容并使用内嵌浏览器期间追踪网络连接，Main、Renderer、Host 与调度器不连接公网；内嵌浏览器打开解析到私有 IP 的企业 DNS 名并拒绝公网 URL；仅 omp 可达其配置的企业 API；逐项检查被关功能入口（手机远控、公网更新、公网配置/帮助/社区/反馈、账号/分享、外部浏览器）均为禁用态并附「离线锁定中已关闭」说明，且无对应公网请求。不传 `--offline` 时桌面为全功能，与 Windows 行为一致：内嵌浏览器可打开公网 URL、更新检查与手机远控按 Windows 语义可用、应用日志输出全部级别。缺失或无效 profile 名在 Electron 启动前以明确错误退出。
+- 以区别于已保存 App Settings profile 的命名 `--profile` 启动：内嵌 omp 收到该 profile，UI 的角色与历史读取同一命名 profile。传 `--offline` 时每个内嵌 omp 进程收到该参数，且桌面处于离线锁定：启动桌面、打开设置、显示推荐内容并使用内嵌浏览器期间追踪网络连接，Main、Renderer、Host 与调度器不连接公网；内嵌浏览器打开解析到私有 IP 的企业 DNS 名并拒绝公网 URL；仅 omp 可达其配置的企业 API；逐项检查被关功能入口（公网更新、公网配置/帮助/社区/反馈、账号/分享、外部浏览器）均为禁用态并附「离线锁定中已关闭」说明，且无对应公网请求。不传 `--offline` 时桌面为全功能，与 Windows 行为一致：内嵌浏览器可打开公网 URL、更新检查按 Windows 语义可用、应用日志输出全部级别。缺失或无效 profile 名在 Electron 启动前以明确错误退出。
 - 检查内嵌推荐目录与 UI 资产：每条推荐都可用本地工具运行，每个推荐图标已内嵌，没有动画来源指向公网主机。
 - 以指向默认数据路径外空目录的 `--home` 启动：`.ompcode`、`.omp`、XDG、Electron 用户/会话、cache、state 与临时路径解析到目标之下；`~/.ompcode` 与 `~/.omp` 链接到对应目标目录；shell `HOME` 不变。覆盖生效期间已保存数据目录被忽略且不能在目标外修改。相同目的地的第二次启动成功且无变化。被占用的 `~/.ompcode` 或 `~/.omp`、冲突链接、逃逸的受管符号链接或无效目的地都在不替换用户数据的情况下退出。不带 `--home` 时，启动器既有 XDG 默认值与其他环境路径不变。
 - 关闭或无效的 Host stdout/stderr 描述符不能把普通 RPC 日志变成未捕获异常；结构化日志仍到达 Main。发布 workflow 接受未占用的短自定义 tag（如 `v0928`）或留空时自动生成，仍拒绝复用 tag 或错误分支。自动 tag 在 workflow 重跑间不同。

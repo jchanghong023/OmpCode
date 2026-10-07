@@ -178,7 +178,7 @@ const zcodePromptAttachmentSchema = z.discriminatedUnion("kind", [
       localPath: z.string().optional(),
     })
     .strict(),
-  // 附件类型新增 video 后，replayable schema 未同步，手机远控会拒绝合法附件。
+  // 附件类型新增 video 后，replayable schema 未同步，Web 客户端会拒绝合法附件。
   z
     .object({
       kind: z.literal("video"),

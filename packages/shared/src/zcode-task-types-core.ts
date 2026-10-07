@@ -334,7 +334,7 @@ export interface ZCodeTaskMeta {
   /**
    * 最后一次失败的可展示原因。
    *
-   * 手机远控断连时实时 task_error 可能无法送达；恢复只能看到 meta.status=error，
+   * Web 客户端断连时实时 task_error 可能无法送达；恢复只能看到 meta.status=error，
    * 但拿不到错误正文，用户会以为发送没有触发。这里把失败原因随 task meta 一起持久化。
    */
   lastError?: ZCodeTaskLastError;

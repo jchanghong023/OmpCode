@@ -25,8 +25,15 @@
 - 结构隔离原则：本地改动与上游改动尽量分开，能用独立目录或独立文件承载就不修改上游共享文件——omp 协议与适配独占 `packages/omp-agent`；新增 UI 组件与文案以 `Omp*` 前缀独立文件维护；Fork 需求只记录于 `docs/requirements/`；对上游共享文件的修改保持最小必要 diff。目标是上游 UI 改动可以低冲突合并进本仓库。
 - 平台范围：产品仅支持 Windows 与 CentOS 7 两个系统；macOS、常规 Linux（RHEL 8+ RPM 等）不再是支持目标。
 - 分支策略：产品分支只有 `main` 一个；CentOS 7 专有分支合入后删除，不做分支级平台分叉（分发构建见 [centos7-release.md](centos7-release.md)）。
-- 界面统一：两平台的界面结构、入口与交互完全一致，Windows 为全功能基准界面；不按平台分叉界面，不因平台能力差异删除或隐藏 UI 入口。唯一豁免：CentOS 7 发布构建标记（`__OMPCODE_CENTOS7_DESKTOP__`）只允许改变动画时长、流式正文合批等渲染性能策略（见 [centos7-performance.md](centos7-performance.md)），不得触及界面元素、入口或功能。上游官方云远控入口（依赖闭源云 relay）按替代关系在两平台统一移除，手机远控只保留内嵌 relay 入口（见 [mobile-relay.md](mobile-relay.md)），属功能替代而非按平台裁剪。
-- 功能区分：两平台差异只允许存在于底层依赖（Electron 版本、原生资产、打包链路）、上述豁免的渲染性能策略，与后端功能的参数门控。CentOS 7 启动器沿用现有 `--offline` 参数作为企业离线锁定开关：传入时关闭手机远控 relay、公网更新、公网配置与遥测等后端并透传给内嵌 omp；不传入时桌面为全功能，与 Windows 基准一致（Windows 不提供该锁定参数）。被关闭功能的 UI 入口保留并呈禁用态，附「离线锁定中已关闭」说明；技术上无法做禁用态的操作在触发时明确报错，不静默缺失。
+- 界面统一：两平台的界面结构、入口与交互完全一致，Windows 为全功能基准界面；不按平台分叉界面，不因平台能力差异删除或隐藏 UI 入口。唯一豁免：CentOS 7 发布构建标记（`__OMPCODE_CENTOS7_DESKTOP__`）只允许改变动画时长、流式正文合批等渲染性能策略（见 [centos7-performance.md](centos7-performance.md)），不得触及界面元素、入口或功能。手机远控在两平台统一取消，不提供自建中继，也不恢复上游官方云远控入口。
+- 功能区分：两平台差异只允许存在于底层依赖（Electron 版本、原生资产、打包链路）、上述豁免的渲染性能策略，与后端功能的参数门控。CentOS 7 启动器沿用现有 `--offline` 参数作为企业离线锁定开关：传入时关闭公网更新、公网配置与遥测等后端并透传给内嵌 omp；不传入时桌面为全功能，与 Windows 基准一致（Windows 不提供该锁定参数）。被关闭功能的 UI 入口保留并呈禁用态，附「离线锁定中已关闭」说明；技术上无法做禁用态的操作在触发时明确报错，不静默缺失。
+
+### 手机远控取消
+
+- 取消自建手机远控的全部专用实现：桌面入口、二维码与链接生成、连接数轮询、手机活动任务标记与客户端声明、TLS 证书生成、中继监听、手机帧桥接、专用 Host 查询、IPC、平台接口、离线门控字段、测试和开发探测脚本；不保留禁用入口、空实现或兼容别名，不恢复官方云远控。
+- 删除范围限于本仓库。已存在的用户证书与数据不主动删除，外部 frp 配置和手机端仓库不修改。
+- 通用 Web 客户端、SSH/WSL/Docker/Server 远程工作区、Host attachment 与 `web-remote-replayable` 交付协议仍保留，不因取消手机入口而删除可复用边界。会话与投影的状态所有者不变；Main 不再拥有手机中继状态或调度其启动、停止。
+- 验收：实际启动桌面后侧栏无手机远控入口、preload 无手机中继 API，应用不创建手机证书、不监听原手机中继端口；桌面正常渲染，通用帧分片/恢复及其他离线门控回归通过，类型检查、Lint 与架构检查通过。
 
 ## 数据、端口与更新隔离
 
@@ -52,7 +59,7 @@
 
 ## Agent 核心与双链路
 
-目标：桌面、Web 与手机远控的全部用户界面保留，本地 Agent 核心由 `omp --mode rpc-ui` 提供；omp 工具与扩展发出的选择、确认和文本输入在现有会话交互面应答。上游 `apps/zcode-cli` 仅作为未接入 workspace、构建或分发的源码快照保留，不作为运行时或回退路径。
+目标：保留桌面与 Web 用户界面，本地 Agent 核心由 `omp --mode rpc-ui` 提供；omp 工具与扩展发出的选择、确认和文本输入在现有会话交互面应答。上游 `apps/zcode-cli` 仅作为未接入 workspace、构建或分发的源码快照保留，不作为运行时或回退路径。
 
 所有权：omp 拥有会话、模型循环、工具执行、配置与凭据；ZCode 适配层对 Host 提供原有协议，对内嵌核心提供 RPC-UI 适配，每个会话惰性启动自己的 omp 子进程。
 
@@ -64,7 +71,7 @@
 - 工具审批由 omp extension runner 以 `extension_ui_request{method:"select"}`（`Approve`/`Deny` 两档，提示携带工具名、原因与明细行）发往宿主，沿通用询问回路呈现与应答；会话级/始终允许等持久决策由 omp 自身 approvalMode 与 `tools.approval` 配置持有。旧 v3 结构化权限卡（六档 `permission_request`）已随 OMP 侧 RPC 收敛删除，不再提供。超时、销毁与断连一律 fail-closed 拒绝本次调用，不存在静默放行路径。
 - 无法等价提供的能力：见「已知与允许的差异」逐项。
 
-验收：从真实公开入口新建会话，覆盖流式、工具调用、双向交互、实际文件变更、完成/中断、冷恢复；同时验证桌面实时交付与手机断线后的续传/超界快照恢复。协议模拟仅补充 wire 校验，不能代替真实核心及 GUI 链路。
+验收：从真实公开入口新建会话，覆盖流式、工具调用、双向交互、实际文件变更、完成/中断、冷恢复；同时验证桌面实时交付与 Web 断线后的续传/超界快照恢复。协议模拟仅补充 wire 校验，不能代替真实核心及 GUI 链路。
 
 ## 产品身份与图标
 
@@ -102,7 +109,7 @@
 9. **模型连通性测试与 commit message 生成**（`provider/testModelConnectivity`、`workspace/generateText`）：均不可用（-32601）。omp v18.8.0 起 RPC 面不再提供 `test_model`（旧 v3 fork 面已随 RPC 收敛删除），替代行为：模型可用性以实际会话轮为准；commit message 生成（`workspace/generateText`）无 omp 等价物。
 10. **权限确认形态**：omp 审批仅在用户 omp 审批配置（如 `--approval-mode` 非默认值或 `tools.approval` 设置）生效时出现；默认 yolo 模式无权限确认（与用户日常 omp 行为一致）。审批以通用询问（`Approve`/`Deny` 两档 select）呈现，提示文本携带工具与目标信息；结构化六档审批卡已随 OMP 侧 RPC 收敛删除（见上文「Agent 核心与双链路」）。
 11. **子代理/后台任务面板**：见 [原生集成](integrations.md)。
-12. **legacy session 事件流**：`session/subscribe` 返回空事件（无 live 事件回放）。替代行为：桌面与 Web/手机主链路均走 v4 帧，不受影响；task 索引的 live 增量更新降级。
+12. **legacy session 事件流**：`session/subscribe` 返回空事件（无 live 事件回放）。替代行为：桌面与 Web 主链路均走 v4 帧，不受影响；task 索引的 live 增量更新降级。
 13. **冷会话历史投影**：见 [会话恢复](session-recovery.md)。
 14. **macOS 与其他 Linux 打包**：原基线记录 omp releases 不提供 darwin 资产，macOS 安装包无法内嵌 omp；运行时须报「内嵌 omp 二进制未找到」的显式错误。产品支持范围仅为 Windows 与 CentOS 7（见上文「上游同步策略与平台范围」），常规 Linux RPM 及其他平台不再维护。CentOS 7 见 [兼容分发](centos7-release.md)。
 15. **`startup/storageState` 存储准备**：omp 核心无 ZCode CLI 的 SQLite 会话库，适配器按协议帧序直接报告 ready；`--prepare-storage` worker 为无操作握手（帧序完整，exit 0）。

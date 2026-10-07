@@ -134,7 +134,6 @@ function GroupedTaskRowComponent({
   const isActive =
     buildTaskWorkspaceKey(activeWorkspacePath, activeWorkspaceIdentity) === workspaceKey &&
     activeTaskId === task.taskId;
-  const isMobileActive = false;
   const statusDotClassName =
     leadingIndicator === "error"
       ? "bg-destructive"
@@ -163,7 +162,6 @@ function GroupedTaskRowComponent({
     <div
       role={dragOverlay ? undefined : "button"}
       tabIndex={dragOverlay ? undefined : 0}
-      data-mobile-active-task={!dragOverlay && isMobileActive ? "true" : undefined}
       className={cn(
         "group/task-row",
         TASK_GROUP_ROW_CLASS,
@@ -343,10 +341,9 @@ function GroupedTaskRowComponent({
   const groupedTaskDomKey = typeof dragId === "string" ? encodeURIComponent(dragId) : undefined;
   // CSS hidden → flex 会让 action trigger 在 pointer 到达时才获得布局尺寸，
   // Tooltip Portal 可能先以未定位坐标绘制。改为交互状态决定 action 是否挂载，
-  // 同时保留键盘、触摸设备和手机远控 active task 的入口。
+  // 同时保留键盘与触摸设备的入口。
   const shouldMountHoverActions =
-    !task.pendingInteraction &&
-    (taskRowHovered || taskRowFocusWithin || isHoverNone || isMobileActive);
+    !task.pendingInteraction && (taskRowHovered || taskRowFocusWithin || isHoverNone);
   // 触屏端 isHoverNone 只负责常驻 action；时间、状态点和 cron/off-peak 元信息
   // 仍应保留，仅在真实 hover / focus 交互时让位，避免手机端永久丢失任务状态。
   const shouldSuppressTaskMetadata = taskRowHovered || taskRowFocusWithin;
@@ -369,7 +366,6 @@ function GroupedTaskRowComponent({
         }
       }}
       data-grouped-task-key={groupedTaskDomKey}
-      data-mobile-active-task={isMobileActive ? "true" : undefined}
       className={cn(
         "group/task-row",
         TASK_GROUP_ROW_CLASS,

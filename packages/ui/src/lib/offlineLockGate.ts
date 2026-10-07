@@ -9,7 +9,7 @@ import { parseOfflineGateState } from "@zcode/shared";
  * `OMPCODE_CENTOS7_LOCAL_ONLY` 裁决一次，经 `PlatformChannels.OfflineGateState` /
  * `IPlatformService.getOfflineGateState` 暴露；renderer 只消费，不自行读环境变量解释。
  *
- * 需求边界（docs/requirements/FORK.md「上游同步策略与平台范围」、mobile-relay.md）：
+ * 需求边界（docs/requirements/FORK.md「上游同步策略与平台范围」）：
  * 被关功能的 UI 入口在两平台一律保留并呈禁用态，附「离线锁定中已关闭」说明；不按
  * 平台删除或隐藏入口。非桌面 / 未提供桥接 / 查询失败一律视为未锁定——Windows 与
  * 未加锁的 CentOS 7 全功能，锁定裁决只能来自 Main 的真实应答。
@@ -18,7 +18,6 @@ import { parseOfflineGateState } from "@zcode/shared";
 const OFFLINE_LOCK_NOT_LOCKED: OfflineGateState = {
   localOnly: false,
   disabledFeatures: {
-    mobileRelay: false,
     publicUpdateCheck: false,
     publicConfig: false,
     publicHelp: false,

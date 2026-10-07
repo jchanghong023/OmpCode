@@ -1,6 +1,6 @@
 # 单分支重构验收矩阵（W6）
 
-工程验收台账，不是需求权威；需求以 [docs/requirements/README.md](requirements/README.md) 为准。本矩阵覆盖 `docs/requirements/` 全部 10 份文档，每行：需求要点 → 验证方式 → 负责工作流 → 状态。
+工程验收台账，不是需求权威；需求以 [docs/requirements/README.md](requirements/README.md) 为准。本矩阵按功能域记录需求要点 → 验证方式 → 负责工作流 → 状态；取消的手机远控需求不再列作功能验收，删除验收归入 FORK。
 
 ## 列说明
 
@@ -15,23 +15,24 @@
 
 ## 1. [FORK.md](requirements/FORK.md) — Fork 与上游差异
 
-| 编号 | 需求要点                                                                                                                                  | 来源                                                                                                                         | 验证方式   | 负责工作流 | 状态 |
-| ---- | ----------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- | ---------- | ---------- | ---- |
-| F01  | 换核：omp RPC 核心替换 `apps/zcode-cli`，omp 拥有会话/模型循环/工具执行/配置凭据；CLI 快照不接入运行时                                    | [Agent 核心与双链路](requirements/FORK.md#agent-核心与双链路)                                                                | E2E+GUI    | W5         |      |
-| F02  | v4 conversation 投影按上游 wire schema 产出，全部下行帧经 `conversationTopicWireFrameSchema` 校验                                         | [Agent 核心与双链路](requirements/FORK.md#agent-核心与双链路)                                                                | UT+E2E     | W5         |      |
-| F03  | 双链路：`desktop-continuous` 与 `web-remote-replayable` 同一投影、按订阅 `clientMode` 区分；断线按水位续传、超界回退整快照 resync         | [Agent 核心与双链路](requirements/FORK.md#agent-核心与双链路)                                                                | UT+E2E+GUI | W5         |      |
-| F04  | omp RPC 帧格式不渗入 UI（适配层闭环）；`ask` 选择/文本输入复用 `ElicitationDialog`                                                        | [Agent 核心与双链路](requirements/FORK.md#agent-核心与双链路)                                                                | UT+GUI     | W5         |      |
-| F05  | 上游基线记录（v3.14.3 / 29628c9a）与同步策略；结构隔离（omp-agent、Omp* 文件、docs/requirements）                                         | [已合入上游基线](requirements/FORK.md#已合入上游基线)、[上游同步策略与平台范围](requirements/FORK.md#上游同步策略与平台范围) | 人工       | W6         |      |
-| F06  | 平台范围仅 Windows 与 CentOS 7；单分支策略；界面统一，CentOS 7 构建标记仅限渲染性能豁免                                                   | [上游同步策略与平台范围](requirements/FORK.md#上游同步策略与平台范围)                                                        | VM+GUI     | W2+W4      |      |
-| F07  | `--offline` 企业离线锁定：关闭 relay/公网更新/公网配置/遥测等后端并透传 omp；被关入口禁用态 +「离线锁定中已关闭」，无法禁用的触发明确报错 | [上游同步策略与平台范围](requirements/FORK.md#上游同步策略与平台范围)                                                        | UT+E2E+VM  | W3         |      |
-| F08  | 数据隔离：`~/.ompcode`/`.ompcode` 全量数据根、右键菜单与更新缓存 OmpCode 专属、双装互不读写                                               | [数据、端口与更新隔离](requirements/FORK.md#数据端口与更新隔离)                                                              | GUI+E2E    | W3         |      |
-| F09  | 更新隔离：不查询/安装上游更新、不受强更线拦截；正式包仅 GitHub Release 手动更新                                                           | [数据、端口与更新隔离](requirements/FORK.md#数据端口与更新隔离)                                                              | GUI+人工   | P2         |      |
-| F10  | 端口隔离：9230/5194/5193/3033 开发端口；运行期本地服务 `listen(0)` 临时端口                                                               | [数据、端口与更新隔离](requirements/FORK.md#数据端口与更新隔离)                                                              | UT+E2E     | W3         |      |
-| F11  | 内嵌 omp：随包分发最新 release 二进制；与用户 omp 同配置；不覆盖/代装用户 omp；子进程 stdio 不监听端口、不影响运行中进程                  | [omp 侧依赖](requirements/FORK.md#omp-侧依赖)                                                                                | UT+E2E     | W5         |      |
-| F12  | Windows x64 手动发布：唯一 OmpCode tag、EXE+SHA256 上传 Release                                                                           | [omp 侧依赖](requirements/FORK.md#omp-侧依赖)                                                                                | 人工       | P2         |      |
-| F13  | 产品身份：OmpCode 品牌文案全位覆盖；omp 官方图标全尺寸更换；「显示效果」入口 Monitor 图标、齿轮设置不变                                   | [产品身份与图标](requirements/FORK.md#产品身份与图标)                                                                        | GUI        | W4         |      |
-| F14  | 已知与允许的差异 18 项：显式拒绝（guard id）或规定替代行为，主对话链路不受影响，不静默缺失                                                | [已知与允许的差异](requirements/FORK.md#已知与允许的差异)                                                                    | UT+E2E+GUI | W5         |      |
-| F15  | 总验收：真实公开入口新建会话覆盖流式/工具调用/双向交互/文件变更/完成中断/冷恢复，并验证双链路恢复                                         | [Agent 核心与双链路](requirements/FORK.md#agent-核心与双链路)                                                                | GUI+E2E    | P2         |      |
+| 编号 | 需求要点                                                                                                                           | 来源                                                                                                                         | 验证方式   | 负责工作流 | 状态 |
+| ---- | ---------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- | ---------- | ---------- | ---- |
+| F01  | 换核：omp RPC 核心替换 `apps/zcode-cli`，omp 拥有会话/模型循环/工具执行/配置凭据；CLI 快照不接入运行时                             | [Agent 核心与双链路](requirements/FORK.md#agent-核心与双链路)                                                                | E2E+GUI    | W5         |      |
+| F02  | v4 conversation 投影按上游 wire schema 产出，全部下行帧经 `conversationTopicWireFrameSchema` 校验                                  | [Agent 核心与双链路](requirements/FORK.md#agent-核心与双链路)                                                                | UT+E2E     | W5         |      |
+| F03  | 双链路：`desktop-continuous` 与 `web-remote-replayable` 同一投影、按订阅 `clientMode` 区分；断线按水位续传、超界回退整快照 resync  | [Agent 核心与双链路](requirements/FORK.md#agent-核心与双链路)                                                                | UT+E2E+GUI | W5         |      |
+| F04  | omp RPC 帧格式不渗入 UI（适配层闭环）；`ask` 选择/文本输入复用 `ElicitationDialog`                                                 | [Agent 核心与双链路](requirements/FORK.md#agent-核心与双链路)                                                                | UT+GUI     | W5         |      |
+| F05  | 上游基线记录（v3.14.3 / 29628c9a）与同步策略；结构隔离（omp-agent、Omp* 文件、docs/requirements）                                  | [已合入上游基线](requirements/FORK.md#已合入上游基线)、[上游同步策略与平台范围](requirements/FORK.md#上游同步策略与平台范围) | 人工       | W6         |      |
+| F06  | 平台范围仅 Windows 与 CentOS 7；单分支策略；界面统一，CentOS 7 构建标记仅限渲染性能豁免                                            | [上游同步策略与平台范围](requirements/FORK.md#上游同步策略与平台范围)                                                        | VM+GUI     | W2+W4      |      |
+| F07  | `--offline` 企业离线锁定：关闭公网更新/公网配置/遥测等后端并透传 omp；被关入口禁用态 +「离线锁定中已关闭」，无法禁用的触发明确报错 | [上游同步策略与平台范围](requirements/FORK.md#上游同步策略与平台范围)                                                        | UT+E2E+VM  | W3         |      |
+| F08  | 数据隔离：`~/.ompcode`/`.ompcode` 全量数据根、右键菜单与更新缓存 OmpCode 专属、双装互不读写                                        | [数据、端口与更新隔离](requirements/FORK.md#数据端口与更新隔离)                                                              | GUI+E2E    | W3         |      |
+| F09  | 更新隔离：不查询/安装上游更新、不受强更线拦截；正式包仅 GitHub Release 手动更新                                                    | [数据、端口与更新隔离](requirements/FORK.md#数据端口与更新隔离)                                                              | GUI+人工   | P2         |      |
+| F10  | 端口隔离：9230/5194/5193/3033 开发端口；运行期本地服务 `listen(0)` 临时端口                                                        | [数据、端口与更新隔离](requirements/FORK.md#数据端口与更新隔离)                                                              | UT+E2E     | W3         |      |
+| F11  | 内嵌 omp：随包分发最新 release 二进制；与用户 omp 同配置；不覆盖/代装用户 omp；子进程 stdio 不监听端口、不影响运行中进程           | [omp 侧依赖](requirements/FORK.md#omp-侧依赖)                                                                                | UT+E2E     | W5         |      |
+| F12  | Windows x64 手动发布：唯一 OmpCode tag、EXE+SHA256 上传 Release                                                                    | [omp 侧依赖](requirements/FORK.md#omp-侧依赖)                                                                                | 人工       | P2         |      |
+| F13  | 产品身份：OmpCode 品牌文案全位覆盖；omp 官方图标全尺寸更换；「显示效果」入口 Monitor 图标、齿轮设置不变                            | [产品身份与图标](requirements/FORK.md#产品身份与图标)                                                                        | GUI        | W4         |      |
+| F14  | 已知与允许的差异 18 项：显式拒绝（guard id）或规定替代行为，主对话链路不受影响，不静默缺失                                         | [已知与允许的差异](requirements/FORK.md#已知与允许的差异)                                                                    | UT+E2E+GUI | W5         |      |
+| F15  | 总验收：真实公开入口新建会话覆盖流式/工具调用/双向交互/文件变更/完成中断/冷恢复，并验证双链路恢复                                  | [Agent 核心与双链路](requirements/FORK.md#agent-核心与双链路)                                                                | GUI+E2E    | P2         |      |
+| F16  | 手机远控取消：无专用 UI/IPC/relay 监听与证书生成，不恢复官方云入口；通用 Web/Host 与其他离线门控保留                               | [手机远控取消](requirements/FORK.md#手机远控取消)                                                                            | GUI+UT     | W3+W4      |      |
 
 ## 2. [models-and-commands.md](requirements/models-and-commands.md) — 账号、Profile、模型与命令
 
@@ -105,7 +106,7 @@
 
 | 编号 | 需求要点                                                                                                                 | 来源                                                                              | 验证方式 | 负责工作流 | 状态 |
 | ---- | ------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------- | -------- | ---------- | ---- |
-| R01  | v4 帧上限覆盖 NDJSON/Channel socket/手机 relay 三承载；生产者分片、组装器只收合法帧；分片不改序号与重放语义              | [产品规则与所有权](requirements/session-recovery.md#产品规则与所有权)             | UT       | W5         |      |
+| R01  | v4 帧上限覆盖 NDJSON/Channel socket 两承载；生产者分片、组装器只收合法帧；分片不改序号与重放语义                         | [产品规则与所有权](requirements/session-recovery.md#产品规则与所有权)             | UT       | W5         |      |
 | R02  | 会话引擎轮次/交互终结：命令发送失败、核心退出、流式中本地命令、已取消交互均收口；已完成轮不被迟到结果改写                | [产品规则与所有权](requirements/session-recovery.md#产品规则与所有权)             | UT       | W5         |      |
 | R03  | 远端部署根 `~/.ompcode/server`；wrapper 只执行当前部署文件、不读 `~/.zcode`                                              | [产品规则与所有权](requirements/session-recovery.md#产品规则与所有权)             | E2E      | P2         |      |
 | R04  | HTTP server 无凭据仅回环监听；显式非回环必须带凭据否则启动失败；断线拒绝未完成 RPC、页面显中断并重连                     | [产品规则与所有权](requirements/session-recovery.md#产品规则与所有权)             | UT+E2E   | P2         |      |
@@ -136,23 +137,9 @@
 | P07  | 「打开方式」编辑器探测不在主线程同步等待外部命令；静态路径优先、命令兜底异步、结果复用                                                                         | [产品规则与所有者](requirements/performance.md#产品规则与所有者) | UT+GUI       | W3         |      |
 | P08  | Agent stdio 适配器按会话串行有状态命令；慢历史读取不阻塞他会话；ACK 先于本请求首帧；同 topic 帧按生成顺序上线                                                  | [产品规则与所有者](requirements/performance.md#产品规则与所有者) | UT           | W5         |      |
 | P09  | 冷会话目录有界读取、按 ID 定位、标题只读头部；长会话恢复避免整文件拆分内存峰值                                                                                 | [产品规则与所有者](requirements/performance.md#产品规则与所有者) | UT+E2E       | W5         |      |
-| P10  | 传输背压：每连接未发送字节有上限；桌面流不丢帧、手机流按水位补发/重取快照                                                                                      | [产品规则与所有者](requirements/performance.md#产品规则与所有者) | UT+E2E       | W5         |      |
+| P10  | 传输背压：每连接未发送字节有上限；桌面流不丢帧、Web 流按水位补发/重取快照                                                                                      | [产品规则与所有者](requirements/performance.md#产品规则与所有者) | UT+E2E       | W5         |      |
 | P11  | 主进程生产日志异步写入、退出前刷盘、错误日志可见（与 centos7-performance 日志域共用实现）                                                                      | [产品规则与所有者](requirements/performance.md#产品规则与所有者) | UT           | W3         |      |
 | P12  | 综合验收：真实模型 GUI 流式会话与导航、设置页往返、查找高亮、打开方式、跨会话隔离、优化前后测量（列表/恢复/时间线/内存）、慢 WebSocket 与饱和 MessagePort 有界 | [验收场景](requirements/performance.md#验收场景)                 | GUI+E2E+人工 | P2         |      |
-
-## 8. [mobile-relay.md](requirements/mobile-relay.md) — 手机远控内嵌中继
-
-| 编号 | 需求要点                                                                                                                                                                             | 来源                                                                              | 验证方式  | 负责工作流 | 状态 |
-| ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------- | --------- | ---------- | ---- |
-| MR01 | relay 运行 Main 进程：连接管理/bootstrap/帧转发唯一所有者；不保存业务状态；经 `AttachServicePort` 接焦点窗口 Host，断开 `DetachServicePort` 无遗留                                   | [架构与所有权](requirements/mobile-relay.md#架构与所有权)                         | UT+E2E    | W3         |      |
-| MR02 | 无鉴权开放接入：`auth_init` 直通 `auth_ack`、重连 `pair_status_ack`；畸形帧断开；入口链接固定 origin 常量、sid/hash 仅格式校验                                                       | [接入模型（无鉴权开放接入）](requirements/mobile-relay.md#接入模型无鉴权开放接入) | UT        | W3         |      |
-| MR03 | relay 协议：bootstrap 列表/`bridge_unavailable`；`workspace-bridge-open/ready` 元数据；V4RpcBridge 分片（256 KiB/片、≤64 片、CRC32、messageSeq fail-closed）、ACK 重放、积压上限断开 | [行为边界](requirements/mobile-relay.md#行为边界)                                 | UT+E2E    | W3         |      |
-| MR04 | TLS：127.0.0.1:8765 自签证书（SAN 覆盖公网 IP 与 127.0.0.1）；不监听公网；公网可达由外部 frp 承担                                                                                    | [行为边界](requirements/mobile-relay.md#行为边界)                                 | UT+E2E    | W3         |      |
-| MR05 | 桌面 UI：入口链接/二维码/复制文本、连接手机数展示、「手机正在操作此任务」沿用不建第二状态源                                                                                          | [行为边界](requirements/mobile-relay.md#行为边界)                                 | GUI       | W4         |      |
-| MR06 | 离线边界：`--offline` 下 relay 不监听不桥接、入口禁用态附说明、手机连入明确报错；不传时与 Windows 一致                                                                               | [行为边界](requirements/mobile-relay.md#行为边界)                                 | UT+E2E+VM | W3         |      |
-| MR07 | 断线与生命周期：释放 attachment、在途 RPC fail-closed；无焦点窗口回 `bridge_unavailable`；退出停监听断全部 terminal、不持久化；链接参数与帧内容不进日志                              | [行为边界](requirements/mobile-relay.md#行为边界)                                 | UT        | W3         |      |
-| MR08 | 验收 1/2/4/5：UT（握手、分片、ACK、积压）、本机 E2E 直连桌面 Host 完成 v4 RPC 往返、资源有界无泄漏、门控 UT+本机探测 E2E（frp 缺失如实记未验证）                                     | [验收条件与状态](requirements/mobile-relay.md#验收条件与状态)                     | UT+E2E    | W3         |      |
-| MR09 | 验收 3：frp 隧道 + ompMobile APK 真机扫码闭环（连接、项目列表、消息收发、断线恢复）                                                                                                  | [验收条件与状态](requirements/mobile-relay.md#验收条件与状态)                     | 人工      | P2         |      |
 
 ## 9. [centos7-release.md](requirements/centos7-release.md) — CentOS 7 发布
 
@@ -165,7 +152,7 @@
 | CR05 | sqlite 双运行时：Electron 44 走 `node:sqlite`、Electron 28 走 better-sqlite3，单封装入口；四使用点（cookie/automation/offPeak/taskIndex）数据行为等价                                 | [Product behavior](requirements/centos7-release.md#product-behavior)                          | UT       | W2         |      |
 | CR06 | ZIP 内容：node-pty、ssh2（无 sshcrypto 加速器）、原生搜索可执行、glibc 2.17 库与字体、CJK 字形与许可；原生模块 Node 20.19.0 构建、产物入 asar.unpacked 与 resources/tools             | [Product behavior](requirements/centos7-release.md#product-behavior)                          | VM       | W1         |      |
 | CR07 | 启动器：`--offline` 激活链（`OMPCODE_CENTOS7_LOCAL_ONLY=1`+透传）、`--profile` 校验与覆盖、`--home` 全量数据重定位与冲突拒绝、`--help` 先行退出；参数矩阵 UT                          | [Product behavior](requirements/centos7-release.md#product-behavior)                          | UT+VM    | W3         |      |
-| CR08 | 离线锁定面：relay/公网更新/公网配置帮助社区反馈/账号分享/外部浏览器/遥测调度/在线 bot 全关；入口禁用态+说明、无法禁用触发报错；内网浏览器可用、SSH 可用、仅 omp 达企业 API            | [Product behavior](requirements/centos7-release.md#product-behavior)                          | VM+E2E   | W3         |      |
+| CR08 | 离线锁定面：公网更新/公网配置帮助社区反馈/账号分享/外部浏览器/遥测调度/在线 bot 全关；入口禁用态+说明、无法禁用触发报错；内网浏览器可用、SSH 可用、仅 omp 达企业 API                  | [Product behavior](requirements/centos7-release.md#product-behavior)                          | VM+E2E   | W3         |      |
 | CR09 | 推荐提示词纯本地（本地工具+内嵌图标、无公网动画来源）；锁定模式不调度遥测与用量报告                                                                                                   | [Product behavior](requirements/centos7-release.md#product-behavior)                          | 人工+GUI | W4         |      |
 | CR10 | Host 工具进程管道容错：专属管道、EBADF/EPIPE 时经结构化通道继续输出不终止 Host                                                                                                        | [Product behavior](requirements/centos7-release.md#product-behavior)                          | UT       | W3         |      |
 | CR11 | workflow tag 校验：main+未占用；空 tag 自动生成 `v<version>-centos7-<run>-<attempt>`；重跑不同 tag；发布 job 用解析输出                                                               | [Product behavior](requirements/centos7-release.md#product-behavior)                          | 人工     | W1         |      |

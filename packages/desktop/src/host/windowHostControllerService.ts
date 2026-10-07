@@ -676,10 +676,6 @@ export function createWindowHostControllerRuntime(options: {
     service,
     createAttachmentService,
     replaceDisconnectedSource,
-    /** 手机远控 bootstrap 用：列出当前已注册的工作区 source（含 offline，由手机端按需选择）。 */
-    listSourceScopes(): WindowHostControllerSourceScope[] {
-      return [...registeredScopes.values()];
-    },
     async resolveTaskAddress(params: {
       taskId: string;
       workspacePath: string;

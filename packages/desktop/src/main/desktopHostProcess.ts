@@ -34,7 +34,6 @@ import {
   ZCODE_DESKTOP_CONTEXT_PROMPT_ENABLED_ENV,
 } from "@zcode/shared";
 import { getMainLaunchPartialMarks } from "./desktopLaunchMarks.js";
-import { handleWindowBridgeableWorkspacesResult } from "./mobileRelay/mobileRelayHostQueries.js";
 import { BroadcastHub } from "./broadcastHub.js";
 import type { TaskRealtimeBus } from "./taskRealtimeBus.js";
 import { createHostLogRelay } from "./hostLogRelay.js";
@@ -341,12 +340,6 @@ export function spawnHostProcess(
 
     if (result.data.type === HostResponseTypes.ResourceUsageSnapshotResult) {
       resolveHostResourceUsageResult(label, result.data);
-      return;
-    }
-
-    if (result.data.type === HostResponseTypes.WindowBridgeableWorkspacesResult) {
-      // 手机远控 bootstrap 查询结果：按 requestId 关联回 relay 的 pending 请求。
-      handleWindowBridgeableWorkspacesResult(result.data);
       return;
     }
 

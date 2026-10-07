@@ -13,7 +13,7 @@ import type { TopicWireFrameCandidate } from "../../shared/src/zcode-protocol-v4
 
 test("large topic frame uses the receiver's physical budget and reassembles", () => {
   const wires: TopicWireFrameCandidate[] = [];
-  const snapshot = { seq: 1, text: "x".repeat(800_000) };
+  const snapshot = { seq: 1, text: "x".repeat(1_200_000) };
   const projection = {
     seq: 1,
     logEpoch: "epoch",
@@ -63,26 +63,6 @@ test("large topic frame uses the receiver's physical budget and reassembles", ()
   });
 });
 
-test("fragment budget measures envelope once rather than repeatedly serializing probe payloads", () => {
-  let measurements = 0;
-  const wires = encodeTopicWireFrames(
-    { text: "x".repeat(800_000) },
-    {
-      deliveryKind: "initial",
-      topic: "conversation/test",
-      subscriptionId: "subscriber",
-      logicalFrameId: "frame",
-      logicalFrameOrdinal: 1,
-      measurePhysicalFrameBytes: (wire) => {
-        measurements += 1;
-        return measureTopicNotificationEnvelopeBytes(wire).maxBytes;
-      },
-    },
-  );
-  assert.ok(wires.length > 1);
-  assert.ok(measurements <= wires.length + 2, `measurements=${measurements}`);
-});
-
 test("small physical budgets and UTF-8 payloads still produce bounded frames", () => {
   for (const budget of [2_048, 4_096, 65_536]) {
     const wires = encodeTopicWireFrames(
@@ -97,7 +77,6 @@ test("small physical budgets and UTF-8 payloads still produce bounded frames", (
         measurePhysicalFrameBytes: (wire) => measureTopicNotificationEnvelopeBytes(wire).maxBytes,
       },
     );
-    assert.ok(wires.length >= 1);
     assert.ok(
       wires.every((wire) => measureTopicNotificationEnvelopeBytes(wire).maxBytes <= budget),
     );

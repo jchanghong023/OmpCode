@@ -7,9 +7,9 @@
  *
  * - `text/html` 严格相等，与 `WorkflowArtifactBody` 里画 html 卡的那道门同一个判据。
  *   宽到 `text/html; charset=utf-8` 会让「直开」和「卡片上有没有那颗按钮」两处判据分叉。
- * - 没有内嵌浏览器（Web / 手机远控）时 `handleOpenBrowserUrl` 只会 `window.open`，
+ * - 没有内嵌浏览器（Web）时 `handleOpenBrowserUrl` 只会 `window.open`，
  *   而 `file://` 在那儿打不开——只能退回产物 tab。
- * - 远程 workspace（SSH / WSL / Docker）与手机远控的 `sourcePath` 在本机不存在，同 `canRevealArtifactInWorkspace`。
+ * - 远程 workspace（SSH / WSL / Docker）与 Web attachment 的 `sourcePath` 在本机不存在，同 `canRevealArtifactInWorkspace`。
  *
  * `contentType` 缺席（老 CLI、冷恢复、或表面本来就不带摘要）一律退回产物 tab：判不出来就
  * 走原路，绝不猜。

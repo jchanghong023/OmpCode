@@ -1,4 +1,4 @@
-/* oxlint-disable eslint(max-lines) -- footer 聚合显示偏好、手机远控与设置入口菜单。 */
+/* oxlint-disable eslint(max-lines) -- footer 聚合显示偏好与设置入口菜单。 */
 import type { Locale } from "@zcode/shared";
 import { memo, useCallback, useEffect, useState } from "react";
 import { DesktopCommandIds, TID_TASK_SETTINGS_BUTTON } from "@zcode/shared";
@@ -33,7 +33,6 @@ import { useShortcutCommandLabel } from "@/shortcuts/useShortcutBindings.js";
 import { useZCodeStore } from "@/store/StoreProvider.js";
 import { normalizeInterfaceMode } from "@/lib/interfaceMode.js";
 import type { Theme } from "@/useTheme.js";
-import { WorkspaceMobileRelayTrigger } from "@/WorkspaceMobileRelayTrigger.js";
 
 const DESKTOP_ZOOM_MIN_LEVEL = -3;
 const DESKTOP_ZOOM_MAX_LEVEL = 5;
@@ -250,8 +249,6 @@ export const WorkspaceSidebarFooter = memo(function WorkspaceSidebarFooterCompon
           </DropdownMenuContent>
         </DropdownMenu>
         <div className="flex shrink-0 items-center gap-1.5">
-          {/* 手机远控 relay 由桌面 main 进程提供，与工作区无关，只要求桌面形态即可显示入口。 */}
-          {isDesktop ? <WorkspaceMobileRelayTrigger compact /> : null}
           <ControlHintTooltip title={settingsButtonLabel}>
             <Button
               type="button"

@@ -1794,7 +1794,7 @@ export function createZCodeTaskServiceAdapter(
           if (requestedSelection) {
             if (!sameModelSelection(snapshot.settings.model.current, requestedSelection)) {
               // replayable 首发复用 draft session 时，draft 可能仍停在预热时的旧模型。
-              // 复用前必须同步 UI 当前模型，否则手机远控首发会显示新模型但真实请求仍用旧模型。
+              // 复用前必须同步 UI 当前模型，否则 Web 首发会显示新模型但真实请求仍用旧模型。
               snapshot = await options.zcodeAgentService.setModel({
                 ...target,
                 sessionId: draftSessionId,
@@ -1807,7 +1807,7 @@ export function createZCodeTaskServiceAdapter(
             snapshot.settings.thoughtLevel.current !== requestedSelection.options.reasoningLevel
           ) {
             // replayable 首发复用 draft session 时也必须以 UI 当前 thought_level 为准。
-            // 否则手机远控可能复用旧 draft session，导致首发请求沿用过期推理强度。
+            // 否则 Web 可能复用旧 draft session，导致首发请求沿用过期推理强度。
             snapshot = await options.zcodeAgentService.setThoughtLevel({
               ...target,
               sessionId: draftSessionId,
@@ -1884,7 +1884,7 @@ export function createZCodeTaskServiceAdapter(
                 }
               : {}),
             // Bugfix: replayable task facade 创建 session 时同样会启动 runtime；
-            // 之前这里丢掉 mcpServers，导致手机远控路径和 desktop-continuous 的 MCP 行为不一致。
+            // 之前这里丢掉 mcpServers，导致 Web 路径和 desktop-continuous 的 MCP 行为不一致。
             mcpServers,
           });
         }
@@ -2266,7 +2266,7 @@ export function createZCodeTaskServiceAdapter(
       assertV4CommandAckOk("resolveInteraction", ack, `elicitation ${params.requestId}`);
       if (params.clientMode === "web-remote-replayable") {
         // 语义保真（原 agentService.respondUserInput 的 web-remote-replayable 分支）：
-        // 手机远控应答后，桌面/其它 observer 需要显式响应事件清理同一 requestId 的弹窗；
+        // Web 应答后，桌面/其它 observer 需要显式响应事件清理同一 requestId 的弹窗；
         // v4 命令路径不再经过旧 respondUserInput，这里由 adapter 本地补投同一事件。
         emitTaskEvent(
           target,
@@ -3484,7 +3484,7 @@ function backgroundTaskNotificationToolUpdateFromInput(params: {
     status,
     content: parsed.notification.result ?? parsed.notification.summary,
     // replayable 动态事件也必须把 notification error 放到标准 tool error，
-    // 否则手机远控与桌面 continuous 的失败详情会产生分叉。
+    // 否则 Web 与桌面 continuous 的失败详情会产生分叉。
     ...(status === "failed" && parsed.notification.error
       ? { error: parsed.notification.error }
       : {}),

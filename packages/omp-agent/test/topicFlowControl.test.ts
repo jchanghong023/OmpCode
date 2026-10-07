@@ -5,7 +5,7 @@ import { ConversationProjection } from "../src/domain/conversationProjection.js"
 
 const waitFlush = () => new Promise<void>((resolve) => setTimeout(resolve, 50));
 
-test("手机饱和连接按水位追帧，桌面持续收到在线帧", async () => {
+test("Web 饱和连接按水位追帧，桌面持续收到在线帧", async () => {
   const frames: { subscriptionId: string; deliveryKind: string }[] = [];
   const projection = new ConversationProjection("session");
   const publisher = new ConversationTopicPublisher("session", projection, {
@@ -20,12 +20,12 @@ test("手机饱和连接按水位追帧，桌面持续收到在线帧", async ()
     connectionId: "desktop",
     clientMode: "desktop-continuous",
   });
-  const mobile = publisher.subscribe({
-    connectionId: "mobile",
+  const web = publisher.subscribe({
+    connectionId: "web",
     clientMode: "web-remote-replayable",
   });
   frames.length = 0;
-  publisher.setConnectionFlowState("mobile", "saturated");
+  publisher.setConnectionFlowState("web", "saturated");
   projection.beginUserTurn({
     text: "hi",
     inputId: "input",
@@ -39,23 +39,23 @@ test("手机饱和连接按水位追帧，桌面持续收到在线帧", async ()
     true,
   );
   assert.equal(
-    frames.some((frame) => frame.subscriptionId === mobile.subscriptionId),
+    frames.some((frame) => frame.subscriptionId === web.subscriptionId),
     false,
   );
-  publisher.setConnectionFlowState("mobile", "drained");
+  publisher.setConnectionFlowState("web", "drained");
   assert.equal(
     frames.some(
-      (frame) => frame.subscriptionId === mobile.subscriptionId && frame.deliveryKind === "online",
+      (frame) => frame.subscriptionId === web.subscriptionId && frame.deliveryKind === "online",
     ),
     true,
   );
-  publisher.setConnectionFlowState("mobile", "closed");
+  publisher.setConnectionFlowState("web", "closed");
   frames.length = 0;
   projection.setTitle("closed", "custom");
   publisher.scheduleFlush(() => {});
   await waitFlush();
   assert.equal(
-    frames.some((frame) => frame.subscriptionId === mobile.subscriptionId),
+    frames.some((frame) => frame.subscriptionId === web.subscriptionId),
     false,
   );
   publisher.dispose();

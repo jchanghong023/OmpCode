@@ -1,9 +1,4 @@
 import { createLocalTtftExporter } from "./localTtftExporter.js";
-import { startMobileRelay, stopMobileRelay } from "./mobileRelay/mobileRelayLifecycle.js";
-import {
-  buildMobileRelayEntryUrl,
-  MOBILE_RELAY_LISTEN_PORT,
-} from "./mobileRelay/mobileRelayProtocol.js";
 /* eslint-disable max-lines */
 import "./desktopEarlyDataBaseDirBootstrap.js";
 import "./desktopEarlyChromiumHardwareAccelerationBootstrap.js";
@@ -88,7 +83,6 @@ import {
   HostMessageTypes,
   isPrivateNetworkEndpoint,
   isLoopbackUrl,
-  buildOfflineLockedMobileRelayEntryStatus,
   resolveOfflineGateState,
   type OfflineGateState,
 } from "@zcode/shared";
@@ -1053,8 +1047,6 @@ async function prepareAppQuit(reason: string, kind: AppShutdownKind = "normal"):
   );
 
   appQuitPreparationInFlight = Promise.all([
-    // 手机远控中继先停：断开全部手机连接并释放端口，再进入 Host 清理屏障。
-    stopMobileRelay(),
     // 退出屏障结束后再启动窗口尺寸写入，可能在 app.exit 前留下 setting.json.lock。
     // 尺寸已在 resize 防抖或最大化状态变化时保存，退出屏障不再创建新的尺寸写入。
     // 修复原因：Main 过去不会等待仍在发送的 /event/report，正常退出也会直接丢事件。
@@ -2057,26 +2049,6 @@ app.whenReady().then(async () => {
 
   await hydratePendingPostUpdateReleaseNotes(mainSettingService);
   logWindowsBundledRuntimeIntegrityDiagnostic();
-
-  // 手机远控内嵌中继：无鉴权开放接入，进程存活即可连接。启动失败不阻塞桌面
-  // 主流程，状态经 PlatformChannels.MobileRelayEntry 供 UI 展示错误原因。
-  // 离线锁定时 relay 后端整体关闭：不监听、不建立桥接（mobile-relay.md 平台与
-  // 离线边界）；入口 IPC 仍注册并回报稳定禁用原因码，手机主动连入没有监听者，
-  // 在 TCP 层被明确拒绝而不是静默超时。
-  if (offlineGate.disabledFeatures.mobileRelay) {
-    ipcMain.handle(PlatformChannels.MobileRelayEntry, () =>
-      buildOfflineLockedMobileRelayEntryStatus({
-        url: buildMobileRelayEntryUrl(),
-        listenPort: MOBILE_RELAY_LISTEN_PORT,
-      }),
-    );
-  } else {
-    void startMobileRelay({
-      getHostProcess: (windowId) => windowHostProcessMap.get(windowId),
-    }).catch((error: unknown) => {
-      logger.error("[mobile-relay] failed to start:", error);
-    });
-  }
 
   // 本 Fork 只有 GitHub Release 手动分发；正式包绝不能安装上游 ZCode 的 feed。
   // 仅保留未打包开发态显式指定 feed 的更新联调入口。

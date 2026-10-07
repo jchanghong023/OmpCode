@@ -198,23 +198,12 @@ function createWebPlatform(): IPlatformService {
     getPathForFile: () => null,
     createTempTextAttachment: () =>
       Promise.reject(new Error("Temporary text attachments require a desktop host")),
-    // 手机远控内嵌 relay 只存在于桌面 main 进程；Web 端没有 relay，
-    // 与 exportLogs 等能力一致返回固定占位，保持 IPlatformService 完整且不新发明语义。
-    getMobileRelayEntry: () =>
-      Promise.resolve({
-        url: "",
-        connections: 0,
-        listenPort: 0,
-        running: false,
-        error: "Not supported in web mode",
-      }),
     // 离线锁定是 CentOS 7 桌面启动器 `--offline` 的运行时事实；Web 端没有该状态，
     // 按「未提供即未锁定」惯例返回全功能占位，与 Windows 基准一致。
     getOfflineGateState: () =>
       Promise.resolve({
         localOnly: false,
         disabledFeatures: {
-          mobileRelay: false,
           publicUpdateCheck: false,
           publicConfig: false,
           publicHelp: false,

@@ -116,7 +116,7 @@ export function createRemoteWorkspaceServiceCollection(params: {
   const localOAuthCredentialRepo = new OAuthCredentialRepo(localCredentialService, {
     onCorruptOAuthSessionCleared: async (providers) => {
       // remote workspace host 读写的是本机 OAuth 凭据。
-      // 损坏恢复必须和 local host 一样清理 Start/Coding Plan 派生 provider，避免手机 remote 残留旧 key。
+      // 损坏恢复必须和 local host 一样清理 Start/Coding Plan 派生 provider，避免 Web attachment 残留旧 key。
       await Promise.all(
         providers.map((provider) => handleOAuthProviderLogout?.(provider) ?? Promise.resolve()),
       );
@@ -194,7 +194,7 @@ export function createRemoteWorkspaceServiceCollection(params: {
   const reportingRemoteZCodeTaskService = params.createReportingRemoteZCodeTaskService(
     params.connectionServices.zcodeTaskService,
   );
-  // 手机 remote 的 replayable mirror 在 reporting wrapper 中发布用户消息；
+  // Web attachment 的 replayable mirror 在 reporting wrapper 中发布用户消息；
   // 附件物化必须包在 reporting 外层，确保 mirror 和真正发给远端 agent 的 prompt 使用同一份远端路径。
   const remoteZCodeTaskService = params.createRemotePromptAttachmentTaskService(
     reportingRemoteZCodeTaskService,
@@ -256,7 +256,7 @@ export function createRemoteWorkspaceServiceCollection(params: {
           | { status: "resolved"; preferences: ZCodeSessionRuntimePreferencesResult }
           | { status: "failed"; message: string };
         try {
-          // 与本地 Host 同源：固定预算不依赖配置网关，远程/手机偏好响应不再串行等待网络。
+          // 与本地 Host 同源：固定预算不依赖配置网关，远程/Web 偏好响应不再串行等待网络。
           const settings = await trackStage("settings", localSettingService.get());
           const modelContextBudgetStrategy = DEFAULT_ZCODE_MODEL_CONTEXT_BUDGET_STRATEGY;
           resolution = {
@@ -305,7 +305,7 @@ export function createRemoteWorkspaceServiceCollection(params: {
     },
   );
 
-  // Web 手机远控进入 SSH task 时只连到 remote workspace host，
+  // Web attachment 进入 SSH task 时只连到 remote workspace host，
   // 没有桌面 renderer 那层 `baseServices + remoteServices` 合并。
   // 因此这里为 remote workspace host 补齐本地全局 channel；文件、终端、ZCode Agent 仍来自远端，
   // 设置、凭据、OAuth、模型供应商和 settings-sync 继续读写本机配置。

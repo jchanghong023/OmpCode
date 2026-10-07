@@ -248,7 +248,7 @@ export class ConversationTopicPublisher {
       subscriptionId,
       logicalFrameId: createId("frame"),
       logicalFrameOrdinal: subscriber.logicalFrameOrdinal,
-      // 接收端按三种承载的最大 envelope 校验；发送端必须使用同一口径预分片。
+      // 接收端按两种承载的最大 envelope 校验；发送端必须使用同一口径预分片。
       measurePhysicalFrameBytes: (wire) => measureTopicNotificationEnvelopeBytes(wire).maxBytes,
     });
     for (const wire of wires) {

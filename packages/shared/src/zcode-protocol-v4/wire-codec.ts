@@ -18,14 +18,10 @@ function vqlByteLength(value: number): number {
   return bytes;
 }
 
-/**
- * 按当前生产三层真实承载计量 topic notification。mobile relay
- * 会把 Channel binary 再 base64，不能只测 CLI 的 logical JSON。
- */
+/** 按当前 CLI NDJSON 与 Channel socket 两种真实承载计量 topic notification。 */
 export function measureTopicNotificationEnvelopeBytes(wire: TopicWireFrameCandidate): {
   cliNdjsonBytes: number;
   channelSocketBytes: number;
-  mobileRelayBytes: number;
   maxBytes: number;
 } {
   const cliNdjsonBytes =
@@ -49,30 +45,10 @@ export function measureTopicNotificationEnvelopeBytes(wire: TopicWireFrameCandid
   const channelPayloadBytes = channelHeaderBytes + 1 + vqlByteLength(wireJsonBytes) + wireJsonBytes;
   // SocketProtocol/PersistentProtocol 在 Channel payload 外再加固定 13-byte frame header。
   const channelSocketBytes = channelPayloadBytes + SOCKET_PROTOCOL_HEADER_BYTES;
-  // topic encoder 继续用 legacy 单片 outer 作为保守 logical budget；production 已不发送该形态，
-  // Channel payload 会再经 acknowledged raw adapter 独立分片并按最终 JSON 精确计量。
-  // 两层预算分别约束 topic logical frame 与 relay physical frame，不能互相替代。
-  const dataBase64Bytes = 4 * Math.ceil(channelPayloadBytes / 3);
-  const transportId = "x".repeat(PROTOCOL_V4_LIMITS.transportEnvelopeIdMaxChars);
-  const mobileRelayFixedBytes = utf8JsonByteLength({
-    type: "data",
-    payload: {
-      zcode_type: "rpc-frame",
-      bridgeSessionId: transportId,
-      bridgeGeneration: Number.MAX_SAFE_INTEGER,
-      recoveryId: transportId,
-      seq: Number.MAX_SAFE_INTEGER,
-      dataBase64: "",
-    },
-    client_ts: Number.MAX_SAFE_INTEGER,
-    server_ts: Number.MAX_SAFE_INTEGER,
-  });
-  const mobileRelayBytes = mobileRelayFixedBytes + dataBase64Bytes;
   return {
     cliNdjsonBytes,
     channelSocketBytes,
-    mobileRelayBytes,
-    maxBytes: Math.max(cliNdjsonBytes, channelSocketBytes, mobileRelayBytes),
+    maxBytes: Math.max(cliNdjsonBytes, channelSocketBytes),
   };
 }
 
@@ -140,8 +116,7 @@ function findFragmentByteBudget<F>(params: {
   checksum: TopicWireChecksum;
   maxPhysicalFrameBytes: number;
 }): number {
-  // base64 本身虽是 ASCII，mobile relay 还会再次编码 Channel payload；
-  // 最外层的增幅为 4/3，另留长度前缀变长余量。
+  // 分片正文只编码一次 base64；另留 Channel 长度前缀变长余量。
   // 只测一次最坏索引的空 envelope，逐片仍做真实上限校验。
   const worstCount = params.logicalBytes;
   const envelopeBytes = params.options.measurePhysicalFrameBytes(
@@ -156,7 +131,7 @@ function findFragmentByteBudget<F>(params: {
   );
   const available = params.maxPhysicalFrameBytes - envelopeBytes;
   const prefixReserve = Math.min(64, Math.floor(Math.max(available, 0) / 10));
-  const base64Quads = Math.floor(((available - prefixReserve) * 3) / 16);
+  const base64Quads = Math.floor((available - prefixReserve) / 4);
   return Math.max(0, Math.min(params.logicalBytes, base64Quads * 3));
 }
 

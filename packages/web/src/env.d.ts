@@ -3,7 +3,7 @@ declare module "@zcode/ui/styles.css";
 
 interface ImportMetaEnv {
   // 本文件手写声明了 Vite env 形状，内置 BASE_URL 也需要显式补上，
-  // 否则手机远控按构建 base 区分 /remote 和 /remote/v3 时无法通过 typecheck。
+  // 否则 Web 子路径部署按构建 base 解析静态资源时无法通过 typecheck。
   readonly BASE_URL: string;
   readonly DEV: boolean;
   readonly PROD: boolean;

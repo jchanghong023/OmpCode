@@ -871,7 +871,7 @@ function isWithinAnyWorkspaceSubagentDirectory(resolvedPath: string): boolean {
 /**
  * delete/update RPC 的 filePath/oldFilePath 原样进 rm()，而 ISubagentsService 与
  * commandsService（F22/F34）同样注册在远端 workspace 服务集合（legacy remote workspace
- * 桥/手机远控可达），删除前必须做收容判定，杜绝任意路径删除。
+ * 桥/Web attachment 可达），删除前必须做收容判定，杜绝任意路径删除。
  *
  * 允许根的构成（以 subagentStorage 的真实目录约定为准）：
  * - 用户级根 <storageRoot>/agents 可由 storageOptions 精确重建，做严格收容；

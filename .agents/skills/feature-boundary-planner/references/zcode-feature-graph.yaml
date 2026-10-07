@@ -501,12 +501,12 @@ edges:
     to: boundary.web-remote-replayable
     type: uses-delivery-policy
     rank: conditional
-    condition: For replayable Web remote and mobile attachments.
+    condition: For replayable Web remote attachments.
   - from: service.zcode-agent-connection-scope
     to: boundary.web-remote-replayable
     type: injects-trusted-client-mode
     rank: conditional
-    condition: For replayable Web remote and mobile attachments.
+    condition: For replayable Web remote attachments.
   - from: boundary.web-remote-replayable
     to: boundary.desktop-continuous
     type: must-remain-isolated-from

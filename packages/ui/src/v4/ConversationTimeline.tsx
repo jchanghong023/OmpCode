@@ -598,7 +598,7 @@ function ConversationTimelineImpl({
     if (!element) return;
 
     // rail 改由 CSS container query 隐藏后，完整历史补拉失去了同一宽度
-    // 资格边界，手机远控与窄分屏也会请求全部 rows。这里仅同步只读分页资格；
+    // 资格边界，窄屏 Web 与窄分屏也会请求全部 rows。这里仅同步只读分页资格；
     // rail 的显隐、占位与过渡仍完全由 CSS 裁决，不恢复 composer 几何测量。
     const commitWidth = (width: number) => {
       const normalizedWidth = Math.max(0, Math.round(width));

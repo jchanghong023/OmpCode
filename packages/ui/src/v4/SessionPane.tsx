@@ -297,7 +297,7 @@ export interface SessionPaneProps {
   workspacePath: string;
   workspaceIdentity?: string;
   remoteSessionId?: string | null;
-  /** Prompt 模板埋点当前仅覆盖 Desktop；Web / 手机远控保留 UI 行为但不触发该事件。 */
+  /** Prompt 模板埋点当前仅覆盖 Desktop；Web 保留 UI 行为但不触发该事件。 */
   isDesktop?: boolean;
   provider?: ZCodeProvider;
   onSessionCreated?: (sessionId: string) => void;

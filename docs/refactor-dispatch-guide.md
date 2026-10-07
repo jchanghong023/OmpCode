@@ -2,6 +2,8 @@
 
 > 配套 [refactor-plan.md](test-reports/refactor-plan.md) 使用。**你是调度者，不是实现者**：按本指南机械执行，不要自行发挥顺序或范围。每一步都是「做 → 查 → 过/停」：检查不符合预期就停下向用户报告，不要猜、不要绕。
 
+> 历史任务卡，仅供已完成的单分支重构沿革查阅，不作为当前实施指令。手机远控已取消，现行范围与验收见 [FORK.md](requirements/FORK.md#手机远控取消)。
+
 ## 0. 角色与红线
 
 你只做五件事：读文档、派发任务卡给子代理、检查子代理交付、按固定顺序集成、如实汇报。业务代码全部由子代理写。
@@ -76,16 +78,15 @@ packages/services/src/session/tasksDatabase/**、新建 sqlite/undici 封装模�
 ```text
 【角色】W3 桌面 Main/Host。基线 refactor/unify-centos7；子分支 refactor/w3-main-host；独立 worktree。
 【先读】docs/test-reports/refactor-plan.md「W3」、docs/requirements/centos7-release.md（离线锁定激活链与门控面）、
-mobile-relay.md（平台与离线边界）、centos7-performance.md（日志）。
+centos7-performance.md（日志）。
 【只许改】packages/desktop/src/main/index.ts、logger.ts、mainLogWriter*、desktopHostProcess.ts、
 preload/**、packages/shared/**（新增门控状态接口，只你所有）、scripts/publish/centos7/**（含 UT）。
 【任务】
 1. 启动器：OMPCODE_CENTOS7_LOCAL_ONLY=1 仅在传 --offline 时设置（现在是常开，要改），--offline 同时
    透传内嵌 omp；--help 文案同步；UT 覆盖参数矩阵。
-2. 离线门控面 8 项逐项落地：手机远控 relay、公网更新、公网配置/帮助/社区/反馈、账号/分享、外部浏览器
+2. 离线门控面逐项落地：公网更新、公网配置/帮助/社区/反馈、账号/分享、外部浏览器
    拉起、遥测与启动/日活调度、Host 在线 bot、推荐提示词本地化——LOCAL_ONLY=1 时后端全部关闭。
 3. packages/shared 定义唯一门控状态接口供 renderer 消费（W4 做禁用态）。
-4. relay 门控测试：UT（不监听、握手拒绝、入口状态）+ 本机 WebSocket 探测 E2E。
 5. logger 收敛为单一有界异步队列（时间/容量上限显式常量并配测试，参考 25ms/4MiB），保留 LOCAL_ONLY
    下 error-only 过滤与退出 1 秒排空；删除分支 mainLogWriter 重复路径及测试，语义并入 mainLoggerAsync。
 6. Host 管道容错（EBADF/EPIPE）保留并补 UT。官方云远控入口的进程侧移除。
@@ -99,11 +100,10 @@ preload/**、packages/shared/**（新增门控状态接口，只你所有）、s
 ```text
 【角色】W4 UI 统一。基线 refactor/unify-centos7；子分支 refactor/w4-ui；独立 worktree。
 【先读】docs/test-reports/refactor-plan.md「W4」、docs/requirements/ 的 FORK.md（界面统一条）、composer.md、skills.md、
-integrations.md（浏览器/钩子段）、mobile-relay.md。
+integrations.md（浏览器/钩子段）。
 【只许改】packages/ui/src/**。
 【任务】
-1. WorkspaceSidebarFooter：恢复完整入口（内嵌手机远控 trigger），采纳 Monitor 图标；移除上游官方云远控
-   入口（两平台统一，替代关系）。
+1. WorkspaceSidebarFooter：保留显示效果与设置入口，采纳 Monitor 图标；不恢复已取消的手机远控或官方云远控入口。
 2. locales 取两侧并集；压缩/自动压缩控件在工具栏与输入框下方全部隐藏（/compact 命令保留）。
 3. PluginsSection/SkillsSection 合并：技能/钩子/浏览器页纯 omp 事实源；无工作区显示空态不冒充。
 4. lib/centos7Desktop.ts 白名单机制：标记只允许出现在枚举的封装模块内，配扫描测试强制。

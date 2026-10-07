@@ -12,7 +12,6 @@ function lockedState(localOnly: boolean): OfflineGateState {
   return {
     localOnly,
     disabledFeatures: {
-      mobileRelay: localOnly,
       publicUpdateCheck: localOnly,
       publicConfig: localOnly,
       publicHelp: localOnly,

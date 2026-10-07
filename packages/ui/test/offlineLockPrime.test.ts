@@ -26,7 +26,6 @@ function buildPlatform(behavior: {
 const LOCKED: OfflineGateState = {
   localOnly: true,
   disabledFeatures: {
-    mobileRelay: true,
     publicUpdateCheck: true,
     publicConfig: true,
     publicHelp: true,
@@ -68,7 +67,7 @@ test("prime 拉取 Main 应答后进入锁定态并通知订阅者；同平台�
     await new Promise((resolve) => setTimeout(resolve, 0));
     assert.equal(calls, 1, "同一 platform 只发一次请求");
     assert.equal(isOfflineLocked(), true);
-    assert.equal(getOfflineLockSnapshot().disabledFeatures.mobileRelay, true);
+    assert.equal(getOfflineLockSnapshot().disabledFeatures.publicUpdateCheck, true);
     assert.equal(notified, 1);
   } finally {
     unsubscribe();
@@ -76,7 +75,7 @@ test("prime 拉取 Main 应答后进入锁定态并通知订阅者；同平台�
       localOnly: false,
       disabledFeatures: {
         ...LOCKED.disabledFeatures,
-        mobileRelay: false,
+        publicUpdateCheck: false,
       } as OfflineGateState["disabledFeatures"],
     });
     // 恢复未锁定基线（applyOfflineLockState 会经 schema 校验归一化全部键）。
