@@ -11,7 +11,7 @@ import { encodeJsonlLine } from "../domain/jsonlFraming.js";
 import { awaitOmpReady } from "./ompReady.js";
 import { dispatchOmpFrame } from "./ompFrameDispatch.js";
 import { parseJson } from "./jsonl.js";
-import type { OmpCommandOutcome, OmpProcessFactory, OmpSessionProcess, OmpStateData, OmpAskRequest, OmpPermissionRequest, OmpUiRequest, OmpSideChannelHandlers } from "../app/ports.js";
+import type { OmpCommandOutcome, OmpProcessFactory, OmpSessionProcess, OmpStateData, OmpAskRequest, OmpUiRequest, OmpSideChannelHandlers } from "../app/ports.js";
 import { logger } from "./logger.js";
 import { PromptResultTracker } from "../domain/promptResultTracker.js";
 
@@ -65,9 +65,10 @@ class OmpChildProcess implements OmpSessionProcess {
     private readonly options: {
       cwd: string;
       resumeSessionPath?: string;
+      /** 目录进程：--no-session（工作区级查询，无会话语义）。 */
+      sessionless?: boolean;
       onEvent: (event: import("../domain/ompFrames.js").OmpSessionEventFrame) => void;
       onUiRequest: (request: OmpUiRequest) => void;
-      onPermissionRequest?: (request: OmpPermissionRequest) => void;
       onAskRequest?: (request: OmpAskRequest) => void;
       onExit: (code: number | null) => void;
     } & OmpSideChannelHandlers,
@@ -78,8 +79,8 @@ class OmpChildProcess implements OmpSessionProcess {
       return;
     }
     this.started = true;
-    const args = [...this.extraArgs, "--mode", "rpc-ui", ...(this.options.resumeSessionPath ? ["--resume", this.options.resumeSessionPath] : [])];
-    logger.info("spawn omp core", { binary: this.binaryPath, cwd: this.options.cwd, resume: this.options.resumeSessionPath ?? null });
+    const args = [...this.extraArgs, "--mode", "rpc-ui", ...(this.options.sessionless ? ["--no-session"] : []), ...(this.options.resumeSessionPath ? ["--resume", this.options.resumeSessionPath] : [])];
+    logger.info("spawn omp core", { binary: this.binaryPath, cwd: this.options.cwd, resume: this.options.resumeSessionPath ?? null, sessionless: this.options.sessionless === true });
     const child = spawn(this.binaryPath, args, { cwd: this.options.cwd, stdio: ["pipe", "pipe", "pipe"], windowsHide: true }) as ChildProcessWithoutNullStreams;
     this.child = child;
     this.exitListener = (code) => this.handleExit(code);
@@ -105,6 +106,14 @@ class OmpChildProcess implements OmpSessionProcess {
     this.subagentSubscriptionAvailable = subscription.success;
     if (!subscription.success) {
       logger.warn("omp 子代理订阅不可用", { error: subscription.error ?? "unknown" });
+    }
+    // 富 ask（extension_ui_request method:"ask" 携带完整问题集）需显式启用；旧核无该命令，
+    // 失败只降级为逐题 select/editor（不阻塞会话进程启动）。
+    if (!this.options.sessionless) {
+      const askDialog = await this.request({ type: "set_ask_dialog", enabled: true }, 10_000).catch((error) => ({ success: false, error: String(error) }));
+      if (!askDialog.success) {
+        logger.info("omp 富 ask 对话框不可用，回落逐题询问", { error: askDialog.error ?? "unknown" });
+      }
     }
   }
   private wireStdout(child: ChildProcessWithoutNullStreams): void {

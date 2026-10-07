@@ -8,7 +8,7 @@ import type { ConversationProjection } from "../domain/conversationProjection.js
 import { createId } from "../domain/ids.js";
 import { agentInvokedOf } from "../domain/titleText.js";
 import type { OmpSessionProcess } from "./ports.js";
-import { dispatchOmpText } from "./ompPromptDispatch.js";
+import { dispatchOmpText, type SlashCommandResolver } from "./ompPromptDispatch.js";
 
 /** 引擎侧宿主：收口/分发流程对引擎状态的读写出口（全部惰性求值，避免构造顺序耦合）。 */
 export interface EnginePromptTurnHost {
@@ -23,6 +23,8 @@ export interface EnginePromptTurnHost {
   ensureStarted: () => Promise<void>;
   currentProcess: () => OmpSessionProcess | null;
   flush: () => void;
+  /** 斜杠命令目录解析器（工作区目录进程 v3 富目录）；缺省不做严格分发。 */
+  resolveSlashCommand?: SlashCommandResolver;
 }
 
 export class EnginePromptTurnCloser {
@@ -117,6 +119,7 @@ export class EnginePromptTurnCloser {
           followupMode: host.followupMode(),
           modelSelection,
           currentConfig: host.projection().stateSnapshot.config,
+          ...(host.resolveSlashCommand ? { resolveSlashCommand: host.resolveSlashCommand } : {}),
         });
         if (!outcome.success) {
           this.failTurn(

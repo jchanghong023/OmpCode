@@ -1,6 +1,7 @@
 // app 层依赖的适配器端口。adapters 层实现；这里只声明接口，保证 app 不碰 IO。
 
 import type {
+  OmpAskQuestion,
   OmpCommandFrame,
   OmpConfigUpdateFrame,
   OmpPromptResultFrame,
@@ -8,11 +9,7 @@ import type {
   OmpSessionInfoUpdateFrame,
   OmpSubagentFrame,
 } from "../domain/ompFrames.js";
-import type {
-  OmpAskRequestFrame,
-  OmpBypassFrame,
-  OmpPermissionRequestFrame,
-} from "../domain/ompForkFrames.js";
+import type { OmpBypassFrame, OmpDirectoryCommand } from "../domain/ompForkFrames.js";
 import type { OmpStateData } from "../domain/ompFrames.js";
 import type { OmpContextReport } from "../domain/ompContextReport.js";
 export type { OmpStateData };
@@ -21,19 +18,17 @@ export interface OmpCommandOutcome {
   success: boolean;
   data?: unknown;
   error?: string;
-  /** omp 错误码（响应帧的 code 字段，如 omp_command_failed）；仅失败时由适配器透传。 */
+  /** omp 错误码（响应帧的 code 字段或适配器合成码）；仅失败时由适配器透传。 */
   code?: string;
 }
 
 export interface OmpSessionProcess {
-  /** omp 会话文件绝对路径（omp 落盘后可用；新会话可能为 null）。 */
+  /** omp 会话文件绝对路径（omp 落盘后可用；新会话/目录进程可能为 null）。 */
   readonly ompSessionFile: string | null;
   /** ready 后 set_subagent_subscription 的事实；旧测试进程可省略。 */
   readonly subagentSubscriptionAvailable?: boolean;
   /** negotiate_protocol v3（fork surface）协商成功的事实；未协商/协商中为 false。 */
   readonly forkSurface?: boolean;
-  /** 项目模式通道事实：prompt 默认 text、/xxx 走 execute_command、会话帧按 sessionId 路由。 */
-  readonly projectMode?: boolean;
   start(): Promise<void>;
   send(command: OmpCommandFrame): Promise<OmpCommandOutcome>;
   respondUi(response: OmpBypassFrame): void;
@@ -64,21 +59,21 @@ export interface OmpProcessFactory {
     options: {
       cwd: string;
       resumeSessionPath?: string;
+      /** 目录进程：`--mode rpc-ui --no-session`（无会话语义，承载工作区级查询）。 */
+      sessionless?: boolean;
       onEvent: (event: OmpSessionEventFrame) => void;
       onUiRequest: (request: OmpUiRequest) => void;
-      /** v3：结构化工具审批请求（rpc-ui-protocol 4.1）。 */
-      onPermissionRequest?: (request: OmpPermissionRequest) => void;
-      /** v3：富 ask 答疑请求（rpc-ui-protocol 4.3）。 */
+      /** 富 ask 请求（extension_ui_request method:"ask"，set_ask_dialog 启用后下发）。 */
       onAskRequest?: (request: OmpAskRequest) => void;
       onExit: (code: number | null) => void;
     } & OmpSideChannelHandlers,
   ): OmpSessionProcess;
 }
 
-/** 会话进程的处理器集合（不含 cwd/resume；项目模式通道与旧进程共用同一形状）。 */
+/** 会话进程的处理器集合（不含 cwd/resume/sessionless；各进程实现共用同一形状）。 */
 export type OmpSessionProcessHandlers = Omit<
   Parameters<OmpProcessFactory["create"]>[0],
-  "cwd" | "resumeSessionPath"
+  "cwd" | "resumeSessionPath" | "sessionless"
 >;
 
 export interface OmpUiRequest {
@@ -97,17 +92,14 @@ export interface OmpUiRequest {
   respond(response: OmpBypassFrame): void;
 }
 
-/** v3 结构化工具审批请求；应答经同车道旁路帧回传。 */
-export interface OmpPermissionRequest {
-  frame: OmpPermissionRequestFrame;
-  respond(response: OmpBypassFrame): void;
-}
-
-/** v3 富 ask 请求；pause 幂等暂停服务端倒计时。 */
+/** 富 ask 请求（extension_ui_request method:"ask"）：完整问题集一次下发；应答按题回传。 */
 export interface OmpAskRequest {
-  frame: OmpAskRequestFrame;
+  frame: {
+    id: string;
+    questions: OmpAskQuestion[];
+    timeoutMs?: number;
+  };
   respond(response: OmpBypassFrame): void;
-  pause(): void;
 }
 
 export interface OmpStoreSessionSummary {
@@ -137,12 +129,6 @@ export type HostUserInputAnswer =
   | { action: "decline" }
   | { action: "cancel" };
 
-/** 宿主权限反向请求（interaction/requestPermission）的应答。 */
-export type HostPermissionAnswer = {
-  decision: "allow" | "deny" | "escalate" | "modify";
-  reason?: string;
-};
-
 /** v4 userInput 反向请求可携带的富问题集（wire schema zcodeUserInputRequestParamsSchema.questions）。 */
 export interface HostUserInputQuestion {
   question: string;
@@ -162,57 +148,26 @@ export interface HostGateway {
     options?: { optionId: string; label: string }[];
     questions?: HostUserInputQuestion[];
   }): Promise<HostUserInputAnswer>;
-  /** 反向请求 interaction/requestPermission，等待宿主应答；缺省实现可省略（走 v4 resolveInteraction）。 */
-  requestPermission?(params: {
-    requestId: string;
-    sessionId: string;
-    toolCallId: string;
-    toolName: string;
-    reason: string;
-    riskLevel: "low" | "medium" | "high" | "critical";
-    input: unknown;
-    origin?: unknown;
-    options: {
-      optionId: string;
-      kind: string;
-      name: string;
-      description?: string;
-      response: unknown;
-    }[];
-  }): Promise<HostPermissionAnswer>;
-}
-
-/** 项目模式会话摘要（app 层消费的字段；完整形状见 domain/ompProjectFrames）。 */
-export interface OmpProjectSessionSummaryPort {
-  readonly sessionId: string;
-  readonly name?: string;
-  readonly sessionFile?: string;
-  readonly sessionGeneration?: string;
 }
 
 /**
- * 项目模式可用性三态：available = 项目进程可用；unsupported = ready 未声明项目模式
- * （旧核，本进程生命周期内不会变化，永久回落）；unavailable = 启动失败/退避窗口中
- * （可重试，与「核本身不支持」必须区分，供调用方决定报错语义与重试策略）。
+ * 目录进程 v3 能力可用性三态：available = 目录进程存活且协商 v3（目录命令可用）；
+ * unsupported = 旧核（v3 协商失败，进程期内不变，-32601 永久能力缺失）；
+ * unavailable = 启动失败/退避窗口（-32000 可重试）。v1 目录查询（模型/命令）不受此判定限制。
  */
-export type OmpProjectAvailability = "available" | "unsupported" | "unavailable";
+export type OmpDirectoryAvailability = "available" | "unsupported" | "unavailable";
 
 /**
- * OMP 项目模式网关端口（实现 = adapters/ompProjectGateway.ts）。app 层经此消费进程
- * 生命周期与会话通道，不直接依赖适配层；omp 未提供项目模式时 available() 为 false，
- * 调用方整体回落「每会话一进程」旧拓扑。
+ * 目录进程网关端口（实现 = adapters/ompDirectoryGateway.ts）：每 workspace 一个常驻
+ * `--mode rpc-ui --no-session` 进程。app 层经此发送工作区级查询（v1）与 v3 目录命令，
+ * 不直接依赖适配层。
  */
-export interface OmpProjectGatewayPort {
-  available(): Promise<boolean>;
-  /** 三态可用性：区分「旧核永久不支持」与「进程暂时不可用（可重试）」。 */
-  availability(): Promise<OmpProjectAvailability>;
-  createSession(params: { name?: string }): Promise<OmpProjectSessionSummaryPort>;
-  resumeSession(sessionId: string): Promise<OmpProjectSessionSummaryPort>;
-  deleteSession(sessionId: string): Promise<OmpCommandOutcome>;
-  sendProject(command: unknown): Promise<OmpCommandOutcome>;
-  acquireSessionChannel(
-    sessionId: string,
-    handlers: OmpSessionProcessHandlers,
-  ): Promise<OmpSessionProcess>;
+export interface OmpDirectoryGatewayPort {
+  /** v1 目录查询（模型/思考档位/命令目录；任何核可用）。 */
+  send(command: OmpCommandFrame): Promise<OmpCommandOutcome>;
+  /** v3 目录命令（补全/模型角色/会话目录）；旧核回 code:"omp_capability_missing"。 */
+  sendDirectory(command: OmpDirectoryCommand): Promise<OmpCommandOutcome>;
+  /** v3 三态可用性：报错语义（永久 -32601 / 暂时 -32000）以此为准。 */
+  availability(): Promise<OmpDirectoryAvailability>;
   dispose(): Promise<void>;
 }

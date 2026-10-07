@@ -285,11 +285,17 @@ test("A9：畸形会话事件帧只跳过该帧，不断事件流", async () => 
     handlers.onEvent({ type: "agent_start" });
     handlers.onEvent({ type: "agent_end" });
     assert.equal(engine.projection.stateSnapshot.control.phase, "completedSuccess");
-    // 只读详情视图入口同样防御。
-    engine.applyViewEvent({
-      type: "message_end",
-      message: null,
-    } as unknown as OmpSessionEventFrame);
+    // 只读详情视图入口（subagentViews 内联投影，同一防御语义）同样跳过畸形帧。
+    try {
+      engine.projector.handleEvent({
+        type: "message_end",
+        message: null,
+      } as unknown as OmpSessionEventFrame);
+      assert.fail("畸形帧应在投影层抛错");
+    } catch {
+      // 预期：调用方（视图）吞掉单帧异常。
+    }
+    assert.equal(engine.projection.stateSnapshot.control.phase, "completedSuccess");
   } finally {
     await engine.dispose();
   }

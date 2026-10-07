@@ -4,12 +4,12 @@ import type { ConversationRow, SessionConfigState } from "@zcode/shared/zcode-pr
 import { ConversationProjection } from "../domain/conversationProjection.js";
 import { OmpEventProjector } from "../domain/ompProjector.js";
 import type { OmpSessionEventFrame, OmpStateData } from "../domain/ompFrames.js";
-import type { HostGateway, HostUserInputAnswer, OmpProcessFactory, OmpSessionProcess, OmpSessionProcessHandlers } from "./ports.js";
+import type { HostGateway, HostUserInputAnswer, OmpProcessFactory, OmpSessionProcess } from "./ports.js";
 import { ConversationTopicPublisher, type SubscribeOptions } from "./topicPublisher.js";
 import { OmpInteractionProxy } from "./ompInteractionProxy.js";
 import { applyEngineAutoCompaction, applyEngineCompaction, applyEngineSetModel, applyEngineThoughtLevel, projectEngineContextWindow, readOmpSkillCommands, refreshEngineModelAfterChange, startEngineProcess } from "./ompEngineProcess.js";
 import { PromptQueueReconciler } from "./promptQueueReconciler.js";
-import { registerQueueDispatchAckSink } from "./ompPromptDispatch.js";
+import { registerQueueDispatchAckSink, type SlashCommandResolver } from "./ompPromptDispatch.js";
 import { EnginePromptTurnCloser } from "./promptTurnCloser.js";
 import { TrailingThrottle } from "./trailingThrottle.js";
 import { deriveTitle } from "../domain/titleText.js";
@@ -20,12 +20,12 @@ export class ConversationEngine {
   readonly workspaceId: string;
   readonly workspacePath: string;
   readonly projection: ConversationProjection;
-  private readonly projector: OmpEventProjector;
+  readonly projector: OmpEventProjector;
   private readonly ompFactory: OmpProcessFactory | undefined;
   private readonly gateway: HostGateway;
   private readonly onIndexChange: (engine: ConversationEngine) => void;
   private readonly onCommandsUpdate: ((commands: unknown) => void) | undefined;
-  private readonly acquireProjectProcess: ((handlers: OmpSessionProcessHandlers) => Promise<OmpSessionProcess>) | undefined;
+  private readonly resolveSlashCommand: SlashCommandResolver | undefined;
   private readonly forwardSubagentFrame: ((frame: import("../domain/ompFrames.js").OmpSubagentFrame) => void) | undefined;
   private readonly publisher: ConversationTopicPublisher;
   private readonly interactionProxy: OmpInteractionProxy;
@@ -52,6 +52,8 @@ export class ConversationEngine {
     ensureStarted: () => this.ensureOmpStarted(),
     currentProcess: () => this.ompProcess,
     flush: () => this.scheduleFlush(),
+    // 惰性闭包读取：promptTurns 字段初始化早于构造体对 resolveSlashCommand 的赋值。
+    resolveSlashCommand: (text) => (this.resolveSlashCommand ? this.resolveSlashCommand(text) : Promise.resolve({ kind: "dispatch" } as const)),
   });
   private readonly subagents: OmpSubagentBridge;
   /** A3/A5：队列对账（get_state 回读判定 + debounce）与 steer 在途标记的协调器。 */
@@ -61,7 +63,7 @@ export class ConversationEngine {
     this.workspaceId = init.workspaceId;
     this.workspacePath = init.workspacePath;
     this.ompFactory = init.ompFactory;
-    this.acquireProjectProcess = init.acquireProjectProcess;
+    this.resolveSlashCommand = init.resolveSlashCommand;
     this.forwardSubagentFrame = init.forwardSubagentFrame;
     this.gateway = init.gateway;
     this.onIndexChange = init.onIndexChange;
@@ -91,7 +93,6 @@ export class ConversationEngine {
       addPendingInteraction: (interaction) => this.projection.addPendingInteraction(interaction),
       resolvePendingInteraction: (interactionId) => this.projection.resolvePendingInteraction(interactionId),
       scheduleFlush: () => this.scheduleFlush(),
-      anchorRowIdOf: (toolCallId) => this.projection.rowIdOfToolCall(toolCallId), // 权限卡锚定到 omp 工具行（已建行时）。
     });
     this.publisher = new ConversationTopicPublisher(init.sessionId, this.projection, init.gateway);
     this.titleInitialized = Boolean(init.initialTitle);
@@ -125,7 +126,6 @@ export class ConversationEngine {
       workspacePath: this.workspacePath,
       ompFactory: this.ompFactory,
       resumeSessionPath: this.resumeSessionPath,
-      acquireProjectProcess: this.acquireProjectProcess,
       interaction: this.interactionProxy,
       onEvent: (event) => this.handleOmpEvent(event),
       onExit: (code, process) => this.handleOmpExit(code, process),
@@ -229,17 +229,6 @@ export class ConversationEngine {
       engineWarn("omp event projection failed", { type: event.type, error: error instanceof Error ? error.message : String(error) });
     }
   }
-  /** 只读详情视图（子代理记录）的事件入口：与主会话共用投影器，不触发状态回读。 */
-  applyViewEvent(event: OmpSessionEventFrame): void {
-    // 防御（A9）：与 handleOmpEvent 同理，单帧投影异常跳过，不断事件流。
-    try {
-      this.projector.handleEvent(event);
-    } catch (error) {
-      engineWarn("omp view event projection failed", { type: event.type, error: error instanceof Error ? error.message : String(error) });
-      return;
-    }
-    this.scheduleFlush();
-  }
   /** v4 resolveInteraction 命令入口：把 UI 应答汇入等待中的交互。 */
   settleInteraction(interactionId: string, answer: HostUserInputAnswer): boolean {
     return this.interactionProxy.settle(interactionId, answer);
@@ -335,6 +324,11 @@ export class ConversationEngine {
     }
   }
 
+  /** 子代理控制/详情续读的进程面（subagentControl.ts 消费，结构化窄视图避免成环）。 */
+  subagentProcessHost() {
+    return { ensureStarted: () => this.ensureOmpStarted(), currentProcess: () => this.ompProcess };
+  }
+
   async dispose(): Promise<void> {
     this.indexNotify.dispose();
     this.publisher.dispose();
@@ -377,7 +371,7 @@ export class ConversationEngine {
     return this.publisher.resync(subscriptionId, base, forceSnapshot);
   }
 
-  private scheduleFlush(): void {
+  scheduleFlush(): void {
     this.publisher.scheduleFlush(() => this.indexNotify.ping());
   }
 

@@ -8,7 +8,6 @@ import { ProtocolError } from "./errors.js";
 import { buildLegacySnapshot } from "./legacySnapshot.js";
 import type { AttachmentStore } from "./attachmentStore.js";
 import type { ConversationEngine } from "./conversationEngine.js";
-import type { OmpMcpServerRow, OmpModelTestResult } from "../domain/ompForkFrames.js";
 
 export interface LegacyMethodContext {
   registry: SessionRegistry;
@@ -19,15 +18,6 @@ export interface LegacyMethodContext {
   /** 最近一次 Account Config 交付回执版本（host 按 revision 回声判等）。 */
   deliveredAccountConfigRevision: string | null;
   loadWorkspaceConfig: () => Promise<WorkspaceConfigState>;
-  /** v3 fork surface 工作区级查询；omp 未协商 v3 时返回 null（按能力缺失降级）。 */
-  testModelConnectivity?: (provider: string, modelId: string) => Promise<OmpModelTestResult | null>;
-  listMcpServers?: () => Promise<OmpMcpServerRow[] | null>;
-  /** 项目模式子代理目录（omp-project-mode.md）：以 OMP 持久目录为准；不可用返回 null。 */
-  listSubagents?: (
-    sessionId: string,
-    offset: number,
-    limit?: number,
-  ) => Promise<Record<string, unknown> | null>;
 }
 
 export function createLegacyHandlers(context: LegacyMethodContext) {
@@ -167,17 +157,9 @@ export function createLegacyHandlers(context: LegacyMethodContext) {
         rawLimit !== null && Number.isFinite(rawLimit)
           ? Math.min(Math.max(Math.trunc(rawLimit), 1), 100)
           : 20;
-      // 项目模式：ended 以 OMP 持久目录为准（重启后仍可发现）；不可用时回落投影目录。
-      const projectDirectory = await context.listSubagents?.(
-        sessionId,
-        normalizedOffset,
-        normalizedLimit,
-      );
-      if (projectDirectory) {
-        return projectDirectory;
-      }
+      // ended 目录以父会话投影为准（冷恢复从会话文件重建持久行；omp-core-integration.md）。
       const engine = context.registry.requireEngine(sessionId);
-      return engine.projection.subagentDirectory(normalizedOffset);
+      return engine.projection.subagentDirectory(normalizedOffset, normalizedLimit);
     },
     [zcodeProtocolMethods.pluginsReferenceCatalog]: async (params) => ({
       authority: asRecord(params)?.sessionId ? ("session" as const) : ("workspace" as const),
@@ -245,73 +227,21 @@ export function createLegacyHandlers(context: LegacyMethodContext) {
         configOptions: config.configOptions,
       };
     },
-    [zcodeProtocolMethods.providerTestModelConnectivity]: async (params) => {
-      const record = asRecord(params);
-      const selection = asRecord(record?.selection);
-      const provider = requiredString(selection, "providerId");
-      const modelId = requiredString(selection, "modelId");
-      const result = await context.testModelConnectivity?.(provider, modelId);
-      if (!result) {
-        // 未接目录进程或 omp 未协商 v3：与既有已知差异一致，按能力缺失拒绝。
-        throw new ProtocolError(
-          -32601,
-          "method not supported by omp core: provider/testModelConnectivity",
-        );
-      }
-      if (!result.ok) {
-        // 六类失败归因（rpc-ui-protocol 5.6 A）随错误信息透出，供设置页呈现原因。
-        const detail = result.error;
-        throw new ProtocolError(
-          -32000,
-          `model connectivity test failed${detail ? ` (${detail.category}${typeof detail.httpStatus === "number" ? ` ${detail.httpStatus}` : ""}): ${detail.message}` : ""}`,
-        );
-      }
-      return { success: true as const };
+    [zcodeProtocolMethods.providerTestModelConnectivity]: async () => {
+      // omp v18.8.0 起 RPC 面无 test_model（旧 v3 fork 面已删除）：按已知差异以能力缺失拒绝
+      // （FORK.md #9），模型可用性以实际会话轮为准。
+      throw new ProtocolError(
+        -32601,
+        "method not supported by omp core: provider/testModelConnectivity",
+      );
     },
     [zcodeProtocolMethods.mcpList]: async () => {
-      const servers = await context.listMcpServers?.();
-      // 未接目录进程或 omp 未协商 v3：保持既有空状态表，不伪造连接事实。
-      if (!servers) {
-        return { statuses: {} };
-      }
-      return { statuses: mcpStatusesOf(servers) };
+      // omp v18.8.0 起 RPC 面无 list_mcp_servers：保持空状态表，不伪造连接事实（FORK.md #8）。
+      return { statuses: {} };
     },
     [zcodeProtocolMethods.processChildProcesses]: async () => ({ processes: [] }),
   };
   return handlers;
-}
-
-/** omp list_mcp_servers 行 → ZCode MCP 状态快照（toolCount 未知计 0；无事件缓存的连接标 unknown→disconnected）。 */
-function mcpStatusesOf(servers: OmpMcpServerRow[]): Record<string, unknown> {
-  const statuses: Record<string, unknown> = {};
-  const updatedAt = new Date().toISOString();
-  for (const server of servers) {
-    const config =
-      server.config && typeof server.config === "object" && !Array.isArray(server.config)
-        ? (server.config as Record<string, unknown>)
-        : {};
-    statuses[server.name] = {
-      status: server.disabled
-        ? "disabled"
-        : server.connection === "connected"
-          ? "connected"
-          : server.connection === "failed"
-            ? "failed"
-            : server.connection === "reconnecting"
-              ? "connecting"
-              : "disconnected",
-      transport:
-        config.type === "sse"
-          ? "sse"
-          : config.type === "http" || typeof config.url === "string"
-            ? "http"
-            : "stdio",
-      toolCount: 0,
-      updatedAt,
-      ...(server.error ? { error: server.error } : {}),
-    };
-  }
-  return statuses;
 }
 
 async function resumeOrReject(

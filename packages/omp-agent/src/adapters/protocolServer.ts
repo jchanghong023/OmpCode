@@ -5,7 +5,7 @@ import { createInterface } from "node:readline";
 import { appendFileSync } from "node:fs";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { encodeJsonlLine } from "../domain/jsonlFraming.js";
-import type { HostGateway, HostPermissionAnswer, HostUserInputAnswer } from "../app/ports.js";
+import type { HostGateway, HostUserInputAnswer } from "../app/ports.js";
 import { logger } from "./logger.js";
 
 // OMP_AGENT_DEBUG_LOG：开发诊断用帧日志（dev 回环临时开启；生产不设置即零开销）。
@@ -295,51 +295,6 @@ export class ProtocolServer implements HostGateway {
     });
   }
 
-  /** v3 结构化审批的反向请求；应答按 zcodePermissionResponseSchema 语义收敛，缺省 deny。 */
-  requestPermission(params: {
-    requestId: string;
-    sessionId: string;
-    toolCallId: string;
-    toolName: string;
-    reason: string;
-    riskLevel: "low" | "medium" | "high" | "critical";
-    input: unknown;
-    origin?: unknown;
-    options: unknown[];
-  }): Promise<HostPermissionAnswer> {
-    return new Promise<HostPermissionAnswer>((resolve, reject) => {
-      if (this.closed) {
-        reject(new Error("host transport closed"));
-        return;
-      }
-      const timer = setTimeout(() => {
-        this.pending.delete(params.requestId);
-        reject(new Error("host permission timeout"));
-      }, INTERACTION_REVERSE_REQUEST_TIMEOUT_MS);
-      timer.unref?.();
-      this.pending.set(params.requestId, {
-        resolve: (result) => resolve(permissionAnswerOf(result)),
-        reject,
-        timer,
-      });
-      this.write({
-        id: params.requestId,
-        method: "interaction/requestPermission",
-        params: {
-          requestId: params.requestId,
-          sessionId: params.sessionId,
-          toolCallId: params.toolCallId,
-          toolName: params.toolName,
-          reason: params.reason,
-          riskLevel: params.riskLevel,
-          input: params.input,
-          ...(params.origin ? { origin: params.origin } : {}),
-          options: params.options,
-        },
-      });
-    });
-  }
-
   dispose(): void {
     this.close();
   }
@@ -369,24 +324,4 @@ function userInputAnswerOf(result: unknown): HostUserInputAnswer {
       : { action: record.action };
   }
   return { action: "cancel" };
-}
-
-/** 权限反向请求应答：{decision, reason?}；未知形态按 deny 收口（fail-closed）。 */
-function permissionAnswerOf(result: unknown): HostPermissionAnswer {
-  if (typeof result !== "object" || result === null) {
-    return { decision: "deny" };
-  }
-  const record = result as { decision?: unknown; reason?: unknown };
-  if (
-    record.decision === "allow" ||
-    record.decision === "deny" ||
-    record.decision === "escalate" ||
-    record.decision === "modify"
-  ) {
-    return {
-      decision: record.decision,
-      ...(typeof record.reason === "string" ? { reason: record.reason } : {}),
-    };
-  }
-  return { decision: "deny" };
 }

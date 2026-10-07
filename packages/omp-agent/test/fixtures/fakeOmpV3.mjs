@@ -1,7 +1,8 @@
-// fake omp v3 fork surface 行为模块（rpc-ui-protocol 4.0/4.1/4.3 + 5.6 A）。
-// 从 fakeOmp.mjs 拆出（架构 maxFileLines=400）：结构化审批、富 ask、fork 查询命令。
-// 仅当宿主协商 v3（negotiatedVersion >= 3）后启用；未协商时镜像真实 omp 的
-// Unknown command 拒绝与 legacy extension_ui select 降级。
+// fake omp v3 fork surface 行为模块（v18.8.0+fork.298 起：最小目录能力面）。
+// 从 fakeOmp.mjs 拆出（架构 maxFileLines=400）：富 ask（extension_ui_request method:"ask"）、
+// 审批（extension runner select Approve/Deny）、v3 目录命令（complete_command / 模型角色 /
+// 会话目录）、set_ask_dialog 门控。仅当宿主协商 v3（negotiatedVersion >= 3）后启用；
+// 未协商时镜像真实 omp 的 Unknown command 拒绝。
 
 /** prompt 消息 → 工具审批场景（工具名/参数/子代理来源）。 */
 export const PROMPT_SCENARIOS = {
@@ -15,11 +16,14 @@ export const PROMPT_SCENARIOS = {
 };
 
 export function createV3Surface({ out, nextId }) {
-  const permissionResponses = [];
-  const askReports = { responses: [], pauses: [] };
-  const pendingPermission = new Map();
+  const approvalResponses = [];
+  const askReports = { responses: [] };
+  const pendingApproval = new Map();
   const pendingAsk = new Map();
   let negotiatedVersion = 1;
+  let askDialogEnabled = false;
+  /** v3 会话目录（list/rename/delete 的 fake 状态；sessionId → name）。 */
+  const directorySessions = new Map();
 
   /** 未协商 v3 时对 fork 命令的拒绝（镜像真实 omp `Unknown command` 顶层 error 形状）。 */
   function respondUnknownForkCommand(command) {
@@ -38,84 +42,92 @@ export function createV3Surface({ out, nextId }) {
     setNegotiatedVersion(version) {
       negotiatedVersion = version;
     },
+    isAskDialogEnabled: () => askDialogEnabled,
 
     /** 客户端 → omp 即时分发旁路帧；消费返回 true。 */
     handleBypassFrame(command) {
-      if (command.type === "permission_response") {
-        const entry = pendingPermission.get(command.id);
-        if (entry) {
-          pendingPermission.delete(command.id);
-          permissionResponses.push({
-            id: command.id,
-            option: command.option,
-            ...(typeof command.feedback === "string" ? { feedback: command.feedback } : {}),
-          });
-          entry(!String(command.option).startsWith("reject"));
-        }
-        return true;
-      }
-      if (command.type === "ask_response") {
+      if (command.type !== "extension_ui_response") return false;
+      if (Array.isArray(command.answers)) {
         const entry = pendingAsk.get(command.id);
         if (entry) {
           pendingAsk.delete(command.id);
-          if (command.cancelled === true) {
-            askReports.responses.push({ id: command.id, cancelled: true });
-            entry({ kind: "cancelled" });
-          } else if (command.chat !== undefined) {
-            askReports.responses.push({ id: command.id, chat: command.chat });
-            entry({ kind: "chat", chat: command.chat });
-          } else {
-            askReports.responses.push({ id: command.id, answers: command.answers });
-            entry({ kind: "answers", answers: command.answers });
-          }
+          askReports.responses.push({ id: command.id, answers: command.answers });
+          entry({ kind: "answers", answers: command.answers });
         }
         return true;
       }
-      if (command.type === "ask_pause") {
-        askReports.pauses.push({ targetId: command.targetId });
-        return true;
+      if (command.cancelled === true) {
+        // ask 与 select 共用 cancelled 变体：先按 ask 收口，未命中再按审批收口；
+        // 都未命中交回 legacy pendingUi 车道（返回 false）。
+        const askEntry = pendingAsk.get(command.id);
+        if (askEntry) {
+          pendingAsk.delete(command.id);
+          askReports.responses.push({ id: command.id, cancelled: true });
+          askEntry({ kind: "cancelled" });
+          return true;
+        }
+        const approvalEntry = pendingApproval.get(command.id);
+        if (approvalEntry) {
+          pendingApproval.delete(command.id);
+          approvalResponses.push({ id: command.id, option: "cancelled" });
+          approvalEntry(false);
+          return true;
+        }
+        return false;
+      }
+      if (typeof command.value === "string") {
+        const entry = pendingApproval.get(command.id);
+        if (entry) {
+          pendingApproval.delete(command.id);
+          approvalResponses.push({ id: command.id, option: command.value });
+          entry(command.value === "Approve");
+          return true;
+        }
+        return false;
       }
       return false;
     },
 
-    /** v3 结构化审批（rpc-ui-protocol 4.1）：permission_request + 六档 permission_response。 */
+    /**
+     * 工具审批（extension runner 路径，oh-my-pi wrapper.ts）：
+     * extension_ui_request{method:"select"} + options ["Approve","Deny"]，提示为
+     * formatApprovalPrompt 形态（Allow tool: <name> / Reason / details）。
+     */
     requestApproval(toolCallId, scenario) {
       return new Promise((resolve) => {
         const id = nextId();
-        pendingPermission.set(id, resolve);
+        pendingApproval.set(id, resolve);
+        const details =
+          typeof scenario.args.path === "string"
+            ? `path: ${scenario.args.path}`
+            : `${scenario.toolName} call`;
         out({
-          type: "permission_request",
+          type: "extension_ui_request",
           id,
-          toolCallId,
-          toolName: scenario.toolName,
-          tier: scenario.toolName === "bash" ? "exec" : "write",
-          reason: `Approve ${scenario.toolName} to continue`,
-          approvalMode: "write",
-          details: [
-            typeof scenario.args.path === "string"
-              ? `path: ${scenario.args.path}`
-              : `${scenario.toolName} call`,
-          ],
-          input: scenario.args,
-          ...(scenario.toolName === "bash" ? { prefixSuggestion: "npm " } : {}),
-          ...(scenario.origin ? { origin: scenario.origin } : {}),
+          method: "select",
+          title: "Tool approval",
+          message: `Allow tool: ${scenario.toolName}\nReason: approval mode\n${details}`,
+          options: ["Approve", "Deny"],
         });
       });
     },
 
-    /** v3 富 ask（rpc-ui-protocol 4.3）：完整问题集一次下发，等 ask_response。 */
+    /**
+     * 富 ask（set_ask_dialog 启用后；oh-my-pi requestRpcAskDialog）：
+     * extension_ui_request{method:"ask"} 携带完整问题集，等 answers/cancelled。
+     */
     runAskTurn(emitTextTurn) {
       const askId = nextId();
       pendingAsk.set(askId, (answer) => {
         let text;
         if (answer.kind === "cancelled") text = "Ask was cancelled";
-        else if (answer.kind === "chat") text = `Ask moved to chat: ${answer.chat}`;
         else text = `ASK RESULT: ${JSON.stringify(answer.answers)}`;
         emitTextTurn(text);
       });
       out({
-        type: "ask_request",
+        type: "extension_ui_request",
         id: askId,
+        method: "ask",
         questions: [
           {
             id: "q-db",
@@ -134,18 +146,16 @@ export function createV3Surface({ out, nextId }) {
             options: [{ label: "Yes" }, { label: "No" }],
           },
         ],
-        note: "Choose wisely",
-        timeoutMs: 60000,
-        deadlineAt: Date.now() + 60000,
+        timeout: 60000,
       });
     },
 
-    /** 本地报告命令（/permission-report、/ask-report）；返回命令结果或 null。 */
+    /** 本地报告命令（/approval-report、/ask-report）；返回命令结果或 null。 */
     localReport(message) {
-      if (message === "/permission-report") {
+      if (message === "/approval-report") {
         out({
           type: "command_output",
-          text: `permission-report:${JSON.stringify(permissionResponses)}`,
+          text: `approval-report:${JSON.stringify(approvalResponses)}`,
         });
         return { agentInvoked: false };
       }
@@ -156,55 +166,183 @@ export function createV3Surface({ out, nextId }) {
       return null;
     },
 
-    /** v3 fork 查询命令（rpc-ui-protocol 5.6 A 消费子集）；消费返回 true。 */
+    /** 会话目录 fake 状态注入（测试用）。 */
+    setDirectorySessions(entries) {
+      directorySessions.clear();
+      for (const [id, name] of entries) directorySessions.set(id, name);
+    },
+    directorySessionNames() {
+      return [...directorySessions.entries()];
+    },
+
+    /** v3 fork 目录命令（rpc-fork-types 最小面）；消费返回 true。 */
     forkCommand(command) {
-      if (command.type === "test_model") {
-        if (command.modelId === "boom-model") {
-          out({
-            id: command.id,
-            type: "response",
-            command: "test_model",
-            success: true,
-            data: {
-              ok: false,
-              latencyMs: 5,
-              error: {
-                category: "rate_limited",
-                message: "429 too many requests",
-                httpStatus: 429,
-              },
-            },
-          });
-        } else {
-          out({
-            id: command.id,
-            type: "response",
-            command: "test_model",
-            success: true,
-            data: { ok: true, latencyMs: 7 },
-          });
-        }
-        return true;
-      }
-      if (command.type === "list_mcp_servers") {
+      if (command.type === "set_ask_dialog") {
+        askDialogEnabled = command.enabled === true;
         out({
           id: command.id,
           type: "response",
-          command: "list_mcp_servers",
+          command: "set_ask_dialog",
+          success: true,
+          data: { enabled: askDialogEnabled },
+        });
+        return true;
+      }
+      if (command.type === "complete_command") {
+        const text = String(command.text ?? "");
+        const known = ["/model", "/models", "/modelpreset", "/security", "/skill:greet"];
+        const items = known
+          .filter((name) => name.startsWith(text))
+          .map((name) => ({
+            label: name.slice(1),
+            insertText: `${name} `,
+            replaceStart: 0,
+            replaceEnd: text.length,
+            kind: "command",
+            description: `fake ${name}`,
+          }));
+        out({
+          id: command.id,
+          type: "response",
+          command: "complete_command",
+          success: true,
+          data: { items, revision: "fake-cmd-r0" },
+        });
+        return true;
+      }
+      if (command.type === "get_model_roles") {
+        out({
+          id: command.id,
+          type: "response",
+          command: "get_model_roles",
           success: true,
           data: {
-            servers: [
-              { name: "context7", scope: "user", disabled: false, connection: "connected" },
+            roles: [
               {
-                name: "broken",
-                scope: "project",
-                disabled: false,
-                connection: "failed",
-                error: "spawn failed",
+                roleId: "default",
+                name: "Default",
+                configurable: true,
+                explicitValue: "fake-provider/fake-model:high",
+                userValue: "fake-provider/fake-model:high",
+                projectValue: null,
+                candidateModels: [
+                  { provider: "fake-provider", modelId: "fake-model", thinkingLevel: "high" },
+                ],
+                source: "user",
+                writableScopes: ["user"],
+                hidden: false,
+                section: "chat",
+                revision: "fake-role-r0",
               },
-              { name: "off", scope: "user", disabled: true, connection: "unknown" },
+              {
+                roleId: "smol",
+                name: "Smol",
+                configurable: true,
+                userValue: null,
+                projectValue: null,
+                candidateModels: [],
+                source: "default",
+                writableScopes: ["user"],
+                hidden: false,
+                section: "chat",
+                revision: "fake-role-r0",
+              },
             ],
           },
+        });
+        return true;
+      }
+      if (command.type === "set_model_role") {
+        out({
+          id: command.id,
+          type: "response",
+          command: "set_model_role",
+          success: true,
+          data: {
+            role: {
+              roleId: command.roleId,
+              name: command.roleId,
+              configurable: true,
+              explicitValue:
+                command.selection === null || command.selection?.kind === "auto"
+                  ? undefined
+                  : `${command.selection.model.provider}/${command.selection.model.modelId}`,
+              userValue: null,
+              projectValue: null,
+              candidateModels: [],
+              source: "user",
+              writableScopes: ["user"],
+              hidden: false,
+              section: "chat",
+              revision: "fake-role-r1",
+            },
+            persisted: true,
+          },
+        });
+        return true;
+      }
+      if (command.type === "list_sessions") {
+        out({
+          id: command.id,
+          type: "response",
+          command: "list_sessions",
+          success: true,
+          data: {
+            sessions: [...directorySessions.entries()].map(([sessionId, name]) => ({
+              sessionId,
+              ...(name ? { name } : {}),
+              current: false,
+              revision: "fake-session-r0",
+            })),
+          },
+        });
+        return true;
+      }
+      if (command.type === "rename_session") {
+        if (!directorySessions.has(command.sessionId)) {
+          out({
+            id: command.id,
+            type: "response",
+            command: "rename_session",
+            success: false,
+            code: "not_found",
+            error: `Session not found: ${command.sessionId}`,
+          });
+          return true;
+        }
+        directorySessions.set(command.sessionId, command.name);
+        out({
+          id: command.id,
+          type: "response",
+          command: "rename_session",
+          success: true,
+          data: {
+            sessionId: command.sessionId,
+            name: command.name,
+            current: false,
+            revision: "fake-session-r1",
+          },
+        });
+        return true;
+      }
+      if (command.type === "delete_session") {
+        if (!directorySessions.delete(command.sessionId)) {
+          out({
+            id: command.id,
+            type: "response",
+            command: "delete_session",
+            success: false,
+            code: "not_found",
+            error: `Session not found: ${command.sessionId}`,
+          });
+          return true;
+        }
+        out({
+          id: command.id,
+          type: "response",
+          command: "delete_session",
+          success: true,
+          data: { sessionId: command.sessionId, deleted: true },
         });
         return true;
       }

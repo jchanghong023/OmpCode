@@ -13,7 +13,6 @@ import { test } from "node:test";
 import { OmpFrameAssembler } from "../src/domain/frameAssembler.js";
 import type { OmpRpcChunkFrame } from "../src/domain/ompFrames.js";
 import { createOmpProcessFactory } from "../src/adapters/ompProcess.js";
-import { OmpProjectProcess } from "../src/adapters/ompProjectProcess.js";
 
 function chunk(
   chunkId: string,
@@ -254,7 +253,7 @@ test("流关闭中断：挂起序列按 interrupted 拒绝，二次 abort 无事
   assert.equal(assembler.abort(), null);
 });
 
-// ── ready 通告上限接线（B6）：ompProcess / ompProjectProcess 在 ready 解析后用
+// ── ready 通告上限接线（B6）：ompProcess 在 ready 解析后用
 // maxReassembledFrameBytes 更新 assembler；用 `node -e` 内联 fake 核驱动真实进程。──
 
 /** 捕获本进程 stderr（适配器 logger 输出）以便断言 debug 级拒绝日志。 */
@@ -334,39 +333,5 @@ test("ompProcess：ready 通告上限接线——超限分片拒绝、限内分�
   } finally {
     captured.restore();
     await omp.dispose();
-  }
-});
-
-// 内联 fake 项目核：ready（rpc-ui-project）通告 128 字节上限；negotiate_protocol 前先发
-// 一条超限分片，再正常响应协商——start() 必须成功且超限分片被拒。
-const FAKE_PROJECT_CORE = `
-const { createInterface } = require("node:readline");
-process.stdout.write(JSON.stringify({ type: "ready", protocolVersion: 1, supportedProtocolVersions: [1, 2, 3], maxReassembledFrameBytes: ${WIRED_LIMIT}, mode: "rpc-ui-project", projectIdentity: { projectRoot: process.cwd() }, processInstanceId: "wire-ut", capabilities: { multiSession: true } }) + "\\n");
-createInterface({ input: process.stdin }).on("line", (line) => {
-  let cmd; try { cmd = JSON.parse(line); } catch { return; }
-  if (cmd.type === "negotiate_protocol") {
-    process.stdout.write(JSON.stringify({ type: "rpc_chunk", chunkId: "oversize", index: 0, count: 1, byteLength: ${WIRED_LIMIT + 1}, data: Buffer.from("{}").toString("base64") }) + "\\n");
-    process.stdout.write(JSON.stringify({ id: cmd.id, type: "response", command: cmd.type, success: true, data: { protocolVersion: cmd.protocolVersion } }) + "\\n");
-  }
-});
-`;
-
-test("ompProjectProcess：ready 即接线通告上限——negotiate 前的超限分片被拒，启动不受影响", async () => {
-  const captured = captureStderr();
-  const process_ = new OmpProjectProcess({
-    binaryPath: process.execPath,
-    extraArgs: ["-e", FAKE_PROJECT_CORE, "--"],
-    cwd: scratchRoot,
-    hooks: { onExit: () => {} },
-  });
-  try {
-    assert.equal(await process_.start(), true);
-    assert.match(
-      captured.text(),
-      /"message":"project rpc_chunk sequence rejected".*"reason":"reassembled frame exceeds advertised limit"/,
-    );
-  } finally {
-    captured.restore();
-    await process_.dispose();
   }
 });

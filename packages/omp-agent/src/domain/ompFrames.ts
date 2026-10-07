@@ -5,6 +5,10 @@
 
 import { z } from "zod";
 import { ompAutoCompactionEndEventSchema, ompQueueUpdateEventSchema } from "./ompEventFrames.js";
+import { ompAskQuestionSchema, type OmpAskAnswerFrame } from "./ompAskFrames.js";
+
+export * from "./ompAskFrames.js";
+export * from "./ompViewIds.js";
 
 export * from "./ompEventFrames.js";
 
@@ -41,7 +45,7 @@ export const ompResponseFrameSchema = z.object({
 });
 export type OmpResponseFrame = z.infer<typeof ompResponseFrameSchema>;
 
-// ── 扩展 UI 请求（审批 select / 确认 / 输入 / 打开 URL）──
+// ── 扩展 UI 请求（审批 select / 确认 / 输入 / 富 ask / 打开 URL）──
 export const ompExtensionUiRequestFrameSchema = z.object({
   type: z.literal("extension_ui_request"),
   id: z.string(),
@@ -63,19 +67,23 @@ export const ompExtensionUiRequestFrameSchema = z.object({
   sensitive: z.boolean().optional(),
   // S5-2 依据：omp 主动取消帧 {type:"extension_ui_request", id:<新id>, method:"cancel",
   // targetId:<原请求id>}（rpc-types.ts RpcExtensionUIRequest cancel 变体；rpc-session-host
-  // 的 cancelHostDialog/requestRpcEditor onAbort 与 rpc-fork-ask 的 onAbort 均发该帧）。
+  // 的 cancelHostDialog/requestRpcEditor onAbort 均发该帧）。
   // 此前 zod 剥离 targetId，代理无法按原请求 id 定位等待中的交互，宿主交互卡残留至本地兜底超时。
   targetId: z.string().optional(),
   // S5-4 依据：requestRpcEditor 发 {method:"editor", title, prefill, promptStyle}
   // （rpc-session-host.ts），prefill 是编辑器初始文本；剥离会让宿主弹空框。
   prefill: z.string().optional(),
+  // method:"ask"（set_ask_dialog 启用后）：一次携带完整问题集（oh-my-pi rpc-mode.ts
+  // requestRpcAskDialog → {method:"ask", questions, timeout}）。
+  questions: z.array(ompAskQuestionSchema).optional(),
 });
 export type OmpExtensionUiRequestFrame = z.infer<typeof ompExtensionUiRequestFrameSchema>;
 
 export type OmpExtensionUiResponseFrame =
   | { type: "extension_ui_response"; id: string; value: string }
   | { type: "extension_ui_response"; id: string; confirmed: boolean }
-  | { type: "extension_ui_response"; id: string; cancelled: true; timedOut?: boolean };
+  | { type: "extension_ui_response"; id: string; cancelled: true; timedOut?: boolean }
+  | { type: "extension_ui_response"; id: string; answers: OmpAskAnswerFrame[] };
 
 // ── host tool / host uri（omp 回调宿主工具；当前适配器不注册 host 工具，仅容错识别）──
 export const ompHostToolCallFrameSchema = z.object({
@@ -313,8 +321,6 @@ export type OmpCommandFrame =
       message: string;
       images?: unknown[];
       streamingBehavior?: "steer" | "followUp";
-      /** 项目模式可选（rpc-ui-protocol §14.4）：text=斜杠按普通文本；auto=严格命令分发。 */
-      inputMode?: "text" | "auto";
     }
   | { id?: string; type: "steer"; message: string; images?: unknown[] }
   | { id?: string; type: "follow_up"; message: string; images?: unknown[] }
@@ -333,9 +339,9 @@ export type OmpCommandFrame =
   | { id?: string; type: "set_session_name"; name: string }
   | { id?: string; type: "abort_bash" }
   | { id?: string; type: "set_subagent_subscription"; level: "off" | "progress" | "events" }
+  // 启用富 ask（extension_ui_request method:"ask" 携带完整问题集）；上游 v1 命令。
+  | { id?: string; type: "set_ask_dialog"; enabled: boolean }
   | { id?: string; type: "get_subagents" }
-  // v3 fork surface 工作区级查询（未协商 v3 的 omp 回 Unknown command，调用方降级）。
-  | import("./ompForkFrames.js").OmpForkQueryCommand
   | {
       id?: string;
       type: "get_subagent_messages";
@@ -343,8 +349,11 @@ export type OmpCommandFrame =
       sessionFile?: string;
       fromByte?: number;
     }
-  // 项目模式（rpc-ui-protocol §14.5）：严格分发执行命令/技能；未知命令不进模型。
-  | { id?: string; type: "execute_command"; text: string };
+  // 子代理控制（上游 v1 面）：停止 = cancel_subagent；发送消息 = steer_subagent。
+  | { id?: string; type: "cancel_subagent"; subagentId: string }
+  | { id?: string; type: "steer_subagent"; subagentId: string; message: string }
+  // v3 fork surface 目录能力（目录进程 --no-session 上消费；未协商 v3 回 Unknown command）。
+  | import("./ompForkFrames.js").OmpDirectoryCommand;
 
 // ── get_state 响应载荷 ──
 export const ompStateDataSchema = z
@@ -383,12 +392,3 @@ export const ompStateDataSchema = z
   })
   .passthrough();
 export type OmpStateData = z.infer<typeof ompStateDataSchema>;
-
-export const ompModelCatalogEntrySchema = z
-  .object({
-    provider: z.string().optional(),
-    id: z.string().optional(),
-    name: z.string().optional(),
-  })
-  .passthrough();
-export type OmpModelCatalogEntry = z.infer<typeof ompModelCatalogEntrySchema>;

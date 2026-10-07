@@ -2,7 +2,7 @@
 
 ## 产品规则与所有权
 
-- 进程拓扑按 [omp-project-mode.md](omp-project-mode.md) 执行：项目模式下每 workspace 一个 OMP 项目进程承载全部会话，会话 ID 自创建起即为 OMP 稳定身份（临时 ID 迁移仅存在于旧「每会话一进程」拓扑）；本文件其余身份、恢复与收口规则在两种拓扑下同构适用。
+- 进程拓扑按 [omp-core-integration.md](omp-core-integration.md) 执行：每会话一个惰性 omp 进程 + 每 workspace 一个常驻目录进程；会话身份沿用「临时 ID → omp 会话文件 UUID」迁移规则，本文件其余身份、恢复与收口规则不受拓扑影响。
 - v4 topic 的生产者与组装器使用同一物理帧计量函数。帧上限覆盖 CLI NDJSON、Channel socket 与手机 relay 三种承载；超过上限时生产者先分片，组装器只接受合法帧。逻辑快照的序号和重放语义不因分片变化。
 - omp 会话引擎拥有当前轮、排队轮和待回答交互。命令发送失败或核心退出时，引擎将相关轮次与交互终结；本地命令没有 `agent_start` 时，按关联的完成事实终结其排队轮。已完成轮次不得被迟到的结果再次更改。
 - 远端 server 和 Agent 的部署根统一为 `~/.ompcode/server`。启动 wrapper 只执行当前部署的 Node 和 Agent 文件，不读取 `~/.zcode`。

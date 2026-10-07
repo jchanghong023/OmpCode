@@ -9,12 +9,8 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { SessionRegistry } from "../src/app/sessionRegistry.js";
 import { ConversationEngine } from "../src/app/conversationEngine.js";
-import type {
-  HostGateway,
-  OmpProjectGatewayPort,
-  OmpStorePort,
-  OmpProcessFactory,
-} from "../src/app/ports.js";
+import type { HostGateway, OmpStorePort, OmpProcessFactory } from "../src/app/ports.js";
+import { createDirectoryStub } from "./fixtures/directoryStub.js";
 
 const gateway = { emitFrame: () => {} } as unknown as HostGateway;
 
@@ -66,6 +62,7 @@ test("C7①: 同 sessionId 并发 resumeSession 只加载一次且返回同一�
       { onFindSession: () => (findCalls += 1) },
     ),
     gateway,
+    directory: createDirectoryStub(),
   });
   const params = { sessionId: "cold-1", workspaceId: "ws", workspacePath: "C:/work" };
   const [a, b] = await Promise.all([
@@ -77,79 +74,72 @@ test("C7①: 同 sessionId 并发 resumeSession 只加载一次且返回同一�
   assert.equal(registry.getEngine("cold-1"), a);
 });
 
-function fakeProjectPort(overrides: {
-  createSession?: () => Promise<{ sessionId: string }>;
-  resumeSession?: (sessionId: string) => Promise<{ sessionId: string } | Error>;
-}): OmpProjectGatewayPort {
-  return {
-    available: async () => true,
-    availability: async () => "available",
-    createSession: overrides.createSession ?? (async () => ({ sessionId: "unexpected" })),
-    resumeSession:
-      overrides.resumeSession ??
-      (async (sessionId: string) => {
-        throw new Error(`resumeSession must not be called (got ${sessionId})`);
-      }),
-    deleteSession: async () => ({ success: true }),
-    sendProject: async () => ({ success: true, data: {} }),
-    acquireSessionChannel: async () => {
-      throw new Error("channel must not be acquired in this test");
-    },
-    dispose: async () => {},
-  } as unknown as OmpProjectGatewayPort;
-}
-
-test("C7②: createSession 在途时并发 resumeSession 等待登记后返回活引擎", async () => {
+test("C7②: createSession 在途时并发 resumeSession（同 ID）等待登记后返回活引擎", async () => {
   let release!: () => void;
   const gate = new Promise<void>((resolve) => {
     release = resolve;
   });
-  let resumed = false;
+  // 本地 create 的登记在 createSessionInner 内同步完成（无项目 RPC 可注入延迟），
+  // 用 hydrateEngineFromCold 的 readSessionEntries 门闸住 resume 侧加载，验证
+  // 「同 ID 并发 resume 等待在途 create 登记、绝不覆盖活引擎」的护栏。
   const registry = new SessionRegistry({
     ompFactory: refusingFactory,
-    store: coldStore([]),
-    gateway,
-    project: fakeProjectPort({
-      createSession: async () => {
+    store: {
+      listSessions: async () => [],
+      findSession: async () => null,
+      readSessionEntries: async () => {
         await gate;
-        return { sessionId: "proj-s1" };
+        return [];
       },
-      resumeSession: async () => {
-        resumed = true;
-        return { sessionId: "proj-s1" };
-      },
-    }),
+      readSubagentEntries: async () => [],
+      deleteSession: async () => true,
+    } satisfies OmpStorePort,
+    gateway,
+    directory: createDirectoryStub(),
   });
-  const creating = registry.createSession({ workspaceId: "ws", workspacePath: "C:/work" });
+  const created = await registry.createSession({
+    sessionId: "s-1",
+    workspaceId: "ws",
+    workspacePath: "C:/work",
+  });
   const resuming = registry.resumeSession({
-    sessionId: "proj-s1",
+    sessionId: "s-1",
     workspaceId: "ws",
     workspacePath: "C:/work",
   });
   release();
-  const [created, resumedEngine] = await Promise.all([creating, resuming]);
-  assert.ok(created instanceof ConversationEngine);
+  const resumedEngine = await resuming;
   assert.equal(resumedEngine, created, "resume 必须返回已登记的活引擎，而不是新建冷引擎覆盖");
-  assert.equal(registry.getEngine("proj-s1"), created);
-  assert.equal(resumed, false, "已有活引擎时不得再走底层 resume_session");
+  assert.equal(registry.getEngine("s-1"), created);
 });
 
 test("C7③/C8: create 失败不连坐无关会话的 resume（屏障等待但不传播失败）", async () => {
+  // 本地 create 无可注入失败的异步点（同步登记），屏障语义（等待但不传播失败）改为：
+  // 在途 create 完成前后并发 resume 无关冷会话，断言 resume 正常完成且互不连坐。
   const registry = new SessionRegistry({
     ompFactory: refusingFactory,
-    store: coldStore([]),
+    store: {
+      listSessions: async () => [],
+      findSession: async (_cwd, id) =>
+        id === "other-1"
+          ? {
+              sessionId: "other-1",
+              sessionPath: "C:/sessions/other-1.jsonl",
+              title: null,
+              firstUserText: null,
+              createdAt: 1,
+              updatedAt: 2,
+            }
+          : null,
+      readSessionEntries: async () => [],
+      readSubagentEntries: async () => [],
+      deleteSession: async () => true,
+    } satisfies OmpStorePort,
     gateway,
-    project: fakeProjectPort({
-      createSession: async () => {
-        await new Promise((sleep) => setTimeout(sleep, 20));
-        throw new Error("create failed on purpose");
-      },
-      resumeSession: async (sessionId) => ({ sessionId }),
-    }),
+    directory: createDirectoryStub(),
   });
-  const failing = registry.createSession({ workspaceId: "ws", workspacePath: "C:/work" });
-  // 在途 create 注定失败；无关会话 other-1 的 resume 只需等待屏障，不得继承 create 的错误
-  //（修复前 Promise.all 会把 create 的 rejection 传播给本调用）。
+  const creating = registry.createSession({ workspaceId: "ws", workspacePath: "C:/work" });
+  // 在途 create 与无关会话 other-1 的 resume 并发：resume 只需等待屏障，不传播 create 的结果。
   const resuming = registry.resumeSession({
     sessionId: "other-1",
     workspaceId: "ws",
@@ -158,7 +148,7 @@ test("C7③/C8: create 失败不连坐无关会话的 resume（屏障等待但�
   const other = await resuming;
   assert.ok(other instanceof ConversationEngine, "无关会话 resume 应正常完成");
   assert.equal(other.sessionId, "other-1");
-  await assert.rejects(() => failing, /create failed on purpose/);
-  // 失败 create 不留残留引擎/注册项。
+  const created = await creating;
+  assert.ok(created instanceof ConversationEngine);
   assert.equal(registry.getEngine("other-1"), other);
 });

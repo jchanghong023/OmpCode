@@ -1,8 +1,8 @@
-// Fork（omp-project-mode.md）：OMP 项目模式 legacy 方法处理器。
-// workspace/completeOmpCommand、workspace/ompModelRoles、workspace/ompSetModelRole、
-// session/controlSubagent；omp 未提供项目模式时按能力缺失显式报错（-32601），不伪造。
-// 项目进程暂时不可用（启动失败/退避窗口）与「核不支持」语义不同：报 -32000 可重试错误，
-// 不冒充能力缺失——宿主 UI 对 -32601 会永久停用动态补全，一次瞬时失败不应造成该后果。
+// Fork（omp-core-integration.md）：OMP 目录能力 legacy 方法处理器。
+// workspace/completeOmpCommand、workspace/ompModelRoles、workspace/ompSetModelRole 走
+// 工作区目录进程（v3）；session/controlSubagent 走父会话进程（cancel/steer_subagent）。
+// v3 能力缺失（旧核，-32601）与目录进程暂时不可用（-32000 可重试）语义不同，不冒充：
+// 宿主 UI 对 -32601 会永久停用动态补全，一次瞬时失败不应造成该后果。
 
 import {
   zcodeControlSubagentParamsSchema,
@@ -11,31 +11,13 @@ import {
   zcodeOmpSetModelRoleParamsSchema,
 } from "@zcode/shared";
 import { ProtocolError } from "./errors.js";
-import type { OmpProjectGatewayPort } from "./ports.js";
+import type { OmpDirectoryGatewayPort } from "./ports.js";
 import type { SessionRegistry } from "./sessionRegistry.js";
 
-export interface OmpProjectMethodDeps {
+export interface OmpDirectoryMethodDeps {
   registry: SessionRegistry;
-  project?: OmpProjectGatewayPort | null;
+  directory: OmpDirectoryGatewayPort;
   workspaceKey: string;
-}
-
-async function requireProject(
-  deps: OmpProjectMethodDeps,
-  method: string,
-): Promise<OmpProjectGatewayPort> {
-  // 网关未注入 = 本端点根本未启用项目模式，等价于永久不支持。
-  if (!deps.project) {
-    throw new ProtocolError(-32601, `method not supported by omp core: ${method}`);
-  }
-  const availability = await deps.registry.projectAvailability();
-  if (availability === "available") {
-    return deps.project;
-  }
-  if (availability === "unsupported") {
-    throw new ProtocolError(-32601, `method not supported by omp core: ${method}`);
-  }
-  throw new ProtocolError(-32000, `omp project process unavailable: ${method}`);
 }
 
 /**
@@ -46,8 +28,8 @@ function outcomeMessage(outcome: { error?: string; code?: string }, fallback: st
   return `${outcome.error ?? fallback}${outcome.code ? ` [${outcome.code}]` : ""}`;
 }
 
-export function createOmpProjectMethodHandlers(
-  deps: OmpProjectMethodDeps,
+export function createOmpDirectoryMethodHandlers(
+  deps: OmpDirectoryMethodDeps,
 ): Record<string, (params: unknown) => Promise<unknown>> {
   return {
     "workspace/completeOmpCommand": async (params: unknown): Promise<unknown> => {
@@ -55,15 +37,13 @@ export function createOmpProjectMethodHandlers(
       if (!parsed.success || parsed.data.workspace.workspaceKey !== deps.workspaceKey) {
         throw new ProtocolError(-32602, "invalid completion request target");
       }
-      const project = await requireProject(deps, "workspace/completeOmpCommand");
-      const outcome = await project.sendProject({
+      const outcome = await deps.directory.sendDirectory({
         type: "complete_command",
         text: parsed.data.text,
         cursor: parsed.data.cursor,
-        ...(parsed.data.sessionId ? { sessionId: parsed.data.sessionId } : {}),
       });
       if (!outcome.success) {
-        throw new ProtocolError(-32000, outcomeMessage(outcome, "complete_command failed"));
+        throwDirectoryError(outcome, "complete_command failed");
       }
       const record = (outcome.data ?? {}) as { items?: unknown[]; revision?: unknown };
       return {
@@ -76,22 +56,16 @@ export function createOmpProjectMethodHandlers(
       if (!parsed.success || parsed.data.workspace.workspaceKey !== deps.workspaceKey) {
         throw new ProtocolError(-32602, "invalid model roles request target");
       }
-      const project = await requireProject(deps, "workspace/ompModelRoles");
-      const outcome = await project.sendProject({
-        type: "get_model_roles",
-        ...(parsed.data.sessionId ? { sessionId: parsed.data.sessionId } : {}),
-      });
+      const outcome = await deps.directory.sendDirectory({ type: "get_model_roles" });
       if (!outcome.success) {
-        throw new ProtocolError(-32000, outcomeMessage(outcome, "get_model_roles failed"));
+        throwDirectoryError(outcome, "get_model_roles failed");
       }
       const record = (outcome.data ?? {}) as {
         roles?: unknown[];
-        revision?: unknown;
         sessionModel?: unknown;
       };
       return {
         roles: Array.isArray(record.roles) ? record.roles : [],
-        ...(typeof record.revision === "string" ? { revision: record.revision } : {}),
         ...(record.sessionModel ? { sessionModel: record.sessionModel } : {}),
       };
     },
@@ -100,8 +74,7 @@ export function createOmpProjectMethodHandlers(
       if (!parsed.success || parsed.data.workspace.workspaceKey !== deps.workspaceKey) {
         throw new ProtocolError(-32602, "invalid model role save target");
       }
-      const project = await requireProject(deps, "workspace/ompSetModelRole");
-      const outcome = await project.sendProject({
+      const outcome = await deps.directory.sendDirectory({
         type: "set_model_role",
         roleId: parsed.data.roleId,
         scope: parsed.data.scope,
@@ -111,7 +84,7 @@ export function createOmpProjectMethodHandlers(
           : {}),
       });
       if (!outcome.success) {
-        throw new ProtocolError(-32000, outcomeMessage(outcome, "set_model_role failed"));
+        throwDirectoryError(outcome, "set_model_role failed");
       }
       return outcome.data ?? {};
     },
@@ -120,7 +93,6 @@ export function createOmpProjectMethodHandlers(
       if (!parsed.success || parsed.data.workspace.workspaceKey !== deps.workspaceKey) {
         throw new ProtocolError(-32602, "invalid subagent control target");
       }
-      await requireProject(deps, "session/controlSubagent");
       const outcome = await deps.registry.controlSubagent(
         parsed.data.sessionId,
         parsed.data.subagentId,
@@ -131,18 +103,8 @@ export function createOmpProjectMethodHandlers(
         throw new ProtocolError(-32000, outcomeMessage(outcome, "control_subagent failed"));
       }
       const record = (outcome.data ?? {}) as Record<string, unknown>;
-      // 状态白名单对齐真值（rpc-project-subagents.control）：stop→"stopping"、send_message→
-      // "sent"；未知词回落 "accepted"（适配器不得伪造同步完成的 "stopped"）。
-      // receipts（send_message 送达回执，Delivery ≠ processing）最小透传，供宿主呈现送达详情。
-      const receipts = Array.isArray(record.receipts)
-        ? record.receipts.filter(
-            (item): item is { to: string; outcome: string; error?: string } => {
-              if (typeof item !== "object" || item === null) return false;
-              const row = item as { to?: unknown; outcome?: unknown };
-              return typeof row.to === "string" && typeof row.outcome === "string";
-            },
-          )
-        : undefined;
+      // 状态词对齐上游真值：stop→"stopping"、send_message→"sent"（subagentControl）；
+      // receipts（send_message 送达回执）上游无对应面，不伪造。
       return {
         subagentId:
           typeof record.subagentId === "string" ? record.subagentId : parsed.data.subagentId,
@@ -153,8 +115,18 @@ export function createOmpProjectMethodHandlers(
           ? (record.status as "sent" | "queued" | "stopping" | "accepted")
           : "accepted",
         ...(typeof record.detail === "string" ? { detail: record.detail } : {}),
-        ...(receipts && receipts.length > 0 ? { receipts } : {}),
       };
     },
   };
+}
+
+/** 目录命令失败的两种语义：能力缺失（旧核，-32601）与暂时不可用/执行失败（-32000）。 */
+function throwDirectoryError(outcome: { error?: string; code?: string }, fallback: string): never {
+  if (outcome.code === "omp_capability_missing") {
+    throw new ProtocolError(
+      -32601,
+      outcome.error ?? `method not supported by omp core: ${fallback}`,
+    );
+  }
+  throw new ProtocolError(-32000, outcomeMessage(outcome, fallback));
 }

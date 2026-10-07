@@ -18,7 +18,7 @@ import {
 } from "../domain/ompFrames.js";
 import type { OmpBypassFrame } from "../domain/ompForkFrames.js";
 import type { PromptResultTracker } from "../domain/promptResultTracker.js";
-import type { OmpAskRequest, OmpPermissionRequest, OmpUiRequest } from "../app/ports.js";
+import type { OmpAskRequest, OmpUiRequest } from "../app/ports.js";
 import { dispatchOmpUiFrame } from "./ompUiFrames.js";
 import { logger } from "./logger.js";
 
@@ -46,7 +46,6 @@ export interface OmpFrameDispatchDeps {
   options: {
     onEvent: (event: OmpSessionEventFrame) => void;
     onUiRequest: (request: OmpUiRequest) => void;
-    onPermissionRequest?: (request: OmpPermissionRequest) => void;
     onAskRequest?: (request: OmpAskRequest) => void;
     onPromptResult?: (frame: OmpPromptResultFrame) => void;
     onCommandOutput?: (frame: { text: string }) => void;
@@ -158,11 +157,8 @@ export function dispatchOmpFrame(frame: unknown, deps: OmpFrameDispatchDeps): vo
       return;
     }
     case "extension_ui_request":
-    case "permission_request":
-    case "ask_request":
       dispatchOmpUiFrame(record, {
         onUiRequest: deps.options.onUiRequest,
-        onPermissionRequest: deps.options.onPermissionRequest,
         onAskRequest: deps.options.onAskRequest,
         respond: (response) => deps.respondUi(response),
       });

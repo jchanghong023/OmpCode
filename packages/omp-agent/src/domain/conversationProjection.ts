@@ -4,6 +4,7 @@
 // delta log 的 op」，以 watermark=seq 收快照后只会收到更大 seq 的 op；行组装在 projectionRows.ts。
 // 轮生命周期/队列对账在 queuedTurnReconcile.ts，增量合并在 deltaMerge.ts（架构 maxFileLines=400）。
 
+import { buildOmpSubagentViewId } from "./ompFrames.js";
 import {
   PROTOCOL_V4_LIMITS,
   type ConversationDelta,
@@ -93,9 +94,10 @@ export class ConversationProjection {
   };
   private lastErrorValue: { code: string; message: string } | null = null;
   private readonly subagents: OmpSubagentProjection;
-  // viewIdOf 默认旧格式 omp-subagent:<id>：旧「每会话一进程」拓扑没有 SubagentViewStore 承接
-  // @parent 地址订阅，UI 据此禁用下钻；项目模式经 EngineInit 显式传 buildOmpSubagentViewId。
-  constructor(sessionId: string, viewIdOf: (subagentId: string) => string = (id) => `omp-subagent:${id}`) {
+  // viewIdOf 默认带父会话地址 omp-subagent:<id>@<session>：SubagentViewStore 承接 @parent
+  // 地址订阅，UI 可下钻只读详情（omp-core-integration.md）；子代理视图引擎等无父会话语义
+  // 的调用方经 EngineInit 显式覆盖。
+  constructor(sessionId: string, viewIdOf: (subagentId: string) => string = (id) => buildOmpSubagentViewId(sessionId, id)) {
     this.sessionId = sessionId;
     this.state = initialAState({});
     this.subagents = new OmpSubagentProjection({
@@ -242,8 +244,8 @@ export class ConversationProjection {
   setSubagentAvailability(availability: "ready" | "unavailable"): void {
     this.subagents.setAvailability(availability);
   }
-  subagentDirectory(offset = 0) {
-    return this.subagents.directory(offset);
+  subagentDirectory(offset = 0, limit = 20) {
+    return this.subagents.directory(offset, limit);
   }
   addPendingInteraction(interaction: PendingInteraction): void {
     this.patchState({ pendingInteractions: [...this.state.pendingInteractions, interaction] });

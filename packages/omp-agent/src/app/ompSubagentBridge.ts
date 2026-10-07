@@ -1,7 +1,6 @@
 // omp 子代理侧信道：记录同一 ID 的生命周期、补读 transcript，并把事实投影到父会话。
 import {
   ompSubagentSnapshotSchema,
-  type OmpCommandFrame,
   type OmpSubagentFrame,
   type OmpSubagentSnapshot,
 } from "../domain/ompFrames.js";
@@ -51,17 +50,6 @@ export class OmpSubagentBridge {
     private readonly flush: () => void,
   ) {}
 
-  /** refresh 的 get_subagents 命令形状：项目模式带 status 过滤（见 refresh 注释）。 */
-  private static directoryCommand(projectMode: boolean | undefined): OmpCommandFrame {
-    // 修复（C2）：真实 omp 的 get_subagents 无过滤时返回 live+durable 合并目录
-    // （rpc-project-subagents.list），durable 终态（parked/interrupted）会被旧映射标成
-    // running，刷新即出现永不终止卡片。项目模式核支持 list({status})，refresh 只要 live
-    // 行，显式传 status:"running" 在源头排除 durable 目录；旧拓扑核无该参数，保持原形状。
-    return projectMode
-      ? ({ type: "get_subagents", status: "running" } as OmpCommandFrame)
-      : { type: "get_subagents" };
-  }
-
   handle(frame: OmpSubagentFrame): void {
     if (frame.type === "subagent_event") return;
     if (frame.type === "subagent_progress") {
@@ -97,9 +85,9 @@ export class OmpSubagentBridge {
   }
 
   async refresh(process: OmpSessionProcess): Promise<void> {
-    const outcome = await process
-      .send(OmpSubagentBridge.directoryCommand(process.projectMode))
-      .catch(() => null);
+    // 新核 get_subagents 快照仅含运行中子代理（终态即从注册表删除，
+    // oh-my-pi rpc-subagents.ts），无需 status 过滤；终态目录由投影持久行承载。
+    const outcome = await process.send({ type: "get_subagents" }).catch(() => null);
     if (this.currentProcess() !== process) return;
     if (!outcome?.success) {
       this.refreshFailed = true;

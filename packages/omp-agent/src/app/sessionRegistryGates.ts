@@ -4,7 +4,7 @@ import type { ConversationEngine } from "./conversationEngine.js";
 import { deleteColdSession } from "./deleteColdSession.js";
 import { deleteLoadedSession } from "./deleteLoadedSession.js";
 import { ProtocolError } from "./errors.js";
-import type { OmpProjectGatewayPort, OmpStorePort } from "./ports.js";
+import type { OmpDirectoryGatewayPort, OmpStorePort } from "./ports.js";
 
 /** 登记门的注册表读写面（SessionRegistry 的窄视图）。 */
 interface RegistryGateIo {
@@ -80,8 +80,7 @@ export class SessionRegistryGates {
 /** 删除/关闭收尾所需的注册表读写面（SessionRegistry 的窄视图）。 */
 export interface SessionTeardownHost {
   gates: SessionRegistryGates;
-  project: OmpProjectGatewayPort | null | undefined;
-  projectAvailable(): Promise<boolean>;
+  directory: OmpDirectoryGatewayPort;
   getEngine(sessionId: string): ConversationEngine | null;
   dropEngine(sessionId: string): void;
   removeIndexSession(workspaceId: string, sessionId: string): void;
@@ -99,14 +98,26 @@ export async function deleteSessionWith(
   // 登记复活（幽灵引擎 + 索引行）。删除未生效时在 catch 回滚，会话身份仍有效。
   host.gates.markDeleted(sessionId);
   try {
-    if (host.project && (await host.projectAvailable())) {
-      // 项目模式：删除结果以 OMP 为准（文件由 OMP 删除）。修复（S7-7）：引擎卸载
-      // （engine.dispose 触发 close_session）移到 OMP 删除成功之后——失败时本地
-      // 状态与 OMP 保持一致（引擎与索引行保留，可重试）。
-      const engine = host.getEngine(sessionId);
-      const outcome = await host.project.deleteSession(sessionId);
-      if (!outcome.success) {
-        throw new ProtocolError(-32004, outcome.error ?? `session deletion failed: ${sessionId}`);
+    // 已加载引擎：先结束其 omp 进程（preparePermanentDeletion 保留投影与 resume 路径）。
+    // 上游语义（oh-my-pi rpc-fork-sessions）：承载会话的进程持有文件租约，delete_session
+    // 对其拒绝（"Close the session's process before deleting it"）——必须先释放占用再删。
+    // 删除墓碑保证释放窗口内同身份 resume 不会复活引擎；删除失败回滚墓碑后引擎仍可
+    // 经 resumeSessionPath 重启（会话身份与内容未受影响）。
+    const engine = host.getEngine(sessionId);
+    if (engine) {
+      await engine.preparePermanentDeletion().catch(() => {});
+    }
+    const directoryOutcome = await host.directory.sendDirectory({
+      type: "delete_session",
+      sessionId,
+    });
+    if (directoryOutcome.success || directoryOutcome.code !== "omp_capability_missing") {
+      if (!directoryOutcome.success) {
+        // omp 权威删除失败（修订冲突/租约冲突等）：如实上报，本地索引保留（可重试）。
+        throw new ProtocolError(
+          -32004,
+          `${directoryOutcome.error ?? `session deletion failed: ${sessionId}`}${directoryOutcome.code ? ` [${directoryOutcome.code}]` : ""}`,
+        );
       }
       if (engine) {
         await engine.dispose();
@@ -118,7 +129,7 @@ export async function deleteSessionWith(
       }
       return;
     }
-    const engine = host.getEngine(sessionId);
+    // 旧核无 v3 会话目录：回落本地文件删除路径（仍须确认文件删除成功后才移除索引）。
     if (engine) {
       const stableId = await deleteLoadedSession(engine, host.store, sessionId);
       host.dropEngine(engine.sessionId);

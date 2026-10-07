@@ -123,16 +123,6 @@ export class V4CommandService {
       case "createSession": {
         const payload =
           envelope.payload as import("@zcode/shared/zcode-protocol-v4").CommandPayloadMap["createSession"];
-        // 修复依据：omp 项目模式的 create_session 立即落盘会话文件，预热草稿会以
-        // 「New session」持久残留（每次渲染器加载累积一条，违反 draft 纯内存契约）。
-        // 项目模式拒绝预热创建，渲染器按既有「回落无预热路径」处理；旧拓扑 draft
-        // 仍由惰性进程保证不落盘，照常接受。
-        if (payload.draftPrewarm && (await this.context.registry.projectAvailable())) {
-          return this.ack(envelope, "rejected", {
-            reasonCode: "fault.command.draftPrewarmUnsupportedByOmpCore",
-            message: "omp project mode persists sessions on create; draft prewarm is disabled",
-          });
-        }
         const input = payload.firstInput
           ? prepareOmpAttachmentInput(
               payload.firstInput.text,

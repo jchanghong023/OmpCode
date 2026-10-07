@@ -6,16 +6,16 @@ import { zcodeProtocolMethods, zcodeSkillsReferenceCatalogParamsSchema } from "@
 import { createLegacyHandlers } from "./legacyMethods.js";
 import { normalizeOmpSlashCommands } from "../domain/ompCommands.js";
 import { skillCatalogOfCommands } from "../domain/ompSkills.js";
-import type { OmpMcpServerRow, OmpModelTestResult } from "../domain/ompForkFrames.js";
 import { ProtocolError } from "./errors.js";
 import { UNSUPPORTED_METHODS } from "./unsupportedMethods.js";
 import { SessionRegistry } from "./sessionRegistry.js";
 import { V4CommandService } from "./v4Commands.js";
 import { AttachmentStore } from "./attachmentStore.js";
 import { SubagentViewStore } from "./subagentViews.js";
-import { createOmpProjectMethodHandlers } from "./ompProjectMethods.js";
+import { createOmpDirectoryMethodHandlers } from "./ompDirectoryMethods.js";
 import { buildUsageStatsResponse } from "./usageStatsResponse.js";
-import type { HostGateway, OmpProjectGatewayPort, OmpProcessFactory, OmpStorePort } from "./ports.js";
+import type { HostGateway, OmpDirectoryGatewayPort, OmpProcessFactory, OmpStorePort } from "./ports.js";
+import type { SlashCommandResolver } from "./ompPromptDispatch.js";
 
 export interface ServerAppDeps {
   ompFactory: OmpProcessFactory;
@@ -24,14 +24,13 @@ export interface ServerAppDeps {
   workspacePath: string;
   workspaceKey: string;
   workspaceIdentity?: string;
-  /** 模型目录来源（registry omp 进程的查询结果，由 adapter 层提供）。 */
+  /** 模型目录来源（目录进程的查询结果，由 adapter 层提供）。 */
   loadWorkspaceConfig: () => Promise<WorkspaceConfigState>;
   loadWorkspaceSkillCommands: () => Promise<unknown>;
-  /** v3 fork surface 工作区级查询（目录 omp 进程）；omp 未协商 v3 时返回 null 按能力缺失降级。 */
-  testModelConnectivity?: (provider: string, modelId: string) => Promise<OmpModelTestResult | null>;
-  listMcpServers?: () => Promise<OmpMcpServerRow[] | null>;
-  /** OMP 项目模式网关（omp-project-mode.md）：可用时会话生命周期与目录查询走共享项目进程。 */
-  project?: OmpProjectGatewayPort | null;
+  /** 工作区目录进程网关（v3 能力：补全/模型角色/会话目录）。 */
+  directory: OmpDirectoryGatewayPort;
+  /** 斜杠命令目录解析器（严格分发）。 */
+  resolveSlashCommand?: SlashCommandResolver;
 }
 
 export class ServerApp {
@@ -40,8 +39,8 @@ export class ServerApp {
   private readonly attachments = new AttachmentStore();
   private readonly legacy: Record<string, (params: unknown) => Promise<unknown>>;
   private readonly deps: ServerAppDeps;
-  private readonly subagentViews: SubagentViewStore | null;
-  private readonly projectMethods: Record<string, (params: unknown) => Promise<unknown>>;
+  private readonly subagentViews: SubagentViewStore;
+  private readonly directoryMethods: Record<string, (params: unknown) => Promise<unknown>>;
   private workspaceConfigCache: WorkspaceConfigState | null = null;
   private workspaceConfigLoading: Promise<WorkspaceConfigState> | null = null;
 
@@ -52,14 +51,13 @@ export class ServerApp {
       store: deps.store,
       gateway: deps.gateway,
       onCommandsUpdate: (commands) => this.updateSlashCommands(commands),
-      project: deps.project ?? null,
+      directory: deps.directory,
+      ...(deps.resolveSlashCommand ? { resolveSlashCommand: deps.resolveSlashCommand } : {}),
     });
     this.commands = new V4CommandService({ registry: this.registry, workspaceId: deps.workspaceKey, workspacePath: deps.workspacePath, attachments: this.attachments });
-    this.subagentViews = deps.project
-      ? new SubagentViewStore({ registry: this.registry, project: deps.project, store: deps.store, gateway: deps.gateway, workspaceId: deps.workspaceKey, workspacePath: deps.workspacePath })
-      : null;
-    if (this.subagentViews) this.registry.setSubagentViews(this.subagentViews);
-    this.projectMethods = createOmpProjectMethodHandlers({ registry: this.registry, project: deps.project ?? null, workspaceKey: deps.workspaceKey });
+    this.subagentViews = new SubagentViewStore({ registry: this.registry, gateway: deps.gateway, workspaceId: deps.workspaceKey, workspacePath: deps.workspacePath });
+    this.registry.setSubagentViews(this.subagentViews);
+    this.directoryMethods = createOmpDirectoryMethodHandlers({ registry: this.registry, directory: deps.directory, workspaceKey: deps.workspaceKey });
     this.legacy = createLegacyHandlers({
       registry: this.registry,
       attachments: this.attachments,
@@ -68,11 +66,6 @@ export class ServerApp {
       workspaceIdentity: deps.workspaceIdentity,
       deliveredAccountConfigRevision: null,
       loadWorkspaceConfig: () => this.getWorkspaceConfig(),
-      testModelConnectivity: deps.testModelConnectivity,
-      listMcpServers: deps.listMcpServers,
-      // 修复（C3 接线）：legacy session/subagents 的 endedLimit 必须透传到项目目录查询，
-      // 否则调用方请求的分页大小被固定为 20。
-      listSubagents: (sessionId, offset, limit) => this.registry.projectSubagentDirectory(sessionId, offset, limit),
     });
   }
 
@@ -83,7 +76,7 @@ export class ServerApp {
     if (this.legacy[method]) {
       return this.legacy[method]!(params);
     }
-    const projectMethod = this.projectMethods[method];
+    const projectMethod = this.directoryMethods[method];
     if (projectMethod) {
       return projectMethod(params);
     }
@@ -243,8 +236,8 @@ export class ServerApp {
     if (!sessionId) {
       throw new ProtocolError(-32602, "invalid topic");
     }
-    // 子代理只读详情视图：合成地址 omp-subagent:<id>@<parent>（omp-project-mode.md）。
-    if (sessionId.startsWith("omp-subagent:") && this.subagentViews) {
+    // 子代理只读详情视图：合成地址 omp-subagent:<id>@<parent>（omp-core-integration.md）。
+    if (sessionId.startsWith("omp-subagent:")) {
       const view = await this.subagentViews.acquire(sessionId);
       if (!view) {
         throw new ProtocolError(-32602, "invalid subagent view topic");
@@ -341,7 +334,7 @@ export class ServerApp {
 
   async dispose(): Promise<void> {
     await this.registry.dispose();
-    await this.deps.project?.dispose().catch(() => {});
+    await this.deps.directory.dispose().catch(() => {});
   }
 }
 

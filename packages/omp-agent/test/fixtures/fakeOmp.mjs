@@ -1,24 +1,25 @@
 // fake omp：讲 omp RPC-UI 的最小假核心，供适配器集成测试使用。
 // 行为脚本：prompt → 流式文本 → write 工具（先 select 审批）→ 完成收口。
-// v3 fork surface 行为（结构化审批/富 ask/fork 查询）在 fakeOmpV3.mjs。
+// v3 fork surface 行为（富 ask/审批 select/v3 目录命令）在 fakeOmpV3.mjs。
+// 目录进程拉起形态 --mode rpc-ui --no-session 亦由本 fake 承载（get_state 等命令照常）。
 
 import { createInterface } from "node:readline";
 import { newStateFields } from "./fakeOmpNewCoreFrames.mjs";
 import { localCommandMessage, out, pendingUi, respond, runLocalCommand, runPromptTurn, shared, v3 } from "./fakeOmpHelpers.mjs";
 
 // 镜像真实 omp cli 的 flag 解析形状（args.ts reportUnrecognizedFlags → main.ts exit 2）：
-// 本 fake 只识别 --mode rpc-ui。适配器项目能力探测（S1-2 拓扑路由）会追加 --rpc-project
-// 拉起本 fake——对单会话 fake 这是未知 flag，必须 stderr 报 unknown flag 并 exit 2
-// （ompProjectReadyGate 据此判真旧核，网关永久回落旧拓扑）；普通 throw（exit 1）会被
-// 判为可重试 unavailable，卡死全部单会话会话创建。
+// 本 fake 识别 --mode rpc-ui [--no-session] [--resume <path>]（目录进程/会话进程两种拉起形态）。
+// 已删除的 fork 旗标（如 --rpc-project）按真实新核：stderr 报 unknown flag 并 exit 2。
 const fakeArgv = process.argv.slice(2);
-const unknownFlag = fakeArgv.find((arg) => arg.startsWith("--") && arg !== "--mode");
+const knownValueFlags = new Set(["--resume"]);
+const knownBareFlags = new Set(["--mode", "--no-session"]);
+const unknownFlag = fakeArgv.find((arg, index) => arg.startsWith("--") && !knownBareFlags.has(arg) && !(knownValueFlags.has(arg) && typeof fakeArgv[index + 1] === "string"));
 if (unknownFlag) {
   process.stderr.write(`Error: unknown flag: ${unknownFlag}\n`);
   process.stderr.write("Run `omp --help` for available flags.\n");
   process.exit(2);
 }
-if (fakeArgv.join(" ") !== "--mode rpc-ui") {
+if (!fakeArgv.includes("--mode") || fakeArgv[fakeArgv.indexOf("--mode") + 1] !== "rpc-ui") {
   throw new Error(`fake omp requires --mode rpc-ui, got: ${fakeArgv.join(" ")}`);
 }
 
@@ -34,15 +35,15 @@ readline.on("line", (line) => {
   } catch {
     return;
   }
+  if (v3.handleBypassFrame(command)) {
+    return;
+  }
   if (command.type === "extension_ui_response") {
     const resolve = pendingUi.get(command.id);
     if (resolve) {
       pendingUi.delete(command.id);
       resolve(command);
     }
-    return;
-  }
-  if (v3.handleBypassFrame(command)) {
     return;
   }
   switch (command.type) {
@@ -98,6 +99,18 @@ readline.on("line", (line) => {
           { name: "ship", source: "extension", description: "Ship changes", input: { hint: "target" } },
           { name: "skill:agent-browser", source: "skill", description: "Browse websites" },
           { name: "skill:architecture-governance", source: "skill", description: "Check architecture" },
+          // fake 专属本地命令（严格分发按目录判定，必须随目录下发）：
+          { name: "later", source: "builtin", description: "Delayed output" },
+          { name: "title", source: "builtin", description: "Set session title", input: { hint: "<title>" } },
+          { name: "model-report", source: "builtin", description: "Report set_model calls" },
+          { name: "config-new", source: "builtin", description: "Emit config_update" },
+          { name: "install-ship2", source: "builtin", description: "Emit available_commands_update" },
+          { name: "failmodel", source: "builtin", description: "Fail a model turn" },
+          { name: "image-report", source: "builtin", description: "Report prompt images", input: { hint: "<label>" } },
+          { name: "text-report", source: "builtin", description: "Report prompt text" },
+          { name: "approval-report", source: "builtin", description: "Report approval responses" },
+          { name: "ask-report", source: "builtin", description: "Report ask responses" },
+          { name: "context", source: "builtin", description: "Context report" },
         ],
       });
       return;
@@ -114,13 +127,14 @@ readline.on("line", (line) => {
         respond(command.id, "prompt", true, { agentInvoked: false });
         return;
       }
-      if (commandText.startsWith("/image-report ")) {
-        const label = commandText.slice("/image-report ".length);
+      const imageReportMatch = /^\/?image-report /.exec(commandText);
+      if (imageReportMatch) {
+        const label = commandText.slice(imageReportMatch[0].length);
         out({ type: "command_output", text: `IMAGE_REPORT:${label}:${JSON.stringify({ hasImages: Object.hasOwn(command, "images"), images: command.images ?? [] })}` });
         respond(command.id, "prompt", true, { agentInvoked: false });
         return;
       }
-      if (commandText.startsWith("/text-report ")) {
+      if (/^\/?text-report /.test(commandText)) {
         out({ type: "command_output", text: `TEXT_REPORT:${JSON.stringify({ message: command.message, images: command.images ?? [] })}` });
         respond(command.id, "prompt", true, { agentInvoked: false });
         return;
@@ -230,13 +244,41 @@ readline.on("line", (line) => {
     case "set_session_name":
       respond(command.id, "set_session_name", true, {});
       return;
-    case "test_model":
-    case "list_mcp_servers":
+    case "set_ask_dialog":
+      // 上游 v1 命令（rpc.md）：任何协商状态都接受，无 v3 门控。
+      if (!v3.forkCommand(command)) {
+        respond(command.id, "set_ask_dialog", true, { enabled: command.enabled === true });
+      }
+      return;
+    case "complete_command":
+    case "get_model_roles":
+    case "set_model_role":
+    case "list_sessions":
+    case "rename_session":
+    case "delete_session":
       if (v3.isV3()) {
-        v3.forkCommand(command);
+        if (!v3.forkCommand(command)) {
+          respond(command.id, command.type, false, { error: `unsupported: ${command.type}` });
+        }
       } else {
         v3.rejectForkCommand(command);
       }
+      return;
+    case "cancel_subagent":
+      respond(command.id, "cancel_subagent", true, { cancelled: true });
+      return;
+    case "steer_subagent":
+      if (!command.message || String(command.message).length === 0) {
+        respond(command.id, "steer_subagent", false, { error: "steer_subagent requires a message" });
+        return;
+      }
+      respond(command.id, "steer_subagent", true);
+      return;
+    case "test_model":
+    case "list_mcp_servers":
+    case "execute_command":
+      // v18.8.0+fork.298 起已删除的 fork 命令：镜像真实核的 Unknown command 拒绝。
+      v3.rejectForkCommand(command);
       return;
     default:
       respond(command.id, command.type ?? "unknown", false, { error: `unsupported: ${command.type}` });

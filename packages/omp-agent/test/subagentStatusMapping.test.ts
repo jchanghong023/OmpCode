@@ -1,66 +1,20 @@
-// 子代理域状态映射 UT（R1③ durable 终态映射 + S6-5 可用性复评）：
-// 1) 目录面 ompProjectDirectory.projectStatusToDirectory：parked→success、interrupted→cancelled、
-//    未知非 live 词→lost（终态），经导出入口 projectSubagentDirectory 驱动；
-// 2) 卡片面 OmpSubagentBridge.subagentStatus：live 词白名单→running，durable/未知词收敛到终态
-//    （frames schema 正在放宽为 string，bridge 映射是未知词的运行时活防线，测试直接以
+// 子代理域状态映射 UT（R1③ durable 终态映射 + S6-5 可用性复评；2026-10-07 适配目录拓扑）：
+// 1) 卡片面 OmpSubagentBridge.subagentStatus：live 词白名单→running，durable/未知词收敛到终态
+//    （frames schema 已放宽为 string，bridge 映射是未知词的运行时活防线，测试直接以
 //    schema 外状态词驱动）；
-// 3) S6-5：refresh 一次瞬时失败→unavailable 不再钉死到进程重启，后续子代理帧触发复评翻回
+// 2) S6-5：refresh 一次瞬时失败→unavailable 不再钉死到进程重启，后续子代理帧触发复评翻回
 //    ready；终态后晚到的 running 快照不得复活已结束行（复评引入更多 refresh 的配套守卫）。
-// wire 级全链路见 projectMode.e2e.test.ts。
+// wire 级全链路见 adapter.e2e.test.ts。
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { setTimeout as sleep } from "node:timers/promises";
-import { projectSubagentDirectory } from "../src/app/ompProjectDirectory.js";
 import { OmpSubagentBridge } from "../src/app/ompSubagentBridge.js";
 import { ConversationProjection } from "../src/domain/conversationProjection.js";
 import type { OmpSubagentFrame } from "../src/domain/ompFrames.js";
-import type {
-  OmpCommandOutcome,
-  OmpProjectGatewayPort,
-  OmpSessionProcess,
-} from "../src/app/ports.js";
+import type { OmpCommandOutcome, OmpSessionProcess } from "../src/app/ports.js";
 
-// ── 1) 目录面映射（修复1：parked→success、interrupted→cancelled，未知词→lost）──
-
-test("projectStatusToDirectory：parked→success、interrupted→cancelled、未知词收敛到终态 lost", async () => {
-  const items = [
-    { subagentId: "sa-parked", name: "scout", status: "parked" },
-    { subagentId: "sa-interrupted", name: "scout", status: "interrupted" },
-    { subagentId: "sa-mystery", name: "scout", status: "some-future-word" },
-    { subagentId: "sa-missing", name: "scout" },
-    { subagentId: "sa-completed", name: "scout", status: "completed" },
-    { subagentId: "sa-failed", name: "scout", status: "failed" },
-    { subagentId: "sa-aborted", name: "scout", status: "aborted" },
-  ];
-  const deps = {
-    project: {
-      sendProject: async () => ({ success: true, data: { items } }),
-    } as unknown as OmpProjectGatewayPort,
-    projectAvailable: async () => true,
-    projectionDirectory: () => null,
-  };
-  const directory = await projectSubagentDirectory(deps, "omp-session-parent", 0, 20);
-  assert.ok(directory, "项目可用时必须返回目录");
-  const ended = (directory as { ended: { items: { agentId: string; status: string }[] } }).ended;
-  assert.deepEqual(
-    ended.items.map((item) => [item.agentId, item.status]),
-    [
-      // parked=已完成驻留、可 send_message 唤醒（PARKED_ACTIONS），不得误标 lost。
-      ["sa-parked", "success"],
-      // interrupted=崩溃中断、无完成事实，与通道侧词汇一致按 cancelled。
-      ["sa-interrupted", "cancelled"],
-      // 一切未知非 live 词收敛到终态，绝不误标 running/复活。
-      ["sa-mystery", "lost"],
-      ["sa-missing", "lost"],
-      ["sa-completed", "success"],
-      ["sa-failed", "failed"],
-      ["sa-aborted", "cancelled"],
-    ],
-  );
-});
-
-// ── 2) 卡片面映射（修复3：live 词白名单，未知词收敛终态）──
+// ── 1) 卡片面映射（live 词白名单，未知词收敛终态）──
 
 /** 真实核 schema 外的状态词经运行时到达 bridge（frames 放宽为 string 后合法）；显式 cast。 */
 function lifecycleFrame(id: string, status: string): OmpSubagentFrame {

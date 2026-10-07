@@ -284,7 +284,7 @@ test("v4 图片和文本进入 omp，不能消费的 PDF 在提交前拒绝", as
       type: "createSession",
       payload: {
         workspaceId: "test-workspace",
-        firstInput: { text: "/image-report first", attachments: [first] },
+        firstInput: { text: "image-report first", attachments: [first] },
       },
       issuedAt: Date.now(),
     })) as { result: unknown };
@@ -331,7 +331,7 @@ test("v4 图片和文本进入 omp，不能消费的 PDF 在提交前拒绝", as
       clientId: "image-client",
       sessionId,
       type: "sendText",
-      payload: { text: "/image-report second", attachments: [second, first] },
+      payload: { text: "image-report second", attachments: [second, first] },
       issuedAt: Date.now(),
     })) as { result: unknown };
     assert.equal(commandAckSchema.parse(sent.result).status, "accepted");
@@ -370,7 +370,7 @@ test("v4 图片和文本进入 omp，不能消费的 PDF 在提交前拒绝", as
       clientId: "image-client",
       sessionId,
       type: "sendText",
-      payload: { text: "/text-report note", attachments: [text] },
+      payload: { text: "text-report note", attachments: [text] },
       issuedAt: Date.now(),
     })) as { result: unknown };
     assert.equal(commandAckSchema.parse(withText.result).status, "accepted");
@@ -392,7 +392,7 @@ test("v4 图片和文本进入 omp，不能消费的 PDF 在提交前拒绝", as
       clientId: "image-client",
       sessionId,
       type: "sendText",
-      payload: { text: "/image-report plain" },
+      payload: { text: "image-report plain" },
       issuedAt: Date.now(),
     })) as { result: unknown };
     assert.equal(commandAckSchema.parse(plain.result).status, "accepted");
@@ -541,6 +541,22 @@ test("workspace/readPresentation 符合 Host 严格响应协议", async () => {
     assert.deepEqual(presentation.slashCommands, [
       { name: "help", description: "Show help", source: "builtin" },
       { name: "ship", description: "Ship changes", inputHint: "target", source: "custom" },
+      { name: "later", description: "Delayed output", source: "builtin" },
+      { name: "title", description: "Set session title", inputHint: "<title>", source: "builtin" },
+      { name: "model-report", description: "Report set_model calls", source: "builtin" },
+      { name: "config-new", description: "Emit config_update", source: "builtin" },
+      { name: "install-ship2", description: "Emit available_commands_update", source: "builtin" },
+      { name: "failmodel", description: "Fail a model turn", source: "builtin" },
+      {
+        name: "image-report",
+        description: "Report prompt images",
+        inputHint: "<label>",
+        source: "builtin",
+      },
+      { name: "text-report", description: "Report prompt text", source: "builtin" },
+      { name: "approval-report", description: "Report approval responses", source: "builtin" },
+      { name: "ask-report", description: "Report ask responses", source: "builtin" },
+      { name: "context", description: "Context report", source: "builtin" },
     ]);
     const modelOption = presentation.configOptions?.find((option) => option.id === "model")
       ?.options?.[0];
@@ -1645,61 +1661,53 @@ async function readFakeReport(
   return JSON.parse(text);
 }
 
-test("v3 结构化审批：permission_request → 权限卡 → 反向请求 allow → 放行且 wire 合法", async () => {
+test("v3 工具审批：extension_ui select(Approve/Deny) → 反向请求 allow → 放行且 wire 合法", async () => {
   const harness = await startAdapter(v3HarnessOptions());
   try {
     const sessionId = await createV3Session(harness, "cmd-v3-perm", "请写 greeting 文件");
 
-    // omp permission_request → interaction/requestPermission 反向请求（结构化载荷）。
-    const permissionRequest = (await harness.waitUntil(() =>
+    // omp 审批（extension runner select）→ interaction/requestUserInput 反向请求（两档选项，
+    // 提示为 formatApprovalPrompt 形态：Allow tool / Reason / details）。
+    const approvalRequest = (await harness.waitUntil(() =>
       harness.frames.find(
-        (frame) => (frame as { method?: string }).method === "interaction/requestPermission",
+        (frame) => (frame as { method?: string }).method === "interaction/requestUserInput",
       ),
     )) as { id: string; params: Record<string, unknown> };
-    assert.equal(permissionRequest.params.toolName, "write");
-    assert.equal(permissionRequest.params.riskLevel, "medium");
-    assert.deepEqual(permissionRequest.params.input, {
-      path: "greeting.txt",
-      content: "line1\nline2\n",
-    });
-    const wireOptionIds = (permissionRequest.params.options as { optionId: string }[]).map(
-      (option) => option.optionId,
+    assert.match(String(approvalRequest.params.prompt), /Allow tool: write/);
+    // 反向请求线形状：options 位于 params.input.options（protocolServer requestUserInput）。
+    const wireOptions = ((approvalRequest.params.input as { options?: { optionId: string }[] })
+      ?.options ?? []) as { optionId: string }[];
+    assert.deepEqual(
+      wireOptions.map((option) => option.optionId),
+      ["Approve", "Deny"],
+      "新核审批恒为 Approve/Deny 两档（会话/始终/前缀档由 omp 配置持有，不经宿主）",
     );
-    assert.deepEqual(wireOptionIds, [
-      "allowOnce",
-      "allowSession",
-      "allowAlways",
-      "deny",
-      "denyAlways",
-    ]);
 
-    // v4 投影：permission 卡携带六档选项、结构化 input、锚定到工具行。
+    // v4 投影：userInput 卡（select 形态、无自由文本）。
     const card = (await harness.waitUntil(() => {
       const interactions = harness.collectState().pendingInteractions as
         | Array<{
             interactionId: string;
             kind: string;
-            anchorRowId: unknown;
             payload: Record<string, unknown>;
           }>
         | undefined;
-      return interactions?.find((item) => item.kind === "permission");
-    })) as { interactionId: string; anchorRowId: unknown; payload: Record<string, unknown> };
-    assert.equal(card.payload.toolName, "write");
-    assert.equal(card.payload.freeText, true);
-    assert.match(String(card.payload.summary), /write/i);
-    assert.deepEqual(card.payload.detail, { path: "greeting.txt", content: "line1\nline2\n" });
-    assert.deepEqual(
-      (card.payload.options as { optionId: string }[]).map((option) => option.optionId),
-      ["allowOnce", "allowSession", "allowAlways", "deny", "denyAlways"],
-    );
-    assert.equal(typeof card.anchorRowId, "number", "权限卡应锚定到已投影的工具行");
+      return interactions?.find(
+        (item) =>
+          item.kind === "userInput" &&
+          (item.payload.options as { optionId: string }[] | undefined)?.some(
+            (option) => option.optionId === "Approve",
+          ),
+      );
+    })) as { interactionId: string; payload: Record<string, unknown> };
+    assert.equal(card.payload.freeText, false);
+    assert.equal(card.payload.answerMode, "option");
 
-    // 宿主直接应答反向请求（allow）→ omp 收到 allow_once → 轮次放行完成。
-    harness.respond(permissionRequest.id, { decision: "allow", reason: "Approved once" });
+    // 宿主直接应答反向请求（allow）→ omp 收到 value "Approve" → 轮次放行完成。
+    harness.respond(approvalRequest.id, { action: "accept", content: { optionId: "Approve" } });
     await waitTurnCompleted(harness, 1);
 
-    // 下行 v4 帧全部合法（含 permission pendingInteraction 的 state patch）。
+    // 下行 v4 帧全部合法（含 userInput pendingInteraction 的 state patch）。
     for (const frame of harness.frames.filter(
       (item) => (item as { method?: string }).method === "v4/conversation/frame",
     )) {
@@ -1712,39 +1720,43 @@ test("v3 结构化审批：permission_request → 权限卡 → 反向请求 all
       );
     }
 
-    // fake 收到的应答选项（经 /permission-report 回读）。
+    // fake 收到的应答选项（经 /approval-report 回读）。
     const report = (await readFakeReport(
       harness,
       sessionId,
       "cmd-v3-perm-report",
-      "/permission-report",
+      "/approval-report",
       1,
     )) as { id: string; option: string }[];
     assert.equal(report.length, 1);
     assert.match(report[0]!.id, /^fake-/);
-    assert.equal(report[0]!.option, "allow_once");
+    assert.equal(report[0]!.option, "Approve");
   } finally {
     await harness.close();
   }
 });
 
-test("v3 拒绝理由回传：v4 resolveInteraction deny+freeText → reject_once+feedback，pending 清空", async () => {
+test("v3 审批拒绝：v4 resolveInteraction 选 Deny → 工具被拒收口 error，pending 清空", async () => {
   const harness = await startAdapter(v3HarnessOptions());
   try {
     const sessionId = await createV3Session(harness, "cmd-v3-deny", "请写 greeting 文件");
     await harness.waitUntil(() =>
       harness.frames.find(
-        (frame) => (frame as { method?: string }).method === "interaction/requestPermission",
+        (frame) => (frame as { method?: string }).method === "interaction/requestUserInput",
       ),
     );
     const card = (await harness.waitUntil(() => {
       const interactions = harness.collectState().pendingInteractions as
-        | Array<{ interactionId: string; kind: string }>
+        | Array<{ interactionId: string; payload: Record<string, unknown> }>
         | undefined;
-      return interactions?.find((item) => item.kind === "permission");
+      return interactions?.find((item) =>
+        (item.payload.options as { optionId: string }[] | undefined)?.some(
+          (option) => option.optionId === "Deny",
+        ),
+      );
     })) as { interactionId: string };
 
-    // 不应答反向请求，改走 v4 resolveInteraction（UI 主路径）：拒绝 + 理由。
+    // UI 主路径（v4 resolveInteraction）：选择 Deny。
     const resolveResult = await harness.request("v4/command", {
       commandId: "cmd-v3-deny-resolve",
       clientId: "test-client",
@@ -1752,7 +1764,7 @@ test("v3 拒绝理由回传：v4 resolveInteraction deny+freeText → reject_onc
       type: "resolveInteraction",
       payload: {
         interactionId: card.interactionId,
-        answer: { optionId: "deny", freeText: "不要动这个文件" },
+        answer: { action: "accept", optionId: "Deny" },
       },
       issuedAt: Date.now(),
     });
@@ -1766,12 +1778,11 @@ test("v3 拒绝理由回传：v4 resolveInteraction deny+freeText → reject_onc
       harness,
       sessionId,
       "cmd-v3-deny-report",
-      "/permission-report",
+      "/approval-report",
       1,
-    )) as { option: string; feedback?: string }[];
+    )) as { option: string }[];
     assert.equal(report.length, 1);
-    assert.equal(report[0]!.option, "reject_once");
-    assert.equal(report[0]!.feedback, "不要动这个文件");
+    assert.equal(report[0]!.option, "Deny");
 
     // 工具被拒：工具行收口为 error；pending 交互清空。
     const toolRow = [...harness.collectRows().values()].find(
@@ -1786,277 +1797,111 @@ test("v3 拒绝理由回传：v4 resolveInteraction deny+freeText → reject_onc
   }
 });
 
-test("v3 会话/前缀档映射：allowSession → allow_session；bash 前缀档 → allow_always_prefix", async () => {
+test("v3 富 ask：多题多选与自定义回答经 answers 按题收敛到 omp", async () => {
   const harness = await startAdapter(v3HarnessOptions());
   try {
-    // 1. write 审批选「本会话免确认」（会话档只能经 v4 resolveInteraction 表达）。
-    const sessionId = await createV3Session(harness, "cmd-v3-session", "请写 greeting 文件");
-    await harness.waitUntil(() =>
-      harness.frames.find(
-        (frame) => (frame as { method?: string }).method === "interaction/requestPermission",
-      ),
-    );
+    // 1) 多题多选 + 自定义回答：answer_0 数组保真（未知值落 customInput）。
+    const sessionId = await createV3Session(harness, "cmd-v3-ask-1", "ASK_ME");
     const firstCard = (await harness.waitUntil(() => {
-      const interactions = harness.collectState().pendingInteractions as
-        | Array<{ interactionId: string; kind: string }>
-        | undefined;
-      return interactions?.find((item) => item.kind === "permission");
-    })) as { interactionId: string };
-    await harness.request("v4/command", {
-      commandId: "cmd-v3-session-resolve",
-      clientId: "test-client",
-      sessionId,
-      type: "resolveInteraction",
-      payload: { interactionId: firstCard.interactionId, answer: { optionId: "allowSession" } },
-      issuedAt: Date.now(),
-    });
-    await waitTurnCompleted(harness, 1);
-    const firstReport = (await readFakeReport(
-      harness,
-      sessionId,
-      "cmd-v3-session-report",
-      "/permission-report",
-      1,
-    )) as { option: string }[];
-    assert.deepEqual(
-      firstReport.map((entry) => entry.option),
-      ["allow_session"],
-    );
-
-    // 2. bash 审批：prefixSuggestion 随卡投放，前缀档选项经 v4 通道映射。
-    const sendResult = await harness.request("v4/command", {
-      commandId: "cmd-v3-bash",
-      clientId: "test-client",
-      sessionId,
-      type: "sendText",
-      payload: { text: "RUN_BASH" },
-      issuedAt: Date.now(),
-    });
-    assert.equal(
-      commandAckSchema.parse((sendResult as { result: unknown }).result).status,
-      "accepted",
-    );
-    const bashRequest = (await harness.waitUntil(() =>
-      harness.frames.find(
-        (frame) =>
-          (frame as { method?: string }).method === "interaction/requestPermission" &&
-          (frame as { params?: { toolName?: string } }).params?.toolName === "bash",
-      ),
-    )) as { id: string; params: Record<string, unknown> };
-    assert.equal(bashRequest.params.riskLevel, "high");
-    const prefixOption = (bashRequest.params.options as { optionId: string; name: string }[]).find(
-      (option) => option.optionId === "allowAlwaysPrefix",
-    );
-    assert.ok(prefixOption, "bash 审批应投放前缀档选项");
-    assert.match(prefixOption!.name, /npm/);
-    const bashCard = (await harness.waitUntil(() => {
-      const interactions = harness.collectState().pendingInteractions as
-        | Array<{ interactionId: string; kind: string; payload: { toolName?: string } }>
-        | undefined;
-      return interactions?.find(
-        (item) => item.kind === "permission" && item.payload.toolName === "bash",
-      );
-    })) as { interactionId: string };
-    await harness.request("v4/command", {
-      commandId: "cmd-v3-bash-prefix",
-      clientId: "test-client",
-      sessionId,
-      type: "resolveInteraction",
-      payload: { interactionId: bashCard.interactionId, answer: { optionId: "allowAlwaysPrefix" } },
-      issuedAt: Date.now(),
-    });
-    await waitTurnCompleted(harness, 2);
-    const secondReport = (await readFakeReport(
-      harness,
-      sessionId,
-      "cmd-v3-bash-report",
-      "/permission-report",
-      2,
-    )) as { option: string }[];
-    assert.ok(
-      secondReport.some((entry) => entry.option === "allow_always_prefix"),
-      `前缀档应答未到达 omp: ${JSON.stringify(secondReport)}`,
-    );
-  } finally {
-    await harness.close();
-  }
-});
-
-test("v3 子代理来源：permission_request.origin 投影为 subagent 徽标并随反向请求下发", async () => {
-  const harness = await startAdapter(v3HarnessOptions());
-  try {
-    const sessionId = await createV3Session(harness, "cmd-v3-origin", "SUBAGENT_WRITE");
-    const permissionRequest = (await harness.waitUntil(() =>
-      harness.frames.find(
-        (frame) => (frame as { method?: string }).method === "interaction/requestPermission",
-      ),
-    )) as { id: string; params: { origin?: Record<string, unknown> } };
-    assert.deepEqual(permissionRequest.params.origin, {
-      kind: "subagent",
-      agentId: "fake-child-9",
-      agentType: "scout",
-      childSessionId: "fake-child-9",
-      parentSessionId: sessionId,
-    });
-    const card = (await harness.waitUntil(() => {
-      const interactions = harness.collectState().pendingInteractions as
-        | Array<{ kind: string; payload: { origin?: Record<string, unknown> } }>
-        | undefined;
-      return interactions?.find((item) => item.kind === "permission");
-    })) as { payload: { origin?: Record<string, unknown> } };
-    assert.deepEqual(card.payload.origin, {
-      kind: "subagent",
-      agentId: "fake-child-9",
-      agentType: "scout",
-      childSessionId: "fake-child-9",
-      parentSessionId: sessionId,
-    });
-    harness.respond(permissionRequest.id, { decision: "allow", reason: "ok" });
-    await waitTurnCompleted(harness, 1);
-  } finally {
-    await harness.close();
-  }
-});
-
-test("v3 富 ask：多题/自定义回答/取消/转对话三条路径按题收敛到 omp", async () => {
-  const harness = await startAdapter(v3HarnessOptions());
-  try {
-    const sessionId = await createV3Session(harness, "cmd-v3-ask", "ASK_ME");
-
-    // 投影：AskUserQuestion 富问答 + 倒计时 + 反向请求携带完整 questions。
-    const card = (await harness.waitUntil(() => {
       const interactions = harness.collectState().pendingInteractions as
         | Array<{
             interactionId: string;
-            kind: string;
-            autoResolution?: { state: string };
-            payload: Record<string, unknown>;
+            payload: {
+              toolName?: string;
+              questions?: { multiSelect?: boolean; options: { preview?: string }[] }[];
+            };
           }>
         | undefined;
       return interactions?.find((item) => item.payload.toolName === "AskUserQuestion");
     })) as {
       interactionId: string;
-      autoResolution?: { state: string };
-      payload: Record<string, unknown>;
+      payload: { questions?: { multiSelect?: boolean; options: { preview?: string }[] }[] };
     };
-    assert.equal(card.payload.kind, "userInput");
-    assert.equal((card.payload.questions as unknown[]).length, 2);
-    const multiQuestion = (card.payload.questions as { multiSelect?: boolean }[])[0]!;
-    assert.equal(multiQuestion.multiSelect, true, "ask multi 应投影为多选");
-    assert.equal(card.autoResolution?.state, "visibleCountdown", "timeoutMs 应投影倒计时");
-    const userInputRequest = (await harness.waitUntil(() =>
-      harness.frames.find(
-        (frame) =>
-          (frame as { method?: string }).method === "interaction/requestUserInput" &&
-          Array.isArray((frame as { params?: { questions?: unknown } }).params?.questions),
-      ),
-    )) as { id: string; params: { questions: unknown[] } };
-    assert.equal(userInputRequest.params.questions.length, 2);
-
-    // 路径一：answer_N 数组 + 自定义回答（未命中标签 → other）。
-    await harness.request("v4/command", {
-      commandId: "cmd-v3-ask-answers",
+    // 富问题集投影：多题/多选/preview 完整透传。
+    assert.equal(firstCard.payload.questions?.length, 2);
+    assert.equal(firstCard.payload.questions?.[0]?.multiSelect, true);
+    assert.equal(firstCard.payload.questions?.[0]?.options[0]?.preview, "SELECT 1;");
+    const resolve = await harness.request("v4/command", {
+      commandId: "cmd-v3-ask-1-resolve",
       clientId: "test-client",
       sessionId,
       type: "resolveInteraction",
       payload: {
-        interactionId: card.interactionId,
-        answer: { action: "accept", content: { answer_0: ["Postgres"], answer_1: "Later" } },
+        interactionId: firstCard.interactionId,
+        answer: {
+          action: "accept",
+          content: { answer_0: ["Postgres", "SQLite", "custom-engine"], answer_1: ["Yes"] },
+        },
       },
       issuedAt: Date.now(),
     });
+    assert.equal(
+      commandAckSchema.parse((resolve as { result: unknown }).result).status,
+      "accepted",
+    );
     await waitTurnCompleted(harness, 1);
-    const askReport = (await readFakeReport(
+    const firstReport = (await readFakeReport(
       harness,
       sessionId,
-      "cmd-v3-ask-report",
+      "cmd-v3-ask-1-report",
       "/ask-report",
       1,
     )) as {
-      responses: { answers?: { questionId: string; selected: string[]; other?: string } }[];
-      pauses: unknown[];
+      responses: {
+        id: string;
+        answers?: { id: string; selectedOptions: string[]; customInput?: string }[];
+        cancelled?: boolean;
+      }[];
     };
-    assert.deepEqual(askReport.responses[0]!.answers, [
-      { questionId: "q-db", selected: ["Postgres"] },
-      { questionId: "q-cache", selected: [], other: "Later" },
+    assert.equal(firstReport.responses.length, 1);
+    assert.deepEqual(firstReport.responses[0]!.answers, [
+      { id: "q-db", selectedOptions: ["Postgres", "SQLite"], customInput: "custom-engine" },
+      { id: "q-cache", selectedOptions: ["Yes"] },
     ]);
-    assert.equal(askReport.pauses.length, 0);
-
-    // 路径二：decline → cancelled（整个 ask abort）。
-    await harness.request("v4/command", {
-      commandId: "cmd-v3-ask-cancel",
-      clientId: "test-client",
-      sessionId,
-      type: "sendText",
-      payload: { text: "ASK_ME" },
-      issuedAt: Date.now(),
-    });
-    const cancelCard = (await harness.waitUntil(() => {
-      const interactions = harness.collectState().pendingInteractions as
-        | Array<{ interactionId: string; payload: { toolName?: string } }>
-        | undefined;
-      return interactions?.find((item) => item.payload.toolName === "AskUserQuestion");
-    })) as { interactionId: string };
-    await harness.request("v4/command", {
-      commandId: "cmd-v3-ask-cancel-resolve",
-      clientId: "test-client",
-      sessionId,
-      type: "resolveInteraction",
-      payload: { interactionId: cancelCard.interactionId, answer: { action: "decline" } },
-      issuedAt: Date.now(),
-    });
-    await waitTurnCompleted(harness, 2);
-    const cancelReport = (await readFakeReport(
-      harness,
-      sessionId,
-      "cmd-v3-ask-report-2",
-      "/ask-report",
-      2,
-    )) as { responses: { id?: string; cancelled?: boolean }[] };
-    assert.match(cancelReport.responses[1]!.id ?? "", /^fake-/);
-    assert.equal(cancelReport.responses[1]!.cancelled, true);
-
-    // 路径三：自由文本 + 多题 → 转为对话（chat）。
-    await harness.request("v4/command", {
-      commandId: "cmd-v3-ask-chat",
-      clientId: "test-client",
-      sessionId,
-      type: "sendText",
-      payload: { text: "ASK_ME" },
-      issuedAt: Date.now(),
-    });
-    const chatCard = (await harness.waitUntil(() => {
-      const interactions = harness.collectState().pendingInteractions as
-        | Array<{ interactionId: string; payload: { toolName?: string } }>
-        | undefined;
-      return interactions?.find((item) => item.payload.toolName === "AskUserQuestion");
-    })) as { interactionId: string };
-    await harness.request("v4/command", {
-      commandId: "cmd-v3-ask-chat-resolve",
-      clientId: "test-client",
-      sessionId,
-      type: "resolveInteraction",
-      payload: {
-        interactionId: chatCard.interactionId,
-        answer: { action: "accept", freeText: "就聊一下" },
-      },
-      issuedAt: Date.now(),
-    });
-    await waitTurnCompleted(harness, 3);
-    const chatReport = (await readFakeReport(
-      harness,
-      sessionId,
-      "cmd-v3-ask-report-3",
-      "/ask-report",
-      3,
-    )) as { responses: { chat?: unknown }[] };
-    assert.equal(chatReport.responses[2]!.chat, "就聊一下");
   } finally {
     await harness.close();
   }
 });
 
-test("v3 ask_pause：snoozeInteractionAutoResolution → omp 收到 ask_pause，投影转 snoozed", async () => {
+test("v3 富 ask 取消：decline → cancelled 收口且 fake 侧记录取消", async () => {
+  // 独立 harness：collectRows 的行池按 rowId 合并多会话行，双会话断言会互相覆盖。
+  const harness = await startAdapter(v3HarnessOptions());
+  try {
+    const sessionId = await createV3Session(harness, "cmd-v3-ask-2", "ASK_ME");
+    const card = (await harness.waitUntil(() => {
+      const interactions = harness.collectState().pendingInteractions as
+        | Array<{ interactionId: string; payload: { toolName?: string } }>
+        | undefined;
+      return interactions?.find((item) => item.payload.toolName === "AskUserQuestion");
+    })) as { interactionId: string };
+    await harness.request("v4/command", {
+      commandId: "cmd-v3-ask-2-resolve",
+      clientId: "test-client",
+      sessionId,
+      type: "resolveInteraction",
+      payload: { interactionId: card.interactionId, answer: { action: "decline" } },
+      issuedAt: Date.now(),
+    });
+    await harness.waitUntil(() =>
+      [...harness.collectRows().values()].some(
+        (row) =>
+          row.kind === "assistantText" && String(row.text ?? "").includes("Ask was cancelled"),
+      ),
+    );
+    const report = (await readFakeReport(
+      harness,
+      sessionId,
+      "cmd-v3-ask-2-report",
+      "/ask-report",
+      1,
+    )) as { responses: { id: string; cancelled?: boolean }[] };
+    assert.equal(report.responses[0]!.cancelled, true);
+  } finally {
+    await harness.close();
+  }
+});
+
+test("v3 ask snooze：首次交互投影转 snoozed（服务端倒计时继续，无协议暂停帧），应答照常收敛", async () => {
   const harness = await startAdapter(v3HarnessOptions());
   try {
     const sessionId = await createV3Session(harness, "cmd-v3-pause", "ASK_ME");
@@ -2078,7 +1923,7 @@ test("v3 ask_pause：snoozeInteractionAutoResolution → omp 收到 ask_pause，
       commandAckSchema.parse((snoozeResult as { result: unknown }).result).status,
       "accepted",
     );
-    // 投影倒计时转 snoozed；fake 收到 ask_pause（幂等暂停服务端自动收尾）。
+    // 投影倒计时转 snoozed（本地预算顺延；omp v18.8.0 起无 ask_pause 协议帧）。
     await harness.waitUntil(() => {
       const interactions = harness.collectState().pendingInteractions as
         | Array<{ interactionId: string; autoResolution?: { state: string } }>
@@ -2086,13 +1931,16 @@ test("v3 ask_pause：snoozeInteractionAutoResolution → omp 收到 ask_pause，
       const current = interactions?.find((item) => item.interactionId === card.interactionId);
       return current?.autoResolution?.state === "snoozed" ? true : undefined;
     });
-    // 先应答收口（ask 运行中本地命令会进队列），再经 /ask-report 回读暂停记录。
+    // 应答照常收口，fake 侧收到按题 answers（无 pauses 记录——协议帧已删除）。
     await harness.request("v4/command", {
       commandId: "cmd-v3-pause-resolve",
       clientId: "test-client",
       sessionId,
       type: "resolveInteraction",
-      payload: { interactionId: card.interactionId, answer: { action: "accept", content: {} } },
+      payload: {
+        interactionId: card.interactionId,
+        answer: { action: "accept", content: { answer_0: ["SQLite"], answer_1: ["No"] } },
+      },
       issuedAt: Date.now(),
     });
     await waitTurnCompleted(harness, 1);
@@ -2102,9 +1950,9 @@ test("v3 ask_pause：snoozeInteractionAutoResolution → omp 收到 ask_pause，
       "cmd-v3-pause-report",
       "/ask-report",
       1,
-    )) as { pauses: { targetId: string }[] };
-    assert.equal(report.pauses.length, 1);
-    assert.match(report.pauses[0]!.targetId, /^fake-/);
+    )) as { responses: unknown[]; pauses?: unknown[] };
+    assert.equal(report.responses.length, 1);
+    assert.equal(report.pauses, undefined, "新核无 ask_pause 协议帧");
   } finally {
     await harness.close();
   }
@@ -2142,7 +1990,7 @@ test("v3 sensitive 输入：extension_ui input.sensitive 投影为密码输入�
   }
 });
 
-test("v3 工作区查询：test_model 实测映射与六类归因；mcp/list 状态快照映射", async () => {
+test("v3 工作区查询：新核无 test_model/list_mcp_servers，按能力缺失拒绝且 mcp 空状态表", async () => {
   const harness = await startAdapter(v3HarnessOptions());
   try {
     const workspace = {
@@ -2150,28 +1998,18 @@ test("v3 工作区查询：test_model 实测映射与六类归因；mcp/list 状
       workspaceIdentity: "test-workspace",
       workspaceKey: "test-workspace",
     };
-    const ok = (await harness.request("provider/testModelConnectivity", {
+    const testModel = (await harness.request("provider/testModelConnectivity", {
       workspace,
       selection: { providerId: "mock", modelId: "mock-1" },
-    })) as { result: { success: boolean } };
-    assert.deepEqual(ok.result, { success: true });
-
-    const boom = (await harness.request("provider/testModelConnectivity", {
-      workspace,
-      selection: { providerId: "mock", modelId: "boom-model" },
     })) as { error?: { code: number; message: string } };
-    assert.ok(boom.error, "失败实测应返回错误");
-    assert.match(boom.error!.message, /rate_limited/);
-    assert.match(boom.error!.message, /429/);
+    assert.ok(testModel.error, "新核无 test_model，连通性测试应拒绝");
+    assert.equal(testModel.error!.code, -32601);
+    assert.match(testModel.error!.message, /not supported by omp core/);
 
     const mcp = (await harness.request("mcp/list", { workspace })) as {
-      result: { statuses: Record<string, { status: string; transport: string; error?: string }> };
+      result: { statuses: Record<string, unknown> };
     };
-    assert.equal(mcp.result.statuses.context7!.status, "connected");
-    assert.equal(mcp.result.statuses.context7!.transport, "stdio");
-    assert.equal(mcp.result.statuses.broken!.status, "failed");
-    assert.match(mcp.result.statuses.broken!.error ?? "", /spawn failed/);
-    assert.equal(mcp.result.statuses.off!.status, "disabled");
+    assert.deepEqual(mcp.result, { statuses: {} });
   } finally {
     await harness.close();
   }

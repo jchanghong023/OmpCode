@@ -60,11 +60,16 @@ export function respond(id, command, success, data) {
 
 // omp 原生附件顺序（rpc-session-host textPrefix，S5-8 对齐）：文本附件上下文前置于用户
 // 消息。本地命令匹配取末段命令文本（最后一个以 "/" 开头的行起），兼容附件前缀在前/在后
-// 两种装配顺序；非命令场景标记（HOLD/ASK_ME/ABORT_AT_START 等）仍按原始全文匹配。
+// 两种装配顺序；报告哨兵（image-report/text-report）支持无斜杠形态（斜杠+附件已被适配层
+// 严格分发拒绝）；非命令场景标记（HOLD/ASK_ME/ABORT_AT_START 等）仍按原始全文匹配。
 export function localCommandMessage(message) {
   if (typeof message !== "string") return message;
-  const index = message.lastIndexOf("\n/");
-  return index >= 0 ? message.slice(index + 1) : message;
+  const lines = message.split("\n");
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    if (lines[i].startsWith("/")) return lines.slice(i).join("\n");
+    if (/^(image-report|text-report) /.test(lines[i])) return lines[i];
+  }
+  return message;
 }
 
 export function runLocalCommand(message) {
@@ -112,7 +117,7 @@ export function runLocalCommand(message) {
 export async function runPromptTurn(message, promptId) {
   out({ type: "agent_start" });
   if (message === "ASK_ME") {
-    if (v3.isV3()) {
+    if (v3.isV3() && v3.isAskDialogEnabled()) {
       await v3.runAskTurn(emitTextTurn);
       return;
     }

@@ -60,8 +60,8 @@
 
 - 对话流式输出、工具调用展示、权限确认、会话管理、文件变更展示：v4 conversation 投影（rows + state patch）按上游 wire schema 产出，全部下行帧经 `conversationTopicWireFrameSchema` 校验。
 - `desktop-continuous` 实时链路与 `web-remote-replayable` 恢复链路：同一投影、按订阅 `clientMode` 区分；断线重连按水位续传（delta log 有界保留，超界回退整快照 resync），两种语义不因换核回退。
-- omp RPC 帧格式不渗入 UI：适配层内闭环（`packages/omp-agent` 独占 omp 协议词汇）。omp rpc-ui 协议 v3（fork surface，见 omp 仓库 `docs-zh-CN/requirements/rpc-ui-protocol.md`）协商成功后：工具 `ask` 以完整问题集一次下发（`ask_request`），投影为 ZCode 原有 `ElicitationDialog` 富问答——多题、多选、选项说明与 preview、「其他」自定义回答、倒计时展示与首次交互暂停（`ask_pause`）；应答按题回传（`ask_response`），取消整体收口。`extension_ui_request` 的 `input`/`editor` 携带 `sensitive` 时投影为密码输入。未协商 v3 的已发布二进制沿用既有降级路径：逐题 `select`/`input`，「其他」由随后文本请求继续输入。
-- 工具审批在 v3 下走结构化权限协议：omp `permission_request` 投影为 ZCode 权限审批卡（`PermissionDialog`），携带工具调用定位、结构化输入预览、子代理来源徽标与六档选项（允许本次/本会话/始终/命令前缀/拒绝/始终拒绝）；应答经 `permission_response` 回传，拒绝理由作为 feedback 附给模型。超时、销毁与断连一律 fail-closed 拒绝本次调用，不存在静默放行路径。
+- omp RPC 帧格式不渗入 UI：适配层内闭环（`packages/omp-agent` 独占 omp 协议词汇）。会话进程在 ready 后发送 `set_ask_dialog {enabled:true}`，omp `ask` 以 `extension_ui_request{method:"ask"}` 单帧携带完整问题集，投影为 ZCode 原有 `ElicitationDialog` 富问答——多题、多选、选项说明与 preview、「其他」自定义回答（映射 `customInput`）、倒计时展示（服务端超时按 recommended 自动收尾）；应答按题回传（`extension_ui_response{answers}`），取消整体收口。`extension_ui_request` 的 `input`/`editor` 携带 `sensitive` 时投影为密码输入，`editor` 的 `prefill` 透传为编辑框初始值。未启用 ask 对话框的已发布二进制沿用既有降级路径：逐题 `select`/`editor`（`promptStyle:true`），「其他」由随后文本请求继续输入。
+- 工具审批由 omp extension runner 以 `extension_ui_request{method:"select"}`（`Approve`/`Deny` 两档，提示携带工具名、原因与明细行）发往宿主，沿通用询问回路呈现与应答；会话级/始终允许等持久决策由 omp 自身 approvalMode 与 `tools.approval` 配置持有。旧 v3 结构化权限卡（六档 `permission_request`）已随 OMP 侧 RPC 收敛删除，不再提供。超时、销毁与断连一律 fail-closed 拒绝本次调用，不存在静默放行路径。
 - 无法等价提供的能力：见「已知与允许的差异」逐项。
 
 验收：从真实公开入口新建会话，覆盖流式、工具调用、双向交互、实际文件变更、完成/中断、冷恢复；同时验证桌面实时交付与手机断线后的续传/超界快照恢复。协议模拟仅补充 wire 校验，不能代替真实核心及 GUI 链路。
@@ -99,8 +99,8 @@
 6. **输入队列编辑**：队列项编辑/重排/删除/立即发送（`editQueueItem` 等）不可用。替代行为：followup 模式等价保留——`guide` 映射 omp `steer`（本轮引导，工具间生效），`queue` 映射 omp `follow_up`（轮后队列），两个 omp 队列均为 one-at-a-time（每轮一条），与上游「每轮一条」语义一致；流式中发送即按当前模式路由。
 7. **用量统计**：app 级用量（`v4/usage/stats`）返回合法空快照；会话级 `v4/conversation/usage` 返回本会话累计值。替代行为：历史聚合统计暂缺（数据源在 omp 会话库，未做聚合）。
 8. **MCP 状态面板**：见 [原生集成](integrations.md)。
-9. **模型连通性测试与 commit message 生成**（`provider/testModelConnectivity`、`workspace/generateText`）：连通性测试经 omp rpc-ui v3 `test_model` 提供（六类失败归因：认证失败/模型未找到/限流/网络/服务端/未配置 endpoint，映射进错误信息；凭据实测消耗一次最小请求）；commit message 生成（`workspace/generateText`）不可用（-32601）。未协商 v3 的已发布 omp 二进制上连通性测试同样按 -32601 拒绝。替代行为：模型可用性以实际会话轮为准。
-10. **权限确认形态**：omp 审批仅在用户 omp 审批配置（如 `--approval-mode` 非默认值）生效时出现；默认 yolo 模式无权限确认（与用户日常 omp 行为一致）。rpc-ui 协议 v3 下审批以结构化权限卡呈现（见上文「Agent 核心与双链路」行为边界）；未协商 v3 的已发布二进制回落通用询问（AskUserQuestion 形态），提示文本携带工具与目标信息。
+9. **模型连通性测试与 commit message 生成**（`provider/testModelConnectivity`、`workspace/generateText`）：均不可用（-32601）。omp v18.8.0 起 RPC 面不再提供 `test_model`（旧 v3 fork 面已随 RPC 收敛删除），替代行为：模型可用性以实际会话轮为准；commit message 生成（`workspace/generateText`）无 omp 等价物。
+10. **权限确认形态**：omp 审批仅在用户 omp 审批配置（如 `--approval-mode` 非默认值或 `tools.approval` 设置）生效时出现；默认 yolo 模式无权限确认（与用户日常 omp 行为一致）。审批以通用询问（`Approve`/`Deny` 两档 select）呈现，提示文本携带工具与目标信息；结构化六档审批卡已随 OMP 侧 RPC 收敛删除（见上文「Agent 核心与双链路」）。
 11. **子代理/后台任务面板**：见 [原生集成](integrations.md)。
 12. **legacy session 事件流**：`session/subscribe` 返回空事件（无 live 事件回放）。替代行为：桌面与 Web/手机主链路均走 v4 帧，不受影响；task 索引的 live 增量更新降级。
 13. **冷会话历史投影**：见 [会话恢复](session-recovery.md)。

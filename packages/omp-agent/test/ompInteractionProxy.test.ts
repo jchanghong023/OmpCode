@@ -287,17 +287,15 @@ test("S5-4: editor accept 而无文本回 cancelled（空串会被 omp 直通采
   assert.deepEqual(responses, [{ type: "extension_ui_response", id: "omp-ui-5", cancelled: true }]);
 });
 
-// ── v3 fork surface：结构化审批与富 ask（rpc-ui-protocol 4.1/4.3）──
+// ── 富 ask（extension_ui_request method:"ask"，set_ask_dialog 启用后）──
 
 interface ProxyHarnessOptions {
   gateway?: {
     requestUserInput?: (params: { prompt: string; questions?: unknown[] }) => Promise<unknown>;
-    requestPermission?: (params: Record<string, unknown>) => Promise<unknown>;
   };
-  anchorRowId?: number | null;
 }
 
-function createV3Proxy(options: ProxyHarnessOptions = {}) {
+function createAskProxy(options: ProxyHarnessOptions = {}) {
   const pending: import("@zcode/shared/zcode-protocol-v4").PendingInteraction[] = [];
   const resolved: string[] = [];
   const responses: unknown[] = [];
@@ -308,96 +306,17 @@ function createV3Proxy(options: ProxyHarnessOptions = {}) {
       ...(options.gateway?.requestUserInput
         ? { requestUserInput: options.gateway.requestUserInput }
         : {}),
-      ...(options.gateway?.requestPermission
-        ? { requestPermission: options.gateway.requestPermission }
-        : {}),
-    } as never,
+    },
     addPendingInteraction: (interaction) => pending.push(interaction),
     resolvePendingInteraction: (id) => resolved.push(id),
     scheduleFlush() {},
-    ...(options.anchorRowId !== undefined ? { anchorRowIdOf: () => options.anchorRowId! } : {}),
   });
   return { proxy, pending, resolved, responses };
 }
 
-test("v3 permission：投影权限卡并经 v4 settle 回传 reject_once+feedback；无反向请求面也收敛", async () => {
-  const { proxy, pending, resolved, responses } = createV3Proxy();
-  const request = {
-    frame: {
-      type: "permission_request" as const,
-      id: "perm-9",
-      toolCallId: "toolu-9",
-      toolName: "write",
-      tier: "write" as const,
-      reason: "Approve write",
-      approvalMode: "write" as const,
-      details: ["path: a.txt"],
-      input: { path: "a.txt" },
-      origin: { subagentId: "child-1", agentType: "scout" },
-    },
-    respond: (response: unknown) => responses.push(response),
-  };
-  const handled = proxy.handlePermission(request);
-  assert.equal(pending.length, 1);
-  const interactionId = pending[0]!.interactionId;
-  assert.equal(pending[0]!.payload.kind, "permission");
-  assert.equal(pending[0]!.payload.toolCallId, "toolu-9");
-  assert.deepEqual(pending[0]!.payload.origin, {
-    kind: "subagent",
-    agentId: "child-1",
-    agentType: "scout",
-    childSessionId: "child-1",
-    parentSessionId: "session-1",
-  });
-  const optionIds = (pending[0]!.payload.options as { optionId: string }[]).map(
-    (option) => option.optionId,
-  );
-  assert.deepEqual(optionIds, ["allowOnce", "allowSession", "allowAlways", "deny", "denyAlways"]);
-  // UI 经 v4 resolveInteraction 拒绝并附理由 → reject_once + feedback（fail-closed）。
-  assert.equal(
-    proxy.settle(interactionId, { action: "accept", optionId: "deny", freeText: "先停一下" }),
-    true,
-  );
-  await handled;
-  assert.deepEqual(responses, [
-    { type: "permission_response", id: "perm-9", option: "reject_once", feedback: "先停一下" },
-  ]);
-  assert.deepEqual(resolved, [interactionId]);
-});
-
-test("v3 permission：宿主反向请求应答 allow → allow_once；无 gateway.requestPermission 时不挂起", async () => {
-  const { proxy, responses } = createV3Proxy({
-    gateway: {
-      requestPermission: async (params) => {
-        assert.equal(params.toolName, "bash");
-        assert.equal(params.riskLevel, "high");
-        return { decision: "allow" };
-      },
-    },
-  });
-  await proxy.handlePermission({
-    frame: {
-      type: "permission_request",
-      id: "perm-10",
-      toolCallId: "toolu-10",
-      toolName: "bash",
-      tier: "exec",
-      approvalMode: "write",
-      details: ["npm install"],
-      input: { command: "npm install" },
-      prefixSuggestion: "npm ",
-    },
-    respond: (response) => responses.push(response),
-  });
-  assert.deepEqual(responses, [
-    { type: "permission_response", id: "perm-10", option: "allow_once" },
-  ]);
-});
-
-test("v3 ask：投影富问题集与倒计时；snooze 触发 pause；应答经 content 解析", async () => {
-  let pauseCalls = 0;
+test("富 ask：投影富问题集与倒计时；应答按题 answers（id 对齐题目 id）", async () => {
   let questionsArg: unknown;
-  const { proxy, pending, responses } = createV3Proxy({
+  const { proxy, pending, responses } = createAskProxy({
     gateway: {
       requestUserInput: async (params) => {
         questionsArg = params.questions;
@@ -405,48 +324,56 @@ test("v3 ask：投影富问题集与倒计时；snooze 触发 pause；应答经 
       },
     },
   });
-  const deadlineAt = Date.now() + 60_000;
   const handled = proxy.handleAsk({
     frame: {
-      type: "ask_request",
       id: "ask-9",
       questions: [
         {
           id: "q1",
           question: "Which database?",
-          options: [{ label: "Postgres" }, { label: "SQLite" }],
+          header: "Database",
+          options: [{ label: "Postgres", preview: "SELECT 1;" }, { label: "SQLite" }],
           multi: true,
         },
+        {
+          id: "q2",
+          question: "Enable cache?",
+          options: [{ label: "Yes" }, { label: "No" }],
+        },
       ],
-      note: "Choose",
       timeoutMs: 60_000,
-      deadlineAt,
     },
-    respond: (response) => responses.push(response),
-    pause: () => {
-      pauseCalls += 1;
-    },
+    respond: (response: unknown) => responses.push(response),
   });
   assert.equal(pending.length, 1);
   assert.equal(pending[0]!.payload.toolName, "AskUserQuestion");
-  assert.deepEqual((pending[0]!.autoResolution as { deadlineAt: number }).deadlineAt, deadlineAt);
+  assert.ok((pending[0]!.autoResolution as { deadlineAt?: number } | undefined)?.deadlineAt);
   assert.match(JSON.stringify(questionsArg), /Which database/);
-  // 首次交互幂等暂停：仅 ask 类交互可 snooze；重复调用仍幂等。
+  // snooze（v4 首次交互）仅顺延本地预算：服务端倒计时继续，不再发协议帧。
   const interactionId = pending[0]!.interactionId;
   assert.equal(proxy.snooze(interactionId), true);
-  assert.equal(pauseCalls, 1);
   assert.equal(
-    proxy.settle(interactionId, { action: "accept", content: { answer_0: ["Postgres"] } }),
+    proxy.settle(interactionId, {
+      action: "accept",
+      content: { answer_0: ["Postgres"], answer_1: ["Yes"] },
+    }),
     true,
   );
   await handled;
   assert.deepEqual(responses, [
-    { type: "ask_response", id: "ask-9", answers: [{ questionId: "q1", selected: ["Postgres"] }] },
+    {
+      type: "extension_ui_response",
+      id: "ask-9",
+      answers: [
+        { id: "q1", selectedOptions: ["Postgres"] },
+        { id: "q2", selectedOptions: ["Yes"] },
+      ],
+    },
   ]);
 });
 
-test("v3 ask：服务端到期自动收尾后本地清场，不再发应答帧；非 ask 交互不可 snooze", async () => {
-  const { proxy, pending, resolved, responses } = createV3Proxy({
+test("富 ask：服务端到期自动收尾后本地清场，不再发应答帧；非 ask 交互不可 snooze", async () => {
+  const { proxy, pending, resolved, responses } = createAskProxy({
     // 反向请求挂起不决（模拟宿主未应答）：只有服务端到期路径能收口。
     gateway: {
       requestUserInput: () => new Promise(() => {}),
@@ -454,26 +381,24 @@ test("v3 ask：服务端到期自动收尾后本地清场，不再发应答帧�
   });
   await proxy.handleAsk({
     frame: {
-      type: "ask_request",
       id: "ask-10",
       questions: [{ id: "q1", question: "Pick", options: [{ label: "A" }] }],
-      deadlineAt: Date.now() + 40,
+      timeoutMs: 40,
     },
-    respond: (response) => responses.push(response),
-    pause: () => {},
+    respond: (response: unknown) => responses.push(response),
   });
   // 非 ask 交互（无到期语义的 ui 请求）snooze 返回 false。
   assert.equal(proxy.snooze("unknown-id"), false);
   await new Promise((sleep) => setTimeout(sleep, 160));
-  assert.deepEqual(responses, [], "到期后不应再发 ask_response");
+  assert.deepEqual(responses, [], "到期后不应再发应答帧");
   // 到期清场与 awaitAnswer 收尾各清一次 pending（幂等），去重后应恰为该交互。
   assert.deepEqual([...new Set(resolved)], [pending[0]!.interactionId]);
   // 迟到的 settle 不再命中。
   assert.equal(proxy.settle(pending[0]!.interactionId, { action: "accept", optionId: "A" }), false);
 });
 
-// ── B1：反向 UI 请求帧解析失败回终止响应（rpc-ui-protocol §14.2「未知交互不能
-// 静默忽略，应回传不支持以终止等待」；omp 侧权限门 await 无超时，吞帧=对端永久挂起）──
+// ── B1：反向 UI 请求帧解析失败回终止响应（「未知交互不能静默忽略，应回传不支持以
+// 终止等待」；omp 侧等待无超时，吞帧=对端永久挂起）──
 
 function createUiFrameHarness() {
   const responses: unknown[] = [];
@@ -483,7 +408,6 @@ function createUiFrameHarness() {
     fired,
     handlers: {
       onUiRequest: () => fired.push("ui"),
-      onPermissionRequest: () => fired.push("permission"),
       onAskRequest: () => fired.push("ask"),
       respond: (frame: unknown) => responses.push(frame),
     },
@@ -504,27 +428,18 @@ test("B1: 畸形 extension_ui_request 回 cancelled 终止响应，handlers 不�
   assert.deepEqual(harness.fired, []);
 });
 
-test("B1: 畸形 permission_request 回 reject_once（fail-closed），onPermissionRequest 不触发", () => {
-  const harness = createUiFrameHarness();
-  // 缺 toolName/tier/approvalMode/details/input 等必填字段。
-  const consumed = dispatchOmpUiFrame(
-    { type: "permission_request", id: "perm-x", toolCallId: "tc-x" },
-    harness.handlers,
-  );
-  assert.equal(consumed, true);
-  assert.deepEqual(harness.responses, [
-    { type: "permission_response", id: "perm-x", option: "reject_once" },
-  ]);
-  assert.deepEqual(harness.fired, []);
-});
-
-test("B1: 空 questions 的 ask_request 回 cancelled；id 缺失时无法回执仅吞帧不抛错", () => {
+test("B1: 畸形 questions 的 ask 帧回 cancelled；id 缺失时无法回执仅吞帧不抛错", () => {
   const harness = createUiFrameHarness();
   assert.equal(
-    dispatchOmpUiFrame({ type: "ask_request", id: "ask-x", questions: [] }, harness.handlers),
+    dispatchOmpUiFrame(
+      { type: "extension_ui_request", id: "ask-x", method: "ask", questions: { bad: true } },
+      harness.handlers,
+    ),
     true,
   );
-  assert.deepEqual(harness.responses, [{ type: "ask_response", id: "ask-x", cancelled: true }]);
+  assert.deepEqual(harness.responses, [
+    { type: "extension_ui_response", id: "ask-x", cancelled: true },
+  ]);
   assert.deepEqual(harness.fired, []);
 
   // id 非 string：无法回执（无法定位等待方），帧仍消费但不得抛错。
@@ -535,6 +450,24 @@ test("B1: 空 questions 的 ask_request 回 cancelled；id 缺失时无法回执
   );
   assert.deepEqual(noId.responses, []);
   assert.deepEqual(noId.fired, []);
+});
+
+test("method:ask + 合法问题集 → onAskRequest 分发（不落 onUiRequest）", () => {
+  const harness = createUiFrameHarness();
+  assert.equal(
+    dispatchOmpUiFrame(
+      {
+        type: "extension_ui_request",
+        id: "ask-ok",
+        method: "ask",
+        questions: [{ id: "q1", question: "Pick", options: [{ label: "A" }] }],
+      },
+      harness.handlers,
+    ),
+    true,
+  );
+  assert.deepEqual(harness.fired, ["ask"]);
+  assert.deepEqual(harness.responses, []);
 });
 
 test("B1: 合法帧照常分发且不回终止响应（回归保护）", () => {

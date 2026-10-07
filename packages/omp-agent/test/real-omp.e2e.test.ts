@@ -465,7 +465,7 @@ test(
 );
 
 test(
-  `真实 omp v3 fork surface：协议协商生效（test_model 实测 + mcp/list 状态）`,
+  `真实 omp v3 fork surface：目录能力（补全/模型角色/会话目录）与能力缺失语义`,
   {
     skip: hasRealBinary ? false : "内嵌 omp 二进制未下载（跳过真实 E2E）",
   },
@@ -490,7 +490,8 @@ test(
       await harness.waitUntil(() =>
         harness.frames.find(
           (frame) =>
-            (frame as { method?: string }).method === "startup/storageState" &&
+            (frame as { method?: string; params?: { phase?: string } }).method ===
+              "startup/storageState" &&
             (frame as { params?: { phase?: string } }).params?.phase === "ready",
         ),
       );
@@ -500,56 +501,66 @@ test(
         workspaceKey: "real-e2e-workspace-3",
       };
 
-      // 1. v3 协商生效的判据：test_model 不再按 -32601 拒绝（未协商二进制的既有行为），
-      //    而是返回实测结果。实测消耗一次最小模型请求；失败时六类归因必须之一。
-      const testResponse = (await harness.request("provider/testModelConnectivity", {
+      // 1. workspace/completeOmpCommand（v3 commandCompletion）：动态补全返回候选与
+      //    修订；-32601 表示二进制早于 v3（协商回落），显式跳过而非失败。
+      const completion = (await harness.request("workspace/completeOmpCommand", {
         workspace,
-        selection: { providerId: modelProvider, modelId },
+        text: "/mod",
+        cursor: 4,
       })) as {
-        result?: { success: boolean };
+        result?: { items?: { label?: string }[]; revision?: string };
         error?: { code: number; message: string };
       };
-      if (testResponse.error?.code === -32601) {
-        // 二进制早于 rpc-ui v3（协商回落 v2，fork 命令被拒绝）：显式跳过而非失败，
-        // v3 验收以发布版 v18.4.3+fork.270 及之后的二进制为准。
+      if (completion.error?.code === -32601) {
         t.skip("内嵌 omp 二进制不支持 v3 fork surface（跳过 v3 验收）");
         return;
       }
-      if (testResponse.result?.success === true) {
-        console.log("[real-e2e] test_model 实测通过");
-      } else {
-        const message = testResponse.error?.message ?? "";
-        const categories = [
-          "auth_failed",
-          "model_not_found",
-          "rate_limited",
-          "network",
-          "server",
-          "endpoint_not_configured",
-        ];
-        assert.ok(
-          categories.some((category) => message.includes(category)),
-          `test_model 失败信息缺少六类归因: ${message}
+      assert.ok(
+        completion.result,
+        `补全失败: ${JSON.stringify(completion.error)}
 ${stderrTail}`,
-        );
-        console.log("[real-e2e] test_model 失败归因:", message.slice(0, 160));
-      }
+      );
+      const labels = (completion.result!.items ?? []).map((item) => item.label);
+      assert.ok(
+        labels.some((label) => typeof label === "string" && label.startsWith("model")),
+        `补全候选应含 model 族命令: ${JSON.stringify(labels).slice(0, 200)}`,
+      );
+      console.log("[real-e2e] complete_command 候选数:", labels.length);
 
-      // 2. mcp/list 映射 omp list_mcp_servers：状态快照为合法对象（无服务器时为空表）。
-      const mcpResponse = (await harness.request("mcp/list", { workspace })) as {
-        result?: { statuses: Record<string, unknown> };
+      // 2. workspace/ompModelRoles（v3 modelRoleConfig）：role 目录非空且携带候选模型。
+      const roles = (await harness.request("workspace/ompModelRoles", { workspace })) as {
+        result?: { roles?: { roleId?: string; configurable?: boolean }[] };
         error?: { code: number; message: string };
       };
       assert.ok(
-        mcpResponse.result,
-        `mcp/list 失败: ${JSON.stringify(mcpResponse.error)}
+        roles.result,
+        `模型角色目录失败: ${JSON.stringify(roles.error)}
 ${stderrTail}`,
       );
-      assert.equal(typeof mcpResponse.result!.statuses, "object");
-      console.log(
-        "[real-e2e] mcp/list 状态服务器数:",
-        Object.keys(mcpResponse.result!.statuses).length,
-      );
+      const roleIds = (roles.result!.roles ?? []).map((role) => role.roleId);
+      assert.ok((roles.result!.roles ?? []).length > 0, "role 目录不得为空");
+      console.log("[real-e2e] model roles:", roleIds.slice(0, 6).join(","));
+
+      // 3. 会话目录（v3 sessionDirectory）：list_sessions 无独立宿主方法；经 legacy
+      //    session/list 交叉验证 v3 目录进程存在不破坏既有链路（冷会话来源是文件系统）。
+      const sessionList = (await harness.request("session/list", { workspace })) as {
+        result?: { sessions?: { sessionId?: string }[] };
+      };
+      assert.ok(sessionList.result, "session/list 失败");
+      assert.ok(Array.isArray(sessionList.result!.sessions));
+
+      // 4. 新核无 test_model/list_mcp_servers：按已知差异显式拒绝且 mcp 空状态表。
+      const testModel = (await harness.request("provider/testModelConnectivity", {
+        workspace,
+        selection: { providerId: modelProvider, modelId },
+      })) as { error?: { code: number; message: string } };
+      assert.equal(testModel.error?.code, -32601, "新核无 test_model，应按能力缺失拒绝");
+      const mcp = (await harness.request("mcp/list", { workspace })) as {
+        result?: { statuses: Record<string, unknown> };
+      };
+      assert.ok(mcp.result);
+      assert.equal(Object.keys(mcp.result.statuses ?? {}).length, 0);
+      console.log("[real-e2e] v3 目录能力验收通过（补全/角色/会话目录/能力缺失语义）");
     } finally {
       child.kill();
       await new Promise((done) => setTimeout(done, 300));

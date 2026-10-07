@@ -1,49 +1,33 @@
-// 子代理只读详情视图（omp-project-mode.md）：合成 childSessionId（编码父会话与子代理身份）
-// 复用 ConversationEngine 的投影/订阅发布；行来自 OMP get_subagent_messages 的已保存记录。
-// 实时更新（事件驱动重水合）：ingestFrame 收到该子代理的 subagent_event 时按 ≥800ms 尾随节流
-// 触发「记录重读 + mergeRows 幂等合并」（同 rowId 内容变化才 upsert、新行 append），订阅端实时
-// 增长且不出现重复行。读侧是「窗口续读 + 全量重建」：真实 omp 的 get_subagent_messages 单次
-// 只返回窗口内完整记录（默认 256KiB、maxBytes 上限 1MiB，rpc-project-subagents.messages），
-// 视图持有 fromByte 游标与已累积记录，按窗口循环续读；行重建始终基于本地累积的全量记录
-// （rowId 由 rowsFromOmpEntries 对完整记录确定性重建，尾部局部 entries 无法对齐行号，也缺
-// 早前 toolResult 回填上下文），订阅端语义与全量重读等价且不重复请求早前窗口。单次续读设
-// 安全窗口数上限，剩余留待下一事件续读；单条记录超窗返回 recordTooLarge（游标不推进、
-// entries 为空），视图插入中文标记行且不再请求该记录。响应 reset=true（记录被截断/重写、
-// 游标越界归零）时丢弃旧累积从当前窗口重建，投影行按替换语义整体切换为新行集（S6-4：
-// 重建视图引擎，mergeRows 只增不删会残留陈旧行）。lifecycle 终态后停止重读调度（终态帧
-// 补读一次收尾）。查看不触发模型执行、不产生控制副作用。
+// 子代理只读详情视图（omp-core-integration.md）：合成 childSessionId 复用引擎的投影/订阅；
+// 行来自父会话进程 get_subagent_messages（fromByte/nextByte 续读，上游无 hasMore，以游标
+// 不再推进为读尽）。实时更新 = subagent_event 尾随节流（≥800ms）触发「记录重读 + mergeRows
+// 幂等合并」；reset=true（记录重写归零）按替换语义重建视图引擎（S6-4）。lifecycle 终态后
+// 停止重读调度。查看不触发模型执行、不产生控制副作用。
 
 import { ConversationEngine } from "./conversationEngine.js";
 import { rowsFromOmpEntries } from "../domain/coldHistory.js";
 import { TrailingThrottle } from "./trailingThrottle.js";
 import {
   buildOmpSubagentViewId,
-  ompProjectSubagentMessagesSchema,
+  ompSessionEventFrameSchema,
   parseOmpSubagentViewId,
-} from "../domain/ompProjectFrames.js";
-import { ompSessionEventFrameSchema } from "../domain/ompFrames.js";
+} from "../domain/ompFrames.js";
 import type { OmpSubagentFrame } from "../domain/ompFrames.js";
 import type { ConversationRow } from "@zcode/shared/zcode-protocol-v4";
 import { rowBaseFields } from "../domain/projectionTypes.js";
-import type { HostGateway, OmpProjectGatewayPort, OmpStorePort } from "./ports.js";
-import type { SessionRegistry } from "./sessionRegistry.js";
+import type { HostGateway } from "./ports.js";
+import { readSubagentRecord } from "./subagentControl.js";
 
 /** subagent_event → 重读的尾随节流窗口：事件风暴合并为一次重读，末事件由尾沿保证必达。 */
 const REFRESH_THROTTLE_MS = 800;
 
-/** get_subagent_messages 单窗口 maxBytes：真实 omp 的窗口上限 1MiB（MAX_BYTES_CAP）。 */
-const SUBAGENT_WINDOW_MAX_BYTES = 1_048_576;
-
-/** 单次 hydrate/refresh 的窗口数安全上限：超出暂停续读，剩余由下一事件触发续读。 */
+/** 单次 hydrate/refresh 的续读窗口数安全上限：超出暂停续读，剩余由下一事件触发续读。 */
 const SUBAGENT_WINDOW_READ_CAP = 8;
 
-/** 视图读侧状态：窗口游标 + 已累积记录 + 阻塞/不可用事实（行重建的本地事实源）。 */
+/** 视图读侧状态：窗口游标 + 已累积记录 + 不可用事实（行重建的本地事实源）。 */
 interface ViewReadState {
   nextByte: number;
   entries: unknown[];
-  /** recordTooLarge：游标无法推进，后续 refresh 不再请求该记录。 */
-  blocked: boolean;
-  blockedBytes: number | null;
   /** 成功响应但记录不可用（不存在/已清理）。 */
   unavailable: boolean;
   /** 本次 readWindows 至少一窗出现 reset=true（记录被截断/重写）；rebuildRows 消费后清零。 */
@@ -51,22 +35,7 @@ interface ViewReadState {
 }
 
 /** 单次续读的结果：驱动调用方决定行重建与提示行。 */
-type WindowReadResult = "complete" | "capped" | "blocked" | "unavailable";
-
-function recordTooLargeMarkerRow(rowId: number, byteLength: number): ConversationRow {
-  return {
-    ...rowBaseFields({
-      rowId,
-      turnId: "turn-subagent-record",
-      entityId: "subagent-record-too-large",
-      productTurnId: "turn-subagent-record",
-      createdAtSeq: rowId,
-    }),
-    kind: "assistantText",
-    text: `⚠ 记录过大（${byteLength} 字节），无法完整显示`,
-    state: "complete",
-  };
-}
+type WindowReadResult = "complete" | "capped" | "unavailable";
 
 function recordUnavailableMarkerRow(rowId: number): ConversationRow {
   return {
@@ -91,13 +60,28 @@ interface ViewRefreshState {
   terminated: boolean;
 }
 
+/** app 层无 logger 依赖；与 conversationEngine.engineWarn 同格式写 stderr。 */
+const viewWarn = (message: string, details?: Record<string, unknown>): void => {
+  process.stderr
+    .write(`${JSON.stringify({ ts: new Date().toISOString(), level: "warn", scope: "omp-agent", message, ...details })}
+`);
+};
+
 export interface SubagentViewDeps {
-  registry: SessionRegistry;
-  project: OmpProjectGatewayPort;
-  store: OmpStorePort;
+  registry: SubagentViewRegistry;
   gateway: HostGateway;
   workspaceId: string;
   workspacePath: string;
+}
+
+/** 视图所需的注册表面（SessionRegistry 的结构化窄视图，测试可替身）。 */
+export interface SubagentViewRegistry {
+  getEngine(sessionId: string): ConversationEngine | null;
+  resumeSession(params: {
+    sessionId: string;
+    workspaceId: string;
+    workspacePath: string;
+  }): Promise<ConversationEngine>;
 }
 
 export class SubagentViewStore {
@@ -122,8 +106,6 @@ export class SubagentViewStore {
       state = {
         nextByte: 0,
         entries: [],
-        blocked: false,
-        blockedBytes: null,
         unavailable: false,
         resetSeen: false,
       };
@@ -132,12 +114,23 @@ export class SubagentViewStore {
     return state;
   }
 
+  /** 父会话引擎定位：已登记引擎优先；冷父会话按目录身份冷恢复（记录读取会现场拉起 --resume 进程）。 */
+  private async parentEngine(parentSessionId: string): Promise<ConversationEngine | null> {
+    const existing = this.deps.registry.getEngine(parentSessionId);
+    if (existing) return existing;
+    return this.deps.registry
+      .resumeSession({
+        sessionId: parentSessionId,
+        workspaceId: this.deps.workspaceId,
+        workspacePath: this.deps.workspacePath,
+      })
+      .catch(() => null);
+  }
+
   /**
-   * 窗口续读：从视图游标循环读取 get_subagent_messages（fromByte/maxBytes，真实 omp 单次
-   * 只返回窗口内完整记录），追加进本地累积；hasMore!==true 即读尽。安全上限内未读尽则返回
-   * capped（剩余留待下一事件续读）。recordTooLarge（单条超窗、游标不推进）置 blocked 并停止
-   * 请求该记录；成功响应失败（记录不可用）返回 unavailable。响应 reset=true 表示记录被截断/
-   * 重写（游标越界归零），丢弃旧累积从当前窗口重建，避免把重写后的部分记录拼在旧记录之后。
+   * 游标续读：从视图游标循环调用父会话进程的 get_subagent_messages（{subagentId, fromByte}），
+   * 追加进本地累积；nextByte 不再推进（或无 nextByte 的旧形状一次性全量）即读尽。安全上限内
+   * 未读尽则返回 capped（剩余留待下一事件续读）；进程就绪失败/命令失败返回 unavailable。
    */
   private async readWindows(
     viewId: string,
@@ -147,48 +140,56 @@ export class SubagentViewStore {
     const state = this.viewReadState(viewId);
     state.unavailable = false;
     state.resetSeen = false;
-    if (state.blocked) return "blocked";
+    const engine = await this.parentEngine(parentSessionId);
+    if (!engine) return "unavailable";
     for (let window = 0; window < SUBAGENT_WINDOW_READ_CAP; window += 1) {
-      const outcome = await this.deps.project.sendProject({
-        type: "get_subagent_messages",
-        sessionId: parentSessionId,
+      const outcome = await readSubagentRecord(
+        engine.subagentProcessHost(),
         subagentId,
-        fromByte: state.nextByte,
-        maxBytes: SUBAGENT_WINDOW_MAX_BYTES,
-      });
-      if (!outcome.success) return "unavailable";
-      const parsed = ompProjectSubagentMessagesSchema.safeParse(outcome.data);
-      const data = parsed.success ? parsed.data : null;
-      // 形状异常按读尽处理：保持当前内容，不向订阅链路抛错（G7 同语义）。
-      if (!data || !Array.isArray(data.entries)) return "complete";
-      if (data.recordTooLarge) {
-        // 单条记录超过窗口上限：游标不推进（继续请求会永远命中同一窗口），标记后停读。
-        state.blocked = true;
-        state.blockedBytes = data.recordTooLarge.byteLength;
-        return "blocked";
+        state.nextByte,
+      );
+      if (outcome === null) {
+        // 进程就绪失败：按传输层异常语义上抛——调用方（ensureHydrated/refreshView）捕获后
+        // 保持当前内容（G7），不插「记录不可用」提示行。
+        throw new Error(`parent session process unavailable: ${parentSessionId}`);
       }
-      if (typeof data.nextByte !== "number") {
-        // 无 nextByte 的旧形状：无法续读，视为一次性全量响应整体替换（防重复追加）。
-        state.entries = [...data.entries];
+      if (!outcome.success) return "unavailable";
+      const record =
+        typeof outcome.data === "object" && outcome.data !== null
+          ? (outcome.data as {
+              entries?: unknown;
+              nextByte?: unknown;
+              reset?: unknown;
+            })
+          : {};
+      if (!Array.isArray(record.entries)) {
+        // 形状异常按读尽处理：保持当前内容，不向订阅链路抛错（G7 同语义）。
+        return "complete";
+      }
+      if (typeof record.nextByte !== "number") {
+        // 无 nextByte 的旧形状：一次性全量响应整体替换（防重复追加）。
+        state.entries = [...record.entries];
         return "complete";
       }
       // reset：记录被截断/重写（游标越界归零），丢弃旧累积从当前窗口重建，
       // 避免把重写后的部分记录拼在旧记录之后。resetSeen 交给 rebuildRows 切换替换语义
       // （S6-4：mergeRows 只增不删，投影残留陈旧行必须清除）。
-      if (data.reset === true) {
+      if (record.reset === true) {
         state.entries = [];
         state.resetSeen = true;
       }
-      state.entries.push(...data.entries);
-      state.nextByte = data.nextByte;
-      if (data.hasMore !== true) return "complete";
+      const advanced = record.nextByte > state.nextByte;
+      state.entries.push(...record.entries);
+      state.nextByte = record.nextByte;
+      // 上游游标单调推进（oh-my-pi rpc-subagents.ts nextByte 语义）：不再推进即读尽
+      // （fromByte 之后无更多记录时返回空 entries 且 nextByte 原样）。
+      if (!advanced) return "complete";
     }
     return "capped";
   }
 
   /**
-   * 行重建：始终基于本地累积的全量记录确定性重建（rowId 稳定，merge 幂等）；blocked 时在
-   * 尾部追加「记录过大」标记行（rowId = 全量行数 + 1，同样确定性）。
+   * 行重建：始终基于本地累积的全量记录确定性重建（rowId 稳定，merge 幂等）。
    * 修复（S6-4）：reset=true 的读次改为替换语义——mergeRows 只增不删，transcript 收缩重写
    * （omp reset 游标归零）时旧累积行数多于新行集会残留陈旧行。投影层没有原地删行原语
    * （row.removed 无投影侧生产者；projection.hydrateRows 对非空投影会重复 rowId），替换按
@@ -200,7 +201,6 @@ export class SubagentViewStore {
     const state = this.readStates.get(viewId);
     if (!state) return;
     const rows = rowsFromOmpEntries(state.entries, new Map());
-    if (state.blocked) rows.push(recordTooLargeMarkerRow(rows.length + 1, state.blockedBytes ?? 0));
     if (merge && state.resetSeen) {
       state.resetSeen = false;
       const rebuilt = this.rebuildViewEngine(viewId);
@@ -249,7 +249,7 @@ export class SubagentViewStore {
   }
 
   /**
-   * 首次水合（hydrating 去重并发订阅）。G7：sendProject 传输层 reject（超时/EPIPE）与记录
+   * 首次水合（hydrating 去重并发订阅）。G7：命令失败/传输层 reject（超时/EPIPE）与记录
    * 不可用同语义——视图保持当前内容（空或已水合），acquire 不 reject，订阅不得因此 -32603；
    * 后续 subagent_event 仍会触发重读自愈。记录不可用（不存在/已清理）时插入「记录不可用」
    * 提示行（Z14：缺失内容要有明确提示），不再静默返回空视图；已有内容保持不变。
@@ -300,7 +300,16 @@ export class SubagentViewStore {
     if (!parsed.success) return;
     // 事件在视图内无活动轮可投影（appendStreamDelta/upsertToolCall 均以 turn 为前置），
     // 行的唯一实时来源是「事件触发的记录重读」；状态面（usage/错误事实）保持既有转发。
-    view.applyViewEvent(parsed.data);
+    // 防御（A9）：单帧投影异常跳过，不断事件流（与主会话 handleOmpEvent 同理）。
+    try {
+      view.projector.handleEvent(parsed.data);
+    } catch (error) {
+      viewWarn("omp view event projection failed", {
+        type: parsed.data.type,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    view.scheduleFlush();
     const state = this.viewState(viewId);
     if (state && !state.terminated) state.throttle.ping();
   }
@@ -342,10 +351,10 @@ export class SubagentViewStore {
 
   /**
    * 单飞重读：与「在途」的首次水合串行化（避免对同一 rowId 先 append 再 hydrate 双写产生重复
-   * 行），再按视图游标窗口续读并幂等合并（merge 带增量，恢复路径对订阅端可见）；水合已完成
+   * 行），再按视图游标续读并幂等合并（merge 带增量，恢复路径对订阅端可见）；水合已完成
    * （含传输失败）时直接续读——已累积记录不重复请求。重叠触发只记 rerun，完成后补跑一次保证
-   * 收敛到最新记录；传输失败保持当前内容，不抛出。记录不可用（成功响应失败）且视图尚为空时
-   * 补「记录不可用」提示行（Z14），已有内容保持不变。
+   * 收敛到最新记录；传输失败保持当前内容，不抛出。记录不可用且视图尚为空时补「记录不可用」
+   * 提示行（Z14），已有内容保持不变。
    */
   private async refreshView(viewId: string): Promise<void> {
     const parsed = parseOmpSubagentViewId(viewId);
@@ -378,5 +387,10 @@ export class SubagentViewStore {
       }
     });
     await state.refreshing;
+  }
+
+  dispose(): void {
+    for (const state of this.refreshStates.values()) state.throttle.dispose();
+    this.refreshStates.clear();
   }
 }

@@ -19,8 +19,8 @@ export function toOmpUiResponse(request: OmpUiRequest, answer: HostUserInputAnsw
   }
   // S5-1 依据：omp 侧取消语义 = {cancelled:true}——parseValueDialogResponse
   // （rpc-session-host.ts）仅在响应携带 "value" 时直通，"cancelled" → undefined
-  // （TUI ESC 亦走该路径）。extension_ui select 是通用扩展选择框（v3 权限审批走
-  // permission_request），不存在「dismiss≈deny」语义；宿主 ElicitationDialog 的
+  // （TUI ESC 亦走该路径）。extension_ui select 是通用扩展选择框（含工具审批的
+  // Approve/Deny），不存在「dismiss≈deny」语义；宿主 ElicitationDialog 的
   // dismiss/ESC 均发 decline，此前合成「deny 选项/末位选项」会把用户关闭对话框
   // 上报为选中肯定选项，替用户执行动作（fail-open）。
   if (answer.action === "decline") {

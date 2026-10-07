@@ -7,6 +7,7 @@ import type {
   OmpStoreSessionSummary,
   OmpProcessFactory,
 } from "../src/app/ports.js";
+import { createDirectoryStub } from "./fixtures/directoryStub.js";
 
 function fixture(allowDelete: boolean) {
   const cold: OmpStoreSessionSummary = {
@@ -38,6 +39,7 @@ function fixture(allowDelete: boolean) {
     } as OmpProcessFactory,
     store,
     gateway: { emitFrame() {} } as HostGateway,
+    directory: createDirectoryStub(),
   });
   return {
     registry,
@@ -144,6 +146,7 @@ test("临时 ID 的运行中会话删除失败后仍可沿原 ID 恢复进程", 
       },
     } as OmpStorePort,
     gateway: { emitFrame() {} } as HostGateway,
+    directory: createDirectoryStub(),
   });
   const engine = await registry.createSession({
     sessionId: "temporary",
@@ -156,5 +159,80 @@ test("临时 ID 的运行中会话删除失败后仍可沿原 ID 恢复进程", 
   await engine.ensureOmpStarted();
   assert.deepEqual(resumePaths, [undefined, sessionPath]);
   assert.equal(deletes, 1);
+  await registry.dispose();
+});
+
+test("v3 会话目录删除：目录进程 delete_session 成功后按 omp 结果删除（不走本地文件）", async () => {
+  const state = fixture(true);
+  const { registry } = state;
+  await registry.resumeSession({
+    sessionId: "stable",
+    workspaceId: "ws",
+    workspacePath: "C:/work",
+  });
+  // 重建带 v3 目录的注册表（fixture 内建旧核桩）：delete_session 成功即视为已删除。
+  const directory = createDirectoryStub(() => ({
+    success: true,
+    data: { sessionId: "stable", deleted: true },
+  }));
+  directory.setForkSurface(true);
+  const store = {
+    listSessions: async () => (state.present ? [] : []),
+    findSession: async () => null,
+    readSessionEntries: async () => [],
+    readSubagentEntries: async () => [],
+    deleteSession: async () => false,
+  } as OmpStorePort;
+  const v3registry = new SessionRegistry({
+    ompFactory: {
+      create() {
+        throw new Error("core must not start");
+      },
+    } as OmpProcessFactory,
+    store,
+    gateway: { emitFrame() {} } as HostGateway,
+    directory,
+  });
+  await v3registry.createSession({
+    sessionId: "local",
+    workspaceId: "ws",
+    workspacePath: "C:/work",
+  });
+  await v3registry.deleteSession("stable");
+  assert.deepEqual(
+    directory.sentDirectoryCommands.filter((command) => command.type === "delete_session"),
+    [{ type: "delete_session", sessionId: "stable" }],
+  );
+  await registry.dispose();
+  await v3registry.dispose();
+});
+
+test("v3 会话目录删除失败：错误面带 omp 错误码且索引保留", async () => {
+  const directory = createDirectoryStub(() => ({
+    success: false,
+    error: "Close the session's process before deleting it (end the RPC connection, then delete)",
+    code: "unsupported",
+  }));
+  directory.setForkSurface(true);
+  const registry = new SessionRegistry({
+    ompFactory: {
+      create() {
+        throw new Error("core must not start");
+      },
+    } as OmpProcessFactory,
+    store: {
+      listSessions: async () => [],
+      readSessionEntries: async () => [],
+      readSubagentEntries: async () => [],
+      deleteSession: async () => false,
+    } as OmpStorePort,
+    gateway: { emitFrame() {} } as HostGateway,
+    directory,
+  });
+  await registry.createSession({ sessionId: "local", workspaceId: "ws", workspacePath: "C:/work" });
+  await assert.rejects(
+    registry.deleteSession("stable"),
+    /Close the session's process before deleting it/,
+  );
   await registry.dispose();
 });

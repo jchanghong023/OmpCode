@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { SessionRegistry } from "../src/app/sessionRegistry.js";
 import type { HostGateway, OmpProcessFactory, OmpStorePort } from "../src/app/ports.js";
+import { createDirectoryStub } from "./fixtures/directoryStub.js";
 import { buildLegacySnapshot } from "../src/app/legacySnapshot.js";
 
 test("omp 稳定会话 ID 绑定后，legacy 列表与引擎查找不重复", async () => {
@@ -226,10 +227,17 @@ test("sessions-index 与 workspace-config 恢复后从当前水位继续发 delt
 test("C6: renameColdSession 下发 rename_session 并同步 sessions-index 标题；失败透传错误码", async () => {
   const frames: string[] = [];
   const sent: unknown[] = [];
-  let projectEnabled = false;
   let failRename = false;
   // omp 落盘新标题后，适配器 store 重扫应读到新值（fake store 以可变标题模拟该事实）。
   let storeTitle = "old title";
+  const directory = createDirectoryStub((command) => {
+    if (command.type !== "rename_session") return { success: true, data: {} };
+    if (failRename) {
+      return { success: false, error: "Unknown session: cold-1", code: "not_found" };
+    }
+    storeTitle = command.name;
+    return { success: true, data: { sessionId: command.sessionId, name: command.name } };
+  });
   const cold = () => [
     {
       sessionId: "cold-1",
@@ -253,20 +261,10 @@ test("C6: renameColdSession 下发 rename_session 并同步 sessions-index 标�
       deleteSession: async () => true,
     } as unknown as OmpStorePort,
     gateway: { emitFrame: (frame: unknown) => frames.push(JSON.stringify(frame)) } as HostGateway,
-    project: {
-      available: async () => projectEnabled,
-      availability: async () => (projectEnabled ? "available" : "unsupported"),
-      sendProject: async (command: unknown) => {
-        sent.push(command);
-        if (failRename) {
-          return { success: false, error: "Unknown session: cold-1", code: "not_found" };
-        }
-        storeTitle = (command as { name: string }).name;
-        return { success: true, data: { sessionId: "cold-1" } };
-      },
-    } as unknown as import("../src/app/ports.js").OmpProjectGatewayPort,
+    directory,
   });
-  // 旧拓扑 createSession 只为建立 primaryWorkspace（冷改名索引回写需要）。
+  directory.setForkSurface(true);
+  // createSession 只为建立 primaryWorkspace（冷改名索引回写需要）。
   await registry.createSession({ workspaceId: "ws", workspacePath: "C:/work" });
   await registry.subscribeSessionsIndex({
     workspaceId: "ws",
@@ -277,14 +275,17 @@ test("C6: renameColdSession 下发 rename_session 并同步 sessions-index 标�
     frames.some((frame) => frame.includes("old title")),
     "冷会话应先以旧标题进索引",
   );
-  projectEnabled = true;
   const ok = await registry.renameColdSession("cold-1", "new title");
   assert.deepEqual(ok, { ok: true });
-  assert.deepEqual(sent, [{ type: "rename_session", sessionId: "cold-1", name: "new title" }]);
+  assert.deepEqual(sent.length, 0, "v1 目录车道不得承载 rename");
+  assert.deepEqual(
+    directory.sentDirectoryCommands.filter((command) => command.type === "rename_session"),
+    [{ type: "rename_session", sessionId: "cold-1", name: "new title" }],
+  );
   assert.ok(
     frames.some(
       (frame) => frame.includes('"session.upserted"') && frame.includes("new title"),
-      `改名后 sessions-index 应回写新标题：${frames.slice(-3).join("\n")}`,
+      `改名后 sessions-index 应回写新标题：${frames.slice(-3).join("|")}`,
     ),
   );
   // 失败透传：omp not_found 的错误与错误码原样交还调用方（v4 命令层据此报 -32004）。
@@ -296,8 +297,8 @@ test("C6: renameColdSession 下发 rename_session 并同步 sessions-index 标�
     error: "Unknown session: cold-1",
     code: "not_found",
   });
-  // 旧核（项目模式不可用）：明确 unsupported，调用方维持既有 -32004 语义。
-  projectEnabled = false;
-  const unsupported = await registry.renameColdSession("cold-1", "again");
+  // 旧核（v3 能力缺失）：明确 unsupported，调用方维持既有 -32004 语义。
+  directory.setForkSurface(false);
+  const unsupported = await registry.renameColdSession("cold-1", "third");
   assert.deepEqual(unsupported, { ok: false, unsupported: true });
 });

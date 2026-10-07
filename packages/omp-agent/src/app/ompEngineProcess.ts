@@ -11,7 +11,7 @@ import type {
   OmpStateData,
   OmpSubagentFrame,
 } from "../domain/ompFrames.js";
-import type { OmpProcessFactory, OmpSessionProcess, OmpSessionProcessHandlers } from "./ports.js";
+import type { OmpProcessFactory, OmpSessionProcess } from "./ports.js";
 import type { OmpInteractionProxy } from "./ompInteractionProxy.js";
 import type { ConversationProjection } from "../domain/conversationProjection.js";
 
@@ -73,9 +73,6 @@ export interface EngineProcessStartHost {
   readonly workspacePath: string;
   readonly resumeSessionPath: string | undefined;
   readonly ompFactory: OmpProcessFactory | undefined;
-  readonly acquireProjectProcess:
-    | ((handlers: OmpSessionProcessHandlers) => Promise<OmpSessionProcess>)
-    | undefined;
   readonly interaction: OmpInteractionProxy;
   onEvent: (event: OmpSessionEventFrame) => void;
   onExit: (code: number | null, process: OmpSessionProcess) => void;
@@ -90,63 +87,11 @@ export interface EngineProcessStartHost {
   bootstrap: (process: OmpSessionProcess) => Promise<void>;
 }
 
-/** 项目通道的存活事实（OmpProjectSessionChannel.alive；端口未声明，按结构读取：
- * false = 通道已随共享项目进程死亡/卸载，undefined = 不携带该事实视为存活）。 */
-interface OmpChannelLiveness {
-  readonly alive?: boolean;
-}
-
 /**
- * 引擎进程启动（从 conversationEngine.ts 拆出）：项目模式取共享进程通道（失败不清空，
- * 可重试），旧拓扑按 factory 拉起独立进程（失败回收并允许下次重试）。
+ * 引擎进程启动（从 conversationEngine.ts 拆出）：按 factory 拉起独立会话进程
+ * （--mode rpc-ui [--resume]）；失败回收并允许下次重试。
  */
 export async function startEngineProcess(host: EngineProcessStartHost): Promise<void> {
-  const handlers: OmpSessionProcessHandlers = {
-    onEvent: host.onEvent,
-    onUiRequest: (request) => void host.interaction.handle(request),
-    onPermissionRequest: (request) => void host.interaction.handlePermission(request),
-    onAskRequest: (request) => void host.interaction.handleAsk(request),
-    onExit: (code) => {
-      const current = host.currentProcess();
-      if (current) host.onExit(code, current);
-    },
-    onCommandOutput: host.onCommandOutput,
-    onPromptResult: host.onPromptResult,
-    onSessionInfoUpdate: host.onSessionInfoUpdate,
-    onConfigUpdate: host.onConfigUpdate,
-    onCommandsUpdate: (commands) => host.onCommandsUpdate?.(commands),
-    onSubagentFrame: host.onSubagentFrame,
-  };
-  if (host.acquireProjectProcess) {
-    // 修复（S7-1）：共享项目进程可能在「通道获取 → setProcess」窗口内死亡，此时引擎
-    // 尚未 setProcess，exit 事件被上方 current 守卫吞掉；bootstrap 随后在死通道上
-    // “成功”完成（start/refreshState 均吞错），引擎从此永久绑定死通道——之后一切请求
-    // 返回 "omp project core is not running"，直到适配器重启。依据 rpc-ui-protocol
-    // §13.3（进程意外退出属可重试失败，重启后幂等重建），bootstrap 完成后校验通道
-    // alive 事实：死通道按旧拓扑失败同语义清理（setProcess(null) + dispose 通道）并
-    // 按可重试失败抛出，下次调用经 gateway.acquireSessionChannel 幂等重建。
-    let process: OmpSessionProcess | null = null;
-    try {
-      process = await host.acquireProjectProcess(handlers);
-      host.setProcess(process);
-      // 失败不清空：通道与会话仍在（OMP 侧已加载），下一次调用可重试。
-      await host.bootstrap(process);
-    } catch (error) {
-      // bootstrap 抛错且通道已死（进程死亡是常见根因）：同语义清理后按可重试失败抛出；
-      // 活通道保持「不清空、可重试」的既有语义。
-      if (process && (process as OmpChannelLiveness).alive === false) {
-        if (host.currentProcess() === process) host.setProcess(null);
-        await process.dispose().catch(() => {});
-      }
-      throw error;
-    }
-    if ((process as OmpChannelLiveness).alive === false) {
-      if (host.currentProcess() === process) host.setProcess(null);
-      await process.dispose().catch(() => {});
-      throw new Error("omp project core exited while bootstrapping session channel");
-    }
-    return;
-  }
   if (!host.ompFactory) {
     throw new Error("engine has no omp process source");
   }
@@ -160,12 +105,12 @@ export async function startEngineProcess(host: EngineProcessStartHost): Promise<
         const current = host.currentProcess();
         if (current) host.onExit(code, current);
       },
-      onCommandOutput: (frame) => handlers.onCommandOutput?.(frame),
-      onPromptResult: (frame) => handlers.onPromptResult?.(frame),
-      onSessionInfoUpdate: (frame) => handlers.onSessionInfoUpdate?.(frame),
-      onConfigUpdate: (frame) => handlers.onConfigUpdate?.(frame),
-      onCommandsUpdate: (commands) => handlers.onCommandsUpdate?.(commands),
-      onSubagentFrame: (frame) => handlers.onSubagentFrame?.(frame),
+      onCommandOutput: host.onCommandOutput,
+      onPromptResult: host.onPromptResult,
+      onSessionInfoUpdate: host.onSessionInfoUpdate,
+      onConfigUpdate: host.onConfigUpdate,
+      onCommandsUpdate: (commands) => host.onCommandsUpdate?.(commands),
+      onSubagentFrame: host.onSubagentFrame,
     },
   );
   host.setProcess(process);
@@ -181,7 +126,7 @@ export async function startEngineProcess(host: EngineProcessStartHost): Promise<
 
 export interface EngineProcessHooks {
   onEvent: Parameters<import("./ports.js").OmpProcessFactory["create"]>[0]["onEvent"];
-  /** 三类反向交互请求（extension_ui / permission / ask）统一由交互代理应答。 */
+  /** 反向交互请求（extension_ui 含富 ask）统一由交互代理应答。 */
   interaction: OmpInteractionProxy;
   onExit: (code: number | null) => void;
   /** 本地命令输出 → 当前轮助手文本。 */
@@ -209,7 +154,6 @@ export function createEngineOmpProcess(
     resumeSessionPath: options.resumeSessionPath,
     onEvent: hooks.onEvent,
     onUiRequest: (request) => void hooks.interaction.handle(request),
-    onPermissionRequest: (request) => void hooks.interaction.handlePermission(request),
     onAskRequest: (request) => void hooks.interaction.handleAsk(request),
     onExit: hooks.onExit,
     onCommandOutput: hooks.onCommandOutput,

@@ -12,9 +12,10 @@ export function buildOmpSubagentDirectory(
   state: SubagentProjectionState,
   offset: number,
   viewIdOf: (id: string) => string = (id) => `omp-subagent:${id}`,
+  limit = 20,
 ) {
   const ended = [...statuses.entries()].filter(([, status]) => status !== "running");
-  const items = ended.slice(offset, offset + 20).flatMap(([id, status]) => {
+  const items = ended.slice(offset, offset + limit).flatMap(([id, status]) => {
     const row = rowAt(rowIds.get(id) ?? -1);
     if (row?.kind !== "subagent" || status === "running") return [];
     return [
@@ -37,7 +38,7 @@ export function buildOmpSubagentDirectory(
     ended: {
       total: ended.length,
       items,
-      ...(offset + 20 < ended.length ? { nextCursor: String(offset + 20) } : {}),
+      ...(offset + limit < ended.length ? { nextCursor: String(offset + limit) } : {}),
     },
   };
 }
@@ -165,7 +166,7 @@ export class OmpSubagentProjection {
     });
   }
 
-  directory(offset: number) {
+  directory(offset: number, limit = 20) {
     return buildOmpSubagentDirectory(
       this.statuses,
       this.rowIds,
@@ -173,6 +174,7 @@ export class OmpSubagentProjection {
       this.host.state(),
       offset,
       this.host.viewIdOf,
+      limit,
     );
   }
 }
