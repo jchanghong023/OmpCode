@@ -5,6 +5,10 @@
 - **Windows x64：GO（本次验收范围）**。最终验收提交 `ca04952489646a4d6842c7553d20a030119e17f5` 的打包版通过了实际 Windows 桌面 BTW 首问、追问、关闭后历史恢复和进程重启冷恢复。它覆盖了本次高风险的 live parent ID 与稳定 task UUID 分离场景。
 - **CentOS 7：NO-GO**。无真实模型的 fake protocol E2E 通过，但全量非真实模型 omp-agent 用例仍有 5 fail、5 cancelled；Node 24.14.0 构建/打包环境也不可用。CentOS 7 不发布。
 
+## 正式发布结果
+
+Windows 发布流水线 [37711402913](https://github.com/jchanghong023/OmpCode/actions/runs/37711402913) 成功，正式公开 [v3.14.3-omp.10](https://github.com/jchanghong023/OmpCode/releases/tag/v3.14.3-omp.10)。标签指向 `ca94d9b38b86d172f5a4334f93e163da12932223`（相比验收代码提交只新增验收报告）。CI 内嵌 omp 仍为已测试的 `v18.8.3+fork.300`。公开 EXE 为 281,914,101 字节，SHA-256 `d3d15851817ac2a527f332fa8597f6f7ef72b07f7b5614198ebb45dacc6b6e4a`，与公开 `.sha256` 文件、GitHub 资产 digest 及 CI 校验结果一致。下节的 `20bb…` 是本地 GUI 验收包校验值，不是公开 CI 重建包校验值。
+
 ## Windows 证据
 
 验收工作区、包和 GUI 均针对提交 `ca04952489646a4d6842c7553d20a030119e17f5`。最终 Windows x64 EXE 为 281,896,364 字节，SHA-256 `20bb17aeef078aff5e3ea2f151a9e6dc138223ec2e5d02fb6d6e63f9fc0a5c51`。根代理确认 bundle、运行时/原生资源和体积校验通过，打包命令退出码为 0。
@@ -45,5 +49,7 @@ C:\Users\jiang\AppData\Local\Temp\ompcode-acceptance-isolated-1e36d92f88dc486e9e
 ## 边界与副作用
 
 本次 GUI 未覆盖 editor/select/input/prefill 的完整交互、workspace 有/无上下文切换、子代理控制 GUI、Web replayable 重连，也未覆盖 CentOS 打包链路；这些场景不纳入本次 Windows GO 结论。
+
+生产 GUI 日志出现不支持 `v4/conversation/workflowRuns` 的请求错误及异步 Promise rejection 告警；本次 BTW 问答与恢复链路仍通过，不据此声称生产日志无异常或 workflow 功能已验收。
 
 第一次启动生产版时只设置了 `ZCODE_DESKTOP_HOME_DIR`，没有隔离实际使用的 `ZCODE_DATA_BASE_DIR`，因而短暂使用默认 workspace 并更新了 `C:\Users\jiang\.ompcode\v2\tasks-index.sqlite` 的修改时间；该次没有发送真实模型请求。进程随后停止，数据文件未回滚或删除，内容是否变化未核验。之后所有真实模型问答都使用上述临时 data base、userData、sessionData 和 workspace；OMP 配置文件未改，测试对话只写入以该唯一临时 workspace 为键的新会话桶。
