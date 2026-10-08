@@ -1129,8 +1129,12 @@ function getVisibleSidePaneTabsByScope(
     ) {
       return tab.rootSessionId === scope.ownerTaskId;
     }
+    // 首问 ACK 可把父身份绑定为持久 UUID；实际侧栏筛选也须保留 live 别名，
+    // 否则已接受的辅助主题会被当作其他父会话的 tab 而从界面消失。
+    if (tab.type === "selection-side-chat") {
+      return isSidePaneTabVisibleForParent(tab, scope.ownerTaskId);
+    }
     if (
-      tab.type === "selection-side-chat" ||
       tab.type === "plan-detail" ||
       tab.type === "workflow-run" ||
       tab.type === "workflow-actor-session" ||

@@ -8,6 +8,8 @@ import {
   getActiveSelectionSideChatTab,
   isSidePaneTabVisibleForParent,
   normalizeWorkspaceSidePaneState,
+  getVisibleSidePaneTabs,
+  resolveSidePaneScopeState,
 } from "../src/lib/workspaceSidePane.js";
 import {
   mergeOmpBtwSlashSuggestions,
@@ -78,6 +80,20 @@ test("stable saved topic stays visible to the live draft-parent alias and to the
   assert.ok(isSidePaneTabVisibleForParent(tab, "live-parent"));
   assert.ok(isSidePaneTabVisibleForParent(tab, "stable-parent"));
   assert.equal(isSidePaneTabVisibleForParent(tab, "other-parent"), false);
+  const liveScope = { workspaceKey: scope.workspaceKey, ownerTaskId: "live-parent" };
+  // 用实际 Workspace 侧栏的 scope 入口覆盖 ACK 绑定后的可见性与 active tab。
+  assert.deepEqual(getVisibleSidePaneTabs(state.tabs, liveScope), [tab]);
+  const resolved = resolveSidePaneScopeState(state, liveScope);
+  assert.equal(resolved.sidePaneState?.activeTabId, tab.id);
+  assert.equal(resolved.isSidePaneCollapsed, false);
+  assert.deepEqual(
+    getVisibleSidePaneTabs(state.tabs, { ...liveScope, ownerTaskId: "other-parent" }),
+    [],
+  );
+  assert.deepEqual(
+    getVisibleSidePaneTabs(state.tabs, { ...liveScope, workspaceKey: "other-workspace" }),
+    [],
+  );
   assert.equal(
     getActiveSelectionSideChatTab(state, {
       workspaceKey: "other-workspace",

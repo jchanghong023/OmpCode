@@ -50,6 +50,7 @@ OMP 身份 ←→ UI 地址投影：sessionId 即 omp 会话 ID；
 - 核心顺序是 started `btw_record` → `btw` response（running checkpoint 已保存）→ `btw_delta` → terminal `btw_record`；接受不等于完成。适配器以真实 record 全量覆盖、delta 只追加最新 running turn；同一 stdout 分片内在 ACK continuation 前到达的 terminal 不被旧 response 回退为 running，父进程实例 fence 丢弃旧回调。完成/错误/取消/进程中断保留部分回答与真实终态。保存失败 `notice(source:btw-history)` 必须呈现，不伪报已落盘。
 - 停止只发送带匹配 recordId 的 `btw_cancel`，不得 `abort` 主回合；空 pane 未发送时无停止副作用。关闭只卸载 pane/订阅，不删除历史、不停止父会话；历史入口通过 `get_btw_history` 发现所有已保存主题，关闭重开及进程重启后可恢复并追问，interrupted 不伪装 complete。
 - 清洁切换不将旧普通 child 会话的副屏记忆恢复为 BTW：只移除旧 tab 元数据，不删除原会话文件；新的辅助地址与已保存主题从原生命令/sidecar 建立。
+- 首问 ACK 将 draft 地址绑定为已保存主题时，侧栏实际使用的 workspace/owner scope 筛选与父身份筛选遵循同一 live 父身份别名规则；主题仍是当前父会话的可见 active tab，不能退回空标签选择器。回归须覆盖实际 scope 筛选、关闭重开及不同 workspace/父会话的隔离。
 
 ```text
 UI draft/tab → v4 command（commandId 幂等）→ OmpBtwStore 派生地址/投影
