@@ -79,7 +79,9 @@ export async function writeOmpModelRolesConfig(
       if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error;
       const doc = parseDocument("");
       const roles = new YAMLMap();
-      for (const { role, value } of updates) roles.set(role, value);
+      // 首次 unset 是无操作，不创建配置或空角色；同批模型与 auto 仍正常落盘。
+      for (const { role, value } of updates) if (value !== "") roles.set(role, value);
+      if (roles.items.length === 0) return { success: true };
       doc.set("modelRoles", roles);
       await mkdir(dirname(configPath), { recursive: true });
       await writeFile(tempPath, doc.toString(), { encoding: "utf8", flag: "wx", mode: 0o600 });
@@ -101,6 +103,35 @@ export async function writeOmpModelRolesConfig(
     for (const { role, value } of updates) {
       // omp 允许 model ID 内含冒号（如 :free）；这里把值当原文保存。
       const existing = roles?.items.find((pair) => pair.key?.toJSON() === role);
+      if (value === "") {
+        if (!existing) continue;
+        changedCount += 1;
+        map.delete(role);
+        // 需要序列化（flow 或删至空映射）时，节点附属注释也要留在文档中。
+        const comments = [
+          existing.key?.commentBefore,
+          existing.key?.comment,
+          existing.value?.commentBefore,
+          existing.value?.comment,
+        ].filter(Boolean);
+        if (comments.length) map.comment = [map.comment, ...comments].filter(Boolean).join("\n");
+        // 块映射按节点范围删除该字段，保留其他角色的原始排版以及行尾注释。
+        const keyRange = existing.key?.range;
+        const valueRange = existing.value?.range;
+        const lineStart = keyRange ? raw.lastIndexOf("\n", keyRange[0] - 1) + 1 : 0;
+        const indent = keyRange ? raw.slice(lineStart, keyRange[0]) : "";
+        if (!roles?.flow && keyRange && valueRange && /^\s*$/u.test(indent)) {
+          const trailing = raw.slice(valueRange[1], valueRange[2]).trimStart();
+          replacements.push({
+            start: lineStart,
+            end: valueRange[2],
+            value: trailing.startsWith("#") ? indent + trailing : "",
+          });
+        } else {
+          requiresSerialization = true;
+        }
+        continue;
+      }
       const previous = existing?.value?.toJSON();
       if (previous === value || (Array.isArray(previous) && previous.join(",") === value)) {
         continue;
@@ -118,6 +149,8 @@ export async function writeOmpModelRolesConfig(
     }
     if (changedCount === 0) return { success: true };
     if (!roles) doc.set("modelRoles", map);
+    // 删除最后一个 role 后显式保留空映射，避免裸 modelRoles: 被重读为非法 null。
+    if (map.items.length === 0) requiresSerialization = true;
     // 仅改已有 role 时按 YAML 节点范围替换标量，避免重排其他配置的格式和注释。
     const next = requiresSerialization
       ? doc.toString()

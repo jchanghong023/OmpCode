@@ -30,6 +30,7 @@ export function isUnknownCommand(error: string | undefined): boolean {
 export class OmpDirectoryGateway {
   private process: OmpSessionProcess | null = null;
   private starting: Promise<OmpSessionProcess | null> | null = null;
+  private generation = 0;
   /** v3 协商结果：null = 未判定（启动失败/退避，可重试）；false = 旧核（永久能力缺失）。 */
   private forkSurface: boolean | null = null;
   private disposed = false;
@@ -47,13 +48,21 @@ export class OmpDirectoryGateway {
     if (this.process) return this.process;
     if (this.starting) return this.starting;
     if (Date.now() < this.nextRetryAt) return null;
-    this.starting = this.startProcess().finally(() => {
-      this.starting = null;
+    const starting = this.startProcess().finally(() => {
+      // 旧代收尾只能释放自己的 flight，不能清除后来登记的新启动。
+      if (this.starting === starting) this.starting = null;
     });
-    return this.starting;
+    this.starting = starting;
+    return starting;
   }
 
   private async startProcess(): Promise<OmpSessionProcess | null> {
+    const generation = ++this.generation;
+    let exited = false;
+    let signalExit!: () => void;
+    const exit = new Promise<void>((resolve) => {
+      signalExit = resolve;
+    });
     const process = this.deps.ompFactory.create({
       cwd: this.deps.cwd,
       // 目录进程无会话语义：--no-session（上游旗标，open_session 之外的查询均可用）。
@@ -62,17 +71,24 @@ export class OmpDirectoryGateway {
       onUiRequest: ({ respond, frame }) =>
         respond({ type: "extension_ui_response", id: frame.id, cancelled: true }),
       onExit: (code) => {
-        if (this.process === process) {
-          this.process = null;
-          this.forkSurface = null;
-        }
+        // ready 后的协商/订阅仍属于启动：exit 必须先使本代失效，
+        // 不能依赖尚未发布的 this.process 才识别已死亡的实例。
+        exited = true;
+        signalExit();
+        if (this.generation !== generation || this.disposed) return;
+        this.process = null;
+        this.forkSurface = null;
         logger.warn("omp 目录进程已退出", { code });
       },
-      onCommandsUpdate: (commands) => this.deps.onCommandsUpdate?.(commands),
+      onCommandsUpdate: (commands) => {
+        if (!exited && !this.disposed && this.generation === generation) {
+          this.deps.onCommandsUpdate?.(commands);
+        }
+      },
     });
     try {
-      await process.start();
-      if (this.disposed) {
+      await Promise.race([process.start(), exit]);
+      if (exited || this.disposed || this.generation !== generation) {
         await process.dispose().catch(() => {});
         return null;
       }
@@ -86,12 +102,14 @@ export class OmpDirectoryGateway {
       }
       return process;
     } catch (error) {
-      this.forkSurface = null;
-      this.nextRetryAt = Date.now() + OmpDirectoryGateway.START_RETRY_BACKOFF_MS;
-      logger.warn("omp 目录进程启动失败", {
-        error: error instanceof Error ? error.message : String(error),
-        retryInMs: OmpDirectoryGateway.START_RETRY_BACKOFF_MS,
-      });
+      if (!exited && !this.disposed && this.generation === generation) {
+        this.forkSurface = null;
+        this.nextRetryAt = Date.now() + OmpDirectoryGateway.START_RETRY_BACKOFF_MS;
+        logger.warn("omp 目录进程启动失败", {
+          error: error instanceof Error ? error.message : String(error),
+          retryInMs: OmpDirectoryGateway.START_RETRY_BACKOFF_MS,
+        });
+      }
       await process.dispose().catch(() => {});
       return null;
     }
@@ -99,16 +117,17 @@ export class OmpDirectoryGateway {
 
   /** 三态可用性（app 层端口）：v3 方法报错语义（永久 -32601 vs 暂时 -32000）以此为准。 */
   async availability(): Promise<OmpDirectoryAvailability> {
-    if (await this.ensure()) {
-      return this.forkSurface === true ? "available" : "unsupported";
-    }
-    return this.forkSurface === false ? "unsupported" : "unavailable";
+    const process = await this.ensure();
+    if (!process || process !== this.process) return "unavailable";
+    return this.forkSurface === true ? "available" : "unsupported";
   }
 
   /** 发送 v1 目录查询命令（模型/档位/命令目录）。 */
   async send(command: OmpCommandFrame): Promise<OmpCommandOutcome> {
     const process = await this.ensure();
-    if (!process) return { success: false, error: "omp directory process unavailable" };
+    if (!process || process !== this.process) {
+      return { success: false, error: "omp directory process unavailable" };
+    }
     return process.send(command);
   }
 
@@ -119,7 +138,7 @@ export class OmpDirectoryGateway {
    */
   async sendDirectory(command: OmpDirectoryCommand): Promise<OmpCommandOutcome> {
     const process = await this.ensure();
-    if (!process) {
+    if (!process || process !== this.process) {
       return {
         success: false,
         error: "omp directory process unavailable",
@@ -138,6 +157,8 @@ export class OmpDirectoryGateway {
 
   async dispose(): Promise<void> {
     this.disposed = true;
+    this.generation += 1;
+    this.forkSurface = null;
     const process = this.process;
     this.process = null;
     await process?.dispose();

@@ -2,7 +2,7 @@
 // 纯逻辑 + 依赖注入回调：不持有进程对象（经 currentProcess() 读引擎当前进程），投影
 // 事实经引用/回调读出，状态应用与 flush 由引擎回调完成；引擎持有实例调用。
 
-import type { OmpStateData } from "../domain/ompFrames.js";
+import type { OmpSessionEventFrame, OmpStateData } from "../domain/ompFrames.js";
 import { ompQueueTextsOf } from "../domain/ompProjector.js";
 import { markQueueReconcileTexts, type QueueReconcileMode } from "../domain/queuedTurnReconcile.js";
 import type { ConversationProjection } from "../domain/conversationProjection.js";
@@ -59,6 +59,8 @@ export class PromptQueueReconciler {
    * 该快照可能不含新消息文本，本轮对账必须跳过（见 refreshAfterActivity）。
    */
   private inputAcceptedSeq = 0;
+  /** 成功 abort 的输入代次；只取消该边界之前从未见到队列事实的等待轮。 */
+  private abortedInputSeq: number | null = null;
 
   constructor(private readonly deps: PromptQueueReconcilerDeps) {}
 
@@ -79,21 +81,28 @@ export class PromptQueueReconciler {
   }
 
   /**
-   * F2b-P1：steer/follow_up 分发 success ACK 到达即登记 seen（markOnly 单元素快照）。
-   * omp v18.4.8 的 #queueUserMessage 在 `await session.followUp()/steer()` 完成后才返回，
-   * rpc handler 在 await 后才回 success ACK ⇒ ACK 到达即已入队（agent-session.ts:8053-8170）；
-   * 而 agent-loop.ts:1754-1763 的停止边界 drain 可在入队后短于 250ms debounce 窗口内消费
-   * 该消息（queue_update 被 debounce 合并、terminal agent_end 的去重还会清掉未触发的
-   * debounce 定时器），快照可能从未携带——「ACK 即 seen」补上这个时序窗口，使 drain 后的
-   * terminal agent_end 对账按合并终态（success）收口而非宽限 interrupted。
-   * 复用 reconcileQueuedTurnsOf 的匹配/登记路径：markOnly 只登记不收口，不依赖流式判定、
-   * 不与 XR1 序号守卫交互（不走 get_state，纯增量 WeakSet 标记）。
-   * 边界备查（新核输入门，v18.4.10+）：被门取消的 steer/follow_up 同样回 success 但未入队
-   * （rpc-ui-protocol §14.4「success≠入队」），该场景会把门取消误判为合并消费；当前内嵌核
-   * v18.4.8 无输入门判据成立，升级内嵌核时随备查项⑦复查。
+   * F010：登记真实 queue_update 的完整快照，不把 RPC success 当接纳证据。
+   * 到达时立即 markOnly，保留 debounce 前 enqueue → drain 的快速消费事实；
+   * 收口仍统一由非流式 get_state 对账决定。
    */
-  noteDispatchAckSeen(text: string): void {
-    this.deps.projection.reconcileQueuedTurns(markQueueReconcileTexts([text], "markOnly"));
+  noteQueueSnapshot(event: Extract<OmpSessionEventFrame, { type: "queue_update" }>): void {
+    const texts = ompQueueTextsOf({ queuedMessages: event });
+    if (texts !== null) {
+      this.deps.projection.reconcileQueuedTurns(markQueueReconcileTexts(texts, "markOnly"));
+    }
+  }
+
+  /**
+   * abort 的成功响应才证明输入门取消边界生效。捕获发送前的输入代次，避免响应
+   * 在途期间的新输入被旧 abort 取消；后续终态回读继续沿用该边界，不新增超时。
+   */
+  prepareAbortReconciliation(): () => Promise<void> {
+    const seqAtAbort = this.inputAcceptedSeq;
+    return async () => {
+      if (this.disposed || this.inputAcceptedSeq !== seqAtAbort) return;
+      this.abortedInputSeq = seqAtAbort;
+      await this.refreshAfterActivity();
+    };
   }
 
   /** A3 触发点（queue_update 事件）：debounce 合并短窗口内的多次触发后回读 get_state。 */
@@ -141,7 +150,10 @@ export class PromptQueueReconciler {
       (state) => {
         this.deps.applyState(state);
         if (seqAtRequest !== this.inputAcceptedSeq) return;
-        this.reconcileQueuedTurnsWith(state, options.queueReconcileMode ?? null);
+        const mode =
+          options.queueReconcileMode ??
+          (this.abortedInputSeq === seqAtRequest ? "forceClose" : null);
+        this.reconcileQueuedTurnsWith(state, mode);
       },
     );
     // get_state 去重：本次回读完成后，若在途期间没有新的 queue_update 触发（调度序号
@@ -179,7 +191,7 @@ export class PromptQueueReconciler {
   ): void {
     if (!state) return;
     const texts = ompQueueTextsOf(state);
-    if (texts === null || !this.deps.projection.hasQueuedTurns()) return;
+    if (texts === null) return;
     if (this.deps.isStreaming()) {
       this.deps.projection.reconcileQueuedTurns(markQueueReconcileTexts(texts, "markOnly"));
       return;
@@ -203,6 +215,7 @@ export class PromptQueueReconciler {
   /** 进程退出/引擎销毁：挂起的对账与在途 steer 标记不再有意义（轮次已另行收口），清理。 */
   dispose(): void {
     this.disposed = true;
+    this.abortedInputSeq = null;
     this.steerGuideCommandId = null;
     if (this.queueReconcileTimer) {
       clearTimeout(this.queueReconcileTimer);

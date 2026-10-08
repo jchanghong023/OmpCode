@@ -12,6 +12,7 @@
 - 桌面“打开方式”的编辑器探测不能在主线程同步等待外部命令；已知静态安装路径优先，命令兜底异步执行，同一次探测结果复用。
 - Agent stdio 适配器按会话串行处理有状态命令；一个会话的慢历史读取不得阻塞其他会话的命令、停止请求或实时帧。同一订阅的 ACK 必须先于该请求产生的首帧，独立会话的帧无需等待此 ACK。请求处理期间定时器产生的后续帧不得延迟到请求结束：同一 topic 的帧必须按生成顺序上线，否则客户端按断档进入恢复。
 - 冷会话目录读取应有界并按 ID 直接定位；标题只读取需要的文件头部，长会话恢复避免一次性拆分整个文件产生额外内存峰值。时间线的运行计时和单轮流式变化不得重新计算未变化的全部历史轮次。
+- 原生 `custom` 输出的持久化去重由输出 store 持有派生索引，omp JSONL 仍为历史事实源；连续输出不能逐条从头重扫整个 JSONL。重复判定必须匹配同一原生会话、`customType`、正文和原生时间戳，同类型/正文但时间不同的消息仍保留。已有文件追加后去重视图及时更新，不能把首次读取后的旧结果当永久事实；文件替换或截短时旧视图失效。
 - `@` 文件引用的本地补扫与元数据访问按 workspace 复用：同一索引版本内不重复扫描同一目录，同 workspace 在途扫描只合并等待而不另起并发扫描，ignore 规则解析结果缓存至规则文件变化；规则修改或新增文件在下一次补扫仍能被发现。
 - 文件索引与 ignore 规则缓存由 Host 的 file service 实例唯一持有，按 `workspaceIdentity?.trim() || workspacePath` 隔离，同时校验实际 rootPath。不同无命中前缀复用同一轮补扫；显式刷新及规则变化仍能发起新一轮扫描，旧扫描的延迟结果不得覆盖新索引，缓存和刷新记录均有容量边界。
 - ignore 规则读取失败时的降级 matcher 仅用于当前请求，不绑定到成功 stat 的文件指纹长期缓存；后续刷新或重扫重新读取规则，读取恢复后排除规则立即恢复。缓存命中不得使降级规则永久保留。
@@ -40,6 +41,23 @@ omp 事件 → ConversationProjection（seq、rows、pending）→ topic frame
 运行计时 → 同一派生缓存中的运行轮时长 → 展示（不重建内容索引）
 ```
 
+```mermaid
+sequenceDiagram
+  participant OMP as OMP / 原生历史所有者
+  participant Store as custom 输出 store / 派生去重索引
+  participant Derived as UI 派生 transcript
+  OMP->>OMP: 保存原生 custom_message 到 JSONL
+  OMP-->>Store: message_end（会话、类型、正文、原生时间戳）
+  Store->>OMP: 首次读历史 / 后续只读取追加范围
+  Store->>Store: 更新去重视图；替换或截短时失效重建
+  alt 同一原生记录已持久化
+    Store-->>Derived: 不另存重复显示副本
+  else 不同时间戳或原生记录尚不存在
+    Store->>Derived: 保存该输出的派生记录
+  end
+  Note over OMP,Store: 新追加记录参与下一次判定，不逐输出重扫全文件
+```
+
 ## 验收场景
 
 1. 重复的 streaming 状态不触发 workspace store 订阅者；状态、错误或 provider 变化仍通知。
@@ -63,6 +81,7 @@ omp 事件 → ConversationProjection（seq、rows、pending）→ topic frame
 19. `.zcodeignore` 指纹可读、正文读取暂时失败时，当前请求可降级；恢复读取后普通查询/显式刷新或 TTL 重扫重新应用排除规则。覆盖 fallback-gitignore 与 fallback-builtin，不把降级 matcher 或索引当作有效规则版本长期保存。
 20. 首次无命中补扫后创建新文件，保留 `@` 清空并在空查询 RPC 返回前重新输入，仍开启新轮次并找到文件；旧空查询失活及 deferred query 跳过空串均不吞掉该轮补扫。
 21. 真实 GUI 的流式代码验收比较完整预期代码行及顺序，冷恢复比较同一完整结果；主题/高亮验收在产品 worker provider 下检查实际 token 和主题颜色，不能仅以修改 props、首尾文字或容器身份作为通过依据。
+22. 使用同一长 JSONL 连续保存多条原生 custom 输出，计量读取次数与字节数：首次建立去重视图后，仅追加范围被读取，不出现输出数乘全文件大小的重复 I/O。覆盖已持久化的精确重复、同类型/正文但不同时间戳、不同会话，以及首次读取后新追加的原生记录；live 与冷恢复各显示一次且不丢新消息，文件替换/截短后旧索引不能误判。与原生扩展文本输出既有语义一起验收，不以缩短历史规避测量。
 
 ## 边界
 
@@ -74,4 +93,4 @@ omp 事件 → ConversationProjection（seq、rows、pending）→ topic frame
 
 需求从原有权威 FORK 与对应 spec 迁入，未因当前实现降低要求。既有实现及历史验证不等于本次验收；统一证据边界见 [需求索引](README.md#实现与验证状态)。
 
-- 2026-10-09：输入、文件索引、时间线、工具索引及思考/代码渲染优化已实施，共享 owner、提交凭据与 Host 身份迁移已接线。阶段复验中 OMP 全套 279/279、0 跳过（含三个真实核心 E2E），该结果发生在原生命令分支合入前；合并后的定向核心回归为 48/48。稳定会话、历史冷恢复、组件高亮/主题及文件提及已有所列场景证据，不替代本轮首次临时 ID→UUID、多 pane/富 JSON/pending、完整代码与重建后的真实模型 GUI 复验。目标 CentOS 7 网络盘、原生焦点/IME 与真实 Web 产品 GUI 未验收；当前续作缺口见 [阶段修复与未完成验收](../test-reports/performance-hot-paths-2026-10-09.md#审查后修复与复验)，测量与历史结果见 [性能热路径验证](../test-reports/performance-hot-paths-2026-10-09.md)。本次文档更新未重跑功能测试。
+- 历史阶段的 279/279（合入原生命令前）与合并定向 48/48 保留于性能报告，不与续作结果合并。2026-10-09 核心体验续作：OMP 全集 374/374、0 跳过通过；真实双 pane 组件与重建后的真实 GLM live/stable、正常关闭后 R7 cold、项目内 mentions 均通过，完整代码比较 80 行及顺序。目标 CentOS 7 网络盘、原生失焦/IME、真实 Web GUI 与附件上传仍未由上述结果覆盖。完整门禁与两平台发布单独验证，不以定向通过代替；详见 [核心体验续作验收](../test-reports/performance-hot-paths-2026-10-09.md#核心体验续作验收)。

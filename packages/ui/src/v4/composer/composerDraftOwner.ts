@@ -152,16 +152,26 @@ export class ComposerDraftOwner {
   materialize(): V4ComposerDraft {
     const core = this.canonical();
     if (core !== this) return core.materialize();
-    const lease = this.activeReader ? this.readers.get(this.activeReader) : undefined;
+    const readerId = core.activeReader;
+    const lease = readerId ? core.readers.get(readerId) : undefined;
+    const hasCurrentReader = lease?.version === core.contentVersion && lease.reader !== undefined;
     const content =
-      lease?.version === this.contentVersion ? lease.reader?.() : this.contentReader?.();
-    if (content && content.text === this.value.text) {
-      this.value = {
-        ...this.value,
-        ...(content.editorStateJson ? { editorStateJson: content.editorStateJson } : {}),
-      };
+      lease?.version === core.contentVersion ? lease.reader?.() : core.contentReader?.();
+    if (content && content.text === core.value.text) {
+      const editorStateJsonChanged =
+        Boolean(content.editorStateJson) && content.editorStateJson !== core.value.editorStateJson;
+      const mentionChanged =
+        content.mention !== undefined && content.mention !== core.value.mention;
+      if (editorStateJsonChanged || mentionChanged) {
+        core.value = {
+          ...core.value,
+          ...(editorStateJsonChanged ? { editorStateJson: content.editorStateJson! } : {}),
+          ...(mentionChanged ? { mention: content.mention! } : {}),
+        };
+        core.publish("content", hasCurrentReader ? (readerId ?? undefined) : undefined);
+      }
     }
-    return this.value;
+    return core.value;
   }
   schedule = () => this.canonical().persistence.schedule();
   flush = () => this.canonical().persistence.flush();

@@ -1,8 +1,16 @@
 // GUI 冒烟（CDP）：验证 dev 桌面 renderer 的 OmpCode 品牌、composer 可用性，并截图存档。
 // 前台短连接，每步超时 15s；只读检查，不持久化任何业务状态。
-import { writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 
-const CDP_PORT = 9230;
+const cdpUrl = (process.env.OMP_E2E_CDP_URL ?? "http://127.0.0.1:9230").replace(/\/+$/u, "");
+// 隔离准备器的 renderer 不在日常端口；配置存在时只选择该来源，不能退回其它 page。
+const rendererUrl =
+  process.env.OMP_E2E_RENDERER_URL ??
+  (process.env.OMP_E2E_RUNTIME_MANIFEST
+    ? JSON.parse(readFileSync(process.env.OMP_E2E_RUNTIME_MANIFEST, "utf8")).rendererUrl
+    : undefined);
+const rendererPrefix = rendererUrl ? `${rendererUrl.replace(/\/+$/u, "")}/` : undefined;
 const STEP_TIMEOUT_MS = 15000;
 
 function withTimeout(promise, label) {
@@ -16,10 +24,14 @@ function withTimeout(promise, label) {
 
 async function main() {
   const targets = await withTimeout(
-    fetch(`http://127.0.0.1:${CDP_PORT}/json/list`).then((r) => r.json()),
+    fetch(`${cdpUrl}/json/list`).then((r) => r.json()),
     "json/list",
   );
-  const page = targets.find((t) => t.type === "page" && t.url.includes("localhost"));
+  const page = targets.find(
+    (t) =>
+      t.type === "page" &&
+      (rendererPrefix ? t.url.startsWith(rendererPrefix) : t.url.includes("localhost")),
+  );
   if (!page) throw new Error("page target not found");
 
   const ws = new WebSocket(page.webSocketDebuggerUrl);
@@ -82,7 +94,11 @@ async function main() {
   );
 
   const shot = await call("Page.captureScreenshot", { format: "png" });
-  const shotPath = "C:/Users/jiang/AppData/Local/Temp/ompcode-gui-01-initial.png";
+  const evidenceDir = process.env.OMP_E2E_EVIDENCE_DIR;
+  if (evidenceDir) mkdirSync(evidenceDir, { recursive: true });
+  const shotPath = evidenceDir
+    ? join(evidenceDir, "ompcode-gui-01-initial.png")
+    : "C:/Users/jiang/AppData/Local/Temp/ompcode-gui-01-initial.png";
   writeFileSync(shotPath, Buffer.from(shot.data, "base64"));
   console.log("[gui] screenshot:", shotPath, Buffer.from(shot.data, "base64").length, "bytes");
 

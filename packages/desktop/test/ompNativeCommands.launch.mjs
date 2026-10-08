@@ -1,7 +1,7 @@
 // N06：本任务专用 Windows 桌面启动器。只派生临时根与进程，不连接用户日常实例。
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { access, appendFile, mkdir, writeFile } from "node:fs/promises";
+import { access, appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { createServer } from "node:net";
 import { basename, dirname, join, resolve } from "node:path";
@@ -22,9 +22,21 @@ const fixtureEnv = nativeFixtureEnv(fixture, credentials);
 delete fixtureEnv.ZCODE_WORKSPACE_IDENTITY;
 const applicationName = `OmpCode Native E2E ${basename(fixture.root)}`;
 const userData = join(`${fixture.configRoot}_ompcode`, "electron", applicationName);
-const rendererUrl = "http://localhost:5194";
-// 本任务使用独占端口；禁止接入此前 GUI 冒烟固定的 9230 或任何日常实例。
-const cdpPort = 9257;
+// renderer 来源由隔离准备器持有；保留手动入口默认值，但配置不能被固定端口覆盖。
+const rendererUrl = (
+  process.env.OMP_E2E_RENDERER_URL ??
+  (process.env.OMP_E2E_RUNTIME_MANIFEST
+    ? JSON.parse(await readFile(process.env.OMP_E2E_RUNTIME_MANIFEST, "utf8")).rendererUrl
+    : undefined) ??
+  "http://localhost:5194"
+).replace(/\/+$/u, "");
+// 本任务使用独占端口；禁止接入日常 CDP 或复用任何已有监听。
+const cdpPort = Number(process.env.OMP_E2E_CDP_PORT ?? 9257);
+assert.ok(
+  Number.isInteger(cdpPort) && cdpPort > 0 && cdpPort <= 65535,
+  "OMP_E2E_CDP_PORT must be a valid dedicated port",
+);
+assert.ok(cdpPort !== 9230 && cdpPort !== 9229, "Use a dedicated test CDP port");
 const cdpUrl = `http://127.0.0.1:${cdpPort}`;
 const metaPath = join(fixture.root, "native-gui-launch.json");
 const require = createRequire(import.meta.url);

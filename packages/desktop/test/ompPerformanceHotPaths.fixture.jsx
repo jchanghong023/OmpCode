@@ -14,6 +14,7 @@ import { ConversationTimeline } from "../../ui/src/v4/ConversationTimeline.tsx";
 import { DEFAULT_CODE_PREVIEW_SETTINGS } from "../../ui/src/lib/codePreviewSettings.ts";
 import { ConversationComposer } from "../../ui/src/v4/ConversationComposer.tsx";
 import { createComposerDraftOwner } from "../../ui/src/v4/composer/composerDraftOwner.ts";
+import { readV4ComposerDraft } from "../../ui/src/v4/composer/composerDraftStore.ts";
 import { PlatformProvider } from "../../ui/src/hooks/usePlatform.tsx";
 import { ServiceProvider } from "../../ui/src/hooks/useServices.tsx";
 import { TabStoreProvider } from "../../ui/src/store/TabStoreProvider.tsx";
@@ -61,24 +62,73 @@ const owners = new Map();
 const pendingSends = [];
 const noop = () => {};
 function getOwner(scope) {
-  if (!owners.has(scope))
-    owners.set(
-      scope,
-      createComposerDraftOwner({
-        workspacePath: "component-fixture",
-        scopeId: scope,
-        draft: {
-          text: "",
-          mode: "build",
-          modelSelection: { providerId: "fixture", modelId: "fixture" },
-          updatedAt: 0,
-        },
-      }),
-    );
-  return owners.get(scope);
+  let owner = owners.get(scope);
+  if (owner) return owner;
+  owner = createComposerDraftOwner({
+    workspacePath: "component-fixture",
+    scopeId: scope,
+    draft: readV4ComposerDraft("component-fixture", undefined, scope) ?? {
+      text: "",
+      mode: "build",
+      modelSelection: { providerId: "fixture", modelId: "fixture" },
+      updatedAt: 0,
+    },
+  });
+  owner.onIdle = () => {
+    queueMicrotask(() => {
+      if (owners.get(scope) !== owner) return;
+      const current = owner.canonical();
+      if (current.leaseCount > 0 || current.pendingCount > 0 || !current.flush()) return;
+      if (owners.get(scope) === owner) owners.delete(scope);
+    });
+  };
+  owners.set(scope, owner);
+  return owner;
 }
 function ComposerFixture() {
   const owner = getOwner(state.composerScope);
+  const lease = React.useMemo(() => Symbol("composer-fixture-reader"), [owner]);
+  React.useLayoutEffect(() => {
+    owner.acquireLease(lease);
+    return () => owner.releaseLease(lease);
+  }, [lease, owner]);
+  const updateComposerContent = React.useCallback(
+    (content) => owner.updateContent(lease, content),
+    [lease, owner],
+  );
+  const markComposerDraftDirty = React.useCallback(
+    (text, userEdit) => owner.markDirty(lease, text, userEdit),
+    [lease, owner],
+  );
+  const readComposerDraft = React.useCallback(() => owner.materialize(), [owner]);
+  const subscribeComposerDraft = React.useCallback(
+    (listener) =>
+      owner.subscribe((event) => {
+        if (event.origin !== lease) listener(event);
+      }),
+    [lease, owner],
+  );
+  const captureComposerSubmission = React.useCallback(
+    (content) => owner.captureSubmission(lease, content),
+    [lease, owner],
+  );
+  const flushComposerDraft = React.useCallback(() => owner.flush(), [owner]);
+  const registerComposerContentReader = React.useCallback(
+    (reader) => owner.registerReader(lease, reader),
+    [lease, owner],
+  );
+  const replaceComposerDraft = React.useCallback(
+    (draft) =>
+      owner.updateConfig((current) => ({
+        ...draft,
+        lastPermissionGrantId: current.lastPermissionGrantId,
+        ompModelBaseline: current.ompModelBaseline,
+        ompModelEdited: true,
+        ompThoughtEdited: true,
+        updatedAt: Date.now(),
+      })),
+    [owner],
+  );
   return (
     <TabStoreProvider>
       <PlatformProvider platform={platform}>
@@ -96,28 +146,14 @@ function ComposerFixture() {
             listenAddToChatEvents={false}
             externalTextInsertRequest={state.externalTextInsertRequest}
             composerDraft={owner.draft}
-            updateComposerContent={(content) => {
-              owner.draft = {
-                ...owner.draft,
-                editorStateJson: undefined,
-                mention: undefined,
-                ...content,
-              };
-              owner.schedule();
-            }}
-            markComposerDraftDirty={owner.schedule}
-            flushComposerDraft={owner.flush}
-            registerComposerContentReader={(reader) => {
-              owner.contentReader = reader;
-              return () => {
-                owner.flush();
-                owner.contentReader = null;
-              };
-            }}
-            replaceComposerDraft={(draft) => {
-              owner.draft = { ...draft, updatedAt: 0 };
-              owner.schedule();
-            }}
+            updateComposerContent={updateComposerContent}
+            markComposerDraftDirty={markComposerDraftDirty}
+            readComposerDraft={readComposerDraft}
+            subscribeComposerDraft={subscribeComposerDraft}
+            captureComposerSubmission={captureComposerSubmission}
+            flushComposerDraft={flushComposerDraft}
+            registerComposerContentReader={registerComposerContentReader}
+            replaceComposerDraft={replaceComposerDraft}
             submissionReady
             createSubmissionFromComposer={() => ({
               mode: "build",
@@ -207,7 +243,12 @@ function View() {
         <DiffsWorkerPoolProvider>
           <TooltipProvider>
             {state.mode === "draft-hooks" ? (
-              <DraftHookFixture scope={state.hookScope} secondPane={state.secondPane} />
+              <DraftHookFixture
+                scope={state.hookScope}
+                secondPane={state.secondPane}
+                rightScope={state.rightHookScope}
+                migrationEvents={state.migrationEvents}
+              />
             ) : state.mode === "file-provider" ? (
               <FileProviderFixture />
             ) : state.mode === "composer" ? (

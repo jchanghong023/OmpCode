@@ -12,10 +12,21 @@ import assert from "node:assert/strict";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";
-import { zcodeWorkspacePresentationSchema } from "@zcode/shared";
+import {
+  zcodeWorkspacePresentationSchema,
+  zcodeProtocolResponseSchema,
+  zcodeProtocolErrorSchema,
+} from "@zcode/shared";
 import {
   conversationTopicWireFrameSchema,
   commandAckSchema,
+  PROTOCOL_V4_LIMITS,
+  v4AttachmentBeginParamsSchema,
+  v4AttachmentBeginResultSchema,
+  v4AttachmentChunkParamsSchema,
+  v4AttachmentChunkResultSchema,
+  v4AttachmentCommitResultSchema,
+  v4AttachmentReadResultSchema,
 } from "@zcode/shared/zcode-protocol-v4";
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -247,6 +258,7 @@ async function uploadFixture(
   sessionId: string,
   mime: string,
   bytes: Buffer,
+  chunkBytes: number = PROTOCOL_V4_LIMITS.attachmentChunkMaxBytes,
 ): Promise<{ ref: string; fileName: string; mime: string; bytes: number }> {
   const extension =
     mime === "application/pdf"
@@ -258,25 +270,271 @@ async function uploadFixture(
           : "png";
   const fileName = `${uploadId}.${extension}`;
   const common = { connectionId: "image-test", uploadId, sessionId };
-  const begun = (await harness.request("v4/attachment/begin", {
-    ...common,
-    fileName,
-    mime,
-    totalBytes: bytes.length,
-    totalChunks: 1,
-    checksum: `sha256:${createHash("sha256").update(bytes).digest("hex")}`,
-  })) as { result: { state: string } };
-  assert.equal(begun.result.state, "staging");
-  await harness.request("v4/attachment/chunk", {
-    ...common,
-    chunkIndex: 0,
-    dataBase64: bytes.toString("base64"),
-  });
-  const committed = (await harness.request("v4/attachment/commit", common)) as {
-    result: { ref: string };
-  };
-  return { ref: committed.result.ref, fileName, mime, bytes: bytes.length };
+  const begun = zcodeProtocolResponseSchema.parse(
+    await harness.request("v4/attachment/begin", {
+      ...common,
+      fileName,
+      mime,
+      totalBytes: bytes.length,
+      totalChunks: Math.ceil(bytes.length / chunkBytes),
+      checksum: `sha256:${createHash("sha256").update(bytes).digest("hex")}`,
+    }),
+  );
+  assert.equal(v4AttachmentBeginResultSchema.parse(begun.result).state, "staging");
+  for (let offset = 0; offset < bytes.length; offset += chunkBytes) {
+    const chunk = zcodeProtocolResponseSchema.parse(
+      await harness.request("v4/attachment/chunk", {
+        ...common,
+        chunkIndex: offset / chunkBytes,
+        dataBase64: bytes.subarray(offset, offset + chunkBytes).toString("base64"),
+      }),
+    );
+    v4AttachmentChunkResultSchema.parse(chunk.result);
+  }
+  const committed = zcodeProtocolResponseSchema.parse(
+    await harness.request("v4/attachment/commit", common),
+  );
+  const { ref } = v4AttachmentCommitResultSchema.parse(committed.result);
+  return { ref, fileName, mime, bytes: bytes.length };
 }
+
+test("F008：stdio 真实附件协议拒绝少字节、多字节、缺片及等长错摘要，不发布可读 ref", async () => {
+  const harness = await startAdapter();
+  try {
+    const checksum = (bytes: string) =>
+      `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
+    const cases = [
+      { uploadId: "short", totalBytes: 2, totalChunks: 1, checksum: checksum("ab"), chunks: ["a"] },
+      { uploadId: "long", totalBytes: 1, totalChunks: 1, checksum: checksum("a"), chunks: ["ab"] },
+      {
+        uploadId: "missing",
+        totalBytes: 2,
+        totalChunks: 2,
+        checksum: checksum("ab"),
+        chunks: ["a"],
+      },
+      {
+        uploadId: "wrong-hash",
+        totalBytes: 1,
+        totalChunks: 1,
+        checksum: checksum("b"),
+        chunks: ["a"],
+      },
+      {
+        uploadId: "wrong-empty",
+        totalBytes: 0,
+        totalChunks: 0,
+        checksum: checksum("a"),
+        chunks: [],
+      },
+    ];
+    for (const { chunks, ...declaration } of cases) {
+      const owner = {
+        connectionId: "integrity-test",
+        sessionId: "draft-integrity",
+        uploadId: declaration.uploadId,
+      };
+      const params = v4AttachmentBeginParamsSchema.parse({
+        ...owner,
+        ...declaration,
+        fileName: "input.png",
+        mime: "image/png",
+      });
+      const begun = zcodeProtocolResponseSchema.parse(
+        await harness.request("v4/attachment/begin", params),
+      );
+      assert.equal(v4AttachmentBeginResultSchema.parse(begun.result).state, "staging");
+      const ref = `omp-attachment://${params.uploadId}`;
+      const readParams = { sessionId: owner.sessionId, ref, offset: 0, limit: 100 };
+      const unreadable = zcodeProtocolErrorSchema.parse(
+        await harness.request("v4/attachment/read", readParams),
+      );
+      assert.equal(unreadable.error.code, -32004);
+      for (const [chunkIndex, chunk] of chunks.entries()) {
+        const accepted = zcodeProtocolResponseSchema.parse(
+          await harness.request(
+            "v4/attachment/chunk",
+            v4AttachmentChunkParamsSchema.parse({
+              ...owner,
+              chunkIndex,
+              dataBase64: Buffer.from(chunk).toString("base64"),
+            }),
+          ),
+        );
+        v4AttachmentChunkResultSchema.parse(accepted.result);
+      }
+      const committed = zcodeProtocolErrorSchema.parse(
+        await harness.request("v4/attachment/commit", owner),
+      );
+      assert.equal(committed.error.code, -32602);
+      const failedRead = zcodeProtocolErrorSchema.parse(
+        await harness.request("v4/attachment/read", readParams),
+      );
+      assert.equal(failedRead.error.code, -32004);
+      // 未发布的 ref 也不能经模型输入消费；createSession 应在创建轮次之前返回 rejected。
+      const attempted = zcodeProtocolResponseSchema.parse(
+        await harness.request("v4/command", {
+          commandId: `invalid-${params.uploadId}`,
+          clientId: "integrity-test",
+          sessionId: null,
+          type: "createSession",
+          issuedAt: Date.now(),
+          payload: {
+            workspaceId: "test-workspace",
+            firstInput: {
+              text: "image-report invalid",
+              attachments: [
+                { ref, fileName: "input.png", mime: "image/png", bytes: params.totalBytes },
+              ],
+            },
+          },
+        }),
+      );
+      const ack = commandAckSchema.parse(attempted.result);
+      assert.equal(ack.status, "rejected");
+      assert.equal(ack.result, undefined);
+      assert.match(ack.message ?? "", /attachment reference missing/u);
+      const aborted = zcodeProtocolResponseSchema.parse(
+        await harness.request("v4/attachment/abort", owner),
+      );
+      assert.deepEqual(aborted.result, {});
+      const retried = zcodeProtocolErrorSchema.parse(
+        await harness.request("v4/attachment/commit", owner),
+      );
+      assert.equal(retried.error.code, -32602);
+    }
+    assert.equal(harness.conversationFrames().length, 0);
+    for (const inconsistent of [
+      { totalBytes: 0, totalChunks: 1 },
+      { totalBytes: 1, totalChunks: 0 },
+    ]) {
+      const response = zcodeProtocolErrorSchema.parse(
+        await harness.request("v4/attachment/begin", {
+          connectionId: "integrity-test",
+          sessionId: "draft-integrity",
+          uploadId: "invalid-zero",
+          fileName: "empty.txt",
+          mime: "text/plain",
+          checksum: checksum(""),
+          ...inconsistent,
+        }),
+      );
+      assert.equal(response.error.code, -32602);
+    }
+    for (const invalidChecksum of [undefined, "sha256:not-a-hash"]) {
+      const response = zcodeProtocolErrorSchema.parse(
+        await harness.request("v4/attachment/begin", {
+          connectionId: "integrity-test",
+          sessionId: "draft-integrity",
+          uploadId: "invalid-checksum",
+          fileName: "input.png",
+          mime: "image/png",
+          totalBytes: 1,
+          totalChunks: 1,
+          checksum: invalidChecksum,
+        }),
+      );
+      assert.equal(response.error.code, -32602);
+    }
+  } finally {
+    await harness.close();
+  }
+});
+
+test("F008：stdio 多片/空附件原字节可回读，重复事务幂等且拒绝跨 owner", async () => {
+  const harness = await startAdapter();
+  try {
+    const bytes = Buffer.from([0, 255, 128, 1, 2]);
+    const attachment = await uploadFixture(
+      harness,
+      "integrity-multi",
+      "draft-integrity",
+      "image/png",
+      bytes,
+      2,
+    );
+    const owner = {
+      connectionId: "image-test",
+      uploadId: "integrity-multi",
+      sessionId: "draft-integrity",
+    };
+    const read = async (ref: string) => {
+      const response = zcodeProtocolResponseSchema.parse(
+        await harness.request("v4/attachment/read", {
+          sessionId: owner.sessionId,
+          ref,
+          offset: 0,
+          limit: 100,
+        }),
+      );
+      return v4AttachmentReadResultSchema.parse(response.result);
+    };
+    const result = await read(attachment.ref);
+    assert.deepEqual(Buffer.from(result.dataBase64, "base64"), bytes);
+    assert.equal(result.mediaType, "image/png");
+    assert.equal(result.totalBytes, bytes.length);
+    const duplicate = zcodeProtocolResponseSchema.parse(
+      await harness.request("v4/attachment/commit", owner),
+    );
+    assert.deepEqual(v4AttachmentCommitResultSchema.parse(duplicate.result), {
+      ref: attachment.ref,
+    });
+    const resent = zcodeProtocolResponseSchema.parse(
+      await harness.request("v4/attachment/chunk", {
+        ...owner,
+        chunkIndex: 0,
+        dataBase64: bytes.subarray(0, 2).toString("base64"),
+      }),
+    );
+    v4AttachmentChunkResultSchema.parse(resent.result);
+    const conflict = zcodeProtocolErrorSchema.parse(
+      await harness.request("v4/attachment/chunk", { ...owner, chunkIndex: 0, dataBase64: "AQI=" }),
+    );
+    assert.equal(conflict.error.code, -32602);
+    const changed = zcodeProtocolErrorSchema.parse(
+      await harness.request("v4/attachment/begin", {
+        ...owner,
+        fileName: "changed.png",
+        mime: "image/png",
+        totalBytes: bytes.length,
+        totalChunks: 3,
+        checksum: `sha256:${createHash("sha256").update(bytes).digest("hex")}`,
+      }),
+    );
+    assert.equal(changed.error.code, -32602);
+    for (const foreign of [
+      { ...owner, sessionId: "other-session" },
+      { ...owner, connectionId: "other-connection" },
+    ]) {
+      for (const method of ["v4/attachment/commit", "v4/attachment/abort"]) {
+        const response = zcodeProtocolErrorSchema.parse(await harness.request(method, foreign));
+        assert.equal(response.error.code, -32602);
+      }
+    }
+    assert.deepEqual(Buffer.from((await read(attachment.ref)).dataBase64, "base64"), bytes);
+    const empty = await uploadFixture(
+      harness,
+      "integrity-empty",
+      owner.sessionId,
+      "image/png",
+      Buffer.alloc(0),
+    );
+    assert.deepEqual(await read(empty.ref), {
+      dataBase64: "",
+      mediaType: "image/png",
+      totalBytes: 0,
+      nextOffset: null,
+    });
+    const duplicateEmpty = zcodeProtocolResponseSchema.parse(
+      await harness.request("v4/attachment/commit", { ...owner, uploadId: "integrity-empty" }),
+    );
+    assert.deepEqual(v4AttachmentCommitResultSchema.parse(duplicateEmpty.result), {
+      ref: empty.ref,
+    });
+  } finally {
+    await harness.close();
+  }
+});
 
 test("v4 图片和文本进入 omp，不能消费的 PDF 在提交前拒绝", async () => {
   const harness = await startAdapter();
@@ -288,6 +546,7 @@ test("v4 图片和文本进入 omp，不能消费的 PDF 在提交前拒绝", as
       "draft-image-test",
       "image/png",
       firstBytes,
+      2,
     );
     const created = (await harness.request("v4/command", {
       commandId: "create-with-image",
@@ -376,6 +635,7 @@ test("v4 图片和文本进入 omp，不能消费的 PDF 在提交前拒绝", as
       sessionId,
       "text/plain",
       Buffer.from("TEXT_ATTACHMENT_OK", "utf8"),
+      3,
     );
     const withText = (await harness.request("v4/command", {
       commandId: "send-with-text",

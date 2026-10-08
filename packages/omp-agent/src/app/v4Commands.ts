@@ -133,6 +133,14 @@ export class V4CommandService {
       case "createSession": {
         const payload =
           envelope.payload as import("@zcode/shared/zcode-protocol-v4").CommandPayloadMap["createSession"];
+        // workspace key 是身份边界，路径只用于运行目录；同路径的其他身份也不能放行。
+        // 必须先于附件读取和引擎创建拒绝，拒绝 ACK 仍走统一幂等表。
+        if (payload.workspaceId !== this.context.workspaceId) {
+          return this.ack(envelope, "rejected", {
+            reasonCode: "fault.command.workspaceMismatch",
+            message: "createSession workspaceId does not match the bound workspace",
+          });
+        }
         const input = payload.firstInput
           ? prepareOmpAttachmentInput(
               payload.firstInput.text,
@@ -146,7 +154,7 @@ export class V4CommandService {
             message: input.error,
           });
         const engine = await this.context.registry.createSession({
-          workspaceId: payload.workspaceId,
+          workspaceId: this.context.workspaceId,
           workspacePath: this.context.workspacePath,
         });
         if (payload.firstInput) {

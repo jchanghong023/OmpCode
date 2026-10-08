@@ -97,6 +97,95 @@ web: replayable ───── 快照 + 断档恢复 ───┘
 - 验收：超过 100 个会话仍可列出并按稳定 ID 恢复；超过 4000 条记录的历史能够回读较早消息；已加载和冷会话永久删除都删掉对应文件并更新索引；模拟文件删除失败时命令失败、文件和索引不被报告为已删除。
 - 验收：在 Windows 用户目录下的系统临时目录创建会话并执行子代理，关闭并重新启动桌面应用后，任务列表中的稳定 ID 能打开完整主会话及子代理记录。
 
+## 上游审查补充验收与所有者时序
+
+以下边界补充既有规则，不更改历史验收结论；审查 ID 用于逐项记录本次可观测证据，不表示已通过。
+
+- **F001 — 浏览器背压关闭与 pending 收口**：真实浏览器连接处于 OPEN 且发送积压超过既有 16 MiB 阈值时，客户端使用浏览器允许的关闭码（1000 或 3000–4999）关闭，不同步抛出 `InvalidAccessError`；关联发送失败、连接 close 与所有未完成 RPC 的拒绝均可观察，不能遗留 pending。Web 页面显示中断并沿既有入口重连、重新订阅，恢复后可继续正常请求；积压未超限时仍正常发送。该浏览器关闭/恢复边界属于 `web-remote-replayable`，不得借此要求 `desktop-continuous` 增加 WebSocket 重放语义。
+- **F027 — 强制快照重连预算**：UI 投影 owner 对一次连续恢复失败最多发起两次自动强制快照重连。订阅 ACK、分片开始、部分帧或尚未应用的 initial/recovery 都不重置预算；只有完整 base 通过组装和序号校验、成功应用到当前身份/订阅的投影后才重置。验收连续三轮“订阅 ACK 成功但 base 组装失败或等待超时”：首次失败后重连 1、再次失败后重连 2、第三次失败进入可见 error 且不再自动重连。另验收第二次重连取得完整 base，后续 delta 从该水位连续前进，之后新的恢复故障可重新使用两次预算；旧订阅迟到 base 不得重置当前预算。`desktop-continuous` 保持连续交付，`web-remote-replayable` 保持水位增量/缺口快照，不混用两条链路的恢复方式。
+
+```mermaid
+sequenceDiagram
+  participant Browser as Web 浏览器连接
+  participant RPC as 协议客户端（pending owner）
+  participant UI as UI 投影 owner
+  participant Topic as 当前会话 topic owner
+  Browser->>Browser: OPEN 且积压超限，以合法关闭码关闭
+  Browser-->>RPC: 发送失败 / close
+  RPC-->>UI: 拒绝所有 pending，显示连接中断
+  UI->>Topic: 重连并订阅（web-remote-replayable）
+  Topic-->>UI: 订阅 ACK（不重置预算）
+  loop 连续 base 失败，最多两次强制快照重连
+    Topic-->>UI: base 组装失败 / 等待超时
+    UI->>UI: 递增恢复预算
+    UI->>Topic: 强制快照重连
+    Topic-->>UI: 订阅 ACK（仍不重置）
+  end
+  alt 两次重连后仍无完整 base
+    UI->>UI: 可见 error，不再自动重连
+  else 当前订阅完整 base 校验并应用成功
+    UI->>UI: 设置已应用水位，重置预算
+    Topic-->>UI: 从该水位连续交付后续 delta
+  end
+  Note over UI,Topic: desktop-continuous 仍由同一 owner 连续交付，不引入 Web 重放
+```
+
+- **F010 — success ACK 不是消费事实**：运行中 `steer`/`follow_up` 在输入门等待时被 abort 取消，RPC 外层仍可能返回 success 且不携带取消结果；因此 ACK 不能登记为已见/已消费。验收成功 ACK 后的空队列快照不能把该输入标为成功完成；独立 command ID 对应轮以取消/失败收口，不留工作中条目，也不显示假成功。正向对照为未取消输入按核心真实队列快照、消费及终态事实收口。
+- **F018 — 同文命令一对一匹配**：两条同文本、不同 command ID 的排队输入先后建立独立轮，第二条 RPC 尚未接纳时，核心单元素队列快照只能匹配第一条，不能把两条一起记为已消费。核心只有文本快照时按顺序和条目数量一对一匹配，单个事实不得复用；消费一项只移出一项并关联其输出。验收停止边界的空快照先于第二条 ACK 到达时，未接纳的第二条不能假成功；两条均被真实接纳并逐项消费时各自正确收口。重复投递同一 command ID 仍幂等，迟到 ACK 不改写已终结轮。
+
+```mermaid
+sequenceDiagram
+  participant UI as Renderer
+  participant Projection as ConversationProjection（轮次 owner）
+  participant Core as OMP（输入门与队列 owner）
+  UI->>Projection: 同文输入 A、B（不同 command ID）
+  Projection->>Core: A 的 follow_up / steer
+  Projection->>Core: B 的 follow_up / steer（仍等待接纳）
+  Core-->>Projection: A 的接纳 ACK / 单元素文本队列事实
+  Projection->>Projection: 只匹配 A，B 保持未接纳
+  alt B 等待期间 abort 取消输入门
+    Core-->>Projection: B 的 cancelled ACK（外层可为 success）
+    Core-->>Projection: 空队列快照 / 终态
+    Projection->>Projection: B 取消收口，不制造消费或成功事实
+  else B 真实接纳并顺序消费
+    Core-->>Projection: B 的接纳事实；逐项用户 message_start
+    Projection->>Projection: 一项事实只匹配一轮，输出归属对应 command ID
+    Core-->>Projection: 真实终态 / get_state 对账
+  end
+  Projection-->>UI: desktop-continuous 连续帧 / web-remote-replayable 同水位快照
+```
+
+- **F013 — 冷扫描失败不等于删除**：已有冷会话投影后触发重扫，模拟目录或派生历史的非 ENOENT 读取失败；失败可观察，保留上次成功的会话摘要及其身份/索引，不广播 `session.removed`，仍存在的文件不被清理。扫描失败时返回空数组或局部结果不得冒充完整成功扫描。读取恢复后，后续正常重扫应更新标题等事实；只有成功的权威扫描确认缺失，或既有永久删除流程确认文件删除成功，才发布对应移除事实。已加载与冷会话都不能因同一次失败误报删除。
+- **F016 — createSession 归属与运行目录一致**：公开 RPC 的 `payload.workspaceId` 必须与当前 Agent 绑定的 workspace key 一致，运行目录仍为该绑定的 workspacePath；本地未配置显式身份时沿用绑定路径 fallback，远程或已配置身份时使用绑定 key，不能把另一 workspace 的 key 当作同一路径的别名。验收绑定 W1 却提交 schema 合法 W2 的创建请求，包含有/无 `firstInput` 两种：明确拒绝且不创建引擎、进程、会话文件或 W2 索引行，不发送首问；匹配的本地 fallback、显式本地 key 和远程 key 均可创建，首问进程 cwd、会话索引及订阅归属指向同一绑定工作区。
+
+```mermaid
+sequenceDiagram
+  participant Client as RPC 调用方
+  participant Command as V4CommandService（绑定 workspace）
+  participant Registry as SessionRegistry（会话身份 owner）
+  participant Index as SessionIndexTopics（索引投影 owner）
+  participant Store as OMP 历史事实源
+  Client->>Command: createSession(workspaceId)
+  alt workspaceId 与绑定 key 不匹配
+    Command-->>Client: 拒绝；不创建、不派发首问
+  else 本地 fallback / 显式 key / 远程 key 匹配
+    Command->>Registry: 用绑定身份与运行目录创建会话
+    Registry-->>Index: 同一 workspace 的会话事实
+    Command-->>Client: 创建结果
+  end
+  Index->>Store: 重扫冷会话
+  alt 非 ENOENT 读取失败
+    Store-->>Index: 扫描失败
+    Index->>Index: 保留上一成功投影，不发布 removed
+  else 完整扫描成功
+    Store-->>Index: 权威历史事实
+    Index-->>Client: 同一身份的更新 / 经确认的移除
+  end
+  Note over Index,Client: Desktop 连续索引与 Web 可重放索引读取同一投影
+```
+
 ## 实现与验证状态
 
 需求从原有权威 FORK 与对应 spec 迁入，未因当前实现降低要求。既有实现及历史验证不等于本次验收；统一证据边界见 [需求索引](README.md#实现与验证状态)。
+
+- 2026-10-09 核心体验续作：F001 的真实 Chromium 积压/关闭/待处理 RPC 拒绝/重新连接读取通过；F010/F018 的取消 ACK 与独立同文消费身份、F013 的冷扫描失败保留、F016 的创建身份及 F027 的 ACK/有效内容恢复预算边界回归通过。OMP 全集 374/374、0 跳过，UI/Host 定向组合通过；真实桌面完成首次 UUID 迁移、旧 scope 草稿、正常退出与 R7 cold。协议模拟不冒充真实网络断线或每种中断时序的产品 GUI；完整门禁另行执行，证据见 [核心体验续作验收](../test-reports/performance-hot-paths-2026-10-09.md#核心体验续作验收)。

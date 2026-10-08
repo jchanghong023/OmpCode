@@ -261,7 +261,7 @@ export function useDraftConfigControl(params: {
     (reader: ComposerContentReader) => currentState.registerReader(lease, reader),
     [currentState, lease],
   );
-  const readComposerDraft = useCallback(() => currentState.draft, [currentState]);
+  const readComposerDraft = useCallback(() => currentState.materialize(), [currentState]);
   const subscribeComposerDraft = useCallback(
     (listener: (event: ComposerDraftEvent) => void) =>
       currentState.subscribe((event) => {

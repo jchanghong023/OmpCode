@@ -14,6 +14,7 @@ import {
   ompSessionIdOfFilePath,
 } from "../domain/ids.js";
 import { buildEngineSessionSummary } from "./engineSessionSummary.js";
+import { reconcileColdSessionIndex } from "./coldSessionIndexReconcile.js";
 import { ConversationEngine } from "./conversationEngine.js";
 import { deriveTitle } from "../domain/titleText.js";
 import { ProtocolError } from "./errors.js";
@@ -171,40 +172,34 @@ export class SessionIndexTopics {
   async onProjectSessionsChanged(): Promise<void> {
     const workspacePath = this.host.primaryWorkspacePath();
     if (!workspacePath) return;
+    let hasSubscribers = false;
+    for (const index of this.indexes.values()) {
+      if (index.subscribers.size > 0) {
+        hasSubscribers = true;
+        break;
+      }
+    }
+    if (!hasSubscribers) return;
+    // 扫描拒绝不是“历史为空”的事实；完整成功前不修改任何摘要，也不发布删除。
+    // 错误交给现有调用方报告，后续重扫仍可基于上次成功的索引对账。
+    const cold = await this.host.store.listSessions(workspacePath);
+    const coldIds = new Set(cold.map((session) => session.sessionId));
     for (const [workspaceId, index] of this.indexes) {
       if (index.subscribers.size === 0) continue;
-      const cold = await this.host.store.listSessions(workspacePath).catch(() => []);
-      const coldIds = new Set(cold.map((session) => session.sessionId));
-      for (const session of cold) {
-        if (index.summaries.has(session.sessionId) || this.host.getEngine(session.sessionId))
-          continue;
-        index.summaries.set(session.sessionId, {
-          sessionId: session.sessionId,
-          workspaceId,
-          title: session.title ?? deriveTitle(session.firstUserText ?? ""),
-          titleSource: session.title ? "custom" : "generated",
-          phase: "completedSuccess",
-          sessionEnded: true,
-          hasBackgroundWork: false,
-          lastActivityAt: session.updatedAt,
-          createdAt: session.createdAt,
-        });
-        this.emitIndexDelta(workspaceId, {
-          op: "session.upserted",
-          session: index.summaries.get(session.sessionId)!,
-        });
-      }
-      for (const sessionId of index.summaries.keys()) {
-        if (
-          !coldIds.has(sessionId) &&
-          !this.host.getEngine(sessionId) &&
-          !sessionId.startsWith("omp-session-")
-        ) {
-          if (index.summaries.delete(sessionId)) {
-            this.emitIndexDelta(workspaceId, { op: "session.removed", sessionId });
-          }
-        }
-      }
+      reconcileColdSessionIndex({
+        workspaceId,
+        cold,
+        coldIds,
+        summaries: index.summaries,
+        hasLoadedSession: (sessionId) => Boolean(this.host.getEngine(sessionId)),
+        upsert: (summary) => {
+          index.summaries.set(summary.sessionId, summary);
+          this.emitIndexDelta(workspaceId, { op: "session.upserted", session: summary });
+        },
+        remove: (sessionId) => {
+          this.removeSession(workspaceId, sessionId);
+        },
+      });
     }
   }
 

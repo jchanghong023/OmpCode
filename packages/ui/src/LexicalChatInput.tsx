@@ -44,6 +44,8 @@ import {
   KEY_ENTER_COMMAND,
   type EditorState,
   type LexicalEditor,
+  $addUpdateTag,
+  SKIP_DOM_SELECTION_TAG,
 } from "lexical";
 import { SlashCommandPlugin } from "./SlashCommandPlugin.js";
 import type { AppSlashCommand } from "./slashCommandHelpers.js";
@@ -193,9 +195,17 @@ function getEditorMarkdown(editorState: EditorState): string {
   return text;
 }
 
+function preserveOtherPaneSelection(editor: LexicalEditor, tag: string) {
+  if (tag !== COMPOSER_DRAFT_RESTORE_UPDATE_TAG) return;
+  const root = editor.getRootElement();
+  // 共享草稿回填会 selectEnd；非当前输入区必须跳过 DOM 选区同步，不能把键盘焦点抢到接收 pane。
+  if (root?.ownerDocument.activeElement !== root) $addUpdateTag(SKIP_DOM_SELECTION_TAG);
+}
+
 function replaceEditorText(editor: LexicalEditor, text: string, tag = PROGRAMMATIC_UPDATE_TAG) {
   editor.update(
     () => {
+      preserveOtherPaneSelection(editor, tag);
       const root = $getRoot();
       root.clear();
 
@@ -262,6 +272,7 @@ function replaceEditorWithMention(
 ) {
   editor.update(
     () => {
+      preserveOtherPaneSelection(editor, tag);
       const root = $getRoot();
       root.clear();
       const paragraph = $createParagraphNode();
@@ -968,7 +979,8 @@ function E2ELexicalInputBridgePlugin({ inputTestId }: { inputTestId?: string }) 
       if (rootElement?.getAttribute("data-testid") === inputTestId) {
         return rootElement;
       }
-      return document.querySelector<HTMLElement>(`[data-testid="${inputTestId}"]`);
+      // 双 pane 卸载时 root 为 null；全局查找会把来源 bridge 挂到另一 pane 并在 cleanup 清掉。
+      return rootElement?.querySelector<HTMLElement>(`[data-testid="${inputTestId}"]`) ?? null;
     };
 
     let retryTimer: number | null = null;

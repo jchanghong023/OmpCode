@@ -1200,7 +1200,9 @@ export const zcodeTaskTargetStatusSchema = zcodeTaskGoalStatusSchema;
 export const zcodeTaskTargetSchema = zcodeTaskGoalSchema;
 export const zcodeTaskTargetChangedPatchSchema = zcodeTaskGoalChangedPatchSchema;
 
-export const zcodeTaskMetaSchema = z
+// Legacy 文件允许省略 mode；先校验共同元信息，再用 safeExtend 收紧现代任务契约，
+// 避免在带迁移 refinement 的对象上放宽字段导致模块加载失败或绕过关联校验。
+export const zcodeLegacyTaskMetaSchema = z
   .object({
     taskId: nonEmptyStringSchema,
     traceId: nonEmptyStringSchema,
@@ -1211,7 +1213,7 @@ export const zcodeTaskMetaSchema = z
     workspacePurpose: z.enum(["project", "conversation"]).optional(),
     createdAt: z.number().int().nonnegative(),
     updatedAt: z.number().int().nonnegative(),
-    mode: zcodeTaskModeSchema,
+    mode: zcodeTaskModeSchema.optional(),
     model: z.string().optional(),
     thoughtLevel: nonEmptyStringSchema.optional(),
     runtimeEpoch: z.number().int().nonnegative().optional(),
@@ -1260,6 +1262,10 @@ export const zcodeTaskMetaSchema = z
     message: "Migration target must match metadata task ID",
     path: ["taskIdMigration"],
   });
+
+export const zcodeTaskMetaSchema = zcodeLegacyTaskMetaSchema.safeExtend({
+  mode: zcodeTaskModeSchema,
+});
 
 export const zcodeTaskIndexEntrySchema = z.object({
   workspaceHash: nonEmptyStringSchema,

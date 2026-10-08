@@ -13,7 +13,11 @@ assert.ok(
 );
 const meta = JSON.parse(await readFile(resolve(process.env.OMP_NATIVE_GUI_META), "utf8"));
 assert.equal(meta.state, "ready", "The isolated launcher must be running");
-assert.equal(meta.cdpUrl, "http://127.0.0.1:9257", "Only this task's dedicated CDP is accepted");
+assert.equal(
+  meta.cdpUrl,
+  process.env.OMP_E2E_CDP_URL ?? "http://127.0.0.1:9257",
+  "Only this task's dedicated CDP is accepted",
+);
 assert.equal(meta.workspace, join(meta.root, "workspace"));
 assert.equal(meta.configRoot, join(meta.root, "omp"));
 assert.ok(meta.applicationName.startsWith("OmpCode Native E2E "));

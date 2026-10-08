@@ -1,9 +1,9 @@
-import { createComposerDraftOwner, type ComposerDraftOwner } from "./composerDraftOwner.js";
 import {
   hasV4ComposerDraftContent,
   migrateV4ComposerDraft,
   readV4ComposerDraft,
 } from "./composerDraftStore.js";
+import { createComposerDraftOwner, type ComposerDraftOwner } from "./composerDraftOwner.js";
 
 const owners = new Map<string, ComposerDraftOwner>();
 const aliases = new Map<string, string>();
@@ -72,18 +72,40 @@ export function migrateSharedComposerDraft(params: {
   const targetDraft = target?.materialize();
   const storedTarget =
     targetDraft ?? readV4ComposerDraft(params.workspacePath, params.workspaceIdentity, toScope);
-  const preferTarget = Boolean(
+  const hasExplicitConfigIntent =
+    targetDraft?.ompModelEdited === true ||
+    targetDraft?.ompThoughtEdited === true ||
+    storedTarget?.ompModelEdited === true ||
+    storedTarget?.ompThoughtEdited === true;
+  const targetHasContentOrPending = Boolean(
     target?.hasUserEdits ||
     target?.pendingCount ||
     (storedTarget && hasV4ComposerDraftContent(storedTarget)),
   );
+  // 正文/富内容或 pending 属于目标完整草稿冲突；只有配置意图时与来源内容合并。
+  const preferTarget = targetHasContentOrPending;
+  const targetConfigDraft = targetDraft ?? storedTarget;
   const sourceDraft = source?.migrationDraft(preferTarget);
+  let migrationSourceDraft = sourceDraft;
+  if (!preferTarget && hasExplicitConfigIntent && targetConfigDraft) {
+    const sourceToMerge =
+      sourceDraft ?? readV4ComposerDraft(params.workspacePath, params.workspaceIdentity, fromScope);
+    if (sourceToMerge) {
+      migrationSourceDraft = {
+        ...sourceToMerge,
+        modelSelection: targetConfigDraft.modelSelection ?? sourceToMerge.modelSelection,
+        ompModelBaseline: targetConfigDraft.ompModelBaseline ?? sourceToMerge.ompModelBaseline,
+        ompModelEdited: targetConfigDraft.ompModelEdited,
+        ompThoughtEdited: targetConfigDraft.ompThoughtEdited,
+      };
+    }
+  }
   const result = migrateV4ComposerDraft({
     workspacePath: params.workspacePath,
     workspaceIdentity: params.workspaceIdentity,
     fromScopeId: fromScope,
     toScopeId: toScope,
-    ...(sourceDraft ? { sourceDraft } : {}),
+    ...(migrationSourceDraft ? { sourceDraft: migrationSourceDraft } : {}),
     ...(targetDraft ? { targetDraft } : {}),
     preferTarget,
     retainConflictingSource: true,
@@ -95,7 +117,7 @@ export function migrateSharedComposerDraft(params: {
   }
   if (!result.moved) return true;
   if (result.usedTarget && source) source.preserveMigrationBackup();
-  const winner = result.usedTarget ? target : source;
+  const winner = result.usedTarget ? target : (source ?? target);
   const loser = result.usedTarget ? source : target;
   if (winner && result.draft) {
     winner.retarget(toScope, result.draft);

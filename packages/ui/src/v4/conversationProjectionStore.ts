@@ -288,7 +288,8 @@ export class ConversationProjectionStore {
   private observedModelTransitionEventId: string | null = null;
   // 订阅代际：并发 connect 只认最新一代，过期结果立即退订防服务端悬挂。
   private generation = 0;
-  /** 恢复历史会话首次订阅的偶发升级失败自动重连预算（成功 live 即清零）。 */
+  private activeSubscriptionGeneration = 0;
+  /** F027：连续恢复失败预算；ACK/live 不证明 base 已应用，仅完整一致基线才清零。 */
   private recoveryAutoRetryCount = 0;
   // 首次订阅尚未拿到 ACK 时，runtime available 只是当前启动流程的正常完成信号；
   // 记录在途数量，避免生命周期通知再次启动 connect，制造同 topic 的订阅替换竞态。
@@ -298,6 +299,7 @@ export class ConversationProjectionStore {
    * 因为 notification 可在 ACK Promise resolve 后异步到达。
    */
   private awaitingInitial: { subscriptionId: string; mode: "snapshot" | "resume" } | null = null;
+  private initialFrameDeadline: ReturnType<typeof setTimeout> | null = null;
   /** 当前 subscription 是否已由旧 applied base 或本代 logical frame 证明水位有效。 */
   private subscriptionHasAppliedBase = false;
   private recovery: {
@@ -402,13 +404,13 @@ export class ConversationProjectionStore {
   async connect(
     options: {
       forceSnapshot?: boolean;
-      initialOverflowRetry?: boolean;
       rendererPrepareStartedAt?: number;
     } = {},
   ): Promise<void> {
     if (this.closed) return;
     const generation = ++this.generation;
     this.discardRecovery();
+    this.clearInitialFrameDeadline();
     const snapshot = options.forceSnapshot ? null : this.state.snapshot;
     const connectStartedAt = options.rendererPrepareStartedAt ?? monotonicNow();
     const subscribeStartedAt = monotonicNow();
@@ -451,8 +453,7 @@ export class ConversationProjectionStore {
       // 的在途 resync 注定被 notOwned 拒绝。换代成功即丢弃旧 recovery——新订阅的 initial
       // 会原子替换整个投影，旧恢复流已无意义；否则其迟到失败会把 live 的新订阅打成 error。
       this.discardRecovery();
-      this.runtimeRecycleRetryAttempt = 0;
-      this.recoveryAutoRetryCount = 0;
+      this.activeSubscriptionGeneration = generation;
       this.initialSubscribeAckAt = monotonicNow();
       this.setState({
         status: "live",
@@ -469,6 +470,13 @@ export class ConversationProjectionStore {
         subscriptionId: result.ack.subscriptionId,
         mode: result.ack.mode,
       };
+      // ACK 之后完全没有 initial notification 也必须收敛；分片开始并不延长此预算。
+      this.initialFrameDeadline = setTimeout(() => {
+        this.initialFrameDeadline = null;
+        if (this.closed || generation !== this.generation || !this.awaitingInitial) return;
+        this.awaitingInitial = null;
+        this.requestRecovery();
+      }, PROTOCOL_V4_LIMITS.logicalFrameAssemblyTimeoutMs);
       this.transport.activate(result.ack.subscriptionId);
       logger.lifecycle.info("v4 conversation store connect completed", {
         durationMs: roundedDuration(subscribeStartedAt, monotonicNow()),
@@ -486,13 +494,10 @@ export class ConversationProjectionStore {
       const message = error instanceof Error ? error.message : String(error);
       this.awaitingInitial = null;
       this.subscriptionHasAppliedBase = false;
-      if (
-        message.includes("fault.subscription.initialFrameStagingOverflow") &&
-        !options.initialOverflowRetry
-      ) {
-        // ACK 前 physical batch 已残缺，active same-sub 尚不存在；只能 fresh
-        // subscribe 强制 snapshot。最多自动一次，避免异常 peer 造成重试风暴。
-        await this.connect({ forceSnapshot: true, initialOverflowRetry: true });
+      if (message.includes("fault.subscription.initialFrameStagingOverflow")) {
+        // ACK 前 physical batch 已残缺，尚无可恢复的 same-sub；与 base 失败共用
+        // 两次强制快照预算，不能另开一份额度绕过 F027 的连续失败上限。
+        this.retryOrFailRecovery(message, false);
         return;
       }
       if (this.scheduleRuntimeRecycleRetry(error, generation)) {
@@ -522,6 +527,23 @@ export class ConversationProjectionStore {
     } finally {
       this.connectInFlight -= 1;
     }
+  }
+
+  private clearInitialFrameDeadline(): void {
+    if (this.initialFrameDeadline === null) return;
+    clearTimeout(this.initialFrameDeadline);
+    this.initialFrameDeadline = null;
+  }
+
+  private markAppliedBaseline(): void {
+    // 完整 snapshot 或衔接的 resume 已成为当前投影事实，才开启下一次恢复周期。
+    this.recoveryAutoRetryCount = 0;
+    this.clearInitialFrameDeadline();
+    this.awaitingInitial = null;
+    // runtime 退避独立于强制快照预算；available/ACK 也可能来自短命新进程，
+    // 只有当前代真正交付可用基线才证明连续回收已恢复。
+    this.runtimeRecycleRetryAttempt = 0;
+    this.clearRuntimeRecycleRetry();
   }
 
   private clearRuntimeRecycleRetry(): void {
@@ -565,13 +587,14 @@ export class ConversationProjectionStore {
     if (this.closed) return;
     this.clearRuntimeRecycleRetry();
     this.discardRecovery();
+    this.clearInitialFrameDeadline();
     this.awaitingInitial = null;
     this.subscriptionHasAppliedBase = false;
     this.generation += 1;
     // 旧 subscriptionId 属于已死 runtime，不得再 unsubscribe（host 侧 owner 已失效）。
     this.setState({ status: "connecting", subscriptionId: null });
     // 不能只 dormant 等 available：agent 懒启动，dispose 后无人拉起时该信号永不到达，
-    // 面板会永久转圈。退避重连自身会拉起 runtime；available 先到则复位计数并即时重连。
+    // 面板会永久转圈。退避重连自身会拉起 runtime；available 先到则即时重连，但不复位预算。
     if (this.scheduleRuntimeRecycleReconnect(this.generation)) return;
     // 退避额度耗尽（runtime 反复回收）：必须落 error 暴露「重新连接」入口，
     // 否则 connecting 无 timer 就是永久转圈，连手动重试都没有。
@@ -580,9 +603,8 @@ export class ConversationProjectionStore {
 
   /** 新 runtime 就绪：与 onRuntimeRestart 同义，携原水位重订阅。 */
   private handleRuntimeAvailable(): void {
-    if (this.closed) return;
+    if (this.closed || this.state.status === "error") return;
     this.clearRuntimeRecycleRetry();
-    this.runtimeRecycleRetryAttempt = 0;
     if (this.connectInFlight > 0) {
       // 冷启动 spawn 会在首次 subscribe ACK
       // 返回前广播 available。若这里立即再 connect，服务端会按同一 connection/topic
@@ -610,19 +632,25 @@ export class ConversationProjectionStore {
     frame: ConversationTopicFrame,
     delivery?: { deliveryKind: TopicFrameDeliveryKind },
   ): void {
-    if (this.closed) return;
-    // 代际防护：旧订阅的迟到帧直接丢弃。
-    if (frame.subscriptionId !== this.state.subscriptionId) return;
+    if (this.closed || this.state.status === "error") return;
+    // 新 connect 已换代但 ACK 尚未到达时，旧 subscriptionId 仍在展示状态中；
+    // 这些迟到成功帧不能应用或重置当前恢复预算。
+    if (
+      frame.subscriptionId !== this.state.subscriptionId ||
+      this.activeSubscriptionGeneration !== this.generation
+    )
+      return;
     const awaitingInitial =
       this.awaitingInitial?.subscriptionId === frame.subscriptionId ? this.awaitingInitial : null;
     const deliveryKind = delivery?.deliveryKind ?? "online";
     const frameReceivedAt = monotonicNow();
-    // RPC 时序无法证明帧用途。只有 publisher 标记的 initial 才消费
-    // awaitingInitial；recovery 必须优先清除此状态，避免 recovery gap 被误判为
-    // original subscribe gap 而换新 subId。迟到 online duplicate 不得消费任何闸门。
+    // RPC 时序无法证明帧用途。initial 只有完整一致基线才消费 awaitingInitial；
+    // recovery 接管等待状态，避免恢复 gap 被误判为 fresh subscribe gap。
+    // 迟到 initial/online duplicate 既不复位预算，也不撤销仍未完成的 initial deadline。
     const initial = deliveryKind === "initial" ? awaitingInitial : null;
-    if (initial || (deliveryKind === "recovery" && awaitingInitial)) {
+    if (deliveryKind === "recovery" && awaitingInitial) {
       this.awaitingInitial = null;
+      this.clearInitialFrameDeadline();
     }
     if (deliveryKind === "online" && this.recovery && frame.payload.kind === "snapshot") {
       // online overflow snapshot 本身是完整权威状态，可建立 applied base；但它不冒充
@@ -662,6 +690,17 @@ export class ConversationProjectionStore {
     },
   ): void {
     if (frame.payload.kind === "snapshot") {
+      if (frame.fromSeq !== 0 || frame.toSeq !== frame.payload.snapshot.seq) {
+        this.requestRecovery(context.recovery);
+        return;
+      }
+      const current = this.state.snapshot;
+      if (
+        this.subscriptionHasAppliedBase &&
+        current?.logEpoch === frame.payload.snapshot.logEpoch &&
+        frame.toSeq < current.seq
+      )
+        return;
       const hadAppliedBase = this.subscriptionHasAppliedBase;
       logSubagentProjectionTransition(
         this.topic,
@@ -677,6 +716,7 @@ export class ConversationProjectionStore {
         turnNavigatorDirectoryRevision: this.state.turnNavigatorDirectoryRevision + 1,
       });
       this.subscriptionHasAppliedBase = true;
+      this.markAppliedBaseline();
       this.reconcileOptimistic(frame.payload.snapshot);
       this.reconcileAcceptedInputProjection(frame.payload.snapshot);
       // initial 丢失时，publisher 允许完整 online snapshot 建立首个
@@ -704,10 +744,18 @@ export class ConversationProjectionStore {
       return;
     }
     const current = this.state.snapshot;
-    // 规则 2a：迟到/重复 logical frame 永远静默丢弃。若它是 ACK 后的 aligned
-    // recovery `(N,N]`，则只收口 flight，不重复 apply。
+    // 仅当前已应用水位的空 resume 是一致基线；更早/重复的成功帧不是恢复事实。
     if (current && frame.toSeq <= current.seq) {
-      if (context.recovery) this.markRecoveryFrameSeen();
+      if (
+        this.subscriptionHasAppliedBase &&
+        frame.fromSeq === current.seq &&
+        frame.toSeq === current.seq &&
+        frame.payload.deltas.length === 0 &&
+        (context.recovery || context.subscribeMode === "resume")
+      ) {
+        this.markAppliedBaseline();
+        if (context.recovery) this.markRecoveryFrameSeen();
+      }
       return;
     }
     if (!current || frame.fromSeq !== current.seq) {
@@ -720,7 +768,7 @@ export class ConversationProjectionStore {
       if (context.subscribeMode !== null) {
         // fresh subscribe 的 resume initial 仍断档，换代订阅强制 snapshot；active
         // subscription 的 online/recovery gap 则保持 same-sub。
-        void this.connect({ forceSnapshot: true });
+        this.retryOrFailRecovery("fault.subscription.recoveryFailed", false);
       } else {
         this.requestRecovery(context.recovery);
       }
@@ -758,6 +806,7 @@ export class ConversationProjectionStore {
         : {}),
     });
     this.subscriptionHasAppliedBase = true;
+    if (context.recovery || context.subscribeMode === "resume") this.markAppliedBaseline();
     this.reconcileOptimistic(next);
     this.reconcileAcceptedInputProjection(next);
     this.observeModelTransition(next, context.online);
@@ -782,12 +831,19 @@ export class ConversationProjectionStore {
     deliveryKind?: TopicFrameDeliveryKind,
     reasonCode?: string,
   ): void {
-    if (this.closed || subscriptionId !== this.state.subscriptionId) return;
+    if (
+      this.closed ||
+      this.state.status === "error" ||
+      subscriptionId !== this.state.subscriptionId ||
+      this.activeSubscriptionGeneration !== this.generation
+    )
+      return;
     if (
       this.awaitingInitial?.subscriptionId === subscriptionId &&
       (deliveryKind === "initial" || deliveryKind === "recovery" || deliveryKind === undefined)
     ) {
       this.awaitingInitial = null;
+      this.clearInitialFrameDeadline();
     }
     // 内容确定性失败不进瞬态阶梯（04-sync 封闭规则 11）：resume 只会把同一批 delta 再投一遍，
     // 必然再被拒；deliveryKind 也不改变结论——本端读不懂这份内容。唯一可能产出不同字节的是
@@ -808,7 +864,9 @@ export class ConversationProjectionStore {
   }
 
   private requestRecovery(recoveryEvent = false, options: { contentFault?: boolean } = {}): void {
-    if (this.closed) return;
+    if (this.closed || this.state.status === "error") return;
+    this.clearInitialFrameDeadline();
+    this.awaitingInitial = null;
     const subscriptionId = this.state.subscriptionId;
     if (!subscriptionId) {
       void this.connect({ forceSnapshot: true });
@@ -965,6 +1023,11 @@ export class ConversationProjectionStore {
     const code = contentFault ? SUBSCRIPTION_CONTENT_REJECTED : reasonCode;
     this.discardRecovery();
     logger.warn(`[v4-store] ${this.topic} recovery fail-closed: ${code}`);
+    this.retryOrFailRecovery(code, contentFault);
+  }
+
+  private retryOrFailRecovery(code: string, contentFault: boolean): void {
+    this.clearInitialFrameDeadline();
     // omp 换核（FORK.md）：恢复历史会话的首次订阅存在偶发恢复升级失败
     //（fault.subscription.recoveryFailed，用户手点「重新连接」必好）。非内容失败时
     // 自动做至多两次强制快照重连，等效手点重连；内容确定性失败仍 fail-closed。
@@ -988,6 +1051,7 @@ export class ConversationProjectionStore {
     // 直接 fresh subscribe，保留旧 snapshot 直到新 snapshot 原子替换。
     this.generation += 1;
     this.discardRecovery();
+    this.clearInitialFrameDeadline();
     this.awaitingInitial = null;
     this.subscriptionHasAppliedBase = false;
     this.setState({ status: "connecting", subscriptionId: null });
@@ -1372,6 +1436,7 @@ export class ConversationProjectionStore {
     this.acceptedInputProjectionTimers.clear();
     this.modelTransitionListeners.clear();
     this.discardRecovery();
+    this.clearInitialFrameDeadline();
     this.awaitingInitial = null;
     this.subscriptionHasAppliedBase = false;
     this.generation++;

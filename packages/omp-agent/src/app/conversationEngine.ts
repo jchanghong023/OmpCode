@@ -9,7 +9,7 @@ import { ConversationTopicPublisher, type SubscribeOptions } from "./topicPublis
 import { OmpInteractionProxy } from "./ompInteractionProxy.js";
 import { applyEngineAutoCompaction, applyEngineCompaction, applyEngineSetModel, applyEngineThoughtLevel, projectEngineContextWindow, readOmpSkillCommands, startEngineProcess, createEngineEventHandler } from "./ompEngineProcess.js";
 import { PromptQueueReconciler } from "./promptQueueReconciler.js";
-import { registerQueueDispatchAckSink, type SlashCommandResolver } from "./ompPromptDispatch.js";
+import type { SlashCommandResolver } from "./ompPromptDispatch.js";
 import { EnginePromptTurnCloser } from "./promptTurnCloser.js";
 import { TrailingThrottle } from "./trailingThrottle.js";
 import { deriveTitle } from "../domain/titleText.js";
@@ -98,9 +98,8 @@ export class ConversationEngine {
       () => this.ompProcess,
       () => this.scheduleFlush(),
     );
-    // A5：在途 steer 的 guide 轮（sourceCommandId 与当前活跃轮一致）在 terminal agent_end
-    // 收口时转回 queuedTurns，等下一个 agent_start 激活承接 drain 输出；A3：queue_update 事件
-    // 是队列对账触发点之一（debounce 后回读 get_state）。两者内聚在 PromptQueueReconciler（含 XR1 竞态守卫）。
+    // A5：在途 guide 轮在 terminal agent_end 转回等待；A3：queue_update 的真实快照
+    // 到达即登记，debounce 仅合并后续 get_state，不能把快速消费的事实一起延迟掉。
     this.queueReconciler = new PromptQueueReconciler({
       projection: this.projection,
       currentProcess: () => this.ompProcess,
@@ -172,13 +171,7 @@ export class ConversationEngine {
       currentProcess: () => this.ompProcess,
       setProcess: (process) => {
         this.ompProcess = process;
-        // F2b-P1 接线：steer/follow_up 分发 success ACK ⇒ 文本已入 omp 队列（v18.4.8 上
-        // rpc handler 在 await followUp()/steer() 后才回 ACK），到达即把分发文本登记为
-        // seen，消除「停止边界 drain 快于 250ms debounce、快照从未携带」窗口的宽限误判
-        // interrupted（语义与边界备查见 PromptQueueReconciler.noteDispatchAckSeen）。
-        if (process) {
-          registerQueueDispatchAckSink(process, (text) => this.queueReconciler.noteDispatchAckSeen(text));
-        }
+        // 进程绑定不登记 ACK 为队列事实；取消输入门的 success 也可能没有真正入队。
       },
       bootstrap: (process) => this.bootstrapProcess(process),
     });
@@ -225,6 +218,7 @@ export class ConversationEngine {
   handleOmpEvent(event: OmpSessionEventFrame): void {
     if (this.disposed) return;
     this.agentInteractions.ingest("$root", event);
+    if (event.type === "queue_update") this.queueReconciler.noteQueueSnapshot(event);
     this.projectEvent(event);
   }
   /** v4 resolveInteraction 命令入口：把 UI 应答汇入等待中的交互。 */
@@ -267,7 +261,9 @@ export class ConversationEngine {
     this.scheduleFlush();
     try {
       await this.ensureOmpStarted();
-      await this.ompProcess?.send({ type: "abort" });
+      const reconcileAbort = this.queueReconciler.prepareAbortReconciliation();
+      const outcome = await this.ompProcess?.send({ type: "abort" });
+      if (outcome?.success) await reconcileAbort();
     } catch {
       this.scheduleFlush();
     }

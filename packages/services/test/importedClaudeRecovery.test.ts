@@ -14,6 +14,31 @@ import { parseLegacyTaskSessionFile } from "../src/session/legacyTaskSessionFile
 import { TaskIndexRepo } from "../src/session/taskIndexRepo.js";
 import { createZCodeTaskServiceAdapter } from "../src/zcode-agent/zcodeTaskServiceAdapter.js";
 
+test("legacy 元信息可省略 mode，但仍拒绝不属于该任务的身份迁移", () => {
+  const meta = {
+    taskId: "canonical-task",
+    traceId: "legacy-trace",
+    workspacePath: "/legacy/workspace",
+    title: "Legacy history",
+    createdAt: 1,
+    updatedAt: 2,
+    taskIdMigration: { fromTaskId: "temporary-task", toTaskId: "canonical-task" },
+  };
+  const file = { meta, messages: [] };
+  const parsed = parseLegacyTaskSessionFile(file);
+  assert.deepEqual(parsed, file);
+  assert.equal(Object.hasOwn(parsed.meta, "mode"), false);
+  assert.throws(() =>
+    parseLegacyTaskSessionFile({
+      ...file,
+      meta: {
+        ...meta,
+        taskIdMigration: { ...meta.taskIdMigration, toTaskId: "another-task" },
+      },
+    }),
+  );
+});
+
 for (const clientMode of ["desktop-continuous", "web-remote-replayable"] as const) {
   test(`previously imported Claude history becomes a real session for ${clientMode}`, async () => {
     const dir = await mkdtemp(join(tmpdir(), "zcode-import-recovery-"));

@@ -1,5 +1,16 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  V4_METHODS,
+  commandAckSchema,
+  conversationTopicWireFrameSchema,
+  sessionsIndexTopicWireFrameSchema,
+  type CommandPayloadMap,
+} from "@zcode/shared/zcode-protocol-v4";
+import { ServerApp } from "../src/app/serverApp.js";
 import { SessionRegistry } from "../src/app/sessionRegistry.js";
 import type { HostGateway, OmpProcessFactory, OmpStorePort } from "../src/app/ports.js";
 import { createDirectoryStub } from "./fixtures/directoryStub.js";
@@ -302,3 +313,182 @@ test("C6: renameColdSession 下发 rename_session 并同步 sessions-index 标�
   const unsupported = await registry.renameColdSession("cold-1", "third");
   assert.deepEqual(unsupported, { ok: false, unsupported: true });
 });
+
+for (const identityKind of ["local-fallback", "explicit-local", "remote"] as const) {
+  test(`F016: 公开 v4 createSession 严格绑定 ${identityKind} 身份，拒绝先于创建和附件处理`, async (context) => {
+    const root = await mkdtemp(join(tmpdir(), "omp-create-identity-"));
+    const workspacePath = join(root, "workspace");
+    const filesPath = join(root, "sessions");
+    await mkdir(workspacePath);
+    await mkdir(filesPath);
+    const workspaceKey =
+      identityKind === "local-fallback"
+        ? workspacePath
+        : identityKind === "explicit-local"
+          ? "local:bound-project"
+          : "ssh:host:bound-project";
+    const frames: unknown[] = [];
+    const processCwds: string[] = [];
+    const prompts: string[] = [];
+    const app = new ServerApp({
+      workspacePath,
+      workspaceKey,
+      ...(identityKind !== "local-fallback" ? { workspaceIdentity: workspaceKey } : {}),
+      loadWorkspaceConfig: async () => ({ configOptions: [], slashCommands: [] }),
+      loadWorkspaceSkillCommands: async () => [],
+      directory: createDirectoryStub(),
+      store: {
+        listSessions: async () => [],
+        readSessionEntries: async () => [],
+        readSubagentEntries: async () => [],
+        deleteSession: async () => true,
+      },
+      gateway: {
+        emitFrame: (frame) => frames.push(frame),
+        requestUserInput: async () => ({ action: "cancel" }),
+      },
+      ompFactory: {
+        create(options) {
+          processCwds.push(options.cwd);
+          const sessionFile = join(filesPath, `process-${processCwds.length}.jsonl`);
+          return {
+            ompSessionFile: sessionFile,
+            start: async () => {
+              await writeFile(sessionFile, '{"type":"session"}\\n');
+            },
+            send: async (command) => {
+              if (command.type === "prompt") {
+                prompts.push(command.message);
+                return { success: true, data: { agentInvoked: false } };
+              }
+              return { success: true, data: {} };
+            },
+            refreshState: async () => null,
+            readContextReport: async () => null,
+            respondUi: () => {},
+            dispose: async () => {},
+          };
+        },
+      },
+    });
+    context.after(async () => {
+      await app.registry.dispose();
+      await rm(root, { recursive: true, force: true });
+    });
+    let creates = 0;
+    const createSession = app.registry.createSession.bind(app.registry);
+    app.registry.createSession = (params) => {
+      creates += 1;
+      return createSession(params);
+    };
+    const envelope = (commandId: string, payload: CommandPayloadMap["createSession"]) => ({
+      commandId,
+      clientId: "identity-test",
+      sessionId: null,
+      type: "createSession",
+      issuedAt: 1,
+      payload,
+    });
+    // 显式身份和远程身份不能把同一执行路径当作另一合法 workspace key。
+    const wrongWorkspace = identityKind === "local-fallback" ? "other-workspace" : workspacePath;
+    for (const firstInput of [
+      undefined,
+      { text: "must not send" },
+      {
+        text: "must not inspect attachment",
+        attachments: [
+          { ref: "missing-reference", fileName: "test.txt", mime: "text/plain", bytes: 1 },
+        ],
+      },
+    ]) {
+      const commandId = `wrong-${firstInput?.text ?? "draft"}`;
+      const request = envelope(commandId, {
+        workspaceId: wrongWorkspace,
+        ...(firstInput ? { firstInput } : {}),
+      });
+      const [first, concurrent] = await Promise.all([
+        app.handleRequest(V4_METHODS.command, request),
+        app.handleRequest(V4_METHODS.command, request),
+      ]);
+      const rejected = commandAckSchema.parse(first);
+      assert.equal(rejected.status, "rejected");
+      assert.equal(rejected.reasonCode, "fault.command.workspaceMismatch");
+      assert.deepEqual(concurrent, first);
+      assert.deepEqual(await app.handleRequest(V4_METHODS.command, request), first);
+      // 同一 command ID 即使换成匹配 payload，也不能把已决拒绝改成创建。
+      assert.deepEqual(
+        await app.handleRequest(
+          V4_METHODS.command,
+          envelope(commandId, { workspaceId: workspaceKey }),
+        ),
+        first,
+      );
+    }
+    assert.equal(creates, 0, "不构造任何会话引擎");
+    assert.deepEqual(processCwds, [], "不构造任何 omp 进程");
+    assert.deepEqual(prompts, [], "不发送首问");
+    assert.deepEqual(await readdir(filesPath), [], "不落盘会话文件");
+    for (const key of [workspaceKey, wrongWorkspace]) {
+      await app.handleRequest(V4_METHODS.conversationSubscribe, {
+        topic: `sessions-index/${key}`,
+        connectionId: "index-test",
+      });
+      const wire = sessionsIndexTopicWireFrameSchema.parse(frames.at(-1));
+      assert.equal(wire.kind, "complete");
+      if (wire.kind === "complete") {
+        assert.equal(wire.frame.payload.kind, "snapshot");
+        if (wire.frame.payload.kind === "snapshot")
+          assert.deepEqual(wire.frame.payload.snapshot.sessions, []);
+      }
+    }
+    const draft = commandAckSchema.parse(
+      await app.handleRequest(
+        V4_METHODS.command,
+        envelope("matching-draft", { workspaceId: workspaceKey }),
+      ),
+    );
+    assert.equal(draft.status, "accepted");
+    assert.equal(creates, 1);
+    assert.deepEqual(processCwds, [], "匹配的空会话仍惰性启动");
+    const accepted = commandAckSchema.parse(
+      await app.handleRequest(
+        V4_METHODS.command,
+        envelope("matching-input", {
+          workspaceId: workspaceKey,
+          firstInput: { text: "bound first input" },
+        }),
+      ),
+    );
+    assert.equal(accepted.status, "accepted");
+    assert.equal(creates, 2);
+    assert.deepEqual(processCwds, [workspacePath]);
+    assert.deepEqual(prompts, ["bound first input"]);
+    assert.equal((await readdir(filesPath)).length, 1);
+    assert.ok(accepted.result?.type === "createSession");
+    if (accepted.result?.type !== "createSession") throw new Error("expected create result");
+    const engine = app.registry.requireEngine(accepted.result.sessionId);
+    assert.equal(engine.workspaceId, workspaceKey);
+    assert.equal(engine.workspacePath, workspacePath);
+    app.registry.upsertEngineSummary(engine);
+    await app.handleRequest(V4_METHODS.conversationSubscribe, {
+      topic: `sessions-index/${workspaceKey}`,
+      connectionId: "index-positive",
+    });
+    const index = sessionsIndexTopicWireFrameSchema.parse(frames.at(-1));
+    assert.equal(index.kind, "complete");
+    if (index.kind === "complete" && index.frame.payload.kind === "snapshot") {
+      const session = index.frame.payload.snapshot.sessions.find(
+        (item) => item.sessionId === engine.sessionId,
+      );
+      assert.equal(session?.workspaceId, workspaceKey);
+    } else throw new Error("expected complete index snapshot");
+    await app.handleRequest(V4_METHODS.conversationSubscribe, {
+      topic: `conversation/${engine.sessionId}`,
+      sessionId: engine.sessionId,
+      connectionId: "session-positive",
+      clientMode: "desktop-continuous",
+    });
+    const conversation = conversationTopicWireFrameSchema.parse(frames.at(-1));
+    assert.equal(conversation.topic, `conversation/${engine.sessionId}`);
+  });
+}

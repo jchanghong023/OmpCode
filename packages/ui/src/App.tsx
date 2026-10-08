@@ -68,6 +68,7 @@ import type {
 import { getActiveSidePaneTab } from "@/lib/workspaceSidePane.js";
 import { logger } from "@/logger.js";
 import { taskListE2EActions } from "@/lib/taskListE2EActions.js";
+import { getSharedComposerDraftOwner } from "@/v4/composer/composerDraftRegistry.js";
 import {
   CLOSE_ACTIVE_CONTEXT_REQUEST_EVENT,
   getCloseActiveContextSidePaneTab,
@@ -797,6 +798,11 @@ export function App({
       },
       getChatMessageCount: () => testMessages?.length ?? 0,
       getPluginsOverview: (params) => services.zcodeAgentService.getPluginsOverview(params),
+      getTaskMeta: (params) => services.zcodeTaskService.getTaskMeta(params),
+      readComposerDraft: (params) => {
+        const owner = getSharedComposerDraftOwner(params);
+        return { scopeId: owner.scopeId, text: owner.draft.text };
+      },
       addPluginMarketplace: (params) => services.zcodeAgentService.addPluginMarketplace(params),
       updatePluginMarketplace: (params) =>
         services.zcodeAgentService.updatePluginMarketplace(params),
@@ -805,7 +811,15 @@ export function App({
       getPluginReferenceCatalog: (params) =>
         services.zcodeAgentService.getPluginReferenceCatalog(params),
     }),
-    [locale, services.zcodeAgentService, setLocale, theme, setTheme, testMessages],
+    [
+      locale,
+      services.zcodeAgentService,
+      services.zcodeTaskService,
+      setLocale,
+      setTheme,
+      testMessages,
+      theme,
+    ],
   );
   useTestActions(testActions);
   const [workspaceMainView, setWorkspaceMainView] = useState<WorkspaceMainView>("chat");

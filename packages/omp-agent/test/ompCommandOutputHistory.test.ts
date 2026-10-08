@@ -1,5 +1,16 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import fs from "node:fs";
+import {
+  appendFile,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rename,
+  rm,
+  utimes,
+  writeFile,
+} from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve, sep } from "node:path";
 import { test, type TestContext } from "node:test";
@@ -980,4 +991,358 @@ test("原生 file/UUID 变化后，旧 epoch derived 不匹配新 file 的同文
   } finally {
     await fixture.registry.dispose();
   }
+});
+
+test("长原生 journal 连续八次 custom append 只读取首轮和追加字节", async (context) => {
+  const { store, env } = await scratch(context);
+  const directory = join(env.OMP_CONFIG_ROOT, "agent", "sessions", "-");
+  const nativePath = join(directory, `2026-10-08T00-00-00-000Z_${stableId}.jsonl`);
+  await mkdir(directory, { recursive: true });
+  const header = `${JSON.stringify({ type: "session", id: stableId, cwd })}\n`;
+  const padding = `${JSON.stringify({
+    type: "message",
+    message: { role: "user", content: "长历史".repeat(1024), timestamp: 1 },
+  })}\n`.repeat(256);
+  await writeFile(nativePath, header + padding);
+
+  // 计量真正文件流的 data，而不是断言实现源码或复制 store 的索引逻辑。
+  const actualReadStream = fs.createReadStream;
+  const ranges: number[] = [];
+  let readBytes = 0;
+  const streamMock = context.mock.method(
+    fs,
+    "createReadStream",
+    (...args: Parameters<typeof fs.createReadStream>) => {
+      const stream = actualReadStream(...args);
+      if (args[0] === nativePath) {
+        const options = args[1];
+        ranges.push(typeof options === "object" ? (options.start ?? 0) : 0);
+        stream.on("data", (chunk: Buffer | string) => {
+          readBytes += typeof chunk === "string" ? Buffer.byteLength(chunk) : chunk.length;
+        });
+      }
+      return stream;
+    },
+  );
+  syncBuiltinESMExports();
+  context.after(() => {
+    streamMock.mock.restore();
+    syncBuiltinESMExports();
+  });
+
+  const session = { cwd, sessionId: logicalId, sessionPath: nativePath };
+  const records = [];
+  let journalBytes = Buffer.byteLength(header + padding);
+  for (let index = 0; index < 8; index += 1) {
+    const timestamp = 1000 + index;
+    const entry =
+      JSON.stringify({
+        type: index % 2 === 0 ? "custom_message" : "message",
+        ...(index % 2 === 0
+          ? { customType: "team-result", content: output.text, display: true, timestamp }
+          : {
+              message: {
+                role: "custom",
+                customType: "team-result",
+                content: [{ type: "text", text: output.text }],
+                display: true,
+                timestamp,
+              },
+            }),
+      }) + "\n";
+    await appendFile(nativePath, entry);
+    const beforeAppend = journalBytes;
+    journalBytes += Buffer.byteLength(entry);
+    const record = {
+      ...output,
+      id: `native-${index}`,
+      customType: "team-result",
+      nativeTimestamp: timestamp,
+      nativeSessionId: stableId,
+      createdAt: timestamp,
+    };
+    records.push(record);
+    await store.appendCommandOutput!(session, record);
+    assert.equal(ranges[index], index === 0 ? 0 : beforeAppend);
+  }
+  await store.appendCommandOutput!(session, { ...records[7]!, id: "repeat-last" });
+  await store.flushCommandOutputs!();
+  assert.equal(ranges.length, 8, "未变化的文件无需再次读取");
+  assert.equal(readBytes, journalBytes, "八次 append 总读取量必须等于首轮加新增字节");
+  assert.deepEqual(await store.readCommandOutputs!(cwd, logicalId), []);
+
+  // 相同类型/正文但新 timestamp 没有原生记录，必须保存且经公开冷恢复显示。
+  await store.appendCommandOutput!(session, {
+    ...records[7]!,
+    id: "not-native-yet",
+    nativeTimestamp: 2000,
+    createdAt: 2000,
+  });
+  const reopened = createOmpStore(env);
+  assert.deepEqual(
+    (await reopened.readCommandOutputs!(cwd, logicalId)).map((record) => record.nativeTimestamp),
+    [2000],
+  );
+  const fixture = registryWith(reopened);
+  try {
+    const cold = await fixture.registry.resumeSession({
+      sessionId: logicalId,
+      workspaceId: "ws",
+      workspacePath: cwd,
+    });
+    assert.deepEqual(
+      cold.projection
+        .rowsRange(undefined, 1000)
+        .rows.filter((row) => row.kind === "assistantText" && row.text === output.text)
+        .map((row) => row.createdAt),
+      [1000, 1001, 1002, 1003, 1004, 1005, 1006, 1007, 2000],
+    );
+    assert.equal(fixture.starts(), 0);
+  } finally {
+    await fixture.registry.dispose();
+  }
+});
+
+test("native 增量索引续接 UTF-8 半字符和 partial line，迟到 flush 不永久缓存缺失", async (context) => {
+  const { store, env } = await scratch(context);
+  const directory = join(env.OMP_CONFIG_ROOT, "agent", "sessions", "-");
+  const nativePath = join(directory, `2026-10-08T00-00-00-000Z_${stableId}.jsonl`);
+  await mkdir(directory, { recursive: true });
+  const header = `${JSON.stringify({ type: "session", id: stableId, cwd })}\n`;
+  const text = "结果😀中文\n下一行";
+  const custom = {
+    type: "custom_message",
+    customType: "team-result",
+    content: text,
+    display: true,
+    timestamp: 2000,
+  };
+  const bytes = Buffer.from(JSON.stringify(custom));
+  const split = bytes.indexOf(Buffer.from("😀")) + 2;
+  await writeFile(nativePath, Buffer.concat([Buffer.from(header), bytes.subarray(0, split)]));
+  const session = { cwd, sessionId: logicalId, sessionPath: nativePath };
+  const record = {
+    id: "partial-before-flush",
+    text,
+    customType: custom.customType,
+    nativeTimestamp: custom.timestamp,
+    createdAt: custom.timestamp,
+  };
+  await store.appendCommandOutput!(session, record);
+  assert.equal((await store.readCommandOutputs!(cwd, logicalId)).length, 1);
+  await appendFile(nativePath, bytes.subarray(split));
+  await store.appendCommandOutput!(session, { ...record, id: "after-complete-no-newline" });
+  assert.equal(
+    (await store.readCommandOutputs!(cwd, logicalId)).length,
+    1,
+    "未换行的完整 UTF-8 JSON 已落盘，不保存第二份",
+  );
+  await appendFile(nativePath, "\n" + JSON.stringify({ ...custom, timestamp: 3000 }) + "\n");
+  await store.appendCommandOutput!(session, {
+    ...record,
+    id: "after-next-line",
+    nativeTimestamp: 3000,
+    createdAt: 3000,
+  });
+  assert.equal((await store.readCommandOutputs!(cwd, logicalId)).length, 1);
+  const fixture = registryWith(createOmpStore(env));
+  try {
+    const cold = await fixture.registry.resumeSession({
+      sessionId: logicalId,
+      workspaceId: "ws",
+      workspacePath: cwd,
+    });
+    assert.deepEqual(
+      cold.projection
+        .rowsRange(undefined, 100)
+        .rows.filter((row) => row.kind === "assistantText")
+        .map((row) => [row.text, row.createdAt]),
+      [
+        [text, 2000],
+        [text, 3000],
+      ],
+    );
+  } finally {
+    await fixture.registry.dispose();
+  }
+});
+
+test("native 索引在 truncate、同路径文件替换和 session/path 迁移后失效", async (context) => {
+  const { store, env } = await scratch(context);
+  const directory = join(env.OMP_CONFIG_ROOT, "agent", "sessions", "-");
+  const nativePath = join(directory, `2026-10-08T00-00-00-000Z_${stableId}.jsonl`);
+  await mkdir(directory, { recursive: true });
+  const header = `${JSON.stringify({ type: "session", id: stableId, cwd })}\n`;
+  const entry = {
+    type: "custom_message",
+    customType: "team-result",
+    content: output.text,
+    display: true,
+    timestamp: 1000,
+  };
+  const session = { cwd, sessionId: logicalId, sessionPath: nativePath };
+  const record = { ...output, customType: entry.customType, nativeTimestamp: 1000 };
+  await writeFile(nativePath, header + JSON.stringify(entry) + "\n");
+  await store.appendCommandOutput!(session, record);
+  assert.deepEqual(await store.readCommandOutputs!(cwd, logicalId), []);
+
+  await writeFile(nativePath, header);
+  await store.appendCommandOutput!(session, { ...record, id: "after-truncate" });
+  await appendFile(nativePath, JSON.stringify({ ...entry, timestamp: 2000 }) + "\n");
+  await store.appendCommandOutput!(session, {
+    ...record,
+    id: "truncated-new-native",
+    nativeTimestamp: 2000,
+  });
+  assert.deepEqual(
+    (await store.readCommandOutputs!(cwd, logicalId)).map((item) => item.id),
+    ["after-truncate"],
+  );
+
+  const replacement = `${nativePath}.replacement`;
+  await writeFile(
+    replacement,
+    header +
+      JSON.stringify({
+        ...entry,
+        timestamp: 3000,
+        content: [{ type: "text", text: output.text }],
+      }) +
+      "\n",
+  );
+  await rename(replacement, nativePath);
+  await store.appendCommandOutput!(session, {
+    ...record,
+    id: "old-replaced-event",
+    nativeTimestamp: 2000,
+  });
+  await store.appendCommandOutput!(session, {
+    ...record,
+    id: "replacement-native",
+    nativeTimestamp: 3000,
+  });
+
+  const newId = "01a0d66e-1891-7035-ab59-f8e5f0a33704";
+  const newPath = join(directory, `2026-10-08T00-00-01-000Z_${newId}.jsonl`);
+  await writeFile(
+    newPath,
+    `${JSON.stringify({ type: "session", id: newId, cwd })}\n${JSON.stringify(entry)}\n`,
+  );
+  const migrated = { ...session, sessionPath: newPath };
+  await store.appendCommandOutput!(migrated, {
+    ...record,
+    id: "old-session-same-event",
+    nativeSessionId: stableId,
+  });
+  await store.appendCommandOutput!(migrated, {
+    ...record,
+    id: "new-session-native",
+    nativeSessionId: newId,
+  });
+  await store.appendCommandOutput!(migrated, {
+    ...record,
+    id: "other-type",
+    customType: "other-result",
+    nativeSessionId: newId,
+  });
+  await store.flushCommandOutputs!();
+  assert.deepEqual(
+    (await createOmpStore(env).readCommandOutputs!(cwd, logicalId)).map((item) => item.id),
+    ["after-truncate", "old-replaced-event", "old-session-same-event", "other-type"],
+  );
+});
+
+test("同 inode 同尺寸 journal 重写后旧 custom 命中失效", async (context) => {
+  const { store, env } = await scratch(context);
+  const directory = join(env.OMP_CONFIG_ROOT, "agent", "sessions", "-");
+  const nativePath = join(directory, `2026-10-08T00-00-00-000Z_${stableId}.jsonl`);
+  await mkdir(directory, { recursive: true });
+  const header = `${JSON.stringify({ type: "session", id: stableId, cwd })}\n`;
+  const entry = {
+    type: "custom_message",
+    customType: "team-result",
+    content: output.text,
+    display: true,
+    timestamp: 1000,
+  };
+  const before = header + JSON.stringify(entry) + "\n";
+  const after = header + JSON.stringify({ ...entry, timestamp: 2000 }) + "\n";
+  assert.equal(Buffer.byteLength(before), Buffer.byteLength(after));
+  const session = { cwd, sessionId: logicalId, sessionPath: nativePath };
+  const record = { ...output, customType: entry.customType, nativeTimestamp: 1000 };
+  await writeFile(nativePath, before);
+  await store.appendCommandOutput!(session, record);
+  assert.deepEqual(await store.readCommandOutputs!(cwd, logicalId), []);
+  await writeFile(nativePath, after);
+  // 不依赖文件系统时间精度；显式改变元数据但仍保留同一 inode/size。
+  const modified = new Date(Date.now() + 60_000);
+  await utimes(nativePath, modified, modified);
+  await store.appendCommandOutput!(session, { ...record, id: "old-same-size-event" });
+  await store.appendCommandOutput!(session, {
+    ...record,
+    id: "rewritten-native-event",
+    nativeTimestamp: 2000,
+  });
+  await store.flushCommandOutputs!();
+  assert.deepEqual(
+    (await createOmpStore(env).readCommandOutputs!(cwd, logicalId)).map((item) => item.id),
+    ["old-same-size-event"],
+  );
+});
+
+test("native journal 读取失败释放描述符并保留原始错误，后续 append 可重新索引", async (context) => {
+  const { store, env } = await scratch(context);
+  const directory = join(env.OMP_CONFIG_ROOT, "agent", "sessions", "-");
+  const nativePath = join(directory, `2026-10-08T00-00-00-000Z_${stableId}.jsonl`);
+  await mkdir(directory, { recursive: true });
+  const entry = {
+    type: "custom_message",
+    customType: "team-result",
+    content: output.text,
+    display: true,
+    timestamp: 1000,
+  };
+  await writeFile(
+    nativePath,
+    JSON.stringify({ type: "session", id: stableId, cwd }) + "\n" + JSON.stringify(entry) + "\n",
+  );
+  const session = { cwd, sessionId: logicalId, sessionPath: nativePath };
+  const record = { ...output, customType: entry.customType, nativeTimestamp: entry.timestamp };
+  const readError = new Error("native journal read interrupted");
+  const actualReadStream = fs.createReadStream;
+  let descriptor: number | undefined;
+  let interruptNextRead = true;
+  const streamMock = context.mock.method(
+    fs,
+    "createReadStream",
+    (...args: Parameters<typeof fs.createReadStream>) => {
+      const stream = actualReadStream(...args);
+      if (args[0] === nativePath && interruptNextRead) {
+        interruptNextRead = false;
+        const options = args[1];
+        if (typeof options === "object") {
+          const fd = options.fd;
+          descriptor = typeof fd === "number" ? fd : fd?.fd;
+        }
+        // 读取实际字节后再打断，避免消费者挂上异步迭代器前人为发出未处理错误。
+        // 仍经过真实 stream.destroy → FileHandle.close，不能用监听器吞掉读错。
+        stream.once("data", () => stream.destroy(readError));
+      }
+      return stream;
+    },
+  );
+  syncBuiltinESMExports();
+  context.after(() => {
+    streamMock.mock.restore();
+    syncBuiltinESMExports();
+  });
+
+  await assert.rejects(store.appendCommandOutput!(session, record), (error) => error === readError);
+  assert.equal(typeof descriptor, "number");
+  assert.throws(() => fs.fstatSync(descriptor!), { code: "EBADF" });
+  await assert.rejects(store.flushCommandOutputs!(), (error) => error === readError);
+  // 先通过 flush 确认失败，再显式重试同一事件；新事件不能替代失败提交。
+  await store.appendCommandOutput!(session, record);
+  await store.flushCommandOutputs!();
+  assert.deepEqual(await createOmpStore(env).readCommandOutputs!(cwd, logicalId), []);
 });

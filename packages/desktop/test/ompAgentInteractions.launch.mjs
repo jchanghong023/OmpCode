@@ -30,13 +30,18 @@ const env = {
   ZCODE_DESKTOP_SESSION_DATA_DIR: join(runRoot, "sessionData"),
   ELECTRON_RENDERER_URL: rendererUrl,
 };
+const requestedWorkspace =
+  process.env.OMP_E2E_OPEN_TEST_PROJECT === "1" ? join(runRoot, "acceptance-project") : undefined;
 // OMP_CONFIG_ROOT 派生应用目录的优先级更高；绝不能让测试落到用户的派生目录。
 assert.ok(!env.OMP_CONFIG_ROOT?.trim(), "Unset OMP_CONFIG_ROOT for isolated GUI acceptance");
 for (const name of ["data", "home", "userData", "sessionData"])
   await mkdir(join(runRoot, name), { recursive: true });
 // 每个task的默认模型可能来自用户@task角色；仅给隔离工作区提供专用agent，
 // 把主/子/嵌套验收都固定到GLM而不改变用户配置。
-const agentDir = join(env.ZCODE_DATA_BASE_DIR, ".ompcode/workspace/default/.omp/agents");
+const agentDir = join(
+  requestedWorkspace ?? join(env.ZCODE_DATA_BASE_DIR, ".ompcode/workspace/default"),
+  ".omp/agents",
+);
 await mkdir(agentDir, { recursive: true });
 const agentFixture = await readFile(
   join(desktopRoot, "test/fixtures/ompInteractionAgent.md"),
@@ -120,12 +125,23 @@ try {
     process.platform === "win32"
       ? join(electronRoot, "dist/electron.exe")
       : join(electronRoot, "dist/electron");
-  const electron = launch("electron", electronBinary, [".", `--remote-debugging-port=${cdpPort}`]);
+  const electron = launch("electron", electronBinary, [
+    ".",
+    `--remote-debugging-port=${cdpPort}`,
+    ...(requestedWorkspace ? ["--open-workspace", requestedWorkspace] : []),
+  ]);
   await waitReady(`${endpoint}/json/version`, electron);
   await writeFile(
     manifestPath,
     JSON.stringify(
-      { runRoot, endpoint, rendererUrl, launcherPid: process.pid, electronPid: electron.pid },
+      {
+        runRoot,
+        endpoint,
+        rendererUrl,
+        launcherPid: process.pid,
+        electronPid: electron.pid,
+        ...(requestedWorkspace ? { requestedWorkspace } : {}),
+      },
       null,
       2,
     ),

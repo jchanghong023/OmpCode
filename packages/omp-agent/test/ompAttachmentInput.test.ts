@@ -1,21 +1,24 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { AttachmentStore } from "../src/app/attachmentStore.js";
 import { prepareOmpAttachmentInput } from "../src/app/ompAttachmentInput.js";
 
 function upload(store: AttachmentStore, name: string, mime: string, bytes: Buffer) {
   const uploadId = `test-${name}`;
+  const owner = { connectionId: "test", sessionId: "session", uploadId };
   store.begin({
-    connectionId: "test",
-    uploadId,
-    sessionId: "session",
+    ...owner,
     fileName: name,
     mime,
     totalBytes: bytes.length,
-    totalChunks: 1,
+    totalChunks: bytes.length === 0 ? 0 : 1,
+    checksum: `sha256:${createHash("sha256").update(bytes).digest("hex")}`,
   });
-  store.chunk({ uploadId, chunkIndex: 0, dataBase64: bytes.toString("base64") });
-  const { ref } = store.commit({ uploadId });
+  if (bytes.length > 0) {
+    store.chunk({ ...owner, chunkIndex: 0, dataBase64: bytes.toString("base64") });
+  }
+  const { ref } = store.commit(owner);
   return { ref, fileName: name, mime, bytes: bytes.length };
 }
 

@@ -125,3 +125,117 @@ test("无效 YAML 时不写入", async () => {
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test("旧核角色从手动档位切换 auto，再 unset 删除字段且保留其他 YAML 与备份", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "omp-role-clear-"));
+  const configPath = join(dir, "config.yml");
+  const original = [
+    "# account config",
+    "modelRoles:",
+    "  # role guidance",
+    "  default: provider/model:high # retain guidance",
+    "  task: [provider/one, provider/two] # untouched role",
+    "otherSetting: true # untouched",
+    "",
+  ].join("\n");
+  try {
+    await writeFile(configPath, original);
+    const automatic = await writeOmpModelRolesConfig(configPath, [
+      { role: "default", value: "auto" },
+    ]);
+    assert.equal(automatic.success, true);
+    if (!automatic.success) return;
+    assert.equal(await readFile(automatic.backupPath!, "utf8"), original);
+    assert.deepEqual(await readOmpModelRolesConfig(configPath), {
+      success: true,
+      roles: [
+        { role: "default", value: "auto" },
+        { role: "task", value: "provider/one,provider/two" },
+      ],
+    });
+    const beforeClear = await readFile(configPath, "utf8");
+    const cleared = await writeOmpModelRolesConfig(configPath, [{ role: "default", value: "" }]);
+    assert.equal(cleared.success, true);
+    if (!cleared.success) return;
+    assert.equal(await readFile(cleared.backupPath!, "utf8"), beforeClear);
+    assert.equal(
+      await readFile(configPath, "utf8"),
+      original.replace(
+        "  default: provider/model:high # retain guidance\n",
+        "  # retain guidance\n",
+      ),
+    );
+    assert.deepEqual(await readOmpModelRolesConfig(configPath), {
+      success: true,
+      roles: [{ role: "task", value: "provider/one,provider/two" }],
+    });
+    assert.deepEqual(await writeOmpModelRolesConfig(configPath, [{ role: "default", value: "" }]), {
+      success: true,
+    });
+    const files = await readdir(dir);
+    assert.equal(files.filter((name) => name.includes(".bak-")).length, 2);
+    assert.equal(
+      files.some((name) => name.endsWith(".tmp")),
+      false,
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("首次 unset 不创建配置，同批首次保存只写模型与 auto", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "omp-role-first-unset-"));
+  const configPath = join(dir, "config.yml");
+  try {
+    assert.deepEqual(await writeOmpModelRolesConfig(configPath, [{ role: "default", value: "" }]), {
+      success: true,
+    });
+    assert.deepEqual(await readdir(dir), []);
+    assert.deepEqual(
+      await writeOmpModelRolesConfig(configPath, [
+        { role: "default", value: "" },
+        { role: "task", value: "provider/model" },
+        { role: "smol", value: "auto" },
+      ]),
+      { success: true },
+    );
+    assert.deepEqual(await readOmpModelRolesConfig(configPath), {
+      success: true,
+      roles: [
+        { role: "task", value: "provider/model" },
+        { role: "smol", value: "auto" },
+      ],
+    });
+    assert.deepEqual(await readdir(dir), ["config.yml"]);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("删除最后角色或 flow mapping 角色后仍可重读，保留无关角色和注释", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "omp-role-map-clear-"));
+  const configPath = join(dir, "config.yml");
+  try {
+    for (const original of [
+      "modelRoles:\n  default: auto # last role note\nother: true # other note\n",
+      "modelRoles: { default: auto }\nother: true # other note\n",
+      "modelRoles: { default: auto, task: provider/model }\nother: true # other note\n",
+    ]) {
+      await writeFile(configPath, original);
+      const result = await writeOmpModelRolesConfig(configPath, [{ role: "default", value: "" }]);
+      assert.equal(result.success, true);
+      const remaining = original.includes("task:")
+        ? [{ role: "task", value: "provider/model" }]
+        : [];
+      assert.deepEqual(await readOmpModelRolesConfig(configPath), {
+        success: true,
+        roles: remaining,
+      });
+      const raw = await readFile(configPath, "utf8");
+      assert.match(raw, /other: true # other note/u);
+      if (original.includes("last role note")) assert.match(raw, /# last role note/u);
+    }
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});

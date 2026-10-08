@@ -15,33 +15,6 @@ export type SlashCommandResolution =
   | { kind: "dispatch" }
   | { kind: "reject"; reason: "unknown" | "tui_only"; commandName: string };
 
-/**
- * steer/follow_up 分发 success ACK 的 seen 登记出口（F2b-P1）。
- * 依据（omp v18.4.8 源码核对）：#queueUserMessage（agent-session.ts:8053-8170）在
- * `await session.followUp()/steer(userMessage)` 完成后才返回，rpc handler 在 await 之后才回
- * success ACK ⇒ ACK 到达即该文本已入 omp 队列；而 agent-loop.ts:1754-1763 的停止边界
- * drain 可在入队后短于 250ms debounce 窗口内消费该消息（queue_update 被 debounce 合并、
- * terminal agent_end 的去重还会清掉未触发的 debounce 定时器），队列快照可能从未携带它。
- * 引擎在进程创建时按进程注册出口（registerQueueDispatchAckSink，见 conversationEngine
- * 接线），分发成功时把分发文本作为单元素快照回传，由引擎经对账器 markOnly 路径立即
- * 登记 seen。
- * 边界备查（新核输入门，v18.4.10+）：输入门取消的 steer/follow_up 同样回 success 但未入队
- * （rpc-ui-protocol §14.4「success≠入队」），该场景「ACK 即 seen」会把门取消误判为合并
- * 消费（宽限 interrupted 被抬升为 success）。升级内嵌核时必须随备查项复查本出口。
- */
-export type QueueDispatchAckSink = (text: string) => void;
-
-/** 每进程一个登记出口（WeakMap 弱引用随进程回收；各会话引擎持有各自独立的进程对象）。 */
-const queueDispatchAckSinks = new WeakMap<OmpSessionProcess, QueueDispatchAckSink>();
-
-/** 引擎接线入口：注册进程的分发 success ACK 出口（重复注册覆盖旧出口）。 */
-export function registerQueueDispatchAckSink(
-  process: OmpSessionProcess,
-  sink: QueueDispatchAckSink,
-): void {
-  queueDispatchAckSinks.set(process, sink);
-}
-
 export async function dispatchOmpText(input: {
   process: OmpSessionProcess;
   text: string;
@@ -110,12 +83,8 @@ export async function dispatchOmpText(input: {
         ? { type: "steer" as const, message: text, ...attachment }
         : { type: "follow_up" as const, message: text, ...attachment };
     const outcome = await input.process.send(command);
-    if (outcome.success) {
-      // 修复（F2b-P1）：success ACK ⇒ 该分发文本已入 omp 队列。立即以 markOnly 登记 seen，
-      // 消除「停止边界 drain 快于 250ms debounce、快照从未携带」时序窗口内的宽限误判
-      // interrupted；未注册出口（如纯分发层测试）静默跳过。
-      queueDispatchAckSinks.get(input.process)?.(text);
-    }
+    // F010：OMP 输入门取消 steer/follow_up 后仍返回无 data 的 success ACK。
+    // 它不是接纳/消费证据；队列事实只能来自 queue_update/get_state 或用户消费事件。
     // 修复（G15）：code 只表达失败类别，成功结果不携带。
     return outcome.success ? outcome : { ...outcome, code: "omp_prompt_failed" };
   }

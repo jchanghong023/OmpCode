@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { chromium } from "playwright-core";
+import { createProjectTask } from "./ompPerformanceHotPaths.guiChecks.mjs";
 
 const manifestPath = process.env.OMP_E2E_RUNTIME_MANIFEST;
 const evidenceDir = process.env.OMP_E2E_EVIDENCE_DIR;
@@ -10,7 +11,8 @@ const marker = process.env.OMP_E2E_RUN_ID;
 assert.ok(manifestPath && evidenceDir && marker);
 const runtime = JSON.parse(await readFile(manifestPath, "utf8"));
 assert.ok(runtime.endpoint && runtime.rendererUrl && runtime.runRoot);
-const workspacePath = join(runtime.runRoot, "data/.ompcode/workspace/default");
+const workspacePath =
+  runtime.requestedWorkspace ?? join(runtime.runRoot, "data/.ompcode/workspace/default");
 await mkdir(evidenceDir, { recursive: true });
 const browser = await chromium.connectOverCDP(runtime.endpoint);
 const page = browser
@@ -23,7 +25,8 @@ const input = page.getByTestId("v4-composer-input").first();
 const evidence = [];
 const filename = `hotpaths-new-${marker}.txt`;
 try {
-  await page.getByRole("button", { name: "新建任务", exact: true }).last().click();
+  // 全局入口创建无项目草稿，检索目标与文件写入目录会错位；复用沙箱项目的真实建任务入口。
+  await createProjectTask(page, workspacePath);
   await input.waitFor({ state: "visible" });
   await page.evaluate(() => {
     const original = MessagePort.prototype.postMessage;

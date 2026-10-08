@@ -49,35 +49,48 @@ export function createSlashCommandResolver(directory: OmpDirectoryGatewayPort): 
   invalidate: () => void;
 } {
   let descriptors: OmpDirectoryCommandDescriptor[] | null = null;
-  let refreshing: Promise<void> | null = null;
+  let generation = 0;
+  let refreshing: { generation: number; promise: Promise<void> } | null = null;
 
-  async function refresh(): Promise<void> {
-    if (refreshing) return refreshing;
-    refreshing = (async () => {
+  function refresh(): Promise<void> {
+    if (refreshing?.generation === generation) return refreshing.promise;
+    const requestedGeneration = generation;
+    const promise = (async () => {
       const outcome = await directory.send({ type: "get_available_commands" }).catch(() => null);
-      if (outcome?.success) {
-        const parsed = ompAvailableCommandsV3ResultSchema.safeParse(outcome.data);
-        if (parsed.success) descriptors = parsed.data.commands;
-      }
+      // 更新事件先于旧响应时，旧目录既不能回填，也不能授权一次 prompt。
+      if (requestedGeneration !== generation) return;
+      const parsed = outcome?.success
+        ? ompAvailableCommandsV3ResultSchema.safeParse(outcome.data)
+        : null;
+      // 失败不能保留先前的可执行命令；本次解析明确按未知命令拒绝。
+      descriptors = parsed?.success ? parsed.data.commands : [];
     })().finally(() => {
-      refreshing = null;
+      if (refreshing?.promise === promise) refreshing = null;
     });
-    return refreshing;
+    refreshing = { generation: requestedGeneration, promise };
+    return promise;
   }
 
   return {
     async resolve(text: string): Promise<SlashCommandResolution> {
-      if (!descriptors) await refresh();
-      let resolution = resolveAgainst(descriptors ?? [], text);
-      if (resolution.kind === "reject" && resolution.reason === "unknown") {
-        // unknown 复核一次：目录变化窗口内的新命令不得误拒（重读失败保持原判定）。
-        await refresh();
-        resolution = resolveAgainst(descriptors ?? [], text);
+      for (;;) {
+        const requestedGeneration = generation;
+        if (!descriptors) await refresh();
+        if (requestedGeneration !== generation) continue;
+        let resolution = resolveAgainst(descriptors ?? [], text);
+        if (resolution.kind === "reject" && resolution.reason === "unknown") {
+          // unknown 仅复核一次；若期间失效，等待当前代而非接受旧快照。
+          await refresh();
+          if (requestedGeneration !== generation) continue;
+          resolution = resolveAgainst(descriptors ?? [], text);
+        }
+        return resolution;
       }
-      return resolution;
     },
     invalidate(): void {
+      generation += 1;
       descriptors = null;
+      refreshing = null;
     },
   };
 }

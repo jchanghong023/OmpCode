@@ -3,6 +3,12 @@ import assert from "node:assert/strict";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { chromium } from "playwright-core";
+import {
+  acceptedHostMigration,
+  codeResponseTurns,
+  createProjectTask,
+  readCompleteCodeLines,
+} from "./ompPerformanceHotPaths.guiChecks.mjs";
 
 const manifestPath = process.env.OMP_E2E_RUNTIME_MANIFEST;
 const evidenceDir = process.env.OMP_E2E_EVIDENCE_DIR;
@@ -22,6 +28,8 @@ assert.ok(page, "Connect only to the isolated renderer from the manifest");
 page.setDefaultTimeout(30_000);
 const input = page.getByTestId("v4-composer-input").first();
 const timeline = page.getByTestId("v4-timeline").first();
+const workspacePath =
+  runtime.requestedWorkspace ?? join(runtime.runRoot, "data/.ompcode/workspace/default");
 const evidence = [];
 const errors = [];
 page.on("pageerror", (error) => errors.push(error.message));
@@ -35,20 +43,7 @@ const expectedCodeLines = Array.from(
   { length: 80 },
   (_, index) => `const line${String(index + 1).padStart(3, "0")} = ${index + 1};`,
 );
-async function readCompleteCodeLines() {
-  return page
-    .locator("diffs-container")
-    .evaluateAll(
-      (nodes) =>
-        nodes
-          .map((node) =>
-            [...(node.shadowRoot?.querySelectorAll("[data-line][data-line-index]") ?? [])].map(
-              (line) => line.textContent.replace(/\r?\n$/u, ""),
-            ),
-          )
-          .find((lines) => lines[0] === "const line001 = 1;") ?? [],
-    );
-}
+let initialComposerScope;
 async function selectGlm() {
   const model = page.getByTestId("chat-model-select-trigger").first();
   if ((await model.getAttribute("aria-label")) !== "zhipu-coding-plan/GLM-5.3-Flash") {
@@ -134,8 +129,11 @@ try {
   await observeStorage();
   if (phase !== "cold") {
     if (phase === "live") {
-      await page.getByRole("button", { name: "新建任务", exact: true }).last().click();
+      await createProjectTask(page, workspacePath);
       await selectGlm();
+      initialComposerScope = await input.evaluate((element) =>
+        element.closest("[data-session-id]").getAttribute("data-session-id"),
+      );
       const prefix = promptA.slice(0, -60);
       await input.fill(prefix);
       const before = await page.evaluate(() => window.hotPathTelemetry.writes);
@@ -164,7 +162,7 @@ try {
       });
       await input.fill(draftA);
       // 切换任务是产品公开边界，必须保存旧 scope 的最新正文及 EditorState。
-      await page.getByRole("button", { name: "新建任务", exact: true }).last().click();
+      await createProjectTask(page, workspacePath);
       await selectGlm();
       await send(promptB);
       await page
@@ -180,7 +178,7 @@ try {
       await input.fill(draftB);
       evidence.push({
         event: "stable-persisted-scopes",
-        initialIdPromotion: "separate-live-failure",
+        initialIdPromotion: "separate-live-phase",
       });
     }
     await switchTask("A");
@@ -188,6 +186,11 @@ try {
     if (phase === "live") {
       const currentSessionId = await input.evaluate((element) =>
         element.closest("[data-session-id]").getAttribute("data-session-id"),
+      );
+      assert.notEqual(
+        currentSessionId,
+        initialComposerScope,
+        "The first task must leave its staged draft scope for the persisted identity",
       );
       assert.match(
         currentSessionId,
@@ -212,8 +215,17 @@ try {
         "The migrated draft must have one canonical persisted scope",
       );
       const observedIds = await page.evaluate(() => [...window.hotPathTelemetry.sessionIds]);
+      const hostMigration = await acceptedHostMigration(page, input, workspacePath, draftA);
       evidence.push({
-        event: "first-session-identity-migration-and-draft",
+        event: "real-host-temporary-task-migration",
+        ...hostMigration,
+        hostMetadataRead: true,
+        oldScopeConsumerResolved: true,
+        canonicalPersistedDraft: true,
+      });
+      evidence.push({
+        event: "first-draft-promotion-to-persisted-uuid",
+        sourceComposerScope: initialComposerScope,
         canonicalSessionId: currentSessionId,
         observedIds,
         oneCanonicalDraft: true,
@@ -255,15 +267,19 @@ try {
       });
       window.streamObserver.observe(node, { childList: true, subtree: true, characterData: true });
     });
+    const previousTurnIds = await codeResponseTurns(page, timeline, marker).evaluateAll((nodes) =>
+      nodes.map((node) => node.dataset.turnId),
+    );
+    const currentResponse = codeResponseTurns(page, timeline, marker, previousTurnIds).last();
     await send(codePrompt);
     await page.getByTestId("v4-stop").first().waitFor({ state: "visible", timeout: 90_000 });
     await input.fill(`${draftA}_DURING_STREAM`);
-    await page
+    // stable 已有相同完成标记；只能等待发送前快照之后新增的回答，不能命中上一轮。
+    await currentResponse
       .getByText(`${marker}_STREAM_DONE`, { exact: true })
-      .first()
       .waitFor({ state: "visible", timeout: 180_000 });
-    await page.getByTestId("v4-composer-send").first().waitFor({ state: "visible" });
-    const actualCodeLines = await readCompleteCodeLines();
+    await page.getByTestId("v4-stop").first().waitFor({ state: "hidden" });
+    const actualCodeLines = await readCompleteCodeLines(currentResponse);
     assert.deepEqual(
       actualCodeLines,
       expectedCodeLines,
@@ -299,18 +315,43 @@ try {
       .getByText(`${marker}_STREAM_DONE`, { exact: true })
       .first()
       .waitFor({ state: "visible" });
-    const coldCodeLines = await readCompleteCodeLines();
+    const coldCodeLines = await readCompleteCodeLines(
+      codeResponseTurns(page, timeline, marker).last(),
+    );
     assert.deepEqual(
       coldCodeLines,
       expectedCodeLines,
       "Cold recovery must render all 80 exact lines in order",
     );
     const live = JSON.parse(await readFile(join(evidenceDir, "live-hotpaths-result.json"), "utf8"));
+    const liveCompletion = live.evidence.find((event) => event.event === "real-stream-completion");
+    assert.ok(liveCompletion, "Live evidence must include the completed stream's full code array");
+    assert.equal(liveCompletion.exactCodeLineCount, expectedCodeLines.length);
+    assert.deepEqual(liveCompletion.allCodeLines, expectedCodeLines);
     assert.deepEqual(
       coldCodeLines,
-      live.evidence.find((event) => event.event === "real-stream-completion").allCodeLines,
+      liveCompletion.allCodeLines,
       "Cold code must equal the actual live full code",
     );
+    const liveMigration = live.evidence.find(
+      (event) => event.event === "real-host-temporary-task-migration",
+    );
+    assert.ok(liveMigration, "Live evidence must contain the real Host's temporary task mapping");
+    const coldMigration = await acceptedHostMigration(
+      page,
+      input,
+      workspacePath,
+      `${draftA}_DURING_STREAM`,
+    );
+    assert.deepEqual(coldMigration, {
+      fromTaskId: liveMigration.fromTaskId,
+      toTaskId: liveMigration.toTaskId,
+    });
+    evidence.push({
+      event: "real-host-cold-task-migration",
+      ...coldMigration,
+      acceptedTaskQueryMetadata: true,
+    });
     await switchTask("B");
     await expectDraft(`${draftB}_BLUR`);
     await page

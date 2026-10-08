@@ -11,6 +11,11 @@ import { createTurnHeaderRow, createUserInputRow, type TurnContext } from "./pro
 import { TurnFileFacts } from "./fileFacts.js";
 import type { ProjectionAState, TurnOutcome } from "./projectionTypes.js";
 import { runningControlPatch, terminalControlPatch } from "./projectionStatePatches.js";
+import {
+  matchQueueSnapshotOf,
+  queueDrainedTurns,
+  queueSeenTurns,
+} from "./queuedSnapshotOccurrences.js";
 
 export interface BeginTurnInput {
   text: string;
@@ -164,7 +169,10 @@ export function failAllTurnsOf(
   }
 }
 
-/** 轮收口：同时结束被挂起的旧轮与当前轮，登记终态控制面并清空轮状态。 */
+/** 轮收口：同时结束被挂起的旧轮与当前轮，登记终态控制面并清空轮状态。
+ * terminalControlPatch 会清空 queue 读面，但 queuedTurns 可能仍在等待真实消费；
+ * projection 委托返回时必须同步重派生，不能等 drain 才修复快照。
+ */
 export function finishTurnOf(
   host: QueuedTurnReconcileHost,
   outcome: TurnOutcome,
@@ -240,21 +248,6 @@ function turnHasContentOf(host: QueuedTurnReconcileHost, turn: TurnContext): boo
 }
 
 /**
- * S4-1 seen 登记（「在场历史」）：omp 停止边界会把排队 follow_up 出队合并进同一 run 消费
- * 并回答（agent-loop.ts:1754-1763——任一 run 结束前 dequeue followUp 并 continue 同一 run，
- * 不产生新 agent_start，被消费文本的回复在同一 run 内流式输出），是主流路径。因此
- * 「terminal agent_end 快照缺席」不能一刀切 interrupted：只有曾在任一 omp 队列快照
- * （queue_update 事件载荷或空闲 get_state 的 queuedMessages，经 promptQueueReconciler
- * 传入，含流式 markOnly 调用）中「在场」过、或其 steer/follow_up 分发 success ACK 已到达
- * （F2b-P1：v18.4.8 上 ACK ⇒ 已入队，经 promptQueueReconciler.noteDispatchAckSeen 以
- * markOnly 单元素快照登记）的排队轮，缺席才说明已被停止边界 drain 消费。
- * 登记表以 TurnContext 对象身份为键的模块级 WeakSet：宿主实现对象
- * （conversationProjection 的 queuedReconcileHost）本次修复不变更，弱引用在轮收口后可
- * 回收，跨引擎实例按轮对象隔离互不影响。
- */
-const queueSeenTurns = new WeakSet<TurnContext>();
-
-/**
  * 对账模式通道：projection.reconcileQueuedTurns 签名固定为 (queueTexts: string[] | null)，
  * 模式以 unique symbol 属性附着在快照文本数组上随调用传入（ompQueueTextsOf 每次返回
  * 新数组，原地附着无跨调用副作用）：
@@ -274,51 +267,10 @@ export function markQueueReconcileTexts(texts: string[], mode: QueueReconcileMod
 }
 
 /**
- * 斜杠命令的命令名段：输入首个 ASCII 空白（空格、\t、\n、\v、\f、\r）前的段落
- * （"/deploy prod --yes" → "/deploy"，"/deploy" → "/deploy"）。不用正则匹配控制字符，
- * 逐字符扫描即可（omp 命令名不含这些字符之外的边界语义）。
- */
-function slashCommandNameOf(inputText: string): string {
-  for (let index = 0; index < inputText.length; index += 1) {
-    const char = inputText[index];
-    if (
-      char === " " ||
-      char === "\t" ||
-      char === "\n" ||
-      char === "\v" ||
-      char === "\f" ||
-      char === "\r"
-    ) {
-      return inputText.slice(0, index);
-    }
-  }
-  return inputText;
-}
-
-/**
- * 排队文本与 omp 队列快照文本匹配（S4-4，F2b-P2 收紧）：先按原文全等；omp 队列 chip 文本
- * 是模板展开/改写后的内容（agent-session.ts queueChipText 返回「入队后内容首个 text 块」
- * 而非提交原文），原文全等会对斜杠命令假缺席。对 "/" 开头的排队文本按命令名段比对：
- * chip 等于命令名段（裸命令 chip）或以「命令名段 + 空格」开头（同命令参数 chip）才命中。
- * 修复（F2b-P2/XR-B）：此前的 chip 前缀匹配（ompText.startsWith(inputText)）会让
- * "/deploy" 误命中不同命令的 chip "/deploy-prod"，把未消费的 /deploy 轮误标 seen，
- * 随后空快照再把它误收口 success。
- */
-function queueTextMatchesOf(inputText: string, ompTexts: string[]): boolean {
-  const commandName = slashCommandNameOf(inputText);
-  return ompTexts.some(
-    (ompText) =>
-      ompText === inputText ||
-      (inputText.startsWith("/") &&
-        (ompText === commandName || ompText.startsWith(`${commandName} `))),
-  );
-}
-
-/**
  * 队列对账（A3/S4-1/S4-2/S4-4）：以 omp 队列快照（steering+followUp 文本）对账本地排队轮。
  * omp 停止边界会把排队 follow_up 合并进同一 run 消费并回答（主流路径，见 queueSeenTurns
  * 注释），快照缺席不再一刀切 interrupted：
- * - 文本在场 → 登记 seen（含流式 markOnly 调用）并保持排队；
+ * - 文本 occurrence 按队列顺序一对一匹配 → 登记 seen（含流式 markOnly）并保持排队；
  * - seen 且现已缺席 → 已被停止边界 drain 消费，按合并终态收口（success，与 A4
  *   mergeQueuedTurnsIntoActiveOf 同语义）；
  * - 从未 seen 且缺席 → 可能在入队路上（S4-2：omp #queueUserMessage 对图片附件有秒级
@@ -332,24 +284,27 @@ export function reconcileQueuedTurnsOf(
   host: QueuedTurnReconcileHost,
   queueTexts: string[] | null,
 ): number {
-  if (queueTexts === null || host.queuedTurns.length === 0) return 0;
+  if (queueTexts === null) return 0;
+  const present = matchQueueSnapshotOf(host, queueTexts);
+  if (present === null) return 0;
   const mode = (queueTexts as QueueReconcileTexts)[QUEUE_RECONCILE_MODE];
-  const ompTexts = queueTexts.map((text) => text.trim());
   let closed = 0;
   for (let index = host.queuedTurns.length - 1; index >= 0; index -= 1) {
     const turn = host.queuedTurns[index]!;
     const text = (host.inputTextByTurnId.get(turn.turnId) ?? "").trim();
     if (text.length === 0) continue;
-    if (queueTextMatchesOf(text, ompTexts)) {
+    if (present.has(turn)) {
       queueSeenTurns.add(turn);
       continue;
     }
-    if (mode === "markOnly") continue;
     const consumed = queueSeenTurns.has(turn);
+    if (consumed) queueDrainedTurns.add(turn);
+    if (mode === "markOnly") continue;
     if (!consumed && mode !== "forceClose") continue;
     host.queuedTurns.splice(index, 1);
     host.inputTextByTurnId.delete(turn.turnId);
     queueSeenTurns.delete(turn);
+    queueDrainedTurns.delete(turn);
     finalizeTurnContexts({
       turns: [turn],
       // seen 且缺席 = 停止边界 drain 已合并消费（success，同 A4 合并收口）；从未 seen 且

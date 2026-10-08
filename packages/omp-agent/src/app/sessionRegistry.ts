@@ -244,9 +244,9 @@ export class SessionRegistry {
 
   /**
    * 冷会话（无引擎）改名：经目录进程 rename_session（按稳定 ID 定位文件后原地改标题槽，
-   * 支持未加载会话）。成功后同步本地 sessions-index 标题——omp 已把新标题落盘，先移除旧
-   * 摘要再触发冷会话重扫（onProjectSessionsChanged 只补缺，不刷新已存在行），重扫即写入
-   * 新标题。旧核无 v3 返回 unsupported，调用方维持既有错误语义；进程暂时不可用返回错误
+   * 支持未加载会话）。成功后以完整冷扫描直接刷新 sessions-index 标题；不能先删旧摘要，
+   * 否则后续读取失败会在文件仍存在时错误广播 removed 并丢失上次成功投影。
+   * 旧核无 v3 返回 unsupported，调用方维持既有错误语义；进程暂时不可用返回错误
    * （可重试，不冒充能力缺失）。
    */
   async renameColdSession(sessionId: string, title: string): Promise<{ ok: true } | { ok: false; unsupported: boolean; error?: string; code?: string }> {
@@ -257,8 +257,7 @@ export class SessionRegistry {
       }
       return { ok: false, unsupported: false, error: outcome.error, code: outcome.code };
     }
-    const workspaceId = this.primaryWorkspace?.id;
-    if (workspaceId && this.indexTopics.removeSession(workspaceId, sessionId)) {
+    if (this.primaryWorkspace) {
       await this.indexTopics.onProjectSessionsChanged();
     }
     return { ok: true };

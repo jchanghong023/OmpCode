@@ -1,6 +1,5 @@
-// OmpModelRolesDialog 的回落分支（omp-project-mode.md）：OMP 未提供项目模式时，读写
-// 用户 omp 配置的 modelRoles（主进程 yaml Document 级替换 + 写前备份）。字段渲染与
-// 保存语义保持换核以来的既有行为。
+// 本地旧核永久缺失角色 RPC 时才由 OmpModelRolesDialog 进入此分支。
+// 临时选择归组件所有，保存通过主进程 YAML owner 备份并原子写入。
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { usePlatform } from "@/hooks/usePlatform.js";
@@ -141,8 +140,9 @@ export function OmpModelRolesFallbackFields({
       setSaveError("platform-unsupported");
       return;
     }
+    // 空字符串是明确的 unset 更新；仅用原值比较，不能把清除操作过滤掉。
     const changedRoles = roles.filter(
-      (item) => item.value && item.value !== originalRoles.get(item.role),
+      (item) => item.value !== (originalRoles.get(item.role) ?? ""),
     );
     if (changedRoles.length === 0) return;
     setSaving(true);
@@ -169,7 +169,7 @@ export function OmpModelRolesFallbackFields({
     }
   }, [originalRoles, platform, roles]);
 
-  const dirty = roles.some((item) => item.value && item.value !== originalRoles.get(item.role));
+  const dirty = roles.some((item) => item.value !== (originalRoles.get(item.role) ?? ""));
 
   return (
     <>
@@ -200,19 +200,25 @@ export function OmpModelRolesFallbackFields({
                   {item.role}
                 </span>
                 <Select
-                  value={known ? parsed.modelPart : UNCONFIGURED_VALUE}
+                  value={item.value ? (known ? parsed.modelPart : item.value) : UNCONFIGURED_VALUE}
                   onValueChange={(value) =>
                     handleRoleChange(item.role, value === UNCONFIGURED_VALUE ? "" : value)
                   }
+                  disabled={saving}
                 >
                   <SelectTrigger aria-label={item.role} size="lg" className="min-w-0 flex-1">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent position="popper" align="start">
-                    {!known ? (
-                      <SelectItem value={UNCONFIGURED_VALUE}>
-                        {item.value || intl.formatMessage({ id: "settings.ompModelRoles.unset" })}
-                      </SelectItem>
+                    <SelectItem value={UNCONFIGURED_VALUE}>
+                      {intl.formatMessage({ id: "settings.ompModelRoles.unset" })}
+                    </SelectItem>
+                    <SelectItem value="auto">
+                      {intl.formatMessage({ id: "ompModelRoles.autoOption" })}
+                    </SelectItem>
+                    {/* 目录外配置有独立选项，不能冒充 unset 或丢失其原值。 */}
+                    {!known && item.value && item.value !== "auto" ? (
+                      <SelectItem value={item.value}>{item.value}</SelectItem>
                     ) : null}
                     {providerGroups.map((group) => (
                       <SelectGroup key={group.label}>
@@ -232,6 +238,7 @@ export function OmpModelRolesFallbackFields({
                     onValueChange={(value) =>
                       handleLevelChange(item.role, value === DEFAULT_LEVEL_VALUE ? "" : value)
                     }
+                    disabled={saving}
                   >
                     <SelectTrigger
                       aria-label={`${item.role} ${intl.formatMessage({ id: "settings.ompModelRoles.thinkingLevel" })}`}

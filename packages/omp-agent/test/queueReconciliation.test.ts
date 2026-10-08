@@ -6,11 +6,8 @@
 // 旧核（v18.4.8）abort 后队列冻结、get_state.queuedMessages 仍是队列事实。
 // S4-1/S4-2/S4-3/S4-4 修复 UT：停止边界 drain 消费的 seen（在场历史）判定、从未 seen 轮的
 // 宽限复查、"/" 前缀 chip 匹配（用例见下方 A3/S4 区块）。
-// F2b 修复 UT：follow_up/steer 分发 success ACK ⇒ 已入队（v18.4.8：rpc handler 在 await
-// followUp()/steer() 后才回 ACK）→ ACK 到达即以 markOnly 登记 seen（快速 drain 无需任何
-// 快照，P1）；"/" 前缀匹配收紧为命令名段比对（/deploy 不命中 /deploy-prod，P2）。
-// 语义变更（P1）：success ACK 已到达的排队轮不再属于「从未 seen」宽限场景——宽限/
-// interrupted 用例的「从未 seen」前提改由 ACK 在途未达构造（runWithQueuedFollowUpPendingAck）。
+// F010/F018 回归：success ACK 不证明核心接纳；同文快照按 occurrence 一对一匹配，
+// 重复快照不能把既有事实转授尚未接纳的新 commandId。斜杠 chip 仍按精确命令名边界匹配。
 
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -23,6 +20,7 @@ import type {
   OmpSessionProcess,
 } from "../src/app/ports.js";
 import type { OmpSessionEventFrame, OmpStateData } from "../src/domain/ompFrames.js";
+import { markQueueReconcileTexts } from "../src/domain/queuedTurnReconcile.js";
 
 interface EngineHarness {
   engine: ConversationEngine;
@@ -145,6 +143,11 @@ test("队列分发失败移除对应等待项，不误删另一条相同输入",
     await harness.engine.sendText("hello", "accepted", "client");
     rejectNext = true;
     await harness.engine.sendText("hello", "failed", "client");
+    assert.deepEqual(
+      harness.engine.projection.buildSnapshot().queue.items.map((item) => item.sourceCommandId),
+      ["accepted"],
+      "失败 mutation 返回时已同步移除，不靠 drain 修复读面",
+    );
     harness.engine.projection.drainPendingDeltas();
     assert.deepEqual(
       harness.engine.projection.buildSnapshot().queue.items.map((item) => item.sourceCommandId),
@@ -237,8 +240,6 @@ async function runWithQueuedFollowUp(harness: EngineHarness): Promise<string> {
 
 /**
  * A 流式运行 + B follow_up 排队（success ACK 在途未达）的公共前奏；返回引擎与 B 的 turnId。
- * F2b-P1 之后的「从未 seen」前提构造：success ACK 到达即按分发原文自匹配登记 seen
- * （ACK ⇒ 已入队，v18.4.8），故宽限/interrupted 场景必须让 ACK 在途未达（send 挂起不落）——
  * 轮已本地排队，但入队事实尚未被证明，也没有任何 omp 快照携带过它。
  */
 async function runWithQueuedFollowUpPendingAck(
@@ -276,9 +277,8 @@ test("A3①：follow_up ACK 在途未达 + terminal agent_end + get_state 无该
   try {
     harness.onEvent({ type: "agent_end" });
     await flushAsync();
-    // 该轮从未被证明入队（ACK 未达、无任何快照在场）：不能立即判 interrupted（可能仍
-    // 在入队路上，「绝不误关」），保持排队并触发一次宽限复查。F2b-P1 语义变更：success
-    // ACK 已到达的轮此刻即登记 seen 并按合并终态收口（见 F2b-P1①），不再落入本分支。
+    // 未见真实队列事实的轮可能仍在入队路上；ACK 未达或已达均不能证明执行完成，
+    // 保持排队并触发一次宽限复查，不制造成功。
     assert.equal(harness.engine.projection.hasQueuedTurns(), true);
     assert.equal(
       headerStates(harness).find((header) => header.turnId === bTurnId)?.state,
@@ -389,35 +389,282 @@ test('S4-4④："/" 开头排队文本按 chip 前缀匹配——模板展开后
   }
 });
 
-// ── F2b：ACK 即 seen（P1）与 "/" 命令名段匹配（P2）──
-// P1 依据（omp v18.4.8 源码核对）：#queueUserMessage（agent-session.ts:8053-8170）在
-// `await session.followUp()/steer()` 完成后才返回，rpc handler 在 await 后才回 success ACK
-// ⇒ ACK 到达即已入队；停止边界 drain（agent-loop.ts:1754-1763）可在入队后短于 250ms
-// debounce 窗口内消费该消息（queue_update 被 debounce 合并、terminal agent_end 去重还会
-// 清掉未触发的定时器），快照可能从未携带——分发 success ACK 到达时立即把分发文本以
-// markOnly 单元素快照登记 seen。边界备查：新核输入门（v18.4.10+）取消的 steer/follow_up
-// 同样回 success 但未入队（§14.4「success≠入队」），当前内嵌核 v18.4.8 无输入门判据成立。
+// ── F010/F018：ACK 与 occurrence 身份，以及 "/" 命令名段匹配 ──
 
-test("F2b-P1①：快速 drain——follow_up success ACK 即 seen（无需任何快照）→ agent_end 缺席 → 合并终态 success", async () => {
+test("F018：单元素同文快照只证明第一条，重复markOnly与迟到ACK不让第二条假成功", async () => {
+  let followUp = ["hello"];
+  let dispatches = 0;
+  let releaseSecond: ((outcome: OmpCommandOutcome) => void) | undefined;
+  const harness = createEngine({
+    state: () => ({ queuedMessages: { followUp } }),
+    sendOutcome: (command) => {
+      if (command.type === "follow_up" && ++dispatches === 2) {
+        return new Promise<OmpCommandOutcome>((resolve) => {
+          releaseSecond = resolve;
+        });
+      }
+      return Promise.resolve({ success: true });
+    },
+  });
+  let secondSend: Promise<"startNow" | "queue"> | undefined;
+  try {
+    await harness.engine.sendText("A", "active", "client");
+    harness.onEvent({ type: "agent_start" });
+    await harness.engine.sendText("hello", "first", "client");
+    secondSend = harness.engine.sendText("hello", "second", "client");
+    await flushAsync();
+    for (let replay = 0; replay < 3; replay += 1) {
+      harness.onEvent({ type: "queue_update", followUp, steering: [] });
+    }
+    // 同一核心事实在两轮都已本地排队时重放，不能用 .some 把第二轮也登记 seen。
+    followUp = [];
+    harness.onEvent({ type: "agent_end" });
+    await flushAsync();
+    const stateOf = (commandId: string) => {
+      const header = harness
+        .rows()
+        .find((row) => row.kind === "turnHeader" && row.sourceCommandId === commandId);
+      return header?.kind === "turnHeader" ? header.state : null;
+    };
+    assert.equal(stateOf("first"), "completedSuccess");
+    assert.equal(stateOf("second"), "running");
+    harness.engine.projection.drainPendingDeltas();
+    assert.deepEqual(
+      harness.engine.projection.buildSnapshot().queue.items.map((item) => item.sourceCommandId),
+      ["second"],
+    );
+    assert.equal(
+      harness.engine.projection.reconcileQueuedTurns(markQueueReconcileTexts([], "forceClose")),
+      1,
+    );
+    assert.deepEqual(harness.engine.projection.buildSnapshot().queue.items, []);
+    assert.deepEqual(harness.engine.projection.stateSnapshot.queue.items, []);
+    assert.equal(stateOf("second"), "completedInterrupted");
+    releaseSecond!({ success: true });
+    await secondSend;
+    assert.equal(stateOf("second"), "completedInterrupted", "迟到 ACK 不改写已终结轮");
+    assert.equal(
+      harness.engine.projection.reconcileQueuedTurns(markQueueReconcileTexts([], "forceClose")),
+      0,
+    );
+    harness.engine.projection.drainPendingDeltas();
+    assert.deepEqual(harness.engine.projection.buildSnapshot().queue.items, []);
+  } finally {
+    releaseSecond?.({ success: false, error: "test disposed" });
+    await secondSend;
+    await harness.engine.dispose();
+  }
+});
+
+test("F018：第一轮已seen后新增同文轮，旧快照在第一轮出队后也不能重新分配", async () => {
+  let followUp = ["hello"];
+  const harness = createEngine({ state: () => ({ queuedMessages: { followUp } }) });
+  try {
+    await harness.engine.sendText("A", "active", "client");
+    harness.onEvent({ type: "agent_start" });
+    await harness.engine.sendText("hello", "first", "client");
+    harness.onEvent({ type: "queue_update", followUp, steering: [] });
+    await harness.engine.sendText("hello", "second", "client");
+    harness.onEvent({ type: "queue_update", followUp, steering: [] });
+    harness.onEvent({ type: "message_start", message: { role: "user", content: "hello" } });
+    streamText(harness, "first reply");
+    // 第一轮已被 message_start 真正消费。同一个单元素旧快照的身份仍是 first，
+    // 不能因为 first 不在本地等待数组就把旧事实转授给 second。
+    harness.onEvent({ type: "queue_update", followUp, steering: [] });
+    followUp = [];
+    harness.onEvent({ type: "agent_end" });
+    await flushAsync();
+    const headers = harness.rows().filter((row) => row.kind === "turnHeader");
+    assert.equal(headers.find((row) => row.sourceCommandId === "first")?.state, "completedSuccess");
+    assert.equal(headers.find((row) => row.sourceCommandId === "second")?.state, "running");
+    const firstInput = harness
+      .rows()
+      .find((row) => row.kind === "userInput" && row.sourceCommandId === "first")!;
+    assert.deepEqual(assistantTextsOf(harness, firstInput.turnId), ["first reply"]);
+    harness.engine.projection.drainPendingDeltas();
+    assert.deepEqual(
+      harness.engine.projection.buildSnapshot().queue.items.map((item) => item.sourceCommandId),
+      ["second"],
+    );
+    assert.equal(
+      harness.engine.projection.reconcileQueuedTurns(markQueueReconcileTexts([], "forceClose")),
+      1,
+    );
+    const secondHeader = harness
+      .rows()
+      .find((row) => row.kind === "turnHeader" && row.sourceCommandId === "second");
+    assert.equal(
+      secondHeader?.kind === "turnHeader" ? secondHeader.state : null,
+      "completedInterrupted",
+    );
+  } finally {
+    await harness.engine.dispose();
+  }
+});
+
+test("F018：真实同文快照从一项增长到两项再FIFO缩减，逐项移出并保留第二轮身份", async () => {
+  let followUp = ["hello"];
+  const harness = createEngine({ state: () => ({ queuedMessages: { followUp } }) });
+  try {
+    await harness.engine.sendText("A", "active", "client");
+    harness.onEvent({ type: "agent_start" });
+    await harness.engine.sendText("hello", "first", "client");
+    harness.onEvent({ type: "queue_update", followUp, steering: [] });
+    await harness.engine.sendText("hello", "second", "client");
+    followUp = ["hello", "hello"];
+    for (let replay = 0; replay < 2; replay += 1) {
+      harness.onEvent({ type: "queue_update", followUp, steering: [] });
+    }
+    harness.engine.projection.drainPendingDeltas();
+    assert.deepEqual(
+      harness.engine.projection.buildSnapshot().queue.items.map((item) => item.sourceCommandId),
+      ["first", "second"],
+    );
+    followUp = ["hello"];
+    harness.onEvent({ type: "queue_update", followUp, steering: [] });
+    harness.onEvent({ type: "agent_end" });
+    await flushAsync();
+    harness.engine.projection.drainPendingDeltas();
+    assert.deepEqual(
+      harness.engine.projection.buildSnapshot().queue.items.map((item) => item.sourceCommandId),
+      ["second"],
+    );
+    const firstHeader = harness
+      .rows()
+      .find((row) => row.kind === "turnHeader" && row.sourceCommandId === "first");
+    assert.equal(firstHeader?.kind === "turnHeader" ? firstHeader.state : null, "completedSuccess");
+    // 只有第二项仍真实排队；用户消费事件关联第二轮的输出，而不是已收口的第一轮。
+    harness.onEvent({ type: "agent_start" });
+    harness.onEvent({ type: "message_start", message: { role: "user", content: "hello" } });
+    streamText(harness, "second reply");
+    followUp = [];
+    harness.onEvent({ type: "agent_end" });
+    await flushAsync();
+    harness.engine.projection.drainPendingDeltas();
+    assert.deepEqual(harness.engine.projection.buildSnapshot().queue.items, []);
+    const secondInput = harness
+      .rows()
+      .find((row) => row.kind === "userInput" && row.sourceCommandId === "second")!;
+    assert.deepEqual(assistantTextsOf(harness, secondInput.turnId), ["second reply"]);
+    assert.ok(headerStates(harness).every((header) => header.state === "completedSuccess"));
+  } finally {
+    await harness.engine.dispose();
+  }
+});
+
+test("F018：markOnly观察旧项消失后，新的单元素同文事实只接纳下一轮", async () => {
+  let followUp: string[] = [];
+  const harness = createEngine({ state: () => ({ queuedMessages: { followUp } }) });
+  try {
+    await harness.engine.sendText("A", "active", "client");
+    harness.onEvent({ type: "agent_start" });
+    await harness.engine.sendText("hello", "first", "client");
+    followUp = ["hello"];
+    harness.onEvent({ type: "queue_update", followUp, steering: [] });
+    followUp = [];
+    harness.onEvent({ type: "queue_update", followUp, steering: [] });
+    // 旧核没有用户消费事件：first 已被核心drain，但markOnly必须暂留到run终态。
+    assert.equal(harness.engine.projection.hasQueuedTurns(), true);
+    await harness.engine.sendText("hello", "second", "client");
+    followUp = ["hello"];
+    harness.onEvent({ type: "queue_update", followUp, steering: [] });
+    harness.onEvent({ type: "queue_update", followUp, steering: [] });
+    followUp = [];
+    harness.onEvent({ type: "agent_end" });
+    await flushAsync();
+    harness.engine.projection.drainPendingDeltas();
+    assert.deepEqual(harness.engine.projection.buildSnapshot().queue.items, []);
+    assert.ok(headerStates(harness).every((header) => header.state === "completedSuccess"));
+  } finally {
+    await harness.engine.dispose();
+  }
+});
+test("F018：消费后无等待轮的真实空快照复位，下一条同文输入可由新事实接纳", async () => {
+  let followUp: string[] = [];
+  const harness = createEngine({ state: () => ({ queuedMessages: { followUp } }) });
+  try {
+    await harness.engine.sendText("A", "active", "client");
+    harness.onEvent({ type: "agent_start" });
+    await harness.engine.sendText("hello", "first", "client");
+    followUp = ["hello"];
+    harness.onEvent({ type: "queue_update", followUp, steering: [] });
+    harness.onEvent({ type: "message_start", message: { role: "user", content: "hello" } });
+    assert.equal(harness.engine.projection.hasQueuedTurns(), false);
+    followUp = [];
+    harness.onEvent({ type: "queue_update", followUp, steering: [] });
+    await harness.engine.sendText("hello", "second", "client");
+    followUp = ["hello"];
+    harness.onEvent({ type: "queue_update", followUp, steering: [] });
+    followUp = [];
+    harness.onEvent({ type: "agent_end" });
+    await flushAsync();
+    harness.engine.projection.drainPendingDeltas();
+    assert.deepEqual(harness.engine.projection.buildSnapshot().queue.items, []);
+    assert.ok(headerStates(harness).every((header) => header.state === "completedSuccess"));
+  } finally {
+    await harness.engine.dispose();
+  }
+});
+
+test("F018：纯图片空文本在markOnly与forceClose快照中都保持不确定，不误关", async () => {
+  const harness = createEngine();
+  try {
+    await harness.engine.sendText("A", "active", "client");
+    harness.onEvent({ type: "agent_start" });
+    await harness.engine.sendText("", "image", "client", [
+      {
+        type: "image",
+        mimeType: "image/png",
+        data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jO1sAAAAASUVORK5CYII=",
+      },
+    ]);
+    harness.onEvent({ type: "queue_update", followUp: [""], steering: [] });
+    assert.equal(
+      harness.engine.projection.reconcileQueuedTurns(markQueueReconcileTexts([], "markOnly")),
+      0,
+    );
+    assert.equal(harness.engine.projection.reconcileQueuedTurns(null), 0);
+    assert.equal(
+      harness.engine.projection.reconcileQueuedTurns(markQueueReconcileTexts([], "forceClose")),
+      0,
+    );
+    const header = harness
+      .rows()
+      .find((row) => row.kind === "turnHeader" && row.sourceCommandId === "image");
+    assert.equal(header?.kind === "turnHeader" ? header.state : null, "running");
+    harness.engine.projection.drainPendingDeltas();
+    assert.deepEqual(
+      harness.engine.projection.buildSnapshot().queue.items.map((item) => item.sourceCommandId),
+      ["image"],
+    );
+  } finally {
+    await harness.engine.dispose();
+  }
+});
+
+test("F010：follow_up success ACK 没有队列或消费事实 → 不假成功，宽限后 interrupted", async () => {
   const harness = createEngine({ state: () => ({ queuedMessages: { followUp: [] } }) });
   try {
     await harness.engine.sendText("A", "cmd-a", "client");
     harness.onEvent({ type: "agent_start" });
     const delivery = await harness.engine.sendText("B 文本", "cmd-b", "client");
     assert.equal(delivery, "queue");
-    // success ACK 已随 sendText 返回到达（⇒ 已入队），全程无任何 queue_update/get_state
-    // 快照携带 B：seen 登记只能来自 ACK（修复前该轮「从未 seen」）。停止边界 drain：
-    // agent_end 到达时 omp 队列已无 B（快照缺席）——seen 且缺席按合并终态收口 success，
-    // 不经过宽限 interrupted（修复前该窗口内被误标 interrupted，实际已被成功回答）。
+    // 新核输入门取消也可返回 success；外层 ACK 本身不能把未见队列事实的 B 记为 seen。
     harness.onEvent({ type: "agent_end" });
     await flushAsync();
     const bTurnId = harness
       .rows()
       .find((row) => row.kind === "userInput" && row.text === "B 文本")!.turnId;
+    assert.equal(harness.engine.projection.hasQueuedTurns(), true);
+    assert.equal(
+      headerStates(harness).find((header) => header.turnId === bTurnId)?.state,
+      "running",
+    );
+    await sleep(2300);
     assert.equal(harness.engine.projection.hasQueuedTurns(), false);
     assert.equal(
       headerStates(harness).find((header) => header.turnId === bTurnId)?.state,
-      "completedSuccess",
+      "completedInterrupted",
     );
   } finally {
     await harness.engine.dispose();
@@ -427,7 +674,7 @@ test("F2b-P1①：快速 drain——follow_up success ACK 即 seen（无需任�
 test("F2b-P2②：前缀碰撞——快照仅含 /deploy-prod 时 /deploy 轮不登记 seen（宽限后 interrupted）", async () => {
   const { harness, bTurnId } = await runWithQueuedFollowUpPendingAck(
     {
-      // ACK 在途未达：隔离 P2 快照匹配路径（成功 ACK 会按分发原文自匹配登记 seen）。
+      // ACK 尚未返回，快照中只有不同命令，不能构成 /deploy 的事实。
       state: () => ({ queuedMessages: { followUp: ["/deploy-prod"] } }),
     },
     "/deploy",
@@ -465,7 +712,7 @@ test("F2b-P2③：同命令参数 chip 仍命中——/deploy 命中 /deploy pro
   );
   try {
     // 快照含同命令参数 chip（模板展开形态）：命令名段 + 空格前缀命中 → 登记 seen、
-    // 保持排队（ACK 在途未达，seen 只能来自快照匹配——隔离 P2 匹配路径）。
+    // 保持排队；seen 必须来自快照中的同命令 chip。
     harness.onEvent({
       type: "queue_update",
       followUp: ["/deploy prod --yes --timeout=90s"],
@@ -597,7 +844,7 @@ test("XR1②：序号未变（无新输入）时对账语义保持——期间�
   // 守卫只跳过「在途期间接受了新输入」的对账；无新输入时快照就是当前事实：缺席轮经
   // S4-2 宽限复查后仍按 interrupted 收口（回归：正常对账仍生效，绝不悬挂 running）；
   // 宽限窗口内不携带该文本的 queue_update 只触发默认对账（缺席且从未 seen → 保持排队），
-  // 不解除宽限。（F2b-P1 之后「从未 seen」前提由 ACK 在途未达构造，见公共前奏注释。）
+  // 不解除宽限，ACK 状态也不改变未见核心事实的判定。
   const { harness, bTurnId } = await runWithQueuedFollowUpPendingAck({
     state: () => ({ queuedMessages: { followUp: [] } }),
   });
@@ -688,6 +935,11 @@ test("A5 竞态：agent_end 插在 beginUserTurn(guide) 与 steer 响应之间 �
     const guideSend = harness.engine.sendText("G 引导", "cmd-g", "client");
     // steer 在途：terminal agent_end 到达（旧轮被收口，guide 轮无内容 → 转回排队）。
     harness.onEvent({ type: "agent_end" });
+    assert.deepEqual(
+      harness.engine.projection.buildSnapshot().queue.items.map((item) => item.sourceCommandId),
+      ["cmd-g"],
+      "guide 转回排队的 mutation 立即更新快照，无需等待 flush",
+    );
     const aTurnId = harness
       .rows()
       .find((row) => row.kind === "userInput" && row.text === "A")!.turnId;
@@ -747,6 +999,7 @@ test("A5 竞态失败路径：steer 响应失败 → 转回排队的 guide 轮�
     releaseSteer();
     await guideSend;
     assert.equal(harness.engine.projection.hasQueuedTurns(), false);
+    assert.deepEqual(harness.engine.projection.buildSnapshot().queue.items, []);
     const gTurnId = harness
       .rows()
       .find((row) => row.kind === "userInput" && row.text === "G 引导")!.turnId;

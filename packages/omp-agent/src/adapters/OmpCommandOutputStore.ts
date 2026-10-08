@@ -1,15 +1,13 @@
-// command_output 未进入 OMP journal，GUI 冷恢复只能保存收到的文本派生记录。
+// command_output 缺少原生 journal 记录时，GUI 冷恢复保存收到的文本派生记录。
 // 单一异步写入链覆盖追加、身份关联与删除，防止关闭/删除后迟到写入复活历史。
 import { createHash, randomUUID } from "node:crypto";
-import { createReadStream } from "node:fs";
 import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
-import { createInterface } from "node:readline";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import type { OmpCommandOutputRecord } from "../domain/OmpCommandOutput.js";
 import { ompSessionIdOfFilePath } from "../domain/ids.js";
 import type { OmpCommandOutputSession, OmpStoreSessionSummary } from "../app/ports.js";
 import { logger } from "./logger.js";
-import { nativeOmpCustomDisplays } from "../domain/OmpCustomMessage.js";
+import { NativeCustomOutputIndex } from "./nativeCustomOutputIndex.js";
 
 interface CommandHistory {
   version: 1;
@@ -84,11 +82,16 @@ export function createOmpCommandOutputStore(root: string, workspaceIdentity?: st
   const directoryOf = (cwd: string) => join(root, digest(workspaceIdentity?.trim() || cwd));
   let tail = Promise.resolve();
   let writeFailure: unknown;
-  const serial = <T>(operation: () => Promise<T>): Promise<T> => {
+  // 单一串行链持有原生派生索引；读取游标及 fd 生命周期由专用 adapter 管理。
+  const nativeIndex = new NativeCustomOutputIndex();
+  const serial = <T>(operation: () => Promise<T>, kind: "read" | "write" = "write"): Promise<T> => {
     const current = tail.then(operation);
     tail = current.then(
       () => {},
       (error) => {
+        // 查询错误由 current 原样拒绝；只能持久写入失败留给 flush 再报告。
+        // 否则一次冷扫描失败会污染后续成功扫描后的 dispose，误报旧的读取错误。
+        if (kind === "read") return;
         writeFailure = error;
         logger.warn("OMP 命令派生历史写入失败", { error: String(error) });
       },
@@ -101,8 +104,22 @@ export function createOmpCommandOutputStore(root: string, workspaceIdentity?: st
     try {
       names = await readdir(directory);
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
-      throw error;
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      // Windows 在祖先为普通文件时也可能对 root/工作区返回 ENOENT。
+      // 只有确实缺目录才是空历史；逐级找到现存祖先，让非目录/权限错误保留真实 cause。
+      let ancestor = root;
+      for (;;) {
+        try {
+          const info = await stat(ancestor);
+          if (!info.isDirectory()) await readdir(ancestor);
+          return [];
+        } catch (ancestorError) {
+          if ((ancestorError as NodeJS.ErrnoException).code !== "ENOENT") throw ancestorError;
+          const parent = dirname(ancestor);
+          if (parent === ancestor) return [];
+          ancestor = parent;
+        }
+      }
     }
     const records = await Promise.all(
       names
@@ -113,9 +130,9 @@ export function createOmpCommandOutputStore(root: string, workspaceIdentity?: st
             const history = historyRecord(JSON.parse(await readFile(path, "utf8")));
             return history ? { path, history } : null;
           } catch (error) {
-            if ((error as NodeJS.ErrnoException).code !== "ENOENT")
-              logger.warn("OMP 命令派生历史读取失败", { error: String(error) });
-            return null;
+            if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+            // 未读到的行不等于已删除；完整扫描失败必须由调用方保留上一份索引。
+            throw error;
           }
         }),
     );
@@ -141,47 +158,6 @@ export function createOmpCommandOutputStore(root: string, workspaceIdentity?: st
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
       throw error;
-    }
-  };
-  const customAlreadyPersisted = async (
-    sessionPath: string | null,
-    record: OmpCommandOutputRecord,
-  ): Promise<boolean> => {
-    if (!sessionPath || record.customType === undefined || record.nativeTimestamp === undefined)
-      return false;
-    if (
-      record.nativeSessionId !== undefined &&
-      record.nativeSessionId !== ompSessionIdOfFilePath(sessionPath)
-    )
-      return false;
-    const stream = createReadStream(sessionPath, { encoding: "utf8" });
-    const lines = createInterface({ input: stream, crlfDelay: Infinity });
-    try {
-      for await (const line of lines) {
-        let entry: unknown;
-        try {
-          entry = JSON.parse(line);
-        } catch {
-          continue;
-        }
-        // 同 type/正文的旧事件不能覆盖新结果；仅原生事件时间相同才证明已经落盘。
-        if (
-          nativeOmpCustomDisplays([entry]).some(
-            (native) =>
-              native.customType === record.customType &&
-              native.text === record.text &&
-              native.timestamp === record.nativeTimestamp,
-          )
-        )
-          return true;
-      }
-      return false;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
-      throw error;
-    } finally {
-      lines.close();
-      stream.destroy();
     }
   };
   const associate = async (
@@ -239,7 +215,7 @@ export function createOmpCommandOutputStore(root: string, workspaceIdentity?: st
           if (summary) summaries.push(summary);
         }
         return summaries;
-      });
+      }, "read");
     },
     findSession(cwd: string, sessionId: string): Promise<OmpStoreSessionSummary | null> {
       return serial(async () => {
@@ -250,7 +226,7 @@ export function createOmpCommandOutputStore(root: string, workspaceIdentity?: st
           if (summary) return summary;
         }
         return null;
-      });
+      }, "read");
     },
     appendCommandOutput(
       session: OmpCommandOutputSession,
@@ -258,7 +234,7 @@ export function createOmpCommandOutputStore(root: string, workspaceIdentity?: st
     ): Promise<void> {
       return serial(async () => {
         // core 在 message_end 前已 flush；journal 有该 custom 时不保存第二份显示副本。
-        if (await customAlreadyPersisted(session.sessionPath, record)) return;
+        if (await nativeIndex.hasPersisted(session.sessionPath, record)) return;
         const nativeSessionId =
           record.nativeSessionId ??
           (record.customType !== undefined ? ompSessionIdOfFilePath(session.sessionPath) : null);
@@ -323,8 +299,11 @@ export function createOmpCommandOutputStore(root: string, workspaceIdentity?: st
     ): Promise<boolean> {
       return serial(async () => {
         for (const { path, history } of await histories(cwd)) {
-          if (matches(history, sessionId, sessionPath)) await rm(path, { force: true });
+          if (!matches(history, sessionId, sessionPath)) continue;
+          if (history.sessionPath) nativeIndex.invalidate(history.sessionPath);
+          await rm(path, { force: true });
         }
+        if (sessionPath) nativeIndex.invalidate(sessionPath);
         return true;
       });
     },

@@ -131,20 +131,22 @@ export class ConversationProjection {
     consumeQueuedInputOf(this.queuedReconcileHost, text);
     if (native) ensureOmpNativeTurn(this.queuedReconcileHost, text);
   }
-  /** 本地命令没有 agent_start；上一轮结束后由完成事实激活并收口队首。 */
   finishQueuedLocalOnlyTurn(sourceCommandId?: string): boolean {
-    return finishQueuedLocalOnlyTurnOf(
+    const finished = finishQueuedLocalOnlyTurnOf(
       this.queuedReconcileHost,
       () => this.closeAssistantResponse(),
       (outcome) => this.finishTurn(outcome),
       sourceCommandId,
     );
+    publishQueuedInputsOf(this.queuedReconcileHost);
+    return finished;
   }
   failCommandTurn(sourceCommandId: string, error: { code: string; message: string }): void {
     failCommandTurnOf(this.queuedReconcileHost, sourceCommandId, error, (failure) => {
       this.recordTurnError(failure);
       this.finishTurn("failed", failure);
     });
+    publishQueuedInputsOf(this.queuedReconcileHost);
   }
   failAllTurns(error: { code: string; message: string }): void {
     failAllTurnsOf(this.queuedReconcileHost, error, (sourceCommandId, failure) => this.failCommandTurn(sourceCommandId, failure));
@@ -159,29 +161,29 @@ export class ConversationProjection {
   }
   finishTurn(outcome: TurnOutcome, error?: { code: string; message: string }): void {
     finishTurnOf(this.queuedReconcileHost, outcome, error);
+    publishQueuedInputsOf(this.queuedReconcileHost);
   }
   hasQueuedTurns(): boolean {
     return this.queuedTurns.length > 0;
   }
-  /**
-   * 队列对账（A3）：判定与收口逻辑在 queuedTurnReconcile.ts（对账语义注释见该模块）；
-   * 返回收口数。
-   */
   reconcileQueuedTurns(queueTexts: string[] | null): number {
-    return reconcileQueuedTurnsOf(this.queuedReconcileHost, queueTexts);
+    const closed = reconcileQueuedTurnsOf(this.queuedReconcileHost, queueTexts);
+    publishQueuedInputsOf(this.queuedReconcileHost);
+    return closed;
   }
-  /** agent_start 合并收口（A4）：合并语义与显示失真备注见 queuedTurnReconcile.ts。 */
   mergeQueuedTurnsIntoActive(): void {
     if (this.turn === null) return;
     mergeQueuedTurnsIntoActiveOf(this.queuedReconcileHost);
+    publishQueuedInputsOf(this.queuedReconcileHost);
   }
   /** 当前活跃轮的 sourceCommandId（无活跃轮为 null；A5 steer 在途判定用）。 */
   activeTurnSourceCommandId(): string | null {
     return this.turn?.sourceCommandId ?? null;
   }
-  /** steer 在途竞态（A5）：完整竞态语义与时序见 queuedTurnReconcile.ts；返回 false 时调用方按常规 agent_end 收口。 */
   requeueActiveTurnAsQueued(outcome: TurnOutcome, error?: { code: string; message: string }): boolean {
-    return requeueActiveTurnAsQueuedOf(this.queuedReconcileHost, outcome, error);
+    const requeued = requeueActiveTurnAsQueuedOf(this.queuedReconcileHost, outcome, error);
+    publishQueuedInputsOf(this.queuedReconcileHost);
+    return requeued;
   }
   appendAssistantText(delta: string): void {
     appendProjectionStreamDelta(this.streamHost, delta, "assistantText");
@@ -325,7 +327,6 @@ export class ConversationProjection {
 
   /** pending → delta log（合并连续同构 op）；返回合并后的列表。 */
   drainPendingDeltas(): ConversationDelta[] {
-    publishQueuedInputsOf(this.queuedReconcileHost);
     if (this.pending.length === 0) {
       return [];
     }

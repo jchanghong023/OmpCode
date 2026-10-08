@@ -38,6 +38,7 @@ test("persisted/realtime metadata preserves migration and validates its canonica
   };
   assert.deepEqual(zcodeTaskMetaSchema.parse(meta).taskIdMigration, event.taskIdMigration);
   assert.equal(zcodeTaskMetaSchema.safeParse({ ...meta, taskId: "wrong" }).success, false);
+  assert.equal(zcodeTaskMetaSchema.safeParse({ ...meta, mode: undefined }).success, false);
   const envelope = {
     type: "workspace_task_list_invalidated",
     eventId: "event",

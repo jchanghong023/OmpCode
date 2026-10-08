@@ -5,6 +5,9 @@
   "license": "Apache-2.0",
   "type": "module",
   "scripts": {
+    "fastcheck": "node scripts/test-gates.mjs fastcheck",
+    "fulltest": "node scripts/test-gates.mjs fulltest",
+    "slowtest": "node scripts/test-gates.mjs slowtest",
     "dev:web": "concurrently -k -n server,web -c blue,green \"pnpm --filter @zcode/server dev\" \"pnpm --filter @zcode/web dev\"",
     "dev:desktop": "pnpm run dev:desktop:prod",
     "dev:desktop:test": "node scripts/dev-desktop-env.mjs test",

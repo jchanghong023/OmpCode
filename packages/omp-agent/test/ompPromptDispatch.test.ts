@@ -148,18 +148,28 @@ test("普通文本 → prompt 携带 images（无 inputMode 字段）", async ()
   });
 });
 
-test("流式 + guide 的普通补充 → steer 携带文本与附件", async () => {
-  const process = new StubProcess();
-  const outcome = await dispatch(process, {
-    text: "改成英文",
-    images: [IMAGE],
-    streaming: true,
-    followupMode: "guide",
+for (const followupMode of ["queue", "guide"] as const) {
+  test(`流式 ${followupMode} 补充保留合并文本和图片，不降级为 prompt`, async () => {
+    const process = new StubProcess();
+    const text =
+      '改成英文\n\n<attached_file name="a.txt" mime="text/plain">\n完整附件正文\n</attached_file>';
+    const outcome = await dispatch(process, {
+      text,
+      originalText: "改成英文",
+      images: [IMAGE],
+      streaming: true,
+      followupMode,
+    });
+    assert.equal(outcome.success, true);
+    assert.deepEqual(process.sent, [
+      {
+        type: followupMode === "guide" ? "steer" : "follow_up",
+        message: text,
+        images: [IMAGE],
+      },
+    ]);
   });
-  assert.equal(outcome.success, true);
-  assert.equal(process.sent.length, 1);
-  assert.deepEqual(process.sent[0], { type: "steer", message: "改成英文", images: [IMAGE] });
-});
+}
 
 for (const followupMode of ["queue", "guide"] as const) {
   test(`busy 原生命令仍走 prompt 并保留 ${followupMode} 的模型输入策略`, async () => {

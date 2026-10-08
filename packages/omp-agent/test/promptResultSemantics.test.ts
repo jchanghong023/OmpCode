@@ -8,13 +8,19 @@ import {
   ompSessionEventFrameSchema,
   type OmpPromptResultFrame,
   type OmpSessionEventFrame,
+  type OmpCommandFrame,
   type OmpStateData,
 } from "../src/domain/ompFrames.js";
 import { PromptResultTracker } from "../src/domain/promptResultTracker.js";
 import { ConversationProjection } from "../src/domain/conversationProjection.js";
 import { OmpEventProjector } from "../src/domain/ompProjector.js";
 import { ConversationEngine } from "../src/app/conversationEngine.js";
-import type { HostGateway, OmpProcessFactory, OmpSessionProcess } from "../src/app/ports.js";
+import type {
+  HostGateway,
+  OmpCommandOutcome,
+  OmpProcessFactory,
+  OmpSessionProcess,
+} from "../src/app/ports.js";
 
 // ── A1：帧 schema ──
 
@@ -79,17 +85,22 @@ interface CapturedHandlers {
   onPromptResult: (frame: OmpPromptResultFrame) => void;
 }
 
-function createEngine() {
+function createEngine(
+  options: {
+    send?: (command: OmpCommandFrame) => Promise<OmpCommandOutcome>;
+    state?: () => OmpStateData | Promise<OmpStateData>;
+  } = {},
+) {
   const handlers = {} as CapturedHandlers;
   const process: OmpSessionProcess = {
     ompSessionFile: "test.jsonl",
     async start() {},
-    async send() {
-      return { success: true };
+    async send(command) {
+      return options.send ? options.send(command) : { success: true };
     },
     respondUi() {},
     async refreshState(): Promise<OmpStateData> {
-      return {};
+      return options.state ? options.state() : {};
     },
     async readContextReport() {
       return null;
@@ -217,6 +228,236 @@ test("S4-3：agentInvoked=false + status=aborted → interrupted；completed 仍
     } finally {
       await local.engine.dispose();
     }
+  } finally {
+    await engine.dispose();
+  }
+});
+
+// F010：当前 OMP 的 steer/follow_up 在输入门被取消后仍返回 success、无 data。
+// 回归从公开引擎输入/停止入口验证 UI 使用的快照，不伪造协议不存在的 cancelled 字段。
+const settleEvents = () => new Promise<void>((resolve) => setImmediate(resolve));
+
+for (const mode of ["queue", "guide"] as const) {
+  test(`F010 ${mode}：输入门取消的无 data success ACK 不产生成功轮或残留队列`, async () => {
+    let finishSupplement!: (outcome: OmpCommandOutcome) => void;
+    let supplementSent!: () => void;
+    const sent = new Promise<void>((resolve) => {
+      supplementSent = resolve;
+    });
+    let harness!: { engine: ConversationEngine; handlers: CapturedHandlers };
+    harness = createEngine({
+      state: () => ({ queuedMessages: { steering: [], followUp: [] } }),
+      async send(command) {
+        if (command.type === "steer" || command.type === "follow_up") {
+          supplementSent();
+          return new Promise<OmpCommandOutcome>((resolve) => {
+            finishSupplement = resolve;
+          });
+        }
+        if (command.type === "abort") {
+          // 输入门取消但 handler 丢弃 cancelled，先发 success ACK，再发终态/空快照。
+          finishSupplement({ success: true });
+          await settleEvents();
+          harness.handlers.onEvent({ type: "agent_end" });
+        }
+        return { success: true };
+      },
+    });
+    try {
+      await harness.engine.sendText("正在执行", "running", "client");
+      harness.handlers.onEvent({ type: "agent_start" });
+      harness.engine.setFollowupMode(mode);
+      const sending = harness.engine.sendText("被门取消的补充", "cancelled", "client");
+      await sent;
+      await harness.engine.stop();
+      await sending;
+      const snapshot = harness.engine.projection.buildSnapshot();
+      const header = snapshot.rows.window.find(
+        (row) => row.kind === "turnHeader" && row.sourceCommandId === "cancelled",
+      );
+      assert.equal(header?.kind === "turnHeader" ? header.state : null, "completedInterrupted");
+      assert.deepEqual(snapshot.queue.items, []);
+      assert.equal(
+        snapshot.rows.window.some((row) => row.kind === "turnHeader" && row.state === "running"),
+        false,
+      );
+      assert.equal(
+        snapshot.rows.window.find(
+          (row) => row.kind === "userInput" && row.sourceCommandId === "cancelled",
+        )?.kind,
+        "userInput",
+      );
+    } finally {
+      await harness.engine.dispose();
+    }
+  });
+}
+
+test("F010：无 data success ACK 后空终态快照不是接纳证据，迟到真实消费仍可执行", async () => {
+  const { engine, handlers } = createEngine({
+    state: () => ({ queuedMessages: { steering: [], followUp: [] } }),
+  });
+  try {
+    await engine.sendText("主轮", "running", "client");
+    handlers.onEvent({ type: "agent_start" });
+    await engine.sendText("尚无消费事实", "unobserved", "client");
+    handlers.onEvent({ type: "agent_end" });
+    // 终态只收口主轮；不等 publisher 的定时 flush，公开快照与 owner 读面就须保留等待项。
+    assert.deepEqual(
+      engine.projection.buildSnapshot().queue.items.map((item) => item.sourceCommandId),
+      ["unobserved"],
+    );
+    assert.deepEqual(
+      engine.projection.stateSnapshot.queue.items.map((item) => item.sourceCommandId),
+      ["unobserved"],
+    );
+    await settleEvents();
+    const waiting = engine.projection.buildSnapshot();
+    assert.deepEqual(
+      waiting.queue.items.map((item) => item.sourceCommandId),
+      ["unobserved"],
+    );
+    const pending = waiting.rows.window.find(
+      (row) => row.kind === "turnHeader" && row.sourceCommandId === "unobserved",
+    );
+    assert.notEqual(pending?.kind === "turnHeader" ? pending.state : null, "completedSuccess");
+    // 正常输入仍可在下一轮被实际用户消息消费；没有扩大成 ACK 失败或超时拒绝。
+    handlers.onEvent({ type: "agent_start" });
+    handlers.onEvent({ type: "message_start", message: { role: "user", content: "尚无消费事实" } });
+    const executing = engine.projection.buildSnapshot();
+    assert.deepEqual(executing.queue.items, []);
+    const input = executing.rows.window.find(
+      (row) => row.kind === "userInput" && row.sourceCommandId === "unobserved",
+    );
+    assert.ok(input);
+    handlers.onEvent({
+      type: "message_update",
+      message: { role: "assistant" },
+      assistantMessageEvent: { type: "text_delta", delta: "迟到消费的真实回复" },
+    });
+    handlers.onEvent({ type: "agent_end" });
+    await settleEvents();
+    const consumed = engine.projection.buildSnapshot();
+    assert.deepEqual(consumed.queue.items, []);
+    const header = consumed.rows.window.find(
+      (row) => row.kind === "turnHeader" && row.sourceCommandId === "unobserved",
+    );
+    assert.equal(header?.kind === "turnHeader" ? header.state : null, "completedSuccess");
+    assert.deepEqual(
+      consumed.rows.window
+        .filter((row) => row.kind === "assistantText" && row.turnId === input.turnId)
+        .map((row) => (row.kind === "assistantText" ? row.text : "")),
+      ["迟到消费的真实回复"],
+    );
+  } finally {
+    await engine.dispose();
+  }
+});
+
+test("F010：abort 已完成后才到的补充 success ACK 不能复活已取消命令", async () => {
+  let finishSupplement!: (outcome: OmpCommandOutcome) => void;
+  let supplementSent!: () => void;
+  const sent = new Promise<void>((resolve) => {
+    supplementSent = resolve;
+  });
+  const { engine, handlers } = createEngine({
+    state: () => ({ queuedMessages: { steering: [], followUp: [] } }),
+    async send(command) {
+      if (command.type === "follow_up") {
+        supplementSent();
+        return new Promise<OmpCommandOutcome>((resolve) => {
+          finishSupplement = resolve;
+        });
+      }
+      return { success: true };
+    },
+  });
+  try {
+    await engine.sendText("主轮", "running", "client");
+    handlers.onEvent({ type: "agent_start" });
+    const sending = engine.sendText("迟到取消 ACK", "cancelled-late", "client");
+    await sent;
+    handlers.onEvent({ type: "agent_end" });
+    await engine.stop();
+    finishSupplement({ success: true });
+    await sending;
+    const snapshot = engine.projection.buildSnapshot();
+    assert.deepEqual(snapshot.queue.items, []);
+    const header = snapshot.rows.window.find(
+      (row) => row.kind === "turnHeader" && row.sourceCommandId === "cancelled-late",
+    );
+    assert.equal(header?.kind === "turnHeader" ? header.state : null, "completedInterrupted");
+  } finally {
+    await engine.dispose();
+  }
+});
+
+test("F010：真实 queue_update 在 debounce 前入队并快速 drain，终态后正常收口", async () => {
+  const { engine, handlers } = createEngine({
+    state: () => ({ queuedMessages: { steering: [], followUp: [] } }),
+  });
+  try {
+    await engine.sendText("主轮", "running", "client");
+    handlers.onEvent({ type: "agent_start" });
+    await engine.sendText("快速补充", "consumed", "client");
+    assert.deepEqual(
+      engine.projection.buildSnapshot().queue.items.map((item) => item.sourceCommandId),
+      ["consumed"],
+    );
+    // 同一任务内的真实 enqueue/dequeue 快照，终态 get_state 已看不到此文本。
+    handlers.onEvent({ type: "queue_update", steering: [], followUp: ["快速补充"] });
+    handlers.onEvent({ type: "queue_update", steering: [], followUp: [] });
+    handlers.onEvent({ type: "agent_end" });
+    await settleEvents();
+    const snapshot = engine.projection.buildSnapshot();
+    assert.deepEqual(snapshot.queue.items, []);
+    const header = snapshot.rows.window.find(
+      (row) => row.kind === "turnHeader" && row.sourceCommandId === "consumed",
+    );
+    assert.equal(header?.kind === "turnHeader" ? header.state : null, "completedSuccess");
+  } finally {
+    await engine.dispose();
+  }
+});
+
+test("F010：没有 queue_update 的实际用户消费事件逐项移出队列并承接回复", async () => {
+  const { engine, handlers } = createEngine({
+    state: () => ({ queuedMessages: { steering: [], followUp: [] } }),
+  });
+  try {
+    await engine.sendText("主轮", "running", "client");
+    handlers.onEvent({ type: "agent_start" });
+    await engine.sendText("实际消费", "consumed", "client");
+    handlers.onEvent({
+      type: "message_start",
+      message: { role: "user", content: [{ type: "text", text: "实际消费" }] },
+    });
+    assert.deepEqual(engine.projection.buildSnapshot().queue.items, []);
+    handlers.onEvent({
+      type: "message_update",
+      message: { role: "assistant" },
+      assistantMessageEvent: { type: "text_delta", delta: "补充的真实回复" },
+    });
+    handlers.onEvent({ type: "agent_end" });
+    await settleEvents();
+    const snapshot = engine.projection.buildSnapshot();
+    const input = snapshot.rows.window.find(
+      (row) => row.kind === "userInput" && row.sourceCommandId === "consumed",
+    );
+    assert.ok(input);
+    const header = snapshot.rows.window.find(
+      (row) => row.kind === "turnHeader" && row.sourceCommandId === "consumed",
+    );
+    assert.equal(header?.kind === "turnHeader" ? header.state : null, "completedSuccess");
+    assert.equal(
+      snapshot.rows.window.some(
+        (row) =>
+          row.kind === "assistantText" &&
+          row.turnId === input.turnId &&
+          row.text === "补充的真实回复",
+      ),
+      true,
+    );
   } finally {
     await engine.dispose();
   }

@@ -83,6 +83,57 @@ web-remote-replayable: 同一 owner → 水位增量 / 缺口快照；冷启动�
 
 核心五项（普通消息、技能调用+补全、内置命令+补全、子代理过程、模型双入口）必须逐项真实 GUI 操作验收并记录证据；协议类型检查或页面可打开不替代操作验收。
 
+## 上游审查补充验收与目录所有者时序
+
+以下仅补充既有目录崩溃重建与命令缓存失效规则，不表示本次验证已完成。
+
+- **F006 — 启动收尾退出可重建**：目录进程已经 ready、但仍在协议协商或事件订阅收尾中退出时，本代启动不可成功缓存为可用进程；等待调用必须收到可见的暂不可用失败，挂起请求被拒绝。验收后续查询在既有退避规则允许时创建新实例，重新协商并能成功查询，不持续复用已退出实例。并发首查询共享同一代启动结果；释放/换代后，旧代迟到的启动完成或 exit 不能安装死实例、清除新登记或派发到新实例。正向对照是 ready、协商与收尾完成且实例仍有效时后续查询复用唯一目录进程。该生命周期故障属于暂不可用，不误报旧核能力缺失。
+
+```mermaid
+sequenceDiagram
+  participant Caller as 工作区查询调用方
+  participant Gateway as OmpDirectoryGateway（实例与代次 owner）
+  participant Old as 目录进程 g
+  participant New as 目录进程 g+1
+  Caller->>Gateway: 并发首次查询
+  Gateway->>Old: 同一代惰性启动
+  Old-->>Gateway: ready；协商 / 订阅收尾仍在途
+  Old-->>Gateway: 收尾完成前 exit
+  Gateway->>Gateway: 本代失效，不缓存退出实例
+  Gateway-->>Caller: 共享启动失败，pending 收口
+  Caller->>Gateway: 后续查询（既有退避允许）
+  Gateway->>New: 新代启动并协商 / 订阅
+  New-->>Gateway: 收尾成功，实例仍有效
+  Gateway->>Gateway: 登记 g+1
+  Old-->>Gateway: 迟到完成 / exit
+  Gateway->>Gateway: 忽略旧代，不影响 g+1
+  Gateway->>New: 派发当前查询
+  New-->>Caller: 真实查询结果
+```
+
+- **F014 — invalidate 代次隔离**：命令目录 owner 在 `available_commands_update` 时推进失效代次；事件前发起、事件后才返回的目录查询属于旧代，不能回填当前缓存或用于本次命令 dispatch。验收旧快照含命令 `/removed`，在查询在途时核心移除它并发送更新，再让旧查询完成：缓存与后续查询必须采用更新后目录，提交 `/removed` 明确拒绝且零 `prompt`/模型请求。新增命令在新代目录可见并正常分发；未发生 invalidate 的查询仍可正常复用缓存，不制造永久等待。动态候选继续按既有规则丢弃过期结果；不另建命令事实源。
+
+```mermaid
+sequenceDiagram
+  participant Input as 输入分发调用方
+  participant Resolver as SlashCommandResolver（缓存与失效代次 owner）
+  participant Directory as OMP 目录事实源
+  participant Session as 会话进程
+  Input->>Resolver: resolve(/removed)
+  Resolver->>Directory: 查询目录（代次 g）
+  Directory-->>Resolver: available_commands_update（移除 /removed）
+  Resolver->>Resolver: invalidate，推进至 g+1
+  Directory-->>Resolver: 旧查询响应（仍含 /removed）
+  Resolver->>Resolver: 丢弃旧代，不缓存、不分发
+  Resolver->>Directory: 查询当前代目录（g+1）
+  Directory-->>Resolver: 当前目录不含 /removed
+  Resolver-->>Input: 未知命令错误，零 prompt
+  Input->>Resolver: resolve(当前目录可执行命令)
+  Resolver->>Session: 仅按有效当前目录发送 prompt
+```
+
+上述工作区目录事实同时服务桌面和 Web；恢复仍遵循 [会话恢复](session-recovery.md#上游审查补充验收与所有者时序) 的 `desktop-continuous` / `web-remote-replayable` 区分。F010/F018 的取消 ACK 与同文队列、F016 的创建身份、F001/F019/F027 的连接与预算边界唯一维护在该文件，不在此重定义。
+
 ## 实现与验证状态
 
 - 辅助对话是本 Fork 的 GUI 接入需求，OMP 自身 rpc-ui 需求文档不承诺独立 BTW GUI，不将其当上游等价产品声明。2026-10-08 的 Windows 打包版提交 `ca04952` 已验证 bare `/btw` 空 pane、首问/追问、关闭重开与进程冷恢复，包含 live parent ID 与稳定 task UUID 分离场景；具体版本及边界见 [修复后验收](../test-reports/acceptance-2026-10-08.md)。该历史结果不代表当前工作树或全部 BTW 场景通过；完整交互、Web replayable 重连与 CentOS 7 真实模型 GUI 仍未验收。
@@ -90,3 +141,5 @@ web-remote-replayable: 同一 owner → 水位增量 / 缺口快照；冷启动�
 - 自动化验证（2026-10-07 实际执行，均通过）：`pnpm --filter @zcode/omp-agent test` 217 项 0 失败 0 跳过（含 fake-omp 协议级 E2E 30 项：严格分发/审批两档/富 ask answers/snooze 无协议帧/能力缺失语义；真实内嵌核 E2E 3 项实际执行——流式→write 工具→审批→文件落盘→完成、本地命令收口+临时模型切换（`zhipu-coding-plan/glm-5.3-flash`）、v3 目录能力（complete_command 补全候选/get_model_roles role 目录/能力缺失语义），内嵌二进制取本地安装的 `omp/18.8.0+fork.298`（`OMP_RELEASE_BINARY_PATH` 注入，与 oh-my-pi 源码 HEAD 同日构建）；`pnpm typecheck`、`pnpm lint`（0w0e）、`pnpm fmt:check`、`pnpm architecture:check --changed`（0 违例）。连带面：`packages/ui/test/ompModelRolesFallback.test.ts` 7 项、`packages/services/test/workspaceConfigEvents.test.ts` 1 项通过。
 - 未验证范围（如实记录）：GUI 真实操作验收（Z01—Z17 的桌面链路）未执行——本轮为协议适配与自动化验证闭环，GUI 走查待后续按本文件验收场景补足；CentOS 7 侧（WSL）链路未跑。测试基建已知限制：adapter e2e 的行池按 rowId 合并多会话行，双会话断言需独立 harness（取消路径用例已拆分）。
 - 历史实现与验证记录（项目模式时期，协议面已失效，仅作沿革备查）：2026-09-29 需求定稿与 Z1/Z2 实施；2026-09-30 GUI 真实验收（Z01/Z02/Z03/Z05/Z08/Z09/Z10/Z11/Z12/Z13/Z14/Z15 逐项通过，截图 `%TEMP%/omp-accept/`）；2026-10-01 低危备查两项缺陷修复；2026-10-04 协议对比审查 24 项修复；2026-10-05 第二轮交叉评审闭环（261 测试全绿）。
+
+- 2026-10-09 核心体验续作：目录进程退出缓存、命令失效代次、原生 custom 输出增量历史，以及会话创建/输入/恢复相关回归已纳入 OMP 全集；固定 Node 24.14.0 下 374/374 通过、0 跳过，包含本机安装核的真实 E2E。具体缺陷边界以各自协议/文件 I/O 用例为准，不把真实核的其他成功路径当作真实崩溃注入或全部 GUI 验收。最终 GLM live/stable、R7 正常退出后 cold 与草稿/mentions 场景通过，证据及完整门禁边界见 [核心体验续作验收](../test-reports/performance-hot-paths-2026-10-09.md#核心体验续作验收)。

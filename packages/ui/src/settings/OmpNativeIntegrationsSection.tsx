@@ -69,6 +69,12 @@ export function OmpNativeIntegrationsView({
             const path = scope === "profile" ? snapshot.profileDir : snapshot.projectDir;
             if (!path) return null;
             const scoped = entries?.filter((entry) => entry.scope === scope) ?? [];
+            const scopeErrorMessageId =
+              kind === "hook" && snapshot.hookErrors.includes(scope)
+                ? "settings.ompNative.hooksReadFailed"
+                : kind === "mcp" && snapshot.configErrors.includes(scope)
+                  ? "settings.ompNative.configInvalid"
+                  : null;
             return (
               <div key={scope} className="rounded-lg border border-border p-4">
                 <div className="flex items-start justify-between gap-2">
@@ -89,19 +95,13 @@ export function OmpNativeIntegrationsView({
                     {intl.formatMessage({ id: "settings.ompNative.openDirectory" })}
                   </Button>
                 </div>
-                {kind === "hook" && snapshot.hookErrors.includes(scope) ? (
+                {/* 同一来源可同时有有效条目和读取错误；错误不能遮住条目或冒充无配置。 */}
+                {scopeErrorMessageId ? (
                   <p className="mt-3 text-ui-base text-destructive">
-                    {intl.formatMessage({ id: "settings.ompNative.hooksReadFailed" })}
+                    {intl.formatMessage({ id: scopeErrorMessageId })}
                   </p>
-                ) : snapshot.configErrors.includes(scope) && kind === "mcp" ? (
-                  <p className="mt-3 text-ui-base text-destructive">
-                    {intl.formatMessage({ id: "settings.ompNative.configInvalid" })}
-                  </p>
-                ) : scoped.length === 0 ? (
-                  <p className="mt-3 text-ui-base text-foreground-subtle">
-                    {intl.formatMessage({ id: "settings.ompNative.empty" })}
-                  </p>
-                ) : (
+                ) : null}
+                {scoped.length > 0 ? (
                   <ul className="mt-3 divide-y divide-border">
                     {scoped.map((entry) => (
                       <li
@@ -119,6 +119,10 @@ export function OmpNativeIntegrationsView({
                       </li>
                     ))}
                   </ul>
+                ) : scopeErrorMessageId ? null : (
+                  <p className="mt-3 text-ui-base text-foreground-subtle">
+                    {intl.formatMessage({ id: "settings.ompNative.empty" })}
+                  </p>
                 )}
               </div>
             );

@@ -84,3 +84,19 @@ Windows 原生 IME 和操作系统焦点丢失未验收；测试覆盖实际中�
 补强的独立 visual GUI 已通过：接入产品 `DiffsWorkerPoolProvider`，实际关键词与标识符 token 不同色；暗色/浅色关键词分别为 `rgb(249, 117, 131)` / `rgb(215, 58, 73)`，代码背景分别为 `rgb(43, 43, 43)` / `rgb(255, 255, 255)`。真实 file provider hook 的 raw 清空、deferred 跳空及空查询迟到响应也通过；服务端为受控 port。结果保留于 `%TEMP%/ompcode-hotpaths-20261009-allfixes/evidence/components-visual-result.json`。完整 80 行比较断言已加入脚本，尚未执行本轮真实模型 GUI，不记为通过。
 
 阶段提交前复验：固定 Node 24.14.0，UI 四文件 **24/24 通过，0 跳过**；完整 `pnpm typecheck`、`pnpm lint`、`pnpm fmt:check`、`pnpm architecture:check --changed` 与 `git diff --check` 通过，架构 baseline/new 均为 0。这些结果不替代上段尚未完成的草稿功能验收。
+
+## 核心体验续作验收
+
+范围已收缩为 OMP 核心会话、输入/草稿、附件完整性、目录/配置与事件恢复；未恢复商业账号、登录或付费套餐，也未修复范围之外的 Bot、品牌及独立 HTTP/Git 展示问题。会话事件流的协议 ACK 不是商业订阅。
+
+- 原生命令分支已通过 `ac6cbd1` 合入 `main`，未重复合并。以下证据来自 `eccd0b1e` 上的续作工作区，不冒充旧阶段或正式发布版本的整体结果。
+- 固定 Node 24.14.0 / pnpm 10.33.2，安装核 `%LOCALAPPDATA%/omp/omp.exe`；使用既有 `zhipu-coding-plan/glm-5.3-flash`，所有产品验收使用专用隔离根与端口。
+- OMP 全集 **374/374 通过，0 失败、0 跳过**，含真实核心及显式开启的原生命令场景。定向 UI/Host 组合回归通过；真实 Electron 组件覆盖最新富 JSON、双 pane 焦点与真实 mention picker、pending 成功/失败、新附件引用、来源失败/A→B→A、配置-only 迁移、窗口事件与已有缓存晚绑定。组件的发送 port 与附件引用边界不冒充上传 E2E。
+- 重建 desktop 与 adapter 后，最终 `HOTPATH_CORE_FINAL_20261009` 的真实 GLM live/stable 通过：沙箱项目内建任务、首次临时 ID→UUID、Host 权威元信息与旧 scope 消费者、唯一 canonical 草稿、切回恢复、流式期间新草稿保护及完整 80 行顺序。stable 排除发送前轮次，等待新增回答完成。
+- R7 同一隔离根的正常退出已观察到窗口/进程退出且服务 exit code=0，非托盘隐藏或强杀；随后 cold 验证完整 80 行与草稿恢复通过。正常退出记录为 `evidence/normal-exit-result.json`，cold 结果为 `evidence/cold-hotpaths-result.json`。
+- 最终 mentions 产品 GUI 通过：连续无命中共享补扫轮次、快速清空后新文件可选、实际 Ctrl+C/V 同 Markdown 富节点转文本以及 blur/reload 保持 JSON。首个失败来自全局“新建任务”选择无项目工作区；脚本现复用项目侧栏公开入口，未放宽候选或结果断言。
+- 实际 Chromium WebSocket 积压探针峰值 15,729,495 字节、18 个待处理 RPC；连接以应用关闭码 4008 关闭，18 个 RPC 均拒绝，新连接实际文件读取恢复。该探针不是整套 Web 产品 GUI。
+
+证据根：`%TEMP%/ompcode-performance-acceptance-20261009-resumed`；R7 组件/cold/正常退出在 `evidence`，最终 live/stable/mentions 在 `evidence-core-final`。保留早期失败记录，不把它们与后续通过混淆。
+
+用户已明确授权完整 `slowtest`、当前全部工作区提交/推送和两条 `origin/main` 正式发布。完整门禁记录独立保存于 `%TEMP%/ompcode-allfixes-20261009/authorized-slowtest-*.log`；本节仅陈述已实际完成的定向验证，不预先声称完整门禁或发布成功。现有门禁将真 CentOS 7 VM 包级、Citrix IME 与目标网络盘记录为缺少统一自动入口，不能用本地探针、WSL 或静态结果替代。

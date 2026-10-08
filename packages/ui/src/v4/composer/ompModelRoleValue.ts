@@ -32,6 +32,8 @@ export function selectOmpRoleModelValue(
   modelPart: string,
   catalog: readonly OmpModelCatalogEntry[],
 ): string {
+  // 自动与清除不属于模型目录；必须先处理，不能遗留旧模型的手动思考后缀。
+  if (modelPart === "" || modelPart === "auto") return modelPart;
   const entry = catalog.find(
     (candidate) => `${candidate.providerId}/${candidate.modelId}` === modelPart,
   );

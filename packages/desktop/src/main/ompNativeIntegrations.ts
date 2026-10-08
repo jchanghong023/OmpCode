@@ -53,7 +53,7 @@ function serverTransport(value: Record<string, unknown>): McpServer["transport"]
 }
 
 async function readMcp(
-  directory: string,
+  filePath: string,
   scope: Scope,
 ): Promise<{
   servers: McpServer[];
@@ -63,32 +63,41 @@ async function readMcp(
 }> {
   let raw: string;
   try {
-    raw = await readFile(join(directory, "mcp.json"), "utf8");
+    raw = await readFile(filePath, "utf8");
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT")
       return { servers: [], invalid: false, disabledServers: [], enabledServers: [] };
     return { servers: [], invalid: true, disabledServers: [], enabledServers: [] };
   }
   try {
-    const config = JSON.parse(raw) as Record<string, unknown>;
-    const records = config.mcpServers;
-    if (!records || typeof records !== "object" || Array.isArray(records)) {
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
       return { servers: [], invalid: true, disabledServers: [], enabledServers: [] };
-    }
+    const config = parsed as Record<string, unknown>;
+    // OMP 用户主文件可以只保存跨来源名单；畸形服务器表不能伪装成空配置。
+    const records = config.mcpServers === undefined ? {} : config.mcpServers;
+    if (!records || typeof records !== "object" || Array.isArray(records))
+      return { servers: [], invalid: true, disabledServers: [], enabledServers: [] };
     const disabledServers = Array.isArray(config.disabledServers)
       ? config.disabledServers.filter((name): name is string => typeof name === "string")
       : [];
     const enabledServers = Array.isArray(config.enabledServers)
       ? config.enabledServers.filter((name): name is string => typeof name === "string")
       : [];
+    let invalid = false;
     const servers = Object.entries(records).flatMap(([name, value]) => {
-      if (!value || typeof value !== "object" || Array.isArray(value)) return [];
+      if (!value || typeof value !== "object" || Array.isArray(value)) {
+        invalid = true;
+        return [];
+      }
       const server = value as Record<string, unknown>;
-      return [
-        { name, scope, enabled: server.enabled !== false, transport: serverTransport(server) },
-      ];
+      // 与 OMP discovery 一致，字符串 false/0 也禁用；其余未知值沿用默认启用。
+      const enabled =
+        server.enabled !== false &&
+        !(typeof server.enabled === "string" && /^(?:false|0)$/iu.test(server.enabled));
+      return [{ name, scope, enabled, transport: serverTransport(server) }];
     });
-    return { servers, invalid: false, disabledServers, enabledServers };
+    return { servers, invalid, disabledServers, enabledServers };
   } catch {
     return { servers: [], invalid: true, disabledServers: [], enabledServers: [] };
   }
@@ -109,25 +118,40 @@ export async function readOmpNativeIntegrations(params: {
       scope,
       extensions: await readExtensions(directory, scope),
       hooks: await readHooks(directory, scope),
-      mcp: await readMcp(directory, scope),
+      mcp: await Promise.all(
+        ["mcp.json", ".mcp.json"].map((fileName) => readMcp(join(directory, fileName), scope)),
+      ),
     })),
   );
-  // omp 的用户名单跨 profile/project 来源生效；disabled 优先于强制 enabled。
-  const disabled = new Set(entries[0]?.mcp.disabledServers ?? []);
-  const forcedEnabled = new Set(entries[0]?.mcp.enabledServers ?? []);
+  // OMP discovery 按项目主文件→兼容文件→profile 主文件→兼容文件占名；
+  // 禁用项同样占名，不能让较低优先级的同名配置重新启用。
+  const servers = new Map<string, McpServer>();
+  for (let index = entries.length - 1; index >= 0; index--) {
+    for (const config of entries[index]!.mcp) {
+      for (const server of config.servers) {
+        if (!servers.has(server.name)) servers.set(server.name, server);
+      }
+    }
+  }
+  // OMP 只从用户主文件读取跨来源名单；disabled 始终优先于强制 enabled。
+  const disabled = new Set(entries[0]?.mcp[0]?.disabledServers ?? []);
+  const forcedEnabled = new Set(entries[0]?.mcp[0]?.enabledServers ?? []);
+  const mcpServers: McpServer[] = [];
+  for (const server of servers.values()) {
+    server.enabled =
+      !disabled.has(server.name) && (server.enabled || forcedEnabled.has(server.name));
+    mcpServers.push(server);
+  }
   return {
     profileDir: params.agentDir,
     ...(params.workspacePath ? { projectDir: join(params.workspacePath, ".omp") } : {}),
     extensions: entries.flatMap((entry) => entry.extensions),
     hooks: entries.flatMap((entry) => entry.hooks.hooks),
     hookErrors: entries.filter((entry) => entry.hooks.invalid).map((entry) => entry.scope),
-    mcpServers: entries
-      .flatMap((entry) => entry.mcp.servers)
-      .map((server) => ({
-        ...server,
-        enabled: !disabled.has(server.name) && (server.enabled || forcedEnabled.has(server.name)),
-      })),
-    configErrors: entries.filter((entry) => entry.mcp.invalid).map((entry) => entry.scope),
+    mcpServers,
+    configErrors: entries
+      .filter((entry) => entry.mcp.some((config) => config.invalid))
+      .map((entry) => entry.scope),
     connectionStatus: "unavailable",
   };
 }

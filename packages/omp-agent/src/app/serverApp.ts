@@ -10,6 +10,7 @@ import { UNSUPPORTED_METHODS } from "./unsupportedMethods.js";
 import { SessionRegistry } from "./sessionRegistry.js";
 import { V4CommandService } from "./v4Commands.js";
 import { AttachmentStore } from "./attachmentStore.js";
+import { dispatchAttachmentRequest } from "./attachmentRequests.js";
 import { SubagentViewStore } from "./subagentViews.js";
 import { createOmpDirectoryMethodHandlers } from "./ompDirectoryMethods.js";
 import { buildUsageStatsResponse } from "./usageStatsResponse.js";
@@ -141,28 +142,11 @@ export class ServerApp {
         const commands = Array.isArray(record?.commands) ? record.commands : [];
         return { results: commands.map((key) => ({ key: isRecord(key) ? key : { sessionId: null, commandId: String(key) }, result: "unknown" as const })) };
       }
-      case V4_METHODS.attachmentBegin: {
-        const record = asRecord(params);
-        const result = this.attachments.begin({
-          connectionId: stringField(record, "connectionId"),
-          uploadId: stringField(record, "uploadId"),
-          sessionId: stringField(record, "sessionId"),
-          fileName: stringField(record, "fileName"),
-          mime: stringField(record, "mime"),
-          totalBytes: numberField(record, "totalBytes"),
-          totalChunks: numberField(record, "totalChunks"),
-        });
-        return result.state === "committed"
-          ? { uploadId: result.uploadId, state: result.state, nextChunkIndex: result.nextChunkIndex, ref: result.ref }
-          : { uploadId: result.uploadId, state: result.state, nextChunkIndex: result.nextChunkIndex };
-      }
+      case V4_METHODS.attachmentBegin:
       case V4_METHODS.attachmentChunk:
-        return this.attachments.chunk({ uploadId: stringField(params, "uploadId"), chunkIndex: numberField(params, "chunkIndex"), dataBase64: stringField(params, "dataBase64") });
       case V4_METHODS.attachmentCommit:
-        return this.attachments.commit({ uploadId: stringField(params, "uploadId") });
       case V4_METHODS.attachmentAbort:
-        this.attachments.abort({ uploadId: stringField(params, "uploadId") });
-        return {};
+        return dispatchAttachmentRequest(method, params, this.attachments);
       case V4_METHODS.attachmentRead:
         return this.attachmentRead(params);
       case V4_METHODS.conversationAttachmentRead:

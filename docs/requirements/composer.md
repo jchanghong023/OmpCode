@@ -14,9 +14,9 @@
 - 会话草稿（正文与 Composer 持有的提交意图）由同一草稿所有者合批持久化：普通编辑只更新内存中的最新草稿值，不逐字符触发草稿全量重写，也不牵动会话页其余部分的快照订阅；发送、切换会话、窗口失焦与正常退出时 flush 最终值。持久化失败不丢已提交输入，草稿恢复以最后一次成功写入为准。
 - Composer 仅接收展示所需的稳定投影；提交回调读取当前会话、路由、队列及配置的最新事实。草稿正文与编辑器 JSON 共用持久化调度，连续输入具有有界保存间隔；切换 scope 时先保存旧草稿，延迟回调不能写入新会话。退出保存复用既有平台生命周期，不创建另一条草稿写入路径。
 - 编辑器富节点结构变化即使 Markdown 正文相同也标记同一草稿为待保存；只在实际合批保存时读取完整 JSON。保存失败后的普通编辑仍按有界窗口重试，不因超过上一次保存时限退化为逐字符重试；显式边界 flush 可以立即重试。
-- 同一 renderer 内，相同 `workspaceIdentity?.trim() || workspacePath` 与 scope 的所有 pane 复用唯一内存草稿 owner 和保存调度器。新 pane 从该 owner 读取尚未落盘的最新值；编辑器 reader 以租约登记，过时的初始化或 reader 不得覆盖最新编辑。最后一个 pane 离开仍 flush，保存失败保留待保存值；不为每个 pane 创建独立持久化写入者。
-- 提交时由同一 owner 冻结草稿版本与 scope，命令失败时只恢复仍属于该提交且未被较新编辑替换的来源草稿。用户切到其他 pane/scope 后，失败仍可恢复来源草稿，但不得调用新编辑器、清除新 pending 或覆盖较新草稿；重复完成/失败幂等。
-- 临时会话 ID 绑定持久 UUID 时，草稿只依据 Host 成功持久化后发布的权威迁移关系迁移。迁移使用同一 owner 和一次草稿记录更新，成功后重定向保存目标；重复事件幂等，目标已有较新用户草稿优先，写入失败不删除来源。无权威映射的旧记录保留，不根据标题、正文或时间猜测归属。
+- 同一 renderer 内，相同 `workspaceIdentity?.trim() || workspacePath` 与 scope 的所有 pane 复用唯一内存草稿 owner 和保存调度器。编辑器 reader 以租约登记，过时的初始化或 reader 不得覆盖最新编辑。普通 dirty 信号不序列化富 JSON；恢复读取或合批保存边界只读取当前有效 reader，若 JSON/mention 实际变化则更新 owner 并以该 reader 为 origin 向其他 pane 发布最新 content。origin pane 忽略自己的投影回环，接收 pane 的程序恢复不得夺取 reader 优先级，也不得改变正在编辑的其他 pane 的 DOM 焦点或选区。新 pane 从 owner 读取尚未落盘的最新值，最后一个 pane 离开仍 flush，保存失败保留待保存值；不为每个 pane 创建独立持久化写入者。
+- 提交时由同一 owner 冻结草稿版本与 scope，命令失败时只恢复仍属于该提交且未被较新编辑替换的来源草稿。用户切到其他 pane/scope 后，失败仍可恢复来源草稿，但不得调用新编辑器、清除新 pending 或覆盖较新草稿；同 scope 另一 pane 的新正文、富 JSON 与附件不被旧成功/失败回包清除，pending receipt 继续归属于原提交直到落定；重复完成/失败幂等。
+- 临时会话 ID 绑定持久 UUID 时，草稿只依据 Host 成功持久化后发布的权威迁移关系迁移。迁移使用同一 owner 和一次草稿记录更新，重复事件幂等。目标有较新正文/富结构或 pending 时整份目标草稿优先，冲突来源备份保留；Storage 写入失败不删除来源。目标仅配置意图且没有目标内容/pending 时，以来源草稿的正文、富 JSON 与 mention 为基底，只覆盖目标显式标记的手动模型/思考选择及 `ompModelBaseline`、`ompModelEdited` / `ompThoughtEdited`，不丢来源内容或初始化配置以外的其他字段。无权威映射的旧记录保留，不根据标题、正文或时间猜测归属。
 - 迁移监听跟随窗口的 workspace 与实际连接，不跟随当前 pane。冷恢复复用既有任务列表元信息：缓存接纳元信息后只发布带迁移关系的事实，绑定监听时读取一次已有缓存；普通任务状态更新不额外扫描全量缓存或拉取另一份任务列表。
 
 ## 状态与时序
@@ -29,23 +29,34 @@
 
 Git 刷新沿用宿主现有事件和请求。
 
-```text
-renderer registry（workspace identity + scope）→ 唯一草稿 owner
-  → pane A / pane B 登记 reader 租约；新 pane 读取 owner 最新值
-Lexical 正文/富节点 dirty → Composer 局部编辑态 + owner 编辑版本
-  → 停顿合批 / 持续输入最大等待 → 读取当前版本的 reader JSON → 同一 Storage 写入入口
-发送 → owner 冻结提交 receipt → claim 清空该版本 → 同一 owner flush
-  → 成功完成 receipt；失败只恢复仍属该 receipt 的来源版本
-  → 切 scope 不改变 receipt 来源；较新编辑阻止旧回包覆盖
-切 scope / 失焦 / 正常退出 → owner flush；最后租约离开且无 receipt 才可释放
-Host 成功提交 ID 迁移 → workspace 事件 / 既有任务元信息
-  → registry 原子迁移草稿记录 → owner 保存目标和租约重定向 → UUID 冷恢复
+```mermaid
+sequenceDiagram
+  participant A as Pane A / Lexical reader
+  participant O as Renderer registry / 唯一 owner
+  participant B as Pane B
+  participant S as Storage
+  participant H as Host / 任务元信息
+  A->>O: 登记 reader 租约；正文/富节点 dirty
+  Note over A,O: 普通编辑只更新版本，不读取完整 JSON
+  B->>O: 新 pane 恢复 / materialize
+  O->>A: 读取当前有效 reader 的 JSON
+  A-->>O: 最新富结构
+  O-->>B: content 投影（origin A）
+  Note over A,B: 接收 pane 不抢 reader、DOM 焦点或选区
+  O->>S: 停顿合批 / 有界保存 / 切 scope / 失焦 / 正常退出 flush
+  A->>O: 提交冻结 receipt；claim 清空该版本
+  O->>S: flush
+  Note over A,O: 成功完成 receipt；失败只恢复未被较新编辑替换的来源版本
+  H->>O: 成功提交 ID 迁移后发布 workspace 事件 / 既有元信息
+  O->>S: 原子迁移记录并保存 UUID 目标
+  O-->>A: owner / reader 租约重定向
+  Note over O,S: 最后租约离开且无 receipt 才释放 owner
 ```
 
 ## 验收场景
 
 1. 电脑窗口在原工具栏显示当前模型、思考等级、Git 项目当前分支及改动数；原上下文圆环可打开悬浮面板，展示 omp 总量及 `/context` 返回的实际分项、空闲空间和自动压缩预留区；分项读取失败时只保留总量，ZCode 额度不出现；手机布局不增加底栏。
-2. 桌面宽窗口、窄窗口及手机输入区均不出现计划模型或计划模式切换按钮；Git 分支与改动数仍显示，点击仍打开原有 Git 审阅入口。
+2. 桌面宽窗口、窄窗口及手机输入区均不出现计划模型或计划模式切换按钮。
 3. `/plan` 命令由 OMP 原生处理；移除按钮不改变模型选择、思考档或设置中的 plan role 配置。
 4. 工具栏与输入框下方均不出现压缩上下文按钮和自动压缩开关；输入 `/compact` 走 OMP 原生命令并保留参数与时间线输出，omp 自动压缩仍由会话管理，上下文圆环与分项弹层不受影响。
 5. Git 状态更新沿用现有宿主刷新；非 Git 工作区不显示误导信息。两种 v4 交付链路的 snapshot 解析和类型检查通过。
@@ -55,13 +66,16 @@ Host 成功提交 ID 迁移 → workspace 事件 / 既有任务元信息
 9. 在长草稿中连续输入时，草稿持久化按合批写入：以同一输入序列比较优化前后的草稿写入次数，普通按键不触发全量草稿重写，也不引起会话页时间线等其余部分的重新渲染；发送后消息内容与输入一致，切换会话再返回、窗口失焦及正常退出后草稿恢复为最后一次 flush 的值。
 10. 输入期间发生流式帧、队列变更或连接路由变化后提交，仍使用最新路由与配置；长草稿连续编辑不重复序列化前后两份 EditorState，正文、提及与附件引用保持一致。覆盖清空、发送失败、相同路径不同 identity 和旧 scope 延迟回调。
 11. 草稿已经保存后，仅修改同正文富节点的提及身份/元数据，再失焦或切会话，恢复 JSON 保留最新结构；Storage 持续失败期间按键仍合批，成功后恢复最新正文与 JSON。
-12. 使用真实草稿 hook 在同 workspace 的 pane A 编辑后、合批保存前挂载同 scope 的 pane B；B 读取最新内存值，两者依次保存/失焦/关闭后仍恢复最后一次用户编辑，不被旧初始化覆盖。不同 workspace identity 或不同会话 scope 相互隔离。
-13. A 提交后离开、A 的命令随后拒绝或抛错，再返回 A 能恢复未被新编辑替换的原草稿；B 的正文、富 JSON、pending、附件和错误不受影响。覆盖 A→B→A、重复回包以及 A 已有新编辑时旧失败不覆盖。
-14. 首次真实会话完成后发布临时 ID→UUID 迁移，继续编辑并切会话再返回、正常关闭后冷启动，以 UUID 恢复同一草稿。覆盖未挂载来源 pane、重复迁移、目标已有编辑、错误 workspace identity 与 Storage 写入失败。
+12. 使用真实草稿 hook 在同 workspace 的 pane A 编辑后挂载同 scope 的 pane B；普通 dirty 不序列化富 JSON，materialize/合批 flush 边界将 A 的最新富结构投影到已挂载 B，新 pane 恢复读取同一最新正文与 JSON（含同 Markdown 的 mention 身份）。不得用旧初始化结构覆盖、不得让接收 pane 的程序恢复抢 reader 或其他 pane 的输入焦点/DOM 选区；持续输入及真实 mention picker 的文字顺序、候选选择仍属于用户当前编辑的 pane。切换/保存后恢复最后一次用户编辑。不同 workspace identity 或不同会话 scope 相互隔离。
+13. 同 scope pane A 提交并处于 pending 时，pane B 编辑正文和富 JSON、加入附件；分别验证 A 成功与失败后保留 B 的新编辑和附件，receipt/pending 仍归属于 A 直到其回包落定。失败不得恢复 A 覆盖 B。
+14. A 提交后离开，A 的命令随后拒绝或抛错，再返回 A 能恢复未被新编辑替换的原草稿；B 的正文、富 JSON、pending、附件和错误不受影响。覆盖 A→B→A、重复回包以及 A 已有新编辑时旧失败不覆盖。
+15. 首次真实会话完成后发布临时 ID→UUID 迁移，继续编辑并切会话再返回、正常关闭后冷启动，以 UUID 恢复同一草稿。覆盖未挂载来源 pane、重复迁移、错误 workspace identity 与 Storage 写入失败/重试；目标仅有初始化模型/思考选择时来源正文、富 JSON、mention 与来源选择胜出。目标空正文但已标记手动模型或思考改选时，来源正文/富结构继续迁移，目标 `modelSelection`、OMP baseline 与 `ompModelEdited` / `ompThoughtEdited` 覆盖配置；目标较新内容或 pending 时整份目标草稿优先并保留来源备份。
 
 ## 实现与验证状态
 
 需求从原有权威 FORK 与对应 spec 迁入，未因当前实现降低要求。既有实现及历史验证不等于本次验收；统一证据边界见 [需求索引](README.md#实现与验证状态)。
 
-- 2026-10-09：已实施草稿合批、富节点 dirty 保存、稳定 Composer 投影/回调，以及 pending 编辑和旧 scope 回包保护。固定 Node 下草稿/投影 UT、真实组件失败路径、稳定 UUID 的桌面会话切换与正常关闭后的冷恢复通过。首次临时 ID→UUID 草稿断裂及离开 scope 后旧失败源草稿恢复仍是既有未验收缺口，未改变需求或猜测映射；详见 [性能热路径验证](../test-reports/performance-hot-paths-2026-10-09.md)。
-- 审查后阶段提交：共享 owner、reader 租约、提交凭据及 Host 权威身份迁移已接线；源草稿失败恢复与首次会话迁移的本轮真实界面验收未完成。富 JSON 交接、双 pane 等待回包的新编辑及仅配置冲突仍需收敛复验，不能把阶段提交当作功能完成。
+- 历史阶段：首次临时 ID→UUID、共享 reader 富 JSON、pending 新编辑及配置-only 冲突曾未验收；旧阶段结果保留于性能报告，不作为当前缺口或通过依据。
+- 2026-10-09 续作：最新 reader JSON materialize、配置-only 迁移、跨 pane 非抢焦点回填与来源失败恢复已实现。真实 Electron 双 hook/Lexical/mention picker 组件验收通过，覆盖 pending 成功/失败、附件引用、A→B→A、窗口迁移事件及已有 query cache 晚绑定。
+- 隔离真实桌面通过首次 GLM 发送、Host 临时 ID→UUID 权威元信息、旧 scope 消费者、唯一 canonical 草稿、切回与流式期间草稿保护；live/stable 比较完整 80 行及顺序，R7 正常退出后的 cold 恢复通过。项目内真实 `@` 无命中补扫、新文件选择及同 Markdown 富节点剪贴板/恢复通过。验收脚本修正了误走全局无项目入口导致写入与检索工作区错位的问题，未修改文件检索产品规则。
+- 固定 Node 24.14.0 / pnpm 10.33.2，OMP 核心全集 374/374 通过、0 失败、0 跳过。真实模型使用既有 GLM 凭据与隔离数据根，不修改用户配置。完整门禁及发布结果独立记录；目标 CentOS 7 网络盘、原生 IME/操作系统原生失焦、真实 Web 产品 GUI 与真实附件上传仍不由本轮组件/桌面场景推断。证据见 [性能热路径验证](../test-reports/performance-hot-paths-2026-10-09.md#核心体验续作验收)。

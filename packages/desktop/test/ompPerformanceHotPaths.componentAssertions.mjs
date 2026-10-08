@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { join } from "node:path";
 import { runComposerAssertions } from "./ompPerformanceHotPaths.composerAssertions.mjs";
 import { runDraftHookAssertions } from "./ompPerformanceHotPaths.draftHookAssertions.mjs";
+import { runDraftMigrationAssertions } from "./ompPerformanceHotPaths.draftMigrationAssertions.mjs";
 
 // 真实组件的DOM与输入断言；transport/clipboard仅在明确记录的端口边界受控。
 export async function runComponentAssertions(page, evidenceDir, evidence, options = {}) {
@@ -281,5 +282,8 @@ export async function runComponentAssertions(page, evidenceDir, evidence, option
     freshFileFound: true,
     serviceBoundary: "controlled-port",
   });
-  if (!options.skipComposer) await runDraftHookAssertions(page, evidence);
+  if (!options.skipComposer) {
+    await runDraftHookAssertions(page, evidence);
+    await runDraftMigrationAssertions(page, evidence);
+  }
 }

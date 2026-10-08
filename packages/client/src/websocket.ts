@@ -46,10 +46,11 @@ export function wrapBrowserWebSocket(ws: WebSocket): ISocket {
     onEnd: onEnd.event,
     write(buffer: VSBuffer) {
       if (ws.readyState === WebSocket.OPEN) {
-        // Bug 根因：慢网络下 send 不等待，浏览器队列可无限增长。
-        // 超界关闭连接后由现有 Web 恢复链路重订阅同一水位。
+        // Bug 根因：慢网络下 send 不等待，队列超限后用 1013 调用浏览器 close
+        // 会抛 InvalidAccessError，既不关闭连接也不释放 pending RPC。
+        // 使用浏览器允许的应用关闭码，沿现有 close/恢复链路收口与重订阅。
         if (ws.bufferedAmount + buffer.byteLength > maxBufferedBytes) {
-          ws.close(1013, "transport buffer saturated");
+          ws.close(4008, "transport buffer saturated");
           return;
         }
         ws.send(buffer.buffer as Uint8Array<ArrayBuffer>);

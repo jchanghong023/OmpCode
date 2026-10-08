@@ -13,7 +13,7 @@
 - `prompt_result` 仅在 `agentInvoked:false` 且属于当前本地命令时收口；agent 已启动的终态只由 `agent_end` 决定，失败和中断结果不得被后续完成帧改写。重复收口不产生状态补丁。
 - Host 启动 omp 适配器不依赖旧 ZCode Provider Registry 的 provider/model 就绪门禁。适配器先启动并从 omp 读取目录，提交时才校验所选模型；omp 无可用模型时由其自身返回明确错误。
 - 首屏及会话输入区不展示旧 ZCode 的“当前没有可用模型／升级／配置”横幅；旧注册表为空不能阻断 omp，真实 omp 错误仍按错误码展示。
-- 更改角色时只改用户选择的 role，保留配置文件其他字段、注释与未触及的 role。写前备份，写入失败时原配置可恢复。模型名中的冒号属于模型 ID，只有目录确认的思考档位后缀才按档位解析。
+- 更改角色时只改用户选择的 role，保留配置文件其他字段、注释与未触及的 role。写前备份，写入失败时原配置可恢复。模型名中的冒号属于模型 ID，只有目录确认的思考档位后缀才按档位解析。本地旧核 YAML 回落也必须提供「自动」（`auto`）与「未配置」（`unset`）选择；自动保存该角色的自动语义，未配置删除目标 role 的持久字段而非过滤掉这次变更或写入组件占位值。此要求不改变新核 RPC 优先及远端/暂不可用不回落的边界。
 - 角色选择器允许在模型支持的档位中选择思考等级。切换模型时保留新模型也支持的原等级；不支持时使用新模型的缺省等级，未设置缺省则不写档位后缀。
 - omp profile 选择由 App Settings 持久化；Desktop Main 启动时读取并通过 `OMP_PROFILE` 传给 Host/内嵌 omp。默认或已有命名 profile 来自 omp 配置根目录，角色配置与历史扫描使用同一 profile 路径。保存后只标记待重启，不能热切换现有会话；待重启时角色编辑器不写旧 profile。
 - 模型设置页的 profile、角色模型和思考档位选择器统一复用 ZCode 的 `Select` 组件及输入框/菜单主题，不使用系统原生下拉框；会话工具栏复用的角色编辑器及旧核回落分支采用相同样式。保持现有候选分组、键盘操作、禁用状态与保存语义。
@@ -25,19 +25,32 @@
 
 ## 时序与失败语义
 
-```text
-用户打开角色编辑器 → UI 请求 Host service → OMP 目录进程 get_model_roles
-用户选择 role 模型 → UI 请求 Host service → OMP set_model_role
-  → OMP 保存目标 role 并返回修订 → UI 显示保存中/成功/失败/被覆盖
-  └→ 仅本地旧核永久缺能力 → IPlatformService → Main 校验当前 YAML
-      → 仅修改目标 role → 备份原件 → 原子替换配置 → UI 显示结果
-
-用户选择 profile → App Settings 持久化 → UI 提示重启
-  → 下次 Main 启动读取设置 → Host/omp 继承 OMP_PROFILE
-  → 会话、目录和 modelRoles 同时切换
-
-应用环境 → Host → 适配器 → omp（数据唯一所有者）
-  └→ 共享根/profile 解析 → Main 配置目录与冷历史投影
+```mermaid
+sequenceDiagram
+  participant User as 用户
+  participant UI as 角色编辑器
+  participant Host as Host / 目录进程
+  participant OMP as OMP 配置所有者
+  participant Main as IPlatformService / Desktop Main
+  User->>UI: 打开编辑器 / 选择 role 模型、auto 或 unset
+  UI->>Host: 读取角色 / 保存目标 role
+  alt 支持角色 RPC
+    Host->>OMP: get_model_roles / set_model_role
+    OMP-->>UI: 角色与修订，呈现保存成功/失败/被覆盖
+  else 仅本地旧核永久缺能力
+    Host-->>UI: 永久能力缺失
+    UI->>Main: YAML 回落，修改目标 role
+    Main->>Main: 校验当前 YAML；备份原件；原子保存
+    Note over Main: 模型/auto 保存对应值；unset 删除目标字段
+    Main-->>UI: 明确保存结果
+  else 暂不可用或远端缺能力
+    Host-->>UI: 明确失败，不写本机配置
+  end
+  User->>UI: 选择 profile
+  UI->>Main: App Settings 持久化，标记待重启
+  Main->>Host: 下次启动透传 OMP_PROFILE 与应用环境
+  Host->>OMP: 同一根/profile 的会话、目录及 modelRoles
+  Note over Main,OMP: OMP 拥有派生数据；Main 回落与冷历史复用共享根/profile 解析
 ```
 
 本地 YAML 回落路径中，配置不存在时读取为空角色并显示内建角色；首次保存仅在目标文件仍不存在时原子创建最小配置，不覆盖并发创建的文件，也不制造虚假的备份。已有配置写入前保留原件备份。YAML 语法无效、`modelRoles` 类型错误或保存失败时显式报错；重复保存同一内容不创建无意义备份。
@@ -71,6 +84,7 @@ sequenceDiagram
    3b2. `OMP_OFFLINE=1` 原样进入 OMP 且 argv 不含 `--offline`；有/无公司配置时应用模型目录均与 OMP 一致，不出现 zcode-api；未启用时使用普通目录。
    3c. fake omp 返回含内置与自定义命令的目录；工作区 presentation 与 workspace-config 均能展示这些命令，输入框输入 `/` 能补全。真实 omp 二进制也能返回合法目录。本地命令同步或延迟完成时，输出可见且会话控制恢复空闲。
    3d. 角色目录读取或自动保存尚未返回时切换工作区、关闭后重新打开编辑器；旧请求不得回写新目标的角色、待保存选择或保存状态。同一角色快速重复操作只接纳当前请求；失败时所选值保留供重试。远端旧核不支持角色 RPC 时不得回落写本机 profile。
+   3d1. 在本地旧核永久缺角色能力的回落入口，将已有目录内模型的 role 改为「自动」，重新打开仍显示自动；再选「未配置」，保存后目标 role 持久字段被删除且重新打开保持未配置，其他 role、配置字段及注释不变。设置页与会话工具栏均覆盖此路径；新核继续调用角色 RPC，暂不可用和远端缺能力仍不得写本机 YAML。
    3e. 设置保存不同 profile 后、重启前，设置与会话工具栏两个角色编辑入口均禁止写旧 profile；模型目录和其他会话临时选择仍按当前运行 profile 保持。
    3e1. 工作区目录进程返回 `sessionModel: { model: { provider, modelId } }` 而没有会话身份时，角色目录仍通过宿主运行时校验并显示全部角色；不得凭空补入会话 ID，也不得把有效目录误报为进程暂不可用。若返回会话身份，仍严格校验其字符串类型。
    3f. 命令参数补全在光标位于词中、候选替换区间跨空格及目录更新时正确：请求携带完整单行文本与 UTF-16 光标，接受候选严格使用返回区间；越界与过期候选不可插入，旧请求不得覆盖新文本或目标。
@@ -95,3 +109,5 @@ sequenceDiagram
 - 2026-10-08：OmpCode 数据根改为由有效 `OMP_CONFIG_ROOT` 派生的 `_ompcode` 兄弟目录；移除旧设置路径启动覆盖和界面迁移动作，设置返回只读的实际路径。Electron userData/sessionData、配置、日志、索引、内部工作区、日志导出与存储管理使用该根。Node 24.19.0 原生 TypeScript 加载下，共享路径、设置读写、任务索引隔离、桌面 Electron 路径与存储根回归共 12 项通过，CentOS 启动器测试通过；lint、格式与架构检查通过。完整类型检查缺少 `@typescript/typescript-linux-x64`，未执行 Windows/CentOS 7 GUI 的完整启动、路径展示及恢复验收。
 - 2026-10-08：任务索引补充有效根目录隔离，默认根沿用旧数据库；自定义根以路径摘要选择独立数据库，Host 启动准备、任务、自动化与错峰索引共用同一解析入口。Node 24.19.0 的原生 TypeScript 加载下，`ompProfileTaskIndexPath.test.ts` 4 项回归通过（含真实 SQLite 的根切换、稳定 UUID 隔离及切回保留置顶/归档/未读），lint、变更格式与架构检查通过。完整 `pnpm typecheck` 因缺少 `@typescript/typescript-linux-x64` 无法运行；tsx 入口缺少 esbuild，采用原生加载执行上述测试。Windows/CentOS 7 GUI 的历史恢复与续聊未验证，不视为完整功能验收。
 - 2026-10-08：已实施 `OMP_CONFIG_ROOT` 共享路径解析、适配器到目录/会话进程的环境透传，移除启动器 `--home`、`--offline` 与旧目录迁移/锁定逻辑。配置、历史和模型目录仍由 OMP 持有；未改动 Desktop continuous 与 Web replayable 时序。已补充路径、profile、冷历史读删、进程环境与启动器回归场景。Node 24.14.0 / pnpm 10.33.2 下 lint、变更 TypeScript 格式、Shell 语法与全量架构检查通过（0 违例）。本次按用户要求不运行 UT、真实核心或 GUI E2E，功能尚未验收；`pnpm typecheck` 被原提交已存在的 `packages/desktop/src/host/index.ts:2062` logger 类型错误阻断（缺少 `debug`），不记为通过。
+
+- 2026-10-09 核心体验续作：旧核角色配置的自动/清除语义、命令目录失效与目录进程生命周期定向回归通过；OMP 全集 374/374、0 跳过，包含安装核真实目录/命令场景。此前类型检查环境限制不是本次结论；本轮重建并实际运行隔离 GLM 桌面，完整门禁及两平台发布仍独立验证，见 [核心体验续作验收](../test-reports/performance-hot-paths-2026-10-09.md#核心体验续作验收)。未修改用户模型角色或凭据。

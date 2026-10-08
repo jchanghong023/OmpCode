@@ -16,6 +16,7 @@
 | [performance.md](performance.md)                   | 流式长会话、查找和界面响应性及一致性约束                                                                                                                |
 | [centos7-release.md](centos7-release.md)           | CentOS 7 原生 glibc 2.17 兼容包、Electron 双轨构建、离线锁定与发布边界                                                                                  |
 | [centos7-performance.md](centos7-performance.md)   | CentOS 7 无 GPU 桌面的动画、流式合批与日志性能策略                                                                                                      |
+| [test-gates.md](test-gates.md)                     | 三级测试编排、覆盖关系、隔离环境及验证状态；执行权限见根 AGENTS.md                                                                                      |
 
 需求或预期用户可见行为变化时，先更新对应文档及验收场景；新独立功能域可新增文档并更新索引。实现设计可解释状态所有权和时序，但不得重复定义另一套产品规则。`docs/specs/` 中保留的一次性依赖升级和 Lint 清理资料是工程任务记录，不是长期产品需求或自动执行授权。
 

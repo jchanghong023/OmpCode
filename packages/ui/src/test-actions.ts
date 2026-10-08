@@ -1,6 +1,6 @@
 import type { TaskChatMessage as ChatMessage } from "@/lib/taskChatMessageTypes.js";
 import { shouldExposeE2EStoreBridge } from "@/lib/e2eStoreBridge.js";
-import type { IZCodeAgentService } from "@zcode/services";
+import type { IZCodeAgentService, IZCodeTaskService } from "@zcode/services";
 import type { TaskListE2EActions } from "@/lib/taskListE2EActions.js";
 import { useEffect } from "react";
 
@@ -40,6 +40,14 @@ export interface TestActions extends TaskListE2EActions {
   listPlugins: IZCodeAgentService["listPlugins"];
   /** E2E 通过真实 zcodeAgentService 查询 Workspace/Session Plugin catalog */
   getPluginReferenceCatalog: IZCodeAgentService["getPluginReferenceCatalog"];
+  /** E2E 读取 Host 已提交的轻量元信息，不依赖当前侧栏列表的加载模式。 */
+  getTaskMeta: IZCodeTaskService["getTaskMeta"];
+  /** 按真实草稿消费者的旧 scope 读面验证 Host 迁移，不注入或伪造关联。 */
+  readComposerDraft: (params: {
+    workspacePath: string;
+    workspaceIdentity?: string;
+    scopeId: string;
+  }) => { scopeId: string; text: string };
 }
 
 declare global {

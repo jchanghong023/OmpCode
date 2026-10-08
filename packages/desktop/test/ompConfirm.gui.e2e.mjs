@@ -6,6 +6,13 @@ import { chromium } from "playwright-core";
 
 const endpoint = process.env.OMP_E2E_CDP_URL;
 const workspace = process.env.OMP_E2E_WORKSPACE;
+// 配置存在时只连接 fixture 的 renderer；无配置的手动入口保留原来的两种回环主机。
+const rendererUrl =
+  process.env.OMP_E2E_RENDERER_URL ??
+  (process.env.OMP_E2E_RUNTIME_MANIFEST
+    ? JSON.parse(await readFile(process.env.OMP_E2E_RUNTIME_MANIFEST, "utf8")).rendererUrl
+    : undefined);
+const rendererPrefix = rendererUrl ? `${rendererUrl.replace(/\/+$/u, "")}/` : undefined;
 assert.ok(endpoint, "Set OMP_E2E_CDP_URL to an isolated OmpCode Electron CDP endpoint");
 assert.ok(workspace, "Set OMP_E2E_WORKSPACE to a workspace with ompConfirmExtension.js installed");
 
@@ -14,7 +21,11 @@ try {
   const page = browser
     .contexts()[0]
     ?.pages()
-    .find((candidate) => /^http:\/\/(?:localhost|127\.0\.0\.1):5194\//u.test(candidate.url()));
+    .find((candidate) =>
+      rendererPrefix
+        ? candidate.url().startsWith(rendererPrefix)
+        : /^http:\/\/(?:localhost|127\.0\.0\.1):5194\//u.test(candidate.url()),
+    );
   assert.ok(page, "Expected an isolated OmpCode renderer page");
   page.setDefaultTimeout(20_000);
 

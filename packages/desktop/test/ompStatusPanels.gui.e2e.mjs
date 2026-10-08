@@ -1,19 +1,27 @@
 // 隔离 Windows 桌面的真实 OMP/模型验收；只通过现有 GUI 入口操作，不注入会话状态。
 import assert from "node:assert/strict";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { chromium } from "playwright-core";
 
 const endpoint = process.env.OMP_E2E_CDP_URL;
 const evidenceDir = process.env.OMP_E2E_EVIDENCE_DIR;
 const phase = process.env.OMP_E2E_PHASE ?? "live";
+// 固定 renderer 端口会绕过隔离 fixture；显式 URL 优先，manifest 提供准备器的真实来源。
+const rendererUrl =
+  process.env.OMP_E2E_RENDERER_URL ??
+  (process.env.OMP_E2E_RUNTIME_MANIFEST
+    ? JSON.parse(await readFile(process.env.OMP_E2E_RUNTIME_MANIFEST, "utf8")).rendererUrl
+    : undefined) ??
+  "http://localhost:5194";
+const rendererPrefix = `${rendererUrl.replace(/\/+$/u, "")}/`;
 assert.ok(endpoint && evidenceDir, "Specify an isolated CDP endpoint and evidence directory");
 await mkdir(evidenceDir, { recursive: true });
 const browser = await chromium.connectOverCDP(endpoint);
 const page = browser
   .contexts()[0]
   .pages()
-  .find((candidate) => candidate.url().startsWith("http://localhost:5194/"));
+  .find((candidate) => candidate.url().startsWith(rendererPrefix));
 assert.ok(page, "Expected the isolated desktop renderer");
 page.setDefaultTimeout(30_000);
 const marker = "OMP_UI_PANELS_20261008";
