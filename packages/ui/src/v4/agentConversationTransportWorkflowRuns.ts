@@ -48,14 +48,11 @@ export function createWorkflowRunTransportMethods(input: {
       });
     },
     async workflowRuns(
-      params: V4ConversationWorkflowRunsParams,
+      _params: V4ConversationWorkflowRunsParams,
     ): Promise<V4ConversationWorkflowRunsResult> {
-      await ensureHandshake();
-      return agentService.conversationWorkflowRunsV4({
-        ...workspace,
-        sessionId: params.sessionId,
-        ...(params.limit !== undefined ? { limit: params.limit } : {}),
-      });
+      // OMP 无 ZCode 动态工作流引擎（FORK.md）；自动查询应本地报告能力缺失，
+      // 不发出注定失败的 RPC，也不能以空列表伪装查询成功。
+      throw new Error("capabilityUnsupported: v4/conversation/workflowRuns by omp core");
     },
     // dwf 用户面产物的三条读面。
     // ⚠ 术语：artifact = 脚本发布给用户看的产出，不是 run 的顶层返回值。

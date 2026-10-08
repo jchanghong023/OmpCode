@@ -195,6 +195,11 @@ export class ZCodeProtocolClient implements IDisposable {
       }
     });
 
+    // transport.send 可能等待背压；响应、取消、超时或 dispose 会先拒绝 resultPromise。
+    // 立即标记内部 Promise 已被处理，避免等待 send 时产生未处理拒绝；最终仍返回原
+    // Promise，将真实错误交给调用方，不能把失败转换成成功。
+    void resultPromise.catch(() => {});
+
     // 已在发送前取消的请求不能继续写入 transport；否则服务端会执行一个客户端已经
     // 放弃、也无法接收响应的模型任务。
     if (!this.pending.has(requestKey)) {

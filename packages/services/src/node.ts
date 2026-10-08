@@ -520,7 +520,6 @@ import {
   type BrowserCommand,
   isZCodeCuaMcpCommand,
   isZCodeCuaMcpPackageArg,
-  isZCodeCuaInternalFeatureEnabled,
   ZCODE_CUA_PLUGIN_AUTHORITY_ENV_KEY,
   type ZCodeAutomation,
   type ZCodeAutomationRun,
@@ -700,17 +699,14 @@ export function registerHostApiNetworkTransportForDispose(
 }
 
 export function shouldEnableDefaultCuaProductHelper(
-  options: {
+  _options: {
     platform?: NodeJS.Platform;
     env?: NodeJS.ProcessEnv;
   } = {},
 ): boolean {
-  // CUA 已随正式版默认开启（isZCodeCuaInternalFeatureEnabled 默认 ON，仅显式 0/false/off 关闭；2026-08 注释更正——旧注释称默认关闭已过期）。显式开启后 macOS 使用既有产品 Helper，Windows 使用安装包内 runtime；
-  // 两端都保持按需启动。关闭时不创建 host、不探测资源、不产生子进程或权限提示。
-  const env = options.env ?? process.env;
-  if (!isZCodeCuaInternalFeatureEnabled(env)) return false;
-  const platform = options.platform ?? process.platform;
-  return platform === "darwin" || platform === "win32";
+  // Computer Use 由 OMP 原生负责；此 Fork 不打包 ZCode CUA Helper。
+  // 旧特性开关默认开启会误探测缺失 manifest 并报错，必须在创建/解析前停止装配。
+  return false;
 }
 
 /**
@@ -1695,16 +1691,9 @@ export function createLocalServices(options: {
   // 先用前向引用连接 agent service 的 CUA turn tracker，避免在活跃 CUA 请求中途重启 Helper；
   // service 创建完成后再赋值。Helper recovery 始终不能回收 Agent。
   let hasActiveTurnRef: (() => boolean) | undefined;
-  const isCuaEnabledForContext = (context?: CuaProductMcpServerResolverContext): boolean =>
-    // 保留 main 原有 gate 行为（避免回归）：dev/internal 特性开启时（ZCODE_CUA_DEV_MODE=1 或
-    // ZCODE_CUA_PRODUCT_HELPER=1）即视为启用，不依赖 config.json 显式 enable——main 的 bootstrap
-    // 用 isZCodeCuaInternalFeatureEnabled 门控 bundled plugin，与 feat 的 workspace enablement 不同。
-    // 生产路径（dev mode off）回落到官方插件 workspace enablement 判定（与 feat 一致）。
-    isZCodeCuaInternalFeatureEnabled(process.env) ||
-    isOfficialCuaPluginEnabledForWorkspace({
-      env: process.env,
-      workingDirectory: context?.workspacePath,
-    });
+  // Helper、spawn broker 环境和 MCP resolver 共用同一个关闭边界，不影响 OMP 原生工具。
+  const isCuaEnabledForContext = (_context?: CuaProductMcpServerResolverContext): boolean =>
+    shouldEnableDefaultCuaProductHelper();
   const defaultCuaProductHelperLifecycle =
     new CuaHelperLifecycleManager<ManagedDefaultCuaProductHelper>(async (managed) => {
       await managed.helper.host.stop();
@@ -2161,8 +2150,7 @@ export function createLocalServices(options: {
               httpProxy: settings.httpProxy,
               noProxy: settings.httpProxyNoProxy,
             };
-      // 与 helper 创建同一个门控（isCuaEnabledForContext：dev/internal 特性 OR 官方插件 enablement），
-      // 避免 dev mode 下 helper 建了但 resolveSpawnEnv 漏注入 broker env 的割裂。
+      // 与 Helper 创建同一门控；OMP 原生 Computer Use 不注入 ZCode broker 环境。
       const cuaPluginEnabled = isCuaEnabledForContext(context);
       // 懒启动：darwin 上 spawn 绝不 acquire 拉起 Helper——已有 host（peek，比如刚走过
       // 授权流）则复用其 tuple；否则只注入稳定 socket，SDK 首次 CUA 调用自行拉起

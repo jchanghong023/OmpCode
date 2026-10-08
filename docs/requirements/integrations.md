@@ -41,6 +41,8 @@ omp task / 子代理事件 → OmpProcess 校验 → ConversationEngine 权威�
 
 ## 扩展、自动化与附件边界
 
+- Computer Use 由 OMP 原生实现和配置，OmpCode 不接入 ZCode CUA Helper、broker 或 `zcode-cua` MCP。Host 不探测其安装资源、不注入 broker 环境、不因旧 ZCode 特性开关启动 Helper；保留 OMP 自身工具配置。验收：Windows 启动会话不解析 `runtime-manifest.json`、不启动 ZCode Helper、不产生其不可用告警。
+
 - 扩展、MCP 以 omp 的配置目录和 RPC 状态为事实源；GUI 只管理或展示 omp 原生项，不重新启用 ZCode 插件商店运行时。
 - 设置中的扩展/MCP 页列出当前 omp profile 与本地项目 `.omp` 中明确配置的扩展入口和 MCP 服务器名、启用状态；不展示配置里的命令参数、环境变量或密钥。提供打开 omp 配置目录的入口，由 omp 原生配置完成管理。当前 omp RPC 无 `list_mcp_servers`，适配器 `mcp/list` 返回合法空状态快照，不伪造连接事实；设置页仍按配置目录扫描列项，连接状态标注「未提供」。扩展运行态查询同样未提供；远程项目不读取同名本地路径。
 - 浏览器设置页展示 omp 内置浏览器的默认开启状态，状态是说明文字，不是可操作的开关；不查询或修改旧 ZCode Browser Use 插件，也不因不支持 `plugins/list` 而显示错误。omp 浏览器的运行与配置仍由 omp 自身负责，页面不保存另一份状态。浏览器数据导入、清理与证书策略沿用原有入口和行为，不迁移旧插件配置。验收：打开浏览器设置显示「默认开启」，不出现插件查询错误，原有浏览器数据和安全控件仍可用。

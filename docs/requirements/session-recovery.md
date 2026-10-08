@@ -2,6 +2,9 @@
 
 ## 产品规则与所有权
 
+- 协议客户端拥有未完成请求：响应、超时、取消或销毁可以先于 transport.send 完成，响应 Promise 必须立即建立拒绝处理，再向调用方保留原始错误；不产生 unhandledRejection 或 rejectionHandled。验收覆盖发送尚未完成时的错误响应、销毁、取消、超时及发送失败。
+- attachment 关闭时向已销毁协议客户端转发 `closed` 属于预期清理，记 debug；非关闭状态及其他传输错误仍记 warn，不掩盖故障。
+
 - 进程拓扑按 [omp-core-integration.md](omp-core-integration.md) 执行：每会话一个惰性 omp 进程 + 每 workspace 一个常驻目录进程；会话身份沿用「临时 ID → omp 会话文件 UUID」迁移规则，本文件其余身份、恢复与收口规则不受拓扑影响。
 - v4 topic 的生产者与组装器使用同一物理帧计量函数。帧上限覆盖 CLI NDJSON 与 Channel socket 两种承载；超过上限时生产者先分片，组装器只接受合法帧。逻辑快照的序号和重放语义不因分片变化。
 - omp 会话引擎拥有当前轮、排队轮和待回答交互。命令发送失败或核心退出时，引擎将相关轮次与交互终结；本地命令没有 `agent_start` 时，按关联的完成事实终结其排队轮。已完成轮次不得被迟到的结果再次更改。

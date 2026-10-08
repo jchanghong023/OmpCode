@@ -101,7 +101,7 @@
 换核后以下能力无法与上游等价提供，要求以显式拒绝（JSON-RPC `-32601` / v4 ACK `fault.command.unsupportedByOmpCore` 等 guard id）或明确的替代行为交付，不静默缺失。UI 侧表现为对应入口不可用（禁用态 tooltip / 操作失败提示），主对话链路不受影响。个别差异的功能域文档规定了入口隐藏等替代形态时（如插件市场入口隐藏）以该功能域文档为准；「上游同步策略与平台范围」的入口保留约束针对两平台之间的差异，不改变这些既定裁剪。
 
 1. **插件与技能市场**：见 [原生集成](integrations.md) 与 [可执行技能](skills.md)。
-2. **工作流中枢与动态工作流**：已保存工作流 GUI（`workflows/*`）、`v4/conversation/workflowRun*` 全族、`startSavedWorkflow`/`resumeWorkflowRun`/`amendWorkflowRunSettings` 不可用。替代行为：无（omp 无等价工作流引擎）。
+2. **工作流中枢与动态工作流**：已保存工作流 GUI（`workflows/*`）、`v4/conversation/workflowRun*` 全族、`startSavedWorkflow`/`resumeWorkflowRun`/`amendWorkflowRunSettings` 不可用。替代行为：无（omp 无等价工作流引擎）。自动 run 摘要查询在 UI transport 本地返回明确能力缺失，不发出注定失败的 Host/OMP RPC，不伪造空列表；能力缺失不记 warn 或重复查询，显式操作仍保持不可用语义。验收：打开普通会话无 workflowRuns RPC 失败日志，会话订阅与命令发送正常。
 3. **automation / Off-Peak**：见 [原生集成](integrations.md)。
 4. **会话内编辑类操作**：fork 某轮（`forkAssistant`）、重试（`retryTurn`）、编辑已发送消息（`editUserQuery`）、工作区文件回滚（`applyFileRewind`/`fileRewindPreview`）不可用。替代行为：无（omp 会话树的 `branch` 能力未进本适配层）。现有辅助对话入口接入原生 BTW，不属于编辑/分叉；唯一规则及验收见 [OMP 辅助对话](omp-core-integration.md#辅助对话原生-btw唯一需求权威)。
 5. **协作模式切换与 goal 循环**：`switchCollaborationMode`（build/edit/plan/yolo）、`sendGoalCommand`、`pauseGoal`/`resumeGoal` 不可用（v4 命令面显式拒绝）。替代行为：会话固定等效于上游 `build` 模式；omp ACP 目录分发的命令（`/model`、`/switch` 等）按 omp 语义透传执行（命令路由详见 [模型与命令](models-and-commands.md)），`/plan`、`/goal` 未进 omp ACP 目录，仍按本地语义处理。

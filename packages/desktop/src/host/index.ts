@@ -117,7 +117,7 @@ import type {
 import type { RemoteTarget } from "@zcode/shared";
 import { wrapElectronPort } from "./electronPort.js";
 import { createTaskRealtimeBridgeForHostInit } from "./taskRealtimeBridge.js";
-import { resolveRpcLogLevel } from "./rpcLogLevel.js";
+import { resolveAttachmentFlowLogLevel, resolveRpcLogLevel } from "./rpcLogLevel.js";
 import { createHostWorkspaceTaskTracker } from "./hostWorkspaceTaskTracker.js";
 import {
   createRemoteMediaPreviewProxy,
@@ -2058,10 +2058,11 @@ function exposeServicesOnMessagePort(
     if (!connectionScope) return Promise.resolve();
     const update = flowUpdateChain.then(() => connectionScope.setTransportFlowState(state));
     flowUpdateChain = update.catch((error) => {
-      logger.warn("failed to forward attachment connection flow state", {
-        state,
-        message: error instanceof Error ? error.message : String(error),
-      });
+      const message = error instanceof Error ? error.message : String(error);
+      logger[resolveAttachmentFlowLogLevel(state, message)](
+        "failed to forward attachment connection flow state",
+        { state, message },
+      );
     });
     return update;
   };

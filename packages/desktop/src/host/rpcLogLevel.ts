@@ -2,6 +2,18 @@ import { ZCODE_AGENT_PROVIDER_NOT_READY_CODE } from "@zcode/shared";
 
 type RpcLogLevel = "debug" | "info" | "warn";
 
+export function resolveAttachmentFlowLogLevel(
+  state: "saturated" | "drained" | "closed",
+  message: string,
+): "debug" | "warn" {
+  // Host 可先回收协议客户端，再由 attachment 转发 closed；只降低明确的预期清理。
+  return state === "closed" &&
+    (message === "ZCode Protocol client disposed" ||
+      message === "ZCode Protocol client is disposed")
+    ? "debug"
+    : "warn";
+}
+
 /**
  * host 之前把 RPC 日志统一走 error，主日志里看起来像所有 RPC 都失败了。
  * 这里按消息内容做最小分级：FAIL 记 warn，高频输出轮询成功记 debug，其余记 info。
