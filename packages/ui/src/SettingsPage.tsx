@@ -66,7 +66,6 @@ import { WorkspaceHelpMenuButton } from "@/WorkspaceHelpMenuButton.js";
 import { WorkspaceSidebarFooter } from "@/WorkspaceSidebarFooter.js";
 import { ControlHintTooltip } from "@/ControlHintTooltip.js";
 import { cn } from "@/components/lib/utils.js";
-import { useSelectDirectory } from "@/hooks/usePlatform.js";
 import { ServiceProvider, useServices } from "@/hooks/useServices.js";
 import { useSettings } from "@/hooks/useSettingService.js";
 import type { CreateTaskRequest } from "@/app-shell/types.js";
@@ -256,7 +255,6 @@ export function SettingsPage({
       null
     );
   });
-  const selectDirectory = useSelectDirectory();
   const services = useServices();
   const onboardingRecordService = services.onboardingRecordService;
   const localHostServices = useBaseWorkspaceServices();
@@ -311,7 +309,6 @@ export function SettingsPage({
   const [toolGroupingChangesEnabled, setToolGroupingChangesEnabled] = useState(false);
   const [zcodeInteractionBehavior, setZCodeInteractionBehavior] =
     useState<ZCodeInteractionBehavior>("queue");
-  const [defaultHomeDir, setDefaultHomeDir] = useState("");
   const [hostPlatform, setHostPlatform] = useState("");
 
   useEffect(
@@ -336,7 +333,7 @@ export function SettingsPage({
     services.settingService
       .get()
       .then((settings: AppSettings) => {
-        setDataBaseDir(settings.dataBaseDir ?? "");
+        setDataBaseDir(settings.dataStoragePath ?? "");
         setTerminalInheritSystemProfile(settings.terminalInheritSystemProfile ?? true);
         setTerminalFontFamily(settings.terminalFontFamily ?? "");
         setIntegratedTerminalShell(settings.integratedTerminalShell ?? { mode: "auto" });
@@ -367,7 +364,6 @@ export function SettingsPage({
     localHostServices.systemService
       .info()
       .then((info) => {
-        setDefaultHomeDir(info.homedir);
         setHostPlatform(info.platform);
         if (info.platform !== "win32") {
           setIntegratedTerminalShellOptions([]);
@@ -579,21 +575,6 @@ export function SettingsPage({
       toast(intl.formatMessage({ id: "settings.httpProxySavedHint" }));
     },
     [services.settingService, intl],
-  );
-  const handleDataBaseDirChange = useCallback(
-    async (dir: string) => {
-      await runSettingsActionAsync({
-        featureId: "settings.storage",
-        action: "change_data_directory",
-        trigger: "button",
-        operation: () => services.settingService.updateDataBaseDir(dir || undefined),
-        completed: { resultSource: "setting_service", requiresRestart: true },
-        failureStage: "data_directory_update",
-      });
-      // Bugfix: 迁移失败时不能先把本地状态改成失败路径，否则设置页会误显示为已切换。
-      setDataBaseDir(dir);
-    },
-    [services.settingService],
   );
   const handleTaskAutoArchiveEnabledChange = useCallback(
     async (enabled: boolean) => {
@@ -1229,7 +1210,6 @@ export function SettingsPage({
                             httpProxy={httpProxy}
                             httpProxyNoProxy={httpProxyNoProxy}
                             httpProxyCaCertPath={httpProxyCaCertPath}
-                            defaultHomeDir={defaultHomeDir}
                             showIntegratedTerminalShell={hostPlatform === "win32"}
                             setLocalePreference={handleFooterLocaleChange}
                             setNotificationEnabled={(enabled) =>
@@ -1274,8 +1254,6 @@ export function SettingsPage({
                               askUserQuestionAutoResolutionEnabled
                             }
                             modelIoFullRetentionEnabled={modelIoFullRetentionEnabled}
-                            onDataBaseDirChange={handleDataBaseDirChange}
-                            onSelectDataBaseDir={selectDirectory}
                             onTerminalInheritSystemProfileChange={
                               handleTerminalInheritSystemProfileChange
                             }

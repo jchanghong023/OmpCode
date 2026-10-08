@@ -1,12 +1,17 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import {
+  getAppConfigDir,
+  getTasksIndexDatabasePath,
+  getConversationWorkspaceDir,
+} from "../src/paths.js";
 import { createSystemService } from "../src/system/systemService.js";
 import { createSettingServiceWithMigrations } from "../src/setting/settingService.js";
 
-// 开发/测试环境的显式 home 与 OMP 配置根保持独立。
+// 开发/测试 home 不改写系统 HOME；生产应用根优先跟随 OMP_CONFIG_ROOT。
 
 async function withEnv(
   env: Record<string, string | undefined>,
@@ -28,22 +33,45 @@ async function withEnv(
   }
 }
 
-test("OMP_CONFIG_ROOT 不覆盖 OmpCode 设置中的数据目录", async () => {
+test("OMP_CONFIG_ROOT 派生应用根，设置读写与显示路径同源且不能由 UI 迁移", async () => {
   const home = await mkdtemp(join(tmpdir(), "desktop-home-settings-"));
+  const ompRoot = join(home, "omp-data");
+  const appRoot = `${ompRoot}_ompcode`;
+  const legacySettings = join(home, ".ompcode", "v2", "setting.json");
+  const activeSettings = join(appRoot, "v2", "setting.json");
   try {
     await mkdir(join(home, ".ompcode", "v2"), { recursive: true });
     await writeFile(
-      join(home, ".ompcode", "v2", "setting.json"),
-      JSON.stringify({ dataBaseDir: home }),
+      legacySettings,
+      JSON.stringify({
+        dataBaseDir: home,
+        locale: "en-US",
+        lastActiveTaskByWorkspace: { old: "old-id" },
+      }),
     );
-    const { service } = createSettingServiceWithMigrations();
-    await withEnv(
-      { ZCODE_DESKTOP_HOME_DIR: home, OMP_CONFIG_ROOT: join(home, "omp-data") },
-      async () => {
-        const settings = await service.get();
-        assert.equal(settings.dataBaseDir, home);
-      },
-    );
+    const original = await readFile(legacySettings, "utf8");
+    await withEnv({ ZCODE_DESKTOP_HOME_DIR: home, OMP_CONFIG_ROOT: ompRoot }, async () => {
+      const { service } = createSettingServiceWithMigrations();
+      const settings = await service.get();
+      assert.equal(settings.dataStoragePath, appRoot);
+      assert.equal(settings.dataBaseDir, undefined);
+      assert.equal(settings.lastActiveTaskByWorkspace, undefined);
+      await service.update({ locale: "zh-CN" });
+      assert.equal((await service.get()).locale, "zh-CN");
+      const persisted = JSON.parse(await readFile(activeSettings, "utf8"));
+      assert.equal(persisted.dataStoragePath, undefined);
+      assert.equal(persisted.locale, "zh-CN");
+      assert.equal(getAppConfigDir(), join(appRoot, "v2"));
+      assert.ok(getTasksIndexDatabasePath().startsWith(join(appRoot, "v2")));
+      assert.equal(getConversationWorkspaceDir(), join(appRoot, "workspace", "default"));
+      await assert.rejects(service.updateDataBaseDir(join(home, "another")), /OMP_CONFIG_ROOT/);
+      assert.equal(await readFile(legacySettings, "utf8"), original);
+    });
+    await withEnv({ ZCODE_DESKTOP_HOME_DIR: home, OMP_CONFIG_ROOT: undefined }, async () => {
+      const { service } = createSettingServiceWithMigrations();
+      assert.equal((await service.get()).locale, "en-US");
+      await assert.rejects(service.updateDataBaseDir(join(home, "another")), /OMP_CONFIG_ROOT/);
+    });
   } finally {
     await rm(home, { recursive: true, force: true });
   }

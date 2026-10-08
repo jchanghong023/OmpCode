@@ -65,7 +65,6 @@ export function GeneralSectionContent({
   httpProxy = "",
   httpProxyNoProxy = "",
   httpProxyCaCertPath = "",
-  defaultHomeDir,
   isDesktop,
   isWindowsDesktop,
   showIntegratedTerminalShell = false,
@@ -82,8 +81,6 @@ export function GeneralSectionContent({
   zcodeInteractionBehavior,
   askUserQuestionAutoResolutionEnabled = true,
   modelIoFullRetentionEnabled = false,
-  onDataBaseDirChange,
-  onSelectDataBaseDir,
   onTerminalInheritSystemProfileChange = async () => {},
   onTerminalFontFamilyChange = async () => {},
   onIntegratedTerminalShellChange = async () => {},
@@ -127,7 +124,6 @@ export function GeneralSectionContent({
   httpProxy?: string;
   httpProxyNoProxy?: string;
   httpProxyCaCertPath?: string;
-  defaultHomeDir: string;
   isDesktop?: boolean;
   isWindowsDesktop?: boolean;
   showIntegratedTerminalShell?: boolean;
@@ -145,8 +141,6 @@ export function GeneralSectionContent({
   zcodeInteractionBehavior: ZCodeInteractionBehavior;
   askUserQuestionAutoResolutionEnabled?: boolean;
   modelIoFullRetentionEnabled?: boolean;
-  onDataBaseDirChange: (dir: string) => Promise<void>;
-  onSelectDataBaseDir: () => Promise<string | null>;
   onTerminalInheritSystemProfileChange: (enabled: boolean) => Promise<void>;
   onTerminalFontFamilyChange: (fontFamily: string) => Promise<void>;
   onIntegratedTerminalShellChange?: (selection: IntegratedTerminalShellSelection) => Promise<void>;
@@ -861,12 +855,7 @@ export function GeneralSectionContent({
             id: "settings.dataBaseDirDescription",
           })}
           control={
-            <DataBaseDirControl
-              dataBaseDir={dataBaseDir}
-              defaultHomeDir={defaultHomeDir}
-              onDataBaseDirChange={onDataBaseDirChange}
-              onSelectDataBaseDir={onSelectDataBaseDir}
-            />
+            <DataBaseDirControl dataBaseDir={dataBaseDir} isWindowsDesktop={isWindowsDesktop} />
           }
         />
       </SettingsGroupCard>

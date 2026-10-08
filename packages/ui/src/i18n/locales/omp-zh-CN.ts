@@ -27,7 +27,11 @@ const ompZhCNOverrides: Record<string, string> = {
   "settings.ompNative.loading": "读取中…",
   "chat.ompSubagent.transcript": "查看子代理记录",
   "settings.dataBaseDirDescription":
-    "应用数据的根目录（默认为用户主目录），修改后会将现有数据复制到新位置。路径后缀 .ompcode/v2 不可更改。",
+    "只能通过 OMP_CONFIG_ROOT 设置。应用使用该路径加 _ompcode 后缀；未设置时使用默认路径。修改后完全退出并重新启动应用，不自动复制旧数据。",
+  "settings.dataBaseDirEnvironmentWindows":
+    'Windows 示例：\nsetx OMP_CONFIG_ROOT "D:\\omp"\n随后从新终端启动应用。',
+  "settings.dataBaseDirEnvironmentLinux":
+    "Linux 示例：\nexport OMP_CONFIG_ROOT=/path/omp\ntcsh：setenv OMP_CONFIG_ROOT /path/omp\n从该终端重新启动应用。",
   "occupationOnboarding.modeDescription": "你希望 OmpCode 如何呈现工作过程？",
   "settings.ompModelRoles.configMissing": "当前 omp profile 未找到模型配置",
   "settings.ompModelRoles.configInvalid": "omp 模型配置格式无效，请检查 config.yml 中的 modelRoles",

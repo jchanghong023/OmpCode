@@ -6,13 +6,28 @@ export function resolveOmpConfigRoot(
   home = homedir(),
   env: NodeJS.ProcessEnv = process.env,
 ): string {
+  return (
+    resolveOmpConfigRootOverride(home, env) ?? resolve(home, env.PI_CONFIG_DIR?.trim() || ".omp")
+  );
+}
+
+function resolveOmpConfigRootOverride(home: string, env: NodeJS.ProcessEnv): string | undefined {
   // 根因：OMP 新增根目录覆盖后，应用仍只读 PI_CONFIG_DIR，导致配置与冷历史指向旧目录。
   // 按 OMP resolveAbsoluteDir 展开 ~ 并忽略相对值，不能把它绑定到当前 workspace。
   let root = env.OMP_CONFIG_ROOT?.trim();
   if (root === "~") root = home;
   else if (root?.startsWith("~/") || root?.startsWith("~\\")) root = home + root.slice(1);
   if (root && isAbsolute(root)) return normalize(root);
-  return resolve(home, env.PI_CONFIG_DIR?.trim() || ".omp");
+  return undefined;
+}
+
+/** OmpCode 只随有效的新变量迁移；未设置时使用默认应用目录，PI_CONFIG_DIR 不参与。 */
+export function resolveOmpCodeDataRootFromEnv(
+  home = homedir(),
+  env: NodeJS.ProcessEnv = process.env,
+): string | undefined {
+  const root = resolveOmpConfigRootOverride(home, env);
+  return root ? `${resolve(root)}_ompcode` : undefined;
 }
 
 export function resolveOmpAgentDir(home = homedir(), env: NodeJS.ProcessEnv = process.env): string {

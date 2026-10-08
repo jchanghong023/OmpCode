@@ -43,12 +43,12 @@
 
 ## 数据、端口与更新隔离
 
-- 本应用全部业务数据根由 `~/.zcode` 改为 `~/.ompcode`（配置 v2、日志、任务索引、会话快照、凭据、CLI 配置、skills/commands/plugins 同步目录、telemetry、computer-use 运行日志等），Electron userData（`%APPDATA%/OmpCode`）与单实例锁本就按产品名隔离；不读取、不迁移、不写入上游 ZCode 的 `~/.zcode`。workspace 内同名配置目录（`.ompcode/`）同样与 ZCode 的 `.zcode/` 错开。
+- 本应用全部业务数据根由 `~/.zcode` 改为 `~/.ompcode`（配置 v2、日志、任务索引、会话快照、凭据、CLI 配置、skills/commands/plugins 同步目录、telemetry、computer-use 运行日志等），默认 Electron userData（`%APPDATA%/OmpCode`）与单实例锁按产品名隔离；环境变量派生的数据根与缓存路径遵循 [根目录规则](models-and-commands.md#产品规则与所有权)；不读取、不迁移、不写入上游 ZCode 的 `~/.zcode`。workspace 内同名配置目录（`.ompcode/`）同样与 ZCode 的 `.zcode/` 错开。
 - Windows 资源管理器右键菜单注册表键、electron-updater 缓存目录（`ompcode-updater`）改为 OmpCode 专属，双装不互相覆盖。
 - 正式安装包仅从本仓库 GitHub Release 手动获取更新；本 Fork 没有专属更新 feed 时，不查询或安装上游 ZCode 的自动更新，也不受上游强制更新线阻止启动。
 - 端口隔离：本地开发远程调试端口 9230（上游 ZCode Dev 用 9229）、桌面 devServer 5194（上游 5174）、Web devServer 5193（上游 5173）、server 包默认端口 3033（上游 3030）；运行期本地服务一律 `listen(0)` 临时端口（不变）。深链 scheme `zcode://` 与 appId 仍按「内部标识不动」约定保留（见已知差异 17）。
 
-- 设置中的数据目录说明中英文均显示实际 `.ompcode/v2` 后缀。正式安装包以外的开发态显式更新联调不代表开启正式安装包上游更新。
+- 设置中的数据目录只读显示实际生效根及环境变量设置方法，遵循 [根目录规则](models-and-commands.md#产品规则与所有权)。正式安装包以外的开发态显式更新联调不代表开启正式安装包上游更新。
 - 验收：与 ZCode 双装运行时不读写或迁移其数据，菜单注册与更新缓存相互独立；开发端口按上述分配，运行期服务使用临时端口；安装包不查询上游更新或被其强更线拦截。
 
 ## omp 侧依赖

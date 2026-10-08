@@ -13,6 +13,7 @@ import {
   createStorageRootsResolver,
   createStorageService,
   getDataBaseDir,
+  getZCodeDataRootDir,
   type IStorageService,
 } from "@zcode/services/node";
 import { logger } from "./logger.js";
@@ -21,7 +22,11 @@ import { createStorageScanWorkerRunner } from "./storageScanWorkerClient.js";
 let service: IStorageService | null = null;
 let latestJobId: string | null = null;
 let subscriber: WebContents | null = null;
-const rootsResolver = createStorageRootsResolver({ getHomeDir: homedir, getDataBaseDir });
+const rootsResolver = createStorageRootsResolver({
+  getHomeDir: homedir,
+  getDataBaseDir,
+  getDataRootDir: getZCodeDataRootDir,
+});
 
 function getService(): IStorageService {
   if (service) return service;

@@ -46,7 +46,7 @@
 - `packages/shared`：共享协议与类型；`packages/client`：Agent 客户端 SDK。
 - `packages/omp-agent`：omp RPC 核心适配器（对 host 讲 ZCode Protocol/v4，对内嵌 omp 二进制讲 omp RPC；本 Fork 的本地 Agent 核心）。
 - `packages/omp-agent/src/adapters/cliMain.ts`：Host 启动的 Agent stdio 入口。
-- OMP 环境沿应用进程链透传，`OMP_CONFIG_ROOT`、`OMP_OFFLINE` 兼容规则见 `docs/requirements/models-and-commands.md`；CentOS 7 启动器不再提供 `--home`、`--offline` 参数，不创建数据根链接。
+- OMP 环境沿应用进程链透传；有效 `OMP_CONFIG_ROOT` 同时派生 `<OMP根>_ompcode` 应用根，设置页只读显示路径与环境变量设置方式；`OMP_CONFIG_ROOT`、`OMP_OFFLINE` 兼容规则见 `docs/requirements/models-and-commands.md`；CentOS 7 启动器不再提供 `--home`、`--offline` 参数，不创建数据根链接。
 - `apps/zcode-cli`：保留的上游源码快照，不在根 workspace 中；运行时边界见 `docs/requirements/FORK.md`，未经用户要求不得接回产品。
 - 子目录规则注册表（全仓唯一）：[apps/zcode-cli/AGENTS.md](apps/zcode-cli/AGENTS.md)——独立 workspace 的上游 CLI 源码快照，承载 CLI 专属工作规范、跨平台与接口契约约束及 `pnpm --dir apps/zcode-cli typecheck/lint` 本地验证入口；其余目录不另设子目录 `AGENTS.md`，通用规则统一由本文件维护。
 - `CONTEXT.md`：插件商店领域词汇；修改相关 UI 前阅读。

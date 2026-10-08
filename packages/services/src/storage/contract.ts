@@ -1,6 +1,7 @@
 /**
  * storage 模块公开契约：资源管理器「存储」tab 使用的服务接口与类型再导出。
  * 只允许从这里 import；实现细节（Worker、fs、catalog 规则）都在模块内部。
+ * Desktop 注入当前实际应用根（含 OMP_CONFIG_ROOT 派生根），扫描/清理不重新拼接 .ompcode。
  */
 import type { Event } from "@zcode/rpc";
 import type { StorageManagementApi, StorageUsageSnapshot } from "@zcode/shared";

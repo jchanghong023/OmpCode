@@ -1,6 +1,6 @@
 /**
- * 数据根解析：R1 = 家目录下的 .zcode（永远存在），R2 = 自定义数据存储路径下的 .zcode（仅当设置了且 ≠ 家目录）。
- * 路径来源由调用方注入（desktop host 传 homedir 与 getDataBaseDir），模块内不读环境变量。
+ * 调用方注入实际应用根时只扫描该根；旧调用方保留 home/base 的 .ompcode 布局。
+ * Desktop Main 传入共享路径解析结果，模块内不再读取环境变量或自行决定新根。
  */
 import { join, resolve } from "node:path";
 import type { RootsResolverPort } from "../app/ports.js";
@@ -11,8 +11,16 @@ const ZCODE_DATA_DIR_NAME = ".ompcode";
 export function resolveStorageRoots(params: {
   homeDir: string;
   dataBaseDir: string;
+  dataRootDir?: string;
 }): StorageRootSpec[] {
   const home = resolve(params.homeDir);
+  if (params.dataRootDir) {
+    const dataRoot = resolve(params.dataRootDir);
+    const hasCustomDataBaseDir = dataRoot !== join(home, ZCODE_DATA_DIR_NAME);
+    return [
+      { id: hasCustomDataBaseDir ? "dataBaseDir" : "home", path: dataRoot, hasCustomDataBaseDir },
+    ];
+  }
   const dataBase = resolve(params.dataBaseDir);
   const hasCustomDataBaseDir = dataBase !== home;
   const roots: StorageRootSpec[] = [
@@ -31,9 +39,14 @@ export function resolveStorageRoots(params: {
 export function createStorageRootsResolver(params: {
   getHomeDir: () => string;
   getDataBaseDir: () => string;
+  getDataRootDir?: () => string;
 }): RootsResolverPort {
   return {
     resolveRoots: async () =>
-      resolveStorageRoots({ homeDir: params.getHomeDir(), dataBaseDir: params.getDataBaseDir() }),
+      resolveStorageRoots({
+        homeDir: params.getHomeDir(),
+        dataBaseDir: params.getDataBaseDir(),
+        dataRootDir: params.getDataRootDir?.(),
+      }),
   };
 }

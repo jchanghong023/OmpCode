@@ -1,6 +1,5 @@
 import { createLocalTtftExporter } from "./localTtftExporter.js";
 /* eslint-disable max-lines */
-import "./desktopEarlyDataBaseDirBootstrap.js";
 import "./desktopEarlyChromiumHardwareAccelerationBootstrap.js";
 import { powerMonitor, powerSaveBlocker } from "electron";
 import { crashCapturePaths } from "./appCrashCaptureBootstrap.js";
@@ -62,7 +61,6 @@ import {
   getDataBaseDir,
   getZCodeDataRootDir,
   normalizeRuntimeProcessEnv,
-  setDataBaseDir,
 } from "@zcode/services/node";
 import {
   desktopMenuMessageIds,
@@ -1968,7 +1966,7 @@ app.whenReady().then(async () => {
   installBrowserRestoreBootstrapProtocol(
     session.fromPartition(EMBEDDED_BROWSER_PARTITION).protocol,
   );
-  // Bootstrap: 从设置文件读取自定义数据目录，在所有 host 进程启动前生效
+  // Bootstrap: 读取当前环境根下的设置；旧 dataBaseDir 不再决定存储路径。
   let loadedBootstrapLocale = false;
   let bootstrapSettings: AppSettings | undefined;
   try {
@@ -1976,9 +1974,6 @@ app.whenReady().then(async () => {
     // omp profile 在进程启动时固定；设置页保存后不热切换已有 Host/会话。
     if (launchProfile === undefined && bootstrapSettings.ompProfile !== undefined) {
       process.env.OMP_PROFILE = bootstrapSettings.ompProfile;
-    }
-    if (bootstrapSettings.dataBaseDir) {
-      setDataBaseDir(bootstrapSettings.dataBaseDir);
     }
     if (bootstrapSettings.locale) {
       loadedBootstrapLocale = true;

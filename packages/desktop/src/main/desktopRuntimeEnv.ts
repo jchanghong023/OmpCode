@@ -1,6 +1,7 @@
 /* eslint-disable max-lines -- desktop runtime/env 解析需要集中维护 main/host/remote assets 的启动边界，拆分会扩大远程连接回归面。 */
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
+import { resolveOmpDesktopDataPaths } from "./OmpDesktopDataPaths.js";
 import { join, resolve, win32 } from "node:path";
 import type { ConnectOptions } from "@zcode/server/remote";
 import { listSSHConfigAliasesFromLocalConfig } from "@zcode/services/node";
@@ -69,16 +70,19 @@ export const runtimeApplicationName =
 // Electron 的 app.getPath("home") 不一定跟随测试进程里的 HOME 覆盖。
 // e2e 默认工作区依赖 home 路径，因此提供显式覆盖，避免测试写到开发者真实 ~/ZCodeProject。
 export const runtimeHomePath = readRuntimeEnvOverride("ZCODE_DESKTOP_HOME_DIR");
+const ompDesktopPaths = resolveOmpDesktopDataPaths(runtimeApplicationName);
+const ompCodeDataRoot = ompDesktopPaths?.root;
 // Chromedriver 管理 Electron 时会注入临时 userData；e2e 默认路径模式下导入期不能提前读取 appData。
-export const shouldUseElectronDefaultUserDataPath = isTruthyRuntimeEnvOverride(
-  "ZCODE_DESKTOP_USE_ELECTRON_DEFAULT_USER_DATA",
-);
+export const shouldUseElectronDefaultUserDataPath =
+  !ompDesktopPaths && isTruthyRuntimeEnvOverride("ZCODE_DESKTOP_USE_ELECTRON_DEFAULT_USER_DATA");
 export const runtimeUserDataPath =
+  ompDesktopPaths?.userData ??
   readRuntimeEnvOverride("ZCODE_DESKTOP_USER_DATA_DIR") ??
   (shouldUseElectronDefaultUserDataPath
     ? undefined
     : join(getElectronAppPath("appData"), runtimeApplicationName));
 export const runtimeSessionDataPath =
+  ompDesktopPaths?.sessionData ??
   readRuntimeEnvOverride("ZCODE_DESKTOP_SESSION_DATA_DIR") ??
   (runtimeUserDataPath ? join(runtimeUserDataPath, "session") : undefined);
 // Chromedriver 会注入临时 --user-data-dir，并在该目录等待 DevToolsActivePort。
@@ -500,7 +504,8 @@ export function buildHostProcessEnv(hostProcessLocalEnv: Record<string, string>)
             )
           ? rawInheritedEnv.ZCODE_CUA_BUNDLED_HELPER_APP_PATH?.trim() ||
             join(
-              rawInheritedEnv.ZCODE_HOME?.trim() || join(homedir(), ".ompcode"),
+              ompCodeDataRoot ??
+                (rawInheritedEnv.ZCODE_HOME?.trim() || join(homedir(), ".ompcode")),
               "computer-use",
               "dev",
               DEV_HELPER_APP_NAME,
@@ -560,6 +565,7 @@ export function buildHostProcessEnv(hostProcessLocalEnv: Record<string, string>)
     // 显式注入编译期产品身份，保证主进程与 host 的身份语义一致；地址独立解析。
     // inheritedEnv 从 .env 通用变量补齐 ZCode/ZAI 链接，未覆盖时统一使用线上默认值。
     ZCODE_ENV,
+    ...(ompCodeDataRoot ? { ZCODE_HOME: ompCodeDataRoot } : {}),
     // Preview 与生产版共享任务、配置和凭据，但不同版本的 Helper 不能互相覆盖或触发降级保护。
     // 只隔离 computer-use 下的运行组件，不改写 ZCODE_HOME / ZCODE_DATA_BASE_DIR 业务数据根。
     ...(isPreviewPackagedRuntime ? { ZCODE_CUA_HELPER_INSTALL_VARIANT: "preview" } : {}),

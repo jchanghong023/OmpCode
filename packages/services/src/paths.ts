@@ -6,7 +6,7 @@ import { basename, join, resolve, win32 } from "node:path";
 import { homedir } from "node:os";
 import { DATA_BASE_DIR_FORBIDDEN_WINDOWS_INSTALL_DIR_ERROR_CODE } from "@zcode/shared";
 import { resolveOmpProfileFromEnv } from "@zcode/shared/omp-profile";
-import { resolveOmpConfigRoot } from "@zcode/shared/node";
+import { resolveOmpConfigRoot, resolveOmpCodeDataRootFromEnv } from "@zcode/shared/node";
 
 let _dataBaseDir: string | null = null;
 export const ZCODE_WINDOWS_APP_INSTALL_DIR_ENV = "ZCODE_WINDOWS_APP_INSTALL_DIR";
@@ -32,8 +32,10 @@ export function setDataBaseDir(dir: string | null): void {
   _dataBaseDir = dir?.trim() || null;
 }
 
-/** Get the current base directory. Priority: setDataBaseDir() > env ZCODE_DATA_BASE_DIR > homedir(). */
+/** 有效 OMP_CONFIG_ROOT 派生目录优先；其余覆盖仅供内部开发与测试隔离。 */
 export function getDataBaseDir(): string {
+  const ompCodeRoot = resolveOmpCodeDataRootFromEnv();
+  if (ompCodeRoot) return ompCodeRoot;
   if (_dataBaseDir) return _dataBaseDir;
   if (envDataBaseDir) return envDataBaseDir;
   // 服务实例会启动后台刷新任务；若每次调用都动态读取 HOME，
@@ -41,9 +43,10 @@ export function getDataBaseDir(): string {
   return defaultDataBaseDir;
 }
 
-/** {dataBaseDir}/.zcode */
+/** OMP_CONFIG_ROOT 的兄弟目录，或默认 {home}/.ompcode。 */
 export function getZCodeDataRootDir(): string {
-  return join(getDataBaseDir(), ".ompcode");
+  // 环境变量派生目录本身就是应用根，不能再加 .ompcode。
+  return resolveOmpCodeDataRootFromEnv() ?? join(getDataBaseDir(), ".ompcode");
 }
 
 /** 非项目对话共享的真实工作目录；默认 ~/.ompcode/workspace/default。 */
@@ -51,7 +54,7 @@ export function getConversationWorkspaceDir(): string {
   return join(getZCodeDataRootDir(), "workspace", "default");
 }
 
-/** {dataBaseDir}/.zcode/v2 */
+/** 应用数据根/v2。 */
 export function getAppConfigDir(): string {
   return join(getZCodeDataRootDir(), "v2");
 }

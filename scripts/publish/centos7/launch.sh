@@ -10,7 +10,8 @@ for arg in "$@"; do
   --profile <名称>   选择内嵌 omp 的配置（也支持 --profile=名称）
   -h, --help         显示此帮助并退出
 
-环境变量：OMP_CONFIG_ROOT 指定 omp 数据根；OMP_OFFLINE=1 启用离线锁定。
+环境变量：OMP_CONFIG_ROOT 指定 omp 数据根，应用使用该路径加 _ompcode 后缀；
+OMP_OFFLINE=1 启用离线锁定。
 环境变量原样传给内嵌 omp。未启用离线锁定时桌面为全功能，与 Windows
 基准一致。其他参数会传递给桌面程序。
 HELP

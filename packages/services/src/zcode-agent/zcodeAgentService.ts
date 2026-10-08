@@ -310,7 +310,7 @@ import {
   ZCodeProtocolRequestTimeoutError,
   type ZCodeProtocolClient,
 } from "./zcodeProtocolClient.js";
-import { getDataBaseDir } from "../paths.js";
+import { getZCodeDataRootDir } from "../paths.js";
 import {
   collectBrowserAmbientContext,
   type BrowserAmbientContextExecutor,
@@ -472,7 +472,7 @@ function savedWorkflowScopeParam(params: ZCodeAgentSavedWorkflowTarget): {
 }
 
 function ensurePluginManagementWorkspacePath(): string {
-  const workspacePath = join(getDataBaseDir(), ".ompcode", PLUGIN_MANAGEMENT_WORKSPACE_DIR_NAME);
+  const workspacePath = join(getZCodeDataRootDir(), PLUGIN_MANAGEMENT_WORKSPACE_DIR_NAME);
   // 插件管理是控制面能力，不能复用可能因真实 workspace 被删而 EPIPE 的会话进程。
   // 这里给它固定一个内部 cwd；真实 workspace 仍通过协议参数传给 CLI 做 workspace-scope 判定。
   mkdirSync(workspacePath, { recursive: true });

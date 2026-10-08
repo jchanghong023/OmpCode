@@ -11,7 +11,7 @@ export interface ISettingService {
       "providerFamilyDomain" | "providerFamilyConnectionSelections"
     >,
   ): Promise<void>;
-  /** Change the data base directory: copy data from old → new location, then persist the setting. */
+  /** 旧客户端兼容入口：始终拒绝，应用路径只由 OMP_CONFIG_ROOT 决定。 */
   updateDataBaseDir(newDir: string | undefined): Promise<void>;
   ensureDefaultProject(homedir: string): Promise<{ path: string; created: boolean }>;
 }

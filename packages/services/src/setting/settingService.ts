@@ -14,7 +14,8 @@ import {
 } from "@zcode/shared";
 import type { ISettingService } from "./setting.js";
 import { normalizeSettingsPatch } from "#src/setting/normalizeSettingsPatch.js";
-import { copyDataDirectory, getDataBaseDir, validateDataBaseDirTarget } from "../paths.js";
+import { getZCodeDataRootDir } from "../paths.js";
+import { resolveOmpCodeDataRootFromEnv } from "@zcode/shared/node";
 import { isEffectiveDevelopmentNodeEnv } from "../runtime-tools/nodeEnv.js";
 import { maybeThrowInjectedFsFault } from "../fs/fsFaultInjection.js";
 import { atomicWriteText } from "../fs/atomicFileUtils.js";
@@ -53,6 +54,8 @@ function resolveUserHomeDir() {
 }
 
 function getSettingsDir() {
+  const ompCodeRoot = resolveOmpCodeDataRootFromEnv();
+  if (ompCodeRoot) return join(ompCodeRoot, "v2");
   return join(resolveUserHomeDir(), ".ompcode", "v2");
 }
 
@@ -209,6 +212,7 @@ async function writeSettings(
   const raw = await readLegacyAccountConnectionSettingsFile(settingsFile);
   const rollbackFields = retainLegacyAccountConnectionFields(raw);
   const persisted = { ...rollbackFields, ...settings };
+  delete persisted.dataStoragePath;
   // 旧 Team 尚待 OAuth 补组织时，schema 的默认 {} 不是用户的新选择。
   // 普通偏好保存必须保留新字段缺席；只有迁移提交或用户显式选连接才结束旧导入。
   if (!commitAccountSelection && readIncompleteLegacyTeamConnections(raw).length > 0) {
@@ -282,7 +286,7 @@ export function createSettingServiceWithMigrations(): {
       await updateQueue;
       const result = await readSettingsWithMeta();
       if (!result.needsMigrationPersist) {
-        return result.settings;
+        return { ...result.settings, dataStoragePath: getZCodeDataRootDir() };
       }
 
       await enqueueSettingsWrite(async (shouldCommit, enterCommitPhase) => {
@@ -296,7 +300,7 @@ export function createSettingServiceWithMigrations(): {
         await writeSettings(latest.settings, shouldCommit, runSettingsCommit, enterCommitPhase);
       });
 
-      return readSettings();
+      return { ...(await readSettings()), dataStoragePath: getZCodeDataRootDir() };
     },
 
     async update(patch: Partial<AppSettings>, expectedAccountSettings): Promise<void> {
@@ -339,25 +343,9 @@ export function createSettingServiceWithMigrations(): {
       await enqueueSettingsWrite(runUpdate);
     },
 
-    async updateDataBaseDir(newDir: string | undefined): Promise<void> {
-      const currentBaseDir = getDataBaseDir();
-      const targetBaseDir = newDir?.trim() || homedir();
-      const validation = validateDataBaseDirTarget(targetBaseDir);
-      if (!validation.ok) {
-        // Windows 安装目录由安装器/自动更新管理，把 .zcode/v2 放进去可能在升级时被覆盖。
-        // 迁移前在 service 层拦截，避免 UI 入口变化或 RPC 调用绕过前端判断。
-        const error = new Error(`${validation.code}: ${validation.forbiddenDir}`);
-        (error as Error & { code: string }).code = validation.code;
-        throw error;
-      }
-
-      if (currentBaseDir !== targetBaseDir) {
-        log("copying data directory from", currentBaseDir, "to", targetBaseDir);
-        await copyDataDirectory(currentBaseDir, targetBaseDir);
-        log("data directory copy done");
-      }
-
-      await this.update({ dataBaseDir: newDir });
+    async updateDataBaseDir(): Promise<void> {
+      // 兼容旧 RPC 方法，但不允许旧客户端触发迁移或保存另一套路径。
+      throw new Error("应用数据目录只能通过 OMP_CONFIG_ROOT 设置，请修改环境变量后重启应用。");
     },
 
     async ensureDefaultProject(userHomeDir: string): Promise<{ path: string; created: boolean }> {

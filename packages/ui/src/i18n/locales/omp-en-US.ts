@@ -29,7 +29,11 @@ const ompEnUSOverrides: Record<string, string> = {
   "settings.ompNative.loading": "Loading…",
   "chat.ompSubagent.transcript": "View subagent transcript",
   "settings.dataBaseDirDescription":
-    "Root directory for app data (defaults to user home directory). Existing data will be copied to the new location. The .ompcode/v2 suffix cannot be changed.",
+    "Set OMP_CONFIG_ROOT to choose the app data path; OmpCode appends _ompcode. Without it, the default path is used. Quit and restart after changes. Existing data is not copied automatically.",
+  "settings.dataBaseDirEnvironmentWindows":
+    'Windows example:\nsetx OMP_CONFIG_ROOT "D:\\omp"\nThen launch the app from a new terminal.',
+  "settings.dataBaseDirEnvironmentLinux":
+    "Linux example:\nexport OMP_CONFIG_ROOT=/path/omp\ntcsh: setenv OMP_CONFIG_ROOT /path/omp\nRestart the app from that terminal.",
   "occupationOnboarding.modeDescription": "How would you like OmpCode to show its work?",
   "settings.ompModelRoles.configMissing": "No model config found for the current omp profile",
   "settings.ompModelRoles.configInvalid":
