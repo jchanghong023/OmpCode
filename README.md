@@ -52,6 +52,14 @@ OmpCode brings OMP sessions, tools, model roles and command discovery into a fri
   </a>
 </p>
 
+**Follow agent collaboration.** See how the main agent and subagents exchange messages, with an interaction timeline showing the order of events.
+
+<p align="center">
+  <a href="docs/images/ompcode-agent-interactions.png">
+    <img src="docs/images/ompcode-agent-interactions.png" alt="OmpCode agent interaction graph and message timeline (example)" width="100%" />
+  </a>
+</p>
+
 ## Why OmpCode
 
 - **ZCode's UI, ChatGPT-style ease:** Start with a familiar, chat-first layout and a polished coding workspace instead of learning a new terminal interface.
