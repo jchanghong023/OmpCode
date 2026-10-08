@@ -161,3 +161,38 @@ test("流式 + guide → steer 携带文本与附件（不做命令分发）", a
   assert.equal(process.sent.length, 1);
   assert.deepEqual(process.sent[0], { type: "steer", message: "/改成英文", images: [IMAGE] });
 });
+
+test("附件块前置仍按原始 slash 拒绝，且不得先修改模型", async () => {
+  const process = new StubProcess();
+  const outcome = await dispatch(process, {
+    text: '<attached_file name="a.txt" mime="text/plain">\nx\n</attached_file>\n\n/compact',
+    originalText: "/compact",
+    modelSelection: { provider: "other", model: "other-model", thought: "high" },
+    resolveSlashCommand: resolverOf(),
+  });
+  assert.equal(outcome.code, "omp_command_attachments_unsupported");
+  assert.equal(outcome.success, false);
+  assert.deepEqual(process.sent, []);
+});
+
+test("未知命令带模型选择也先拒绝，不产生 set_model 副作用", async () => {
+  const process = new StubProcess();
+  const outcome = await dispatch(process, {
+    text: "  /bogus",
+    modelSelection: { provider: "other", model: "other-model" },
+    resolveSlashCommand: resolverOf({ kind: "reject", reason: "unknown", commandName: "bogus" }),
+  });
+  assert.equal(outcome.code, "omp_command_unknown");
+  assert.deepEqual(process.sent, []);
+});
+
+test("模型相同但思考档位被核心拒绝时不发送 prompt", async () => {
+  const process = new StubProcess({ success: false, error: "thinking unavailable" });
+  const outcome = await dispatch(process, {
+    text: "hello",
+    modelSelection: { provider: "p", model: "m", thought: "high" },
+  });
+  assert.equal(outcome.success, false);
+  assert.equal(outcome.code, "omp_set_thinking_level_failed");
+  assert.deepEqual(process.sent, [{ type: "set_thinking_level", level: "high" }]);
+});

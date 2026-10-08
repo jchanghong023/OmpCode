@@ -49,15 +49,21 @@ export function titleFromOmpEntries(entries: unknown[]): string | null {
       record.type === "message" &&
       typeof record.message === "object" &&
       record.message !== null &&
-      (record.message as { role?: string }).role === "user"
+      "role" in record.message &&
+      record.message.role === "user"
     ) {
-      const content =
-        (record.message as { content?: { type?: string; text?: string }[] }).content ?? [];
-      const text = content
-        .filter((block) => block.type === "text")
-        .map((block) => block.text ?? "")
-        .join(" ")
-        .trim();
+      // 字符串是当前 omp 的合法用户正文形状；标题扫描不能因此抛错中断列表。
+      const content = "content" in record.message ? record.message.content : undefined;
+      const text = (
+        typeof content === "string"
+          ? content
+          : Array.isArray(content)
+            ? content
+                .filter((block) => block?.type === "text" && typeof block.text === "string")
+                .map((block) => block.text)
+                .join(" ")
+            : ""
+      ).trim();
       if (text.length > 0) {
         firstUserText = text;
       }

@@ -187,11 +187,10 @@ function RootInner({
     // 离线锁定门控状态从这里拉一次（Main 唯一所有者应答；非桌面/查询失败=未锁定），
     // 之后的禁用态消费全部走 offlineLockGate 的订阅快照。
     primeOfflineLockFromPlatform(platform);
-    // 对话 UI perf 只属于 desktop-continuous；Web/mobile 即使能看到权威状态也不装 reporter。
-    setUiPerfArmsReporter(isDesktop && !isCentos7DesktopBuild ? platform : null);
-    setSessionOpenArmsReporter(isDesktop && !isCentos7DesktopBuild ? platform : null);
-    // 发送漏斗同理：只在 Electron 桌面端上报，Web/mobile 的 reportArmsCustomEvent 是空实现。
-    setSendFunnelArmsReporter(isDesktop && !isCentos7DesktopBuild ? platform : null);
+    // 构建标记仅控制绘制成本；两种桌面都注册 reporter，联网权限由运行时离线锁决定。
+    setUiPerfArmsReporter(isDesktop ? platform : null);
+    setSessionOpenArmsReporter(isDesktop ? platform : null);
+    setSendFunnelArmsReporter(isDesktop ? platform : null);
     return () => {
       setMcpStorePlatform(null);
       setUiPerfArmsReporter(null);
@@ -210,10 +209,7 @@ function RootInner({
   // 动态工作流灰度快照的唯一取数点：
   // 放在 app 级 ServiceProvider 这一层取一次，自动化页与 run 面板只读。消费方可能位于
   // 工作区级 ServiceProvider 内（远程 Host 的 accessor），由它们取数会拿到另一台 Host 的答案。
-  useDynamicWorkflowAvailabilityLoader(
-    services.codingPlanSubscriptionService,
-    !isCentos7DesktopBuild,
-  );
+  useDynamicWorkflowAvailabilityLoader(services.codingPlanSubscriptionService);
 
   const { intl, locale } = useZCodeIntl();
   const theme = useZCodeStore((state) => state.theme);
@@ -398,10 +394,6 @@ function RootInner({
   const refreshProviderState = useRootProviderStateRefresh(services);
   useRootProviderSettingsSnapshot(services);
   useEffect(() => {
-    if (isCentos7DesktopBuild) {
-      setProviderFamilyDomainMigrationComplete(true);
-      return;
-    }
     let disposed = false;
 
     void (async () => {
@@ -488,7 +480,7 @@ function RootInner({
     registerBaseWorkspaceServices(services);
   }, [services]);
 
-  useBotBroadcastEffects(services, tabStoreApi, !isCentos7DesktopBuild);
+  useBotBroadcastEffects(services, tabStoreApi);
 
   const handleOpenRemoteConnection = useCallback((preference?: RemoteConnectionOpenPreference) => {
     setRemoteConnectionOpenPreference(preference ?? null);
@@ -709,7 +701,8 @@ function RootInner({
   }, [platform]);
 
   useRootOAuthEffects({
-    enabled: !isCentos7DesktopBuild,
+    // 旧 ZCode 账号已退役，两平台都不恢复；不能以 CentOS 构建标记造成账号行为分叉。
+    enabled: false,
     accountIntentKey: JSON.stringify([
       user?.id,
       appSettings?.providerFamilyDomain,

@@ -499,6 +499,8 @@ export function useDraftConfigControl(params: {
   );
 
   const { available: planModelAvailable, toggle: togglePlanModel } = useOmpPlanModelToggle({
+    workspacePath,
+    workspaceIdentity,
     scopeKey,
     stateRef,
     draftConfigRef,

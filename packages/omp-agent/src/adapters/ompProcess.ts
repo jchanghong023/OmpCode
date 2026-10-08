@@ -100,8 +100,9 @@ class OmpChildProcess implements OmpSessionProcess {
     child.stdin.on("error", (error) => {
       logger.debug("omp stdin write failed", { error: String(error) });
     });
-    await this.awaitReadyAndNegotiate(child);
+    // 同批 stdout 可能同时含 ready 与目录更新，持续读取器必须在 ready 等待前接线。
     this.wireStdout(child);
+    await this.awaitReadyAndNegotiate(child);
     const subscription = await this.request({ type: "set_subagent_subscription", level: "events" }, 10_000).catch((error) => ({ success: false, error: String(error) }));
     this.subagentSubscriptionAvailable = subscription.success;
     if (!subscription.success) {
@@ -123,18 +124,17 @@ class OmpChildProcess implements OmpSessionProcess {
 
   /** ready 等待 + 协商；ready 通告的 v2 重组上限接线到分片重组器。 */
   private async awaitReadyAndNegotiate(child: ChildProcessWithoutNullStreams): Promise<void> {
-    const ready = await awaitOmpReady(child, {
+    await awaitOmpReady(child, {
       request: (command) => this.request(command),
       onForkSurface: () => {
         this.forkSurface = true;
       },
+      onReady: (ready) => {
+        const limit = ready.maxReassembledFrameBytes;
+        if (typeof limit === "number" && limit > 0) this.assembler.updateMaxReassembledBytes(limit);
+        child.stdout.resume();
+      },
     });
-    // 修复（B6）：重组上限按 ready 通告值更新（缺失/非法保持默认 64MiB）；
-    // rpc_chunk 只在 v2/v3 协商成功后出现，ready 即接线时机安全。
-    const limit = ready.maxReassembledFrameBytes;
-    if (typeof limit === "number" && limit > 0) {
-      this.assembler.updateMaxReassembledBytes(limit);
-    }
   }
 
   private handleLine(line: string): void {
@@ -278,6 +278,13 @@ class OmpChildProcess implements OmpSessionProcess {
     this.options.onExit(code);
   }
   async dispose(): Promise<void> {
+    // 正常 EOF 关闭也必须结算在途请求；disposed 会阻止 handleExit 的意外退出路径。
+    for (const pending of this.pending.values()) {
+      clearTimeout(pending.timer);
+      pending.reject(new Error("omp core disposed"));
+    }
+    this.pending.clear();
+    this.promptResults.clear();
     this.disposed = true;
     const child = this.child;
     if (!child) {

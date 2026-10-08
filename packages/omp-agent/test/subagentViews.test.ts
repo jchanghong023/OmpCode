@@ -12,7 +12,7 @@ import { SubagentViewStore, type SubagentViewRegistry } from "../src/app/subagen
 import { buildOmpSubagentViewId } from "../src/domain/ompFrames.js";
 import type { OmpSubagentFrame } from "../src/domain/ompFrames.js";
 import type { ConversationEngine } from "../src/app/conversationEngine.js";
-import type { HostGateway, OmpCommandOutcome } from "../src/app/ports.js";
+import type { HostGateway, OmpCommandOutcome, OmpStorePort } from "../src/app/ports.js";
 
 const PARENT = "omp-session-parent";
 const VIEW_ID = buildOmpSubagentViewId(PARENT, "sa-1");
@@ -73,6 +73,7 @@ async function createStore(
     subagentId?: string;
     fromByte?: number;
   }) => Promise<OmpCommandOutcome | null>,
+  persistedStore?: Pick<OmpStorePort, "readSessionEntries" | "readSubagentEntries">,
 ): Promise<Harness> {
   let calls = 0;
   const gateway: HostGateway = {
@@ -95,6 +96,7 @@ async function createStore(
       }),
     }),
   } as unknown as ConversationEngine;
+  Object.defineProperty(parentEngine, "ompSessionFile", { value: "C:/sessions/parent.jsonl" });
   const registry: SubagentViewRegistry = {
     getEngine: (sessionId) => (sessionId === PARENT ? parentEngine : null),
     resumeSession: async () => parentEngine,
@@ -104,6 +106,7 @@ async function createStore(
     gateway,
     workspaceId: "test-workspace",
     workspacePath: process.cwd(),
+    store: persistedStore,
   });
   const engine = await store.acquire(VIEW_ID);
   assert.ok(engine, "合法 viewId 必须建立视图引擎");
@@ -202,6 +205,7 @@ test("lifecycle 终态后停止重读调度（终态帧补读一次）", async (
 });
 
 test("G7：传输层失败（null/失败响应）不使 acquire 失败，视图保持空投影", async () => {
+  // 普通传输失败不回退磁盘，不能把当前错误掩盖成旧记录成功。
   const harness = await createStore(async () => null);
   assert.deepEqual(harness.rows(), [], "传输失败保持空投影");
 });
@@ -298,6 +302,40 @@ test("C1：记录不可用（success:false）——插入「记录不可用」�
   assert.match(rows[0]!.text ?? "", /记录不可用/);
 });
 
+test("冷恢复 Unknown subagent 仅在父历史证明归属后读持久记录", async () => {
+  let reads = 0;
+  const persistedStore = {
+    readSessionEntries: async () => [
+      {
+        type: "message",
+        message: {
+          role: "toolResult",
+          toolName: "task",
+          toolCallId: "task-1",
+          details: { progress: [{ id: "sa-1", agent: "scout" }] },
+        },
+      },
+    ],
+    readSubagentEntries: async () => {
+      reads += 1;
+      return [entryUser("persisted"), entryAssistant("done")];
+    },
+  };
+  const outcome = { success: false, error: "Unknown subagent or session file unavailable: sa-1" };
+  const harness = await createStore(async () => outcome, persistedStore);
+  assert.equal(reads, 1);
+  assert.deepEqual(
+    harness.rows().map((row) => row.text),
+    ["persisted", "done"],
+  );
+  const unowned = await createStore(async () => outcome, {
+    ...persistedStore,
+    readSessionEntries: async () => [],
+  });
+  assert.equal(reads, 1, "无父会话归属证明不得读任意子代理路径");
+  assert.match(unowned.rows()[0]?.text ?? "", /记录不可用/);
+});
+
 // ── S6-4：reset=true 替换语义（transcript 收缩重写，omp reset 游标归零）──
 
 test("S6-4：reset 替换语义——旧行多于新行集时残留陈旧行被清除", async () => {
@@ -343,14 +381,15 @@ test("S6-4：reset 替换语义——旧行多于新行集时残留陈旧行被�
           }
         : { success: true, data: { entries: [], nextByte: fromByte } };
   harness.store.ingestFrame(PARENT, subagentEvent("delta"));
+  const seqBefore = harness.seq();
   await waitFor(() => {
     const rebuilt = harness.store.getEngine(VIEW_ID);
     return (
       rebuilt !== null &&
-      rebuilt !== harness.engine &&
+      rebuilt === harness.engine &&
       rebuilt.projection.rowsRange(undefined, 100).rows.length === 2
     );
-  }, "reset 后视图应重建为仅含新行集的引擎");
+  }, "reset 后同一订阅引擎应仅含新行集");
   const rebuilt = harness.store.getEngine(VIEW_ID)!;
   assert.deepEqual(
     [...rebuilt.projection.rowsRange(undefined, 100).rows].map(
@@ -358,6 +397,19 @@ test("S6-4：reset 替换语义——旧行多于新行集时残留陈旧行被�
     ),
     ["run 2 a", "run 2 b"],
     "陈旧行（run 1 b/run 1 c）必须被清除，不得残留",
+  );
+  assert.equal(rebuilt, harness.engine, "reset 不得丢弃原订阅");
+  await waitFor(
+    () => harness.deltasSince(seqBefore).some((delta) => delta.op === "row.removed"),
+    "删除屏障下发",
+  );
+  const fresh = harness.deltasSince(seqBefore);
+  assert.equal(fresh[0]?.op, "row.removed");
+  assert.deepEqual(
+    fresh
+      .filter((delta) => delta.op === "row.appended")
+      .map((delta) => ("row" in delta ? delta.row.rowId : null)),
+    [1, 2],
   );
   // 重建后的引擎就是当前视图：后续非 reset 重读继续落在它上，合并行为不变、不再重建。
   phase = "stable";

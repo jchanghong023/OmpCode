@@ -45,6 +45,8 @@ export function registerQueueDispatchAckSink(
 export async function dispatchOmpText(input: {
   process: OmpSessionProcess;
   text: string;
+  /** 原始用户文本：合并附件正文不得绕过斜杠判定。 */
+  originalText?: string;
   images: { type: "image"; data: string; mimeType: string }[];
   streaming: boolean;
   followupMode: "queue" | "guide";
@@ -56,7 +58,40 @@ export async function dispatchOmpText(input: {
   const { text, images } = input;
   // 修复（G9）：被拒输入不得先改写会话模型——「斜杠命令 + 附件」守卫前置于
   // applyEngineModelSelection，模型选择只在输入被接受后执行。
-  const mergedTextAttachment = text.includes(TEXT_ATTACHMENT_MARKER);
+  const originalText = input.originalText ?? text;
+  const mergedTextAttachment = text !== originalText || text.includes(TEXT_ATTACHMENT_MARKER);
+  if (!input.streaming && originalText.trimStart().startsWith("/")) {
+    // 修复（F8/A6）：斜杠命令无附件载体（目录内命令走 prompt 本地执行，images 被忽略），
+    // 带图片时不能静默丢弃附件，必须明确失败让用户改用无附件命令或把图片说明写入命令参数；
+    // 文本附件由 v4Commands 经 ompAttachmentInput 拼进文本，按拼接标记识别并拒绝。
+    if (images.length > 0 || mergedTextAttachment) {
+      return {
+        success: false,
+        code: "omp_command_attachments_unsupported",
+        error:
+          images.length > 0
+            ? "斜杠命令暂不支持同时发送图片附件；请去掉附件后重发，或把图片说明写入命令参数"
+            : "斜杠命令暂不支持同时发送文本附件；请去掉附件后重发，或把附件说明写入命令参数",
+      };
+    }
+    if (input.resolveSlashCommand) {
+      // 斜杠严格分发（omp-core-integration.md）：适配层按命令目录本地判定——目录内且 omp
+      // 可执行 → 以 prompt 文本发送（omp 本地执行，agentInvoked:false + command_output
+      // 收口）；未知或仅 TUI 可执行 → 明确报错，绝不发给模型（omp 会把未知 "/xxx" 当普通
+      // 文本送入模型）。
+      const resolution = await input.resolveSlashCommand(originalText.trimStart());
+      if (resolution.kind === "reject") {
+        return {
+          success: false,
+          code: resolution.reason === "unknown" ? "omp_command_unknown" : "omp_command_tui_only",
+          error:
+            resolution.reason === "unknown"
+              ? `未知命令：${resolution.commandName}（omp 命令目录中不存在）`
+              : `命令 ${resolution.commandName} 需要终端运行时，当前宿主不可执行`,
+        };
+      }
+    }
+  }
   if (input.modelSelection) {
     const failure = await applyEngineModelSelection(
       input.process,
@@ -82,38 +117,6 @@ export async function dispatchOmpText(input: {
     }
     // 修复（G15）：code 只表达失败类别，成功结果不携带。
     return outcome.success ? outcome : { ...outcome, code: "omp_prompt_failed" };
-  }
-  if (text.startsWith("/")) {
-    // 修复（F8/A6）：斜杠命令无附件载体（目录内命令走 prompt 本地执行，images 被忽略），
-    // 带图片时不能静默丢弃附件，必须明确失败让用户改用无附件命令或把图片说明写入命令参数；
-    // 文本附件由 v4Commands 经 ompAttachmentInput 拼进文本，按拼接标记识别并拒绝。
-    if (images.length > 0 || mergedTextAttachment) {
-      return {
-        success: false,
-        code: "omp_command_attachments_unsupported",
-        error:
-          images.length > 0
-            ? "斜杠命令暂不支持同时发送图片附件；请去掉附件后重发，或把图片说明写入命令参数"
-            : "斜杠命令暂不支持同时发送文本附件；请去掉附件后重发，或把附件说明写入命令参数",
-      };
-    }
-    if (input.resolveSlashCommand) {
-      // 斜杠严格分发（omp-core-integration.md）：适配层按命令目录本地判定——目录内且 omp
-      // 可执行 → 以 prompt 文本发送（omp 本地执行，agentInvoked:false + command_output
-      // 收口）；未知或仅 TUI 可执行 → 明确报错，绝不发给模型（omp 会把未知 "/xxx" 当普通
-      // 文本送入模型）。
-      const resolution = await input.resolveSlashCommand(text);
-      if (resolution.kind === "reject") {
-        return {
-          success: false,
-          code: resolution.reason === "unknown" ? "omp_command_unknown" : "omp_command_tui_only",
-          error:
-            resolution.reason === "unknown"
-              ? `未知命令：${resolution.commandName}（omp 命令目录中不存在）`
-              : `命令 ${resolution.commandName} 需要终端运行时，当前宿主不可执行`,
-        };
-      }
-    }
   }
   const outcome = await input.process.send({ type: "prompt", message: text, ...attachment });
   return outcome.success ? outcome : { ...outcome, code: "omp_prompt_failed" };

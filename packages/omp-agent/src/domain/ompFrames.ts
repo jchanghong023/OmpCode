@@ -6,11 +6,14 @@
 import { z } from "zod";
 import { ompAutoCompactionEndEventSchema, ompQueueUpdateEventSchema } from "./ompEventFrames.js";
 import { ompAskQuestionSchema, type OmpAskAnswerFrame } from "./ompAskFrames.js";
+import type { OmpBtwCommand } from "./OmpBtwFrames.js";
+import { ompContentBlockSchema, ompMessageContentSchema } from "./OmpCustomMessage.js";
 
 export * from "./ompAskFrames.js";
 export * from "./ompViewIds.js";
 
 export * from "./ompEventFrames.js";
+export * from "./OmpBtwFrames.js";
 
 // ── 启动帧 ──
 export const ompReadyFrameSchema = z.object({
@@ -95,21 +98,11 @@ export const ompHostToolCallFrameSchema = z.object({
 });
 
 // ── 会话事件（AgentSessionEvent 原样转发）──
-const ompContentBlockSchema = z
-  .object({
-    type: z.string(),
-    text: z.string().optional(),
-    thinking: z.string().optional(),
-    id: z.string().optional(),
-    name: z.string().optional(),
-    arguments: z.unknown().optional(),
-  })
-  .passthrough();
 
 export const ompAgentMessageSchema = z
   .object({
     role: z.string(),
-    content: z.array(ompContentBlockSchema).optional(),
+    content: ompMessageContentSchema.optional(),
     usage: z
       .object({
         input: z.number().optional(),
@@ -352,6 +345,7 @@ export type OmpCommandFrame =
   // 子代理控制（上游 v1 面）：停止 = cancel_subagent；发送消息 = steer_subagent。
   | { id?: string; type: "cancel_subagent"; subagentId: string }
   | { id?: string; type: "steer_subagent"; subagentId: string; message: string }
+  | OmpBtwCommand
   // v3 fork surface 目录能力（目录进程 --no-session 上消费；未协商 v3 回 Unknown command）。
   | import("./ompForkFrames.js").OmpDirectoryCommand;
 

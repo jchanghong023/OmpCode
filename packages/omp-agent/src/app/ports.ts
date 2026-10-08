@@ -12,6 +12,7 @@ import type {
 import type { OmpBypassFrame, OmpDirectoryCommand } from "../domain/ompForkFrames.js";
 import type { OmpStateData } from "../domain/ompFrames.js";
 import type { OmpContextReport } from "../domain/ompContextReport.js";
+import type { OmpBtwFrame } from "../domain/OmpBtwFrames.js";
 export type { OmpStateData };
 
 export interface OmpCommandOutcome {
@@ -52,6 +53,7 @@ export interface OmpSideChannelHandlers {
   /** 命令目录变化（available_commands_update）。 */
   onCommandsUpdate?: (commands: unknown) => void;
   onSubagentFrame?: (frame: OmpSubagentFrame) => void;
+  onBtwFrame?: (frame: OmpBtwFrame) => void;
 }
 
 export interface OmpProcessFactory {

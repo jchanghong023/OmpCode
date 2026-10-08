@@ -149,7 +149,7 @@ function findNewestCachedTag() {
     if (!entry.isDirectory()) {
       continue;
     }
-    const tagManifest = resolve(cacheDir, entry.name, "manifest.json");
+    const tagManifest = resolve(cacheDir, entry.name, `${assetName}.manifest.json`);
     const tagAsset = resolve(cacheDir, entry.name, assetName);
     if (!existsSync(tagManifest) || !existsSync(tagAsset)) {
       continue;
@@ -163,7 +163,9 @@ function findNewestCachedTag() {
 async function fetchChecksums(tag) {
   const url = `${DOWNLOAD_BASE}/${encodeURIComponent(tag)}/SHA256SUMS.txt`;
   const response = await fetch(url, { headers: { "User-Agent": "omp-agent-fetch" } });
-  if (!response.ok) return null;
+  if (!response.ok) {
+    throw new Error(`[fetch-omp] 无法获取发布 SHA256SUMS.txt（HTTP ${response.status}）`);
+  }
   const text = await response.text();
   const map = new Map();
   for (const line of text.split("\n")) {
@@ -210,30 +212,40 @@ async function main() {
   const tag = process.env.OMP_RELEASE_TAG || (await resolveLatestTag());
   const tagCacheDir = resolve(cacheDir, tag);
   const cachedAsset = resolve(tagCacheDir, assetName);
-  const cachedManifest = resolve(tagCacheDir, "manifest.json");
+  // 修复原因：同 tag 的多平台缓存不能共用元数据；缓存存在也不代表资产仍完整。
+  const cachedManifest = resolve(tagCacheDir, `${assetName}.manifest.json`);
+  let expected;
 
   if (!existsSync(cachedAsset) || !existsSync(cachedManifest)) {
     const checksums = await fetchChecksums(tag);
-    const expected = checksums?.get(assetName);
+    expected = checksums.get(assetName);
+    if (!expected) {
+      throw new Error(`[fetch-omp] 发布 SHA256SUMS.txt 缺少资产 ${assetName}`);
+    }
     const url = `${DOWNLOAD_BASE}/${encodeURIComponent(tag)}/${assetName}`;
     console.log(`[fetch-omp] 下载 ${url}`);
     await downloadToFile(url, cachedAsset);
-    if (expected) {
-      const actual = await sha256OfFile(cachedAsset);
-      if (actual !== expected) {
-        rmSync(cachedAsset, { force: true });
-        throw new Error(
-          `[fetch-omp] SHA256 校验失败：${assetName}（期望 ${expected}，实际 ${actual}）`,
-        );
-      }
-      console.log(`[fetch-omp] SHA256 校验通过 ${expected.slice(0, 12)}…`);
-    } else {
-      console.warn("[fetch-omp] release 未提供 SHA256SUMS，跳过校验");
-    }
-    writeFileSync(cachedManifest, `${JSON.stringify({ tag, asset: assetName }, null, 2)}\n`);
   } else {
+    const manifest = JSON.parse(readFileSync(cachedManifest, "utf8"));
+    if (manifest.tag !== tag || manifest.asset !== assetName || !/^[0-9a-f]{64}$/.test(manifest.sha256)) {
+      throw new Error(`[fetch-omp] 无效的资产缓存元数据：${cachedManifest}`);
+    }
+    expected = manifest.sha256;
     console.log(`[fetch-omp] 命中缓存 ${cachedAsset}`);
   }
+
+  // 修复原因：缺失发布摘要不能降级为“跳过校验”，且缓存篡改必须在复制进资源前失败。
+  const actual = await sha256OfFile(cachedAsset);
+  if (actual !== expected) {
+    rmSync(cachedAsset, { force: true });
+    rmSync(cachedManifest, { force: true });
+    throw new Error(
+      `[fetch-omp] SHA256 校验失败：${assetName}（期望 ${expected}，实际 ${actual}）`,
+    );
+  }
+  console.log(`[fetch-omp] SHA256 校验通过 ${expected.slice(0, 12)}…`);
+  mkdirSync(tagCacheDir, { recursive: true });
+  writeFileSync(cachedManifest, `${JSON.stringify({ tag, asset: assetName, sha256: expected }, null, 2)}\n`);
 
   const stagedManifest = JSON.parse(readFileSync(cachedManifest, "utf8"));
   const stagedTag = stagedManifest.tag;

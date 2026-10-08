@@ -111,3 +111,48 @@ test("订阅冷会话先交付快照，后台状态读取与紧接的发送共�
     await engine.dispose();
   }
 });
+
+test("关闭在途启动不得继续get_state或复活引擎", async () => {
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let reads = 0;
+  let disposals = 0;
+  const engine = new ConversationEngine({
+    sessionId: "closing-start",
+    workspaceId: "ws",
+    workspacePath: ".",
+    gateway: { emitFrame() {}, requestUserInput: async () => ({ action: "cancel" }) },
+    onIndexChange() {},
+    ompFactory: {
+      create: () => ({
+        ompSessionFile: null,
+        async start() {
+          await gate;
+        },
+        async send() {
+          return { success: true };
+        },
+        respondUi() {},
+        async refreshState() {
+          reads += 1;
+          return null;
+        },
+        async readContextReport() {
+          return null;
+        },
+        async dispose() {
+          disposals += 1;
+        },
+      }),
+    },
+  });
+  const starting = assert.rejects(engine.ensureOmpStarted(), /closed/);
+  const closing = engine.dispose();
+  release();
+  await Promise.all([starting, closing]);
+  assert.equal(reads, 0);
+  assert.ok(disposals > 0);
+  await assert.rejects(engine.ensureOmpStarted(), /closed/);
+});

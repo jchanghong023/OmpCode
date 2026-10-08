@@ -15,7 +15,11 @@ import { homedir, tmpdir } from "node:os";
 import { join, relative, resolve, sep } from "node:path";
 import { test } from "node:test";
 import { createOmpStore, ompSessionsRoot } from "../src/adapters/ompStore.js";
-import { rowsFromOmpEntries, titleFromOmpEntries } from "../src/domain/coldHistory.js";
+import {
+  rowsFromOmpEntries,
+  titleFromOmpEntries,
+  transcriptFromOmpEntries,
+} from "../src/domain/coldHistory.js";
 
 // ── omp session-title-slot.ts 同形首行槽位（含 pad 补齐到 256 字节）。──
 
@@ -151,6 +155,29 @@ test("titleFromOmpEntries：无槽位时取最后一条 title_change，其次 he
   assert.equal(
     titleFromOmpEntries([{ type: "session", id: SESSION_ID, timestamp: "t", cwd: "/w" }, user]),
     "首条用户消息",
+  );
+});
+
+test("当前 omp 合法字符串正文可恢复标题、历史与子代理 transcript", () => {
+  const entries = [
+    { type: "message", message: { role: "user", content: "saved plain user", timestamp: 1 } },
+    {
+      type: "message",
+      message: {
+        role: "assistant",
+        content: [null, { type: "text", text: "saved answer" }],
+        timestamp: 2,
+      },
+    },
+  ];
+  assert.equal(titleFromOmpEntries(entries), "saved plain user");
+  assert.deepEqual(
+    rowsFromOmpEntries(entries).map((row) => ("text" in row ? row.text : "")),
+    ["saved plain user", "saved answer"],
+  );
+  assert.equal(
+    transcriptFromOmpEntries(entries),
+    "user: saved plain user\n\nassistant: saved answer",
   );
 });
 

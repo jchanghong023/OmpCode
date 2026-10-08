@@ -176,6 +176,10 @@ export interface SelectionSideChatPaneTab {
   workspaceIdentity?: string;
   remoteSessionId?: string;
   parentSessionId: string;
+  /** 父文件首次落盘前的活跃 UI 身份；持久父身份仍为 parentSessionId。 */
+  liveParentSessionId?: string;
+  /** 仅当前公开辅助命令创建的主题；旧普通 child tab 不恢复成 BTW。 */
+  sideTopicVersion?: 1;
   childSessionId: string;
   ordinal: number;
 }
@@ -477,6 +481,7 @@ export interface OpenSelectionSideChatRequest {
   workspaceIdentity?: string;
   remoteSessionId?: string;
   parentSessionId: string;
+  liveParentSessionId?: string;
   childSessionId: string;
   /** active child 已确定不存在时，由宿主原子替换对应旧 tab。 */
   replacesChildSessionId?: string;
@@ -570,7 +575,11 @@ export function normalizeWorkspaceSidePaneState(
 
   // Treemapping 当前需要从侧边栏隐藏。旧版本可能已经把 treemapping tab
   // 写进了 workspace 级 side pane 记忆，这里在状态边界统一过滤，避免恢复后入口继续出现。
-  const filteredTabs = current.tabs.filter((tab) => tab.type !== "treemapping");
+  const filteredTabs = current.tabs.filter(
+    (tab) =>
+      tab.type !== "treemapping" &&
+      (tab.type !== "selection-side-chat" || tab.sideTopicVersion === 1),
+  );
   if (filteredTabs.length === 0) {
     return null;
   }
@@ -765,12 +774,14 @@ function createSelectionSideChatPaneTab(
       encodeSidePaneTabIdPart(options.childSessionId),
     ].join(":"),
     type: "selection-side-chat",
+    sideTopicVersion: 1,
     openedAt: Date.now(),
     workspaceKey: options.workspaceKey,
     workspacePath: options.workspacePath,
     ...(options.workspaceIdentity ? { workspaceIdentity: options.workspaceIdentity } : {}),
     ...(options.remoteSessionId ? { remoteSessionId: options.remoteSessionId } : {}),
     parentSessionId: options.parentSessionId,
+    ...(options.liveParentSessionId ? { liveParentSessionId: options.liveParentSessionId } : {}),
     childSessionId: options.childSessionId,
     ordinal: options.ordinal,
   };
@@ -1686,7 +1697,8 @@ export function openSelectionSideChatPane(
     (tab): tab is SelectionSideChatPaneTab =>
       tab.type === "selection-side-chat" &&
       tab.workspaceKey === options.workspaceKey &&
-      tab.parentSessionId === options.parentSessionId &&
+      (tab.parentSessionId === options.parentSessionId ||
+        tab.liveParentSessionId === options.parentSessionId) &&
       tab.childSessionId === options.childSessionId,
   );
   const ordinal =
@@ -1696,7 +1708,12 @@ export function openSelectionSideChatPane(
       options.workspaceKey,
       options.parentSessionId,
     );
-  const nextTab = createSelectionSideChatPaneTab({ ...options, ordinal });
+  const nextTab = createSelectionSideChatPaneTab({
+    ...options,
+    parentSessionId: existing?.parentSessionId ?? options.parentSessionId,
+    liveParentSessionId: options.liveParentSessionId ?? existing?.liveParentSessionId,
+    ordinal,
+  });
   return activateSidePaneTab(current, existing ? { ...existing, ...nextTab } : nextTab);
 }
 
@@ -1709,7 +1726,7 @@ function getNextSelectionSideChatOrdinal(
     tabs.flatMap((tab) =>
       tab.type === "selection-side-chat" &&
       tab.workspaceKey === workspaceKey &&
-      tab.parentSessionId === parentSessionId
+      (tab.parentSessionId === parentSessionId || tab.liveParentSessionId === parentSessionId)
         ? [tab.ordinal]
         : [],
     ),
@@ -1726,7 +1743,8 @@ export function getActiveSelectionSideChatTab(
   const active = getActiveSidePaneTab(current);
   return active?.type === "selection-side-chat" &&
     active.workspaceKey === scope.workspaceKey &&
-    active.parentSessionId === scope.parentSessionId
+    (active.parentSessionId === scope.parentSessionId ||
+      active.liveParentSessionId === scope.parentSessionId)
     ? active
     : null;
 }
@@ -1905,8 +1923,10 @@ export function isSidePaneTabVisibleForParent(
     return tab.sessionId === parentSessionId;
   }
   // 归属于某条对话（而非 workspace 全局）的 tab 按 parentSessionId 收窄。
+  if (tab.type === "selection-side-chat") {
+    return tab.parentSessionId === parentSessionId || tab.liveParentSessionId === parentSessionId;
+  }
   if (
-    tab.type === "selection-side-chat" ||
     tab.type === "plan-detail" ||
     tab.type === "workflow-run" ||
     tab.type === "workflow-directory" ||

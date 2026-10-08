@@ -140,7 +140,8 @@ export function failCommandTurnOf(
     host.inputTextByTurnId.delete(queued.turnId);
     return;
   }
-  failActive(error);
+  // 原命令可能已收口并激活了下一轮；晚到失败不得污染不相关的新轮。
+  if (host.activeTurn()?.sourceCommandId === sourceCommandId) failActive(error);
 }
 
 /** 全轮失败（进程退出/删除会话）：活跃轮与全部排队轮依次失败收口。 */

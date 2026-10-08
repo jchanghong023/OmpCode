@@ -1,4 +1,3 @@
-import { resolveSelectionSideInheritedModel } from "@/lib/selectionSideInheritedModel.js";
 import { useStartPlanRecommendation } from "@/hooks/useStartPlanRecommendation.js";
 import type { SessionCreateSource } from "@zcode/shared";
 import { reportSessionCreate } from "@/lib/sessionCreateTelemetry.js";
@@ -223,10 +222,10 @@ import { useSessionSubscriptionErrorTelemetry } from "@/v4/telemetry/useSessionS
 import { useSessionOpenArmsTelemetry } from "@/v4/telemetry/useSessionOpenArmsTelemetry.js";
 import {
   parseV4VisibleSlashCommand,
-  parseSelectionSideSlashCommand,
   v4QueuedCommandText,
   type V4VisibleSlashCommand,
 } from "@/v4/slashCommands.js";
+import { routeOmpBtwComposerInput } from "@/lib/OmpBtwComposerRouting.js";
 import { useSlashCommands } from "@/hooks/useSlashCommands.js";
 import { useV4Conversation } from "@/v4/V4ConversationContext.js";
 import { useConversationProjection } from "@/v4/useConversationProjection.js";
@@ -262,7 +261,6 @@ import type {
 } from "@/lib/workspaceSidePane.js";
 import {
   buildSelectionSideChatKey,
-  clearSelectionSideChat,
   createSelectionSideChat,
   isSelectionSideChatBlocked,
   registerSelectionSideChatOpener,
@@ -275,7 +273,6 @@ import {
   type AppSlashCommand,
 } from "@/slashCommandHelpers.js";
 import {
-  clearConversationSelectionReferenceScope,
   dispatchConversationSelectionAdd,
   type ConversationSelectionReference,
 } from "@/lib/conversationSelectionReference.js";
@@ -300,7 +297,7 @@ export interface SessionPaneProps {
   /** Prompt 模板埋点当前仅覆盖 Desktop；Web 保留 UI 行为但不触发该事件。 */
   isDesktop?: boolean;
   provider?: ZCodeProvider;
-  onSessionCreated?: (sessionId: string) => void;
+  onSessionCreated?: (sessionId: string, parentSessionId?: string) => void;
   /** deleteSession：删除当前会话后回到 draft（shell 起新草稿）。 */
   onSessionDeleted?: () => void;
   /** 隐藏副屏的 child 已不存在时，由宿主移除对应 tab。 */
@@ -1875,26 +1872,8 @@ export function SessionPane({
     async (reference?: ConversationSelectionReference, forceNew = false) => {
       if (!sessionId || !selectionSideChatKey || !onOpenSelectionSideChat) return;
       try {
-        let targetChildSessionId = reference && !forceNew ? activeSelectionSideChatSessionId : null;
-        let replacesChildSessionId: string | undefined;
-        if (targetChildSessionId) {
-          try {
-            await zcodeSessionService.readSession({
-              workspacePath,
-              ...(workspaceIdentity ? { workspaceIdentity } : {}),
-              sessionId: targetChildSessionId,
-              messageLimit: 1,
-            });
-          } catch (error) {
-            if (!String(error).includes("sessionNotFound")) throw error;
-            // 多开后 tab id 包含 child，旧单例实现依靠新 child 覆盖同一个父 tab
-            // 来移除失效项已不成立。这里显式携带 replacesChildSessionId，让宿主原子删旧开新。
-            replacesChildSessionId = targetChildSessionId;
-            clearSelectionSideChat(targetChildSessionId);
-            clearConversationSelectionReferenceScope(targetChildSessionId, workspaceKey);
-            targetChildSessionId = null;
-          }
-        }
+        const targetChildSessionId =
+          reference && !forceNew ? activeSelectionSideChatSessionId : null;
 
         if (targetChildSessionId) {
           onOpenSelectionSideChat({
@@ -1914,7 +1893,7 @@ export function SessionPane({
           return;
         }
 
-        const childSessionId = await createSelectionSideChat(selectionSideChatKey, async () => {
+        const created = await createSelectionSideChat(selectionSideChatKey, async () => {
           const ack = await dispatchCommand("createSelectionSideSession", {}, sessionId);
           if (
             (ack.status !== "accepted" && ack.status !== "duplicate") ||
@@ -1922,19 +1901,22 @@ export function SessionPane({
           ) {
             throw new Error(ack.reasonCode ?? "createSelectionSideSession 被拒绝");
           }
-          return ack.result.sessionId;
+          return {
+            childSessionId: ack.result.sessionId,
+            parentSessionId: ack.result.parentSessionId ?? sessionId,
+          };
         });
         onOpenSelectionSideChat({
           workspacePath,
           ...(workspaceIdentity ? { workspaceIdentity } : {}),
           ...(remoteSessionId ? { remoteSessionId } : {}),
-          parentSessionId: sessionId,
-          childSessionId,
-          ...(replacesChildSessionId ? { replacesChildSessionId } : {}),
+          parentSessionId: created.parentSessionId,
+          ...(created.parentSessionId !== sessionId ? { liveParentSessionId: sessionId } : {}),
+          childSessionId: created.childSessionId,
         });
         if (reference) {
           dispatchConversationSelectionAdd({
-            targetSessionId: childSessionId,
+            targetSessionId: created.childSessionId,
             workspaceKey,
             reference,
           });
@@ -1946,8 +1928,6 @@ export function SessionPane({
           parentSessionId: sessionId,
           workspaceKey,
         });
-        // Fork 约束（FORK.md 已知差异）：核心不提供的能力入口必须显式反馈，
-        // 不得静默无反应；omp 适配层对本命令返回 fault.command.unsupportedByOmpCore。
         toast(
           intl.formatMessage(
             message.includes("unsupportedByOmpCore")
@@ -1969,7 +1949,6 @@ export function SessionPane({
       workspaceIdentity,
       workspaceKey,
       workspacePath,
-      zcodeSessionService,
     ],
   );
 
@@ -1978,21 +1957,15 @@ export function SessionPane({
       if (!sessionId || !selectionSideChatKey || !onOpenSelectionSideChat) {
         throw new Error("selection side chat is unavailable");
       }
-      const inherited = resolveSelectionSideInheritedModel(
-        snapshotRef.current?.config,
-        modelSelectionView,
-      );
-      const chosen = inherited ? await recommendStartPlan(inherited) : undefined;
-      if (chosen === null) return false;
-      const modelSelection = chosen && chosen !== inherited ? chosen : undefined;
-      // 参数命令每次都是新 child；同一条文本在 ACK 未回时重试仍复用 pending，
-      // 不同文本则不能与 bare `/side` 或另一条 prompt 合并。
-      const pendingKey = `${selectionSideChatKey}\u0000prompt\u0000${text}`;
+      // bare 与固定入口共用空 pane 的 pending key；带参数每次新主题，只合并同一在途输入。
+      const pendingKey = text
+        ? `${selectionSideChatKey}\u0000prompt\u0000${text}`
+        : selectionSideChatKey;
       try {
-        const childSessionId = await createSelectionSideChat(pendingKey, async () => {
+        const created = await createSelectionSideChat(pendingKey, async () => {
           const ack = await dispatchCommand(
             "createSelectionSideSession",
-            { firstInput: { text, ...(modelSelection ? { modelSelection } : {}) } },
+            text ? { firstInput: { text } } : {},
             sessionId,
             undefined,
             undefined,
@@ -2004,14 +1977,18 @@ export function SessionPane({
           ) {
             throw new Error(ack.reasonCode ?? "createSelectionSideSession 被拒绝");
           }
-          return ack.result.sessionId;
+          return {
+            childSessionId: ack.result.sessionId,
+            parentSessionId: ack.result.parentSessionId ?? sessionId,
+          };
         });
         onOpenSelectionSideChat({
           workspacePath,
           ...(workspaceIdentity ? { workspaceIdentity } : {}),
           ...(remoteSessionId ? { remoteSessionId } : {}),
-          parentSessionId: sessionId,
-          childSessionId,
+          parentSessionId: created.parentSessionId,
+          ...(created.parentSessionId !== sessionId ? { liveParentSessionId: sessionId } : {}),
+          childSessionId: created.childSessionId,
         });
       } catch (error) {
         // `/side` 失败返回 blocked 保留草稿；提示语义与无参数入口一致（FORK.md 已知差异：
@@ -2032,8 +2009,6 @@ export function SessionPane({
     [
       dispatchCommand,
       intl,
-      modelSelectionView,
-      recommendStartPlan,
       onOpenSelectionSideChat,
       remoteSessionId,
       selectionSideChatKey,
@@ -2084,14 +2059,9 @@ export function SessionPane({
       ),
     [slashCommands],
   );
-  const availableSelectionSideSlashCommandNames = useMemo(
-    () => ["side", "btw"].filter((name) => !cliSlashCommandNames.has(name)),
-    [cliSlashCommandNames],
-  );
 
-  // `/side` App 层斜杠命令。命令目录仍以 CLI catalog 为权威，这里只在渲染层
-  // 按门禁注入"选中即打开辅助对话"的本地命令；草稿态（无父 session 可挂 child）、
-  // 辅助对话自身、只读与手机 viewport 均不提供。
+  // GUI /side、/btw 是同一个本地辅助业务入口。原生 btw=tui-only 目录事实不变，
+  // 但不能遮蔽 GUI 别名；草稿（无父会话）、辅助主题自身与只读 pane 不提供嵌套入口。
   const appSlashCommands = useMemo<AppSlashCommand[] | undefined>(() => {
     if (
       !sessionId ||
@@ -2115,9 +2085,8 @@ export function SessionPane({
     return [
       { value: "side", description, keywords: sharedKeywords, run: openNewSelectionSideChat },
       { value: "btw", description, keywords: sharedKeywords, run: openNewSelectionSideChat },
-    ].filter((command) => !cliSlashCommandNames.has(command.value));
+    ];
   }, [
-    cliSlashCommandNames,
     handleOpenSelectionSideConversation,
     intl,
     onOpenSelectionSideChat,
@@ -2571,6 +2540,28 @@ export function SessionPane({
       const readyAttachments = options?.attachments ?? [];
       const sharedContextRefs = options?.sharedContextRefs;
       const contextAttachmentCount = options?.contextAttachmentCount ?? 0;
+      if (selectionSideChat && sessionId) {
+        if (
+          readyAttachments.length ||
+          sharedContextRefs?.length ||
+          options?.submission?.planEnabled
+        ) {
+          throw new Error("辅助对话只支持文本，模型继承父会话；不支持附件、共享上下文或计划模式");
+        }
+        const ack = await dispatchCommand(
+          "sendText",
+          { text },
+          sessionId,
+          undefined,
+          undefined,
+          options?.telemetrySeed,
+        );
+        if (ack.status !== "accepted" && ack.status !== "duplicate")
+          throw sessionSendRejectionError(ack, "辅助对话被拒绝");
+        if (ack.result?.type === "createSelectionSideSession")
+          onSessionCreated?.(ack.result.sessionId, ack.result.parentSessionId);
+        return "sent" as const;
+      }
       let slashCommand = parseV4VisibleSlashCommand(text, readyAttachments, {
         contextAttachmentCount,
         cliOwnedCommandNames: cliSlashCommandNames,
@@ -2604,20 +2595,6 @@ export function SessionPane({
           ? useZCodeSessionStore.getState().getWorkspaceState(workspacePath, workspaceIdentity)
               .groupedDraftTask
           : null;
-      const selectionSideSlashCommand =
-        sessionId && (appSlashCommands?.length ?? 0) > 0
-          ? parseSelectionSideSlashCommand(text, readyAttachments, {
-              contextAttachmentCount,
-              enabledCommandNames: availableSelectionSideSlashCommandNames,
-            })
-          : null;
-      if (sessionId && selectionSideSlashCommand) {
-        const created = await handleOpenSelectionSideConversationWithPrompt(
-          selectionSideSlashCommand.text,
-          options?.telemetrySeed,
-        );
-        return created ? ("sent" as const) : ("blocked" as const);
-      }
       if (
         submission?.planEnabled &&
         slashCommand !== null &&
@@ -2928,19 +2905,18 @@ export function SessionPane({
       recommendStartPlan,
       captureAcceptedModelSelection,
       dispatchSlashCommand,
-      availableSelectionSideSlashCommandNames,
       cliSlashCommandNames,
-      appSlashCommands,
       appFollowupMode,
       handleDraftSessionCreated,
       reportDraftCreated,
       handleDraftSwitchMode,
-      handleOpenSelectionSideConversationWithPrompt,
       intl,
       lease,
       resolveInitialDraftConfig,
       createSubmissionFromComposer,
       sessionId,
+      selectionSideChat,
+      onSessionCreated,
       settleCurrentQueueInputs,
       workspaceIdentity,
       workspaceKey,
@@ -2950,6 +2926,13 @@ export function SessionPane({
 
   const dispatchSendText = useCallback(
     (text: string, options?: ConversationComposerSendOptions) => {
+      // 先消费本地辅助别名，再冻结主会话 Submission/配置 barrier；两种编辑器提交共用此门。
+      const sideSubmission = selectionSideChat
+        ? null
+        : routeOmpBtwComposerInput(text, appSlashCommands, options, (question) =>
+            handleOpenSelectionSideConversationWithPrompt(question, options?.telemetrySeed),
+          );
+      if (sideSubmission) return sideSubmission;
       const createSource = useZCodeSessionStore
         .getState()
         .getWorkspaceState(workspacePath, workspaceIdentity).draftCreateSource;
@@ -2965,6 +2948,9 @@ export function SessionPane({
       );
     },
     [
+      appSlashCommands,
+      handleOpenSelectionSideConversationWithPrompt,
+      selectionSideChat,
       configCommandBarrier,
       createSubmissionFromComposer,
       dispatchSendTextAfterConfig,
@@ -3390,6 +3376,7 @@ export function SessionPane({
 
   const followupModeSyncKeyRef = useRef<string | null>(null);
   useEffect(() => {
+    if (selectionSideChat) return;
     const targetSessionId = sessionId ?? prewarmSessionId;
     if (!targetSessionId || !appFollowupMode || snapshotRevision === null) return;
     if (snapshotSessionId !== targetSessionId) return;
@@ -3412,6 +3399,7 @@ export function SessionPane({
     dispatchConfigCas,
     prewarmSessionId,
     sessionId,
+    selectionSideChat,
     snapshotFollowupMode,
     snapshotRevision,
     snapshotSessionId,
@@ -4382,9 +4370,10 @@ export function SessionPane({
       draftConfig={draftConfig}
       composerDraft={composerDraft}
       replaceComposerDraft={replaceComposerDraft}
-      submissionReady={composerSubmissionReady}
+      submissionReady={selectionSideChat ? true : composerSubmissionReady}
+      parentModelOnly={selectionSideChat}
       updateComposerContent={updateComposerContent}
-      createSubmissionFromComposer={createSubmissionFromComposer}
+      createSubmissionFromComposer={selectionSideChat ? undefined : createSubmissionFromComposer}
       contextHeader={isDraft ? draftComposerHeader : undefined}
       centered={isDraft}
       blockingRequestId={blockingInteractionId}
@@ -4421,7 +4410,7 @@ export function SessionPane({
       onSelectThought={handleSelectThought}
       planModelActive={planModelActive}
       planModelAvailable={planModelAvailable}
-      onTogglePlanModel={togglePlanModel}
+      onTogglePlanModel={selectionSideChat ? undefined : togglePlanModel}
       gitSummary={gitSummary}
       gitDirtyFileCount={gitDirtyFileCount}
       onOpenGitReview={
@@ -4444,7 +4433,9 @@ export function SessionPane({
       onOpenCodeViewer={onOpenCodeViewer}
       suppressGoalCommands={selectionSideChat}
       appSlashCommands={appSlashCommands}
-      onDropTargetControllerChange={handleDropTargetControllerChange}
+      onDropTargetControllerChange={
+        selectionSideChat ? undefined : handleDropTargetControllerChange
+      }
     />
   );
   const pendingGuideProjection = snapshot ? projectPendingGuideQueue(snapshot.queue) : null;

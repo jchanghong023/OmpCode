@@ -1,11 +1,12 @@
 // 子代理只读详情视图（omp-core-integration.md）：合成 childSessionId 复用引擎的投影/订阅；
 // 行来自父会话进程 get_subagent_messages（fromByte/nextByte 续读，上游无 hasMore，以游标
 // 不再推进为读尽）。实时更新 = subagent_event 尾随节流（≥800ms）触发「记录重读 + mergeRows
-// 幂等合并」；reset=true（记录重写归零）按替换语义重建视图引擎（S6-4）。lifecycle 终态后
+// 幂等合并」；reset=true 按同一订阅的删除屏障替换视图行（S6-4）。lifecycle 终态后
 // 停止重读调度。查看不触发模型执行、不产生控制副作用。
 
 import { ConversationEngine } from "./conversationEngine.js";
 import { rowsFromOmpEntries } from "../domain/coldHistory.js";
+import { readPersistedSubagentEntries, recordUnavailableMarkerRow } from "./coldHydration.js";
 import { TrailingThrottle } from "./trailingThrottle.js";
 import {
   buildOmpSubagentViewId,
@@ -13,9 +14,7 @@ import {
   parseOmpSubagentViewId,
 } from "../domain/ompFrames.js";
 import type { OmpSubagentFrame } from "../domain/ompFrames.js";
-import type { ConversationRow } from "@zcode/shared/zcode-protocol-v4";
-import { rowBaseFields } from "../domain/projectionTypes.js";
-import type { HostGateway } from "./ports.js";
+import type { HostGateway, OmpStorePort } from "./ports.js";
 import { readSubagentRecord } from "./subagentControl.js";
 
 /** subagent_event → 重读的尾随节流窗口：事件风暴合并为一次重读，末事件由尾沿保证必达。 */
@@ -37,21 +36,6 @@ interface ViewReadState {
 /** 单次续读的结果：驱动调用方决定行重建与提示行。 */
 type WindowReadResult = "complete" | "capped" | "unavailable";
 
-function recordUnavailableMarkerRow(rowId: number): ConversationRow {
-  return {
-    ...rowBaseFields({
-      rowId,
-      turnId: "turn-subagent-record",
-      entityId: "subagent-record-unavailable",
-      productTurnId: "turn-subagent-record",
-      createdAtSeq: rowId,
-    }),
-    kind: "assistantText",
-    text: "记录不可用（不存在或已清理）",
-    state: "complete",
-  };
-}
-
 /** 单个视图的实时重读状态：throttle 调度、refreshing 单飞、rerun 重叠补跑、terminated 停表。 */
 interface ViewRefreshState {
   throttle: TrailingThrottle;
@@ -72,6 +56,7 @@ export interface SubagentViewDeps {
   gateway: HostGateway;
   workspaceId: string;
   workspacePath: string;
+  store?: Pick<OmpStorePort, "readSessionEntries" | "readSubagentEntries">;
 }
 
 /** 视图所需的注册表面（SessionRegistry 的结构化窄视图，测试可替身）。 */
@@ -90,6 +75,7 @@ export class SubagentViewStore {
   private readonly refreshStates = new Map<string, ViewRefreshState>();
   private readonly readStates = new Map<string, ViewReadState>();
   private readonly deps: SubagentViewDeps;
+  private disposed = false;
 
   constructor(deps: SubagentViewDeps) {
     this.deps = deps;
@@ -153,7 +139,22 @@ export class SubagentViewStore {
         // 保持当前内容（G7），不插「记录不可用」提示行。
         throw new Error(`parent session process unavailable: ${parentSessionId}`);
       }
-      if (!outcome.success) return "unavailable";
+      if (!outcome.success) {
+        const entries = await readPersistedSubagentEntries(
+          engine.ompSessionFile,
+          this.deps.store,
+          subagentId,
+          outcome.error,
+        );
+        if (entries) {
+          if (entries.length === 0) return "unavailable";
+          state.resetSeen ||= state.entries.length > 0;
+          state.entries = entries;
+          state.nextByte = 0;
+          return "complete";
+        }
+        return "unavailable";
+      }
       const record =
         typeof outcome.data === "object" && outcome.data !== null
           ? (outcome.data as {
@@ -188,26 +189,15 @@ export class SubagentViewStore {
     return "capped";
   }
 
-  /**
-   * 行重建：始终基于本地累积的全量记录确定性重建（rowId 稳定，merge 幂等）。
-   * 修复（S6-4）：reset=true 的读次改为替换语义——mergeRows 只增不删，transcript 收缩重写
-   * （omp reset 游标归零）时旧累积行数多于新行集会残留陈旧行。投影层没有原地删行原语
-   * （row.removed 无投影侧生产者；projection.hydrateRows 对非空投影会重复 rowId），替换按
-   * 「重建视图引擎」实现：以新行集水合全新引擎并替换 views 登记，此后的 acquire/getEngine/
-   * 事件重读都落到新引擎；旧订阅端不会自发收到通知，视图冻结至下一次 resync 触发
-   * （渲染端重开面板/stale 行命令/连接关闭，topicPublisher.resync）。非 reset 路径合并行为不变。
-   */
+  /** reset 使用同一视图投影的 row.removed 屏障；保留订阅身份，不冻结已打开详情。 */
   private rebuildRows(viewId: string, merge: boolean): void {
     const state = this.readStates.get(viewId);
-    if (!state) return;
+    if (!state || this.disposed) return;
     const rows = rowsFromOmpEntries(state.entries, new Map());
     if (merge && state.resetSeen) {
       state.resetSeen = false;
-      const rebuilt = this.rebuildViewEngine(viewId);
-      if (rebuilt) {
-        rebuilt.hydrateRows(rows, false);
-        return;
-      }
+      this.views.get(viewId)?.replaceHydratedRows(rows);
+      return;
     }
     const engine = this.views.get(viewId);
     if (!engine) return;
@@ -225,27 +215,21 @@ export class SubagentViewStore {
     });
   }
 
-  /** S6-4：以全新引擎重建视图（投影行整体替换为新行集）；viewId 非法时返回 null。 */
-  private rebuildViewEngine(viewId: string): ConversationEngine | null {
-    if (!parseOmpSubagentViewId(viewId)) return null;
-    const engine = this.createViewEngine(viewId);
-    this.views.set(viewId, engine);
-    return engine;
-  }
-
   /** 订阅 conversation/omp-subagent:<id>@<parent>：先水合历史行，再返回视图引擎。 */
   async acquire(viewId: string): Promise<ConversationEngine | null> {
+    if (this.disposed) return null;
     const parsed = parseOmpSubagentViewId(viewId);
     if (!parsed) return null;
     const existing = this.views.get(viewId);
     if (existing) {
-      return existing;
+      await this.hydrating.get(viewId);
+      return this.views.get(viewId) ?? null;
     }
     const engine = this.createViewEngine(viewId);
     this.views.set(viewId, engine);
     // 历史行先行入投影（订阅快照即含已保存记录）；实时增量由 ingestFrame 触发重读合并。
     await this.ensureHydrated(viewId, parsed.parentSessionId, parsed.subagentId);
-    return engine;
+    return this.disposed ? null : (this.views.get(viewId) ?? null);
   }
 
   /**
@@ -341,7 +325,7 @@ export class SubagentViewStore {
 
   /** 运行结束：补一次重读收尾（捕获节流窗口内最后一批记录），随后停止该视图的重读调度。 */
   private finishView(viewId: string): void {
-    const state = this.refreshStates.get(viewId);
+    const state = this.viewState(viewId);
     if (!state || state.terminated) return;
     state.terminated = true;
     state.throttle.dispose();
@@ -381,7 +365,7 @@ export class SubagentViewStore {
       }
     })().finally(() => {
       state.refreshing = null;
-      if (state.rerun) {
+      if (state.rerun && !this.disposed) {
         state.rerun = false;
         void this.refreshView(viewId);
       }
@@ -390,6 +374,10 @@ export class SubagentViewStore {
   }
 
   dispose(): void {
+    this.disposed = true;
+    for (const view of this.views.values()) void view.dispose();
+    this.views.clear();
+    this.readStates.clear();
     for (const state of this.refreshStates.values()) state.throttle.dispose();
     this.refreshStates.clear();
   }

@@ -43,6 +43,11 @@ export const SubagentSessionSidePane = memo(function SubagentSessionSidePane({
         {/* Fork（omp-project-mode.md）：omp 合成地址的显式控制入口（Z15）；其余保持只读。 */}
         {tab.childSessionId.startsWith("omp-subagent:") ? (
           <OmpSubagentControlBar
+            key={JSON.stringify([
+              tab.workspaceIdentity?.trim() || tab.workspacePath,
+              tab.remoteSessionId,
+              tab.childSessionId,
+            ])}
             workspacePath={tab.workspacePath}
             workspaceIdentity={tab.workspaceIdentity}
             remoteSessionId={tab.remoteSessionId}

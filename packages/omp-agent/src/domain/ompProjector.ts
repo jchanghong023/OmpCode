@@ -111,6 +111,9 @@ export class OmpEventProjector {
             this.projection.closeAssistantResponse();
           }
         }
+        if (event.type === "message_end" && event.message.role === "custom") {
+          this.projection.appendCustomMessage(event.message);
+        }
         return;
       case "message_update":
         this.handleAssistantMessageEvent(event.assistantMessageEvent);

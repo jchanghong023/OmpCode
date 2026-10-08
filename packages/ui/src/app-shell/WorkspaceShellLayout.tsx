@@ -1199,7 +1199,10 @@ export const WorkspaceShellLayout = memo(function WorkspaceShellLayoutComponent(
   const handleV4SessionDeleted = useCallback(() => {
     if (activeTaskId) {
       for (const tab of sidePaneState?.tabs ?? []) {
-        if (tab.type === "selection-side-chat" && tab.parentSessionId === activeTaskId) {
+        if (
+          tab.type === "selection-side-chat" &&
+          (tab.parentSessionId === activeTaskId || tab.liveParentSessionId === activeTaskId)
+        ) {
           handleCloseSidePaneTab(tab.id);
         }
       }

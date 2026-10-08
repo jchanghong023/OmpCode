@@ -7,6 +7,7 @@ import {
 } from "@zcode/shared";
 import { Button } from "@/components/ui/button.js";
 import { Input } from "@/components/ui/input.js";
+import { Textarea } from "@/components/ui/textarea.js";
 import type { V4UserInputViewModel } from "@/v4/pendingInteractionAdapter.js";
 import { runUserAction } from "@/lib/userActionTelemetry.js";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
@@ -16,13 +17,13 @@ interface V4UserInputDialogProps {
   onSubmit: (answer: {
     optionId?: string;
     freeText?: string;
-    action?: "accept" | "decline";
+    action?: "accept" | "decline" | "cancel";
   }) => void;
 }
 
 /** v4 userInput 交互最小弹窗（竖切）。 */
 export function V4UserInputDialog({ model, onSubmit }: V4UserInputDialogProps) {
-  const [freeText, setFreeText] = useState("");
+  const [freeText, setFreeText] = useState(() => model.prefill ?? "");
   const { intl } = useZCodeIntl();
 
   const handleOption = useCallback(
@@ -42,10 +43,10 @@ export function V4UserInputDialog({ model, onSubmit }: V4UserInputDialogProps) {
   );
 
   const handleFreeTextSubmit = useCallback(() => {
-    const trimmed = freeText.trim();
-    if (!trimmed && model.freeText) return;
-    onSubmit(model.freeText ? { freeText: trimmed } : { optionId: model.options[0]?.optionId });
-  }, [freeText, model.freeText, model.options, onSubmit]);
+    // omp editor/password 的首尾空白也是输入，不得按普通聊天草稿裁剪。
+    if (!model.freeText) return;
+    onSubmit({ freeText });
+  }, [freeText, model.freeText, onSubmit]);
 
   return (
     <div
@@ -71,15 +72,29 @@ export function V4UserInputDialog({ model, onSubmit }: V4UserInputDialogProps) {
         ) : null}
         {model.freeText ? (
           <div className="flex flex-col gap-2">
-            <Input
-              type={model.sensitive ? "password" : "text"}
-              value={freeText}
-              onChange={(event) => setFreeText(event.target.value)}
-              data-testid={TID_V4_USER_INPUT_TEXT}
-            />
-            <Button type="button" onClick={handleFreeTextSubmit}>
-              提交
-            </Button>
+            {model.prefill !== undefined && !model.sensitive ? (
+              <Textarea
+                value={freeText}
+                onChange={(event) => setFreeText(event.target.value)}
+                data-testid={TID_V4_USER_INPUT_TEXT}
+              />
+            ) : (
+              <Input
+                type={model.sensitive ? "password" : "text"}
+                autoComplete={model.sensitive ? "off" : undefined}
+                value={freeText}
+                onChange={(event) => setFreeText(event.target.value)}
+                data-testid={TID_V4_USER_INPUT_TEXT}
+              />
+            )}
+            <div className="flex justify-end gap-2">
+              <Button type="button" variant="outline" onClick={() => onSubmit({ action: "cancel" })}>
+                {intl.formatMessage({ id: "common.cancel" })}
+              </Button>
+              <Button type="button" onClick={handleFreeTextSubmit}>
+                {intl.formatMessage({ id: "chat.elicitation.submit" })}
+              </Button>
+            </div>
           </div>
         ) : null}
         {model.confirmation ? (

@@ -16,6 +16,8 @@ interface UseOmpCommandCompletionOptions {
   sessionId?: string | null;
   /** 正在编辑的完整命令文本（以 `/` 开头，含参数）。 */
   text: string | null;
+  /** UTF-16 光标；未提供时按文本末尾。 */
+  cursor?: number;
   enabled: boolean;
 }
 
@@ -39,7 +41,11 @@ export function useOmpCommandCompletion(
   );
   const services = resolution.services;
   const rpcReady = resolution.rpcReady;
-  const [state, setState] = useState<OmpCommandCompletionState>(EMPTY);
+  const [state, setState] = useState<{
+    value: OmpCommandCompletionState;
+    requestKey: string;
+    services: typeof services;
+  } | null>(null);
   const seqRef = useRef(0);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // 能力缺失记忆：避免旧核每键一次注定失败的 RPC 与空面板闪烁；换工作区/远端会话/服务后重置。
@@ -47,6 +53,17 @@ export function useOmpCommandCompletion(
   const text = options.text;
   const enabled = options.enabled && text !== null && text.startsWith("/");
   const remoteSessionId = resolution.remoteSessionId ?? options.remoteSessionId;
+  const cursor = options.cursor ?? text?.length ?? 0;
+  const requestKey = JSON.stringify([
+    enabled,
+    rpcReady,
+    text,
+    cursor,
+    options.workspacePath,
+    options.workspaceIdentity,
+    options.sessionId,
+    remoteSessionId,
+  ]);
 
   // workspaceKey（workspacePath + workspaceIdentity）、remoteSessionId 或 services 变化时
   // 重置能力缺失记忆：新目标可能支持 complete_command。
@@ -74,18 +91,19 @@ export function useOmpCommandCompletion(
     if (!enabled || !rpcReady || !text) {
       const seq = ++seqRef.current;
       void seq;
-      setState(EMPTY);
+      setState(null);
       return;
     }
     // 能力缺失（旧核）后跳过请求：loading 不置真，面板回落本地目录过滤。
     if (capabilityMissingRef.current) {
       const seq = ++seqRef.current;
       void seq;
-      setState(EMPTY);
+      setState(null);
       return;
     }
     const seq = ++seqRef.current;
-    setState((current) => ({ ...current, loading: true }));
+    // 输入改变即清空旧候选，不能让 debounce 窗口中的旧 range 修改新文本。
+    setState({ value: { items: [], loading: true }, requestKey, services });
     debounceRef.current = setTimeout(() => {
       debounceRef.current = null;
       services.zcodeAgentService
@@ -95,11 +113,11 @@ export function useOmpCommandCompletion(
           ...(remoteSessionId ? { remoteSessionId } : {}),
           ...(options.sessionId ? { sessionId: options.sessionId } : {}),
           text,
-          cursor: text.length,
+          cursor,
         })
         .then((result) => {
           if (seq !== seqRef.current) return;
-          setState({ items: result.items ?? [], loading: false });
+          setState({ value: { items: result.items ?? [], loading: false }, requestKey, services });
         })
         .catch((error: unknown) => {
           if (seq !== seqRef.current) return;
@@ -109,10 +127,12 @@ export function useOmpCommandCompletion(
             capabilityMissingRef.current = true;
           }
           logger.debug("[useOmpCommandCompletion] 动态补全不可用", { error: message });
-          setState({ items: [], loading: false });
+          setState({ value: EMPTY, requestKey, services });
         });
     }, 120);
     return () => {
+      // 卸载/目标切换同样使在途请求失效，不能只取消尚未发送的 timer。
+      seqRef.current++;
       if (debounceRef.current) {
         clearTimeout(debounceRef.current);
         debounceRef.current = null;
@@ -123,16 +143,35 @@ export function useOmpCommandCompletion(
     rpcReady,
     services,
     text,
+    cursor,
+    requestKey,
     options.workspacePath,
     options.workspaceIdentity,
     options.sessionId,
     remoteSessionId,
   ]);
 
-  return state;
+  return state?.requestKey === requestKey && state.services === services ? state.value : EMPTY;
 }
 
 /** 候选去重键：完整命令文本（insertText）。 */
 export function ompCompletionDedupeKey(item: ZCodeOmpCommandCompletionItem): string {
   return item.insertText;
+}
+
+/** omp 的替换区间是完整单行文本的 UTF-16 偏移；不猜词界，不裁剪 insertText。 */
+export function applyOmpCommandCompletion(text: string, item: ZCodeOmpCommandCompletionItem) {
+  if (
+    !Number.isInteger(item.replaceStart) ||
+    !Number.isInteger(item.replaceEnd) ||
+    item.replaceStart < 0 ||
+    item.replaceEnd < item.replaceStart ||
+    item.replaceEnd > text.length
+  ) {
+    return null;
+  }
+  return {
+    text: text.slice(0, item.replaceStart) + item.insertText + text.slice(item.replaceEnd),
+    cursor: item.replaceStart + item.insertText.length,
+  };
 }

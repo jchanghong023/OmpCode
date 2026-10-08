@@ -404,7 +404,9 @@ export function V4InteractionDialogs({
                   ? { optionId: value }
                   : { freeText: value }
                 : { action: "cancel" as const };
-            void resolveInteraction(pending.interactionId, answer);
+            void resolveInteraction(pending.interactionId, answer).then((accepted) => {
+              if (accepted) removeElicitationDraft(pending.interactionId);
+            });
             return;
           }
           void resolveInteraction(pending.interactionId, {
@@ -430,6 +432,7 @@ export function V4InteractionDialogs({
   });
   return (
     <V4UserInputDialog
+      key={pending.interactionId}
       model={model}
       onSubmit={(answer) => {
         void resolveInteraction(pending.interactionId, answer);

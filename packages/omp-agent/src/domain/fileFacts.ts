@@ -96,7 +96,12 @@ export class TurnFileFacts {
         additions,
         deletions: 0,
         toolName,
-        patch: buildPatch(0, additions, content ? `-${content}` : ""),
+        // write 只有新内容事实；补丁必须标为新增，不能把正 additions 显示成删除。
+        patch: buildPatch(
+          0,
+          additions,
+          content ? content.split("\n").map((line) => `+${line}`) : [],
+        ),
       });
       return;
     }

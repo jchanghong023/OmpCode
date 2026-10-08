@@ -290,6 +290,8 @@ export const userInputRequestPayloadSchema = z.object({
   kind: z.literal("userInput"),
   prompt: z.string(),
   freeText: z.boolean(),
+  // 修复原因：omp editor 初始文本必须经过 topic 校验保留，否则 GUI 收到空编辑框。
+  prefill: z.string().optional(),
   options: z.array(z.object({ optionId: z.string(), label: z.string() })).optional(),
   /** 单值回答直接返回为选项或自由文本。 */
   answerMode: z.enum(["option", "text"]).optional(),

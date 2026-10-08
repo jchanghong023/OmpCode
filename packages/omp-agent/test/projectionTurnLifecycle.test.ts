@@ -140,6 +140,13 @@ test("hashline edit 使用成功结果 diff 记录路径与实际增删", () => 
   assert.equal(facts.items()[0]?.path, "src/example.ts");
 });
 
+test("write 的文件差异行标记为新增而不是删除", () => {
+  const facts = new TurnFileFacts();
+  facts.recordToolResult({ toolName: "write", input: { path: "new.txt", content: "one\ntwo" } });
+  assert.deepEqual(facts.summary(), { files: 1, additions: 2, deletions: 0 });
+  assert.deepEqual(facts.items()[0]?.patches[0]?.lines, ["+one", "+two"]);
+});
+
 test("只有关联 request id 的本地 prompt_result 可以异步收口", () => {
   const tracker = new PromptResultTracker();
   tracker.noteResponse({ id: "local", command: "prompt", success: true, data: {} });

@@ -67,7 +67,7 @@ test("缺首片拒绝：无挂起序列时首达分片 index≠0 整体拒绝", 
   });
 });
 
-test("重复分片拒绝但不清空序列：补齐其余分片仍可重组", () => {
+test("重复分片整体拒绝：后续片不得复用已拒序列", () => {
   const assembler = new OmpFrameAssembler();
   const parts = fragments({ type: "x" }, 2, "seq-d");
   assert.deepEqual(assembler.push(parts[0]!), { kind: "pending" });
@@ -75,7 +75,10 @@ test("重复分片拒绝但不清空序列：补齐其余分片仍可重组", ()
     kind: "rejected",
     reason: "duplicate rpc_chunk fragment",
   });
-  assert.deepEqual(assembler.push(parts[1]!), { kind: "assembled", frame: { type: "x" } });
+  assert.deepEqual(assembler.push(parts[1]!), {
+    kind: "rejected",
+    reason: "rpc_chunk sequence missing initial fragment",
+  });
 });
 
 test("坏 base64：分片载荷非法即拒并丢弃挂起序列（S3-4 逐片严格校验）", () => {
@@ -249,6 +252,28 @@ test("流关闭中断：挂起序列按 interrupted 拒绝，二次 abort 无事
   assert.deepEqual(assembler.abort(), {
     kind: "rejected",
     reason: "rpc_chunk sequence interrupted",
+  });
+  assert.equal(assembler.abort(), null);
+});
+
+test("同 chunkId 元数据变化整体拒绝，不以首片声明静默拼接", () => {
+  for (const patch of [{ count: 3 }, { byteLength: 50 }]) {
+    const assembler = new OmpFrameAssembler();
+    const parts = fragments({ type: "x" }, 2, "metadata");
+    assert.deepEqual(assembler.push(parts[0]!), { kind: "pending" });
+    assert.deepEqual(assembler.push({ ...parts[1]!, ...patch }), {
+      kind: "rejected",
+      reason: "rpc_chunk sequence metadata mismatch",
+    });
+    assert.equal(assembler.abort(), null);
+  }
+});
+
+test("未齐片即超出声明字节数时立即丢弃序列", () => {
+  const assembler = new OmpFrameAssembler();
+  assert.deepEqual(assembler.push(chunk("overflow", 0, 2, 3, "e30gIA==")), {
+    kind: "rejected",
+    reason: "rpc_chunk sequence exceeds declared length",
   });
   assert.equal(assembler.abort(), null);
 });

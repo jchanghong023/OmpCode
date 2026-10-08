@@ -18,67 +18,71 @@ export interface OmpNegotiationHooks {
   }) => Promise<OmpCommandOutcome>;
   /** v3 协商成功回调（fork surface 激活）。 */
   onForkSurface: () => void;
+  /** ready 到达后先交接持续读流，再发送协商，避免同批 stdout 响应丢失。 */
+  onReady: (ready: OmpReadyFrame) => void;
 }
 
-/**
- * 等待 omp ready 帧并触发协议协商。resolve 于 ready 到达，携带解析后的 ready 帧
- * （进程层据此接线 v2 分片重组上限 maxReassembledFrameBytes）；协商 fire-and-forget——
- * omp 侧对 fork 命令/帧按协商结果门控，本函数只记录能力事实，不阻塞启动。
- */
+/** ready → 持续读流交接 → 协商完成；能力事实必须先于 start() 返回。 */
 export function awaitOmpReady(
   child: ChildProcessWithoutNullStreams,
   hooks: OmpNegotiationHooks,
 ): Promise<OmpReadyFrame> {
   return new Promise<OmpReadyFrame>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error("omp core ready timeout")), READY_TIMEOUT_MS);
-    const onLine = (line: string) => {
-      const frame = parseJson(line);
-      if (!frame || typeof frame !== "object") {
-        return;
-      }
-      const readyParsed = ompReadyFrameSchema.safeParse(frame);
-      if (!readyParsed.success) {
-        return;
-      }
-      clearTimeout(timer);
-      const versions = readyParsed.data.supportedProtocolVersions;
-      if (versions?.includes(3)) {
-        hooks
-          .request({ type: "negotiate_protocol", protocolVersion: 3 })
-          .then((outcome) => {
-            if (outcome.success) {
-              hooks.onForkSurface();
-              logger.info("omp rpc-ui fork surface v3 已激活");
-              return;
-            }
-            logger.warn("omp v3 协商失败，回落 v2", { error: outcome.error ?? "unknown" });
-            void negotiateV2(hooks, versions);
-          })
-          .catch((error) => {
-            logger.warn("omp v3 协商失败，回落 v2", { error: String(error) });
-            void negotiateV2(hooks, versions);
-          });
-      } else {
-        void negotiateV2(hooks, versions);
-      }
-      readline.removeListener("line", onLine);
-      resolve(readyParsed.data);
-    };
     const readline = createInterface({ input: child.stdout });
+    const cleanup = () => {
+      clearTimeout(timer);
+      readline.removeListener("line", onLine);
+      readline.removeListener("close", onClose);
+      child.removeListener("exit", onExit);
+      child.removeListener("error", onError);
+      readline.close();
+    };
+    const fail = (error: Error) => {
+      cleanup();
+      reject(error);
+    };
+    const onClose = () => fail(new Error("omp core stdout closed before ready"));
+    const onExit = (code: number | null) =>
+      fail(new Error(`omp core exited before ready (code ${code ?? "null"})`));
+    const onError = (error: Error) => fail(error);
+    const timer = setTimeout(() => fail(new Error("omp core ready timeout")), READY_TIMEOUT_MS);
+    const onLine = (line: string) => {
+      const parsed = ompReadyFrameSchema.safeParse(parseJson(line));
+      if (!parsed.success) return;
+      cleanup();
+      // 原先协商 fire-and-forget，目录读取 forkSurface 时仍未收到 ACK，
+      // 会把当前 v3 核永久误判为旧核；先接好读流，再等待能力事实。
+      hooks.onReady(parsed.data);
+      void negotiate(hooks, parsed.data.supportedProtocolVersions).then(
+        () => resolve(parsed.data),
+        reject,
+      );
+    };
     readline.on("line", onLine);
-    readline.once("close", () => {
-      clearTimeout(timer);
-      reject(new Error("omp core stdout closed before ready"));
-    });
-    child.once("exit", (code) => {
-      clearTimeout(timer);
-      reject(new Error(`omp core exited before ready (code ${code ?? "null"})`));
-    });
-    child.once("error", (error) => {
-      clearTimeout(timer);
-      reject(error instanceof Error ? error : new Error(String(error)));
-    });
+    readline.once("close", onClose);
+    child.once("exit", onExit);
+    child.once("error", onError);
   });
+}
+
+async function negotiate(
+  hooks: OmpNegotiationHooks,
+  versions: number[] | undefined,
+): Promise<void> {
+  if (versions?.includes(3)) {
+    try {
+      const outcome = await hooks.request({ type: "negotiate_protocol", protocolVersion: 3 });
+      if (outcome.success) {
+        hooks.onForkSurface();
+        logger.info("omp rpc-ui fork surface v3 已激活");
+        return;
+      }
+      logger.warn("omp v3 协商失败，回落 v2", { error: outcome.error ?? "unknown" });
+    } catch (error) {
+      logger.warn("omp v3 协商失败，回落 v2", { error: String(error) });
+    }
+  }
+  await negotiateV2(hooks, versions);
 }
 
 /** v2 分片协商（v3 不可用或协商失败时的回落路径）。 */

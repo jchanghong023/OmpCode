@@ -40,6 +40,9 @@
    3a. workspace-config 先于工作区恢复或反过来先到时，设置页与 composer 都持续显示 omp 模型目录；冷恢复已存在任务后仍可编辑 role。
    3b. 隔离桌面实例准备默认与命名 profile 的不同模型/角色配置及历史任务；切换 profile 保存后仍显示待重启且不改旧配置；重启后只显示目标 profile 的角色、目录与历史会话；切回默认 profile 后原任务仍可见。
    3c. fake omp 返回含内置与自定义命令的目录；工作区 presentation 与 workspace-config 均能展示这些命令，输入框输入 `/` 能补全。真实 omp 二进制也能返回合法目录。本地命令同步或延迟完成时，输出可见且会话控制恢复空闲。
+   3d. 角色目录读取或自动保存尚未返回时切换工作区、关闭后重新打开编辑器；旧请求不得回写新目标的角色、待保存选择或保存状态。同一角色快速重复操作只接纳当前请求；失败时所选值保留供重试。远端旧核不支持角色 RPC 时不得回落写本机 profile。
+   3e. 设置保存不同 profile 后、重启前，设置与会话工具栏两个角色编辑入口均禁止写旧 profile；模型目录和其他会话临时选择仍按当前运行 profile 保持。
+   3f. 命令参数补全在光标位于词中、候选替换区间跨空格及目录更新时正确：请求携带完整单行文本与 UTF-16 光标，接受候选严格使用返回区间；越界与过期候选不可插入，旧请求不得覆盖新文本或目标。
 4. 源码类型检查、lint、omp 协议 E2E 与架构检查通过；GUI E2E 使用当前源码的开发态运行，不执行安装包生成。
 
 ## 命令路由与角色覆盖
@@ -50,6 +53,7 @@
 - 多角色（`modelRoles`）按本文件角色配置规则在设置与会话工具栏完整适配，角色清单与 omp 内建角色（default/smol/slow/vision/plan/commit/tiny/memory/task/advisor/image/web/speech/dictation/judge）一致并随配置追加自定义角色。
 
 技能目录与调用见 [skills.md](skills.md)；提交时的临时模型选择见 [composer.md](composer.md)；恢复、guide/queue 及文件变更事实见 [session-recovery.md](session-recovery.md)。
+辅助入口 `/side` 与 `/btw` 的独立接入按 [OMP 辅助对话](omp-core-integration.md#辅助对话原生-btw唯一需求权威)，不进入普通 slash/prompt 分流；计划模型的目标工作区与旧核回落验收见 [输入区](composer.md)。
 
 验收还应检查：登录/套餐/配额入口全部移除；命令热更新、重命名和模型状态回投可见；命中目录的命令由 omp 执行，压缩保持既有映射；真实失败不能呈现为成功。
 

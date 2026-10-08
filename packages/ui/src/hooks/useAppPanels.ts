@@ -84,6 +84,7 @@ import { useIsOfficeMode } from "@/hooks/useInterfaceMode.js";
 import { clearSelectionSideChat } from "@/lib/selectionSideChatRuntime.js";
 import { clearConversationSelectionReferenceScope } from "@/lib/conversationSelectionReference.js";
 import { subscribeTaskLifecycle } from "@/lib/taskLifecycleEvents.js";
+import { subscribeSavedSidePanes } from "@/lib/OmpBtwPaneRuntime.js";
 
 export interface BrowserNavigationRequest {
   id: string;
@@ -173,7 +174,7 @@ export function useAppPanels(options: {
   } = options;
   const supportsEmbeddedBrowser = explicitSupportsEmbeddedBrowser ?? Boolean(isDesktop);
   const activeWorkspaceKey = workspaceIdentity?.trim() || workspaceAbsPath;
-  const { zcodeAgentService, zcodeSessionService } = useServices();
+  const { zcodeAgentService } = useServices();
   const isOfficeMode = useIsOfficeMode();
   const sidePaneMemoryKey = useMemo(
     () =>
@@ -900,7 +901,6 @@ export function useAppPanels(options: {
               (tab) =>
                 tab.type === "selection-side-chat" &&
                 tab.workspaceKey === workspaceKey &&
-                tab.parentSessionId === request.parentSessionId &&
                 tab.childSessionId === request.replacesChildSessionId,
             )
           : undefined;
@@ -1160,25 +1160,22 @@ export function useAppPanels(options: {
     ],
   );
 
+  useEffect(
+    () =>
+      subscribeSavedSidePanes((request) => {
+        const key = request.workspaceIdentity?.trim() || request.workspacePath;
+        if (key === (workspaceIdentity?.trim() || workspaceAbsPath))
+          handleOpenSelectionSideChat(request);
+      }),
+    [handleOpenSelectionSideChat, workspaceAbsPath, workspaceIdentity],
+  );
+
   const closeSelectionSideChatRuntime = useCallback(
     (tab: Extract<WorkspaceSidePaneTab, { type: "selection-side-chat" }>) => {
       clearSelectionSideChat(tab.childSessionId);
       clearConversationSelectionReferenceScope(tab.childSessionId, tab.workspaceKey);
-      void zcodeSessionService
-        .closeSession({
-          workspacePath: tab.workspacePath,
-          ...(tab.workspaceIdentity ? { workspaceIdentity: tab.workspaceIdentity } : {}),
-          sessionId: tab.childSessionId,
-        })
-        .catch((error) => {
-          if (String(error).includes("sessionNotFound")) return;
-          logger.warn("[App] 关闭框选副屏 runtime 失败", {
-            childSessionId: tab.childSessionId,
-            error: error instanceof Error ? error.message : String(error),
-          });
-        });
     },
-    [zcodeSessionService],
+    [],
   );
 
   useEffect(() => {
@@ -1189,7 +1186,8 @@ export function useAppPanels(options: {
       const closingTabs =
         latestSidePaneMemoryRef.current.sidePaneState?.tabs.filter(
           (tab): tab is Extract<WorkspaceSidePaneTab, { type: "selection-side-chat" }> =>
-            tab.type === "selection-side-chat" && tab.parentSessionId === event.taskId,
+            tab.type === "selection-side-chat" &&
+            (tab.parentSessionId === event.taskId || tab.liveParentSessionId === event.taskId),
         ) ?? [];
       if (closingTabs.length === 0) return;
 
@@ -1330,9 +1328,7 @@ export function useAppPanels(options: {
   );
 
   const rememberClosedSidePaneTabs = useCallback((tabs: WorkspaceSidePaneTab[]) => {
-    const restorableTabs = tabs.filter(
-      (tab) => tab.type !== "selection-side-chat" && tab.type !== "browser-use",
-    );
+    const restorableTabs = tabs.filter((tab) => tab.type !== "browser-use");
     if (restorableTabs.length === 0) {
       return;
     }

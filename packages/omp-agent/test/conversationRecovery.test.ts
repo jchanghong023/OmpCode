@@ -45,6 +45,23 @@ test("failed queued command does not fail the running turn", () => {
   );
 });
 
+test("原命令晚到失败不得把后续活跃轮标记失败", () => {
+  const projection = new ConversationProjection("late-failure");
+  projection.beginUserTurn(input("first"));
+  projection.finishTurn("success");
+  projection.beginUserTurn(input("second"));
+  projection.failCommandTurn("first", { code: "late", message: "old dispatch rejected" });
+  assert.equal(projection.stateSnapshot.control.phase, "running");
+  assert.equal(projection.lastError, null);
+  assert.deepEqual(
+    projection
+      .rowsRange(undefined, 100)
+      .rows.filter((row) => row.kind === "turnHeader")
+      .map((row) => row.state),
+    ["completedSuccess", "running"],
+  );
+});
+
 test("core exit closes active and queued turns", () => {
   const projection = new ConversationProjection("session");
   projection.beginUserTurn(input("first"));

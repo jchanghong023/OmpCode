@@ -88,6 +88,7 @@ export function ChatPromptEditor({
   excludedSlashCommandNames,
   appSlashCommands,
   enableMentionPanel,
+  enableCommandPanel,
 }: {
   workspacePath: string;
   workspaceIdentity?: string;
@@ -148,6 +149,7 @@ export function ChatPromptEditor({
   appSlashCommands?: readonly AppSlashCommand[];
   /** mention 面板开关（透传 LexicalChatInput）。 */
   enableMentionPanel?: boolean;
+  enableCommandPanel?: boolean;
 }) {
   const { intl } = useZCodeIntl();
   const toolbarRef = useComposerToolbarFit();
@@ -384,6 +386,7 @@ export function ChatPromptEditor({
           excludedSlashCommandNames={excludedSlashCommandNames}
           appSlashCommands={appSlashCommands}
           enableMentionPanel={enableMentionPanel}
+          enableCommandPanel={enableCommandPanel}
         />
         <div ref={toolbarRef} className="group/toolbar flex items-end gap-3">
           <div className="flex min-w-0 flex-1 items-center" data-composer-leading-actions>

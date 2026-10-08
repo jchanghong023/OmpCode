@@ -62,7 +62,10 @@ export class OmpDirectoryGateway {
       onUiRequest: ({ respond, frame }) =>
         respond({ type: "extension_ui_response", id: frame.id, cancelled: true }),
       onExit: (code) => {
-        if (this.process === process) this.process = null;
+        if (this.process === process) {
+          this.process = null;
+          this.forkSurface = null;
+        }
         logger.warn("omp 目录进程已退出", { code });
       },
       onCommandsUpdate: (commands) => this.deps.onCommandsUpdate?.(commands),

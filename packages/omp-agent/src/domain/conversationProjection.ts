@@ -38,6 +38,7 @@ import {
 import { applyProjectionToolCallUpdate } from "./projectionToolCallUpdate.js";
 import { appendProjectionStreamDelta, closeProjectionStreamingRows, materializeStreamTextRow, type ProjectionStreamHost } from "./projectionStreamText.js";
 import { conversationRowIdOfToolCall, createMarkerRow, buildConversationSnapshot, conversationRowsRange, type ToolCallUpsert, type TurnContext } from "./projectionRows.js";
+import { appendOmpCustomMessage } from "./OmpCustomMessage.js";
 
 // 输入轮载荷类型随轮生命周期移入 queuedTurnReconcile；re-export 保住既有 import 路径。
 export type { BeginTurnInput } from "./queuedTurnReconcile.js";
@@ -190,13 +191,13 @@ export class ConversationProjection {
   }
   // ── 流式文本与思考 ──
   appendAssistantText(delta: string): void {
-    this.appendStreamDelta(delta, "assistantText");
+    appendProjectionStreamDelta(this.streamHost, delta, "assistantText");
+  }
+  appendCustomMessage(message: unknown): void {
+    appendOmpCustomMessage(this.streamHost, message);
   }
   appendReasoning(delta: string): void {
-    this.appendStreamDelta(delta, "reasoning");
-  }
-  private appendStreamDelta(delta: string, kind: "assistantText" | "reasoning"): void {
-    appendProjectionStreamDelta(this.streamHost, delta, kind);
+    appendProjectionStreamDelta(this.streamHost, delta, "reasoning");
   }
   // 模型响应结束（message_end）：关闭本响应的流式行；下一次文本增量开新行。
   closeAssistantResponse(): void {
@@ -223,6 +224,10 @@ export class ConversationProjection {
     });
   }
 
+  /** 无主 transcript 的辅助投影：仍由同一序列发布状态，不操作主 turn/queue。 */
+  patchSideViewState(patch: Pick<StatePatch, "control" | "inputRouting" | "availability" | "config">): void {
+    this.patchState(patch);
+  }
   // ── 状态面 ──
   addUsage(delta: { inputTokens?: number; outputTokens?: number; cacheReadTokens?: number; cacheWriteTokens?: number }): void {
     this.patchState(usagePatch(this.state, delta));
@@ -313,6 +318,18 @@ export class ConversationProjection {
   /** 只读详情视图的事件驱动重水合：全量重读行幂等合并（新行 append、同 rowId 内容变化才 upsert），订阅端实时增长且无重复行。 */
   mergeRows(rows: ConversationRow[]): void {
     mergeProjectionRows({ rows: this.rows, claimRowId: (rowId) => this.claimRowId(rowId), appendRow: (row) => this.appendRow(row), upsertRow: (row) => this.upsertRow(row) }, rows);
+  }
+  /** 只读记录重写：同一 owner 发删除屏障再追加，实时/恢复订阅看到相同替换结果。 */
+  replaceHydratedRows(rows: ConversationRow[]): void {
+    if (this.rowIds.length > 0) this.pushPending({ op: "row.removed", fromRowId: this.rowIds[0]! });
+    this.rows.clear();
+    this.pendingStreamTextByRowId.clear();
+    this.rowIds.length = 0;
+    for (const row of rows) {
+      this.claimRowId(row.rowId);
+      this.appendRow(row);
+    }
+    this.patchState({ subagents: this.subagents.hydrate(rows) });
   }
 
   /** pending → delta log（合并连续同构 op）；返回合并后的列表。 */

@@ -114,6 +114,8 @@ export class PromptQueueReconciler {
    * queue_update/agent_end 触发点重新发起，不会丢失。
    */
   noteInputAccepted(): void {
+    // 核心崩溃后同一引擎可重启；新输入重新武装宽限对账，不能沿用退出时的 disposed。
+    this.disposed = false;
     this.inputAcceptedSeq += 1;
   }
 

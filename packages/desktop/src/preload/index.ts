@@ -4,7 +4,7 @@ import {
   databaseStartupPortPayloadSchema,
 } from "@zcode/shared";
 /* eslint-disable max-lines -- preload bridge 集中暴露桌面平台 IPC，拆散会让 contextBridge 权限边界更难审计。 */
-import { contextBridge, ipcRenderer, webFrame } from "electron";
+import { contextBridge, ipcRenderer, webFrame, webUtils } from "electron";
 import {
   installArmsRumBridgeIpcForward,
   scheduleArmsEventBridgePatch,
@@ -301,9 +301,12 @@ contextBridge.exposeInMainWorld("zcode", {
     ipcRenderer.invoke(PlatformChannels.PrintToPdf),
   /** 从系统拖拽/文件输入得到的 Web File 解析真实本地路径 */
   getPathForFile: (file: File): string | null => {
-    // 修复依据：Electron 28 尚无 webUtils.getPathForFile；其拖拽 File 自带非标准 path。
-    // 只从 preload 提取本地文件路径，避免把整份 File 或能力暴露给 renderer。
-    const path = (file as File & { path?: unknown }).path;
+    // 修复原因：Electron 32+ 移除了 File.path，44 必须使用 webUtils；28 才回退旧属性。
+    // 只提取路径，不向 renderer 暴露 Electron 能力或 File 对象。
+    const path =
+      typeof webUtils?.getPathForFile === "function"
+        ? webUtils.getPathForFile(file)
+        : (file as File & { path?: unknown }).path;
     return typeof path === "string" && path.trim().length > 0 ? path.trim() : null;
   },
   /** 长文本粘贴落盘为真正的本地附件，避免正文和 prompt payload 被撑大 */

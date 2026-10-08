@@ -3,17 +3,18 @@ import { test } from "node:test";
 import { OmpInteractionProxy } from "../src/app/ompInteractionProxy.js";
 import { dispatchOmpUiFrame } from "../src/adapters/ompUiFrames.js";
 
-test("rpc-ui editor 自由文本经现有交互路径返回同一请求", async () => {
+test("rpc-ui editor 多行与空白正文经交互路径原样返回同一请求", async () => {
   const pending: { interactionId: string; payload: unknown }[] = [];
   const resolved: string[] = [];
   const responses: unknown[] = [];
+  const editorValue = "\n  需要保留旧数据\n\n  多行缩进  \n";
   const proxy = new OmpInteractionProxy({
     sessionId: "session-1",
     gateway: {
       emitFrame() {},
       async requestUserInput(params) {
         assert.equal(params.prompt, "补充说明");
-        return { action: "accept", freeText: "需要保留旧数据" };
+        return { action: "accept", freeText: editorValue };
       },
     },
     addPendingInteraction: (interaction) => pending.push(interaction),
@@ -31,16 +32,8 @@ test("rpc-ui editor 自由文本经现有交互路径返回同一请求", async 
     resolved,
     pending.map((interaction) => interaction.interactionId),
   );
-  assert.deepEqual(pending[0]?.payload, {
-    kind: "userInput",
-    prompt: "补充说明",
-    freeText: true,
-    answerMode: "text",
-    allowCustomInput: true,
-    questions: [{ question: "补充说明", header: "补充说明", options: [] }],
-  });
   assert.deepEqual(responses, [
-    { type: "extension_ui_response", id: "omp-ui-1", value: "需要保留旧数据" },
+    { type: "extension_ui_response", id: "omp-ui-1", value: editorValue },
   ]);
 });
 
@@ -262,6 +255,26 @@ test("S5-4: editor prefill 携带进 pendingInteraction payload 供宿主作初�
   assert.deepEqual(responses, [
     { type: "extension_ui_response", id: "omp-ui-4", value: "改好的文本" },
   ]);
+});
+
+test("editor 缺省 prefill 仍显式投影空串，普通 input 不声明 editor 标记", async () => {
+  const pending: { payload: unknown }[] = [];
+  const proxy = new OmpInteractionProxy({
+    sessionId: "session-1",
+    gateway: { emitFrame() {}, requestUserInput: async () => ({ action: "cancel" }) },
+    addPendingInteraction: (interaction) => pending.push(interaction),
+    resolvePendingInteraction() {},
+    scheduleFlush() {},
+  });
+  await proxy.handle({ frame: { id: "editor-empty", method: "editor" }, respond() {} });
+  await proxy.handle({ frame: { id: "input-empty", method: "input" }, respond() {} });
+  const editor = pending[0]?.payload;
+  const input = pending[1]?.payload;
+  assert.ok(editor && typeof editor === "object" && "prefill" in editor);
+  assert.equal(editor.prefill, "");
+  assert.ok(input && typeof input === "object");
+  assert.equal("prefill" in input, false);
+  proxy.dispose();
 });
 
 test("S5-4: editor accept 而无文本回 cancelled（空串会被 omp 直通采纳为编辑结果、丢失原文）", async () => {

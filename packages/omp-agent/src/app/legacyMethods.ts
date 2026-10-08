@@ -102,9 +102,10 @@ export function createLegacyHandlers(context: LegacyMethodContext) {
     },
     [zcodeProtocolMethods.sessionCompact]: async (params) => {
       const record = asRecord(params);
-      const engine = context.registry.getEngine(requiredString(record, "sessionId"));
-      await engine?.compact();
-      const snapshot = engine ? buildLegacySnapshot({ ...context, engine }) : null;
+      const engine = context.registry.requireEngine(requiredString(record, "sessionId"));
+      // 核心拒绝压缩时不能仍回 accepted；legacy 与 v4 必须共享真实结果语义。
+      await engine.compact();
+      const snapshot = buildLegacySnapshot({ ...context, engine });
       return {
         response: "compacted",
         ...(snapshot ? { snapshot } : {}),

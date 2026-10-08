@@ -729,8 +729,8 @@ test("桌面主链路：createSession → 流式 → 工具 → 权限确认 →
       "rpc-ui 选择题须投影到已有 Ask 界面",
     );
 
-    // 4. 直接应答反向请求（host 的另一条应答路径）
-    harness.respond(interaction.id, { action: "accept", content: { value: "Approve" } });
+    // 4. Host 反向请求应答使用显式选项；content.value 是自由文本，不是审批选择。
+    harness.respond(interaction.id, { action: "accept", content: { optionId: "Approve" } });
 
     // 5. 等待会话完成
     await harness.waitUntil(() => {

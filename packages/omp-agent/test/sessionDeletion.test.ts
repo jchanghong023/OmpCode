@@ -236,3 +236,70 @@ test("v3 会话目录删除失败：错误面带 omp 错误码且索引保留", 
   );
   await registry.dispose();
 });
+
+test("临时主ID删除先释放进程，再用落盘UUID发目录删除；未落盘草稿不查目录", async () => {
+  const stableId = "01a0d66e-1891-7035-ab59-f8e5f0a33703";
+  let disposed = false;
+  const directory = createDirectoryStub((command) => {
+    assert.equal(disposed, true, "释放占用必须先于磁盘删除");
+    assert.equal("sessionId" in command ? command.sessionId : null, stableId);
+    return { success: true };
+  });
+  directory.setForkSurface(true);
+  const registry = new SessionRegistry({
+    ompFactory: {
+      create: () => ({
+        ompSessionFile: `C:/sessions/2026-09-24T00-00-00-000Z_${stableId}.jsonl`,
+        async start() {},
+        async send() {
+          return { success: true };
+        },
+        respondUi() {},
+        async refreshState() {
+          return null;
+        },
+        async readContextReport() {
+          return null;
+        },
+        async dispose() {
+          disposed = true;
+        },
+      }),
+    },
+    store: {
+      listSessions: async () => [],
+      findSession: async () => null,
+      readSessionEntries: async () => [],
+      readSubagentEntries: async () => [],
+      deleteSession: async () => {
+        assert.fail("v3不得本地删文件");
+      },
+    },
+    gateway: { emitFrame() {}, requestUserInput: async () => ({ action: "cancel" }) },
+    directory,
+  });
+  try {
+    const engine = await registry.createSession({
+      sessionId: "temporary",
+      workspaceId: "ws",
+      workspacePath: "C:/work",
+    });
+    await engine.ensureOmpStarted();
+    await registry.deleteSession("temporary");
+    assert.equal(registry.getEngine("temporary"), null);
+    assert.equal(registry.getEngine(stableId), null);
+    assert.deepEqual(directory.sentDirectoryCommands, [
+      { type: "delete_session", sessionId: stableId },
+    ]);
+    await registry.createSession({
+      sessionId: "draft",
+      workspaceId: "ws",
+      workspacePath: "C:/work",
+    });
+    await registry.deleteSession("draft");
+    assert.equal(registry.getEngine("draft"), null);
+    assert.equal(directory.sentDirectoryCommands.length, 1, "无保存文件的草稿不得发delete_session");
+  } finally {
+    await registry.dispose();
+  }
+});

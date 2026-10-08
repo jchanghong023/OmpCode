@@ -1,6 +1,6 @@
 import type { ConversationSelectionReference } from "@/lib/conversationSelectionReference.js";
 
-const pendingCreations = new Map<string, Promise<string>>();
+const pendingCreations = new Map<string, Promise<unknown>>();
 const blockedChildSessionIds = new Set<string>();
 const listeners = new Set<() => void>();
 type SelectionSideChatOpener = (reference?: ConversationSelectionReference) => Promise<void>;
@@ -19,12 +19,12 @@ export function buildSelectionSideChatKey(workspaceKey: string, parentSessionId:
  * 同一个用户手势在 command pending 期间只创建一次；完成后立即释放 parent scope，
  * 让固定入口的下一次点击可以创建新的 child，而不是退化回旧的单例绑定。
  */
-export async function createSelectionSideChat(
+export async function createSelectionSideChat<T>(
   key: string,
-  create: () => Promise<string>,
-): Promise<string> {
+  create: () => Promise<T>,
+): Promise<T> {
   const current = pendingCreations.get(key);
-  if (current) return current;
+  if (current) return current as Promise<T>;
   const pending = create().finally(() => {
     if (pendingCreations.get(key) === pending) {
       pendingCreations.delete(key);

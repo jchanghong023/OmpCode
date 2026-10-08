@@ -5,6 +5,8 @@ import type { SelectionSideChatPaneTab } from "@/lib/workspaceSidePane.js";
 import type { PaneWorkspaceScope } from "@/v4/paneLayoutStore.js";
 import { SessionPane } from "@/v4/SessionPane.js";
 import { V4PaneConversationProvider } from "@/v4/V4ConversationContext.js";
+import { OmpBtwHistoryButton } from "./OmpBtwHistoryButton.js";
+import { openSavedSidePane } from "@/lib/OmpBtwPaneRuntime.js";
 
 export const SelectionSideChatPane = memo(function SelectionSideChatPane({
   tab,
@@ -32,23 +34,46 @@ export const SelectionSideChatPane = memo(function SelectionSideChatPane({
   // 父级 tabs.map 原来为每个 memo pane 创建内联闭包，任意父级渲染都会
   // 破坏 onUnavailable 引用稳定性；由叶子按稳定 tab id 收口回调。
   const handleUnavailable = useCallback(() => onUnavailable(tab.id), [onUnavailable, tab.id]);
+  const handleBound = useCallback(
+    (childSessionId: string, parentSessionId?: string) =>
+      openSavedSidePane({
+        workspacePath: tab.workspacePath,
+        workspaceIdentity: tab.workspaceIdentity,
+        remoteSessionId: tab.remoteSessionId,
+        parentSessionId: parentSessionId ?? tab.parentSessionId,
+        liveParentSessionId:
+          tab.liveParentSessionId ??
+          (parentSessionId && parentSessionId !== tab.parentSessionId
+            ? tab.parentSessionId
+            : undefined),
+        childSessionId,
+        replacesChildSessionId: tab.childSessionId,
+      }),
+    [tab],
+  );
   return (
     <V4PaneConversationProvider scope={scope}>
-      <SessionPane
-        paneId={tab.id}
-        sessionId={tab.childSessionId}
-        openTrigger="selection"
-        selectionSideChat
-        focused={focused}
-        telemetryVisible={focused}
-        workspacePath={tab.workspacePath}
-        workspaceIdentity={tab.workspaceIdentity}
-        remoteSessionId={tab.remoteSessionId}
-        onOpenBrowserUrl={onOpenBrowserUrl}
-        onOpenCodeViewer={onOpenCodeViewer}
-        onOpenFileLink={onOpenFileLink}
-        onSelectionSideChatUnavailable={handleUnavailable}
-      />
+      <div className="flex h-full min-h-0 flex-col">
+        <OmpBtwHistoryButton tab={tab} />
+        <div className="min-h-0 flex-1">
+          <SessionPane
+            paneId={tab.id}
+            sessionId={tab.childSessionId}
+            openTrigger="selection"
+            selectionSideChat
+            onSessionCreated={handleBound}
+            focused={focused}
+            telemetryVisible={focused}
+            workspacePath={tab.workspacePath}
+            workspaceIdentity={tab.workspaceIdentity}
+            remoteSessionId={tab.remoteSessionId}
+            onOpenBrowserUrl={onOpenBrowserUrl}
+            onOpenCodeViewer={onOpenCodeViewer}
+            onOpenFileLink={onOpenFileLink}
+            onSelectionSideChatUnavailable={handleUnavailable}
+          />
+        </div>
+      </div>
     </V4PaneConversationProvider>
   );
 });

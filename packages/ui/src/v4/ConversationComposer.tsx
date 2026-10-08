@@ -1,5 +1,6 @@
 /* oxlint-disable eslint(max-lines) -- composer 集中收口输入区 wiring（附件/草稿/历史/mention），拆分会打散收口粒度。 */
 import { getLocalTtftObserver } from "@/v4/telemetry/localTtftObserver.js";
+import { resolveOmpBtwComposerCommand } from "@/lib/OmpBtwComposerRouting.js";
 /**
  * v4 会话 composer（composer parity）。
  *
@@ -396,6 +397,8 @@ interface ConversationComposerProps {
   workspacePath: string;
   workspaceIdentity?: string;
   remoteSessionId?: string;
+  /** 辅助主题只能借父模型；不提供独立模型/思考/模式菜单。 */
+  parentModelOnly?: boolean;
   /** SessionPane 从目标 Host 原子读取的选择事实；Composer 不自行解析 Host。 */
   modelSelectionView?: ModelSelectionView | null;
   modelSelectionState?: ModelSelectionState;
@@ -489,6 +492,7 @@ function formatAttachmentLineCount(attachment: ChatComposerAttachment, locale: s
 function ConversationComposerImpl({
   snapshot,
   sessionId = null,
+  parentModelOnly = false,
   skillCatalogSessionId = sessionId,
   draftMode = false,
   draftConfig,
@@ -1134,7 +1138,10 @@ function ConversationComposerImpl({
   // choice 保留正常发送按钮；提交后由 SessionPane 按 slash 语义决定是否弹确认框。
   // V4 重构时把 guide 当成“不可提交”状态，导致按钮和 Enter 同时失效；
   // guide 是 CLI 已授权的 busy 输入路由，是否最终 steer 或回退 queue 由命令层裁决。
-  const routingAllowsSend = draftMode || (snapshot !== null && mode !== "reject");
+  // 本地辅助入口不提交主会话的模型配置/排队模式；父会话仍由原生 BTW 借用。
+  const localSideInput = resolveOmpBtwComposerCommand(text, appSlashCommands) !== null;
+  const routingAllowsSend = localSideInput || draftMode || (snapshot !== null && mode !== "reject");
+  const submissionAllowsSend = localSideInput || submissionReady;
   const attachmentsReady = !attachmentsApi.hasUnreadyAttachments;
   const canSend =
     !disabled &&
@@ -1142,7 +1149,7 @@ function ConversationComposerImpl({
     hasDraftToSubmit &&
     routingAllowsSend &&
     attachmentsReady &&
-    submissionReady;
+    submissionAllowsSend;
   // 旧 UI 状态机：streaming + 空草稿 → Stop；有草稿 → 发送键（入队）。
   const showStopControl = canStop && !hasDraftToSubmit;
 
@@ -1175,7 +1182,8 @@ function ConversationComposerImpl({
       // __draft__，下次新建任务又恢复。发送开始时冻结真正提交的 scope。
       const submittedDraft = snapshotDraftOfEditor();
       let cleanupRevision = contentRevisionRef.current;
-      const submission = createSubmissionFromComposer?.() ?? null;
+      const localSideSubmission = resolveOmpBtwComposerCommand(trimmed, appSlashCommands) !== null;
+      const submission = localSideSubmission ? null : (createSubmissionFromComposer?.() ?? null);
       const submittedAttachmentIds = attachmentsApi.attachments.map((item) => item.id);
       if (
         (!trimmed &&
@@ -1186,8 +1194,10 @@ function ConversationComposerImpl({
           !hasPendingConversationSelections &&
           !submittedShareContext) ||
         pendingRef.current ||
-        !submissionReady ||
-        (createSubmissionFromComposer !== undefined && submission === null) ||
+        (!localSideSubmission && !submissionReady) ||
+        (!localSideSubmission &&
+          createSubmissionFromComposer !== undefined &&
+          submission === null) ||
         attachmentsApi.hasUnreadyAttachments
       ) {
         return;
@@ -1449,6 +1459,7 @@ function ConversationComposerImpl({
       }
     },
     [
+      appSlashCommands,
       attachmentsApi,
       conversationSelectionReferences,
       conversationTelemetry,
@@ -2050,27 +2061,36 @@ function ConversationComposerImpl({
     () => (
       <div className="flex min-w-0 items-center gap-1">
         <span className="flex min-w-0 shrink items-center gap-1 overflow-hidden empty:hidden">
-          <V4ComposerModelControls
-            workspacePath={workspacePath}
-            workspaceIdentity={workspaceIdentity}
-            modelSelectionView={modelSelectionView}
-            modelSelectionState={modelSelectionState}
-            modelSelectionReload={modelSelectionReload}
-            sessionId={sessionId ?? null}
-            phase={composerPhase}
-            provider={provider}
-            draftMode={draftMode}
-            draftConfig={draftConfig}
-            usage={composerUsage}
-            disabled={disabled}
-            activeConfigPicker={activeConfigPicker}
-            onConfigPickerOpenChange={handleConfigPickerOpenChange}
-            onSelectModel={handleSelectModelTrace}
-            onSelectThought={onSelectThought}
-            onSwitchMode={onSwitchMode}
-            onRecoverCustomModelSelection={onRecoverCustomModelSelection}
-            onSendCompressionCommand={onSendCompressionCommand}
-          />
+          {parentModelOnly ? (
+            <span className="truncate text-ui-caption text-foreground-subtle">
+              {intl.formatMessage(
+                { id: "chat.selections.sideParentModel" },
+                { provider: snapshot?.config.provider ?? "", model: snapshot?.config.model ?? "" },
+              )}
+            </span>
+          ) : (
+            <V4ComposerModelControls
+              workspacePath={workspacePath}
+              workspaceIdentity={workspaceIdentity}
+              modelSelectionView={modelSelectionView}
+              modelSelectionState={modelSelectionState}
+              modelSelectionReload={modelSelectionReload}
+              sessionId={sessionId ?? null}
+              phase={composerPhase}
+              provider={provider}
+              draftMode={draftMode}
+              draftConfig={draftConfig}
+              usage={composerUsage}
+              disabled={disabled}
+              activeConfigPicker={activeConfigPicker}
+              onConfigPickerOpenChange={handleConfigPickerOpenChange}
+              onSelectModel={handleSelectModelTrace}
+              onSelectThought={onSelectThought}
+              onSwitchMode={onSwitchMode}
+              onRecoverCustomModelSelection={onRecoverCustomModelSelection}
+              onSendCompressionCommand={onSendCompressionCommand}
+            />
+          )}
         </span>
         {showStopControl ? (
           <ControlHintTooltip title={stopTooltipTitle} shortcut="Esc">
@@ -2110,6 +2130,9 @@ function ConversationComposerImpl({
       </div>
     ),
     [
+      parentModelOnly,
+      snapshot?.config.provider,
+      snapshot?.config.model,
       canSend,
       activeConfigPicker,
       composerPhase,
@@ -2164,12 +2187,14 @@ function ConversationComposerImpl({
         ) : null}
         {/* 附件画廊重构曾整段覆盖 leadingActions，误删 CUA 常驻入口。
             入口自身继续负责平台、远程与设置可见性，不在 composer 重复判定。 */}
-        <V4ComposerCuaEntry
-          workspacePath={workspacePath}
-          workspaceIdentity={workspaceIdentity}
-          remoteSessionId={remoteSessionId}
-          currentSessionBusy={canStop}
-        />
+        {parentModelOnly ? null : (
+          <V4ComposerCuaEntry
+            workspacePath={workspacePath}
+            workspaceIdentity={workspaceIdentity}
+            remoteSessionId={remoteSessionId}
+            currentSessionBusy={canStop}
+          />
+        )}
         <ConversationBackgroundWorkTrigger
           backgroundWorks={snapshot?.backgroundWorks ?? []}
           runningSubagentCount={runningSubagentCount}
@@ -2193,6 +2218,7 @@ function ConversationComposerImpl({
       onTogglePlanModel,
       onSwitchMode,
       planModelActive,
+      parentModelOnly,
       planModelAvailable,
       provider,
       remoteSessionId,
@@ -2268,9 +2294,11 @@ function ConversationComposerImpl({
           taskId={sessionId}
           skillCatalogSessionId={skillCatalogSessionId}
           placeholder={placeholder}
-          disabled={disabled || mode === "reject"}
+          disabled={disabled || (mode === "reject" && !localSideInput)}
           submitting={pending}
-          submitDisabled={pending || !routingAllowsSend || !attachmentsReady || !submissionReady}
+          submitDisabled={
+            pending || !routingAllowsSend || !attachmentsReady || !submissionAllowsSend
+          }
           allowSubmitWhenEmpty={
             // 发送按钮已把代码评论视为可发送上下文，但这里曾漏掉同一状态，
             // 导致空文本仅附代码评论时 Enter 被编辑器判为空，必须改点发送按钮。
@@ -2283,12 +2311,12 @@ function ConversationComposerImpl({
           enterSubmits={enterSubmits}
           onModifiedSubmit={modifiedEnterSubmits ? handleModifiedEditorSubmit : undefined}
           submitLabel={sendTooltipTitle}
-          showSlashButton
+          showSlashButton={!parentModelOnly}
           // @ 是 Plugin / 文件 / 对话 / 画板主入口；# 会话与 $ / ¥ / ￥ Skills
           // 仍由 MentionPlugin 保留兼容触发，但不在 + 菜单重复展示。
-          showMentionButton
+          showMentionButton={!parentModelOnly}
           topContent={topContentNode}
-          attachmentAction={attachmentAction}
+          attachmentAction={parentModelOnly ? undefined : attachmentAction}
           inputTestId={TID_V4_COMPOSER_INPUT}
           inputApiRef={inputApiRef}
           promptHistory={promptHistory}
@@ -2296,15 +2324,18 @@ function ConversationComposerImpl({
           // secondary pane 按产品能力隐藏 goal，不再追加任何内建命令或别名。
           excludedSlashCommandNames={suppressGoalCommands ? ["goal"] : undefined}
           appSlashCommands={appSlashCommands}
-          enableMentionPanel
+          enableMentionPanel={!parentModelOnly}
+          enableCommandPanel={!parentModelOnly}
           leadingActions={leadingActionsNode}
           submitControl={submitControlNode}
           className="p-0"
           onChange={handleEditorChange}
           onFocus={handleEditorFocus}
           onSubmit={handleEditorSubmit}
-          onWhiteboardMentionSelected={attachmentsApi.handleWhiteboardMentionSelected}
-          onPaste={attachmentsApi.handlePaste}
+          onWhiteboardMentionSelected={
+            parentModelOnly ? undefined : attachmentsApi.handleWhiteboardMentionSelected
+          }
+          onPaste={parentModelOnly ? undefined : attachmentsApi.handlePaste}
         />
         {attachmentsApi.attachmentError ? (
           <p className="flex items-start gap-2 p-3 text-ui-base text-warning">

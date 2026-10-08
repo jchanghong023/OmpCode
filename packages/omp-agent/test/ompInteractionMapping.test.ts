@@ -7,6 +7,7 @@ import assert from "node:assert/strict";
 import type { OmpAskQuestion } from "../src/domain/ompFrames.js";
 import type { HostUserInputAnswer } from "../src/app/ports.js";
 import { askDeadlineOf, askResponseOf } from "../src/app/ompInteractionMapping.js";
+import { toOmpUiResponse } from "../src/app/ompUiResponseOf.js";
 
 const QUESTIONS: OmpAskQuestion[] = [
   {
@@ -120,4 +121,65 @@ test("askDeadlineOf：timeoutMs 换算 epoch，非法/缺失返回 undefined", (
   assert.equal(askDeadlineOf({}), undefined);
   assert.equal(askDeadlineOf({ timeoutMs: 0 }), undefined);
   assert.equal(askDeadlineOf({ timeoutMs: -5 }), undefined);
+});
+
+test("工具审批 select：仅合法显式 Approve/Deny 才下发；当前 GUI 结构保真", () => {
+  const request = {
+    frame: {
+      id: "permission",
+      method: "select",
+      prompt: "Allow tool?",
+      options: ["Approve", "Deny"],
+    },
+    respond() {},
+  };
+  for (const value of request.frame.options) {
+    for (const answer of [
+      { action: "accept" as const, optionId: value },
+      {
+        action: "accept" as const,
+        content: { answer: value, answer_0: [value], answers: { "Allow tool?": value } },
+      },
+    ]) {
+      assert.deepEqual(toOmpUiResponse(request, answer), {
+        type: "extension_ui_response",
+        id: "permission",
+        value,
+      });
+    }
+  }
+  for (const answer of [
+    { action: "accept" as const },
+    { action: "accept" as const, optionId: "Unknown" },
+    { action: "accept" as const, optionId: "Approve", content: { answer_0: ["Deny"] } },
+    { action: "accept" as const, content: { answer_0: [] } },
+    { action: "accept" as const, optionId: "Approve", content: { answer_0: [] } },
+    { action: "accept" as const, content: { answer_0: ["Approve", "Approve"] } },
+    { action: "decline" as const, optionId: "Approve" },
+  ]) {
+    assert.deepEqual(toOmpUiResponse(request, answer), {
+      type: "extension_ui_response",
+      id: "permission",
+      cancelled: true,
+    });
+  }
+});
+
+test("input/editor 接受当前 GUI answer 字段，无文本仍按既定取消语义收口", () => {
+  for (const method of ["input", "editor"]) {
+    const request = { frame: { id: "input", method }, respond() {} };
+    assert.deepEqual(
+      toOmpUiResponse(request, { action: "accept", content: { answer: "sensitive" } }),
+      {
+        type: "extension_ui_response",
+        id: "input",
+        value: "sensitive",
+      },
+    );
+    assert.deepEqual(toOmpUiResponse(request, { action: "accept", content: { answer: "" } }), {
+      type: "extension_ui_response",
+      id: "input",
+      cancelled: true,
+    });
+  }
 });

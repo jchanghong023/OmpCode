@@ -69,8 +69,14 @@ export class OmpInteractionProxy {
     }
     // S5-4 依据：omp requestRpcEditor 发 {method:"editor", title, prefill, promptStyle}
     // （rpc-session-host.ts），prefill 是编辑器初始文本；此前 schema 剥离导致宿主弹空框。
+    // editor 即使没有初始正文也显式带空 prefill，让宿主保留多行编辑/取消语义，
+    // 避免与普通 input 同形后误入单题问答和持久草稿入口。
     const prefill =
-      method === "editor" ? (request.frame as { prefill?: string }).prefill : undefined;
+      method === "editor"
+        ? "prefill" in request.frame && typeof request.frame.prefill === "string"
+          ? request.frame.prefill
+          : ""
+        : undefined;
     const interactionId = createInteractionId();
     const prompt = request.frame.message ?? request.frame.prompt ?? request.frame.title ?? "";
     const options = request.frame.options?.map((option) => ({ optionId: option, label: option }));

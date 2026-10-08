@@ -3,6 +3,7 @@
 import type { ConversationRow } from "@zcode/shared/zcode-protocol-v4";
 import { rowBaseFields } from "./projectionTypes.js";
 import { ompTodoPlan } from "./ompTodoPlan.js";
+import { visibleOmpCustomMessage } from "./OmpCustomMessage.js";
 
 interface ColdContext {
   sessionId: string;
@@ -89,8 +90,18 @@ export function coldSubagentIds(entries: readonly unknown[]): string[] {
 export function transcriptFromOmpEntries(entries: readonly unknown[]): string {
   const parts: string[] = [];
   for (const entry of entries) {
-    const message = object(object(entry)?.message);
+    const record = object(entry);
+    const message = object(record?.message);
+    const custom = visibleOmpCustomMessage(record?.type === "custom_message" ? record : message);
+    if (custom) {
+      parts.push(`custom: ${custom.text}`);
+      continue;
+    }
     if (!message || !["user", "assistant", "toolResult"].includes(String(message.role))) continue;
+    if (typeof message.content === "string") {
+      if (message.content) parts.push(`${message.role}: ${message.content}`);
+      continue;
+    }
     const content = Array.isArray(message.content) ? message.content : [];
     for (const raw of content) {
       const block = object(raw);
@@ -176,6 +187,21 @@ export function rowsFromOmpEntries(
       continue;
     }
     const record = entry as Record<string, unknown>;
+    const custom = visibleOmpCustomMessage(
+      record.type === "custom_message" ? record : record.message,
+    );
+    if (custom) {
+      rows.push(
+        makeRow(
+          context,
+          currentTurnId,
+          `custom-${context.nextRowId}`,
+          { kind: "assistantText", text: custom.text, state: "complete" },
+          custom.timestamp ?? Date.now(),
+        ),
+      );
+      continue;
+    }
     if (
       record.type === "message" &&
       typeof record.message === "object" &&
@@ -183,14 +209,16 @@ export function rowsFromOmpEntries(
     ) {
       const message = record.message as {
         role?: string;
-        content?: {
-          type?: string;
-          text?: string;
-          thinking?: string;
-          id?: string;
-          name?: string;
-          arguments?: unknown;
-        }[];
+        content?:
+          | string
+          | {
+              type?: string;
+              text?: string;
+              thinking?: string;
+              id?: string;
+              name?: string;
+              arguments?: unknown;
+            }[];
         timestamp?: number;
         toolCallId?: string;
         toolName?: string;
@@ -198,10 +226,19 @@ export function rowsFromOmpEntries(
         details?: unknown;
       };
       const timestamp = typeof message.timestamp === "number" ? message.timestamp : Date.now();
+      // omp 的合法 UserMessage.content 可以是字符串；不能用数组操作使整个冷恢复失败。
+      const content: Exclude<
+        NonNullable<typeof message.content>,
+        string
+      > = typeof message.content === "string"
+        ? [{ type: "text", text: message.content }]
+        : Array.isArray(message.content)
+          ? message.content.filter((block) => block && typeof block === "object")
+          : [];
       if (message.role === "user") {
         context.turnCounter += 1;
         currentTurnId = `turn-cold-${context.turnCounter}`;
-        const text = (message.content ?? [])
+        const text = content
           .filter((block) => block.type === "text")
           .map((block) => block.text ?? "")
           .join("\n");
@@ -217,7 +254,7 @@ export function rowsFromOmpEntries(
         continue;
       }
       if (message.role === "assistant") {
-        for (const block of message.content ?? []) {
+        for (const block of content) {
           if (block.type === "thinking" && block.thinking) {
             rows.push(
               makeRow(
@@ -260,7 +297,7 @@ export function rowsFromOmpEntries(
         continue;
       }
       if (message.role === "toolResult" && typeof message.toolCallId === "string") {
-        const text = (message.content ?? [])
+        const text = content
           .filter((block) => block.type === "text")
           .map((block) => block.text ?? "")
           .join("\n");

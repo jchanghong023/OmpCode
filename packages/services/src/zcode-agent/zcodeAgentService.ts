@@ -839,6 +839,7 @@ interface WaitingWorkspaceStartup {
   cancelled: boolean;
   lastLoggedRevision?: string;
   workspace: ZCodeAgentWorkspaceTarget;
+  startup?: Promise<ZCodeProtocolClient>;
 }
 
 interface ActiveWorkspaceClient {
@@ -3003,31 +3004,38 @@ export function createZCodeAgentService(
       return active.client;
     }
 
-    const waiting = waitingWorkspaceStartups.get(workspaceKey) ?? {
+    const waiting: WaitingWorkspaceStartup = waitingWorkspaceStartups.get(workspaceKey) ?? {
       cancelled: false,
       workspace: params,
     };
     waiting.workspace = params;
     waitingWorkspaceStartups.set(workspaceKey, waiting);
 
-    // omp 自己的模型目录是执行事实源。旧 ZCode Provider Registry 为空时仍须启动
-    // 适配器，否则连 omp 模型列表与历史会话都无法读取。release 后禁止旧启动续体复活。
-    if (waiting.cancelled || waitingWorkspaceStartups.get(workspaceKey) !== waiting) {
-      throw createRuntimeUnavailableError(params);
+    // 修复原因：并发调用复用 waiting identity 却分别推进启动，先完成者删掉登记后，
+    // 后完成者会把同代成功误判成 release。共享整段启动 flight，同时保留取消/换代 fence。
+    if (!waiting.startup) {
+      waiting.startup = (async () => {
+        const entry = await getOrStartReadOnlyClient(params);
+        if (waiting.cancelled || waitingWorkspaceStartups.get(workspaceKey) !== waiting) {
+          throw createRuntimeUnavailableError(params);
+        }
+        entry.modelExecutionEnabled = true;
+        processManager.markReady(params, entry.client);
+        entry.workspace = waiting.workspace;
+        waitingWorkspaceStartups.delete(workspaceKey);
+        logger.info(undefined, "omp 适配器就绪，允许模型执行", {
+          workspaceKey,
+          workspacePath: params.workspacePath,
+        });
+        return entry.client;
+      })().catch((error: unknown) => {
+        if (waitingWorkspaceStartups.get(workspaceKey) === waiting) {
+          waitingWorkspaceStartups.delete(workspaceKey);
+        }
+        throw error;
+      });
     }
-    const entry = await getOrStartReadOnlyClient(params);
-    if (waiting.cancelled || waitingWorkspaceStartups.get(workspaceKey) !== waiting) {
-      throw createRuntimeUnavailableError(params);
-    }
-    entry.modelExecutionEnabled = true;
-    processManager.markReady(params, entry.client);
-    entry.workspace = params;
-    waitingWorkspaceStartups.delete(workspaceKey);
-    logger.info(undefined, "omp 适配器就绪，允许模型执行", {
-      workspaceKey,
-      workspacePath: params.workspacePath,
-    });
-    return entry.client;
+    return waiting.startup;
   }
 
   async function getReadOnlyClient(

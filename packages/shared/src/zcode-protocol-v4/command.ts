@@ -68,13 +68,14 @@ export const commandPayloadSchemas = {
     // 无预热路径，旧拓扑（惰性进程、真内存 draft）照常接受。
     draftPrewarm: z.boolean().optional(),
   }),
-  // 父会话由 envelope.sessionId 指定；服务端从父 record 派生完整运行配置。
-  // firstInput 存在时，child 创建完成后立即启动首条普通输入；缺省则保持空副屏。
+  // 父会话由 envelope.sessionId 指定；辅助会话运行配置由父 runtime 提供。
+  // firstInput 缺省只开空 pane；restoreSaved 只发现已保存主题，不执行模型。
   createSelectionSideSession: z.object({
+    restoreSaved: z.boolean().optional(),
     firstInput: z
       .object({
         text: z.string().trim().min(1),
-        // 提交推荐只覆盖新 child 的完整选择，缺省保留父 runtime 继承。
+        // 不支持独立选择的核心必须明确拒绝不一致的 modelSelection。
         modelSelection: modelSelectionSchema.optional(),
       })
       .optional(),
@@ -378,6 +379,8 @@ export const commandResultSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.enum(["createSession", "createSelectionSideSession", "forkAssistant"]),
     sessionId: z.string(),
+    sideSessionIds: z.array(z.string()).optional(),
+    parentSessionId: z.string().optional(),
     input: z
       .object({
         delivery: z.enum(["startNow", "queue", "guide"]),

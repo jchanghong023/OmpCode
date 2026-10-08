@@ -8,7 +8,7 @@
 
 <p align="center">
   The familiar feel of ChatGPT. The polished interface of ZCode. The full power of OMP.<br />
-  OmpCode brings every OMP command and feature into a friendly graphical workspace for AI coding.
+OmpCode brings OMP sessions, tools, model roles and command discovery into a friendly graphical workspace for AI coding.
 </p>
 
 <p align="center">
@@ -55,11 +55,11 @@
 ## Why OmpCode
 
 - **ZCode's UI, ChatGPT-style ease:** Start with a familiar, chat-first layout and a polished coding workspace instead of learning a new terminal interface.
-- **OMP all the way through:** An embedded OMP core powers the agent, while the UI is adapted to OMP's sessions, tools, models, commands, and full feature set.
+- **OMP all the way through:** An embedded OMP core powers the agent, while the UI is adapted to OMP's sessions, tools, models and commands. Explicit capability limits are documented in [the Fork requirements](docs/requirements/FORK.md#已知与允许的差异).
 - **Every slash command:** Browse and run the complete OMP command catalog in the composer, including `/model`, `/switch`, `/compact`, `/mcp`, `/usage`, and skill commands.
 - **Models on your terms:** Use OMP Profiles and model roles to pick models and thinking levels, or switch them for a session.
 - **A clear view of your work:** Streaming responses, tool calls, file changes, context usage, and compaction state stay visible in one workspace.
-- **Keep working across devices:** Continue with the Web interface and mobile remote access.
+- **Desktop and Web workflows:** Use the desktop workspace or the general Web client. Dedicated mobile remote control has been retired.
 
 ## Quick start
 

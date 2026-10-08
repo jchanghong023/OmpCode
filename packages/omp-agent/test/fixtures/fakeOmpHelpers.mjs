@@ -8,9 +8,8 @@ export const out = (frame) => process.stdout.write(`${JSON.stringify(frame)}\n`)
 let counter = 0;
 export const nextId = () => `fake-${++counter}`;
 
-// v3 fork surface 模式（rpc-ui-protocol 4.0）：ready 公告 [1,2,3]，协商成功后审批走
-// permission_request、ask 走 ask_request、fork 查询命令可用；未协商时镜像真实 omp 的
-// Unknown command 拒绝与 legacy extension_ui select 降级。
+// v3 ready 公告 [1,2,3]；当前 ask 和审批均使用 extension_ui_request/response，
+// 目录能力由协议协商启用，不恢复已删除的 permission_request/ask_request。
 export const v3 = createV3Surface({ out, nextId });
 
 // 会话级可变状态（原 fakeOmp.mjs 模块变量，改经 shared 对象共享）。

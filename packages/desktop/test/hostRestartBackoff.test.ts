@@ -1,6 +1,19 @@
 import assert from "node:assert/strict";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { registerHooks } from "node:module";
 import { test } from "node:test";
+
+// 修复原因：生命周期模块的 Main logger 导入会创建并清理日志，必须先隔离再加载。
+const logRoot = await mkdtemp(join(tmpdir(), "omp-host-backoff-test-"));
+process.env.ZCODE_ENV = "test";
+process.env.ZCODE_E2E_RUNTIME_LOG_DIR = logRoot;
+test.after(async () => {
+  const { logger } = await import("../src/main/logger.js");
+  await logger.flush();
+  await rm(logRoot, { recursive: true, force: true });
+});
 
 // 纯 Node 测试进程无法加载 electron（包内 "type":"module" 使命名导入在链接期直接
 // 失败，且传递依赖存在导入期副作用）。这里用模块钩子把 electron 替换为惰性 Proxy

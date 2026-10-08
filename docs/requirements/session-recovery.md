@@ -17,7 +17,7 @@ omp 输入 → 会话引擎 → omp RPC → prompt_result / agent_end / 发送�
 
 desktop: continuous ──┐
                       ├─ 同一 Host owner / topic seq → UI 投影
-mobile: replayable ───┘
+web: replayable ──────┘
 
 Host 旧进程退出 → 比对当前登记身份 → 仅清理旧登记 → 重建或通知当前窗口
 ```
@@ -30,6 +30,7 @@ Host 旧进程退出 → 比对当前登记身份 → 仅清理旧登记 → 重
 2. omp 发送拒绝、核心退出、流式期间本地命令和已取消交互都能收口，不留下永久 running 或假 accepted。
 3. 干净远端只部署 `~/.ompcode/server` 仍能启动 Agent；无 token 的 HTTP 入口不暴露在非回环接口。
 4. Web 断线拒绝挂起 RPC，恢复后重新订阅；Host 意外退出后窗口能恢复或明确显示失败。
+   同一 workspace 首次并发执行共享一代启动结果，所有调用都可继续；启动中释放或换代后旧调用必须失败，不向新进程派发，也不能让旧续体注销新登记。启动失败后下一次调用能重新启动。
 5. 命令目录与不可用命令的可见行为分别按 [模型与命令](models-and-commands.md) 和 [能力边界](FORK.md#已知与允许的差异) 验证。
 
 ## 资源生命周期与已知限制
@@ -54,6 +55,7 @@ Host 旧进程退出 → 比对当前登记身份 → 仅清理旧登记 → 重
 - `SessionRegistry` 是会话对外身份与 sessions-index / workspace-config 序号的所有者。临时 ID 绑定 omp UUID 后，索引、会话 topic、快照和 legacy 读取必须指向同一会话；迁移期间已建立的旧 ID 订阅继续可用。恢复快照的 `toSeq` 必须是该 topic 当前水位，恢复后的下一条 delta 从该水位连续前进。
 - Host 的持久任务索引保留用户组织信息。临时 ID 迁移至 UUID 时，任务行、分组、排序、置顶、归档、未读和定时任务关联作为同一任务迁移；冷启动对账只清理真正不再存在的旧行。
 - 冷会话文件系统时间戳进入 Host/任务索引前要规范为安全整数毫秒，避免列表校验失败、临时任务未清理。
+- 辅助主题的空地址到真实主题地址绑定与 sidecar 冷恢复按 [OMP 辅助对话](omp-core-integration.md#辅助对话原生-btw唯一需求权威)；不从主 transcript 推测辅助历史，不因恢复自动重发问题。
 
 ```text
 omp 首轮终态 → 临时 ID 终态通知 → UUID 绑定 → 索引身份迁移
@@ -61,7 +63,7 @@ omp 首轮终态 → 临时 ID 终态通知 → UUID 绑定 → 索引身份迁�
 
 desktop: continuous ── 实时帧 ───────────┐
                                          ├─ 同一身份和单调序号
-mobile: replayable ── 快照 + 断档恢复 ───┘
+web: replayable ───── 快照 + 断档恢复 ───┘
 ```
 
 - 新会话首轮前后、继续对话及重启后只有一条任务；旧订阅不丢帧，UUID 订阅收到同 topic 帧；持久组织信息不丢失。重复身份迁移与重复恢复不产生重复行或回退水位。

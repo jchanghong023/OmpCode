@@ -8,7 +8,10 @@ import {
 } from "#src/session/tasksDatabase/schema-v1.js";
 import { importLegacyAutomationSelections } from "#src/session/tasksDatabase/provider-selection-v2.js";
 import { OFFICIAL_GLM_SELECTION_MIGRATION_SQL } from "#src/session/tasksDatabase/official-glm-selection-v3.js";
-import { OMP_SWAP_LEGACY_PURGE_SQL } from "#src/session/tasksDatabase/omp-swap-purge-v4.js";
+import {
+  OMP_SWAP_LEGACY_PURGE_SQL,
+  OMP_SWAP_LEGACY_TASK_PURGE_SQL,
+} from "#src/session/tasksDatabase/omp-swap-purge-v4.js";
 
 // 冻结历史列声明，不能以实时 Repo/schema 代替，否则新版构建会改变已应用 checksum。
 const columns = [
@@ -120,7 +123,10 @@ export function runTasksDatabaseMigrations(
       options.onProgress?.("migrating", { ...migrationFacts });
       if (migration.id === "0001_adopt_task_schema") adoptSchema(db);
       else if (migration.id === "0002_provider_selection") importLegacyAutomationSelections(db);
-      else if (migration.id === "0004_omp_swap_legacy_purge") db.exec(OMP_SWAP_LEGACY_PURGE_SQL);
+      // 0004 identity/checksum 保留冻结原件，但首次执行采用受限任务投影清理，
+      // 避免破坏仍由自动化服务消费的用户数据；已应用记录照常跳过。
+      else if (migration.id === "0004_omp_swap_legacy_purge")
+        db.exec(OMP_SWAP_LEGACY_TASK_PURGE_SQL);
       else db.exec(OFFICIAL_GLM_SELECTION_MIGRATION_SQL);
       migrationFacts.executedCount++;
       db.prepare("INSERT INTO tasks_schema_migration VALUES(?,?,?)").run(

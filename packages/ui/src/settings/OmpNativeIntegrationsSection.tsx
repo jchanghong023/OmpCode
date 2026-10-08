@@ -42,21 +42,22 @@ export function OmpNativeIntegrationsView({
     <section className="flex max-w-3xl flex-col gap-5" data-testid={`omp-native-${kind}`}>
       <div className="flex items-center justify-between gap-3">
         <div>
-          <h2 className="text-xl font-semibold text-foreground">{title}</h2>
-          <p className="mt-1 text-sm text-foreground-subtle">{description}</p>
+          {/* 原生配置页同样必须随界面字号缩放，不能使用 Tailwind 固定字号。 */}
+          <h2 className="text-ui-lg font-semibold text-foreground">{title}</h2>
+          <p className="mt-1 text-ui-base text-foreground-subtle">{description}</p>
         </div>
         <Button type="button" variant="outline" size="sm" onClick={onRefresh} disabled={loading}>
           {intl.formatMessage({ id: "settings.ompNative.refresh" })}
         </Button>
       </div>
       {error ? (
-        <p className="text-sm text-destructive">
+        <p className="text-ui-base text-destructive">
           {intl.formatMessage({ id: "settings.ompNative.loadFailed" })}: {error}
         </p>
       ) : null}
       {snapshot ? (
         <>
-          <p className="rounded-lg border border-border px-3 py-2 text-sm text-foreground-subtle">
+          <p className="rounded-lg border border-border px-3 py-2 text-ui-base text-foreground-subtle">
             {intl.formatMessage({
               id:
                 kind === "hook"
@@ -75,7 +76,7 @@ export function OmpNativeIntegrationsView({
                     <h3 className="font-medium text-foreground">
                       {intl.formatMessage({ id: `settings.ompNative.${scope}` })}
                     </h3>
-                    <p className="break-all text-xs text-foreground-subtle">{path}</p>
+                    <p className="break-all font-mono text-ui-base text-foreground-subtle">{path}</p>
                   </div>
                   <Button
                     type="button"
@@ -87,15 +88,15 @@ export function OmpNativeIntegrationsView({
                   </Button>
                 </div>
                 {kind === "hook" && snapshot.hookErrors.includes(scope) ? (
-                  <p className="mt-3 text-sm text-destructive">
+                  <p className="mt-3 text-ui-base text-destructive">
                     {intl.formatMessage({ id: "settings.ompNative.hooksReadFailed" })}
                   </p>
                 ) : snapshot.configErrors.includes(scope) && kind === "mcp" ? (
-                  <p className="mt-3 text-sm text-destructive">
+                  <p className="mt-3 text-ui-base text-destructive">
                     {intl.formatMessage({ id: "settings.ompNative.configInvalid" })}
                   </p>
                 ) : scoped.length === 0 ? (
-                  <p className="mt-3 text-sm text-foreground-subtle">
+                  <p className="mt-3 text-ui-base text-foreground-subtle">
                     {intl.formatMessage({ id: "settings.ompNative.empty" })}
                   </p>
                 ) : (
@@ -103,7 +104,7 @@ export function OmpNativeIntegrationsView({
                     {scoped.map((entry) => (
                       <li
                         key={`${scope}:${entry.name}`}
-                        className="flex items-center justify-between gap-2 py-2 text-sm"
+                        className="flex items-center justify-between gap-2 py-2 text-ui-base"
                       >
                         <span className="truncate text-foreground">{entry.name}</span>
                         <span className="shrink-0 text-foreground-subtle">
@@ -122,7 +123,7 @@ export function OmpNativeIntegrationsView({
           })}
         </>
       ) : loading ? (
-        <p className="text-sm text-foreground-subtle">
+        <p className="text-ui-base text-foreground-subtle">
           {intl.formatMessage({ id: "settings.ompNative.loading" })}
         </p>
       ) : null}

@@ -1,6 +1,7 @@
 // SessionRegistry 的删除/关闭墓碑、冷恢复登记门与删除/关闭收尾编排（自 sessionRegistry.ts 拆出）。
 
 import type { ConversationEngine } from "./conversationEngine.js";
+import { ompSessionIdOfFilePath } from "../domain/ids.js";
 import { deleteColdSession } from "./deleteColdSession.js";
 import { deleteLoadedSession } from "./deleteLoadedSession.js";
 import { ProtocolError } from "./errors.js";
@@ -104,13 +105,14 @@ export async function deleteSessionWith(
     // 删除墓碑保证释放窗口内同身份 resume 不会复活引擎；删除失败回滚墓碑后引擎仍可
     // 经 resumeSessionPath 重启（会话身份与内容未受影响）。
     const engine = host.getEngine(sessionId);
-    if (engine) {
-      await engine.preparePermanentDeletion().catch(() => {});
-    }
-    const directoryOutcome = await host.directory.sendDirectory({
-      type: "delete_session",
-      sessionId,
-    });
+    const persistedPath = engine ? await engine.preparePermanentDeletion() : null;
+    const stableId = ompSessionIdOfFilePath(persistedPath) ?? sessionId;
+    // 惰性草稿还没有核心文件，不向目录删除不存在的临时 ID；已落盘则用 UUID，
+    // 运行中索引仍使用临时 ID 的窗口内也必须能永久删除。
+    const directoryOutcome =
+      engine && !persistedPath
+        ? { success: true, code: undefined, error: undefined }
+        : await host.directory.sendDirectory({ type: "delete_session", sessionId: stableId });
     if (directoryOutcome.success || directoryOutcome.code !== "omp_capability_missing") {
       if (!directoryOutcome.success) {
         // omp 权威删除失败（修订冲突/租约冲突等）：如实上报，本地索引保留（可重试）。
@@ -125,8 +127,11 @@ export async function deleteSessionWith(
       }
       const workspaceId = engine?.workspaceId ?? host.primaryWorkspace()?.id;
       if (workspaceId) {
-        host.removeIndexSession(workspaceId, sessionId);
+        for (const id of new Set([sessionId, stableId, ...(engine ? [engine.sessionId] : [])])) {
+          host.removeIndexSession(workspaceId, id);
+        }
       }
+      if (engine) host.forgetRekeyed(engine.sessionId);
       return;
     }
     // 旧核无 v3 会话目录：回落本地文件删除路径（仍须确认文件删除成功后才移除索引）。

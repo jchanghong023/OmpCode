@@ -16,6 +16,7 @@ import { createOmpDirectoryMethodHandlers } from "./ompDirectoryMethods.js";
 import { buildUsageStatsResponse } from "./usageStatsResponse.js";
 import type { HostGateway, OmpDirectoryGatewayPort, OmpProcessFactory, OmpStorePort } from "./ports.js";
 import type { SlashCommandResolver } from "./ompPromptDispatch.js";
+import { OmpBtwStore } from "./OmpBtwStore.js";
 
 export interface ServerAppDeps {
   ompFactory: OmpProcessFactory;
@@ -41,6 +42,7 @@ export class ServerApp {
   private readonly deps: ServerAppDeps;
   private readonly subagentViews: SubagentViewStore;
   private readonly directoryMethods: Record<string, (params: unknown) => Promise<unknown>>;
+  private readonly sideViews: OmpBtwStore;
   private workspaceConfigCache: WorkspaceConfigState | null = null;
   private workspaceConfigLoading: Promise<WorkspaceConfigState> | null = null;
 
@@ -54,8 +56,9 @@ export class ServerApp {
       directory: deps.directory,
       ...(deps.resolveSlashCommand ? { resolveSlashCommand: deps.resolveSlashCommand } : {}),
     });
-    this.commands = new V4CommandService({ registry: this.registry, workspaceId: deps.workspaceKey, workspacePath: deps.workspacePath, attachments: this.attachments });
-    this.subagentViews = new SubagentViewStore({ registry: this.registry, gateway: deps.gateway, workspaceId: deps.workspaceKey, workspacePath: deps.workspacePath });
+    this.sideViews = new OmpBtwStore({ registry: this.registry, gateway: deps.gateway, workspaceId: deps.workspaceKey, workspacePath: deps.workspacePath });
+    this.commands = new V4CommandService({ registry: this.registry, workspaceId: deps.workspaceKey, workspacePath: deps.workspacePath, attachments: this.attachments, sideViews: this.sideViews });
+    this.subagentViews = new SubagentViewStore({ registry: this.registry, gateway: deps.gateway, workspaceId: deps.workspaceKey, workspacePath: deps.workspacePath, store: deps.store });
     this.registry.setSubagentViews(this.subagentViews);
     this.directoryMethods = createOmpDirectoryMethodHandlers({ registry: this.registry, directory: deps.directory, workspaceKey: deps.workspaceKey });
     this.legacy = createLegacyHandlers({
@@ -100,6 +103,7 @@ export class ServerApp {
           const parsed = v4ConnectionFlowParamsSchema.safeParse(params);
           if (!parsed.success) throw new ProtocolError(-32602, "invalid connection flow state");
           this.registry.setConnectionFlowState(parsed.data.connectionId, parsed.data.state);
+          this.sideViews.setConnectionFlowState(parsed.data.connectionId, parsed.data.state);
         }
         return {};
       case V4_METHODS.conversationSubscribe:
@@ -236,6 +240,17 @@ export class ServerApp {
     if (!sessionId) {
       throw new ProtocolError(-32602, "invalid topic");
     }
+    if (this.sideViews.owns(sessionId)) {
+      const base = asRecord(record?.base);
+      return {
+        ack: await this.sideViews.subscribe(sessionId, {
+          sessionId,
+          connectionId: stringField(record, "connectionId"),
+          clientMode: stringField(record, "clientMode") as "desktop-continuous" | "web-remote-replayable",
+          base: base ? { logEpoch: stringField(base, "logEpoch"), seq: numberField(base, "seq") } : null,
+        }),
+      };
+    }
     // 子代理只读详情视图：合成地址 omp-subagent:<id>@<parent>（omp-core-integration.md）。
     if (sessionId.startsWith("omp-subagent:")) {
       const view = await this.subagentViews.acquire(sessionId);
@@ -277,6 +292,10 @@ export class ServerApp {
       if (!sessionId) {
         throw new ProtocolError(-32602, "invalid topic");
       }
+      if (this.sideViews.owns(sessionId)) {
+        const view = await this.sideViews.acquire(sessionId);
+        return { ack: view.publisher.resync(subscriptionId, baseOrNull, forceSnapshot) };
+      }
       const engine = this.registry.requireEngine(sessionId);
       return { ack: engine.resync(subscriptionId, baseOrNull, forceSnapshot) };
     }
@@ -290,6 +309,7 @@ export class ServerApp {
     const subscriptionId = stringField(record, "subscriptionId");
     const sessionId = topic.startsWith("conversation/") ? topic.slice("conversation/".length) : null;
     if (sessionId) {
+      this.sideViews.getView(sessionId)?.publisher.unsubscribe(subscriptionId);
       this.registry.getEngine(sessionId)?.unsubscribe(subscriptionId);
     }
     this.registry.unsubscribe(topic, subscriptionId);
@@ -298,7 +318,8 @@ export class ServerApp {
 
   private rowsRange(params: unknown) {
     const record = asRecord(params);
-    const engine = this.registry.requireEngine(stringField(record, "sessionId"));
+    const id = stringField(record, "sessionId");
+    const engine = this.sideViews.getView(id) ?? this.registry.requireEngine(id);
     const beforeRowId = numberFieldOrNull(record, "beforeRowId");
     const limit = numberField(record, "limit");
     const page = engine.projection.rowsRange(beforeRowId === null ? undefined : beforeRowId, limit);
@@ -333,6 +354,7 @@ export class ServerApp {
   }
 
   async dispose(): Promise<void> {
+    this.sideViews.dispose();
     await this.registry.dispose();
     await this.deps.directory.dispose().catch(() => {});
   }

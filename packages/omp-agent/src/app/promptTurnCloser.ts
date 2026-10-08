@@ -78,6 +78,7 @@ export class EnginePromptTurnCloser {
     clientId: string,
     images: { type: "image"; data: string; mimeType: string }[] = [],
     modelSelection?: { provider: string; model: string; thought?: string },
+    originalText = text,
   ): Promise<"startNow" | "queue"> {
     const host = this.host;
     host.ensureTitleFromText(text);
@@ -114,6 +115,7 @@ export class EnginePromptTurnCloser {
         const outcome = await dispatchOmpText({
           process,
           text,
+          originalText,
           images,
           streaming,
           followupMode: host.followupMode(),

@@ -25,6 +25,7 @@ import {
 import { useSubagents } from "@/hooks/useSubagents.js";
 import { useSkills } from "@/hooks/useSkills.js";
 import {
+  applyOmpCommandCompletion,
   ompCompletionDedupeKey,
   useOmpCommandCompletion,
 } from "./hooks/useOmpCommandCompletion.js";
@@ -54,6 +55,7 @@ import {
   slashComposingQueryOf,
   type SlashCommandPluginProps,
 } from "./slashCommandHelpers.js";
+import { mergeOmpBtwSlashSuggestions } from "./lib/OmpBtwComposerRouting.js";
 import { useSlashCommandMentionPanelSections } from "./slashCommandPanelSections.js";
 import { getCurrentTextNodeSelection } from "./mentions/mentionHelpers.js";
 import {
@@ -98,6 +100,7 @@ export function SlashCommandPlugin({
   // Fork（omp-project-mode.md）：正在编辑的完整 "/" 命令行（含参数空格）；驱动
   // complete_command 动态候选。null 表示当前不在命令编辑态。
   const [slashText, setSlashText] = useState<string | null>(null);
+  const [slashCursor, setSlashCursor] = useState(0);
   const dismissedSignatureRef = useRef<string | null>(null);
   const activeSignatureRef = useRef<string | null>(null);
   const activeTokenRef = useRef<ActivePromptInputTokenSnapshot | null>(null);
@@ -106,12 +109,11 @@ export function SlashCommandPlugin({
     const cliSuggestions = buildSlashSuggestions(commands).filter(
       (item) => !excluded.has(item.value),
     );
-    // App 层命令追加在 CLI catalog 之后展示；CLI 已提供同名命令时以 CLI 为准，避免遮蔽。
-    const cliValues = new Set(cliSuggestions.map((item) => item.value));
+    // 仅 GUI 已提供的 btw/side 本地辅助别名优先；保留其它同名命令的 native 权威及目录元数据。
     const appSuggestions = buildAppSlashCommandSuggestions(appCommands ?? []).filter(
-      (item) => !cliValues.has(item.value) && !excluded.has(item.value),
+      (item) => !excluded.has(item.value),
     );
-    return [...cliSuggestions, ...appSuggestions];
+    return mergeOmpBtwSlashSuggestions(cliSuggestions, appSuggestions);
   }, [appCommands, commands, excludedCommandNames]);
   // Fork（omp-project-mode.md）：OMP complete_command 动态候选；名称级与静态目录合并
   // （去重），参数级（argument/subcommand）在命令编辑模式单独成组。
@@ -120,6 +122,7 @@ export function SlashCommandPlugin({
     workspaceIdentity,
     sessionId: sessionId ?? null,
     text: slashText,
+    cursor: slashCursor,
     enabled: !disabled && activeTrigger?.trigger === "/",
   });
   const dynamicCommandSuggestions = useMemo(() => {
@@ -176,11 +179,11 @@ export function SlashCommandPlugin({
   );
   // Fork：命令编辑模式（query 含空格 = 已输入命令名，正在补参数）只显示动态参数候选，
   // 过滤键取最后一个词；名称模式合并动态名称候选。
-  const argumentMode = (activeTrigger?.query ?? "").includes(" ");
+  const argumentMode = /\s/.test(activeTrigger?.query ?? "");
   const filterQuery = useMemo(() => {
     const query = activeTrigger?.query ?? null;
     if (query === null) return null;
-    return argumentMode ? query.slice(query.lastIndexOf(" ") + 1) : query;
+    return argumentMode ? query.slice(query.search(/\S*$/)) : query;
   }, [activeTrigger?.query, argumentMode]);
   const filteredCommandSuggestions = useMemo(
     () =>
@@ -321,11 +324,10 @@ export function SlashCommandPlugin({
           return;
         }
         activeTokenRef.current = selectionState ? nextActiveToken : null;
-        setSlashText(
-          textBeforeCursor.startsWith("/") && !textBeforeCursor.includes("\n")
-            ? textBeforeCursor
-            : null,
-        );
+        const fullText =
+          selectionState?.text ?? cursorText.textBeforeCursor + cursorText.textAfterCursor;
+        setSlashText(fullText.startsWith("/") && !fullText.includes("\n") ? fullText : null);
+        setSlashCursor(textBeforeCursor.length);
 
         const nextSignature = getPromptInputTriggerSignature(nextActiveTrigger);
         if (
@@ -380,28 +382,17 @@ export function SlashCommandPlugin({
           return;
         }
 
-        // Fork：命令编辑模式（已带空格）选中的是参数候选；替换最后一个词并按纯文本插入，
-        // 不生成命令 mention。
-        if (activeSlashTrigger.query.includes(" ")) {
-          const before = selectionState.textBeforeCursor;
-          const lastSpace = before.lastIndexOf(" ");
-          const argumentStart = lastSpace + 1;
-          // 光标停在参数词中间时（方向键/点击移动后接受候选），把光标后的词尾一并纳入
-          // 替换区间，否则残留半个词（如 `/security ver|se` 接受 `--verbose` 得
-          // `--verbose se`）；语义与名称分支消费 token tail 一致。
-          const tailLength = /^\S+/.exec(selectionState.textAfterCursor)?.[0].length ?? 0;
-          selectionState.selection.setTextNodeRange(
-            selectionState.node,
-            argumentStart,
-            selectionState.node,
-            selectionState.cursorOffset + tailLength,
-          );
-          const replacement = $createTextNode(`${suggestion.value} `);
-          selectionState.selection.insertNodes([replacement]);
-          replacement.selectEnd();
-          dismissedSignatureRef.current = null;
-          activeTokenRef.current = null;
-          setSelectedIndex(0);
+        const completionIndex = /^omp-(?:arg|cmd):(\d+):/.exec(suggestion.id)?.[1];
+        if (completionIndex !== undefined) {
+          // 候选必须仍属于当前全文/光标；严格消费 omp 的区间，不能替换“最后一个词”。
+          if (selectionState.text !== slashText || selectionState.cursorOffset !== slashCursor) {
+            return;
+          }
+          const item = ompCompletionItems[Number(completionIndex)];
+          const replacement = item && applyOmpCommandCompletion(selectionState.text, item);
+          if (!replacement) return;
+          selectionState.node.setTextContent(replacement.text);
+          selectionState.node.select(replacement.cursor, replacement.cursor);
           return;
         }
 
@@ -449,7 +440,7 @@ export function SlashCommandPlugin({
         editor.focus();
       });
     },
-    [appCommands, editor],
+    [appCommands, editor, ompCompletionItems, slashCursor, slashText],
   );
 
   const selectSuggestion = useCallback(

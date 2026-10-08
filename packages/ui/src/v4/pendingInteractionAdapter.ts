@@ -99,6 +99,7 @@ export interface V4UserInputViewModel {
   freeText: boolean;
   confirmation: boolean;
   sensitive?: boolean;
+  prefill?: string;
   options: ReadonlyArray<{ optionId: string; label: string }>;
 }
 
@@ -112,6 +113,7 @@ export function pendingUserInputToViewModel(
     // omp confirm 没有 options/questions/freeText；这种形态必须有显式 accept/decline 入口。
     confirmation: !interaction.payload.freeText && !interaction.payload.options?.length,
     sensitive: interaction.payload.sensitive,
+    prefill: interaction.payload.prefill,
     options: interaction.payload.options ?? [],
   };
 }
@@ -121,6 +123,10 @@ export function pendingUserInputToElicitationRequest(
   interaction: PendingInteraction & { payload: UserInputRequestPayload },
 ): ZCodeElicitationRequest | null {
   const { payload } = interaction;
+  // 敏感内容不能进入富问答的明文输入与草稿 store；editor 初始值也由临时输入框保留。
+  if (payload.sensitive || (payload.answerMode === "text" && payload.prefill !== undefined)) {
+    return null;
+  }
   if (!payload.questions || payload.questions.length === 0) {
     return null;
   }

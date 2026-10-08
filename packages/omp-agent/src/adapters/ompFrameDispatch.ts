@@ -3,6 +3,7 @@
 
 import {
   ompAvailableCommandsFrameSchema,
+  ompBtwFrameSchema,
   ompCommandOutputFrameSchema,
   ompConfigUpdateFrameSchema,
   ompPromptResultFrameSchema,
@@ -21,6 +22,7 @@ import type { PromptResultTracker } from "../domain/promptResultTracker.js";
 import type { OmpAskRequest, OmpUiRequest } from "../app/ports.js";
 import { dispatchOmpUiFrame } from "./ompUiFrames.js";
 import { logger } from "./logger.js";
+import type { OmpBtwFrame } from "../domain/OmpBtwFrames.js";
 
 /** safeParse 失败的 issue 摘要（首条 path+message，不含载荷，避免敏感内容入日志）。 */
 function issueSummary(error: {
@@ -53,6 +55,7 @@ export interface OmpFrameDispatchDeps {
     onConfigUpdate?: (frame: OmpConfigUpdateFrame) => void;
     onCommandsUpdate?: (commands: unknown) => void;
     onSubagentFrame?: (frame: OmpSubagentFrame) => void;
+    onBtwFrame?: (frame: OmpBtwFrame) => void;
   };
   respondUi(response: OmpBypassFrame): void;
 }
@@ -139,6 +142,13 @@ export function dispatchOmpFrame(frame: unknown, deps: OmpFrameDispatchDeps): vo
       if (parsed.success) {
         deps.options.onConfigUpdate?.(parsed.data);
       }
+      return;
+    }
+    case "btw_record":
+    case "btw_delta":
+    case "notice": {
+      const parsed = ompBtwFrameSchema.safeParse(record);
+      if (parsed.success) deps.options.onBtwFrame?.(parsed.data);
       return;
     }
     case "extension_error":

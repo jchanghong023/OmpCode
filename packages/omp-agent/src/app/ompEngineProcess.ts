@@ -14,6 +14,57 @@ import type {
 import type { OmpProcessFactory, OmpSessionProcess } from "./ports.js";
 import type { OmpInteractionProxy } from "./ompInteractionProxy.js";
 import type { ConversationProjection } from "../domain/conversationProjection.js";
+import type { OmpBtwFrame } from "../domain/OmpBtwFrames.js";
+import type { OmpEventProjector } from "../domain/ompProjector.js";
+
+/** 单次构造的窄事件桥：热路径不分配 context；引擎仍拥有队列与生命周期。 */
+export function createEngineEventHandler(hooks: {
+  projection(): ConversationProjection;
+  projector(): OmpEventProjector;
+  currentProcess(): OmpSessionProcess | null;
+  isCurrent(process: OmpSessionProcess): boolean;
+  applyState(state: OmpStateData | null): void;
+  flush(): void;
+  onTerminalEnd(): void;
+}): (event: OmpSessionEventFrame) => void {
+  return (event) => {
+    try {
+      // 真实 omp 的 model_changed 不带载荷（#emit({type}) 无字段）：回读 get_state 再落
+      // 配置与 modelChange 标记，避免 UI 出现空 provider/model 的占位标记。
+      if (event.type === "model_changed" && !event.model) {
+        void refreshEngineModelAfterChange(
+          hooks.currentProcess(),
+          hooks.projection(),
+          hooks.applyState,
+          hooks.flush,
+          hooks.isCurrent,
+        );
+        return;
+      }
+      hooks.projector().handleEvent(event);
+      if (event.type === "agent_end" && event.isTerminal !== false) {
+        // 清流式后补收积压的本地命令完成（收口语义在 promptTurnCloser）。
+        // terminal 对账复用 get_state；仍排队且从未 seen 的轮进行 S4-2 宽限复查，
+        // 不误关仍在入队路上的排队轮。具体主轮动作仍由引擎回调拥有。
+        hooks.onTerminalEnd();
+        return;
+      }
+      hooks.flush();
+    } catch (error) {
+      engineWarn("omp event projection failed", {
+        type: event.type,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  };
+}
+
+/** app 层无 logger 依赖；与 adapters/logger.ts 同格式写 stderr（stdout 是协议通道，不用 console）。 */
+const engineWarn = (message: string, details?: Record<string, unknown>): void => {
+  process.stderr.write(
+    `${JSON.stringify({ ts: new Date().toISOString(), level: "warn", scope: "omp-agent", message, ...details })}\n`,
+  );
+};
 
 /** 从会话自己的 omp 进程读取当前可执行命令，避免以工作区目录代替会话事实。 */
 export async function readOmpSkillCommands(process: OmpSessionProcess): Promise<unknown> {
@@ -43,12 +94,13 @@ export async function refreshEngineModelAfterChange(
   projection: ConversationProjection,
   applyState: (state: OmpStateData) => void,
   scheduleFlush: () => void,
+  isCurrent: (process: OmpSessionProcess) => boolean,
 ): Promise<void> {
   if (!process) {
     return;
   }
   const state = await process.refreshState().catch(() => null);
-  if (!state) {
+  if (!state || !isCurrent(process)) {
     return;
   }
   const previous = projection.stateSnapshot.config;
@@ -82,6 +134,7 @@ export interface EngineProcessStartHost {
   onConfigUpdate: (frame: OmpConfigUpdateFrame) => void;
   onCommandsUpdate: ((commands: unknown) => void) | undefined;
   onSubagentFrame: (frame: OmpSubagentFrame) => void;
+  onBtwFrame?: (frame: OmpBtwFrame) => void;
   currentProcess: () => OmpSessionProcess | null;
   setProcess: (process: OmpSessionProcess | null) => void;
   bootstrap: (process: OmpSessionProcess) => Promise<void>;
@@ -102,8 +155,8 @@ export async function startEngineProcess(host: EngineProcessStartHost): Promise<
       onEvent: host.onEvent,
       interaction: host.interaction,
       onExit: (code) => {
-        const current = host.currentProcess();
-        if (current) host.onExit(code, current);
+        // 捕获真正退出的进程，不能把旧回调错误归到当前新进程。
+        if (host.currentProcess() === process) host.onExit(code, process);
       },
       onCommandOutput: host.onCommandOutput,
       onPromptResult: host.onPromptResult,
@@ -111,7 +164,10 @@ export async function startEngineProcess(host: EngineProcessStartHost): Promise<
       onConfigUpdate: host.onConfigUpdate,
       onCommandsUpdate: (commands) => host.onCommandsUpdate?.(commands),
       onSubagentFrame: host.onSubagentFrame,
+      onBtwFrame: host.onBtwFrame,
     },
+    // 旧进程退出/关闭后的缓冲帧不得写入重启后的会话或重新打开交互。
+    () => host.currentProcess() === process,
   );
   host.setProcess(process);
   try {
@@ -142,26 +198,49 @@ export interface EngineProcessHooks {
   onSubagentFrame: NonNullable<
     Parameters<import("./ports.js").OmpProcessFactory["create"]>[0]["onSubagentFrame"]
   >;
+  onBtwFrame?: (frame: OmpBtwFrame) => void;
 }
 
 export function createEngineOmpProcess(
   factory: OmpProcessFactory,
   options: { cwd: string; resumeSessionPath?: string },
   hooks: EngineProcessHooks,
+  isCurrent: () => boolean = () => true,
 ): OmpSessionProcess {
   return factory.create({
     cwd: options.cwd,
     resumeSessionPath: options.resumeSessionPath,
-    onEvent: hooks.onEvent,
-    onUiRequest: (request) => void hooks.interaction.handle(request),
-    onAskRequest: (request) => void hooks.interaction.handleAsk(request),
+    onEvent: (event) => {
+      if (isCurrent()) hooks.onEvent(event);
+    },
+    onUiRequest: (request) => {
+      if (isCurrent()) void hooks.interaction.handle(request);
+    },
+    onAskRequest: (request) => {
+      if (isCurrent()) void hooks.interaction.handleAsk(request);
+    },
     onExit: hooks.onExit,
-    onCommandOutput: hooks.onCommandOutput,
-    onPromptResult: hooks.onPromptResult,
-    onSessionInfoUpdate: hooks.onSessionInfoUpdate,
-    onConfigUpdate: hooks.onConfigUpdate,
-    onCommandsUpdate: hooks.onCommandsUpdate,
-    onSubagentFrame: hooks.onSubagentFrame,
+    onCommandOutput: (frame) => {
+      if (isCurrent()) hooks.onCommandOutput(frame);
+    },
+    onPromptResult: (frame) => {
+      if (isCurrent()) hooks.onPromptResult(frame);
+    },
+    onSessionInfoUpdate: (frame) => {
+      if (isCurrent()) hooks.onSessionInfoUpdate(frame);
+    },
+    onConfigUpdate: (frame) => {
+      if (isCurrent()) hooks.onConfigUpdate(frame);
+    },
+    onCommandsUpdate: (commands) => {
+      if (isCurrent()) hooks.onCommandsUpdate(commands);
+    },
+    onSubagentFrame: (frame) => {
+      if (isCurrent()) hooks.onSubagentFrame(frame);
+    },
+    onBtwFrame: (frame) => {
+      if (isCurrent()) hooks.onBtwFrame?.(frame);
+    },
   });
 }
 
@@ -228,7 +307,8 @@ export async function applyEngineSetModel(
   if (!outcome.success) return { error: outcome.error ?? "set_model failed" };
   if (selection.thought) {
     // "off" 是合法档位（rpc.md：set_thinking_level 接受 off），显式关闭思考必须下发。
-    await process.send({ type: "set_thinking_level", level: selection.thought });
+    const thought = await process.send({ type: "set_thinking_level", level: selection.thought });
+    if (!thought.success) return { error: thought.error ?? "set_thinking_level failed" };
   }
   return {};
 }
@@ -255,7 +335,12 @@ export async function applyEngineModelSelection(
   }
   if (selection.thought && selection.thought !== current.thought) {
     // "off" 也是合法档位（rpc.md：set_thinking_level 接受 off），显式关闭思考必须下发。
-    await process.send({ type: "set_thinking_level", level: selection.thought });
+    const thought = await process.send({ type: "set_thinking_level", level: selection.thought });
+    if (!thought.success)
+      return {
+        code: "omp_set_thinking_level_failed",
+        message: thought.error ?? "set_thinking_level failed",
+      };
   }
   return null;
 }

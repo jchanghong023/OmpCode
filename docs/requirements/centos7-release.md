@@ -54,11 +54,13 @@ flowchart TD
 
 - 在 CentOS 7 x64 VM（`glibc 2.17`、内核 `3.10.0-1160.el7.x86_64`）上，非 root 用户把 ZIP 解压到 HOME 下，不安装任何内容，启动启动器并看到 OmpCode UI。宿主无 CJK 字体时，中文设置与菜单标签及任意中文会话文本显示为字形而不是空框；英文保持可读。实测内嵌 omp 会话、集成终端与原生搜索；用打包的 `ssh2` 客户端完成 SSH 握手，并确认 `app.asar` 与 `app.asar.unpacked` 均无可选原生加密加速器。
 - 以区别于已保存 App Settings profile 的命名 `--profile` 启动：内嵌 omp 收到该 profile，UI 的角色与历史读取同一命名 profile。传 `--offline` 时每个内嵌 omp 进程收到该参数，且桌面处于离线锁定：启动桌面、打开设置、显示推荐内容并使用内嵌浏览器期间追踪网络连接，Main、Renderer、Host 与调度器不连接公网；内嵌浏览器打开解析到私有 IP 的企业 DNS 名并拒绝公网 URL；仅 omp 可达其配置的企业 API；逐项检查被关功能入口（公网更新、公网配置/帮助/社区/反馈、账号/分享、外部浏览器）均为禁用态并附「离线锁定中已关闭」说明，且无对应公网请求。不传 `--offline` 时桌面为全功能，与 Windows 行为一致：内嵌浏览器可打开公网 URL、更新检查按 Windows 语义可用、应用日志输出全部级别。缺失或无效 profile 名在 Electron 启动前以明确错误退出。
+- 离线 HTTP 重定向回归（无需模型）：临时回环服务返回指向公网 URL 的 302 时，Host 全局 fetch 与 undici 出口均拒绝，不能向重定向目标发起请求；普通非离线请求仍保留原重定向行为。
 - 检查内嵌推荐目录与 UI 资产：每条推荐都可用本地工具运行，每个推荐图标已内嵌，没有动画来源指向公网主机。
 - 以指向默认数据路径外空目录的 `--home` 启动：`.ompcode`、`.omp`、XDG、Electron 用户/会话、cache、state 与临时路径解析到目标之下；`~/.ompcode` 与 `~/.omp` 链接到对应目标目录；shell `HOME` 不变。覆盖生效期间已保存数据目录被忽略且不能在目标外修改。相同目的地的第二次启动成功且无变化。被占用的 `~/.ompcode` 或 `~/.omp`、冲突链接、逃逸的受管符号链接或无效目的地都在不替换用户数据的情况下退出。不带 `--home` 时，启动器既有 XDG 默认值与其他环境路径不变。
 - 关闭或无效的 Host stdout/stderr 描述符不能把普通 RPC 日志变成未捕获异常；结构化日志仍到达 Main。发布 workflow 接受未占用的短自定义 tag（如 `v0928`）或留空时自动生成，仍拒绝复用 tag 或错误分支。自动 tag 在 workflow 重跑间不同。
 - 检查每个分发可执行文件与原生插件的 GLIBC 需求 ≤ 2.17，并在宿主 `libstdc++` 缺所需符号时提供其 C++ 运行时。发布 ZIP 不含 PRoot 或 Ubuntu 根文件系统，不修改宿主 glibc 或既有 omp 安装。仅在该 VM 验收通过后，才允许调整手动 CentOS workflow 的构建方式。
 - Windows 基线保护：CentOS 7 构建的版本切换不得持久改写仓库 manifest 与 lockfile（CI 工作区内的临时改写不回传仓库）；Windows 发布产物仍基于 Electron 44.x 且 `node:sqlite` 路径可用。renderer 做一次 CentOS 7 包（Chromium 120）与 Windows 的 UI 走查对比：界面结构、入口与交互一致，渲染性能策略差异除外。
+- 双轨回归（无需模型）：Electron 44 的原生 File 经 `webUtils.getPathForFile` 得到本地附件路径；Electron 28 缺少该能力时才读取 `File.path`。两者都不能把空路径伪装成本地文件。慢磁盘下正常退出的所有 Main 日志排空调用共用一秒预算，不得在已超预算后重新等待无界队列。
 - 公司 Citrix X Server 是独立验收环境：通过 VM 的 X11 显示不代表公司服务器的 XKB 或 GLX 能力可用。
 
 ## 实现与验证状态

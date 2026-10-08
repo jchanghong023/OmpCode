@@ -8,8 +8,21 @@
 // 的 ElectronAppAdapter 经 require("electron").app 读取版本，hook 对 CJS require 同样生效），
 // electron-updater 本体保持真实实现——它的构造器 semver 校验就是被测契约本身。
 import assert from "node:assert/strict";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { registerHooks } from "node:module";
 import { test } from "node:test";
+
+// 修复原因：导入 updater 会初始化 Main logger 并清理旧日志，测试不能触碰真实用户目录。
+const logRoot = await mkdtemp(join(tmpdir(), "omp-updater-version-test-"));
+process.env.ZCODE_ENV = "test";
+process.env.ZCODE_E2E_RUNTIME_LOG_DIR = logRoot;
+test.after(async () => {
+  const { logger } = await import("../src/main/logger.js");
+  await logger.flush();
+  await rm(logRoot, { recursive: true, force: true });
+});
 
 interface D2TestState {
   version: string;

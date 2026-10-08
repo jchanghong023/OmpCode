@@ -10,6 +10,7 @@ import {
 } from "../domain/coldHistory.js";
 import type { ConversationEngine } from "./conversationEngine.js";
 import type { OmpStorePort } from "./ports.js";
+import { rowBaseFields } from "../domain/projectionTypes.js";
 
 export interface ColdHydrationHost {
   store: OmpStorePort;
@@ -49,4 +50,35 @@ export async function hydrateEngineFromCold(
     createdAt: createdAt ?? Date.now(),
     lastActivityAt: updatedAt ?? Date.now(),
   });
+}
+
+/** 当前进程没有旧 roster 时，仅允许读取父历史证明归属的持久子代理记录。 */
+export async function readPersistedSubagentEntries(
+  sessionPath: string | null,
+  store: Pick<OmpStorePort, "readSessionEntries" | "readSubagentEntries"> | undefined,
+  subagentId: string,
+  error: string | undefined,
+): Promise<unknown[] | null> {
+  // 普通 RPC/传输失败不能用旧记录伪装成功，客户端 ID 也不能成为任意文件读入口。
+  if (!sessionPath || !store || !error?.startsWith("Unknown subagent or session file unavailable:"))
+    return null;
+  if (!coldSubagentIds(await store.readSessionEntries(sessionPath)).includes(subagentId))
+    return null;
+  return store.readSubagentEntries(sessionPath, subagentId);
+}
+
+/** 持久记录不存在时沿用详情投影的明确提示行。 */
+export function recordUnavailableMarkerRow(rowId: number): ConversationRow {
+  return {
+    ...rowBaseFields({
+      rowId,
+      turnId: "turn-subagent-record",
+      entityId: "subagent-record-unavailable",
+      productTurnId: "turn-subagent-record",
+      createdAtSeq: rowId,
+    }),
+    kind: "assistantText",
+    text: "记录不可用（不存在或已清理）",
+    state: "complete",
+  };
 }

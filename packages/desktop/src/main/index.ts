@@ -2374,7 +2374,8 @@ app.on("before-quit", (event) => {
       logger.info(
         `[app-quit] preparation finished, resuming quit with windows=${remainingWindows.length}`,
       );
-      await logger.flush();
+      // 修复原因：此前已进入退出刷盘预算，不能再次无界等待慢盘上的同一队列。
+      await flushMainLogs();
       // ChromeDriver 关闭最后一个 renderer 后才触发 app.quit 时，
       // 第一次 before-quit 会被异步 host 清理拦截；清理完成时窗口可能仍处于
       // closing 状态，此时重入 app.quit 会被 Electron 忽略，ChromeDriver 会等待

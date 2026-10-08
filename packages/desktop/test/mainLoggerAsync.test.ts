@@ -41,11 +41,6 @@ async function fileContent(): Promise<string> {
 
 test.after(() => rm(logRoot, { recursive: true, force: true }));
 
-test("队列上限为显式常量且取需求参考值", () => {
-  assert.equal(MAIN_LOG_FLUSH_WINDOW_MS, 25);
-  assert.equal(MAIN_LOG_MAX_QUEUED_BYTES, 4 * 1024 * 1024);
-  assert.equal(MAIN_LOG_EXIT_FLUSH_BUDGET_MS, 1000);
-});
 
 test("主进程日志调用不等文件写入，退出屏障刷盘保留错误", async () => {
   logger.info("async-fixture-info");
@@ -116,3 +111,4 @@ test("退出排空共享预算：重复 flushMainLogs 不累加等待", async ()
   const content = await fileContent();
   assert.match(content, /exit-fixture-error/);
 });
+

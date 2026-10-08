@@ -132,9 +132,12 @@ export function createHostApiNetworkTransport(
       throw new Error("Host API network transport has been disposed");
     }
     const requestUrl = input instanceof Request ? input.url : String(input);
-    // 修复原因：Host API 直接用 undici.fetch，会绕过 Host 入口的 globalThis.fetch 限制。
-    if (process.env.OMPCODE_CENTOS7_LOCAL_ONLY === "1" && !isLoopbackUrl(requestUrl)) {
-      throw new Error("CentOS 7 desktop public network access is disabled");
+    // 修复原因：undici 绕过 Host 全局 fetch；初始 URL 和其后的重定向都必须 fail-closed。
+    if (process.env.OMPCODE_CENTOS7_LOCAL_ONLY === "1") {
+      if (!isLoopbackUrl(requestUrl)) {
+        throw new Error("CentOS 7 desktop public network access is disabled");
+      }
+      init = { ...init, redirect: "error" };
     }
     const route = resolveHostProxyForUrl(requestUrl, options);
     if (route.kind === "invalid") {

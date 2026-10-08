@@ -14,6 +14,7 @@
  * 3. 后续远端 connect / scoped attachment 都由同一 Host 处理
  */
 import { createHostDatabaseStartup } from "./hostDatabaseStartup.js";
+import { createHostLocalOnlyFetch } from "./offlineFetch.js";
 import { isClosedHostOutput } from "./closedOutputError.js";
 import { randomUUID } from "node:crypto";
 import {
@@ -82,7 +83,6 @@ import {
   isRemoteWorkspaceIdentity,
   resolveWorkspaceKey,
   formatModelPickerValue,
-  isLoopbackUrl,
   type ZCodePromptAttachment,
   type ZCodeStreamEvent,
   type ZCodeTaskMeta,
@@ -97,15 +97,7 @@ import {
 } from "@zcode/shared";
 
 if (process.env.OMPCODE_CENTOS7_LOCAL_ONLY === "1") {
-  // 修复原因：Host 的原生 fetch 不经过 Electron Session，必须在 Host 入口独立阻断公网。
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = async (input, init) => {
-    const url = input instanceof Request ? input.url : String(input);
-    if (!isLoopbackUrl(url)) {
-      throw new Error("CentOS 7 desktop public network access is disabled");
-    }
-    return originalFetch(input, init);
-  };
+  globalThis.fetch = createHostLocalOnlyFetch(globalThis.fetch);
 }
 import {
   parseHostIncomingMessageEvent,

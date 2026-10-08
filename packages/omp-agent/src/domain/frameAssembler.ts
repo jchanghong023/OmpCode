@@ -72,7 +72,13 @@ export class OmpFrameAssembler {
       };
     }
     const pending = this.pending;
+    // 每片元数据必须与首片一致；否则可绕过声明上限并把不同逻辑帧拼在一起。
+    if (pending.count !== chunk.count || pending.byteLength !== chunk.byteLength) {
+      this.pending = null;
+      return { kind: "rejected", reason: "rpc_chunk sequence metadata mismatch" };
+    }
     if (pending.received[chunk.index] !== undefined) {
+      this.pending = null;
       return { kind: "rejected", reason: "duplicate rpc_chunk fragment" };
     }
     // 逐片严格 base64：本片载荷非法时立即拒绝该序列（对齐 RpcFrameDecoder.decodeBase64）。
@@ -80,6 +86,10 @@ export class OmpFrameAssembler {
     if (bytes === null) {
       this.pending = null;
       return { kind: "rejected", reason: "rpc_chunk payload is not valid base64" };
+    }
+    if (pending.receivedBytes + bytes.byteLength > pending.byteLength) {
+      this.pending = null;
+      return { kind: "rejected", reason: "rpc_chunk sequence exceeds declared length" };
     }
     pending.received[chunk.index] = bytes;
     pending.receivedBytes += bytes.byteLength;

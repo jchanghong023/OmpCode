@@ -17,6 +17,8 @@ import type { SessionRegistry } from "./sessionRegistry.js";
 import type { ConversationEngine } from "./conversationEngine.js";
 import { prepareOmpAttachmentInput } from "./ompAttachmentInput.js";
 import { engineModelSelectionOf } from "./ompEngineProcess.js";
+import type { OmpBtwStore } from "./OmpBtwStore.js";
+import { dispatchOmpBtwCommand, isOmpBtwSessionCommand } from "./OmpBtwCommands.js";
 
 const UNSUPPORTED = "fault.command.unsupportedByOmpCore";
 const CAP = PROTOCOL_V4_LIMITS.idempotencyTablePerSession;
@@ -27,6 +29,7 @@ export interface V4CommandContext {
   workspaceId: string;
   workspacePath: string;
   attachments: AttachmentStore;
+  sideViews?: OmpBtwStore;
 }
 
 export class V4CommandService {
@@ -108,6 +111,13 @@ export class V4CommandService {
   }
 
   private async dispatch(envelope: CommandEnvelope): Promise<CommandAck> {
+    if (envelope.type === "createSelectionSideSession" || isOmpBtwSessionCommand(envelope)) {
+      return dispatchOmpBtwCommand(envelope, this.context.sideViews, {
+        ack: (status, extra) => this.ack(envelope, status, extra),
+        unsupported: (what) => this.unsupportedAck(envelope, what),
+        requireSessionId: (id) => this.requireSessionId(id),
+      });
+    }
     if (COMMANDS_REQUIRING_BASE_REVISION.has(envelope.type)) {
       const engine = envelope.sessionId
         ? this.context.registry.getEngine(envelope.sessionId)
@@ -150,6 +160,7 @@ export class V4CommandService {
             envelope.clientId,
             input?.images ?? [],
             selection,
+            payload.firstInput.text,
           );
           return this.ack(envelope, "accepted", {
             result: {
@@ -183,6 +194,7 @@ export class V4CommandService {
           envelope.clientId,
           input.images,
           engineModelSelectionOf(payload.modelSelection),
+          payload.text,
         );
         return this.ack(envelope, "accepted", {
           result: { type: "inputAccepted", delivery, inputId: createId("input") },
@@ -296,8 +308,6 @@ export class V4CommandService {
       case "pauseGoal":
       case "resumeGoal":
         return this.unsupportedAck(envelope, "goal loop");
-      case "createSelectionSideSession":
-        return this.unsupportedAck(envelope, "selection side sessions");
       case "forkAssistant":
         return this.unsupportedAck(envelope, "forking a turn");
       case "retryTurn":

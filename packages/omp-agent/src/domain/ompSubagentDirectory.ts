@@ -78,6 +78,8 @@ export class OmpSubagentProjection {
   }
 
   hydrate(rows: readonly ConversationRow[]): SubagentProjectionState {
+    this.rowIds.clear();
+    this.statuses.clear();
     for (const row of rows) {
       if (row.kind !== "subagent" || !row.entityId) continue;
       const id = row.entityId.startsWith("omp-subagent:")

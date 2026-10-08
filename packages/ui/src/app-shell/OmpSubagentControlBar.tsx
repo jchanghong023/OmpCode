@@ -1,4 +1,4 @@
-import { memo, useCallback, useMemo, useState } from "react";
+import { memo, useCallback, useMemo, useRef, useState } from "react";
 import { SendIcon, SquareIcon } from "lucide-react";
 import { Button } from "@/components/ui/button.js";
 import { useWorkspaceServicesResolution } from "@/hooks/useWorkspaceServices.js";
@@ -30,12 +30,15 @@ export const OmpSubagentControlBar = memo(function OmpSubagentControlBar({
   const [message, setMessage] = useState("");
   const [status, setStatus] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const controlInFlight = useRef(false);
   const target = useMemo(() => parseOmpSubagentViewIdOf(childSessionId), [childSessionId]);
 
   const send = useCallback(
     async (action: "send_message" | "stop") => {
-      if (!target || !resolution.rpcReady) return;
+      // Enter 不经过禁用按钮；用同步闩阻止同一条消息被重复提交。
+      if (!target || !resolution.rpcReady || controlInFlight.current) return;
       if (action === "send_message" && !message.trim()) return;
+      controlInFlight.current = true;
       setBusy(true);
       setStatus(null);
       try {
@@ -57,6 +60,7 @@ export const OmpSubagentControlBar = memo(function OmpSubagentControlBar({
           `${intl.formatMessage({ id: "ompSubagentControl.failed" })}: ${error instanceof Error ? error.message : String(error)}`,
         );
       } finally {
+        controlInFlight.current = false;
         setBusy(false);
       }
     },
@@ -71,6 +75,7 @@ export const OmpSubagentControlBar = memo(function OmpSubagentControlBar({
     <div className="border-b border-border bg-surface px-3 py-2">
       <div className="flex items-center gap-2">
         <input
+          disabled={busy || !resolution.rpcReady}
           className="min-w-0 flex-1 rounded-md border border-input-border bg-background px-2 py-1 text-ui-sm text-foreground placeholder:text-foreground-subtlest focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-input-border-focused"
           placeholder={intl.formatMessage({ id: "ompSubagentControl.sendPlaceholder" })}
           value={message}
@@ -86,7 +91,7 @@ export const OmpSubagentControlBar = memo(function OmpSubagentControlBar({
           type="button"
           variant="ghost"
           size="sm"
-          disabled={busy || !message.trim()}
+          disabled={busy || !resolution.rpcReady || !message.trim()}
           onClick={() => void send("send_message")}
         >
           <SendIcon aria-hidden className="size-3.5" />
@@ -96,7 +101,7 @@ export const OmpSubagentControlBar = memo(function OmpSubagentControlBar({
           type="button"
           variant="ghost"
           size="sm"
-          disabled={busy}
+          disabled={busy || !resolution.rpcReady}
           onClick={() => void send("stop")}
         >
           <SquareIcon aria-hidden className="size-3 fill-current" />

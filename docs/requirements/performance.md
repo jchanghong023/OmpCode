@@ -40,6 +40,7 @@ omp 事件 → ConversationProjection（seq、rows、pending）→ topic frame
 11. 使用相同的大目录和长会话样本比较优化前后的列表、恢复、时间线流式更新耗时和内存峰值；结果与历史分页一致。
 12. 慢 WebSocket 与饱和 MessagePort 下缓冲保持有界；恢复后同一 seq 的桌面连续交付与 Web 快照/缺口修复均不丢最终结果。
 13. 关闭调试日志后每帧只有一次协议编码；大量日志期间主窗口不被同步文件 I/O 阻塞，退出时日志完整。
+14. 工作区上下文尚未就绪时打开引导/设置，再将 workspace 从缺省切到真实路径、远端 identity 并清空：同一已挂载组件的 Hook 调用顺序保持稳定；缺省目标使用当前上下文服务，明确目标仍按既有 workspace/identity 隔离路由，不触发 React Hook 顺序异常或引导错误边界。
 
 ## 边界
 
