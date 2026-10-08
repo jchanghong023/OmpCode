@@ -35,10 +35,10 @@ export function highestOmpThoughtLevel(
 export function ompSessionConfigToSelection(
   config: Partial<SessionConfigState> | null | undefined,
 ): ModelSelection | undefined {
-  if (config?.modelSelection) return config.modelSelection;
   const providerId = config?.provider?.trim();
   const modelId = config?.model?.trim();
-  if (!providerId || !modelId) return undefined;
+  // 原生命令可临时切换模型，冷恢复不能用之前提交的稀疏 modelSelection 覆盖实际模型。
+  if (!providerId || !modelId) return config?.modelSelection;
   const reasoningLevel = config?.thought?.trim();
   return {
     providerId,

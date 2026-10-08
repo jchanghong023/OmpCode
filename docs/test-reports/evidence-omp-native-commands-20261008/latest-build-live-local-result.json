@@ -1,0 +1,9 @@
+{
+  "modelCall": false,
+  "assistantRowId": 185,
+  "assistantText": "Advisor disabled.",
+  "scope": "latest adapter/Host build; actual GUI composer through native OMP",
+  "result": "passed",
+  "previousMaximumRowId": 182,
+  "command": "/advisor off"
+}

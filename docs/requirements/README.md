@@ -2,18 +2,19 @@
 
 `docs/requirements/` 是本 Fork 固定的需求权威目录。每项需求只在所属功能域维护；本索引不复制子需求。开发规则、源码入口和测试命令见 [AGENTS.md](../../AGENTS.md)。
 
-| 文档                                               | 唯一维护的需求域                                                                                                                                  |
-| -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 文档                                               | 唯一维护的需求域                                                                                                                                        |
+| -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | [FORK.md](FORK.md)                                 | Fork 目的、上游同步策略与平台范围（单分支、界面统一、`OMP_OFFLINE` 环境门控）、上游基线、核心替换、双链路、产品身份、数据隔离、分发及尚不等价的能力边界 |
-| [omp-core-integration.md](omp-core-integration.md) | OMP 核心接入：每会话一进程 + 目录进程 v3 能力、斜杠严格分发、交互回路（ask/审批）、子代理详情与控制、模型双入口及 Z01—Z17 验收                    |
-| [models-and-commands.md](models-and-commands.md)   | 账号移除、Profile 隔离、角色配置、模型目录与原生命令                                                                                              |
-| [composer.md](composer.md)                         | 桌面输入区、临时模型、计划命令入口、上下文、压缩与 Git 状态                                                                                       |
-| [skills.md](skills.md)                             | omp 可执行技能目录、候选、调用与只读设置                                                                                                          |
-| [integrations.md](integrations.md)                 | 子代理、工具交互、扩展/MCP、浏览器与钩子设置页、自动化、文件引用与附件                                                                            |
-| [session-recovery.md](session-recovery.md)         | 会话身份、历史恢复、轮次收口、Host/远端连接与故障处理                                                                                             |
-| [performance.md](performance.md)                   | 流式长会话、查找和界面响应性及一致性约束                                                                                                          |
-| [centos7-release.md](centos7-release.md)           | CentOS 7 原生 glibc 2.17 兼容包、Electron 双轨构建、离线锁定与发布边界                                                                            |
-| [centos7-performance.md](centos7-performance.md)   | CentOS 7 无 GPU 桌面的动画、流式合批与日志性能策略                                                                                                |
+| [omp-core-integration.md](omp-core-integration.md) | OMP 核心接入：每会话一进程 + 目录进程 v3 能力、斜杠严格分发、交互回路（ask/审批）、子代理详情与控制、模型双入口及 Z01—Z17 验收                          |
+| [omp-native-commands.md](omp-native-commands.md)   | 核心 rpc-ui 命令：wiki、repo、team、plan、loop、goal、advisor、ultrathink、orchestrate、workflowz、fullsend、skill 与 compact 的原生对接和验收          |
+| [models-and-commands.md](models-and-commands.md)   | 账号移除、Profile 隔离、角色配置、模型目录与原生命令                                                                                                    |
+| [composer.md](composer.md)                         | 桌面输入区、临时模型、计划命令入口、上下文、压缩与 Git 状态                                                                                             |
+| [skills.md](skills.md)                             | omp 可执行技能目录、候选、调用与只读设置                                                                                                                |
+| [integrations.md](integrations.md)                 | 子代理、工具交互、扩展/MCP、浏览器与钩子设置页、自动化、文件引用与附件                                                                                  |
+| [session-recovery.md](session-recovery.md)         | 会话身份、历史恢复、轮次收口、Host/远端连接与故障处理                                                                                                   |
+| [performance.md](performance.md)                   | 流式长会话、查找和界面响应性及一致性约束                                                                                                                |
+| [centos7-release.md](centos7-release.md)           | CentOS 7 原生 glibc 2.17 兼容包、Electron 双轨构建、离线锁定与发布边界                                                                                  |
+| [centos7-performance.md](centos7-performance.md)   | CentOS 7 无 GPU 桌面的动画、流式合批与日志性能策略                                                                                                      |
 
 需求或预期用户可见行为变化时，先更新对应文档及验收场景；新独立功能域可新增文档并更新索引。实现设计可解释状态所有权和时序，但不得重复定义另一套产品规则。`docs/specs/` 中保留的一次性依赖升级和 Lint 清理资料是工程任务记录，不是长期产品需求或自动执行授权。
 

@@ -201,6 +201,7 @@ test("public v4 empty → native BTW stream → same-topic followup → side-onl
     const primary = f.app.registry.requireEngine(parent);
     primary.projector.handleEvent({ type: "agent_start" });
     assert.equal(primary.projector.isStreaming, true);
+    const parentRows = structuredClone((await f.snapshot(parent)).rows.window);
     const first = await f.command("sendText", draft, { text: "first question" }, "question-1");
     const id = identity(first).sessionId;
     assert.equal(first.status, "accepted");
@@ -227,7 +228,7 @@ test("public v4 empty → native BTW stream → same-topic followup → side-onl
     const cancelled = await f.snapshot(id, "web-remote-replayable");
     assert.equal(cancelled.control.phase, "completedInterrupted");
     assert.equal(cancelled.rows.window.filter((row) => row.kind === "userInput").length, 2);
-    assert.equal((await f.snapshot(parent)).rows.window.length, 0);
+    assert.deepEqual((await f.snapshot(parent)).rows.window, parentRows);
     await f.app.registry.closeSession(parent);
     const stableParent = identity(first).parentSessionId;
     assert.ok(stableParent);

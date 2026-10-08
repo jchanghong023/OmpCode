@@ -13,6 +13,7 @@ import type { OmpBypassFrame, OmpDirectoryCommand } from "../domain/ompForkFrame
 import type { OmpStateData } from "../domain/ompFrames.js";
 import type { OmpContextReport } from "../domain/ompContextReport.js";
 import type { OmpBtwFrame } from "../domain/OmpBtwFrames.js";
+import type { OmpCommandOutputRecord } from "../domain/OmpCommandOutput.js";
 export type { OmpStateData };
 
 export interface OmpCommandOutcome {
@@ -111,6 +112,15 @@ export interface OmpStoreSessionSummary {
   firstUserText: string | null;
   updatedAt: number;
   createdAt: number;
+  /** 仅有 GUI 命令派生历史；空 sessionPath 不能作为 OMP --resume 路径。 */
+  commandOutputOnly?: true;
+}
+
+export interface OmpCommandOutputSession {
+  cwd: string;
+  sessionId: string;
+  sessionPath: string | null;
+  title?: string;
 }
 
 /** omp 会话存储只读访问（~/.omp/agent/sessions/<encoded-cwd>）。 */
@@ -123,6 +133,24 @@ export interface OmpStorePort {
   /** omp 为 task 子代理在父会话同名目录保存的独立 JSONL。 */
   readSubagentEntries(sessionPath: string, subagentId: string): Promise<unknown[]>;
   deleteSession(sessionPath: string): Promise<boolean>;
+  /** 只保存 GUI 实际收到的本地命令文本，不保存 OMP 模型历史或业务状态。 */
+  appendCommandOutput?(
+    session: OmpCommandOutputSession,
+    record: OmpCommandOutputRecord,
+  ): Promise<void>;
+  readCommandOutputs?(
+    cwd: string,
+    sessionId: string,
+    sessionPath?: string | null,
+  ): Promise<OmpCommandOutputRecord[]>;
+  /** 原生文件随后生成时关联其 UUID；不另建 OMP 会话文件。 */
+  associateCommandOutputs?(session: OmpCommandOutputSession): Promise<void>;
+  deleteCommandOutputs?(
+    cwd: string,
+    sessionId: string,
+    sessionPath?: string | null,
+  ): Promise<boolean>;
+  flushCommandOutputs?(): Promise<void>;
 }
 
 /** omp 反向 UI 请求经宿主呈现的应答；content 无损承载多题 answers/annotations。 */

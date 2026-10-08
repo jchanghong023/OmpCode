@@ -112,11 +112,11 @@ export function buildAgentEndpointOriginEnv(
   return { ZCODE_BASE_URL: trimmed };
 }
 
-/** 把 Host 已知的 remote workspace identity 注入对应 Agent；本地 workspace 保持 path fallback。 */
+/** 注入 Host 派生的 workspace key；本地路径 fallback 同样覆盖父进程的其他身份。 */
 export function buildAgentWorkspaceIdentityEnv(
-  workspaceIdentity: string | undefined,
+  workspaceKey: string | undefined,
 ): Record<string, string> {
-  const trimmed = workspaceIdentity?.trim();
+  const trimmed = workspaceKey?.trim();
   return trimmed ? { [ZCODE_WORKSPACE_IDENTITY_ENV]: trimmed } : {};
 }
 

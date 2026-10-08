@@ -62,6 +62,7 @@
 - Windows EXE 与 CentOS 7 ZIP 的 GitHub Actions 手动发布入口不提供任何自定义输入项：从 `main` 点击运行即可，发布 Tag 自动生成为 `v<UTC日期YYYYMMDD>-<时间HHmmss>-<run-id>-<run-attempt>`。同秒触发的两条流水线通过运行 ID 区分，重新运行全部 job 通过重试次数区分；构建 job 生成一次，发布 job 使用该输出。默认发布正式 Release，上传安装包与 SHA256 校验文件；发布流水线不单独运行测试。
 
 验收：两个运行面板均无 tag 或预发布输入项；生成的 Tag 包含日期时间，双平台并行触发与重新运行全部 job 不重复；发布使用构建输出的同一个 Tag，保留分支与已有 Tag 校验。
+
 - 内嵌 omp 的配置与边界：内嵌拷贝与用户已安装的 omp 使用完全相同的配置（同一配置、凭据与会话数据来源），行为与用户日常使用的 omp 保持一致；NEVER 覆盖、替换、修改或代为安装用户已安装的 omp，内嵌拷贝只存在于 ZCode 应用资源目录内。
 - 进程与端口边界：内嵌 omp 只以子进程形态经 stdio 通信，不监听任何端口；绝不探测、复用、终止或以其他方式影响用户机器上已在运行的 ZCode / omp 进程。本仓库自建的任何本地测试服务一律使用 `listen(0)` 临时端口，发生端口冲突时换临时端口重试，不占用固定端口。
 - CentOS 7 独立分发与安全限制见 [centos7-release.md](centos7-release.md)。
@@ -112,7 +113,7 @@
 2. **工作流中枢与动态工作流**：已保存工作流 GUI（`workflows/*`）、`v4/conversation/workflowRun*` 全族、`startSavedWorkflow`/`resumeWorkflowRun`/`amendWorkflowRunSettings` 不可用。替代行为：无（omp 无等价工作流引擎）。自动 run 摘要查询在 UI transport 本地返回明确能力缺失，不发出注定失败的 Host/OMP RPC，不伪造空列表；能力缺失不记 warn 或重复查询，显式操作仍保持不可用语义。验收：打开普通会话无 workflowRuns RPC 失败日志，会话订阅与命令发送正常。
 3. **automation / Off-Peak**：见 [原生集成](integrations.md)。
 4. **会话内编辑类操作**：fork 某轮（`forkAssistant`）、重试（`retryTurn`）、编辑已发送消息（`editUserQuery`）、工作区文件回滚（`applyFileRewind`/`fileRewindPreview`）不可用。替代行为：无（omp 会话树的 `branch` 能力未进本适配层）。现有辅助对话入口接入原生 BTW，不属于编辑/分叉；唯一规则及验收见 [OMP 辅助对话](omp-core-integration.md#辅助对话原生-btw唯一需求权威)。
-5. **协作模式切换与 goal 循环**：`switchCollaborationMode`（build/edit/plan/yolo）、`sendGoalCommand`、`pauseGoal`/`resumeGoal` 不可用（v4 命令面显式拒绝）。替代行为：会话固定等效于上游 `build` 模式；omp ACP 目录分发的命令（`/model`、`/switch` 等）按 omp 语义透传执行（命令路由详见 [模型与命令](models-and-commands.md)），`/plan`、`/goal` 未进 omp ACP 目录，仍按本地语义处理。
+5. **旧 ZCode 协作模式与 goal API**：`switchCollaborationMode`（build/edit/plan/yolo）、`sendGoalCommand`、`pauseGoal`/`resumeGoal` 不可用（v4 命令面显式拒绝）；OMP 原生 `/plan`、`/goal`、`/loop` 等通过 rpc-ui 核心接入，规则见 [核心命令需求](omp-native-commands.md)，不复活旧 ZCode 状态机。
 6. **输入队列编辑**：队列项编辑/重排/删除/立即发送（`editQueueItem` 等）不可用。替代行为：followup 模式等价保留——`guide` 映射 omp `steer`（本轮引导，工具间生效），`queue` 映射 omp `follow_up`（轮后队列），两个 omp 队列均为 one-at-a-time（每轮一条），与上游「每轮一条」语义一致；流式中发送即按当前模式路由。
 7. **用量统计**：app 级用量（`v4/usage/stats`）返回合法空快照；会话级 `v4/conversation/usage` 返回本会话累计值。替代行为：历史聚合统计暂缺（数据源在 omp 会话库，未做聚合）。
 8. **MCP 状态面板**：见 [原生集成](integrations.md)。

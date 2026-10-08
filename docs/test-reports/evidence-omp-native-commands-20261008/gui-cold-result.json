@@ -1,0 +1,19 @@
+[
+  {
+    "event": "fixture-project-context",
+    "taskTestId": "task-item-01a11bac-4f06-73ea-a708-dea08602dd04",
+    "journal": "C:\\Users\\jiang\\AppData\\Local\\Temp\\omp-native-command-e2e-4JVBvC\\omp\\agent\\sessions\\-tmp-omp-native-command-e2e-4JVBvC-workspace\\2026-10-08T13-20-39-686Z_01a11bac-4f06-73ea-a708-dea08602dd04.jsonl",
+    "header": {
+      "type": "session",
+      "id": "01a11bac-4f06-73ea-a708-dea08602dd04",
+      "cwd": "C:\\Users\\jiang\\AppData\\Local\\Temp\\omp-native-command-e2e-4JVBvC\\workspace"
+    },
+    "result": "passed"
+  },
+  {
+    "event": "cold-history",
+    "taskTestId": "task-item-01a11bac-4f06-73ea-a708-dea08602dd04",
+    "checkedRows": 155,
+    "result": "passed"
+  }
+]

@@ -2059,10 +2059,15 @@ function exposeServicesOnMessagePort(
     const update = flowUpdateChain.then(() => connectionScope.setTransportFlowState(state));
     flowUpdateChain = update.catch((error) => {
       const message = error instanceof Error ? error.message : String(error);
-      logger[resolveAttachmentFlowLogLevel(state, message)](
-        "failed to forward attachment connection flow state",
-        { state, message },
-      );
+      // 关闭期回执属于 debug；Host 主日志没有该方法，复用现有 RPC debug 出口避免类型与运行时错误。
+      if (resolveAttachmentFlowLogLevel(state, message) === "debug") {
+        rpcDebugLogger.debug(undefined, "failed to forward attachment connection flow state", {
+          state,
+          message,
+        });
+      } else {
+        logger.warn("failed to forward attachment connection flow state", { state, message });
+      }
     });
     return update;
   };

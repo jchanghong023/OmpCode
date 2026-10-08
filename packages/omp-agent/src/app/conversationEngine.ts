@@ -16,6 +16,7 @@ import { deriveTitle } from "../domain/titleText.js";
 import { OmpSubagentBridge } from "./ompSubagentBridge.js";
 import type { EngineInit } from "./engineInit.js";
 import { OmpBtwEventBridge } from "./OmpBtwEventBridge.js";
+import { OmpCommandOutputBridge } from "./ompCommandOutput.js";
 export class ConversationEngine {
   readonly sessionId: string;
   readonly workspaceId: string;
@@ -26,6 +27,7 @@ export class ConversationEngine {
   private readonly gateway: HostGateway;
   private readonly onIndexChange: (engine: ConversationEngine) => void;
   private readonly onCommandsUpdate: ((commands: unknown) => void) | undefined;
+  private readonly commandOutputs: OmpCommandOutputBridge;
   private readonly resolveSlashCommand: SlashCommandResolver | undefined;
   private readonly forwardSubagentFrame: ((frame: import("../domain/ompFrames.js").OmpSubagentFrame) => void) | undefined;
   private readonly publisher: ConversationTopicPublisher;
@@ -86,6 +88,7 @@ export class ConversationEngine {
     this.gateway = init.gateway;
     this.onIndexChange = init.onIndexChange;
     this.onCommandsUpdate = init.onCommandsUpdate;
+    this.commandOutputs = new OmpCommandOutputBridge({ projection: () => this.projection, sessionPath: () => this.ompSessionFile, save: init.onCommandOutput, flush: init.flushCommandOutputs, scheduleFlush: () => this.scheduleFlush(), refresh: () => this.queueReconciler.scheduleQueueReconciliation() });
     this.resumeSessionPath = init.resumeSessionPath;
     this.projection = new ConversationProjection(init.sessionId, init.viewIdOf);
     this.subagents = new OmpSubagentBridge(
@@ -104,7 +107,7 @@ export class ConversationEngine {
       isStreaming: () => this.projector.isStreaming,
       scheduleFlush: () => this.scheduleFlush(),
     });
-    this.projector = new OmpEventProjector(this.projection, { steerGuideCommandId: () => this.queueReconciler.steerGuideCommandIdOf(), onQueueUpdate: () => this.queueReconciler.scheduleQueueReconciliation() });
+    this.projector = new OmpEventProjector(this.projection, { steerGuideCommandId: () => this.queueReconciler.steerGuideCommandIdOf(), onQueueUpdate: () => this.queueReconciler.scheduleQueueReconciliation(), onCustomMessage: this.commandOutputs.custom });
     this.interactionProxy = new OmpInteractionProxy({
       sessionId: init.sessionId,
       gateway: init.gateway,
@@ -148,11 +151,7 @@ export class ConversationEngine {
       interaction: this.interactionProxy,
       onEvent: (event) => this.handleOmpEvent(event),
       onExit: (code, process) => this.handleOmpExit(code, process),
-      onCommandOutput: ({ text }) => {
-        if (!this.projector.isStreaming) this.projection.activateQueuedTurn();
-        this.projection.appendAssistantText(text);
-        this.scheduleFlush();
-      },
+      onCommandOutput: this.commandOutputs.emit,
       // prompt 响应/异步 prompt_result 的收口语义（A1，含 agentInvoked 判定）内聚在 promptTurns。
       onPromptResult: (frame) => this.promptTurns.onPromptResult(frame),
       onSessionInfoUpdate: ({ title }) => this.applySessionTitle(title),
@@ -340,18 +339,19 @@ export class ConversationEngine {
     this.btw.dispose();
     await process?.dispose();
     await this.ompStarting?.catch(() => {});
+    await this.commandOutputs.flush();
   }
 
   /** 删除前仅释放文件占用；磁盘删除失败时仍可用原投影和订阅重新启动。 */
   async preparePermanentDeletion(): Promise<string | null> {
     await this.ompStarting?.catch(() => {});
     const process = this.ompProcess;
-    if (!process) return this.resumeSessionPath ?? null;
-    this.resumeSessionPath = process.ompSessionFile ?? this.resumeSessionPath;
+    this.resumeSessionPath = process?.ompSessionFile ?? this.resumeSessionPath;
     const persistedPath = this.resumeSessionPath ?? null;
     this.ompProcess = null;
-    await process.dispose();
-    this.projection.failAllTurns({ code: "session_delete", message: "session stopped for deletion" });
+    await process?.dispose();
+    await this.commandOutputs.flush();
+    if (process) this.projection.failAllTurns({ code: "session_delete", message: "session stopped for deletion" });
     this.scheduleFlush();
     return persistedPath;
   }

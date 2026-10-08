@@ -394,6 +394,8 @@ test("ompSessionsRoot：linux/darwin 且 $XDG_DATA_HOME/omp 存在时扁平化 a
 });
 
 test("ompSessionsRoot：锚点不存在回退 ~/.omp 布局；XDG_DATA_HOME 为空不参与；win32 不受影响", () => {
+  // Windows 的 /home/u 是当前盘根路径；共享解析器使用绝对路径，测试也采用宿主解析后的 home。
+  const home = resolve("/home/u");
   const xdg = "/xdg-data";
   const never = (): boolean => false;
   const onlyAppRoot = (path: string): boolean => path === join(xdg, "omp");
@@ -402,39 +404,39 @@ test("ompSessionsRoot：锚点不存在回退 ~/.omp 布局；XDG_DATA_HOME 为�
     ompSessionsRoot({
       env: { XDG_DATA_HOME: xdg } as NodeJS.ProcessEnv,
       platform: "linux",
-      home: "/home/u",
+      home,
       exists: never,
     }),
-    join("/home/u", ".omp", "agent", "sessions"),
+    join(home, ".omp", "agent", "sessions"),
   );
   // 空串 XDG_DATA_HOME 不参与（omp resolveIf 对 falsy 直接跳过）。
   assert.equal(
     ompSessionsRoot({
       env: { XDG_DATA_HOME: "" } as NodeJS.ProcessEnv,
       platform: "linux",
-      home: "/home/u",
+      home,
       exists: onlyAppRoot,
     }),
-    join("/home/u", ".omp", "agent", "sessions"),
+    join(home, ".omp", "agent", "sessions"),
   );
   // 命名 profile 锚点不存在 → 回退 profiles/<p>/agent/sessions。
   assert.equal(
     ompSessionsRoot({
       env: { XDG_DATA_HOME: xdg, OMP_PROFILE: "work" } as NodeJS.ProcessEnv,
       platform: "linux",
-      home: "/home/u",
+      home,
       exists: onlyAppRoot,
     }),
-    join("/home/u", ".omp", "profiles", "work", "agent", "sessions"),
+    join(home, ".omp", "profiles", "work", "agent", "sessions"),
   );
   // win32 完全不参与 XDG（锚点存在也不改道）。
   assert.equal(
     ompSessionsRoot({
       env: { XDG_DATA_HOME: xdg } as NodeJS.ProcessEnv,
       platform: "win32",
-      home: "/home/u",
+      home,
       exists: onlyAppRoot,
     }),
-    join("/home/u", ".omp", "agent", "sessions"),
+    join(home, ".omp", "agent", "sessions"),
   );
 });

@@ -60,7 +60,8 @@ export async function dispatchOmpText(input: {
   // applyEngineModelSelection，模型选择只在输入被接受后执行。
   const originalText = input.originalText ?? text;
   const mergedTextAttachment = text !== originalText || text.includes(TEXT_ATTACHMENT_MARKER);
-  if (!input.streaming && originalText.trimStart().startsWith("/")) {
+  const slashCommand = originalText.trimStart().startsWith("/");
+  if (slashCommand) {
     // 修复（F8/A6）：斜杠命令无附件载体（目录内命令走 prompt 本地执行，images 被忽略），
     // 带图片时不能静默丢弃附件，必须明确失败让用户改用无附件命令或把图片说明写入命令参数；
     // 文本附件由 v4Commands 经 ompAttachmentInput 拼进文本，按拼接标记识别并拒绝。
@@ -101,9 +102,9 @@ export async function dispatchOmpText(input: {
     if (failure) return { success: false, code: failure.code, error: failure.message };
   }
   const attachment = images.length > 0 ? { images } : {};
-  if (input.streaming) {
-    // 流式中的补充输入始终按文本（steer 引导本轮 / follow_up 入队），不做命令分发，
-    // 附件守卫也不适用（steer/follow_up 的 images 载荷完整支持）。
+  if (input.streaming && !slashCommand) {
+    // 普通补充仍走 steer/follow_up；斜杠必须进入 prompt 的原生命令派发器，否则 OMP
+    // 会把 /goal、/compact 等文本排入模型正文而不执行命令（rpc-mode.ts 输入分流依据）。
     const command =
       input.followupMode === "guide"
         ? { type: "steer" as const, message: text, ...attachment }
@@ -118,6 +119,16 @@ export async function dispatchOmpText(input: {
     // 修复（G15）：code 只表达失败类别，成功结果不携带。
     return outcome.success ? outcome : { ...outcome, code: "omp_prompt_failed" };
   }
-  const outcome = await input.process.send({ type: "prompt", message: text, ...attachment });
+  const outcome = await input.process.send({
+    type: "prompt",
+    message: text,
+    ...attachment,
+    ...(input.streaming
+      ? {
+          streamingBehavior:
+            input.followupMode === "guide" ? ("steer" as const) : ("followUp" as const),
+        }
+      : {}),
+  });
   return outcome.success ? outcome : { ...outcome, code: "omp_prompt_failed" };
 }

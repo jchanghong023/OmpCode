@@ -77,13 +77,13 @@ sequenceDiagram
 
 - omp 当前目录中的内置斜杠命令（如 `/model`、`/switch`、`/compact`、`/rename`、`/mcp`、`/usage`）在对话输入框可用；目录变化（`available_commands_update`）实时推送刷新补全面板；`skill:*` 命令在技能候选分组展示。
 - `/rename`、`/model` 等的状态回投（`session_info_update`/`config_update`/`model_changed`）同步到会话标题与模型状态。
-- UI 本地拦截让位：命令名命中 omp 目录时按 omp 语义透传执行（如 `/model`、`/switch`、`/usage`）；仅 `/compact`/`/compress` 保留本地 v4 映射（与 omp `/compact` 等价且排队/时间线集成更好）。omp ACP 目录未分发的命令（`/plan`、`/goal` 等 TUI-only 命令）不受影响，仍按 [FORK 能力边界第 5 项](FORK.md#已知与允许的差异) 处理。
+- UI 本地拦截让位：命令名命中 omp 目录时按 omp 语义透传执行，核心命令、`/compact` 参数及兼容别名规则统一见 [核心 rpc-ui 命令接入](omp-native-commands.md)。
 - 多角色（`modelRoles`）按本文件角色配置规则在设置与会话工具栏完整适配，角色清单与 omp 内建角色（default/smol/slow/vision/plan/commit/tiny/memory/task/advisor/image/web/speech/dictation/judge）一致并随配置追加自定义角色。
 
 技能目录与调用见 [skills.md](skills.md)；提交时的临时模型选择见 [composer.md](composer.md)；恢复、guide/queue 及文件变更事实见 [session-recovery.md](session-recovery.md)。
 辅助入口 `/side` 与 `/btw` 的独立接入按 [OMP 辅助对话](omp-core-integration.md#辅助对话原生-btw唯一需求权威)，不进入普通 slash/prompt 分流；输入区取消计划切换按钮、保留 `/plan` 命令的规则见 [输入区](composer.md)。
 
-验收还应检查：登录/套餐/配额入口全部移除；命令热更新、重命名和模型状态回投可见；命中目录的命令由 omp 执行，压缩保持既有映射；真实失败不能呈现为成功。
+验收还应检查：登录/套餐/配额入口全部移除；命令热更新、重命名和模型状态回投可见；命中目录的命令由 omp 执行；真实失败不能呈现为成功。
 
 ## 实现与验证状态
 

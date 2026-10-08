@@ -1,10 +1,12 @@
-// 排队轮对账与轮生命周期（A3/A4/A5，自 conversationProjection.ts 内聚抽出）：
-// 纯逻辑模块——轮开启/激活/收口、失败与 steer 竞态转回排队、输入文本登记表与排队轮
-// 数组的判定/收口都在这里；投影持有状态并经 QueuedTurnReconcileHost 委托调用，
-// 投影对外 API 不变。
+// 排队轮对账与轮生命周期（A3/A4/A5）：开启/激活/收口、失败与 steer 转回排队的纯逻辑。
+// 投影持有状态，经 QueuedTurnReconcileHost 委托；输入登记与排队数组仍由同一 owner 写入。
 
 import type { ConversationRow, StatePatch } from "@zcode/shared/zcode-protocol-v4";
-import { finalizeFailedQueuedTurn, finalizeTurnContexts } from "./projectionTurnFinalizer.js";
+import {
+  finalizeFailedQueuedTurn,
+  finalizeLocalCommandTurn,
+  finalizeTurnContexts,
+} from "./projectionTurnFinalizer.js";
 import { createTurnHeaderRow, createUserInputRow, type TurnContext } from "./projectionRows.js";
 import { TurnFileFacts } from "./fileFacts.js";
 import type { ProjectionAState, TurnOutcome } from "./projectionTypes.js";
@@ -108,10 +110,14 @@ export function finishQueuedLocalOnlyTurnOf(
   host: QueuedTurnReconcileHost,
   closeAssistant: () => void,
   finishTurn: (outcome: "success") => void,
+  sourceCommandId?: string,
 ): boolean {
+  const target = sourceCommandId ?? host.activeTurn()?.sourceCommandId;
+  if (target && finalizeLocalCommandTurn(host, target)) return true;
   if (host.activeTurn()) return false;
   activateQueuedTurnOf(host);
   if (!host.activeTurn()) return false;
+  finalizeLocalCommandTurn(host, host.activeTurn()!.sourceCommandId);
   closeAssistant();
   finishTurn("success");
   return true;

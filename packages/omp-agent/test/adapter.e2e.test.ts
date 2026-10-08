@@ -4,6 +4,8 @@
 
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { createRequire } from "node:module";
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -40,7 +42,10 @@ class AdapterHarness {
   private nextRequestId = 100;
   private child: ReturnType<typeof spawn>;
 
-  constructor(child: ReturnType<typeof spawn>) {
+  constructor(
+    child: ReturnType<typeof spawn>,
+    private readonly testRoot: string,
+  ) {
     this.child = child;
     const readline = createInterface({ input: child.stdout });
     readline.on("line", (line) => {
@@ -110,7 +115,7 @@ class AdapterHarness {
           string,
           unknown
         >[]) {
-          rows.set(row.rowId as number, row);
+          rows.set(row.rowId as number, { ...row });
         }
       } else if (frame.payload.kind === "deltas") {
         for (const delta of frame.payload.deltas as {
@@ -122,7 +127,7 @@ class AdapterHarness {
         }[]) {
           if (delta.op === "row.appended" || delta.op === "row.upserted") {
             const row = delta.row as Record<string, unknown>;
-            rows.set(row.rowId as number, row);
+            rows.set(row.rowId as number, { ...row });
           } else if (
             delta.op === "row.delta" &&
             typeof delta.rowId === "number" &&
@@ -171,6 +176,10 @@ class AdapterHarness {
       this.child.stdin.end();
       setTimeout(() => this.child.kill("SIGKILL"), 3000).unref?.();
     });
+    // 仅清理当前 harness 创建的临时根；包含派生命令显示历史，不能写入用户应用根。
+    if (dirname(this.testRoot) === tmpdir() && this.testRoot.includes("omp-adapter-e2e-")) {
+      await rm(this.testRoot, { recursive: true, force: true });
+    }
   }
 }
 
@@ -199,6 +208,7 @@ function assertFrameOrdinalsIncrease(frames: unknown[], subscriptionId: string):
 }
 
 async function startAdapter(extraEnv: Record<string, string> = {}): Promise<AdapterHarness> {
+  const testRoot = await mkdtemp(join(tmpdir(), "omp-adapter-e2e-"));
   const child = spawn(process.execPath, [tsxCliPath, adapterEntry, "app-server", "--stdio"], {
     cwd: packageRoot,
     env: {
@@ -207,7 +217,9 @@ async function startAdapter(extraEnv: Record<string, string> = {}): Promise<Adap
       OMP_RPC_ARGS_JSON: JSON.stringify([fakeOmpPath]),
       ZCODE_WORKSPACE_IDENTITY: "test-workspace",
       // 隔离 omp 配置目录：测试不得读写用户真实的 ~/.omp 会话数据。
-      PI_CONFIG_DIR: join(packageRoot, ".test-omp-home"),
+      OMP_CONFIG_ROOT: join(testRoot, "omp"),
+      PI_CONFIG_DIR: join(testRoot, "omp"),
+      ZCODE_DATA_BASE_DIR: testRoot,
       ...extraEnv,
     },
     stdio: ["pipe", "pipe", "pipe"],
@@ -216,7 +228,7 @@ async function startAdapter(extraEnv: Record<string, string> = {}): Promise<Adap
   child.stderr.on("data", (chunk: Buffer) => {
     stderrTail = `${stderrTail}${chunk.toString("utf8")}`.slice(-4000);
   });
-  const harness = new AdapterHarness(child);
+  const harness = new AdapterHarness(child, testRoot);
   await harness.waitUntil(() =>
     harness.frames.find(
       (frame) =>
@@ -680,6 +692,279 @@ for (const [command, expectedOutput] of [
         rows.some(
           (row) => row.kind === "assistantText" && String(row.text).includes(expectedOutput),
         ),
+      );
+    } finally {
+      await harness.close();
+    }
+  });
+}
+
+test("busy 原生命令 ACK 后多段输出可见，模型轮继续且等待索引交互仍可停止", async () => {
+  const harness = await startAdapter({ FAKE_OMP_NATIVE_COMMANDS: "1" });
+  try {
+    const created = (await harness.request("v4/command", {
+      commandId: "native-create",
+      clientId: "native-client",
+      sessionId: null,
+      type: "createSession",
+      payload: { workspaceId: "test-workspace", firstInput: { text: "HOLD model stream" } },
+      issuedAt: Date.now(),
+    })) as { result: unknown };
+    const createAck = commandAckSchema.parse(created.result);
+    const sessionId = (createAck.result as { sessionId: string }).sessionId;
+    await harness.request("v4/conversation/subscribe", {
+      topic: `conversation/${sessionId}`,
+      connectionId: "native-desktop",
+      clientMode: "desktop-continuous",
+    });
+    await harness.waitUntil(() =>
+      [...harness.collectRows().values()].some(
+        (row) => row.kind === "assistantText" && row.text === "holding",
+      ),
+    );
+    const send = async (text: string, commandId: string) =>
+      commandAckSchema.parse(
+        (
+          (await harness.request("v4/command", {
+            commandId,
+            clientId: "native-client",
+            sessionId,
+            type: "sendText",
+            payload: { text },
+            issuedAt: Date.now(),
+          })) as { result: unknown }
+        ).result,
+      );
+    const compact = await send("/compact soft keep paragraphs", "native-compact");
+    assert.equal(compact.status, "accepted");
+    assert.equal((compact.result as { delivery?: string }).delivery, "startNow");
+    await harness.waitUntil(
+      () =>
+        [...harness.collectRows().values()].filter(
+          (row) => row.kind === "assistantText" && String(row.text).startsWith("Compaction:"),
+        ).length === 2,
+    );
+    assert.deepEqual(
+      [...harness.collectRows().values()]
+        .filter((row) => row.kind === "assistantText")
+        .map((row) => row.text),
+      ["holding", "Compaction: first paragraph\n", "Compaction: second paragraph\n"],
+    );
+    assert.equal((harness.collectState().control as { phase: string }).phase, "running");
+    const firstHeader = [...harness.collectRows().values()].find(
+      (row) => row.kind === "turnHeader" && row.sourceCommandId === "native-create",
+    );
+    assert.equal(firstHeader?.state, "running");
+    assert.equal((await send("/wiki", "native-wiki")).status, "accepted");
+    await harness.waitUntil(
+      () => (harness.collectState().pendingInteractions as unknown[] | undefined)?.length === 1,
+    );
+    const stopped = commandAckSchema.parse(
+      (
+        (await harness.request("v4/command", {
+          commandId: "native-stop",
+          clientId: "native-client",
+          sessionId,
+          type: "stop",
+          payload: {},
+          issuedAt: Date.now(),
+        })) as { result: unknown }
+      ).result,
+    );
+    assert.equal(stopped.status, "accepted");
+    await harness.waitUntil(() =>
+      [...harness.collectRows().values()].some(
+        (row) => row.kind === "assistantText" && row.text === "Wiki stopped.",
+      ),
+    );
+    await harness.waitUntil(
+      () => (harness.collectState().pendingInteractions as unknown[] | undefined)?.length === 0,
+    );
+    for (const frame of harness.frames.filter(
+      (item) => (item as { method?: string }).method === "v4/conversation/frame",
+    )) {
+      const parsed = conversationTopicWireFrameSchema.safeParse(
+        (frame as { params: unknown }).params,
+      );
+      assert.ok(parsed.success, JSON.stringify(parsed.error?.issues));
+    }
+  } finally {
+    await harness.close();
+  }
+});
+
+for (const action of ["answer", "stop"] as const) {
+  test(`原生背景命令 ACK 后 pending 仍可停止，${action} 后停止可用性解除`, async () => {
+    const harness = await startAdapter({ FAKE_OMP_NATIVE_COMMANDS: "1" });
+    try {
+      const created = (await harness.request("v4/command", {
+        commandId: "pending-create",
+        clientId: "pending-client",
+        sessionId: null,
+        type: "createSession",
+        payload: { workspaceId: "test-workspace", firstInput: { text: "/help" } },
+        issuedAt: Date.now(),
+      })) as { result: unknown };
+      const sessionId = (commandAckSchema.parse(created.result).result as { sessionId: string })
+        .sessionId;
+      await harness.request("v4/conversation/subscribe", {
+        topic: `conversation/${sessionId}`,
+        connectionId: "pending-background",
+        clientMode: "desktop-continuous",
+      });
+      const send = (await harness.request("v4/command", {
+        commandId: "pending-wiki",
+        clientId: "pending-client",
+        sessionId,
+        type: "sendText",
+        payload: { text: "/wiki" },
+        issuedAt: Date.now(),
+      })) as { result: unknown };
+      assert.equal(commandAckSchema.parse(send.result).status, "accepted");
+      const card = (await harness.waitUntil(
+        () =>
+          (
+            harness.collectState().pendingInteractions as
+              | Array<{ interactionId: string }>
+              | undefined
+          )?.[0],
+      )) as { interactionId: string };
+      const control = harness.collectState().control as { canStop: boolean; phase: string };
+      assert.equal(control.phase, "completedSuccess");
+      assert.equal(control.canStop, true);
+      const answered = (await harness.request("v4/command", {
+        commandId: "pending-control",
+        clientId: "pending-client",
+        sessionId,
+        type: action === "stop" ? "stop" : "resolveInteraction",
+        payload:
+          action === "stop"
+            ? {}
+            : {
+                interactionId: card.interactionId,
+                answer: { action: "accept", optionId: "New document index" },
+              },
+        issuedAt: Date.now(),
+      })) as { result: unknown };
+      assert.equal(commandAckSchema.parse(answered.result).status, "accepted");
+      await harness.waitUntil(
+        () => (harness.collectState().pendingInteractions as unknown[] | undefined)?.length === 0,
+      );
+      const settled = harness.collectState().control as {
+        canStop: boolean;
+        phase: string;
+        stopState: string;
+      };
+      assert.equal(settled.canStop, false);
+      assert.equal(settled.stopState, "idle");
+      assert.equal(settled.phase, control.phase, "等待解除不能推断背景操作的业务终态");
+      await harness.waitUntil(() =>
+        [...harness.collectRows().values()].some(
+          (row) =>
+            row.kind === "assistantText" &&
+            row.text === (action === "stop" ? "Wiki stopped." : "Wiki selected."),
+        ),
+      );
+    } finally {
+      await harness.close();
+    }
+  });
+}
+
+for (const control of ["resolveInteraction", "stop"] as const) {
+  test(`同步原生 goal confirm 未返回 send ACK 时，${control} 控制回路可达`, async () => {
+    const harness = await startAdapter({ FAKE_OMP_NATIVE_COMMANDS: "1" });
+    try {
+      const created = (await harness.request("v4/command", {
+        commandId: "sync-create",
+        clientId: "sync-client",
+        sessionId: null,
+        type: "createSession",
+        payload: { workspaceId: "test-workspace", firstInput: { text: "/help" } },
+        issuedAt: Date.now(),
+      })) as { result: unknown };
+      const sessionId = (commandAckSchema.parse(created.result).result as { sessionId: string })
+        .sessionId;
+      await harness.request("v4/conversation/subscribe", {
+        topic: `conversation/${sessionId}`,
+        connectionId: "sync-goal",
+        clientMode: "desktop-continuous",
+      });
+      let sendFinished = false;
+      const pendingSend = harness
+        .request("v4/command", {
+          commandId: "sync-goal-drop",
+          clientId: "sync-client",
+          sessionId,
+          type: "sendText",
+          payload: { text: "/goal drop" },
+          issuedAt: Date.now(),
+        })
+        .then((result) => {
+          sendFinished = true;
+          return result as { result: unknown };
+        });
+      const card = (await harness.waitUntil(
+        () =>
+          (
+            harness.collectState().pendingInteractions as
+              | Array<{ interactionId: string }>
+              | undefined
+          )?.[0],
+      )) as { interactionId: string };
+      assert.equal(sendFinished, false, "真实同步 confirm 的 send ACK 必须仍在等待");
+      if (control === "resolveInteraction") {
+        const invalid = (await harness.request("v4/command", {
+          commandId: "sync-invalid-reply",
+          clientId: "sync-client",
+          sessionId,
+          type: control,
+          payload: { interactionId: card.interactionId, answer: { action: "invalid" } },
+          issuedAt: Date.now(),
+        })) as { error?: { code: number } };
+        assert.equal(invalid.error?.code, -32602, "控制回路仍执行完整 Envelope 校验");
+        assert.equal(sendFinished, false);
+        const foreign = (await harness.request("v4/command", {
+          commandId: "sync-foreign-reply",
+          clientId: "sync-client",
+          sessionId: "unknown-session",
+          type: control,
+          payload: { interactionId: card.interactionId, answer: { action: "accept" } },
+          issuedAt: Date.now(),
+        })) as { error?: { code: number } };
+        assert.equal(foreign.error?.code, -32004, "不存在的会话不能答复当前会话的交互");
+        assert.equal(sendFinished, false);
+      }
+      const envelope = {
+        commandId: "sync-control",
+        clientId: "sync-client",
+        sessionId,
+        type: control,
+        payload:
+          control === "stop"
+            ? {}
+            : { interactionId: card.interactionId, answer: { action: "accept" } },
+        issuedAt: Date.now(),
+      };
+      const result = (await harness.request("v4/command", envelope)) as { result: unknown };
+      assert.equal(commandAckSchema.parse(result.result).status, "accepted");
+      const duplicate = (await harness.request("v4/command", envelope)) as { result: unknown };
+      assert.deepEqual(duplicate.result, result.result, "重复 commandId 继续由原服务幂等裁决");
+      assert.equal(commandAckSchema.parse((await pendingSend).result).status, "accepted");
+      await harness.waitUntil(
+        () => (harness.collectState().pendingInteractions as unknown[] | undefined)?.length === 0,
+      );
+      const expected = control === "stop" ? "Goal drop cancelled." : "Goal dropped.";
+      await harness.waitUntil(() =>
+        [...harness.collectRows().values()].some(
+          (row) => row.kind === "assistantText" && row.text === expected,
+        ),
+      );
+      assert.equal(
+        [...harness.collectRows().values()].filter(
+          (row) => row.kind === "assistantText" && row.text === expected,
+        ).length,
+        1,
       );
     } finally {
       await harness.close();

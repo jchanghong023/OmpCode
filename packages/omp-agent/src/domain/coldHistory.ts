@@ -191,11 +191,17 @@ export function rowsFromOmpEntries(
       record.type === "custom_message" ? record : record.message,
     );
     if (custom) {
+      // 原生 custom 是独立显示事实；挂最近模型 turn 会让多个 team 结果被 UI 组的
+      // latest-assistant 规则互相隐藏。用 journal entry ID 稳定分组，不推进模型轮。
+      const displayId =
+        typeof record.id === "string" && record.id
+          ? `omp-native-custom:${record.id}`
+          : `omp-native-custom-row:${context.nextRowId}`;
       rows.push(
         makeRow(
           context,
-          currentTurnId,
-          `custom-${context.nextRowId}`,
+          displayId,
+          displayId,
           { kind: "assistantText", text: custom.text, state: "complete" },
           custom.timestamp ?? Date.now(),
         ),

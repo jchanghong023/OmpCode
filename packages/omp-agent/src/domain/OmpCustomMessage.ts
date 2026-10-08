@@ -57,6 +57,47 @@ export function visibleOmpCustomMessage(
   };
 }
 
+/** 保留可见 custom 的原生类型，用于缺失 journal 时的派生显示去重。 */
+export function visibleOmpCustomDisplay(value: unknown): {
+  customType: string;
+  text: string;
+  timestamp?: number;
+} | null {
+  const visible = visibleOmpCustomMessage(value);
+  if (!visible) return null;
+  return { ...visible, customType: (value as { customType: string }).customType };
+}
+
+export function ompCustomDisplayKey(customType: string, text: string): string {
+  return JSON.stringify([customType, text]);
+}
+
+/** 原生 history 包装与直接 custom entry 共用同一可见性判断。 */
+export function nativeOmpCustomDisplayCounts(entries: readonly unknown[]): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const visible of nativeOmpCustomDisplays(entries)) {
+    const key = ompCustomDisplayKey(visible.customType, visible.text);
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  return counts;
+}
+
+export function nativeOmpCustomDisplays(
+  entries: readonly unknown[],
+): NonNullable<ReturnType<typeof visibleOmpCustomDisplay>>[] {
+  const displays: NonNullable<ReturnType<typeof visibleOmpCustomDisplay>>[] = [];
+  for (const entry of entries) {
+    if (typeof entry !== "object" || entry === null) continue;
+    const record = entry as { type?: string; message?: unknown };
+    const visible = visibleOmpCustomDisplay(
+      record.type === "custom_message" ? record : record.message,
+    );
+    if (!visible) continue;
+    displays.push(visible);
+  }
+  return displays;
+}
+
 /** message_end 才落一条完整行；共享 projection row/seq owner，不触碰流式锚点。 */
 export function appendOmpCustomMessage(host: ProjectionStreamHost, message: unknown): void {
   const custom = visibleOmpCustomMessage(message);
