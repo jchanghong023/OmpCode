@@ -2,20 +2,9 @@ name: Release CentOS 7 ZIP
 
 on:
   workflow_dispatch:
-    inputs:
-      tag:
-        description: "Optional release tag; leave blank to generate one automatically"
-        required: false
-        default: ""
-        type: string
-      prerelease:
-        description: "Mark the GitHub Release as a prerelease"
-        required: true
-        default: false
-        type: boolean
 
 concurrency:
-  group: release-centos7-${{ inputs.tag || github.run_id }}
+  group: release-centos7-${{ github.run_id }}
   cancel-in-progress: false
 
 jobs:
@@ -33,13 +22,12 @@ jobs:
       - name: Validate release target
         id: release_meta
         shell: bash
-        env:
-          REQUESTED_TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
           [[ "$GITHUB_REF" == refs/heads/main ]] || { echo 'CentOS 7 releases must run from main.' >&2; exit 1; }
           version=$(node -p 'require("./package.json").version')
-          release_tag=${REQUESTED_TAG:-"v${version}-centos7-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"}
+          # 日期时间方便识别，运行 ID 与重试次数保证同秒发布、重新运行不撞号。
+          release_tag="v$(date -u +%Y%m%d-%H%M%S)-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           git check-ref-format "refs/tags/$release_tag" || { echo "Invalid release tag: $release_tag" >&2; exit 1; }
           existing_tag=$(git ls-remote --tags origin "refs/tags/$release_tag") || { echo 'Could not check existing release tags.' >&2; exit 1; }
           [[ -z "$existing_tag" ]] || { echo "Tag $release_tag already exists." >&2; exit 1; }
@@ -315,7 +303,6 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       RELEASE_TAG: ${{ needs.preflight.outputs.release_tag }}
-      IS_PRERELEASE: ${{ inputs.prerelease }}
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -338,9 +325,6 @@ jobs:
           assets=(release-assets/OmpCode-*-centos7-x64.zip)
           [[ ${#assets[@]} -eq 1 && -f ${assets[0]} ]]
           args=(--repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "OmpCode $RELEASE_TAG" --notes 'Native CentOS 7 x64 offline ZIP (glibc 2.17). Extract under HOME and run bin/ompcode-centos7 without root or PRoot. Chromium sandboxing is disabled.' --generate-notes --draft)
-          if [[ "$IS_PRERELEASE" == 'true' ]]; then
-            args+=(--prerelease)
-          fi
           gh release create "$RELEASE_TAG" "${assets[0]}" "${assets[0]}.sha256" "${args[@]}"
 
       - name: Verify assets and publish release

@@ -2,25 +2,17 @@ name: Release Windows EXE
 
 on:
   workflow_dispatch:
-    inputs:
-      tag:
-        description: "Unique tag, for example v3.14.3-omp.1"
-        required: true
-        type: string
-      prerelease:
-        description: "Mark the GitHub Release as a prerelease"
-        required: true
-        default: false
-        type: boolean
 
 concurrency:
-  group: release-windows-${{ inputs.tag }}
+  group: release-windows-${{ github.run_id }}
   cancel-in-progress: false
 
 jobs:
   build:
     runs-on: windows-latest
     timeout-minutes: 120
+    outputs:
+      release_tag: ${{ steps.release_meta.outputs.release_tag }}
     permissions:
       contents: read
     env:
@@ -31,27 +23,26 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Validate release target
+        id: release_meta
         shell: pwsh
-        env:
-          RELEASE_TAG: ${{ inputs.tag }}
         run: |
           if ($env:GITHUB_REF -ne 'refs/heads/main') {
             throw 'Windows releases must run from main.'
           }
           $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
-          $pattern = '^v' + [regex]::Escape($version) + '-omp\.[1-9][0-9]*$'
-          if ($env:RELEASE_TAG -cnotmatch $pattern) {
-            throw "Tag must match v$version-omp.<positive number>."
-          }
+          # 日期时间方便识别，运行 ID 与重试次数保证同秒发布、重新运行不撞号。
+          $releaseTag = "v$([DateTime]::UtcNow.ToString('yyyyMMdd-HHmmss'))-${env:GITHUB_RUN_ID}-${env:GITHUB_RUN_ATTEMPT}"
           # 修复依据：PowerShell 的 CI 外壳会把 ls-remote --exit-code 的“未找到”(2) 当作失败。
-          $existingTag = git ls-remote --tags origin "refs/tags/$env:RELEASE_TAG"
+          $existingTag = git ls-remote --tags origin "refs/tags/$releaseTag"
           if ($LASTEXITCODE -ne 0) {
             throw 'Could not check existing release tags.'
           }
           if ($existingTag) {
-            throw "Tag $env:RELEASE_TAG already exists."
+            throw "Tag $releaseTag already exists."
           }
           "APP_VERSION=$version" >> $env:GITHUB_ENV
+          "release_tag=$releaseTag" >> $env:GITHUB_OUTPUT
+          "Release tag: $releaseTag" >> $env:GITHUB_STEP_SUMMARY
 
       - uses: pnpm/action-setup@v4
         with:
@@ -104,8 +95,7 @@ jobs:
       contents: write
     env:
       GH_TOKEN: ${{ github.token }}
-      RELEASE_TAG: ${{ inputs.tag }}
-      IS_PRERELEASE: ${{ inputs.prerelease }}
+      RELEASE_TAG: ${{ needs.build.outputs.release_tag }}
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -128,9 +118,6 @@ jobs:
           assets=(release-assets/OmpCode-*-win-x64.exe)
           [[ ${#assets[@]} -eq 1 && -f ${assets[0]} ]]
           args=(--repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "OmpCode $RELEASE_TAG" --notes 'Windows x64 installer. This build is unsigned.' --generate-notes --draft)
-          if [[ "$IS_PRERELEASE" == 'true' ]]; then
-            args+=(--prerelease)
-          fi
           gh release create "$RELEASE_TAG" "${assets[0]}" "${assets[0]}.sha256" "${args[@]}"
 
       - name: Verify assets and publish release

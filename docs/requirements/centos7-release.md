@@ -19,7 +19,7 @@
 - 推荐提示词只引用本地任务与内嵌图标，不需要公网站点、在线插件或下载图片。锁定模式下不调度应用启动/日活遥测、不转发远程用量与会话创建报告，Host 不启动或放行在线 bot 任务；入口与菜单项保留，触发时按上述反馈规则处理。提示词目录归 UI 所有，绝不执行网络 IO；启动器仍是桌面网络策略所有者。缺失可选视觉资源不得延迟或阻塞渲染。
 - 取消启动器的 `--home`、`--offline` 参数；移除原 `--home` 的符号链接、目录迁移与设置锁定逻辑。OMP 数据根使用继承的环境变量，规则见 [模型与命令](models-and-commands.md#产品规则与所有权)；启动器不改写 `OMP_CONFIG_ROOT` 或 `PI_CONFIG_DIR`。OmpCode 数据目录及只读界面遵循同一 [根目录规则](models-and-commands.md#产品规则与所有权)，旧数据及符号链接不自动修改。
 - 启动器对 `--help` 或 `-h` 打印自身用法并以成功码退出，先于包文件检查、Electron 启动与任何数据目录创建；帮助说明 `OMP_CONFIG_ROOT`、`OMP_OFFLINE`、`--profile` 与其他桌面参数的转发。正常启动保持既有参数处理。
-- Host 工具进程使用专属 stdout/stderr 管道，其日志不会继承 Citrix 或 shell 会话中的无效描述符。原始输出管道不可用（`EBADF`/`EPIPE`）时，日志继续经既有结构化消息通道输出，不终止 Host；无关写错误保持可见。发布 workflow 校验从 `main` 运行且 tag 未占用，不强加自定义 tag 命名模式；空 tag 输入自动生成 `v<app-version>-centos7-<run-id>-<run-attempt>`，提供的 tag 合法且未占用时原样使用。校验 job 把解析出的 tag 作为 job 输出发布，发布 job 精确使用该值；重跑获得不同的自动 tag。
+- Host 工具进程使用专属 stdout/stderr 管道，其日志不会继承 Citrix 或 shell 会话中的无效描述符。原始输出管道不可用（`EBADF`/`EPIPE`）时，日志继续经既有结构化消息通道输出，不终止 Host；无关写错误保持可见。发布 workflow 的零输入与自动日期时间 Tag 规则统一见 [Fork 分发约定](FORK.md)。校验 job 把生成的 Tag 作为 job 输出发布，发布 job 精确使用该值。
 - 面向该分发 commit 创建或更新 release 使用 workflow 默认 `GITHUB_TOKEN`（发布 job `contents: write`）。workflow 从 `main` 分发，天然满足默认 token 对 workflow 文件与默认分支一致的要求。
 - 手动发布 workflow 每次全新构建 CentOS 7 原生资产，并在打包前校验必需文件与 ELF 兼容性；不缓存原生阶段、最终 ZIP 或解包后的桌面应用。组装完成的 ZIP 仍需通过完整兼容性、SSH、归档与校验和检查后才发布。
 - 分支与 tag 校验通过后，Linux 桌面与 CentOS 7 原生资产在不同 GitHub runner 上并行构建；两组产物以 tar 归档经 workflow artifacts 传递以保留可执行权限与符号链接；在依赖的打包 job 中组装并校验 ZIP，仅发布该 job 校验通过的 ZIP 与 SHA256。所有 job 必须构建或打包触发 commit，而不是移动中的分支头。
@@ -57,7 +57,7 @@ flowchart TD
 - 离线 HTTP 重定向回归（无需模型）：临时回环服务返回指向公网 URL 的 302 时，Host 全局 fetch 与 undici 出口均拒绝，不能向重定向目标发起请求；普通非离线请求仍保留原重定向行为。
 - 检查内嵌推荐目录与 UI 资产：每条推荐都可用本地工具运行，每个推荐图标已内嵌，没有动画来源指向公网主机。
 - 带 `OMP_CONFIG_ROOT` 与不同 `PI_CONFIG_DIR` 启动时二者原样进入 Electron/Host/omp，目录解析按根目录环境规则验收；启动器不创建 `~/.ompcode` 或 `~/.omp` 链接，帮助不再列出 `--home` 或 `--offline`，OmpCode 的只读数据目录界面按根目录规则展示，不再提供路径选择或保存。既有 XDG 默认值、输入法配置链接与 profile/offline 参数行为保留。
-- 关闭或无效的 Host stdout/stderr 描述符不能把普通 RPC 日志变成未捕获异常；结构化日志仍到达 Main。发布 workflow 接受未占用的短自定义 tag（如 `v0928`）或留空时自动生成，仍拒绝复用 tag 或错误分支。自动 tag 在 workflow 重跑间不同。
+- 关闭或无效的 Host stdout/stderr 描述符不能把普通 RPC 日志变成未捕获异常；结构化日志仍到达 Main。发布 workflow 无自定义输入项，自动生成日期时间 Tag，仍拒绝复用 Tag 或错误分支；重新运行全部 job 时生成不同 Tag。
 - 检查每个分发可执行文件与原生插件的 GLIBC 需求 ≤ 2.17，并在宿主 `libstdc++` 缺所需符号时提供其 C++ 运行时。发布 ZIP 不含 PRoot 或 Ubuntu 根文件系统，不修改宿主 glibc 或既有 omp 安装。仅在该 VM 验收通过后，才允许调整手动 CentOS workflow 的构建方式。
 - Windows 基线保护：CentOS 7 构建的版本切换不得持久改写仓库 manifest 与 lockfile（CI 工作区内的临时改写不回传仓库）；Windows 发布产物仍基于 Electron 44.x 且 `node:sqlite` 路径可用。renderer 做一次 CentOS 7 包（Chromium 120）与 Windows 的 UI 走查对比：界面结构、入口与交互一致，渲染性能策略差异除外。
 - 双轨回归（无需模型）：Electron 44 的原生 File 经 `webUtils.getPathForFile` 得到本地附件路径；Electron 28 缺少该能力时才读取 `File.path`。两者都不能把空路径伪装成本地文件。慢磁盘下正常退出的所有 Main 日志排空调用共用一秒预算，不得在已超预算后重新等待无界队列。

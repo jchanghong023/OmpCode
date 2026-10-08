@@ -59,7 +59,9 @@
 - 接口参考与测试基线：接口与协议开发参考本地源码 `D:\code1111111111\oh-my-pi` 与上述 omp 权威文档；实际测试（含换核验收 E2E）使用 releases 实际内嵌的发布版本二进制执行，不以本地源码的未发布改动为测试对象。
 - 分发：随 ZCode 安装包内嵌——打包时取该 fork GitHub releases 页面（`https://github.com/jchanghong023/oh-my-pi/releases`）的最新版本二进制，内嵌进应用资源并由应用拉起；用户无需单独安装 omp。不依赖上游 oh-my-pi 的 npm / Homebrew / Nix / `omp.sh` 分发。
 - 分发完整性：下载的 omp release 资产必须具有对应的发布 SHA256，缺失校验文件/资产条目或摘要不符时资源准备失败；复用缓存时仍验证资产摘要，不能只凭文件存在判定可分发。缓存按平台资产分别保存校验元数据，不能让同 tag 的其他平台覆盖来源信息。
-- Windows x64 桌面版通过 GitHub Actions 手动发布：从 `main` 输入与当前版本匹配的唯一 OmpCode 标签，打包后将安装 EXE 与 SHA256 校验文件上传到本仓库 GitHub Release；发布流水线不单独运行测试。
+- Windows EXE 与 CentOS 7 ZIP 的 GitHub Actions 手动发布入口不提供任何自定义输入项：从 `main` 点击运行即可，发布 Tag 自动生成为 `v<UTC日期YYYYMMDD>-<时间HHmmss>-<run-id>-<run-attempt>`。同秒触发的两条流水线通过运行 ID 区分，重新运行全部 job 通过重试次数区分；构建 job 生成一次，发布 job 使用该输出。默认发布正式 Release，上传安装包与 SHA256 校验文件；发布流水线不单独运行测试。
+
+验收：两个运行面板均无 tag 或预发布输入项；生成的 Tag 包含日期时间，双平台并行触发与重新运行全部 job 不重复；发布使用构建输出的同一个 Tag，保留分支与已有 Tag 校验。
 - 内嵌 omp 的配置与边界：内嵌拷贝与用户已安装的 omp 使用完全相同的配置（同一配置、凭据与会话数据来源），行为与用户日常使用的 omp 保持一致；NEVER 覆盖、替换、修改或代为安装用户已安装的 omp，内嵌拷贝只存在于 ZCode 应用资源目录内。
 - 进程与端口边界：内嵌 omp 只以子进程形态经 stdio 通信，不监听任何端口；绝不探测、复用、终止或以其他方式影响用户机器上已在运行的 ZCode / omp 进程。本仓库自建的任何本地测试服务一律使用 `listen(0)` 临时端口，发生端口冲突时换临时端口重试，不占用固定端口。
 - CentOS 7 独立分发与安全限制见 [centos7-release.md](centos7-release.md)。
