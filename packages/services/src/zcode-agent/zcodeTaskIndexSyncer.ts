@@ -102,7 +102,7 @@ export interface ZCodeTaskIndexSyncer {
   /**
    * 兼容入口（旧 shadow 订阅 API 形状）：session 维度的激活信号统一收敛为
    * workspace 级 v4 订阅。options.includeSnapshot 在 v4 摄入下无对应语义（初始
-   * sessions-index snapshot 只静默补缺失行，不回放终态/广播），保留参数只为不动调用面。
+   * sessions-index snapshot 只补缺失行并通知列表刷新，不回放终态），保留参数只为不动调用面。
    */
   ensureSessionSubscription(
     target: ZCodeAgentSessionTarget,
@@ -278,7 +278,7 @@ interface WorkspaceIngestState {
   configLastWarnAt: number | null;
   /** 会话摘要基线（terminal 迁移/标题变化的 diff 依据）。 */
   summaries: Map<string, SessionSummary>;
-  /** 首帧（snapshot）静默补缺失行，但不回放历史终态事件或列表广播。 */
+  /** 首帧（snapshot）补缺失行后统一通知列表刷新，不回放历史终态事件。 */
   seeded: boolean;
   /** workspace 级 frame emitter 跨 runtime generation 保持稳定，只允许安装一组 listener。 */
   frameListenersInstalled: boolean;
@@ -722,9 +722,10 @@ export function createZCodeTaskIndexSyncer(
   ): Promise<void> {
     const candidates = [...summaries].filter((summary) => summary.phase !== "draft");
     if (candidates.length === 0) return;
+    const generation = state.indexSubscriptionGeneration;
     // 纯 V4 UI 不经过 zcodeSessionService.initializeWorkspace；若把首帧
     // 当成“已有 sqlite 存量”的静默基线，远端新库就会永远是 0 行。这里只做原子
-    // insert-if-missing，不广播、不回放历史终态，也不覆盖已有产品壳状态；后续打开/
+    // insert-if-missing，不回放历史终态，也不覆盖已有产品壳状态；后续打开/
     // 收口时再由完整 snapshot 补 model、正文搜索等权威字段。
     // 防灾保护：历史会话可能很多，不能一次创建等量 Promise 挤占 host 事件循环。
     // 固定小批次写入；失败只汇总一条生产日志，避免逐会话错误再次制造日志风暴。
@@ -750,6 +751,15 @@ export function createZCodeTaskIndexSyncer(
         `首次 sessions-index 基线补齐 task index 失败 workspace=${resolveWorkspaceKey(state.target)} failed=${failedCount} total=${candidates.length}`,
         firstError,
       );
+    }
+    // Bug 根因：历史补齐晚于侧栏首次读取时，空列表缓存没有失效通知，要新建会话才刷新。
+    // 写入结束后统一通知当前订阅的列表重读；部分成功也刷新，不回放历史终态或未读提醒。
+    if (
+      failedCount < candidates.length &&
+      isLiveState(state) &&
+      state.indexSubscriptionGeneration === generation
+    ) {
+      emitWorkspaceTaskListChanged(state.target, undefined, "task_meta_changed");
     }
   }
 
@@ -1069,7 +1079,7 @@ export function createZCodeTaskIndexSyncer(
         nextSummaries.set(summary.sessionId, summary);
       }
       if (!state.seeded) {
-        // 首帧 = 静默基线：不回放历史终态、不发列表广播；仅原子补齐缺失行，
+        // 首帧 = 历史基线：不回放历史终态；原子补齐缺失行后统一通知列表刷新，
         // 防止远端/新安装的空 sqlite 因纯 V4 路径永远没有存量。
         state.summaries = nextSummaries;
         state.seeded = true;
