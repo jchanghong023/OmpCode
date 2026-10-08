@@ -13,6 +13,7 @@ import { TID_CHAT_REASONING_CONTENT, TID_CHAT_REASONING_TRIGGER } from "@zcode/s
 import { BrainIcon, ChevronRightIcon } from "lucide-react";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
 import { QueuedSummaryContent } from "@/ToolCallBlocks/QueuedSummaryContent.js";
+import { resolveReasoningStreamingSummary } from "./reasoningSummary.js";
 import type { ComponentProps, CSSProperties, ReactNode } from "react";
 import {
   EMPTY_SCROLL_MASK_STATE,
@@ -252,18 +253,7 @@ export function isReasoningSummaryOverflowing({
   return scrollWidth > clientWidth + 1;
 }
 
-export function resolveReasoningStreamingSummary(
-  streamingText: string,
-): { key: string; text: string } | null {
-  const lines = streamingText.replace(/\r\n?/gu, "\n").split("\n");
-  for (let index = lines.length - 1; index >= 0; index -= 1) {
-    const text = lines[index]?.trim() ?? "";
-    if (text.length > 0) {
-      return { key: String(index), text };
-    }
-  }
-  return null;
-}
+export { resolveReasoningStreamingSummary } from "./reasoningSummary.js";
 
 const REASONING_SUMMARY_MASK =
   "linear-gradient(to right, transparent 0, black 16px, black calc(100% - 16px), transparent 100%)";
@@ -292,8 +282,10 @@ export const ReasoningTrigger = memo(
   }: ReasoningTriggerProps) => {
     const { isStreaming, isOpen, duration } = useReasoning();
     const { intl } = useZCodeIntl();
-    const streamingSummary =
-      isStreaming && !isOpen ? resolveReasoningStreamingSummary(streamingText) : null;
+    const streamingSummary = useMemo(
+      () => (isStreaming && !isOpen ? resolveReasoningStreamingSummary(streamingText) : null),
+      [isStreaming, isOpen, streamingText],
+    );
     const streamingSummaryRef = useRef<HTMLSpanElement | null>(null);
     const streamingSummaryTextRef = useRef<HTMLSpanElement | null>(null);
     const [isStreamingSummaryOverflowing, setIsStreamingSummaryOverflowing] = useState(false);

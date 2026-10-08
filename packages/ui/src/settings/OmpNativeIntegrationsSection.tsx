@@ -76,7 +76,9 @@ export function OmpNativeIntegrationsView({
                     <h3 className="font-medium text-foreground">
                       {intl.formatMessage({ id: `settings.ompNative.${scope}` })}
                     </h3>
-                    <p className="break-all font-mono text-ui-base text-foreground-subtle">{path}</p>
+                    <p className="break-all font-mono text-ui-base text-foreground-subtle">
+                      {path}
+                    </p>
                   </div>
                   <Button
                     type="button"

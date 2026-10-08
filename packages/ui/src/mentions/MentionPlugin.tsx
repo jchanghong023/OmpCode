@@ -43,6 +43,7 @@ import {
 } from "./mentionPanelRouting.js";
 import { $createPromptMentionNode } from "./nodes/PromptMentionNode.js";
 import { useFileMentionProvider } from "./providers/fileMentionProvider.js";
+import { createFileMentionInputRounds } from "./providers/fileMentionSearch.js";
 import { usePluginsMentionProvider } from "./providers/pluginsMentionProvider.js";
 import { useSessionsMentionProvider } from "./providers/sessionsMentionProvider.js";
 import { useSkillsMentionProvider } from "./providers/skillsMentionProvider.js";
@@ -138,7 +139,23 @@ export function MentionPlugin({
 }: MentionPluginProps & { provider: ZCodeProvider }) {
   const [editor] = useLexicalComposerContext();
   const { intl } = useZCodeIntl();
-  const [activeTrigger, setActiveTrigger] = useState<ActivePromptInputTrigger | null>(null);
+  const [activeTrigger, setActiveTriggerState] = useState<ActivePromptInputTrigger | null>(null);
+  const [fileMentionInputRounds] = useState(createFileMentionInputRounds);
+  const [fileMentionRoundVersion, setFileMentionRoundVersion] = useState(0);
+  const acceptActiveTrigger = useCallback(
+    (next: ActivePromptInputTrigger | null) => {
+      // 轮次必须在 Lexical 接纳实际清空/重新打开时更新，不能依赖 deferred 渲染空串。
+      const version = fileMentionInputRounds.admit(
+        next?.query ?? "",
+        !disabled && next?.trigger === "@",
+      );
+      setFileMentionRoundVersion(version);
+      setActiveTriggerState((current) =>
+        current?.trigger === next?.trigger && current?.query === next?.query ? current : next,
+      );
+    },
+    [disabled, fileMentionInputRounds],
+  );
   const [selectedIndex, setSelectedIndex] = useState(0);
   const dismissedSignatureRef = useRef<string | null>(null);
   const activeSignatureRef = useRef<string | null>(null);
@@ -186,6 +203,7 @@ export function MentionPlugin({
     intl.formatMessage({ id: "chat.mention.files.empty" }),
     intl.formatMessage({ id: "chat.mention.files.title" }),
     fileDefaultPreviewLimit,
+    { liveQuery: activeQuery, roundVersion: fileMentionRoundVersion },
   );
   const whiteboardResult = useWhiteboardMentionProvider(
     workspacePath,
@@ -372,10 +390,10 @@ export function MentionPlugin({
       return;
     }
 
-    setActiveTrigger(null);
+    acceptActiveTrigger(null);
     setSelectedIndex(0);
     activeTokenRef.current = null;
-  }, [disabled]);
+  }, [acceptActiveTrigger, disabled]);
 
   useEffect(() => {
     return editor.registerUpdateListener(({ dirtyElements, dirtyLeaves, editorState }) => {
@@ -390,7 +408,7 @@ export function MentionPlugin({
       editorState.read(() => {
         if (disabled) {
           activeTokenRef.current = null;
-          setActiveTrigger(null);
+          acceptActiveTrigger(null);
           return;
         }
 
@@ -398,7 +416,7 @@ export function MentionPlugin({
         if (!selectionState) {
           activeTokenRef.current = null;
           dismissedSignatureRef.current = null;
-          setActiveTrigger(null);
+          acceptActiveTrigger(null);
           return;
         }
 
@@ -415,7 +433,7 @@ export function MentionPlugin({
         ) {
           activeTokenRef.current = null;
           dismissedSignatureRef.current = null;
-          setActiveTrigger(null);
+          acceptActiveTrigger(null);
           return;
         }
         activeTokenRef.current = nextActiveToken;
@@ -429,26 +447,14 @@ export function MentionPlugin({
         }
 
         if (dismissedSignatureRef.current === nextSignature) {
-          setActiveTrigger(null);
+          acceptActiveTrigger(null);
           return;
         }
 
-        setActiveTrigger((current) => {
-          if (
-            current?.trigger === nextActiveToken.trigger &&
-            current.query === nextActiveToken.query
-          ) {
-            return current;
-          }
-
-          return {
-            query: nextActiveToken.query,
-            trigger: nextActiveToken.trigger,
-          };
-        });
+        acceptActiveTrigger({ query: nextActiveToken.query, trigger: nextActiveToken.trigger });
       });
     });
-  }, [disabled, editor]);
+  }, [acceptActiveTrigger, disabled, editor]);
 
   const insertMentionItem = useCallback(
     (item: MentionItem) => {
@@ -495,7 +501,7 @@ export function MentionPlugin({
 
         dismissedSignatureRef.current = null;
         activeTokenRef.current = null;
-        setActiveTrigger(null);
+        acceptActiveTrigger(null);
         setSelectedIndex(0);
         void onWhiteboardMentionSelected(item.value);
         requestAnimationFrame(() => {
@@ -561,13 +567,13 @@ export function MentionPlugin({
 
       dismissedSignatureRef.current = null;
       activeTokenRef.current = null;
-      setActiveTrigger(null);
+      acceptActiveTrigger(null);
       setSelectedIndex(0);
       requestAnimationFrame(() => {
         editor.focus();
       });
     },
-    [editor, onWhiteboardMentionSelected],
+    [acceptActiveTrigger, editor, onWhiteboardMentionSelected],
   );
 
   const selectOption = useCallback(
@@ -657,7 +663,7 @@ export function MentionPlugin({
         event?.stopPropagation();
 
         dismissedSignatureRef.current = activeSignatureRef.current;
-        setActiveTrigger(null);
+        acceptActiveTrigger(null);
         setSelectedIndex(0);
         return true;
       },
@@ -671,7 +677,7 @@ export function MentionPlugin({
       () => {
         dismissedSignatureRef.current = null;
         activeTokenRef.current = null;
-        setActiveTrigger(null);
+        acceptActiveTrigger(null);
         setSelectedIndex(0);
         return false;
       },
@@ -686,7 +692,7 @@ export function MentionPlugin({
       unregisterEscape();
       unregisterBlur();
     };
-  }, [editor, flatItems, isOpen, selectOption, selectedIndex]);
+  }, [acceptActiveTrigger, editor, flatItems, isOpen, selectOption, selectedIndex]);
 
   const panelTitle = intl.formatMessage({ id: "chat.mention.title" });
   const panelDescription = hasActiveQuery

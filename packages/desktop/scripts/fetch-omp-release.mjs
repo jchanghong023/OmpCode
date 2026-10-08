@@ -227,7 +227,11 @@ async function main() {
     await downloadToFile(url, cachedAsset);
   } else {
     const manifest = JSON.parse(readFileSync(cachedManifest, "utf8"));
-    if (manifest.tag !== tag || manifest.asset !== assetName || !/^[0-9a-f]{64}$/.test(manifest.sha256)) {
+    if (
+      manifest.tag !== tag ||
+      manifest.asset !== assetName ||
+      !/^[0-9a-f]{64}$/.test(manifest.sha256)
+    ) {
       throw new Error(`[fetch-omp] 无效的资产缓存元数据：${cachedManifest}`);
     }
     expected = manifest.sha256;
@@ -245,7 +249,10 @@ async function main() {
   }
   console.log(`[fetch-omp] SHA256 校验通过 ${expected.slice(0, 12)}…`);
   mkdirSync(tagCacheDir, { recursive: true });
-  writeFileSync(cachedManifest, `${JSON.stringify({ tag, asset: assetName, sha256: expected }, null, 2)}\n`);
+  writeFileSync(
+    cachedManifest,
+    `${JSON.stringify({ tag, asset: assetName, sha256: expected }, null, 2)}\n`,
+  );
 
   const stagedManifest = JSON.parse(readFileSync(cachedManifest, "utf8"));
   const stagedTag = stagedManifest.tag;

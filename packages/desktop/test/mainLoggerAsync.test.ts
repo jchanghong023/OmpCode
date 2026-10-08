@@ -41,7 +41,6 @@ async function fileContent(): Promise<string> {
 
 test.after(() => rm(logRoot, { recursive: true, force: true }));
 
-
 test("主进程日志调用不等文件写入，退出屏障刷盘保留错误", async () => {
   logger.info("async-fixture-info");
   logger.error("async-fixture-error");
@@ -111,4 +110,3 @@ test("退出排空共享预算：重复 flushMainLogs 不累加等待", async ()
   const content = await fileContent();
   assert.match(content, /exit-fixture-error/);
 });
-

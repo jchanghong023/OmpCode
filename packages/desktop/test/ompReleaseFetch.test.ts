@@ -13,7 +13,9 @@ const assets: Record<string, string> = {
   "omp-windows-x64.exe": "windows release fixture",
   "omp-linux-x64": "linux release fixture",
 };
-const sums = Object.entries(assets).map(([name, content]) => `${createHash("sha256").update(content).digest("hex")}  ${name}`).join("\n");
+const sums = Object.entries(assets)
+  .map(([name, content]) => `${createHash("sha256").update(content).digest("hex")}  ${name}`)
+  .join("\n");
 
 async function fixture(mode: "valid" | "missing" | "no-entry" | "wrong") {
   const root = await mkdtemp(join(tmpdir(), "omp-release-fetch-"));
@@ -27,7 +29,13 @@ async function fixture(mode: "valid" | "missing" | "no-entry" | "wrong") {
     const name = request.url?.split("/").at(-1);
     if (name === "SHA256SUMS.txt") {
       response.statusCode = mode === "missing" ? 404 : 200;
-      response.end(mode === "no-entry" ? "" : mode === "wrong" ? ` ${"0".repeat(64)}  omp-windows-x64.exe` : sums);
+      response.end(
+        mode === "no-entry"
+          ? ""
+          : mode === "wrong"
+            ? ` ${"0".repeat(64)}  omp-windows-x64.exe`
+            : sums,
+      );
     } else if (name && Object.hasOwn(assets, name)) {
       response.end(assets[name]);
     } else {
@@ -46,7 +54,13 @@ async function fixture(mode: "valid" | "missing" | "no-entry" | "wrong") {
     delete env.GITHUB_TOKEN;
     return execute(process.execPath, [script], {
       cwd: root,
-      env: { ...env, OMP_RELEASE_TAG: "fixture-tag", OMP_RELEASE_DOWNLOAD_BASE: `http://127.0.0.1:${address.port}`, ZCODE_TARGET_OS: platform, ZCODE_TARGET_ARCH: "x64" },
+      env: {
+        ...env,
+        OMP_RELEASE_TAG: "fixture-tag",
+        OMP_RELEASE_DOWNLOAD_BASE: `http://127.0.0.1:${address.port}`,
+        ZCODE_TARGET_OS: platform,
+        ZCODE_TARGET_ARCH: "x64",
+      },
       timeout: 15_000,
     });
   }
@@ -55,7 +69,9 @@ async function fixture(mode: "valid" | "missing" | "no-entry" | "wrong") {
     run,
     requests: () => requests,
     async close() {
-      await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+      await new Promise<void>((resolve, reject) =>
+        server.close((error) => (error ? reject(error) : resolve())),
+      );
       await rm(root, { recursive: true, force: true });
     },
   };
@@ -70,10 +86,15 @@ test("发布资产与缓存均校验，缓存篡改在复制资源前失败", as
     const requests = f.requests();
     await f.run();
     assert.equal(f.requests(), requests, "verified cache reuse must not redownload");
-    await writeFile(join(f.desktop, ".omp-release-cache", "fixture-tag", "omp-windows-x64.exe"), "corrupted");
+    await writeFile(
+      join(f.desktop, ".omp-release-cache", "fixture-tag", "omp-windows-x64.exe"),
+      "corrupted",
+    );
     await assert.rejects(f.run(), /SHA256 校验失败/);
     assert.equal(await readFile(staged, "utf8"), assets["omp-windows-x64.exe"]);
-  } finally { await f.close(); }
+  } finally {
+    await f.close();
+  }
 });
 
 for (const mode of ["missing", "no-entry", "wrong"] as const) {
@@ -81,8 +102,13 @@ for (const mode of ["missing", "no-entry", "wrong"] as const) {
     const f = await fixture(mode);
     try {
       await assert.rejects(f.run(), /SHA256/);
-      await assert.rejects(readFile(join(f.desktop, "bundled-agents", "win32-x64", "glm", "omp", "omp.exe")), { code: "ENOENT" });
-    } finally { await f.close(); }
+      await assert.rejects(
+        readFile(join(f.desktop, "bundled-agents", "win32-x64", "glm", "omp", "omp.exe")),
+        { code: "ENOENT" },
+      );
+    } finally {
+      await f.close();
+    }
   });
 }
 
@@ -93,9 +119,16 @@ test("同 tag 多平台缓存分别保留资产来源与摘要", async () => {
     await f.run("linux");
     await f.run();
     for (const platform of ["win32", "linux"]) {
-      const manifest = JSON.parse(await readFile(join(f.desktop, "bundled-agents", `${platform}-x64`, "glm", "omp", "omp-release.json"), "utf8"));
+      const manifest = JSON.parse(
+        await readFile(
+          join(f.desktop, "bundled-agents", `${platform}-x64`, "glm", "omp", "omp-release.json"),
+          "utf8",
+        ),
+      );
       assert.equal(manifest.tag, "fixture-tag");
       assert.equal(manifest.asset, platform === "win32" ? "omp-windows-x64.exe" : "omp-linux-x64");
     }
-  } finally { await f.close(); }
+  } finally {
+    await f.close();
+  }
 });

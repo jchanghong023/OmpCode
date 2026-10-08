@@ -32,8 +32,9 @@ import {
   type QueuedTurnReconcileHost,
 } from "./queuedTurnReconcile.js";
 import { applyProjectionToolCallUpdate } from "./projectionToolCallUpdate.js";
+import { ProjectionToolCallIndex } from "./projectionToolCallIndex.js";
 import { appendProjectionStreamDelta, closeProjectionStreamingRows, materializeStreamTextRow, type ProjectionStreamHost } from "./projectionStreamText.js";
-import { conversationRowIdOfToolCall, createMarkerRow, buildConversationSnapshot, conversationRowsRange, type ToolCallUpsert, type TurnContext } from "./projectionRows.js";
+import { createMarkerRow, buildConversationSnapshot, conversationRowsRange, type ToolCallUpsert, type TurnContext } from "./projectionRows.js";
 import { appendOmpCustomMessage } from "./OmpCustomMessage.js";
 import { ompTodoState, ompTodoStateFromRows } from "./ompTodoPlan.js";
 
@@ -46,6 +47,7 @@ export class ConversationProjection {
   private sequence = 0;
   private revisionValue = 0;
   private rows = new Map<number, ConversationRow>();
+  private readonly toolCallIndex = new ProjectionToolCallIndex();
   private pendingStreamTextByRowId = new Map<number, string[]>();
   private rowIds: number[] = [];
   private nextRowId = 1;
@@ -210,13 +212,12 @@ export class ConversationProjection {
       turn,
       update,
       createdAtSeq: this.sequence + 1,
-      rows: this.rows.values(),
+      existing: this.toolCallIndex.firstRow(update.toolCallId, this.rows),
       nextRowId: () => this.nextRowId++,
       rowAt: (rowId) => this.rows.get(rowId),
       upsertRow: (row) => this.upsertRow(row),
     });
   }
-
   /** 无主 transcript 的辅助投影：仍由同一序列发布状态，不操作主 turn/queue。 */
   patchSideViewState(patch: Pick<StatePatch, "control" | "inputRouting" | "availability" | "config">): void {
     this.patchState(patch);
@@ -225,7 +226,6 @@ export class ConversationProjection {
   addUsage(delta: { inputTokens?: number; outputTokens?: number; cacheReadTokens?: number; cacheWriteTokens?: number }): void {
     this.patchState(usagePatch(this.state, delta));
   }
-
   setContextWindow(usedTokens: number | null, maxTokens: number | null, report?: import("./ompContextReport.js").OmpContextReport | null): void {
     this.patchState(contextWindowPatch(this.state, usedTokens, maxTokens, report));
   }
@@ -235,7 +235,6 @@ export class ConversationProjection {
   setTitle(title: string, source: "default" | "generated" | "custom"): void {
     this.patchState({ meta: { title, titleSource: source } });
   }
-
   upsertSubagent(input: Parameters<OmpSubagentProjection["upsert"]>[0]): void {
     this.subagents.upsert(input);
   }
@@ -248,22 +247,18 @@ export class ConversationProjection {
   addPendingInteraction(interaction: PendingInteraction): void {
     this.patchState({ pendingInteractions: [...this.state.pendingInteractions, interaction] });
   }
-
   resolvePendingInteraction(interactionId: string): void {
     this.patchState({ pendingInteractions: this.state.pendingInteractions.filter((item) => item.interactionId !== interactionId) });
   }
-
   /** AskUserQuestion 首次交互暂停倒计时：autoResolution 置 snoozed（omp 侧 ask_pause 由交互代理发送）。 */
   snoozeInteractionAutoResolution(interactionId: string): void {
     const pendingInteractions = snoozePendingInteractions(this.state.pendingInteractions, interactionId);
     if (pendingInteractions) this.patchState({ pendingInteractions });
   }
-
   /** 权限卡锚定：按 omp toolCallId 找最近一条工具行（找不到返回 null）。 */
   rowIdOfToolCall(toolCallId: string): number | null {
-    return conversationRowIdOfToolCall(this.rows, this.rowIds, toolCallId);
+    return this.toolCallIndex.latestRowId(toolCallId);
   }
-
   addTimelineMarker(marker: TimelineMarkerPayload): void {
     const turn = this.turn;
     if (!turn) {
@@ -306,6 +301,7 @@ export class ConversationProjection {
       this.claimRowId(row.rowId);
     }
     this.rowIds.sort((a, b) => a - b);
+    this.toolCallIndex.rebuild(this.rows, this.rowIds);
     this.state = { ...this.state, subagents: this.subagents.hydrate(rows), plan: ompTodoStateFromRows(rows) };
   }
 
@@ -319,6 +315,7 @@ export class ConversationProjection {
     rows = rows.map((row) => this.subagents.withViewId(row));
     if (this.rowIds.length > 0) this.pushPending({ op: "row.removed", fromRowId: this.rowIds[0]! });
     this.rows.clear();
+    this.toolCallIndex.clear();
     this.pendingStreamTextByRowId.clear();
     this.rowIds.length = 0;
     for (const row of rows) {
@@ -355,6 +352,7 @@ export class ConversationProjection {
   private appendRow(row: ConversationRow): void {
     this.rows.set(row.rowId, row);
     this.rowIds.push(row.rowId);
+    this.toolCallIndex.append(row);
     this.pushPending({ op: "row.appended", row });
     const plan = ompTodoState(row);
     if (plan !== undefined) this.patchState({ plan });
@@ -368,11 +366,13 @@ export class ConversationProjection {
   private upsertRow(row: ConversationRow): void {
     // Bug 根因：首次工具/子代理行误发 row.upserted，桌面增量客户端对未知 rowId
     // 按协议忽略，导致运行态只有状态计数、没有可见记录；首次必须 append。
-    const isNew = !this.rows.has(row.rowId);
+    const previous = this.rows.get(row.rowId);
+    const isNew = previous === undefined;
     this.rows.set(row.rowId, row);
     if (isNew) {
       this.rowIds.push(row.rowId);
     }
+    this.toolCallIndex.upsert(previous, row, this.rows, this.rowIds);
     this.pushPending(isNew ? { op: "row.appended", row } : { op: "row.upserted", row });
     const plan = ompTodoState(row);
     if (plan !== undefined) this.patchState({ plan });

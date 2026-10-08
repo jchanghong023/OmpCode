@@ -73,6 +73,12 @@
 
 Agent 交互页的已保存会话可执行 `node packages/desktop/test/ompAgentInteractions.visual.e2e.mjs`，复用上述 `OMP_E2E_RUNTIME_MANIFEST`、`OMP_E2E_EVIDENCE_DIR`、`OMP_E2E_RUN_ID`，验证摘要/原文开合、深浅主题与窄栏布局，不发起新的模型轮次。
 
+性能热路径验收：`node packages/desktop/test/ompPerformanceHotPaths.components.e2e.mjs` 启动独立 Electron 组件环境，检查代码/思考/时间线及输入保存边界，不调用模型。`node packages/desktop/test/ompPerformanceHotPaths.gui.e2e.mjs` 复用专用隔离启动器及 `OMP_E2E_RUNTIME_MANIFEST`、`OMP_E2E_EVIDENCE_DIR`、`OMP_E2E_RUN_ID`，验证真实 GLM 发送、草稿与文件引用；`OMP_E2E_PHASE=live` 检查新建会话，`stable` 检查已有持久 ID 的会话，`cold` 在重启同一隔离目录后检查恢复，三者的结果分别报告。
+
+`node packages/desktop/test/ompPerformanceHotPaths.mentions.e2e.mjs` 使用同一隔离 runtime manifest、evidence 目录和 run ID，验证真实 `@` 无命中补扫、新文件候选及同 Markdown 富节点的剪贴板/草稿恢复；Host 扫描次数由文件服务真实 I/O 测试独立计量。
+
+UI UT 使用 `@/` 路径别名时，从根执行 `pnpm exec tsx --tsconfig packages/ui/tsconfig.json --test <测试文件>`。性能对照入口为 `packages/ui/test/conversationTurnRenderBuilder.perf.ts`、`packages/ui/test/streamingContentPresentation.perf.ts` 和 `packages/services/test/workspaceFileIndex.perf.mts <baseline-git-ref>`；使用固定 Node 与相同样本，不将本地探针当作目标网络盘验收。
+
 ## 实现与验证
 
 - 代码改动使用 `.agents/skills/architecture-governance/SKILL.md`，先运行架构检查，再读取目标模块的受控上下文。

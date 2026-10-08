@@ -27,16 +27,24 @@ input.on("close", () => process.exit(0));
 
 function deferred() {
   let resolve!: () => void;
-  const promise = new Promise<void>((done) => { resolve = done; });
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
   return { promise, resolve };
 }
 
 async function requestsAt(path: string) {
   const text = await readFile(path, "utf8");
-  return text.trim().split("\n").map((line) => JSON.parse(line) as {
-    method: string;
-    sessionId: string;
-  });
+  return text
+    .trim()
+    .split("\n")
+    .map(
+      (line) =>
+        JSON.parse(line) as {
+          method: string;
+          sessionId: string;
+        },
+    );
 }
 
 test("same-generation concurrent consumers share startup and both reach the stdio runtime", async () => {
@@ -52,7 +60,10 @@ test("same-generation concurrent consumers share startup and both reach the stdi
       starts += 1;
       entered.resolve();
       await release.promise;
-      return { command: process.execPath, args: ["--input-type=module", "-e", fakeAgent, requestPath] };
+      return {
+        command: process.execPath,
+        args: ["--input-type=module", "-e", fakeAgent, requestPath],
+      };
     },
   });
   try {
@@ -63,12 +74,15 @@ test("same-generation concurrent consumers share startup and both reach the stdi
     release.resolve();
     assert.deepEqual(await results, [true, true]);
     assert.equal(starts, 1);
-    assert.deepEqual(
-      (await requestsAt(requestPath)).map((request) => request.sessionId).sort(),
-      ["existing-a", "existing-b"],
-    );
+    assert.deepEqual((await requestsAt(requestPath)).map((request) => request.sessionId).sort(), [
+      "existing-a",
+      "existing-b",
+    ]);
     // 同一进程内的关闭真实改变 fixture 状态，重复关闭并非 echo 成功。
-    assert.equal(await service.closeSession({ workspacePath: root, sessionId: "existing-a" }), false);
+    assert.equal(
+      await service.closeSession({ workspacePath: root, sessionId: "existing-a" }),
+      false,
+    );
   } finally {
     release.resolve();
     await service.disposeAllAndWait();
@@ -92,7 +106,10 @@ test("release cancels old startup without dispatch, and the next generation rema
         entered.resolve();
         await release.promise;
       }
-      return { command: process.execPath, args: ["--input-type=module", "-e", fakeAgent, requestPath] };
+      return {
+        command: process.execPath,
+        args: ["--input-type=module", "-e", fakeAgent, requestPath],
+      };
     },
   });
   try {
@@ -102,7 +119,10 @@ test("release cancels old startup without dispatch, and the next generation rema
     await service.disposeWorkspace({ workspacePath: root });
     release.resolve();
     await rejected;
-    assert.equal(await service.closeSession({ workspacePath: root, sessionId: "existing-new" }), true);
+    assert.equal(
+      await service.closeSession({ workspacePath: root, sessionId: "existing-new" }),
+      true,
+    );
     assert.equal(starts, 2);
     assert.deepEqual(await requestsAt(requestPath), [
       { method: "session/close", sessionId: "existing-new" },
@@ -131,7 +151,10 @@ test("failed startup is shared by concurrent consumers and does not poison the n
         await release.promise;
         throw new Error("isolated startup failure");
       }
-      return { command: process.execPath, args: ["--input-type=module", "-e", fakeAgent, requestPath] };
+      return {
+        command: process.execPath,
+        args: ["--input-type=module", "-e", fakeAgent, requestPath],
+      };
     },
   });
   try {
@@ -143,10 +166,14 @@ test("failed startup is shared by concurrent consumers and does not poison the n
     release.resolve();
     for (const result of await results) {
       assert.equal(result.status, "rejected");
-      if (result.status === "rejected") assert.match(String(result.reason), /isolated startup failure/);
+      if (result.status === "rejected")
+        assert.match(String(result.reason), /isolated startup failure/);
     }
     assert.equal(starts, 1);
-    assert.equal(await service.closeSession({ workspacePath: root, sessionId: "existing-new" }), true);
+    assert.equal(
+      await service.closeSession({ workspacePath: root, sessionId: "existing-new" }),
+      true,
+    );
     assert.equal(starts, 2);
     assert.deepEqual(await requestsAt(requestPath), [
       { method: "session/close", sessionId: "existing-new" },

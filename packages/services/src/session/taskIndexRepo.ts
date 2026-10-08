@@ -1341,6 +1341,9 @@ export class TaskIndexRepo {
           // 本身不知道迁移来源。同步运行态快照时保留已有 migrationSource，避免
           // 列表过滤和后续切模型把导入任务重新当成普通 ZCode 任务。
           migrationSource: params.meta.migrationSource ?? existingMeta?.migrationSource,
+          // Bug 根因：只发 live 迁移事件会在 Host 重启/断连时丢失草稿关联。
+          // 关联只由 rekey 事务写入；Agent snapshot 既不能清除，也不能伪造替换。
+          taskIdMigration: existingMeta?.taskIdMigration,
           // 同步运行态快照时保留已有 cron automation 身份：运行态 protocol snapshot 的 meta 不带 cron 标记，
           // 不用已存值兜底会在后续 sync 时把 cron 身份冲掉，导致 icon / 分组 / 关联查询失效。
           cronAutomationId: params.meta.cronAutomationId ?? existingMeta?.cronAutomationId,
@@ -1474,7 +1477,8 @@ export class TaskIndexRepo {
         return rowToMeta(existing);
       }
       return this.writeRecord({
-        meta,
+        // 基线摘要不是迁移 authority；只有下方 rekey 事务能创建 from/to 关联。
+        meta: { ...meta, taskIdMigration: undefined },
         pinned: false,
         archived: false,
         deleted: false,
@@ -1517,7 +1521,11 @@ export class TaskIndexRepo {
             "DELETE FROM task_group_view_node_orders WHERE node_type = 'task' AND node_key = ?",
           )
           .run(newKey);
-        const meta = { ...rowToMeta(from), taskId: params.toTaskId };
+        const meta = {
+          ...rowToMeta(from),
+          taskId: params.toTaskId,
+          taskIdMigration: { fromTaskId: params.fromTaskId, toTaskId: params.toTaskId },
+        };
         database
           .prepare(
             "UPDATE tasks SET task_id = ?, meta_json = ? WHERE workspace_key = ? AND task_id = ?",

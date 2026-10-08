@@ -16,6 +16,7 @@ import { useDynamicWorkflowAvailabilityLoader } from "@/hooks/useDynamicWorkflow
 import { useTabPersistence } from "@/hooks/useTabPersistence.js";
 import { useTokenRefresh } from "@/hooks/useTokenRefresh.js";
 import { useWorkspaceServices } from "@/hooks/useWorkspaceServices.js";
+import { ComposerDraftMigrationEvents } from "@/hooks/useComposerDraftMigrationEvents.js";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
 import { SSHDialog } from "@/SSHDialog.js";
 import { CodingPlanUpgradeDialogProvider } from "@/settings/CodingPlanUpgradeDialogProvider.js";
@@ -1022,6 +1023,7 @@ function RootInner({
 
   return (
     <RootShell>
+      <ComposerDraftMigrationEvents scopes={windowWorkspaceTabs} />
       {rootModelSelectionErrorNode}
       {remoteConnectionDialog}
       {directoryBrowserDialog}

@@ -96,7 +96,9 @@ export class OmpEventProjector {
       case "message_end":
         if (event.type === "message_start" && event.message.role === "user") {
           const content = event.message.content;
-          this.projection.activateQueuedTurn(typeof content === "string" ? content : textOfContent(content ?? []));
+          this.projection.activateQueuedTurn(
+            typeof content === "string" ? content : textOfContent(content ?? []),
+          );
         }
         if (event.message.role === "assistant") {
           // 供应商错误（如 401 未授权模型）记在 assistant 消息的 stopReason/errorStatus 上，

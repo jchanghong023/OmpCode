@@ -91,7 +91,10 @@ interface ComposerAttachmentsApi {
   removeAttachment: (id: string) => void;
   retryAttachment: (id: string) => void;
   /** 发送成功只清冻结的附件 id；不传表示用户主动清空整个附件区。 */
-  clearAttachments: (attachmentIds?: readonly string[]) => void;
+  clearAttachments: (
+    attachmentIds?: readonly string[],
+    options?: { preserveError?: boolean },
+  ) => void;
   /** 把已由 session 接管的 queue refs 原样恢复为 ready chips；不触发 upload/adopt。 */
   restoreSessionOwnedAttachments: (attachments: readonly AttachmentRef[]) => boolean;
   /** 只返回已 ready ref；任一附件未就绪时返回 null 作 submit 二次门禁。 */
@@ -969,7 +972,7 @@ export function useComposerAttachments(
   );
 
   const clearAttachments = useCallback(
-    (attachmentIds?: readonly string[]) => {
+    (attachmentIds?: readonly string[], options?: { preserveError?: boolean }) => {
       const ids = attachmentIds ? new Set(attachmentIds) : null;
       const current = readComposerAttachmentScope(scopeKey).filter(
         (item) => !ids || ids.has(item.id),
@@ -1000,7 +1003,9 @@ export function useComposerAttachments(
         (entry) => entry.scopeKey !== scopeKey || (ids !== null && !ids.has(entry.attachmentId)),
       );
       commitScope(scopeKey, (items) => (ids ? items.filter((item) => !ids.has(item.id)) : []));
-      setAttachmentError(null);
+      // 旧 scope 的 accepted 仍须消费已发送 ID，但复用的 Composer 错误面属于
+      // 当前 scope；跨 scope quiet 消费不能清掉新会话的附件错误。
+      if (!options?.preserveError) setAttachmentError(null);
     },
     [commitScope, scopeKey],
   );

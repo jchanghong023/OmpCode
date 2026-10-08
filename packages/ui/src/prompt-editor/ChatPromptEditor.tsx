@@ -76,6 +76,7 @@ export function ChatPromptEditor({
   shellClassName,
   compactPlaceholder = false,
   onChange,
+  onContentDirty,
   onSubmit,
   onModifiedSubmit,
   onCancel,
@@ -133,7 +134,8 @@ export function ChatPromptEditor({
   className?: string;
   shellClassName?: string;
   compactPlaceholder?: boolean;
-  onChange?: (value: string) => void;
+  onChange?: (value: string, metadata?: { draftRestore?: boolean }) => void;
+  onContentDirty?: (isProgrammatic: boolean, draftRestore?: boolean, text?: string) => void;
   // 适配：返回 false 表示业务层拒绝/延迟本次提交，Lexical 不自行 reset（草稿保留）。
   onSubmit: (value: string) => boolean | void;
   onModifiedSubmit?: (value: string) => boolean | void;
@@ -203,9 +205,9 @@ export function ChatPromptEditor({
   }, [initialValue, resolvedInputApiRef, syncInitialValueOnMount]);
 
   const handleTextChange = useCallback(
-    (value: string) => {
+    (value: string, metadata?: { draftRestore?: boolean }) => {
       latestTextRef.current = value;
-      onChange?.(value);
+      onChange?.(value, metadata);
     },
     [onChange],
   );
@@ -371,6 +373,7 @@ export function ChatPromptEditor({
           onSubmit={handleEditorSubmit}
           onModifiedSubmit={onModifiedSubmit}
           onChange={handleTextChange}
+          onContentDirty={onContentDirty}
           onFocus={onFocus}
           triggerPanelContainer={resolvedTriggerPanelContainer}
           workspacePath={workspacePath}

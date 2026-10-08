@@ -88,7 +88,11 @@ export function V4UserInputDialog({ model, onSubmit }: V4UserInputDialogProps) {
               />
             )}
             <div className="flex justify-end gap-2">
-              <Button type="button" variant="outline" onClick={() => onSubmit({ action: "cancel" })}>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => onSubmit({ action: "cancel" })}
+              >
                 {intl.formatMessage({ id: "common.cancel" })}
               </Button>
               <Button type="button" onClick={handleFreeTextSubmit}>

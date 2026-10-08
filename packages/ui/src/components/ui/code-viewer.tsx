@@ -8,13 +8,14 @@ import type {
 } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Trash2Icon } from "lucide-react";
-import type { FileContents, LineAnnotation, SupportedLanguages } from "@pierre/diffs";
+import type { LineAnnotation } from "@pierre/diffs";
 import { File, type FileOptions } from "@pierre/diffs/react";
 import type { BundledTheme } from "shiki";
 
 import { cn } from "@/components/lib/utils.js";
 import { Button } from "@/components/ui/button.js";
 import { Textarea } from "@/components/ui/textarea.js";
+import { createCodeViewerFile } from "./codeViewerFile.js";
 import type { CodeCommentPreview, CodeCommentRange } from "@/lib/codeCommentContext.js";
 import { isDarkCodePreviewTheme } from "@/lib/codePreviewPreferences.js";
 import { DIFFS_PREFERRED_HIGHLIGHTER } from "@/lib/diffsHighlighterEngine.js";
@@ -151,15 +152,6 @@ function toCssString(value: string) {
   return JSON.stringify(value);
 }
 
-function hashCodeViewerContent(code: string): string {
-  let hash = 5381;
-  for (let index = 0; index < code.length; index += 1) {
-    hash = (hash * 33) ^ code.charCodeAt(index);
-  }
-
-  return (hash >>> 0).toString(36);
-}
-
 function readCodeCommentShortcutPlatformInfo(): KeyboardShortcutPlatformInfo {
   if (typeof navigator === "undefined") {
     return {};
@@ -245,28 +237,6 @@ export function findCodeViewerCommentElement(
     if (shadowTarget) return shadowTarget;
   }
   return null;
-}
-
-function createCodeViewerFile(params: {
-  code: string;
-  enableSyntaxHighlighting: boolean;
-  language: string;
-  theme?: BundledTheme;
-}): FileContents {
-  const lang = params.enableSyntaxHighlighting
-    ? (params.language as SupportedLanguages)
-    : ("text" as SupportedLanguages);
-  const name = params.language ? `preview.${params.language}` : "preview.txt";
-  const themeCacheKey = params.theme ?? "auto";
-
-  return {
-    name,
-    contents: params.code,
-    lang,
-    // @pierre/diffs 会按 file.cacheKey 复用 token；旧 key 没带主题，导致同一 task 内
-    // 切换 app light/dark 时继续命中旧高亮，只有切换 task 触发重建后才恢复。
-    cacheKey: `${themeCacheKey}:${name}:${lang}:${params.code.length}:${hashCodeViewerContent(params.code)}`,
-  };
 }
 
 function normalizeRange(range: CodeCommentRange): CodeCommentRange {
@@ -674,7 +644,7 @@ export function CodeViewer({
     return () => {
       window.cancelAnimationFrame(animationFrame);
     };
-  }, [file.cacheKey, firstLineNumber, focusedEndLine, focusedStartLine, focusRequestId]);
+  }, [file, firstLineNumber, focusedEndLine, focusedStartLine, focusRequestId]);
   // 依赖是 CSS 字符串（内容）而不是数组引用：调用方每次渲染给一个新数组时，options 不该跟着换（File 会重排）。
   const markedLinesCss = codeViewerMarkedLinesCss(markedLines);
   const options = useMemo<FileOptions<CodeViewerAnnotationMetadata, undefined>>(
@@ -755,8 +725,9 @@ export function CodeViewer({
           showRange={topCommentShowRange}
         />
       ) : null}
+      {/* 内容和主题由 File 的更新接口处理；内容 cacheKey 作为 React key 会在每次
+          流式追加时销毁实例，重建 Shadow DOM、监听器及高亮任务。 */}
       <File
-        key={file.cacheKey}
         file={file}
         options={options}
         lineAnnotations={lineAnnotations}

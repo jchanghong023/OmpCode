@@ -36,21 +36,6 @@ export function conversationRowsRange(
   };
 }
 
-/** 权限卡锚定：按 toolCallId 找最近一条工具行（倒序扫描，找不到返回 null）。 */
-export function conversationRowIdOfToolCall(
-  rows: ReadonlyMap<number, ConversationRow>,
-  rowIds: readonly number[],
-  toolCallId: string,
-): number | null {
-  for (let index = rowIds.length - 1; index >= 0; index -= 1) {
-    const row = rows.get(rowIds[index]!);
-    if (row && row.kind === "toolCall" && row.toolCallId === toolCallId) {
-      return row.rowId;
-    }
-  }
-  return null;
-}
-
 export interface RowInit {
   rowId: number;
   turnId: string;

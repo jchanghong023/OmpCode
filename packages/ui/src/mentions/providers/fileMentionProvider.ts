@@ -5,6 +5,7 @@ import { buildFileMentionMarkdown } from "@/mentions/mentionMarkdown.js";
 import { WORKSPACE_FILE_SEARCH_DISPLAY_CAP } from "@zcode/shared/workspaceFileSearch";
 import { getMentionGroupLimitForQuery } from "@/mentions/mentionSearch.js";
 import type { MentionCategoryResult, MentionItem } from "@/mentions/mentionTypes.js";
+import { searchFileMentionEntries, type FileMentionInputAdmission } from "./fileMentionSearch.js";
 
 function mapWorkspaceFileToMentionItem(entry: WorkspaceFileEntry): MentionItem {
   return {
@@ -26,10 +27,6 @@ function mapWorkspaceFileToMentionItem(entry: WorkspaceFileEntry): MentionItem {
   };
 }
 
-function normalizeRefreshQuery(query: string): string {
-  return query.trim().toLowerCase();
-}
-
 export function useFileMentionProvider(
   workspacePath: string,
   workspaceIdentity: string | undefined,
@@ -38,17 +35,20 @@ export function useFileMentionProvider(
   emptyText: string,
   title: string,
   defaultPreviewLimit?: number,
+  inputAdmission?: FileMentionInputAdmission,
 ): MentionCategoryResult {
   const { fileService } = useServices();
+  const liveQuery = inputAdmission?.liveQuery ?? query;
+  const roundVersion = inputAdmission?.roundVersion ?? 0;
   const limit =
     getMentionGroupLimitForQuery(query, defaultPreviewLimit) ?? WORKSPACE_FILE_SEARCH_DISPLAY_CAP;
   // 连接实例也属于作用域：相同路径的远程重连不能接纳旧 Host 的查询结果。
   const scope = useMemo(
     () => ({
       error: null as Error | null,
-      lastMissQuery: null as string | null,
+      didMissRefresh: false,
     }),
-    [fileService, workspacePath, workspaceIdentity, enabled],
+    [fileService, workspacePath, workspaceIdentity, enabled, roundVersion],
   );
   const [result, setResult] = useState<{
     scope: typeof scope;
@@ -61,21 +61,15 @@ export function useFileMentionProvider(
 
   useEffect(() => {
     // 错误态等待面板/工作区/连接生命周期重置，避免 query 变化触发失败重试循环。
-    if (!enabled || scope.error) return;
+    // 真实清空已经开启新轮次时，旧 deferred 前缀不能消耗新一轮的补扫额度。
+    if (!enabled || scope.error || query !== liveQuery) return;
     let active = true;
     setResult({ scope, query, limit, entries: [], loading: true, error: null });
     const params = { rootPath: workspacePath, workspaceIdentity, query, limit };
     const search = async () => {
       try {
-        let entries = await fileService.searchWorkspaceFiles(params);
+        const entries = await searchFileMentionEntries(fileService, params, scope, () => active);
         if (!active) return;
-        const normalizedQuery = normalizeRefreshQuery(query);
-        if (entries.length === 0 && normalizedQuery && scope.lastMissQuery !== normalizedQuery) {
-          scope.lastMissQuery = normalizedQuery;
-          // 无命中补扫必须绕过 Host TTL，否则外部新文件在缓存有效期内永远不可见。
-          entries = await fileService.searchWorkspaceFiles({ ...params, refresh: true });
-          if (!active) return;
-        }
         setResult({ scope, query, limit, entries, loading: false, error: null });
       } catch (error) {
         if (!active) return;
@@ -88,10 +82,14 @@ export function useFileMentionProvider(
     return () => {
       active = false;
     };
-  }, [enabled, fileService, workspacePath, workspaceIdentity, query, limit, scope]);
+  }, [enabled, fileService, workspacePath, workspaceIdentity, query, liveQuery, limit, scope]);
 
   const current =
-    enabled && result?.scope === scope && result.query === query && result.limit === limit;
+    enabled &&
+    query === liveQuery &&
+    result?.scope === scope &&
+    result.query === query &&
+    result.limit === limit;
   const items = useMemo(
     () => (current ? result.entries.map(mapWorkspaceFileToMentionItem) : []),
     [current, result],

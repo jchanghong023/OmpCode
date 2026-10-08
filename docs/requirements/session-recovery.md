@@ -72,12 +72,16 @@ sequenceDiagram
 - `edit` 文件变更以成功的工具结果为准。默认 hashline `input` 中的文件段提供路径，工具结果中的统一 diff 提供实际增删行；多文件调用分别归入当前轮。无可验证路径或 diff 时不编造增删数。
 - `SessionRegistry` 是会话对外身份与 sessions-index / workspace-config 序号的所有者。临时 ID 绑定 omp UUID 后，索引、会话 topic、快照和 legacy 读取必须指向同一会话；迁移期间已建立的旧 ID 订阅继续可用。恢复快照的 `toSeq` 必须是该 topic 当前水位，恢复后的下一条 delta 从该水位连续前进。
 - Host 的持久任务索引保留用户组织信息，并按 [根目录/profile 隔离规则](models-and-commands.md#产品规则与所有权) 选择数据库。切换 OMP 根目录后，不从旧根的索引恢复 UUID；旧目录与索引保留供切回使用。临时 ID 迁移至 UUID 时，任务行、分组、排序、置顶、归档、未读和定时任务关联作为同一任务迁移；冷启动对账只清理真正不再存在的旧行。
+- Host 的任务索引同步器是任务 ID 迁移关系所有者；持久化 rekey 成功且当前 workspace 代际仍有效后，在现有 `workspace_task_list_changed` 事件发布可选 `taskIdMigration: { fromTaskId, toTaskId }`，事件的 taskId/taskMeta 使用目标 ID。不另建 RPC/topic、不改运行中身份或 seq/ACK。UI 经现有 workspace 事件入口将映射交给草稿 owner，具体草稿冲突与恢复规则唯一维护于 [输入区需求](composer.md)。失败或过时代际不发布迁移成功，重复事件不得制造重复任务/草稿。
+- 同一 rekey 事务将权威 `taskIdMigration` 保存在既有任务 `meta_json`，不另建表或第二份映射所有者；后续 runtime snapshot/meta 更新保留该字段，不能由 Agent 的旧投影清除或伪造。已有任务列表读面返回此元信息，用于 Renderer 未收到事件或 Host 重启后的草稿补迁；校验目标 ID 必须等于任务 ID、来源与目标不同。没有权威映射的历史记录保留，不猜测、不回填虚假关系。
 - 冷会话文件系统时间戳进入 Host/任务索引前要规范为安全整数毫秒，避免列表校验失败、临时任务未清理。
 - 辅助主题的空地址到真实主题地址绑定与 sidecar 冷恢复按 [OMP 辅助对话](omp-core-integration.md#辅助对话原生-btw唯一需求权威)；不从主 transcript 推测辅助历史，不因恢复自动重发问题。
 
 ```text
 omp 首轮终态 → 临时 ID 终态通知 → UUID 绑定 → 索引身份迁移
-  → Host 持久行及关联迁移 → 会话 topic / legacy / UI 同源
+  → Host 持久行及 meta_json 的 from/to 同事务迁移成功
+  → 现有 workspace 事件发布 from/to / 断线后从既有任务列表读取 from/to
+  → UI 唯一草稿 owner 原子迁移并重定向保存 → 会话 topic / legacy / UI 同源
 
 desktop: continuous ── 实时帧 ───────────┐
                                          ├─ 同一身份和单调序号

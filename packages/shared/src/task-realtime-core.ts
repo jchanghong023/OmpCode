@@ -7,6 +7,7 @@
 import { z } from "zod";
 import type { ZCodeTaskMigrationSource, ZCodeTaskMode } from "./zcode-task-types-core.js";
 import { zcodeAgentProviderSchema } from "./zcode-agent-policy.js";
+import { zcodeTaskIdMigrationSchema } from "./task-id-migration.js";
 import { zcodePermissionResponseSchema } from "./zcode-protocol-legacy-types.js";
 // merge 冲突解决：两侧分别在相邻行新增独立 import（本分支 hook trust review
 // 决策 schema、staging telemetry error attribution schema），二者无语义交集，均保留。
@@ -43,38 +44,44 @@ const zcodeTaskChangeSummaryRealtimeSchema = z
     ),
   })
   .strict();
-const taskMetaRealtimeSchema = z.object({
-  taskId: nonEmptyString,
-  traceId: nonEmptyString,
-  title: z.string(),
-  titleOverridden: z.boolean().optional(),
-  workspacePath: nonEmptyString,
-  workspaceIdentity: nonEmptyString.optional(),
-  createdAt: z.number().int().nonnegative(),
-  updatedAt: z.number().int().nonnegative(),
-  // realtime deliver 的运行时 schema 之前把 mode 放宽成 string，
-  // schema 推导类型因此无法回到 ZCodeTaskMeta，host typecheck 也就无法覆盖这条链路。
-  mode: z.enum(zcodeTaskModeRealtimeValues),
-  model: z.string().optional(),
-  runtimeEpoch: z.number().int().nonnegative().optional(),
-  provider: zcodeAgentProviderSchema.optional(),
-  migrationSource: z.enum(zcodeTaskMigrationSourceRealtimeValues).optional(),
-  forkedFromTaskId: nonEmptyString.optional(),
-  unreadAt: z.number().int().nonnegative().optional(),
-  status: z.enum(["running", "completed", "error"]).optional(),
-  lastError: z
-    .object({
-      code: z.string().optional(),
-      message: z.string().min(1),
-      traceId: nonEmptyString.optional(),
-      taskId: nonEmptyString.optional(),
-      // 旧 realtime schema 会静默剥离 lastError.attribution，导致手机 replayable
-      // task meta 与桌面 snapshot 的归因不一致；这里沿用共享 schema 保持 wire 约束一致。
-      attribution: errorAttributionSchema.optional(),
-    })
-    .optional(),
-  changeSummary: zcodeTaskChangeSummaryRealtimeSchema.optional(),
-});
+const taskMetaRealtimeSchema = z
+  .object({
+    taskId: nonEmptyString,
+    traceId: nonEmptyString,
+    title: z.string(),
+    titleOverridden: z.boolean().optional(),
+    workspacePath: nonEmptyString,
+    workspaceIdentity: nonEmptyString.optional(),
+    createdAt: z.number().int().nonnegative(),
+    updatedAt: z.number().int().nonnegative(),
+    // realtime deliver 的运行时 schema 之前把 mode 放宽成 string，
+    // schema 推导类型因此无法回到 ZCodeTaskMeta，host typecheck 也就无法覆盖这条链路。
+    mode: z.enum(zcodeTaskModeRealtimeValues),
+    model: z.string().optional(),
+    runtimeEpoch: z.number().int().nonnegative().optional(),
+    provider: zcodeAgentProviderSchema.optional(),
+    migrationSource: z.enum(zcodeTaskMigrationSourceRealtimeValues).optional(),
+    taskIdMigration: zcodeTaskIdMigrationSchema.optional(),
+    forkedFromTaskId: nonEmptyString.optional(),
+    unreadAt: z.number().int().nonnegative().optional(),
+    status: z.enum(["running", "completed", "error"]).optional(),
+    lastError: z
+      .object({
+        code: z.string().optional(),
+        message: z.string().min(1),
+        traceId: nonEmptyString.optional(),
+        taskId: nonEmptyString.optional(),
+        // 旧 realtime schema 会静默剥离 lastError.attribution，导致手机 replayable
+        // task meta 与桌面 snapshot 的归因不一致；这里沿用共享 schema 保持 wire 约束一致。
+        attribution: errorAttributionSchema.optional(),
+      })
+      .optional(),
+    changeSummary: zcodeTaskChangeSummaryRealtimeSchema.optional(),
+  })
+  .refine((meta) => !meta.taskIdMigration || meta.taskIdMigration.toTaskId === meta.taskId, {
+    message: "Migration target must match metadata task ID",
+    path: ["taskIdMigration"],
+  });
 export function resolveWorkspaceKey(params: {
   workspacePath: string;
   workspaceIdentity?: string;

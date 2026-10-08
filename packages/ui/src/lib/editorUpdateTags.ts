@@ -10,3 +10,6 @@ export const PROGRAMMATIC_UPDATE_TAG = "zcode-programmatic";
  * 使用独立标记后，SlashCommandPlugin 可精确跳过历史回填更新，不影响用户手输 / 时的正常面板行为。
  */
 export const HISTORY_NAVIGATION_UPDATE_TAG = "zcode-history-navigation";
+
+/** 唯一草稿 owner 的展示投影；不能反向成为新的用户编辑。 */
+export const COMPOSER_DRAFT_RESTORE_UPDATE_TAG = "zcode-composer-draft-restore";

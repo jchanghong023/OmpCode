@@ -310,6 +310,8 @@ export interface ZCodeTaskMeta {
   provider?: ZCodeProvider;
   /** 迁移来源；普通新建任务为空，用于识别 Claude Code 原生历史导入。 */
   migrationSource?: ZCodeTaskMigrationSource;
+  /** Host 成功 rekey 的持久关联；Agent snapshot 不拥有该字段。 */
+  taskIdMigration?: { fromTaskId: string; toTaskId: string };
   /**
    * cron 身份标记：该 session 属于哪条 automation。
    *

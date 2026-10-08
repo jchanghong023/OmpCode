@@ -82,11 +82,15 @@ export interface LexicalChatInputHandle {
     trailingText?: string,
   ) => void;
   prependMentionIfMissing: (mention: ComposerMentionPrefill) => boolean;
-  setMention: (mention: ComposerMentionPrefill, trailingText?: string) => void;
+  setMention: (
+    mention: ComposerMentionPrefill,
+    trailingText?: string,
+    options?: { draftRestore?: boolean },
+  ) => void;
   insertMention: (mention: ComposerMentionPrefill, selectionState?: EditorState) => void;
-  setText: (text: string) => void;
+  setText: (text: string, options?: { draftRestore?: boolean }) => void;
   setTextWithPluginMentions: (text: string) => void;
-  setEditorStateJson: (editorStateJson: string) => void;
+  setEditorStateJson: (editorStateJson: string, options?: { draftRestore?: boolean }) => void;
   setSkillMention: (skillName: string, markdown?: string, trailingText?: string) => void;
   setSlashCommandMention: (commandName: string, markdown?: string, trailingText?: string) => void;
 }
@@ -123,7 +127,11 @@ interface LeadingChineseSlashAliasInputOptions {
 const CHINESE_SLASH_ALIAS = "、";
 const STANDARD_SLASH_TRIGGER = "/";
 
-import { HISTORY_NAVIGATION_UPDATE_TAG, PROGRAMMATIC_UPDATE_TAG } from "./lib/editorUpdateTags.js";
+import {
+  COMPOSER_DRAFT_RESTORE_UPDATE_TAG,
+  HISTORY_NAVIGATION_UPDATE_TAG,
+  PROGRAMMATIC_UPDATE_TAG,
+} from "./lib/editorUpdateTags.js";
 
 function shouldSubmitLexicalEnter({
   allowSubmitWhenEmpty = false,
@@ -185,7 +193,7 @@ function getEditorMarkdown(editorState: EditorState): string {
   return text;
 }
 
-function replaceEditorText(editor: LexicalEditor, text: string) {
+function replaceEditorText(editor: LexicalEditor, text: string, tag = PROGRAMMATIC_UPDATE_TAG) {
   editor.update(
     () => {
       const root = $getRoot();
@@ -202,7 +210,7 @@ function replaceEditorText(editor: LexicalEditor, text: string) {
 
       root.getLastChild()?.selectEnd();
     },
-    { tag: PROGRAMMATIC_UPDATE_TAG },
+    { tag },
   );
 }
 
@@ -250,6 +258,7 @@ function replaceEditorWithMention(
   editor: LexicalEditor,
   mention: ComposerMentionPrefill,
   trailingText = " ",
+  tag = PROGRAMMATIC_UPDATE_TAG,
 ) {
   editor.update(
     () => {
@@ -262,7 +271,7 @@ function replaceEditorWithMention(
       root.append(paragraph);
       trailing.selectEnd();
     },
-    { tag: PROGRAMMATIC_UPDATE_TAG },
+    { tag },
   );
 }
 
@@ -314,9 +323,13 @@ function prependEditorMentionIfMissing(
   return inserted;
 }
 
-function replaceEditorStateJson(editor: LexicalEditor, editorStateJson: string) {
+function replaceEditorStateJson(
+  editor: LexicalEditor,
+  editorStateJson: string,
+  tag = PROGRAMMATIC_UPDATE_TAG,
+) {
   const editorState = editor.parseEditorState(editorStateJson);
-  editor.setEditorState(editorState, { tag: PROGRAMMATIC_UPDATE_TAG });
+  editor.setEditorState(editorState, { tag });
 }
 
 function resetEditor(editor: LexicalEditor) {
@@ -811,9 +824,12 @@ function KeyboardPlugin({
  */
 function TextContentPlugin({
   onChange,
+  onContentDirty,
   taskId,
 }: {
-  onChange?: (text: string) => void;
+  onChange?: (text: string, metadata?: { draftRestore?: boolean }) => void;
+  /** 富节点 metadata 变化可能保持相同 Markdown，仍需标记 JSON 草稿为 dirty。 */
+  onContentDirty?: (isProgrammatic: boolean, draftRestore?: boolean, text?: string) => void;
   taskId?: string | null;
 }) {
   const [editor] = useLexicalComposerContext();
@@ -845,39 +861,38 @@ function TextContentPlugin({
   }, [editor]);
 
   useEffect(() => {
-    if (!onChange) {
+    if (!onChange && !onContentDirty) {
       return;
     }
 
-    return editor.registerUpdateListener(
-      ({ dirtyElements, dirtyLeaves, editorState, prevEditorState, tags }) => {
-        if (dirtyElements.size === 0 && dirtyLeaves.size === 0) {
-          return;
-        }
+    // 原因：旧实现每个 dirty update 同时序列化前后两份完整长草稿。
+    // 已交付 Markdown 就是上一次比较基线，监听期间只序列化新状态一次。
+    let previousText = getEditorMarkdown(editor.getEditorState());
+    return editor.registerUpdateListener(({ dirtyElements, dirtyLeaves, editorState, tags }) => {
+      if (dirtyElements.size === 0 && dirtyLeaves.size === 0) {
+        return;
+      }
 
-        // 输入卡顿计时:包住「全量序列化 + onChange 同步重渲染」这段处理热点。
-        const startedAt = performance.now();
+      const startedAt = performance.now();
+      const nextText = getEditorMarkdown(editorState);
+      const draftRestore = tags.has(COMPOSER_DRAFT_RESTORE_UPDATE_TAG);
+      // owner 展示回填也更新比较基线；否则后续 undo 回旧正文会被旧基线误吞。
+      onContentDirty?.(tags.has(PROGRAMMATIC_UPDATE_TAG) || draftRestore, draftRestore, nextText);
+      if (nextText === previousText) return;
+      previousText = nextText;
+      onChange?.(nextText, { draftRestore });
 
-        const nextText = getEditorMarkdown(editorState);
-        const previousText = getEditorMarkdown(prevEditorState);
-        if (nextText === previousText) {
-          return;
-        }
-
-        onChange(nextText);
-
-        const lagMs = performance.now() - startedAt;
-        // 程序化改写与 IME 组合态不算打字卡顿(判定在 recordInputLag 内统一短路)。
-        recordInputLag({
-          lagMs,
-          textLength: nextText.length,
-          isProgrammatic: tags.has(PROGRAMMATIC_UPDATE_TAG),
-          isComposing: composingRef.current,
-          taskId: taskId ?? undefined,
-        });
-      },
-    );
-  }, [editor, onChange, taskId]);
+      const lagMs = performance.now() - startedAt;
+      // 程序化改写与 IME 组合态不算打字卡顿(判定在 recordInputLag 内统一短路)。
+      recordInputLag({
+        lagMs,
+        textLength: nextText.length,
+        isProgrammatic: tags.has(PROGRAMMATIC_UPDATE_TAG) || draftRestore,
+        isComposing: composingRef.current,
+        taskId: taskId ?? undefined,
+      });
+    });
+  }, [editor, onChange, onContentDirty, taskId]);
 
   return null;
 }
@@ -905,11 +920,20 @@ function E2ELexicalInputBridgePlugin({ inputTestId }: { inputTestId?: string }) 
       focus: () => editor.focus(),
       getEditorState: () => editor.getEditorState(),
       getText: () => getEditorMarkdown(editor.getEditorState()),
-      setText: (text: string) => replaceEditorText(editor, text),
+      setText: (text: string, options?: { draftRestore?: boolean }) =>
+        replaceEditorText(
+          editor,
+          text,
+          options?.draftRestore ? COMPOSER_DRAFT_RESTORE_UPDATE_TAG : PROGRAMMATIC_UPDATE_TAG,
+        ),
       setTextWithPluginMentions: (text: string) =>
         replaceEditorTextWithPluginMentions(editor, text),
-      setEditorStateJson: (editorStateJson: string) =>
-        replaceEditorStateJson(editor, editorStateJson),
+      setEditorStateJson: (editorStateJson: string, options?: { draftRestore?: boolean }) =>
+        replaceEditorStateJson(
+          editor,
+          editorStateJson,
+          options?.draftRestore ? COMPOSER_DRAFT_RESTORE_UPDATE_TAG : PROGRAMMATIC_UPDATE_TAG,
+        ),
     };
 
     let attachedInput: HTMLElement | null = null;
@@ -1284,13 +1308,27 @@ function EditorApiPlugin({
       insertMention: (mention, selectionState) =>
         insertEditorMention(editor, mention, selectionState),
       prependMentionIfMissing: (mention) => prependEditorMentionIfMissing(editor, mention),
-      setMention: (mention, trailingText) =>
-        replaceEditorWithMention(editor, mention, trailingText),
-      setText: (text: string) => replaceEditorText(editor, text),
+      setMention: (mention, trailingText, options) =>
+        replaceEditorWithMention(
+          editor,
+          mention,
+          trailingText,
+          options?.draftRestore ? COMPOSER_DRAFT_RESTORE_UPDATE_TAG : PROGRAMMATIC_UPDATE_TAG,
+        ),
+      setText: (text: string, options?: { draftRestore?: boolean }) =>
+        replaceEditorText(
+          editor,
+          text,
+          options?.draftRestore ? COMPOSER_DRAFT_RESTORE_UPDATE_TAG : PROGRAMMATIC_UPDATE_TAG,
+        ),
       setTextWithPluginMentions: (text: string) =>
         replaceEditorTextWithPluginMentions(editor, text),
-      setEditorStateJson: (editorStateJson: string) =>
-        replaceEditorStateJson(editor, editorStateJson),
+      setEditorStateJson: (editorStateJson: string, options?: { draftRestore?: boolean }) =>
+        replaceEditorStateJson(
+          editor,
+          editorStateJson,
+          options?.draftRestore ? COMPOSER_DRAFT_RESTORE_UPDATE_TAG : PROGRAMMATIC_UPDATE_TAG,
+        ),
       setSkillMention: (skillName: string, markdown = `$${skillName}`, trailingText = " ") =>
         replaceEditorWithSkillMention(editor, skillName, markdown, trailingText),
       setSlashCommandMention: (
@@ -1316,7 +1354,8 @@ interface LexicalChatInputProps {
   enterSubmits?: boolean;
   onSubmit: (text: string) => LexicalSubmitResult;
   onModifiedSubmit?: (text: string) => LexicalSubmitResult;
-  onChange?: (text: string) => void;
+  onChange?: (text: string, metadata?: { draftRestore?: boolean }) => void;
+  onContentDirty?: (isProgrammatic: boolean, draftRestore?: boolean, text?: string) => void;
   onFocus?: () => void;
   triggerPanelContainer?: HTMLElement | null;
   workspacePath: string;
@@ -1352,6 +1391,7 @@ export function LexicalChatInput({
   onSubmit,
   onModifiedSubmit,
   onChange,
+  onContentDirty,
   onFocus,
   triggerPanelContainer,
   workspacePath,
@@ -1486,7 +1526,7 @@ export function LexicalChatInput({
           <PlainTextPlugin contentEditable={contentEditable} ErrorBoundary={LexicalErrorBoundary} />
           <HistoryPlugin />
           <PromptClipboardPlugin />
-          <TextContentPlugin onChange={onChange} taskId={taskId} />
+          <TextContentPlugin onChange={onChange} onContentDirty={onContentDirty} taskId={taskId} />
           <KeyboardPlugin
             onSubmit={handleSubmit}
             onModifiedSubmit={onModifiedSubmit}

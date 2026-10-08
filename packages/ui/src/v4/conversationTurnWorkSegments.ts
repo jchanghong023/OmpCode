@@ -131,6 +131,31 @@ function resolveSegmentDurationMs(options: {
   return undefined;
 }
 
+/** 计时仅影响运行中的最后一个视觉工作段，历史分段与 flow 保持原引用。 */
+export function refreshConversationTurnWorkSegmentsClock(
+  segments: ConversationTurnWorkSegment[] | undefined,
+  header: TurnHeaderRow | undefined,
+  nowMs: number | undefined,
+): ConversationTurnWorkSegment[] | undefined {
+  const tail = segments?.at(-1);
+  if (!segments || !tail || tail.workStatus?.state !== "running") return segments;
+  const durationMs = resolveSegmentDurationMs({
+    header,
+    segmentIndex: segments.length - 1,
+    triggerRow: tail.triggerRow,
+    segmentRunning: true,
+    segmentCount: segments.length,
+    nowMs,
+  });
+  if (durationMs === tail.workStatus.durationMs) return segments;
+  const next = segments.slice();
+  next[next.length - 1] = {
+    ...tail,
+    workStatus: { state: "running", ...(durationMs !== undefined ? { durationMs } : {}) },
+  };
+  return next;
+}
+
 export function buildConversationTurnWorkSegments(options: {
   key: string;
   header?: TurnHeaderRow;

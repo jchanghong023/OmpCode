@@ -11,15 +11,13 @@ export function applyProjectionToolCallUpdate(input: {
   turn: TurnContext;
   update: ToolCallUpsert;
   createdAtSeq: number;
-  rows: Iterable<ConversationRow>;
+  existing: ToolCallRow | undefined;
   nextRowId: () => number;
   rowAt: (rowId: number) => ConversationRow | undefined;
   upsertRow: (row: ConversationRow) => void;
 }): void {
   const { turn, update } = input;
-  const existing = [...input.rows].find(
-    (row): row is ToolCallRow => row.kind === "toolCall" && row.toolCallId === update.toolCallId,
-  );
+  const existing = input.existing;
   const merged = existing
     ? mergeToolCallRow(existing, update)
     : createToolCallRow({

@@ -185,6 +185,8 @@ export interface ZCodeWorkspaceTaskListChanged {
   taskId?: string;
   reason: "auto_archive" | "realtime_sync" | TaskRealtimeReason;
   taskMeta?: ZCodeTaskMeta;
+  /** SQLite 已提交的身份迁移；只改变产品任务/草稿归属，不改变运行中的会话或协议水位。 */
+  taskIdMigration?: { fromTaskId: string; toTaskId: string };
   /** Host 已确认该终态应制造后台未读；普通 status/resume/snapshot 收敛不得携带。 */
   unreadSignal?: "background_terminal";
 }

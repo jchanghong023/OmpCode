@@ -51,28 +51,32 @@ for (const alreadyApplied of [false, true]) {
           .update(JSON.stringify([OMP_SWAP_LEGACY_PURGE_SQL]))
           .digest("hex");
         assert.equal(
-          raw.prepare("SELECT checksum FROM tasks_schema_migration WHERE id=?")
+          raw
+            .prepare("SELECT checksum FROM tasks_schema_migration WHERE id=?")
             .get("0004_omp_swap_legacy_purge")?.checksum,
           frozenChecksum,
         );
         if (!alreadyApplied) {
-          raw.prepare("DELETE FROM tasks_schema_migration WHERE id=?")
+          raw
+            .prepare("DELETE FROM tasks_schema_migration WHERE id=?")
             .run("0004_omp_swap_legacy_purge");
         }
         for (const outcome of ["succeeded", "failed"]) {
-          raw.prepare(
-            `INSERT INTO automation_runs
+          raw
+            .prepare(
+              `INSERT INTO automation_runs
              (run_id, automation_id, workspace_key, outcome, dispatch_status, session_id,
               error, created_at, updated_at)
              VALUES (?, ?, ?, ?, 'dispatched', ?, ?, 1, 2)`,
-          ).run(
-            `run-${outcome}`,
-            plan.automationId,
-            workspacePath,
-            outcome,
-            `session-${outcome}`,
-            outcome === "failed" ? "existing failure" : null,
-          );
+            )
+            .run(
+              `run-${outcome}`,
+              plan.automationId,
+              workspacePath,
+              outcome,
+              `session-${outcome}`,
+              outcome === "failed" ? "existing failure" : null,
+            );
         }
       } finally {
         raw.close();
@@ -84,7 +88,7 @@ for (const alreadyApplied of [false, true]) {
         assert.equal(runs.length, 2);
         assert.deepEqual(runs.map((run) => run.outcome).sort(), ["failed", "succeeded"]);
         assert.equal(
-          await tasks.getTaskMeta({ workspacePath, taskId: "sess_old-cli" }) !== null,
+          (await tasks.getTaskMeta({ workspacePath, taskId: "sess_old-cli" })) !== null,
           alreadyApplied,
         );
         assert.ok(await tasks.getTaskMeta({ workspacePath, taskId: "session-not-old-cli" }));

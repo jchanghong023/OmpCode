@@ -11,6 +11,8 @@ import { isKnownRemoteResourcePackageId } from "./remoteResourcePackages.js";
 import { zcodeProviderSchema } from "./providers.js";
 import { zcodeAgentProviderSchema } from "./zcode-agent-policy.js";
 import { modelSelectionSchema } from "./model-selection.js";
+import { zcodeTaskIdMigrationSchema } from "./task-id-migration.js";
+export { zcodeTaskIdMigrationSchema } from "./task-id-migration.js";
 import { providerProvisioningTriggerSchema } from "./provider-provisioning.js";
 import {
   zcodeMcpTelemetryEventSchema,
@@ -27,6 +29,7 @@ import {
   taskRealtimeDeliveredEventSchema,
   taskRealtimeEventSchema,
   taskRealtimeHostDeliveryKindSchema,
+  taskRealtimeReasonSchema,
   taskRunLeaseAcquireRequestSchema,
   taskRunLeaseResultSchema,
   taskRunLeaseTargetSchema,
@@ -1197,65 +1200,123 @@ export const zcodeTaskTargetStatusSchema = zcodeTaskGoalStatusSchema;
 export const zcodeTaskTargetSchema = zcodeTaskGoalSchema;
 export const zcodeTaskTargetChangedPatchSchema = zcodeTaskGoalChangedPatchSchema;
 
-export const zcodeTaskMetaSchema = z.object({
-  taskId: nonEmptyStringSchema,
-  traceId: nonEmptyStringSchema,
-  title: z.string(),
-  titleOverridden: z.boolean().optional(),
-  workspacePath: nonEmptyStringSchema,
-  workspaceIdentity: nonEmptyStringSchema.optional(),
-  workspacePurpose: z.enum(["project", "conversation"]).optional(),
-  createdAt: z.number().int().nonnegative(),
-  updatedAt: z.number().int().nonnegative(),
-  mode: zcodeTaskModeSchema,
-  model: z.string().optional(),
-  thoughtLevel: nonEmptyStringSchema.optional(),
-  runtimeEpoch: z.number().int().nonnegative().optional(),
-  provider: zcodeAgentProviderSchema.optional(),
-  migrationSource: zcodeTaskMigrationSourceSchema.optional(),
-  forkedFromTaskId: nonEmptyStringSchema.optional(),
-  // cron automation 身份：随 meta_json 一起持久化（单一来源），同时在写入时投影到 tasks 表
-  // cron_automation_id 索引列，供按 automation 反查 session。runId 属于 automation_runs /
-  // 投递 metadata，不属于 task 表。
-  cronAutomationId: nonEmptyStringSchema.optional(),
-  // off-peak 身份：与 cron 同款持久化策略——meta_json 单一来源 + tasks 表
-  // off_peak_task_id 索引投影列（兜底/反查）。
-  offPeakTaskId: nonEmptyStringSchema.optional(),
-  unreadAt: z.number().int().nonnegative().optional(),
-  status: zcodeTaskPersistStatusSchema.optional(),
-  lastError: z
-    .object({
-      code: z.string().optional(),
-      detail: z.string().optional(),
-      message: z.string().min(1),
-      traceId: nonEmptyStringSchema.optional(),
-      taskId: nonEmptyStringSchema.optional(),
-      attribution: errorAttributionSchema.optional(),
-    })
-    .optional(),
-  changeSummary: z
-    .object({
-      fileCount: z.number().int().nonnegative(),
-      added: z.number().int().nonnegative(),
-      removed: z.number().int().nonnegative(),
-      files: z.array(
-        z.object({
-          path: z.string(),
-          added: z.number().int().nonnegative(),
-          removed: z.number().int().nonnegative(),
-          writeCount: z.number().int().positive(),
-          lastTurnIndex: z.number().int().nonnegative(),
-        }),
-      ),
-    })
-    .optional(),
-  target: zcodeTaskGoalSchema.nullable().optional(),
-});
+export const zcodeTaskMetaSchema = z
+  .object({
+    taskId: nonEmptyStringSchema,
+    traceId: nonEmptyStringSchema,
+    title: z.string(),
+    titleOverridden: z.boolean().optional(),
+    workspacePath: nonEmptyStringSchema,
+    workspaceIdentity: nonEmptyStringSchema.optional(),
+    workspacePurpose: z.enum(["project", "conversation"]).optional(),
+    createdAt: z.number().int().nonnegative(),
+    updatedAt: z.number().int().nonnegative(),
+    mode: zcodeTaskModeSchema,
+    model: z.string().optional(),
+    thoughtLevel: nonEmptyStringSchema.optional(),
+    runtimeEpoch: z.number().int().nonnegative().optional(),
+    provider: zcodeAgentProviderSchema.optional(),
+    migrationSource: zcodeTaskMigrationSourceSchema.optional(),
+    taskIdMigration: zcodeTaskIdMigrationSchema.optional(),
+    forkedFromTaskId: nonEmptyStringSchema.optional(),
+    // cron automation 身份：随 meta_json 一起持久化（单一来源），同时在写入时投影到 tasks 表
+    // cron_automation_id 索引列，供按 automation 反查 session。runId 属于 automation_runs /
+    // 投递 metadata，不属于 task 表。
+    cronAutomationId: nonEmptyStringSchema.optional(),
+    // off-peak 身份：与 cron 同款持久化策略——meta_json 单一来源 + tasks 表
+    // off_peak_task_id 索引投影列（兜底/反查）。
+    offPeakTaskId: nonEmptyStringSchema.optional(),
+    unreadAt: z.number().int().nonnegative().optional(),
+    status: zcodeTaskPersistStatusSchema.optional(),
+    lastError: z
+      .object({
+        code: z.string().optional(),
+        detail: z.string().optional(),
+        message: z.string().min(1),
+        traceId: nonEmptyStringSchema.optional(),
+        taskId: nonEmptyStringSchema.optional(),
+        attribution: errorAttributionSchema.optional(),
+      })
+      .optional(),
+    changeSummary: z
+      .object({
+        fileCount: z.number().int().nonnegative(),
+        added: z.number().int().nonnegative(),
+        removed: z.number().int().nonnegative(),
+        files: z.array(
+          z.object({
+            path: z.string(),
+            added: z.number().int().nonnegative(),
+            removed: z.number().int().nonnegative(),
+            writeCount: z.number().int().positive(),
+            lastTurnIndex: z.number().int().nonnegative(),
+          }),
+        ),
+      })
+      .optional(),
+    target: zcodeTaskGoalSchema.nullable().optional(),
+  })
+  .refine((meta) => !meta.taskIdMigration || meta.taskIdMigration.toTaskId === meta.taskId, {
+    message: "Migration target must match metadata task ID",
+    path: ["taskIdMigration"],
+  });
 
 export const zcodeTaskIndexEntrySchema = z.object({
   workspaceHash: nonEmptyStringSchema,
   taskId: nonEmptyStringSchema,
 });
+
+export const zcodeWorkspaceTaskListChangedSchema = z
+  .object({
+    type: z.literal("workspace_task_list_changed"),
+    workspacePath: nonEmptyStringSchema,
+    workspaceIdentity: nonEmptyStringSchema.optional(),
+    taskId: nonEmptyStringSchema.optional(),
+    reason: z.union([
+      z.literal("auto_archive"),
+      z.literal("realtime_sync"),
+      taskRealtimeReasonSchema,
+    ]),
+    taskMeta: zcodeTaskMetaSchema.optional(),
+    unreadSignal: z.literal("background_terminal").optional(),
+    taskIdMigration: zcodeTaskIdMigrationSchema.optional(),
+  })
+  .strict()
+  .superRefine((event, context) => {
+    const migration = event.taskIdMigration;
+    if (!migration) return;
+    if (
+      event.taskId !== migration.toTaskId ||
+      (event.taskMeta && event.taskMeta.taskId !== migration.toTaskId)
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["taskIdMigration"],
+        message: "Migration target must match task ID",
+      });
+    }
+    if (
+      event.taskMeta &&
+      (event.taskMeta.workspaceIdentity?.trim() || event.taskMeta.workspacePath) !==
+        (event.workspaceIdentity?.trim() || event.workspacePath)
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["taskMeta"],
+        message: "Migration metadata must belong to the same workspace",
+      });
+    }
+    if (
+      event.taskMeta?.taskIdMigration &&
+      event.taskMeta.taskIdMigration.fromTaskId !== migration.fromTaskId
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["taskMeta", "taskIdMigration"],
+        message: "Event and metadata must describe the same migration",
+      });
+    }
+  });
 
 export const zcodePinnedTasksFileSchema = z.object({
   version: z.literal("1"),

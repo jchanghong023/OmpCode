@@ -5,7 +5,14 @@ import { applyComposerPermissionGrant } from "@/v4/composer/composerPermissionGr
 //
 // Workspace presentation 水合只提供 mode 与 slash commands；模型候选、能力和首选值
 // 统一来自目标 Host ModelSelectionView。
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useSyncExternalStore,
+} from "react";
 import { ZCODE_AGENT_PROVIDER, resolveExecutionState } from "@zcode/shared";
 import { applyComposerPlanTransition } from "@/v4/composer/composerPlanTransition.js";
 import type {
@@ -35,13 +42,16 @@ import {
   readOmpModelCatalog,
   resolveOmpModelSelection,
 } from "@/v4/composer/ompModelCatalog.js";
+import { V4_DRAFT_SCOPE_ROOT, type V4ComposerDraft } from "@/v4/composer/composerDraftStore.js";
 import {
-  clearV4ComposerDraft,
-  persistV4ComposerDraft,
-  readV4ComposerDraft,
-  V4_DRAFT_SCOPE_ROOT,
-  type V4ComposerDraft,
-} from "@/v4/composer/composerDraftStore.js";
+  type ComposerContentReader,
+  type ComposerDraftEvent,
+  type ComposerSubmissionReceipt,
+} from "@/v4/composer/composerDraftOwner.js";
+import {
+  getSharedComposerDraftOwner,
+  migrateSharedComposerDraft,
+} from "@/v4/composer/composerDraftRegistry.js";
 import { resolveAppFollowupMode } from "@/v4/composer/followupModeSettings.js";
 import { logger } from "@/logger.js";
 import { selectWorkspaceZCodeState, useZCodeSessionStore } from "@/store/zcodeSessionStore.js";
@@ -94,6 +104,14 @@ interface DraftConfigControl {
   updateComposerContent: (
     content: Pick<V4ComposerDraft, "text" | "editorStateJson" | "mention">,
   ) => void;
+  markComposerDraftDirty: (text?: string, userEdit?: boolean) => void;
+  readComposerDraft: () => V4ComposerDraft;
+  subscribeComposerDraft: (listener: (event: ComposerDraftEvent) => void) => () => void;
+  captureComposerSubmission: (
+    content: Pick<V4ComposerDraft, "text" | "editorStateJson" | "mention">,
+  ) => ComposerSubmissionReceipt;
+  flushComposerDraft: () => boolean;
+  registerComposerContentReader: (reader: ComposerContentReader) => () => void;
   replaceComposerDraft: (draft: Omit<V4ComposerDraft, "updatedAt">) => void;
   /** 新任务被接纳后，把当前完整 Root Draft 原子式转移到真实 Session scope。 */
   promoteComposerDraft: (createdSessionId: string) => void;
@@ -136,18 +154,18 @@ export function useDraftConfigControl(params: {
   const scopeId = sessionId ?? V4_DRAFT_SCOPE_ROOT;
   const scopeKey = JSON.stringify([workspaceKey, scopeId]);
   const loadedScope = useMemo(
-    () => ({
-      scopeKey,
-      draft: readV4ComposerDraft(workspacePath, workspaceIdentity, scopeId) ?? {
-        text: "",
-        updatedAt: 0,
-      },
-    }),
+    () => getSharedComposerDraftOwner({ workspacePath, workspaceIdentity, scopeId }),
     [scopeKey],
   );
-  const [storedState, setStoredState] = useState(loadedScope);
-  let currentState = storedState.scopeKey === scopeKey ? storedState : loadedScope;
-  let draft = currentState.draft;
+  const currentState = loadedScope;
+  const lease = useMemo(() => Symbol("composer-reader"), [currentState]);
+  useSyncExternalStore(
+    currentState.subscribeConfig,
+    currentState.getConfigRevision,
+    currentState.getConfigRevision,
+  );
+  const initialDraft = currentState.draft;
+  let draft = initialDraft;
   // omp 换核：模型选择事实源 = workspace-config 的 omp 目录；ZCode 账号目录不再参与草稿。
   const configOptions = useZCodeSessionStore(
     useShallow(
@@ -185,14 +203,21 @@ export function useDraftConfigControl(params: {
     draft = applyComposerPlanTransition(draft, sessionConfig.planTransition);
     draft = applyComposerPermissionGrant(draft, sessionConfig.permissionGrant);
   }
-  if (draft !== currentState.draft) currentState = { ...currentState, draft };
-  if (currentState !== storedState) setStoredState(currentState);
+  useLayoutEffect(() => {
+    // 新 pane 的初始化只在读取版本仍有效时提交，不能用旧 render 覆盖另一个 pane 的新编辑。
+    if (draft !== initialDraft) currentState.updateConfig(() => draft, initialDraft);
+  }, [currentState, draft, initialDraft]);
   const stateRef = useRef(currentState);
   stateRef.current = currentState;
   // 原因：目录短暂不可用时保留草稿原意图；提交由目录门禁阻断。
-  const effectiveSelection = ompCatalog
-    ? (resolveOmpModelSelection(ompCatalog, draft.modelSelection ?? null).selection ?? undefined)
-    : draft.modelSelection;
+  const effectiveSelection = useMemo(
+    () =>
+      ompCatalog
+        ? (resolveOmpModelSelection(ompCatalog, draft.modelSelection ?? null).selection ??
+          undefined)
+        : draft.modelSelection,
+    [ompCatalog, draft.modelSelection],
+  );
   const draftConfig = useMemo<Partial<SessionConfigState>>(
     () => ({
       mode: draft.mode,
@@ -206,43 +231,62 @@ export function useDraftConfigControl(params: {
   );
   const draftConfigRef = useRef(draftConfig);
   draftConfigRef.current = draftConfig;
-  const lastPersistedDraftRef = useRef<V4ComposerDraft | null>(null);
-  useEffect(() => {
-    if (
-      (draft.mode || draft.initializeFromNewTask) &&
-      draft !== lastPersistedDraftRef.current &&
-      stateRef.current.draft === draft &&
-      stateRef.current.scopeKey === scopeKey
-    ) {
-      persistV4ComposerDraft(workspacePath, workspaceIdentity, scopeId, draft);
-      lastPersistedDraftRef.current = draft;
+  useLayoutEffect(() => {
+    currentState.acquireLease(lease);
+    const flush = () => currentState.flush();
+    if (typeof window !== "undefined") {
+      window.addEventListener("pagehide", flush);
+      window.addEventListener("blur", flush);
+      window.addEventListener("beforeunload", flush);
     }
-  }, [draft, scopeKey]);
+    return () => {
+      currentState.releaseLease(lease);
+      if (typeof window !== "undefined") {
+        window.removeEventListener("pagehide", flush);
+        window.removeEventListener("blur", flush);
+        window.removeEventListener("beforeunload", flush);
+      }
+    };
+  }, [currentState, lease]);
+  const markComposerDraftDirty = useCallback(
+    (text?: string, userEdit = true) => {
+      if (stateRef.current === currentState) currentState.markDirty(lease, text, userEdit);
+    },
+    [currentState, lease],
+  );
+  const flushComposerDraft = useCallback(() => currentState.flush(), [currentState]);
+  const registerComposerContentReader = useCallback(
+    (reader: ComposerContentReader) => currentState.registerReader(lease, reader),
+    [currentState, lease],
+  );
+  const readComposerDraft = useCallback(() => currentState.draft, [currentState]);
+  const subscribeComposerDraft = useCallback(
+    (listener: (event: ComposerDraftEvent) => void) =>
+      currentState.subscribe((event) => {
+        if (event.origin !== lease) listener(event);
+      }),
+    [currentState, lease],
+  );
+  const captureComposerSubmission = useCallback(
+    (content: Pick<V4ComposerDraft, "text" | "editorStateJson" | "mention">) =>
+      currentState.captureSubmission(lease, content),
+    [currentState, lease],
+  );
   const updateComposerDraft = useCallback(
     (update: (current: V4ComposerDraft) => V4ComposerDraft) => {
-      // 旧 scope 的延迟编辑器回调不能写入刚切换到的会话。
-      if (stateRef.current.scopeKey !== scopeKey) return;
-      const previous = stateRef.current.draft;
-      const next = update(previous);
-      const nextState = { ...stateRef.current, draft: next };
-      stateRef.current = nextState;
-      const selection =
-        next.modelSelection === previous.modelSelection
-          ? draftConfigRef.current.modelSelection
-          : next.modelSelection;
+      if (stateRef.current !== currentState) return;
+      currentState.updateConfig(update);
+      const next = currentState.draft;
       draftConfigRef.current = {
         mode: next.mode,
         planEnabled: next.planEnabled ?? false,
-        modelSelection: selection,
-        provider: selection?.providerId ?? "",
-        model: selection?.modelId ?? "",
-        thought: selection?.options?.reasoningLevel ?? "",
+        modelSelection: next.modelSelection,
+        provider: next.modelSelection?.providerId ?? "",
+        model: next.modelSelection?.modelId ?? "",
+        thought: next.modelSelection?.options?.reasoningLevel ?? "",
       };
-      setStoredState(nextState);
-      persistV4ComposerDraft(workspacePath, workspaceIdentity, scopeId, next);
-      lastPersistedDraftRef.current = next;
     },
-    [scopeKey, workspacePath, workspaceIdentity, scopeId],
+    [currentState],
   );
   const updateDraftConfig = useCallback(
     (update: (current: Partial<SessionConfigState>) => Partial<SessionConfigState>) => {
@@ -273,15 +317,12 @@ export function useDraftConfigControl(params: {
         return () => {};
       return () => {
         // 自动对应只在本次提交被接纳后固定；旧 ACK 不得覆盖期间的新意图或新 scope。
-        if (
-          stateRef.current.scopeKey !== scopeKey ||
-          stateRef.current.draft.modelSelection !== original
-        )
+        if (stateRef.current !== currentState || stateRef.current.draft.modelSelection !== original)
           return;
         updateComposerDraft((current) => ({ ...current, modelSelection: selection }));
       };
     },
-    [scopeKey, updateComposerDraft],
+    [currentState, updateComposerDraft],
   );
   const resolveInitialDraftConfig = useCallback((): Partial<SessionConfigState> | undefined => {
     if (!draftConfigRef.current.mode) return undefined;
@@ -294,14 +335,9 @@ export function useDraftConfigControl(params: {
 
   const updateComposerContent = useCallback(
     (content: Pick<V4ComposerDraft, "text" | "editorStateJson" | "mention">) => {
-      updateComposerDraft((current) => ({
-        ...current,
-        editorStateJson: undefined,
-        mention: undefined,
-        ...content,
-      }));
+      if (stateRef.current === currentState) currentState.updateContent(lease, content);
     },
-    [updateComposerDraft],
+    [currentState, lease],
   );
   const replaceComposerDraft = useCallback(
     (replacement: Omit<V4ComposerDraft, "updatedAt">) => {
@@ -317,21 +353,21 @@ export function useDraftConfigControl(params: {
 
   const promoteComposerDraft = useCallback(
     (createdSessionId: string) => {
-      if (stateRef.current.scopeKey !== scopeKey || scopeId !== V4_DRAFT_SCOPE_ROOT) return;
-      const targetSessionId = createdSessionId.trim();
-      if (!targetSessionId) return;
-      // 首发成功曾直接删除 Root scope，真实 Session 没有 Composer Draft，
-      // 重挂载后又从 Snapshot 初始化。先写目标、再删来源，保留完整正文/模式/选择。
-      const written = persistV4ComposerDraft(
+      if (
+        stateRef.current !== currentState ||
+        scopeId !== V4_DRAFT_SCOPE_ROOT ||
+        !createdSessionId.trim()
+      )
+        return;
+      migrateSharedComposerDraft({
         workspacePath,
         workspaceIdentity,
-        targetSessionId,
-        stateRef.current.draft,
-      );
-      if (!written) return;
-      clearV4ComposerDraft(workspacePath, workspaceIdentity, V4_DRAFT_SCOPE_ROOT);
+        fromTaskId: V4_DRAFT_SCOPE_ROOT,
+        toTaskId: createdSessionId,
+        redirectSourceLookup: false,
+      });
     },
-    [scopeId, scopeKey, workspaceIdentity, workspacePath],
+    [currentState, scopeId, workspaceIdentity, workspacePath],
   );
 
   // ── workspace 目录水合（见文件头说明）──
@@ -513,12 +549,31 @@ export function useDraftConfigControl(params: {
     [updateComposerDraft],
   );
 
+  // 正文只在 scope 恢复时读取。稳态父页 render 不再传播逐字符变化的草稿对象；
+  // 配置变更仍提供最新配置，编辑器的最新正文由当前 scope owner 保存。
+  const composerDraft = useMemo(
+    () => draft,
+    [
+      currentState,
+      draft.mode,
+      draft.planEnabled,
+      draft.modelSelection,
+      draft.lastPermissionGrantId,
+      draft.lastPlanTransitionId,
+    ],
+  );
   return {
     modelSelectionRead,
     draftConfig,
     draftConfigRef,
     resolveInitialDraftConfig,
-    composerDraft: draft,
+    composerDraft,
+    markComposerDraftDirty,
+    readComposerDraft,
+    subscribeComposerDraft,
+    captureComposerSubmission,
+    flushComposerDraft,
+    registerComposerContentReader,
     updateComposerContent,
     replaceComposerDraft,
     promoteComposerDraft,

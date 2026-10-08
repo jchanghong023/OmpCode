@@ -210,3 +210,38 @@ export function clearV4ComposerDraft(
   delete file.scopes[scopeId];
   return writeDraftFile(key, file);
 }
+
+/** 权威身份迁移只更新一次 workspace 草稿文件；失败时来源记录保持原样。 */
+export function migrateV4ComposerDraft(params: {
+  workspacePath: string;
+  workspaceIdentity?: string;
+  fromScopeId: string;
+  toScopeId: string;
+  sourceDraft?: V4ComposerDraft;
+  targetDraft?: V4ComposerDraft;
+  preferTarget?: boolean;
+  retainConflictingSource?: boolean;
+}) {
+  const key = getV4ComposerDraftStorageKey(params.workspacePath, params.workspaceIdentity);
+  const file = readDraftFile(key);
+  const source = params.sourceDraft ?? file.scopes[params.fromScopeId];
+  const target = params.targetDraft ?? file.scopes[params.toScopeId];
+  if (params.fromScopeId === params.toScopeId || !source) {
+    return { written: true, moved: false, draft: target, usedTarget: Boolean(target) };
+  }
+  const usedTarget = Boolean(target && (params.preferTarget ?? hasV4ComposerDraftContent(target)));
+  const draft = usedTarget ? target! : source;
+  file.scopes[params.toScopeId] = draft;
+  // 两个用户草稿发生冲突时保留来源备份，目标仍为后续编辑的唯一事实源。
+  if (usedTarget && params.retainConflictingSource && hasV4ComposerDraftContent(source)) {
+    // 来源可能从未落盘；必须把最新内存值写进同一原子更新，不能只保留旧磁盘副本。
+    file.scopes[params.fromScopeId] = source;
+  } else {
+    delete file.scopes[params.fromScopeId];
+  }
+  return { written: writeDraftFile(key, file), moved: true, draft, usedTarget };
+}
+
+export function hasV4ComposerDraftContent(draft: V4ComposerDraft): boolean {
+  return Boolean(draft.text || draft.editorStateJson || draft.mention);
+}

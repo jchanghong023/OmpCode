@@ -15,6 +15,7 @@ import {
 } from "@/v4/workflowLaunchTurn.js";
 import {
   buildConversationTurnWorkSegments,
+  refreshConversationTurnWorkSegmentsClock,
   resolveConversationTurnWorkDurationMs,
   resolveConversationTurnWorkStatus,
 } from "@/v4/conversationTurnWorkSegments.js";
@@ -368,6 +369,29 @@ export function createDraftUnit(turnId: string): DraftTurnRenderUnit {
     assistantWorkRows: [],
     hookInvocations: [],
     orderedRows: [],
+  };
+}
+
+/** 运行时钟只改变时长，不需要重新筛选正文或重建全部 guide/CUA 分组。 */
+export function refreshRenderUnitClock(
+  unit: ConversationTurnRenderUnit,
+  nowMs: number | undefined,
+): ConversationTurnRenderUnit {
+  if (!unit.isRunning) return unit;
+  const durationMs = resolveConversationTurnWorkDurationMs(unit.header, { nowMs }, true);
+  const workSegments = refreshConversationTurnWorkSegmentsClock(
+    unit.workSegments,
+    unit.header,
+    nowMs,
+  );
+  const durationChanged = unit.workStatus?.durationMs !== durationMs;
+  if (!durationChanged && workSegments === unit.workSegments) return unit;
+  return {
+    ...unit,
+    ...(durationChanged && unit.workStatus
+      ? { workStatus: { state: "running", ...(durationMs !== undefined ? { durationMs } : {}) } }
+      : {}),
+    ...(workSegments ? { workSegments } : {}),
   };
 }
 

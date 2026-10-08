@@ -10,6 +10,7 @@ import {
   resolveZCodeVisibleSessionTitle,
   ZCODE_AGENT_PROVIDER_NOT_READY_CODE,
   ZCODE_AGENT_PROVIDER,
+  zcodeWorkspaceTaskListChangedSchema,
   type ZCodeTaskGoal,
   type ZCodeTaskMode,
   type ZCodeTaskMeta,
@@ -148,7 +149,7 @@ export interface ZCodeTaskIndexSyncer {
     target: WorkspaceBroadcastTarget,
     meta: ZCodeTaskMeta | undefined,
     reason: ZCodeWorkspaceTaskListChanged["reason"],
-    options?: Pick<ZCodeWorkspaceTaskListChanged, "unreadSignal">,
+    options?: Pick<ZCodeWorkspaceTaskListChanged, "unreadSignal" | "taskIdMigration">,
   ): void;
   /**
    * 获取共享的 workspace emitter，给 adapter 用来 fire 非 task_list_changed 类事件
@@ -321,6 +322,8 @@ export function createZCodeTaskIndexSyncer(
   // 临时会话的旧读/订阅路由仍可用，但任务索引只有 UUID 一个写入身份。
   // 完成帧附近已有在途 readSession；必须在其写库前重定向，避免 rekey 后又造回旧行。
   const taskIdAliases = new Map<string, string>();
+  // alias 可在事务前用于拦截旧 snapshot 写入；只有提交成功的关系才允许公开回放。
+  const confirmedTaskIdMigrations = new Map<string, Map<string, ZCodeWorkspaceTaskListChanged>>();
   const aliasKey = (target: ZCodeAgentWorkspaceTarget, taskId: string): string =>
     `${resolveWorkspaceKey(target)}\u0000${taskId}`;
   const canonicalTaskId = (target: ZCodeAgentWorkspaceTarget, taskId: string): string =>
@@ -495,7 +498,7 @@ export function createZCodeTaskIndexSyncer(
     target: WorkspaceBroadcastTarget,
     taskMeta: ZCodeTaskMeta | undefined,
     reason: ZCodeWorkspaceTaskListChanged["reason"],
-    options?: Pick<ZCodeWorkspaceTaskListChanged, "unreadSignal">,
+    options?: Pick<ZCodeWorkspaceTaskListChanged, "unreadSignal" | "taskIdMigration">,
   ): void {
     // 排查日志（左侧列表随输入框操作刷新）：确认哪些操作在发 task list 广播、reason 是什么。
     logger.debug(
@@ -505,15 +508,18 @@ export function createZCodeTaskIndexSyncer(
     getWorkspaceEmitter({
       workspacePath: target.workspacePath,
       workspaceIdentity: target.workspaceIdentity,
-    }).fire({
-      type: "workspace_task_list_changed",
-      workspacePath: target.workspacePath,
-      workspaceIdentity: target.workspaceIdentity,
-      taskId: target.taskId,
-      reason,
-      ...(taskMeta ? { taskMeta } : {}),
-      ...(options?.unreadSignal ? { unreadSignal: options.unreadSignal } : {}),
-    });
+    }).fire(
+      zcodeWorkspaceTaskListChangedSchema.parse({
+        type: "workspace_task_list_changed",
+        workspacePath: target.workspacePath,
+        workspaceIdentity: target.workspaceIdentity,
+        taskId: target.taskId,
+        reason,
+        ...(taskMeta ? { taskMeta } : {}),
+        ...(options?.unreadSignal ? { unreadSignal: options.unreadSignal } : {}),
+        ...(options?.taskIdMigration ? { taskIdMigration: options.taskIdMigration } : {}),
+      }),
+    );
   }
 
   async function resyncTaskIndexRowFromAgent(
@@ -1152,14 +1158,56 @@ export function createZCodeTaskIndexSyncer(
           state.pendingRekeyFrom = null;
           // SessionRegistry 先发临时 ID 终态，再连续发 removed/upserted UUID。
           // SQLite 是唯一产品壳状态所有者；迁移后列表只广播同一个稳定任务。
-          taskIdAliases.set(aliasKey(state.target, fromTaskId), delta.session.sessionId);
+          const toTaskId = delta.session.sessionId;
+          const workspaceKey = resolveWorkspaceKey(state.target);
+          const generation = state.indexSubscriptionGeneration;
+          const runtimeGeneration = state.runtimeGeneration;
+          const key = aliasKey(state.target, fromTaskId);
+          taskIdAliases.set(key, toTaskId);
           void taskIndexRepo
-            .rekeyTaskId({ ...state.target, fromTaskId, toTaskId: delta.session.sessionId })
+            .rekeyTaskId({ ...state.target, fromTaskId, toTaskId })
             .then((meta) => {
-              if (meta && isLiveState(state))
-                emitWorkspaceTaskListChanged(state.target, undefined, "task_meta_changed");
+              // Bug 根因：私有 alias 没有公开迁移事实，UI 会把临时/持久 ID 当成两个草稿。
+              // 仅在 SQLite 提交成功且所属订阅/运行时仍有效时发布；旧代际不得冒充当前身份。
+              if (
+                meta?.taskIdMigration?.fromTaskId !== fromTaskId ||
+                meta.taskIdMigration.toTaskId !== toTaskId
+              ) {
+                if (taskIdAliases.get(key) === toTaskId) taskIdAliases.delete(key);
+                return;
+              }
+              if (
+                !isLiveState(state) ||
+                state.indexSubscriptionGeneration !== generation ||
+                state.runtimeGeneration !== runtimeGeneration
+              )
+                return;
+              const taskIdMigration = { fromTaskId, toTaskId };
+              let migrations = confirmedTaskIdMigrations.get(workspaceKey);
+              if (!migrations) {
+                migrations = new Map();
+                confirmedTaskIdMigrations.set(workspaceKey, migrations);
+              }
+              if (migrations.get(fromTaskId)?.taskIdMigration?.toTaskId === toTaskId) return;
+              // 迟订阅仅回放关联，不回放旧 meta，避免把最新任务状态冲回事务提交时的旧值。
+              migrations.set(fromTaskId, {
+                type: "workspace_task_list_changed",
+                ...state.target,
+                taskId: toTaskId,
+                reason: "task_meta_changed",
+                taskIdMigration,
+              });
+              emitWorkspaceTaskListChanged(
+                { ...state.target, taskId: toTaskId },
+                meta,
+                "task_meta_changed",
+                { taskIdMigration },
+              );
             })
-            .catch((error) => logger.warn(undefined, `omp 任务身份迁移失败 ${fromTaskId}`, error));
+            .catch((error) => {
+              if (taskIdAliases.get(key) === toTaskId) taskIdAliases.delete(key);
+              logger.warn(undefined, `omp 任务身份迁移失败 ${fromTaskId}`, error);
+            });
         }
         processSummary(
           state,
@@ -1891,6 +1939,9 @@ export function createZCodeTaskIndexSyncer(
         if (cached) listener(cached);
         const cachedSlash = workspaceIngests.get(workspaceKey)?.latestSlashCommandsEvent;
         if (cachedSlash) listener(cachedSlash);
+        for (const migration of confirmedTaskIdMigrations.get(workspaceKey)?.values() ?? []) {
+          listener(migration);
+        }
         return disposable;
       };
     },
@@ -1932,6 +1983,8 @@ export function createZCodeTaskIndexSyncer(
       runtimeLifecycleDisposable?.dispose();
       runtimeRestartedDisposable?.dispose();
       availableRuntimeGenerationByWorkspaceKey.clear();
+      taskIdAliases.clear();
+      confirmedTaskIdMigrations.clear();
     },
   };
 }

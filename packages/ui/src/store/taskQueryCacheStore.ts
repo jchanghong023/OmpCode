@@ -15,6 +15,7 @@ import {
   type TaskListCacheKey,
 } from "@/lib/taskQueryCache.js";
 import { notifyTaskLifecycle } from "@/lib/taskLifecycleEvents.js";
+import { publishTaskQueryMetaMigration } from "@/store/taskQueryMetaMigrationEvents.js";
 import { uiMemoryDiagnosticsRegistry } from "@/lib/memoryDiagnostics.js";
 
 export interface TaskListMembershipState {
@@ -360,7 +361,8 @@ export const useTaskQueryCacheStore = create<TaskQueryCacheState>()((set) => ({
     partial,
     loadingShardKeys,
     failedShardKeys,
-  }) =>
+  }) => {
+    const migrations: ZCodeTaskMeta[] = [];
     set((state) => {
       const nextTaskMetaByEntityKey = { ...state.taskMetaByEntityKey };
       let taskMetaChanged = false;
@@ -391,6 +393,7 @@ export const useTaskQueryCacheStore = create<TaskQueryCacheState>()((set) => ({
           hasUnreadOverlay,
           unreadAtOverlay,
         });
+        if (item.taskIdMigration) migrations.push(item);
         if (
           hasUnreadOverlay &&
           (unreadAtOverlay === null
@@ -469,8 +472,12 @@ export const useTaskQueryCacheStore = create<TaskQueryCacheState>()((set) => ({
           ? nextTaskUnreadOverlayByEntityKey
           : state.taskUnreadOverlayByEntityKey,
       };
-    }),
-  setQueryResults: (entries) =>
+    });
+    // 只发布已接纳的迁移关系，且在缓存事务之外消费草稿，避免嵌套状态更新。
+    for (const meta of migrations) publishTaskQueryMetaMigration(meta);
+  },
+  setQueryResults: (entries) => {
+    const migrations: ZCodeTaskMeta[] = [];
     set((state) => {
       if (entries.length === 0) {
         return state;
@@ -520,6 +527,7 @@ export const useTaskQueryCacheStore = create<TaskQueryCacheState>()((set) => ({
             hasUnreadOverlay,
             unreadAtOverlay,
           });
+          if (item.taskIdMigration) migrations.push(item);
           if (
             hasUnreadOverlay &&
             (unreadAtOverlay === null
@@ -597,8 +605,10 @@ export const useTaskQueryCacheStore = create<TaskQueryCacheState>()((set) => ({
           ? nextTaskUnreadOverlayByEntityKey
           : state.taskUnreadOverlayByEntityKey,
       };
-    }),
-  upsertTaskMeta: (task) =>
+    });
+    for (const meta of migrations) publishTaskQueryMetaMigration(meta);
+  },
+  upsertTaskMeta: (task) => {
     set((state) => {
       const entityKey = buildTaskEntityKey(task);
       const existingTask = state.taskMetaByEntityKey[entityKey];
@@ -617,8 +627,10 @@ export const useTaskQueryCacheStore = create<TaskQueryCacheState>()((set) => ({
           [entityKey]: nextTask,
         },
       };
-    }),
-  updateTaskMetaPreservingMembership: (task) =>
+    });
+    publishTaskQueryMetaMigration(task);
+  },
+  updateTaskMetaPreservingMembership: (task) => {
     set((state) => {
       const entityKey = buildTaskEntityKey(task);
       const existingTask = state.taskMetaByEntityKey[entityKey];
@@ -658,8 +670,10 @@ export const useTaskQueryCacheStore = create<TaskQueryCacheState>()((set) => ({
         resultsByQueryKey: nextResultsByQueryKey,
         taskMetaByEntityKey: nextTaskMetaByEntityKey,
       };
-    }),
-  applyTaskMutation: ({ previousTask, nextTask, previousState, nextState }) =>
+    });
+    publishTaskQueryMetaMigration(task);
+  },
+  applyTaskMutation: ({ previousTask, nextTask, previousState, nextState }) => {
     set((state) => {
       const previousEntityKey = buildTaskEntityKey(previousTask);
       const nextEntityKey = buildTaskEntityKey(nextTask);
@@ -747,7 +761,9 @@ export const useTaskQueryCacheStore = create<TaskQueryCacheState>()((set) => ({
         resultsByQueryKey: nextResultsByQueryKey,
         taskMetaByEntityKey: nextTaskMetaByEntityKey,
       };
-    }),
+    });
+    publishTaskQueryMetaMigration(nextTask);
+  },
   setTaskUnreadOverlay: (task, unreadAt) =>
     set((state) => {
       const entityKey = buildTaskEntityKey(task);

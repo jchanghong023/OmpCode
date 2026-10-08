@@ -393,12 +393,26 @@ function ConversationTimelineImpl({
     return () => observer.disconnect();
   }, [hasHeaderSlot]);
   const [liveNowMs, setLiveNowMs] = useState(() => Date.now());
+  const liveNowMsRef = useRef(liveNowMs);
+  liveNowMsRef.current = liveNowMs;
   const renderCacheRef = useRef<{ sessionKey: string; cache: ConversationTurnRenderCache } | null>(
     null,
   );
   if (renderCacheRef.current?.sessionKey !== sessionKey) {
     renderCacheRef.current = { sessionKey, cache: new ConversationTurnRenderCache() };
   }
+  // 导航与查找只依赖正文/阶段，不消费运行时长；避免每秒重建全部历史的派生索引。
+  const contentProjection = useMemo(() => {
+    const cache = renderCacheRef.current!.cache;
+    const units = buildConversationTurnRenderUnits(
+      rows,
+      { nowMs: liveNowMsRef.current, sessionPhase },
+      cache,
+    );
+    // 派生成员与该次视图一起捕获，不能读取另一次被放弃 render 写入的缓存版本。
+    return { units, hasRunningUnit: cache.hasRunningUnit, queryRowIds: cache.queryRowIds };
+  }, [rows, sessionPhase, sessionKey]);
+  const contentRenderUnits = contentProjection.units;
   const renderUnits = useMemo(
     () =>
       buildConversationTurnRenderUnits(
@@ -409,22 +423,15 @@ function ConversationTimelineImpl({
         },
         renderCacheRef.current!.cache,
       ),
-    [liveNowMs, rows, sessionPhase],
+    // 切换 session 时即使尾窗引用恰好相同，也必须构建新实例的派生缓存。
+    [contentRenderUnits, liveNowMs, rows, sessionPhase, sessionKey],
   );
   const { virtualizedUnits, liveUnit, liveUnitIndex } = useMemo(
     () => splitConversationTimelineLiveTail(renderUnits),
     [renderUnits],
   );
-  const hasRunningUnit = useMemo(() => renderUnits.some((unit) => unit.isRunning), [renderUnits]);
-  const turnNavigatorQueryRowIds = useMemo(
-    () =>
-      new Set(
-        renderUnits.flatMap((unit) =>
-          unit.visibleUserInputs.filter((row) => row.origin === "realUser").map((row) => row.rowId),
-        ),
-      ),
-    [renderUnits],
-  );
+  const hasRunningUnit = contentProjection.hasRunningUnit;
+  const turnNavigatorQueryRowIds = contentProjection.queryRowIds;
   const turnNavigatorQueryRowIdsRef = useRef(turnNavigatorQueryRowIds);
   turnNavigatorQueryRowIdsRef.current = turnNavigatorQueryRowIds;
   const centeredEmptyLayout = centerEmptyStateWithDock && renderUnits.length === 0;
@@ -1346,7 +1353,7 @@ function ConversationTimelineImpl({
 
   useConversationTimelineFind({
     rootRef: scrollRef,
-    renderUnits,
+    renderUnits: contentRenderUnits,
     rows,
     mountedRowsKey,
     canLoadOlder,
@@ -1649,7 +1656,7 @@ function ConversationTimelineImpl({
         commit={commitCapturedScrollMemory}
       />
       <ConversationTurnNavigator
-        renderUnits={renderUnits}
+        renderUnits={contentRenderUnits}
         isHydratingDirectory={loadingOlder}
         scrollOffsetPx={virtualizer.scrollOffset ?? turnNavigatorViewport.scrollOffsetPx}
         viewportHeightPx={virtualizer.scrollRect?.height ?? turnNavigatorViewport.viewportHeightPx}

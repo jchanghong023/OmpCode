@@ -93,6 +93,8 @@ import {
   type ConversationComposerSendOptions,
   type ConversationComposerSendResult,
 } from "@/v4/ConversationComposer.js";
+import { useComposerCallback } from "@/v4/composer/useComposerCallback.js";
+import { projectComposerSnapshot, type ComposerSnapshot } from "@/v4/composer/composerSnapshot.js";
 import type { ConversationDropTargetController } from "@/v4/composer/conversationDropTarget.js";
 import { shouldIgnoreEscapeForStopGeneration } from "@/v4/composer/escapeStop.js";
 import { ConversationDraftEmptyState } from "@/v4/ConversationDraftEmptyState.js";
@@ -793,6 +795,12 @@ export function SessionPane({
   // Composer 保存下一次 Submission 的 renderer intent；prewarm session 仅承载草稿预热。
   const {
     composerDraft,
+    markComposerDraftDirty,
+    readComposerDraft,
+    subscribeComposerDraft,
+    captureComposerSubmission,
+    flushComposerDraft,
+    registerComposerContentReader,
     modelSelectionRead,
     draftConfig,
     draftConfigRef,
@@ -3474,10 +3482,13 @@ export function SessionPane({
   const controlLastErrorKey = controlLastError
     ? createSessionErrorKey(snapshot?.sessionId ?? sessionId, controlLastError)
     : null;
-  const projectedComposerError =
-    controlLastError && controlLastErrorKey && !dismissedErrorKeys.includes(controlLastErrorKey)
-      ? toComposerUiError(snapshot?.sessionId ?? sessionId, controlLastError)
-      : null;
+  const projectedComposerError = useMemo(
+    () =>
+      controlLastError && controlLastErrorKey && !dismissedErrorKeys.includes(controlLastErrorKey)
+        ? toComposerUiError(snapshot?.sessionId ?? sessionId, controlLastError)
+        : null,
+    [controlLastError, controlLastErrorKey, dismissedErrorKeys, snapshot?.sessionId, sessionId],
+  );
   // 官方 Server MCP 不可用（额度耗尽 / 无 Coding Plan）：事实来自 tool row 上的结构化标识，
   // 与模型额度是两条独立信息通道，这里只做投影。
   const mcpUnavailableNotice = useMemo(
@@ -3558,13 +3569,27 @@ export function SessionPane({
       });
   }, [dispatchCommand, handleDraftSessionCreated, recoverableCommand, workspaceKey]);
 
+  // 流式 rows/seq 不参与 Composer 展示；事件通过稳定代理读取当前闭包与快照。
+  const composerSnapshotRef = useRef<ComposerSnapshot | null>(null);
+  composerSnapshotRef.current = projectComposerSnapshot(snapshot, composerSnapshotRef.current);
+  const readLatestComposerSnapshot = useCallback(() => snapshotRef.current, []);
+  const handleComposerSendText = useComposerCallback(handleSendText);
+  const readComposerSubmission = useComposerCallback(createSubmissionFromComposer);
+  const handleComposerOpenGitReview = useComposerCallback(() =>
+    onOpenGitReview?.(gitWorktreeReviewSourceId ?? undefined),
+  );
+  const handleComposerOpenBackgroundWorks = useComposerCallback(handleOpenRunningBackgroundWorks);
+  const handleComposerCompression = useComposerCallback(handleSendCompressionCommand);
+  const handleComposerRecoverModel = useComposerCallback(handleRecoverCustomModelSelection);
+  const handleComposerAutoCompaction = useComposerCallback(handleSetAutoCompaction);
+
   // subagent 右侧 child tab 是观察视图；复用普通 SessionPane 时
   // 若仍创建 composer，会让用户误以为可以直接向 child session 继续输入。
   const composerNode = readOnly ? null : (
     <ConversationComposer
       key="conversation-composer"
-      // Snapshot 仍服务用量、路由与运行态；工具栏的 mode/model 只读下方 Composer Draft。
-      snapshot={snapshot}
+      snapshot={composerSnapshotRef.current}
+      readLatestSnapshot={readLatestComposerSnapshot}
       sessionId={sessionId}
       // 草稿 taskId 仍为 null，但 prewarm 已经拥有独立 AgentRuntime。
       // 只给 Skill catalog 下发 effective id，避免 UI 扫到 prewarm runtime 尚未加载的新 Skill。
@@ -3572,11 +3597,17 @@ export function SessionPane({
       draftMode={isDraft}
       draftConfig={draftConfig}
       composerDraft={composerDraft}
+      markComposerDraftDirty={markComposerDraftDirty}
+      readComposerDraft={readComposerDraft}
+      subscribeComposerDraft={subscribeComposerDraft}
+      captureComposerSubmission={captureComposerSubmission}
+      flushComposerDraft={flushComposerDraft}
+      registerComposerContentReader={registerComposerContentReader}
       replaceComposerDraft={replaceComposerDraft}
       submissionReady={selectionSideChat ? true : composerSubmissionReady}
       parentModelOnly={selectionSideChat}
       updateComposerContent={updateComposerContent}
-      createSubmissionFromComposer={selectionSideChat ? undefined : createSubmissionFromComposer}
+      createSubmissionFromComposer={selectionSideChat ? undefined : readComposerSubmission}
       contextHeader={isDraft ? draftComposerHeader : undefined}
       centered={isDraft}
       blockingRequestId={blockingInteractionId}
@@ -3604,7 +3635,7 @@ export function SessionPane({
       telemetryDraftConfig={telemetryDraftConfig}
       telemetryVisible={telemetryVisible && conversationTelemetryForegroundEnabled}
       readPlanIdentitySnapshot={readPlanIdentitySnapshot}
-      onSendText={handleSendText}
+      onSendText={handleComposerSendText}
       onDraftStateChange={handleComposerDraftStateChange}
       composerRestoreRequest={composerRestoreRequest}
       onComposerRestoreApplied={handleComposerRestoreApplied}
@@ -3613,21 +3644,19 @@ export function SessionPane({
       onSelectThought={handleSelectThought}
       gitSummary={gitSummary}
       gitDirtyFileCount={gitDirtyFileCount}
-      onOpenGitReview={
-        onOpenGitReview ? () => onOpenGitReview(gitWorktreeReviewSourceId ?? undefined) : undefined
-      }
-      onSetAutoCompaction={handleSetAutoCompaction}
+      onOpenGitReview={onOpenGitReview ? handleComposerOpenGitReview : undefined}
+      onSetAutoCompaction={handleComposerAutoCompaction}
       onSwitchMode={handleSwitchMode}
       onOpenRunningBackgroundWorks={
-        sessionId && runningBackgroundWorkCount > 0 ? handleOpenRunningBackgroundWorks : undefined
+        sessionId && runningBackgroundWorkCount > 0 ? handleComposerOpenBackgroundWorks : undefined
       }
       backgroundWorkOpenTarget={soleRunningWorkflowRunTarget ? "workflow-run" : "panel"}
       // 父轮结束后 subagents.running 的目录投影可能短暂落后于仍为 running 的
       // backgroundWorks；Composer 若直接读目录会提前隐藏 Agent 入口。这里复用状态面板按
       // childSessionId 精确回退后的计数，让两个入口共享同一份运行态真值。
       runningSubagentCount={runningAgentCount}
-      onRecoverCustomModelSelection={handleRecoverCustomModelSelection}
-      onSendCompressionCommand={handleSendCompressionCommand}
+      onRecoverCustomModelSelection={handleComposerRecoverModel}
+      onSendCompressionCommand={handleComposerCompression}
       error={composerError}
       onDismissError={handleDismissComposerError}
       onOpenCodeViewer={onOpenCodeViewer}

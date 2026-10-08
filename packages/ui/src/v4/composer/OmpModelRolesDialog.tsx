@@ -50,7 +50,6 @@ export interface OmpModelRolesDialogProps {
   workspaceIdentity?: string;
 }
 
-
 export function OmpModelRolesDialog(props: OmpModelRolesDialogProps) {
   const resolution = useWorkspaceServicesResolution(
     props.workspacePath,
@@ -61,7 +60,8 @@ export function OmpModelRolesDialog(props: OmpModelRolesDialogProps) {
   const { settings } = useSettings();
   const [activeProfile, setActiveProfile] = useState<string | null>(null);
   useEffect(() => {
-    if ((!props.open && !props.inline) || !platform.listOmpProfiles || resolution.isRemoteTarget) return;
+    if ((!props.open && !props.inline) || !platform.listOmpProfiles || resolution.isRemoteTarget)
+      return;
     let cancelled = false;
     void platform
       .listOmpProfiles()
@@ -96,11 +96,13 @@ export function OmpModelRolesDialog(props: OmpModelRolesDialogProps) {
   );
 }
 
-function OmpModelRolesEditor(props: OmpModelRolesDialogProps & {
-  resolution: OmpRoleEditorResolution;
-  writeBlocked: boolean;
-  profileUnavailable: boolean;
-}) {
+function OmpModelRolesEditor(
+  props: OmpModelRolesDialogProps & {
+    resolution: OmpRoleEditorResolution;
+    writeBlocked: boolean;
+    profileUnavailable: boolean;
+  },
+) {
   const {
     open = false,
     onOpenChange,
@@ -178,7 +180,8 @@ function OmpModelRolesEditor(props: OmpModelRolesDialogProps & {
     const requestGeneration = generation.current;
     const requestSequence = loadSequence.current + 1;
     void loadRpcRoles().then((outcome) => {
-      if (requestGeneration !== generation.current || requestSequence !== loadSequence.current) return;
+      if (requestGeneration !== generation.current || requestSequence !== loadSequence.current)
+        return;
       if (outcome === "fallback") setSource("fallback");
     });
   }, [loadRpcRoles]);
@@ -252,7 +255,10 @@ function OmpModelRolesEditor(props: OmpModelRolesDialogProps & {
         // 保存失败同样按三态分流（S8-1）：只有旧核永久缺失（-32601）才允许转本地
         // 回落保存（切换到回落编辑器直写用户 config.yml）；-32000 等暂时不可用保留
         // 待保存选择显示失败供重试，绝不静默降级直写用户配置。
-        if (!resolution.isRemoteTarget && classifyOmpRoleSaveFailure(error) === "capabilityMissing") {
+        if (
+          !resolution.isRemoteTarget &&
+          classifyOmpRoleSaveFailure(error) === "capabilityMissing"
+        ) {
           logger.info("[omp-model-roles] 保存遇旧核能力缺失，转本地回落编辑", {
             roleId,
             error: message,
@@ -282,52 +288,50 @@ function OmpModelRolesEditor(props: OmpModelRolesDialogProps & {
     [services, workspaceIdentity, workspacePath, resolution.isRemoteTarget, writeBlocked],
   );
 
-
   if (!open && !inline) return null;
 
-  const fields =
-    writeBlocked ? (
-      <p className="text-ui-base text-foreground-subtle">
-        {intl.formatMessage({
-          id: props.profileUnavailable
-            ? "settings.ompModelRoles.loadFailed"
-            : "settings.ompProfile.restartRequired",
-        })}
-      </p>
-    ) : source === "rpc" ? (
-      <OmpModelRolesRpcFields
-        roles={rpcRoles}
-        pending={rpcPending}
-        rowState={rpcRowState}
-        catalogEntries={catalogEntries}
-        onSave={saveRpcRole}
-        inline={inline}
-        onOpenChange={onOpenChange}
-      />
-    ) : loadFailure !== null ? (
-      // 目录加载失败（rpc 未就绪 / -32000 暂时不可用 / 其他错误）：停留错误态并提供
-      // 重试入口，不回落直写用户配置（S8-1）；错误框样式对齐 SkillsSection 失败态。
-      <>
-        <div className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-ui-base text-destructive">
-          {intl.formatMessage({ id: "ompModelRoles.loadUnavailable" })}
-          {loadFailure ? `: ${loadFailure}` : ""}
-        </div>
-        <div className="flex items-center justify-end gap-2">
-          {!inline ? (
-            <Button variant="ghost" onClick={() => onOpenChange?.(false)}>
-              {intl.formatMessage({ id: "common.close" })}
-            </Button>
-          ) : null}
-          <Button onClick={runRpcLoad}>{intl.formatMessage({ id: "common.retry" })}</Button>
-        </div>
-      </>
-    ) : source === "fallback" ? (
-      <OmpModelRolesFallbackFields
-        catalogEntries={catalogEntries}
-        inline={inline}
-        onOpenChange={onOpenChange}
-      />
-    ) : null;
+  const fields = writeBlocked ? (
+    <p className="text-ui-base text-foreground-subtle">
+      {intl.formatMessage({
+        id: props.profileUnavailable
+          ? "settings.ompModelRoles.loadFailed"
+          : "settings.ompProfile.restartRequired",
+      })}
+    </p>
+  ) : source === "rpc" ? (
+    <OmpModelRolesRpcFields
+      roles={rpcRoles}
+      pending={rpcPending}
+      rowState={rpcRowState}
+      catalogEntries={catalogEntries}
+      onSave={saveRpcRole}
+      inline={inline}
+      onOpenChange={onOpenChange}
+    />
+  ) : loadFailure !== null ? (
+    // 目录加载失败（rpc 未就绪 / -32000 暂时不可用 / 其他错误）：停留错误态并提供
+    // 重试入口，不回落直写用户配置（S8-1）；错误框样式对齐 SkillsSection 失败态。
+    <>
+      <div className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-ui-base text-destructive">
+        {intl.formatMessage({ id: "ompModelRoles.loadUnavailable" })}
+        {loadFailure ? `: ${loadFailure}` : ""}
+      </div>
+      <div className="flex items-center justify-end gap-2">
+        {!inline ? (
+          <Button variant="ghost" onClick={() => onOpenChange?.(false)}>
+            {intl.formatMessage({ id: "common.close" })}
+          </Button>
+        ) : null}
+        <Button onClick={runRpcLoad}>{intl.formatMessage({ id: "common.retry" })}</Button>
+      </div>
+    </>
+  ) : source === "fallback" ? (
+    <OmpModelRolesFallbackFields
+      catalogEntries={catalogEntries}
+      inline={inline}
+      onOpenChange={onOpenChange}
+    />
+  ) : null;
 
   if (inline) {
     return (
