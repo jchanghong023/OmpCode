@@ -56,6 +56,7 @@ import type {
   ZCodeSessionRuntimePreferencesResult,
   ZCodeSessionStateSnapshot,
   ZCodeSessionSubagentsResult,
+  ZCodeSessionAgentInteractionsResult,
   ZCodeStateUpdatedNotification,
   ZCodeTaskClientMode,
   ZCodeBrowserAmbientContext,
@@ -221,6 +222,12 @@ export interface ZCodeAgentListSessionSubagentsParams extends ZCodeAgentSessionT
   endedLimit?: number;
   /** 远程 workspace 的宿主连接身份；只用于选择现有 Host，不进入 CLI wire query。 */
   remoteSessionId?: string;
+}
+
+export interface ZCodeAgentListSessionAgentInteractionsParams extends ZCodeAgentSessionTarget {
+  remoteSessionId?: string;
+  cursor?: string;
+  limit?: number;
 }
 
 export interface ZCodeAgentAppUsageParams {
@@ -593,6 +600,9 @@ export interface IZCodeAgentService {
   listSessionSubagents(
     params: ZCodeAgentListSessionSubagentsParams,
   ): Promise<ZCodeSessionSubagentsResult>;
+  listSessionAgentInteractions(
+    params: ZCodeAgentListSessionAgentInteractionsParams,
+  ): Promise<ZCodeSessionAgentInteractionsResult>;
   getAppUsageStats(params: ZCodeAgentAppUsageParams): Promise<AppUsageSnapshot>;
   getTaskTokenUsage(params: ZCodeAgentTaskTokenUsageParams): Promise<ZCodeTaskTokenUsageResult>;
   readSession(params: ZCodeAgentReadSessionParams): Promise<ZCodeSessionStateSnapshot>;

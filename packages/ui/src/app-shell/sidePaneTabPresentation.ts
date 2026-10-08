@@ -12,6 +12,7 @@ export interface SidePaneTabPresentationLabels {
   terminalTitle: string;
   subagentTypeLabel: string;
   subagentDirectoryTitle: string;
+  ompAgentInteractionsTitle: string;
   selectionChatTitle: string;
   planTitle: string;
   workflowRunTitle: string;
@@ -51,6 +52,9 @@ export function getSidePaneTabSearchHint(tab: WorkspaceSidePaneTab): string {
   if (tab.type === "subagent-directory") {
     return `${tab.rootSessionId} ${tab.parentSessionId} subagent directory`;
   }
+  if (tab.type === "omp-agent-interactions") {
+    return `${tab.rootSessionId} agent interactions messages communication`;
+  }
   if (tab.type === "browser") return tab.initialUrl ?? "";
   if (tab.type === "browser-use") {
     return `${tab.title ?? ""} ${tab.sessionId} browser use`;
@@ -85,6 +89,7 @@ export function getLocalizedSidePaneTabTitle(
       "terminal.title": labels.terminalTitle,
       "sidePane.subagent": labels.subagentTypeLabel,
       "sidePane.subagentDirectory": labels.subagentDirectoryTitle,
+      "ompInteractions.title": labels.ompAgentInteractionsTitle,
       "sidePane.selectionChat": labels.selectionChatTitle,
       "planTool.panel.planTab": labels.planTitle,
       "sidePane.workflowRun": labels.workflowRunTitle,
@@ -111,6 +116,7 @@ export function getSidePaneTabTypeLabel(
     return tab.subagentType.trim() || labels.subagentTypeLabel;
   }
   if (tab.type === "subagent-directory") return labels.subagentDirectoryTitle;
+  if (tab.type === "omp-agent-interactions") return labels.ompAgentInteractionsTitle;
   if (tab.type === "browser" || tab.type === "browser-use") return labels.browserTitle;
   if (tab.type === "git") return labels.reviewTitle;
   if (tab.type === "treemapping") return labels.treemappingTitle;

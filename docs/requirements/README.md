@@ -11,6 +11,7 @@
 | [composer.md](composer.md)                         | 桌面输入区、临时模型、计划命令入口、上下文、压缩与 Git 状态                                                                                             |
 | [skills.md](skills.md)                             | omp 可执行技能目录、候选、调用与只读设置                                                                                                                |
 | [integrations.md](integrations.md)                 | 子代理、工具交互、扩展/MCP、浏览器与钩子设置页、自动化、文件引用与附件                                                                                  |
+| [agent-interactions.md](agent-interactions.md)     | 主会话 Agent 交互独立 tab、消息方向与时间、实时与历史观察、按需读取和视觉验收                                                                           |
 | [session-recovery.md](session-recovery.md)         | 会话身份、历史恢复、轮次收口、Host/远端连接与故障处理                                                                                                   |
 | [performance.md](performance.md)                   | 流式长会话、查找和界面响应性及一致性约束                                                                                                                |
 | [centos7-release.md](centos7-release.md)           | CentOS 7 原生 glibc 2.17 兼容包、Electron 双轨构建、离线锁定与发布边界                                                                                  |

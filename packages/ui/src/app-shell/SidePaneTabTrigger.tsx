@@ -96,6 +96,7 @@ export function SortableSidePaneTabTrigger({
       <div
         ref={setNodeRef}
         data-side-pane-tab-id={tab.id}
+        data-side-pane-tab-type={tab.type}
         data-browser-tab-residency={"residency" in tab ? tab.residency : undefined}
         data-active={isActive ? "" : undefined}
         data-state={isActive ? "active" : "inactive"}
@@ -303,6 +304,9 @@ export function SidePaneTabIcon({ tab }: { tab: WorkspaceSidePaneTab }) {
   if (tab.type === "subagent-directory") {
     return <ListTreeIcon className="size-3.5" />;
   }
+  if (tab.type === "omp-agent-interactions") {
+    return <WaypointsIcon className="size-3.5" />;
+  }
 
   if (tab.type === "browser") {
     return <BrowserTabFavicon faviconUrl={tab.faviconUrl} />;
@@ -509,6 +513,9 @@ export function getSidePaneTabTitle(
 
   if (tab.type === "subagent-directory") {
     return formatMessage({ id: "sidePane.subagentDirectory" });
+  }
+  if (tab.type === "omp-agent-interactions") {
+    return formatMessage({ id: "ompInteractions.title" });
   }
 
   if (tab.type === "browser") {

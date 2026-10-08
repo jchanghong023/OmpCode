@@ -10,3 +10,8 @@
 - 辅助主题借用父会话进程的原生 BTW；OMP 运行时与 BTW sidecar 拥有执行/历史，适配器只派生不透明地址、投影和订阅，不另建接受队列或主 transcript。
 - 空辅助 pane 不执行模型；首问返回真实主题地址并绑定稳定父 UUID，追问/停止按该主题关联，冷恢复仅经真实历史查询。两条交付链路复用同一水位与进程实例 fence。
 - 原生扩展的显式可见 custom 消息仅作为标准完成文本投影；隐藏消息不进入 UI 行/派生 transcript。不运行 TUI renderer，也不把该消息当模型响应参与用量、错误或轮次结算；live/cold 复用同一可见性规则。
+- `session/agentInteractions` 是带 workspace/root-session scope 的只读查询。会话引擎观察经过校验的原始 IRC/custom 与 task/write/wait 结构，交互读面统一归并 live 与受控后代 JSONL；UI 不解析文件或拥有另一份通信事实。
+- 观察页按文件 size/mtime 游标缓存原始记录；首查询刷新权威快照，分页游标绑定快照 revision。只保留最近两版，过期游标显式失败，不混合不同版本的 offset。读取预算为每文件 50,000 条、每树 256 个主体、8 层后代、live 20,000 条，预算不足标 partial。
+- 消息 ID 是首选幂等键。缺 ID 的旧转发只有无歧义跨源观察才能归并，同源同正文消息保留。源中发送时间与落盘时间分别标 `sent`/`recorded`，缺失留未知；没有处理回执就不能生成已读/已处理状态。旧核全量审计缺口始终显式标 partial。
+- 直接子代理状态读取原会话子代理目录与 revision，不新设运行状态 owner；嵌套状态只从已证明 task 归属的 `wait.jobs(type:task)` 更新，优先使用 `agentUrlId`。同名 bash/eval、未知身份和主会话结束不能推出子代理终态。
+- 交互读面通过既有 SubagentBridge records 的进程归属读取现在状态；冷订阅虽可能启动 Main，但 roster 无该 child 的真实生命周期/快照证明时仍显示 `unknown`，不假定旧 pending/running 仍在执行。明确源终态不会被旧目录的 running 覆盖。进程实例变化参与缓存版本，旧进程的证明不跨实例复用；只读判断不启动进程、发新查询命令或执行模型。

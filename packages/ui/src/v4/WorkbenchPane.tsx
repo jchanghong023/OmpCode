@@ -286,6 +286,9 @@ export interface WorkbenchShellBinding {
   onOpenBackgroundBash?: (request: OpenBackgroundBashSideTabRequest) => void;
   onOpenSubagentSession?: (request: OpenScopedSubagentSideTabRequest) => void;
   onOpenSubagentDirectory?: (request: OpenScopedSubagentDirectorySideTabRequest) => void;
+  onOpenOmpAgentInteractions?: (
+    request: import("@/lib/workspaceSidePane.js").OpenOmpAgentInteractionsSideTabRequest,
+  ) => void;
   onSyncSubagentSessionTabs?: (request: SyncSubagentSessionTabsRequest) => void;
   onOpenSelectionSideChat?: (request: OpenSelectionSideChatRequest) => void;
   onOpenPlanDetail?: (request: OpenScopedPlanDetailSideTabRequest) => void;
@@ -598,6 +601,7 @@ export function WorkbenchLeafPane({
           onOpenSubagentSession={shell.onOpenSubagentSession}
           onOpenBackgroundBash={shell.onOpenBackgroundBash}
           onOpenSubagentDirectory={shell.onOpenSubagentDirectory}
+          onOpenOmpAgentInteractions={shell.onOpenOmpAgentInteractions}
           onSyncSubagentSessionTabs={shell.onSyncSubagentSessionTabs}
           onOpenSelectionSideChat={shell.onOpenSelectionSideChat}
           onOpenPlanDetail={shell.onOpenPlanDetail}

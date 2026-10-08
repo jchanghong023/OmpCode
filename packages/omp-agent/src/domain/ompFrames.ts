@@ -157,6 +157,8 @@ export const ompSessionEventFrameSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("turn_end"), message: ompAgentMessageSchema.optional() }),
   z.object({ type: z.literal("message_start"), message: ompAgentMessageSchema }),
   z.object({ type: z.literal("message_end"), message: ompAgentMessageSchema }),
+  // IRC 是独立会话事件；正文与 details 必须无损交给只读交互投影。
+  z.object({ type: z.literal("irc_message"), message: ompAgentMessageSchema }),
   z.object({
     type: z.literal("message_update"),
     message: ompAgentMessageSchema,

@@ -1,0 +1,122 @@
+[
+  {
+    "name": "wide-dark",
+    "width": 684,
+    "detailWidth": 636,
+    "detailScrollWidth": 636,
+    "theme": "dark theme-zai-dark platform-windows-desktop",
+    "background": "rgb(22, 22, 22)",
+    "graph": {
+      "width": 669,
+      "height": 312,
+      "scrollWidth": 669,
+      "scrollHeight": 312,
+      "nodes": [
+        {
+          "id": "main",
+          "caption": "主智能体main",
+          "inside": true,
+          "fontSize": "14px"
+        },
+        {
+          "id": "InteractionAlpha",
+          "caption": "InteractionAlpha已完成",
+          "inside": true,
+          "fontSize": "14px"
+        },
+        {
+          "id": "InteractionBeta",
+          "caption": "InteractionBeta状态未确认",
+          "inside": true,
+          "fontSize": "14px"
+        },
+        {
+          "id": "InteractionAlpha/InteractionAlpha.InteractionGamma",
+          "caption": "InteractionAlpha.InteractionGamma已完成",
+          "inside": true,
+          "fontSize": "14px"
+        }
+      ]
+    }
+  },
+  {
+    "name": "wide-light",
+    "width": 684,
+    "detailWidth": 636,
+    "detailScrollWidth": 636,
+    "theme": "platform-windows-desktop theme-zai-light",
+    "background": "rgb(248, 248, 248)",
+    "graph": {
+      "width": 669,
+      "height": 312,
+      "scrollWidth": 669,
+      "scrollHeight": 312,
+      "nodes": [
+        {
+          "id": "main",
+          "caption": "主智能体main",
+          "inside": true,
+          "fontSize": "14px"
+        },
+        {
+          "id": "InteractionAlpha",
+          "caption": "InteractionAlpha已完成",
+          "inside": true,
+          "fontSize": "14px"
+        },
+        {
+          "id": "InteractionBeta",
+          "caption": "InteractionBeta状态未确认",
+          "inside": true,
+          "fontSize": "14px"
+        },
+        {
+          "id": "InteractionAlpha/InteractionAlpha.InteractionGamma",
+          "caption": "InteractionAlpha.InteractionGamma已完成",
+          "inside": true,
+          "fontSize": "14px"
+        }
+      ]
+    }
+  },
+  {
+    "name": "narrow-light",
+    "width": 324,
+    "detailWidth": 276,
+    "detailScrollWidth": 276,
+    "theme": "platform-windows-desktop theme-zai-light",
+    "background": "rgb(248, 248, 248)",
+    "graph": {
+      "width": 309,
+      "height": 420,
+      "scrollWidth": 309,
+      "scrollHeight": 420,
+      "nodes": [
+        {
+          "id": "main",
+          "caption": "主智能体main",
+          "inside": true,
+          "fontSize": "14px"
+        },
+        {
+          "id": "InteractionAlpha",
+          "caption": "InteractionAlpha已完成",
+          "inside": true,
+          "fontSize": "14px"
+        },
+        {
+          "id": "InteractionBeta",
+          "caption": "InteractionBeta状态未确认",
+          "inside": true,
+          "fontSize": "14px"
+        },
+        {
+          "id": "InteractionAlpha/InteractionAlpha.InteractionGamma",
+          "caption": "InteractionAlpha.InteractionGamma已完成",
+          "inside": true,
+          "fontSize": "14px"
+        }
+      ]
+    }
+  }
+]

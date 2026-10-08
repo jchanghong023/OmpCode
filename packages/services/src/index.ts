@@ -164,6 +164,7 @@ export type {
   ZCodeAgentRuntimeLifecycleEvent,
   ZCodeAgentRuntimePolicy,
   ZCodeAgentReadSessionParams,
+  ZCodeAgentListSessionAgentInteractionsParams,
   ZCodeAgentResumeSessionParams,
   ZCodeAgentRunAutomationNowResult,
   ZCodeAgentSavedWorkflowTarget,

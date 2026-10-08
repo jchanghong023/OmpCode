@@ -42,6 +42,7 @@ import { Tabs, TabsContent, TabsList } from "@/components/ui/tabs.js";
 import { SidePaneTabOverview } from "@/app-shell/SidePaneTabOverview.js";
 import { SubagentSessionSidePane } from "@/app-shell/SubagentSessionSidePane.js";
 import { SubagentDirectorySidePane } from "@/app-shell/SubagentDirectorySidePane.js";
+import { OmpAgentInteractionsSidePane } from "@/app-shell/OmpAgentInteractionsSidePane.js";
 import { SelectionSideChatPane } from "@/app-shell/SelectionSideChatPane.js";
 import { BackgroundBashOutputSidePane } from "@/app-shell/BackgroundBashOutputSidePane.js";
 import { PlanDetailSidePane } from "@/app-shell/PlanDetailSidePane.js";
@@ -64,6 +65,7 @@ import {
   resolveOpenTabLauncherItemIds,
   shouldOfferSelectionSideConversation,
   shouldRenderPreviewPaneHeavyContent,
+  shouldMountOmpAgentInteractionsTab,
   type OpenTabLauncherItemId,
 } from "@/app-shell/animatedSidePanePanelModel.js";
 import type { BrowserNavigationRequest, RecentClosedSidePaneTab } from "@/hooks/useAppPanels.js";
@@ -321,6 +323,7 @@ export function AnimatedSidePanePanel({
   onOpenCodeViewer,
   onOpenFileLink,
   onOpenSubagentSession,
+  onBindOmpAgentInteractionsRoot,
   onOpenWorkflowActorSession,
   onOpenWorkflowWorkspace,
   onOpenWorkflowArtifact,
@@ -387,6 +390,9 @@ export function AnimatedSidePanePanel({
   onOpenFileLink?: (target: MessageFileLinkTarget) => void;
   onOpenBackgroundBash?: (request: OpenBackgroundBashSideTabRequest) => void;
   onOpenSubagentSession: (request: OpenScopedSubagentSideTabRequest) => void;
+  onBindOmpAgentInteractionsRoot: (
+    binding: import("@/lib/workspaceSidePane.js").OmpAgentInteractionsRootBinding,
+  ) => void;
   /** run 详情页里点 ask 节点 → 打开那个 actor 实例的 transcript tab。 */
   onOpenWorkflowActorSession?: (request: OpenScopedWorkflowActorSessionSideTabRequest) => void;
   /** run 详情页里点脚本行 → 打开该 run 的脚本 transcript tab，落到那一站。 */
@@ -420,8 +426,9 @@ export function AnimatedSidePanePanel({
       getVisibleSidePaneTabs(tabs, {
         workspaceKey,
         ownerTaskId: sidePaneOwnerId,
+        remoteSessionId: workspaceRemoteSessionId,
       }),
-    [sidePaneOwnerId, tabs, workspaceKey],
+    [sidePaneOwnerId, tabs, workspaceKey, workspaceRemoteSessionId],
   );
   const activeTabId = sidePaneState?.activeTabId ?? "";
   const visibleActiveTabId = visibleTabs.some((tab) => tab.id === activeTabId)
@@ -890,6 +897,7 @@ export function AnimatedSidePanePanel({
         subagentDirectoryTitle: intl.formatMessage({
           id: "sidePane.subagentDirectory",
         }),
+        ompAgentInteractionsTitle: intl.formatMessage({ id: "ompInteractions.title" }),
         selectionChatTitle: intl.formatMessage({
           id: "sidePane.selectionChat",
         }),
@@ -1104,6 +1112,19 @@ export function AnimatedSidePanePanel({
                             visible={isVisible && tab.id === visibleActiveTabId}
                             onOpenCodeViewer={onOpenCodeViewer}
                           />
+                        ) : tab.type === "omp-agent-interactions" ? (
+                          shouldMountOmpAgentInteractionsTab({
+                            isSidePaneVisible: isVisible,
+                            isActiveTab: tab.id === visibleActiveTabId,
+                            isCurrentScope: visibleTabs.some((visible) => visible.id === tab.id),
+                          }) ? (
+                            <ServiceProvider services={services}>
+                              <OmpAgentInteractionsSidePane
+                                tab={tab}
+                                onRootResolved={onBindOmpAgentInteractionsRoot}
+                              />
+                            </ServiceProvider>
+                          ) : null
                         ) : tab.type === "subagent-session" ? (
                           <SubagentSessionSidePane
                             tab={tab}

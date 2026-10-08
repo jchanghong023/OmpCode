@@ -6,6 +6,8 @@
 
 ### 子代理
 
+主会话的 Agent 交互独立观察 tab（与子代理详情同级）见 [agent-interactions.md](agent-interactions.md)，本域不重复定义通信图与消息聚合规则。
+
 - omp `task` 工具负责启动和调度子代理。GUI 显示运行中、结束和失败状态，能查看子代理记录；不得把父代理最终回复当成子代理运行证据。
 - 新工具行和子代理行首次出现必须发送 `row.appended`，之后才使用 `row.upserted`；桌面实时增量和 Web 恢复快照应得到相同的行集合。
 - 每个 omp 会话进程在 ready 后订阅 `subagent_lifecycle` / `subagent_progress` / `subagent_event`。适配器校验并投影同一子代理 ID 的状态；重连或冷恢复从 `get_subagents` 取快照，记录从 `get_subagent_messages` 读取。订阅失败显式降级并记录错误，不能假装没有子代理。

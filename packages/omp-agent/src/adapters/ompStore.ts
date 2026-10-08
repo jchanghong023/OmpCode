@@ -14,6 +14,7 @@ import type { OmpStorePort, OmpStoreSessionSummary } from "../app/ports.js";
 import { titleFromOmpEntries } from "../domain/coldHistory.js";
 import { logger } from "./logger.js";
 import { createOmpCommandOutputStore } from "./OmpCommandOutputStore.js";
+import { safeInteractionAgentId } from "../domain/OmpInteractionIds.js";
 
 /**
  * omp sessions 目录解析（S1-3，对齐 omp DirResolver XDG 规则，v18.4.8+fork.278
@@ -217,6 +218,29 @@ export function createOmpStore(env: NodeJS.ProcessEnv = process.env): OmpStorePo
         return await readEntries(childPath);
       } catch {
         return [];
+      }
+    },
+
+    async readInteractionEntries(sessionPath, ancestry, version) {
+      if (!sessionPath.endsWith(".jsonl") || ancestry.some((id) => !safeInteractionAgentId(id))) {
+        return { version: "invalid", available: false };
+      }
+      let recordPath = sessionPath;
+      for (const id of ancestry) recordPath = join(recordPath.slice(0, -6), `${id}.jsonl`);
+      try {
+        const info = await stat(recordPath);
+        const currentVersion = `${info.size}:${info.mtimeMs}`;
+        if (currentVersion === version) return { version: currentVersion, available: true };
+        // 读取预算只约束观察页；普通会话历史仍保持完整读取。
+        const entries = await readEntries(recordPath, 50_001);
+        return {
+          version: currentVersion,
+          available: true,
+          entries: entries.slice(0, 50_000),
+          truncated: entries.length > 50_000,
+        };
+      } catch {
+        return { version: "missing", available: false, entries: [] };
       }
     },
 

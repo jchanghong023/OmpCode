@@ -25,6 +25,8 @@ import {
   openTerminalSidePane,
   openSubagentSessionSidePane,
   openSubagentDirectorySidePane,
+  openOmpAgentInteractionsSidePane,
+  bindOmpAgentInteractionsRoot,
   openSelectionSideChatPane,
   openPlanDetailSidePane,
   openWorkflowRunSidePane,
@@ -63,6 +65,8 @@ import {
   type OpenBackgroundBashSideTabRequest,
   openBackgroundBashSidePane,
   type OpenScopedSubagentDirectorySideTabRequest,
+  type OpenOmpAgentInteractionsSideTabRequest,
+  type OmpAgentInteractionsRootBinding,
   type OpenSelectionSideChatRequest,
   type OpenScopedPlanDetailSideTabRequest,
   type OpenScopedWorkflowRunSideTabRequest,
@@ -302,9 +306,10 @@ export function useAppPanels(options: {
         getVisibleSidePaneTabs(next.tabs, {
           workspaceKey: activeWorkspaceKey,
           ownerTaskId: sidePaneOwnerId,
+          remoteSessionId: workspaceRemoteSessionId,
         }).length,
       ),
-    [activeWorkspaceKey, sidePaneOwnerId],
+    [activeWorkspaceKey, sidePaneOwnerId, workspaceRemoteSessionId],
   );
 
   const syncSidePaneCollapsedWithTabs = useCallback(
@@ -330,7 +335,11 @@ export function useAppPanels(options: {
       );
       const resolved = resolveSidePaneScopeState(
         current,
-        { workspaceKey: activeWorkspaceKey, ownerTaskId: sidePaneOwnerId },
+        {
+          workspaceKey: activeWorkspaceKey,
+          ownerTaskId: sidePaneOwnerId,
+          remoteSessionId: workspaceRemoteSessionId,
+        },
         preferredTabId,
         collapsedPreference,
       );
@@ -345,7 +354,13 @@ export function useAppPanels(options: {
       });
       return resolved.sidePaneState;
     });
-  }, [activeTaskId, activeWorkspaceKey, commitSidePaneState, sidePaneOwnerId]);
+  }, [
+    activeTaskId,
+    activeWorkspaceKey,
+    commitSidePaneState,
+    sidePaneOwnerId,
+    workspaceRemoteSessionId,
+  ]);
 
   const handleOpenCodeViewer = useCallback(
     (source: CodeViewerSource) => {
@@ -891,6 +906,20 @@ export function useAppPanels(options: {
     [commitSidePaneState],
   );
 
+  const handleOpenOmpAgentInteractions = useCallback(
+    (request: OpenOmpAgentInteractionsSideTabRequest) => {
+      revealSidePaneForCurrentOwner();
+      commitOpenedSidePaneState((current) => openOmpAgentInteractionsSidePane(current, request));
+    },
+    [commitOpenedSidePaneState, revealSidePaneForCurrentOwner],
+  );
+  const handleBindOmpAgentInteractionsRoot = useCallback(
+    (binding: OmpAgentInteractionsRootBinding) => {
+      commitSidePaneState((current) => bindOmpAgentInteractionsRoot(current, binding));
+    },
+    [commitSidePaneState],
+  );
+
   const handleOpenSelectionSideChat = useCallback(
     (request: OpenSelectionSideChatRequest) => {
       const workspaceKey = request.workspaceIdentity?.trim() || request.workspacePath;
@@ -1431,7 +1460,12 @@ export function useAppPanels(options: {
   const handleCloseOtherSidePaneTabs = useCallback(
     (tabId: string) => {
       const visibleTabs =
-        sidePaneState?.tabs.filter((tab) => isSidePaneTabVisibleForParent(tab, activeTaskId)) ?? [];
+        sidePaneState?.tabs.filter((tab) =>
+          isSidePaneTabVisibleForParent(tab, activeTaskId, {
+            workspaceKey: activeWorkspaceKey,
+            remoteSessionId: workspaceRemoteSessionId,
+          }),
+        ) ?? [];
       const targetExists = visibleTabs.some((tab) => tab.id === tabId);
       const closingTabs = targetExists ? visibleTabs.filter((tab) => tab.id !== tabId) : [];
       void closeBrowserTabsWithAuthority(closingTabs).then((authorized) => {
@@ -1447,7 +1481,10 @@ export function useAppPanels(options: {
         }
         rememberClosedSidePaneTabs(closingTabs);
         commitSidePaneState((current) => {
-          const next = closeVisibleOtherSidePaneTabs(current, tabId, activeTaskId);
+          const next = closeVisibleOtherSidePaneTabs(current, tabId, activeTaskId, {
+            workspaceKey: activeWorkspaceKey,
+            remoteSessionId: workspaceRemoteSessionId,
+          });
           logger.info(
             `[App] 关闭其他右侧面板 tab=${tabId} workspace=${workspaceAbsPath} tabs=${next?.tabs.length ?? 0}`,
           );
@@ -1463,12 +1500,19 @@ export function useAppPanels(options: {
       rememberClosedSidePaneTabs,
       sidePaneState?.tabs,
       workspaceAbsPath,
+      activeWorkspaceKey,
+      workspaceRemoteSessionId,
     ],
   );
 
   const handleCloseAllSidePaneTabs = useCallback(() => {
     const visibleTabs =
-      sidePaneState?.tabs.filter((tab) => isSidePaneTabVisibleForParent(tab, activeTaskId)) ?? [];
+      sidePaneState?.tabs.filter((tab) =>
+        isSidePaneTabVisibleForParent(tab, activeTaskId, {
+          workspaceKey: activeWorkspaceKey,
+          remoteSessionId: workspaceRemoteSessionId,
+        }),
+      ) ?? [];
     void closeBrowserTabsWithAuthority(visibleTabs).then((authorized) => {
       if (!authorized) return;
       for (const tab of visibleTabs) {
@@ -1483,7 +1527,10 @@ export function useAppPanels(options: {
       rememberClosedSidePaneTabs(visibleTabs);
       commitSidePaneState((current) => {
         logger.info(`[App] 关闭全部右侧面板 tabs workspace=${workspaceAbsPath}`);
-        const next = closeVisibleSidePaneTabs(current, activeTaskId);
+        const next = closeVisibleSidePaneTabs(current, activeTaskId, {
+          workspaceKey: activeWorkspaceKey,
+          remoteSessionId: workspaceRemoteSessionId,
+        });
         syncSidePaneCollapsedWithTabs(next);
         return next;
       });
@@ -1497,6 +1544,8 @@ export function useAppPanels(options: {
     sidePaneState?.tabs,
     syncSidePaneCollapsedWithTabs,
     workspaceAbsPath,
+    activeWorkspaceKey,
+    workspaceRemoteSessionId,
   ]);
 
   const handleReopenClosedSidePaneTab = useCallback(
@@ -1555,10 +1604,19 @@ export function useAppPanels(options: {
     () =>
       allRecentClosedSidePaneTabs.filter(
         (item) =>
-          isSidePaneTabVisibleForParent(item.tab, activeTaskId) &&
+          isSidePaneTabVisibleForParent(item.tab, activeTaskId, {
+            workspaceKey: activeWorkspaceKey,
+            remoteSessionId: workspaceRemoteSessionId,
+          }) &&
           (!isOfficeMode || (item.tab.type !== "terminal" && item.tab.type !== "git")),
       ),
-    [activeTaskId, allRecentClosedSidePaneTabs, isOfficeMode],
+    [
+      activeTaskId,
+      activeWorkspaceKey,
+      allRecentClosedSidePaneTabs,
+      isOfficeMode,
+      workspaceRemoteSessionId,
+    ],
   );
 
   return {
@@ -1588,6 +1646,8 @@ export function useAppPanels(options: {
     handleOpenSubagentSession,
     handleOpenBackgroundBash,
     handleOpenSubagentDirectory,
+    handleOpenOmpAgentInteractions,
+    handleBindOmpAgentInteractionsRoot,
     handleSyncSubagentSessionTabs,
     handleOpenSelectionSideChat,
     handleOpenPlanDetail,
