@@ -2,10 +2,11 @@
 import { lstatSync } from "node:fs";
 import { cp } from "node:fs/promises";
 import { createHash } from "node:crypto";
-import { basename, join, win32 } from "node:path";
+import { basename, join, resolve, win32 } from "node:path";
 import { homedir } from "node:os";
 import { DATA_BASE_DIR_FORBIDDEN_WINDOWS_INSTALL_DIR_ERROR_CODE } from "@zcode/shared";
 import { resolveOmpProfileFromEnv } from "@zcode/shared/omp-profile";
+import { resolveOmpConfigRoot } from "@zcode/shared/node";
 
 let _dataBaseDir: string | null = null;
 export const ZCODE_WINDOWS_APP_INSTALL_DIR_ENV = "ZCODE_WINDOWS_APP_INSTALL_DIR";
@@ -183,13 +184,24 @@ export function getGitCheckpointIndexRootDir(): string {
   return join(getZCodeDataRootDir(), "git-checkpoint-index");
 }
 
-/** omp 的会话按 profile 隔离；索引投影也必须隔离，避免切换后混入旧 profile 任务。 */
-export function getTasksIndexDatabasePath(
-  env: { OMP_PROFILE?: string; PI_PROFILE?: string } = process.env,
-): string {
+/** omp 会话按根目录和 profile 隔离；Host 启动与所有 Repo 共用此索引路径。 */
+export function getTasksIndexDatabasePath(env: NodeJS.ProcessEnv = process.env): string {
   const profile = resolveOmpProfileFromEnv(env);
-  const fileName =
-    profile === "default" ? "tasks-index.sqlite" : `tasks-index-omp-${profile}.sqlite`;
+  const home = homedir();
+  const comparableRoot = (value: string) => {
+    const path = resolve(value);
+    return process.platform === "win32" ? path.toLowerCase() : path;
+  };
+  const root = comparableRoot(resolveOmpConfigRoot(home, env));
+  const defaultRoot = comparableRoot(resolveOmpConfigRoot(home, {}));
+  // 根因：原索引只按 profile 分库，切换 OMP_CONFIG_ROOT 后旧 UUID 仍在侧栏，
+  // 但新根下找不到文件，打开即 session unavailable。按有效根分库而非删除旧行，
+  // 保留切回时的分组/置顶等产品状态；默认根沿用旧库，不迁移用户历史。
+  const stem =
+    root === defaultRoot
+      ? "tasks-index"
+      : `tasks-index-omp-root-${createHash("sha256").update(root).digest("hex").slice(0, 24)}`;
+  const fileName = profile === "default" ? `${stem}.sqlite` : `${stem}-omp-${profile}.sqlite`;
   return join(getAppConfigDir(), fileName);
 }
 

@@ -18,7 +18,7 @@
 - omp profile 选择由 App Settings 持久化；Desktop Main 启动时读取并通过 `OMP_PROFILE` 传给 Host/内嵌 omp。默认或已有命名 profile 来自 omp 配置根目录，角色配置与历史扫描使用同一 profile 路径。保存后只标记待重启，不能热切换现有会话；待重启时角色编辑器不写旧 profile。
 - 当前应用环境沿 Main → Host → 适配器 → omp 传递，OMP 自身拥有配置、缓存、运行状态和浏览器 storage-state 等派生目录；应用不另建迁移机制。有效的 `OMP_CONFIG_ROOT` 优先于 `PI_CONFIG_DIR`，只接受绝对路径，支持 `~`、`~/`、`~\\` 展开；空值和相对值被忽略，再按既有 `PI_CONFIG_DIR`（相对用户主目录）或 `~/.omp` 解析。Desktop Main 的 profile 枚举、角色配置回落、原生扩展/MCP/钩子目录与适配器冷历史扫描复用共享的根/profile 解析。项目级 `.omp/` 与 OmpCode 自身数据目录不随该变量改变；已有数据不自动移动、复制或删除。Linux 已迁移的 XDG sessions 仍按当前 OMP 的 XDG 优先规则解析。
 - `OMP_OFFLINE` 原样传给目录进程、会话进程与 OMP 派生进程，不转换成已取消的 `--offline`。模型可见性与解析由 OMP 唯一裁决，应用使用 OMP 返回的可用模型目录，不维护 zcode-api/company 的第二套过滤。offline 进程始终不列出或解析 zcode-api，无公司配置时也不例外；其他已配置且凭据就绪的 lane 仍由 OMP 返回，普通启动保留正常目录。
-- 任务索引是 omp 会话的本地投影，必须按已启动的 profile 分库；默认 profile 保持现有 `tasks-index.sqlite` 以保留历史，命名 profile 使用独立数据库，切回时仍可看到原 profile 的索引。Host 启动准备与所有索引 Repo 必须解析到同一路径，避免在 UI 混入其他 profile 的任务。
+- 任务索引是 omp 会话的本地投影，必须按实际解析后的 OMP 根目录与已启动的 profile 分库；默认根目录保留现有数据库命名，自定义根目录使用独立数据库。相同有效根目录的不同环境变量写法使用同一索引；无效覆盖值遵循 OMP 的回落规则。切回原根目录/profile 时，原任务及分组、排序、置顶、归档、未读与自动化关联仍保留。Host 启动准备与所有索引 Repo 必须解析到同一路径；切换根目录不迁移或删除旧历史，不在 UI 混入其他根目录的任务。
 - 设置侧栏“模型设置”始终展示全部内建 omp role 的选择器，已有配置的自定义 role 追加展示；会话工具栏“管理模型”复用同一编辑器。当前 profile 没有配置文件时显示未配置的内建角色，首次保存仅创建所选角色的 `modelRoles`，不写入空角色；两处只允许选择 omp 目录已有模型，不提供供应商或模型新增操作。该编辑器的目录与保存走 OMP RPC（目录进程 `get_model_roles`/`set_model_role`，全部可配置 role 含未配置项、逐 role 自动保存与保存中/失败/被覆盖状态），本地 YAML 读写仅作 OMP 无 v3 能力时的回落；两条路径的入口与状态语义见 [omp-core-integration.md](omp-core-integration.md)。
 
 ## 时序与失败语义
@@ -37,6 +37,20 @@
 
 配置不存在时读取为空角色并显示内建角色；首次保存仅在目标文件仍不存在时原子创建最小配置，不覆盖并发创建的文件，也不制造虚假的备份。已有配置写入前保留原件备份。YAML 语法无效、`modelRoles` 类型错误或保存失败时显式报错；重复保存同一内容不创建无意义备份。
 
+```mermaid
+sequenceDiagram
+  participant Main as Desktop Main
+  participant Host as Host
+  participant Repo as 任务索引
+  participant OMP as OMP 历史所有者
+  Main->>Host: 启动环境（根目录/profile）
+  Host->>Repo: 共享解析选择对应数据库
+  Host->>OMP: 透传同一环境
+  OMP-->>Host: 当前根/profile 的 sessions-index
+  Host->>Repo: 补齐当前历史投影
+  Note over Repo: 旧根数据库保留，切回时复用
+```
+
 ## 验收场景
 
 1. 隔离桌面开发态不配置任何 ZCode Provider Registry，首屏不出现旧模型横幅，Host 仍启动 omp 适配器并显示其模型目录；从 omp 历史恢复会话、订阅消息；新会话选择 omp 模型，发送后流式展示、工具写文件并能再次恢复。
@@ -45,6 +59,7 @@
    3a. workspace-config 先于工作区恢复或反过来先到时，设置页与 composer 都持续显示 omp 模型目录；冷恢复已存在任务后仍可编辑 role。
    3b. 隔离桌面实例准备默认与命名 profile 的不同模型/角色配置及历史任务；切换 profile 保存后仍显示待重启且不改旧配置；重启后只显示目标 profile 的角色、目录与历史会话；切回默认 profile 后原任务仍可见。
    3b1. 设置绝对或 `~` 展开的 `OMP_CONFIG_ROOT`，同时设置指向另一目录的 `PI_CONFIG_DIR`：内嵌 omp、profile 列表、角色配置回落、原生集成目录与冷历史读取使用目标根和同一 profile；相对/空的新变量回落旧规则。默认与命名 profile 的恢复、续聊和删除作用于目标目录；项目 `.omp/` 与旧目录保留。Linux 的 XDG sessions 锚点已存在/不存在时分别与当前 OMP 路径一致。
+   3b1a. 默认根目录已有稳定 UUID 历史任务时，以同一 profile 切换到空的新根目录并重启，侧栏不得显示旧任务或触发其恢复；新根目录创建的任务可恢复。切换两个自定义根目录亦保持隔离；切回原目录后，其任务组织信息仍在。显式指定默认根、`~` 展开、尾部分隔符与无效相对覆盖值按有效路径选择同一索引。
    3b2. `OMP_OFFLINE=1` 原样进入 OMP 且 argv 不含 `--offline`；有/无公司配置时应用模型目录均与 OMP 一致，不出现 zcode-api；未启用时使用普通目录。
    3c. fake omp 返回含内置与自定义命令的目录；工作区 presentation 与 workspace-config 均能展示这些命令，输入框输入 `/` 能补全。真实 omp 二进制也能返回合法目录。本地命令同步或延迟完成时，输出可见且会话控制恢复空闲。
    3d. 角色目录读取或自动保存尚未返回时切换工作区、关闭后重新打开编辑器；旧请求不得回写新目标的角色、待保存选择或保存状态。同一角色快速重复操作只接纳当前请求；失败时所选值保留供重试。远端旧核不支持角色 RPC 时不得回落写本机 profile。
@@ -69,4 +84,5 @@
 
 需求从原有权威 FORK 与对应 spec 迁入，未因当前实现降低要求。既有实现及历史验证不等于本次验收；统一证据边界见 [需求索引](README.md#实现与验证状态)。
 
+- 2026-10-08：任务索引补充有效根目录隔离，默认根沿用旧数据库；自定义根以路径摘要选择独立数据库，Host 启动准备、任务、自动化与错峰索引共用同一解析入口。Node 24.19.0 的原生 TypeScript 加载下，`ompProfileTaskIndexPath.test.ts` 4 项回归通过（含真实 SQLite 的根切换、稳定 UUID 隔离及切回保留置顶/归档/未读），lint、变更格式与架构检查通过。完整 `pnpm typecheck` 因缺少 `@typescript/typescript-linux-x64` 无法运行；tsx 入口缺少 esbuild，采用原生加载执行上述测试。Windows/CentOS 7 GUI 的历史恢复与续聊未验证，不视为完整功能验收。
 - 2026-10-08：已实施 `OMP_CONFIG_ROOT` 共享路径解析、适配器到目录/会话进程的环境透传，移除启动器 `--home`、`--offline` 与旧目录迁移/锁定逻辑。配置、历史和模型目录仍由 OMP 持有；未改动 Desktop continuous 与 Web replayable 时序。已补充路径、profile、冷历史读删、进程环境与启动器回归场景。Node 24.14.0 / pnpm 10.33.2 下 lint、变更 TypeScript 格式、Shell 语法与全量架构检查通过（0 违例）。本次按用户要求不运行 UT、真实核心或 GUI E2E，功能尚未验收；`pnpm typecheck` 被原提交已存在的 `packages/desktop/src/host/index.ts:2062` logger 类型错误阻断（缺少 `debug`），不记为通过。
