@@ -78,7 +78,7 @@ function clampBinaryPreviewBytes(length?: number) {
 }
 
 function resolveWorkspaceHomeDir(): string {
-  // --home 也必须覆盖应用创建的默认/临时工作区，避免它们仍占用原 HOME 空间。
+  // 开发/测试实例的默认与临时工作区跟随显式 home，避免写入真实用户目录。
   return process.env.ZCODE_DESKTOP_HOME_DIR?.trim() || homedir();
 }
 

@@ -5,6 +5,51 @@ import test from "node:test";
 import { createOmpProcessFactory } from "../src/adapters/ompProcess.js";
 import { OmpDirectoryGateway } from "../src/adapters/ompDirectoryGateway.js";
 
+test("目录与会话进程原样继承入口 OMP 环境，不注入 --offline", { timeout: 5000 }, async () => {
+  const core = `
+    const {createInterface}=require("node:readline");
+    const out=value=>process.stdout.write(JSON.stringify(value)+"\\n");
+    out({type:"ready",protocolVersion:1});
+    createInterface({input:process.stdin}).on("line",line=>{
+      const command=JSON.parse(line);
+      out({type:"response",id:command.id,command:command.type,success:true,data:{
+        env:Object.fromEntries(["OMP_CONFIG_ROOT","OMP_OFFLINE","OMP_FUTURE_OPTION","PI_CONFIG_DIR"].map(key=>[key,process.env[key]])),
+        argv:process.argv.slice(1)
+      }});
+    });
+  `;
+  const expected = {
+    OMP_CONFIG_ROOT: "~/relocated",
+    OMP_OFFLINE: "1",
+    OMP_FUTURE_OPTION: "value",
+    PI_CONFIG_DIR: "legacy",
+  };
+  const factory = createOmpProcessFactory(process.execPath, ["-e", core, "--"], {
+    ...process.env,
+    ...expected,
+  });
+  for (const sessionless of [false, true]) {
+    const child = factory.create({
+      cwd: process.cwd(),
+      sessionless,
+      onEvent() {},
+      onUiRequest() {},
+      onExit() {},
+    });
+    try {
+      await child.start();
+      const result = await child.send({ type: "get_available_models" });
+      assert.equal(result.success, true);
+      const data = result.data as { env: Record<string, string>; argv: string[] };
+      assert.deepEqual(data.env, expected);
+      assert.equal(data.argv.includes("--offline"), false);
+      assert.equal(data.argv.includes("--no-session"), sessionless);
+    } finally {
+      await child.dispose();
+    }
+  }
+});
+
 test("/context 输出只进入报告，随后用户本地命令仍进入聊天侧信道", async () => {
   const fixture = join(fileURLToPath(new URL(".", import.meta.url)), "fixtures", "fakeOmp.mjs");
   const output: string[] = [];

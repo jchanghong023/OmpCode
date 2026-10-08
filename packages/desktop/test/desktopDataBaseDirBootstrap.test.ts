@@ -6,23 +6,24 @@ import test from "node:test";
 import { getDataBaseDir, setDataBaseDir } from "@zcode/services/node";
 import { applyEarlyDataBaseDirBootstrap } from "../src/main/desktopDataBaseDirBootstrap.js";
 
-test("CentOS 7 --home overrides a saved data directory during early bootstrap", async () => {
-  const root = await mkdtemp(join(tmpdir(), "centos7-home-bootstrap-"));
+test("OMP_CONFIG_ROOT does not override the saved OmpCode data directory", async () => {
+  const root = await mkdtemp(join(tmpdir(), "omp-data-bootstrap-"));
   const settingsFile = join(root, "setting.json");
-  const selectedHome = join(root, "selected-home");
-  const previousHome = process.env.OMPCODE_CENTOS7_HOME;
+  const ompRoot = join(root, "omp-root");
+  const savedHome = join(root, "saved-home");
+  const previousRoot = process.env.OMP_CONFIG_ROOT;
   const previousBaseDir = getDataBaseDir();
-  await writeFile(settingsFile, JSON.stringify({ dataBaseDir: join(root, "saved-home") }));
+  await writeFile(settingsFile, JSON.stringify({ dataBaseDir: savedHome }));
 
   try {
-    process.env.OMPCODE_CENTOS7_HOME = selectedHome;
-    assert.equal(applyEarlyDataBaseDirBootstrap(settingsFile), selectedHome);
-    assert.equal(getDataBaseDir(), selectedHome);
+    process.env.OMP_CONFIG_ROOT = ompRoot;
+    assert.equal(applyEarlyDataBaseDirBootstrap(settingsFile), savedHome);
+    assert.equal(getDataBaseDir(), savedHome);
   } finally {
-    if (previousHome === undefined) {
-      delete process.env.OMPCODE_CENTOS7_HOME;
+    if (previousRoot === undefined) {
+      delete process.env.OMP_CONFIG_ROOT;
     } else {
-      process.env.OMPCODE_CENTOS7_HOME = previousHome;
+      process.env.OMP_CONFIG_ROOT = previousRoot;
     }
     setDataBaseDir(previousBaseDir);
     await rm(root, { recursive: true, force: true });

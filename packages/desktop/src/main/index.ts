@@ -271,7 +271,7 @@ if (!shouldUseElectronDefaultUserDataPath) {
 process.title = runtimeApplicationName;
 const moduleDir = resolveImportMetaDirname(import.meta);
 
-// 离线锁定门控状态的唯一所有者：CentOS 7 启动器 --offline 写入 OMPCODE_CENTOS7_LOCAL_ONLY
+// 离线锁定门控状态的唯一所有者：CentOS 7 启动器由 OMP_OFFLINE 派生 OMPCODE_CENTOS7_LOCAL_ONLY
 // （唯一设置者），Main 在此裁决一次并经 PlatformChannels.OfflineGateState 提供 renderer
 // （W4 据此做禁用态）；Main/Host 其余门控点共享同一事实，不各自解释环境变量。
 const offlineGate: OfflineGateState = resolveOfflineGateState(process.env);
@@ -1931,7 +1931,7 @@ app.on("second-instance", (_event, argv, _workingDirectory, additionalData) => {
 
 app.whenReady().then(async () => {
   if (process.env.OMPCODE_CENTOS7_LOCAL_ONLY === "1") {
-    // 修复原因：--offline 只属于 omp，桌面 Chromium 的配置、资源和浏览器请求须独立拦截。
+    // 修复原因：OMP_OFFLINE 由 omp 解析，桌面 Chromium 的配置、资源和浏览器请求须独立拦截。
     session.defaultSession.webRequest.onBeforeRequest((details, callback) => {
       callback({ cancel: !isLoopbackUrl(details.url) });
     });
@@ -1977,8 +1977,7 @@ app.whenReady().then(async () => {
     if (launchProfile === undefined && bootstrapSettings.ompProfile !== undefined) {
       process.env.OMP_PROFILE = bootstrapSettings.ompProfile;
     }
-    // CentOS 7 --home 是本次启动的强制存储根，不能被用户设置里旧的数据目录覆盖。
-    if (bootstrapSettings.dataBaseDir && !process.env.OMPCODE_CENTOS7_HOME?.trim()) {
+    if (bootstrapSettings.dataBaseDir) {
       setDataBaseDir(bootstrapSettings.dataBaseDir);
     }
     if (bootstrapSettings.locale) {

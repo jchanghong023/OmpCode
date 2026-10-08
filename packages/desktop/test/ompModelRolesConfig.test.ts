@@ -24,6 +24,14 @@ test("配置路径与 omp 的 PI_CONFIG_DIR 主目录解析规则一致", () => 
     resolveOmpModelRolesConfigPath(home, { OMP_PROFILE: "", PI_PROFILE: "legacy" }),
     join(home, ".omp", "agent", "config.yml"),
   );
+  assert.equal(
+    resolveOmpModelRolesConfigPath(home, {
+      OMP_CONFIG_ROOT: "~/data",
+      PI_CONFIG_DIR: "ignored",
+      OMP_PROFILE: "work",
+    }),
+    join(home, "data", "profiles", "work", "agent", "config.yml"),
+  );
 });
 
 test("modelRoles 保存保留注释、其他角色和字段，重复保存不备份", async () => {

@@ -7,15 +7,12 @@ for arg in "$@"; do
       cat <<'HELP'
 用法：bin/ompcode-centos7 [选项] [桌面程序参数...]
 
-  --home <绝对路径>   将 OmpCode 和内嵌 omp 的数据存放在该目录下
   --profile <名称>   选择内嵌 omp 的配置（也支持 --profile=名称）
-  --offline          启用离线锁定：关闭公网更新/配置/帮助/
-                     社区/反馈、账号/分享、外部浏览器与遥测等桌面联网
-                     后端，并把离线模式透传给内嵌 omp
   -h, --help         显示此帮助并退出
 
-不传 --offline 时桌面为全功能，与 Windows 基准一致。其他参数会传递给
-桌面程序。使用 --home 时不会覆盖已有的 ~/.ompcode 或 ~/.omp。
+环境变量：OMP_CONFIG_ROOT 指定 omp 数据根；OMP_OFFLINE=1 启用离线锁定。
+环境变量原样传给内嵌 omp。未启用离线锁定时桌面为全功能，与 Windows
+基准一致。其他参数会传递给桌面程序。
 HELP
       exit 0
       ;;
@@ -24,8 +21,7 @@ done
 
 package_root=$(dirname "$(dirname "$(readlink -f "$0")")")
 app="$package_root/app"
-# 离线锁定的唯一开关是 --offline：由下方参数解析决定 OMPCODE_CENTOS7_LOCAL_ONLY，
-# 不传时桌面为全功能（与 Windows 基准一致），绝不继承调用者残留的锁定变量。
+# OMP 环境变量原样继承；启动器只派生桌面的离线门控状态。
 [[ -x "$app/zcode" && -x "$app/resources/glm/omp/omp" && -f "$app/resources/app.asar" ]] || {
   echo 'OmpCode CentOS 7 package is incomplete.' >&2
   exit 1
@@ -39,9 +35,6 @@ fi
 desktop_args=()
 profile_override=
 profile_requested=0
-offline_requested=0
-home_override=
-home_requested=0
 while (($#)); do
   case "$1" in
     --profile)
@@ -57,19 +50,6 @@ while (($#)); do
       profile_override=${1#--profile=}
       profile_requested=1
       shift
-      ;;
-    --offline)
-      offline_requested=1
-      shift
-      ;;
-    --home)
-      if (($# < 2)); then
-        echo 'OmpCode: --home requires an absolute directory.' >&2
-        exit 2
-      fi
-      home_override=$2
-      home_requested=1
-      shift 2
       ;;
     *)
       desktop_args+=("$1")
@@ -90,19 +70,19 @@ elif [[ ${OMPCODE_CENTOS7_PROFILE+x} ]]; then
   unset OMPCODE_CENTOS7_PROFILE
 fi
 
-if ((offline_requested)); then
-  # 离线锁定激活链（centos7-release.md）：--offline 同时设置桌面锁定变量并透传
-  # 内嵌 omp（omp 侧由 OMPCODE_CENTOS7_OFFLINE 经适配器转成 omp --offline 参数）。
-  export OMPCODE_CENTOS7_LOCAL_ONLY=1
-  export OMPCODE_CENTOS7_OFFLINE=1
-  # 桌面遥测出口一并关闭，dotenv 也不能重新启用（Main 侧另有同语义兜底）。
-  unset ZCODE_ARMS_RUM_ENDPOINT ZCODE_TELEMETRY_REPORT_ENDPOINT
-else
-  # 该变量的唯一设置者是本启动器：不传 --offline 时必须清掉调用者环境里的
-  # 残留锁定变量，保证未锁定桌面为全功能（与 Windows 基准一致）；遥测出口
-  # 等环境按原样继承，与 Windows 语义相同。
-  unset OMPCODE_CENTOS7_LOCAL_ONLY OMPCODE_CENTOS7_OFFLINE
-fi
+# 修复依据：OMP 已移除 --offline；环境值直接继承，桌面门控按相同真值规则派生。
+offline_value=${OMP_OFFLINE:-}
+offline_value="${offline_value#"${offline_value%%[![:space:]]*}"}"
+offline_value="${offline_value%"${offline_value##*[![:space:]]}"}"
+case "${offline_value,,}" in
+  1|true|yes|on)
+    export OMPCODE_CENTOS7_LOCAL_ONLY=1
+    unset ZCODE_ARMS_RUM_ENDPOINT ZCODE_TELEMETRY_REPORT_ENDPOINT
+    ;;
+  *)
+    unset OMPCODE_CENTOS7_LOCAL_ONLY
+    ;;
+esac
 
 configure_ibus_session() {
   [[ -n ${DISPLAY:-} ]] || return 0
@@ -173,87 +153,8 @@ configure_ibus_session() {
 }
 configure_ibus_session
 
-if ((home_requested)); then
-  if [[ "$home_override" != /* ]]; then
-    echo 'OmpCode: --home requires an absolute directory.' >&2
-    exit 2
-  fi
-  data_base=$(readlink -m -- "$home_override")
-  canonical_home=$(readlink -f -- "$HOME")
-  case "$data_base" in
-    "$canonical_home"|\
-      "$canonical_home/.ompcode"|"$canonical_home/.ompcode/"*|\
-      "$canonical_home/.omp"|"$canonical_home/.omp/"*)
-      echo 'OmpCode: --home cannot be ~ or inside ~/.ompcode or ~/.omp.' >&2
-      exit 2
-      ;;
-  esac
-
-  # 修复依据：只迁移 ~/.ompcode 会让 Electron、Chromium 和 omp 继续把独立状态写入原 HOME。
-  # 在创建任何目录前检查两个共享配置入口，避免冲突时留下半套新数据目录或覆盖用户数据。
-  check_home_data_link() {
-    local name=$1
-    local link="$HOME/$name"
-    local target="$data_base/$name"
-    if [[ -L "$link" ]]; then
-      if [[ "$(readlink -m -- "$link")" != "$(readlink -m -- "$target")" ]]; then
-        echo "OmpCode: ~/$name already links to another location." >&2
-        exit 2
-      fi
-    elif [[ -e "$link" ]]; then
-      echo "OmpCode: ~/$name already exists; move its data before using --home." >&2
-      exit 2
-    fi
-  }
-
-  check_home_data_link .ompcode
-  check_home_data_link .omp
-
-  app_config_root="$data_base/.config/ompcode-centos7"
-  managed_data_dirs=(
-    "$data_base/.ompcode"
-    "$data_base/.omp"
-    "$app_config_root/OmpCode/session"
-    "$data_base/.local/share/ompcode-centos7"
-    "$data_base/.local/state/ompcode-centos7"
-    "$data_base/.cache/ompcode-centos7"
-    "$data_base/.tmp/ompcode-centos7"
-  )
-  data_prefix="${data_base%/}/"
-  if [[ "$data_base" == / ]]; then
-    data_prefix=/
-  fi
-  for directory in "${managed_data_dirs[@]}"; do
-    resolved_directory=$(readlink -m -- "$directory")
-    case "$resolved_directory" in
-      "$data_prefix"*) ;;
-      *)
-        echo "OmpCode: managed data path escapes --home: $directory" >&2
-        exit 2
-        ;;
-    esac
-  done
-  mkdir -p -- "${managed_data_dirs[@]}"
-
-  [[ -L "$HOME/.ompcode" ]] || ln -s -- "$data_base/.ompcode" "$HOME/.ompcode"
-  [[ -L "$HOME/.omp" ]] || ln -s -- "$data_base/.omp" "$HOME/.omp"
-
-  export XDG_CONFIG_HOME="$app_config_root"
-  export XDG_DATA_HOME="$data_base/.local/share/ompcode-centos7"
-  export XDG_CACHE_HOME="$data_base/.cache/ompcode-centos7"
-  export XDG_STATE_HOME="$data_base/.local/state/ompcode-centos7"
-  export TMPDIR="$data_base/.tmp/ompcode-centos7"
-  export PI_CONFIG_DIR="$data_base/.omp"
-  export ZCODE_DATA_BASE_DIR="$data_base"
-  export ZCODE_DESKTOP_HOME_DIR="$data_base"
-  export ZCODE_DESKTOP_USER_DATA_DIR="$app_config_root/OmpCode"
-  export ZCODE_DESKTOP_SESSION_DATA_DIR="$app_config_root/OmpCode/session"
-  export OMPCODE_CENTOS7_HOME="$data_base"
-else
-  export XDG_CONFIG_HOME="$HOME/.config/ompcode-centos7"
-  export XDG_DATA_HOME="$HOME/.local/share/ompcode-centos7"
-  unset OMPCODE_CENTOS7_HOME
-fi
+export XDG_CONFIG_HOME="$HOME/.config/ompcode-centos7"
+export XDG_DATA_HOME="$HOME/.local/share/ompcode-centos7"
 # 将真实输入法配置链接到隔离目录，保持 ibus/fcitx 地址文件等可见。
 # 这只是路径兼容，不是只读隔离，也不能替代上面的 IBus 会话总线对齐；
 # 目标位置已存在的同名条目不覆盖、不迁移。

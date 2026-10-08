@@ -34,10 +34,10 @@ interface PendingCommand {
   timer: NodeJS.Timeout;
 }
 
-export function createOmpProcessFactory(binaryPath: string, extraArgs: string[] = []): OmpProcessFactory {
+export function createOmpProcessFactory(binaryPath: string, extraArgs: string[] = [], env: NodeJS.ProcessEnv = process.env): OmpProcessFactory {
   return {
     create(options) {
-      return new OmpChildProcess(binaryPath, extraArgs, options);
+      return new OmpChildProcess(binaryPath, extraArgs, options, env);
     },
   };
 }
@@ -72,6 +72,7 @@ class OmpChildProcess implements OmpSessionProcess {
       onAskRequest?: (request: OmpAskRequest) => void;
       onExit: (code: number | null) => void;
     } & OmpSideChannelHandlers,
+    private readonly env: NodeJS.ProcessEnv,
   ) {}
 
   async start(): Promise<void> {
@@ -81,7 +82,8 @@ class OmpChildProcess implements OmpSessionProcess {
     this.started = true;
     const args = [...this.extraArgs, "--mode", "rpc-ui", ...(this.options.sessionless ? ["--no-session"] : []), ...(this.options.resumeSessionPath ? ["--resume", this.options.resumeSessionPath] : [])];
     logger.info("spawn omp core", { binary: this.binaryPath, cwd: this.options.cwd, resume: this.options.resumeSessionPath ?? null, sessionless: this.options.sessionless === true });
-    const child = spawn(this.binaryPath, args, { cwd: this.options.cwd, stdio: ["pipe", "pipe", "pipe"], windowsHide: true }) as ChildProcessWithoutNullStreams;
+    // 修复依据：目录与会话进程必须继承入口的同一环境；OMP_CONFIG_ROOT/OMP_OFFLINE 由 OMP 解析。
+    const child = spawn(this.binaryPath, args, { cwd: this.options.cwd, env: this.env, stdio: ["pipe", "pipe", "pipe"], windowsHide: true }) as ChildProcessWithoutNullStreams;
     this.child = child;
     this.exitListener = (code) => this.handleExit(code);
     child.once("exit", this.exitListener);

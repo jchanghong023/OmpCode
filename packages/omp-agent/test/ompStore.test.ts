@@ -5,6 +5,53 @@ import { join, relative, resolve, sep } from "node:path";
 import { test } from "node:test";
 import { createOmpStore } from "../src/adapters/ompStore.js";
 
+test("OMP_CONFIG_ROOT 冷历史读取与删除使用目标 profile，旧目录保留", async (context) => {
+  const root = await mkdtemp(join(tmpdir(), "omp-store-config-root-"));
+  context.after(async () => {
+    assert.ok(resolve(root).startsWith(`${resolve(tmpdir())}${sep}`));
+    await rm(root, { recursive: true, force: true });
+  });
+  const legacy = join(root, "legacy");
+  const OMP_CONFIG_ROOT = join(root, "data");
+  for (const [directory, id] of [
+    [join(legacy, "agent", "sessions", "-"), "legacy"],
+    [join(OMP_CONFIG_ROOT, "agent", "sessions", "-"), "default"],
+    [join(OMP_CONFIG_ROOT, "profiles", "work", "agent", "sessions", "-"), "named"],
+  ]) {
+    await mkdir(directory!, { recursive: true });
+    await writeFile(
+      join(directory!, `2026-10-08T00-00-00-000Z_${id}.jsonl`),
+      `${JSON.stringify({ type: "session", id })}\n`,
+    );
+  }
+  const env = { OMP_CONFIG_ROOT, PI_CONFIG_DIR: legacy };
+  const store = createOmpStore(env);
+  assert.deepEqual(
+    (await store.listSessions(homedir())).map((session) => session.sessionId),
+    ["default"],
+  );
+  const namedStore = createOmpStore({ ...env, OMP_PROFILE: "work" });
+  const named = await namedStore.findSession?.(homedir(), "named");
+  assert.equal(
+    named?.sessionPath,
+    join(
+      OMP_CONFIG_ROOT,
+      "profiles",
+      "work",
+      "agent",
+      "sessions",
+      "-",
+      "2026-10-08T00-00-00-000Z_named.jsonl",
+    ),
+  );
+  assert.equal(await namedStore.deleteSession(named!.sessionPath), true);
+  assert.deepEqual(await namedStore.listSessions(homedir()), []);
+  assert.equal(
+    (await createOmpStore({ PI_CONFIG_DIR: legacy }).listSessions(homedir()))[0]?.sessionId,
+    "legacy",
+  );
+});
+
 test("相对 PI_CONFIG_DIR 从用户主目录解析并扫描 omp 冷会话", async (context) => {
   const testRoot = await mkdtemp(join(tmpdir(), "omp-store-test-"));
   context.after(async () => {
@@ -48,7 +95,7 @@ test(
   },
 );
 
-test("目录链接访问的会话恢复：链接路径 realpath 后与 omp 真实路径编码同一目录（--home 链接语义）", async (context) => {
+test("目录链接访问的会话恢复：链接路径 realpath 后与 omp 真实路径编码同一目录", async (context) => {
   const testRoot = await mkdtemp(join(tmpdir(), "omp-store-link-"));
   context.after(async () => {
     assert.ok(resolve(testRoot).startsWith(`${resolve(tmpdir())}${sep}`));

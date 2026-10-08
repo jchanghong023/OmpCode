@@ -37,13 +37,6 @@ function readBootstrapDataBaseDirFromDisk(
 }
 
 export function applyEarlyDataBaseDirBootstrap(settingsFile?: string): string | null {
-  const centos7Home = process.env.OMPCODE_CENTOS7_HOME?.trim();
-  if (centos7Home) {
-    // --home 必须早于 logger 与 crashReporter 生效，旧设置中的 dataBaseDir 不得把数据写回原 HOME。
-    setDataBaseDir(centos7Home);
-    return centos7Home;
-  }
-
   const dataBaseDir = readBootstrapDataBaseDirFromDisk(settingsFile);
   if (dataBaseDir) {
     // 启动早期就把 dataBaseDir 注入进来，避免 logger / crashReporter 先按默认 HOME 建目录，

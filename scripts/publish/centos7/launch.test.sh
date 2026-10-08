@@ -49,19 +49,19 @@ mkdir -p "$package_root/bin" "$package_root/app/resources/glm/omp"
 cp "$script_dir/launch.sh" "$launcher"
 chmod +x "$launcher"
 help_home="$test_root/help-home"
-help_data="$test_root/help-data"
-help_output=$(HOME="$help_home" "$launcher" --home "$help_data" --help)
-grep -Fq -- '--home <绝对路径>' <<<"$help_output"
+help_output=$(HOME="$help_home" "$launcher" --help)
 grep -Fq -- '--profile <名称>' <<<"$help_output"
-grep -Fq -- '--offline' <<<"$help_output"
-grep -Fq -- '离线锁定' <<<"$help_output"
-grep -Fq -- '全功能' <<<"$help_output"
-[[ ! -e "$help_home" && ! -e "$help_data" ]]
+grep -Fq -- 'OMP_CONFIG_ROOT' <<<"$help_output"
+grep -Fq -- 'OMP_OFFLINE=1' <<<"$help_output"
+if grep -Eq -- '--home|--offline' <<<"$help_output"; then
+  echo 'Removed launch options are still advertised.' >&2
+  exit 1
+fi
+[[ ! -e "$help_home" ]]
 HOME="$help_home" "$launcher" -h >/dev/null
 [[ ! -e "$help_home" ]]
 
-# Git Bash/MSYS 的 -x 判定要求文件具备可执行形态（shebang 魔数或 .exe 扩展名）；
-# 给 omp 夹具最小 shebang，让同一测试在 CentOS 7 与 Windows Git Bash 都成立。
+# Git Bash/MSYS 的 -x 判定需要 shebang 或 .exe 扩展名。
 touch "$package_root/app/resources/app.asar"
 printf '#!/bin/sh\nexit 0\n' > "$package_root/app/resources/glm/omp/omp"
 chmod +x "$package_root/app/resources/glm/omp/omp"
@@ -69,10 +69,10 @@ cat > "$package_root/app/zcode" <<'STUB'
 #!/bin/bash
 set -euo pipefail
 for name in \
-  HOME XDG_CONFIG_HOME XDG_DATA_HOME XDG_CACHE_HOME XDG_STATE_HOME TMPDIR PI_CONFIG_DIR \
+  HOME XDG_CONFIG_HOME XDG_DATA_HOME XDG_CACHE_HOME XDG_STATE_HOME TMPDIR \
+  OMP_CONFIG_ROOT PI_CONFIG_DIR OMP_OFFLINE OMP_FUTURE_OPTION \
   ZCODE_DATA_BASE_DIR ZCODE_DESKTOP_HOME_DIR ZCODE_DESKTOP_USER_DATA_DIR \
-  ZCODE_DESKTOP_SESSION_DATA_DIR OMPCODE_CENTOS7_HOME OMPCODE_CENTOS7_PROFILE \
-  OMPCODE_CENTOS7_OFFLINE OMPCODE_CENTOS7_LOCAL_ONLY \
+  ZCODE_DESKTOP_SESSION_DATA_DIR OMPCODE_CENTOS7_PROFILE OMPCODE_CENTOS7_LOCAL_ONLY \
   ZCODE_ARMS_RUM_ENDPOINT ZCODE_TELEMETRY_REPORT_ENDPOINT \
   DBUS_SESSION_BUS_ADDRESS IBUS_ADDRESS GTK_IM_MODULE XMODIFIERS; do
   printf '%s=%s\n' "$name" "${!name-}"
@@ -83,18 +83,6 @@ done
 STUB
 chmod +x "$package_root/app/zcode"
 
-user_home="$test_root/user-home"
-data_home="$test_root/external data"
-mkdir -p "$user_home/.config/ibus/bus"
-ibus_marker="$user_home/.config/ibus/bus/address-marker"
-printf 'ibus-socket-address\n' >"$ibus_marker"
-output=$("$env_bin" \
-  -u XDG_CONFIG_HOME -u XDG_DATA_HOME -u XDG_CACHE_HOME -u XDG_STATE_HOME -u TMPDIR \
-  -u PI_CONFIG_DIR -u ZCODE_DATA_BASE_DIR -u ZCODE_DESKTOP_HOME_DIR \
-  -u ZCODE_DESKTOP_USER_DATA_DIR -u ZCODE_DESKTOP_SESSION_DATA_DIR \
-  -u OMPCODE_CENTOS7_HOME -u OMPCODE_CENTOS7_LOCAL_ONLY -u ZCODE_ARMS_RUM_ENDPOINT \
-  HOME="$user_home" "$launcher" --home "$data_home" --profile test-profile --offline --extra value)
-
 expect_line() {
   local expected=$1
   if ! grep -Fxq -- "$expected" <<<"$output"; then
@@ -103,127 +91,80 @@ expect_line() {
   fi
 }
 
+user_home="$test_root/user-home"
+mkdir -p "$user_home/.config/ibus/bus"
+printf 'ibus-socket-address\n' > "$user_home/.config/ibus/bus/address-marker"
+output=$("$env_bin" \
+  -u XDG_CONFIG_HOME -u XDG_DATA_HOME -u XDG_CACHE_HOME -u XDG_STATE_HOME -u TMPDIR \
+  -u ZCODE_DATA_BASE_DIR -u ZCODE_DESKTOP_HOME_DIR \
+  -u ZCODE_DESKTOP_USER_DATA_DIR -u ZCODE_DESKTOP_SESSION_DATA_DIR \
+  -u ZCODE_ARMS_RUM_ENDPOINT \
+  HOME="$user_home" OMP_CONFIG_ROOT="$test_root/external omp" PI_CONFIG_DIR=legacy \
+  OMP_OFFLINE=1 OMP_FUTURE_OPTION=preserved \
+  "$launcher" --profile test-profile --extra value)
 expect_line "HOME=$user_home"
-expect_line "XDG_CONFIG_HOME=$data_home/.config/ompcode-centos7"
-expect_line "XDG_DATA_HOME=$data_home/.local/share/ompcode-centos7"
-expect_line "XDG_CACHE_HOME=$data_home/.cache/ompcode-centos7"
-expect_line "XDG_STATE_HOME=$data_home/.local/state/ompcode-centos7"
-expect_line "TMPDIR=$data_home/.tmp/ompcode-centos7"
-expect_line "PI_CONFIG_DIR=$data_home/.omp"
-expect_line "ZCODE_DATA_BASE_DIR=$data_home"
-expect_line "ZCODE_DESKTOP_HOME_DIR=$data_home"
-expect_line "ZCODE_DESKTOP_USER_DATA_DIR=$data_home/.config/ompcode-centos7/OmpCode"
-expect_line "ZCODE_DESKTOP_SESSION_DATA_DIR=$data_home/.config/ompcode-centos7/OmpCode/session"
-expect_line "OMPCODE_CENTOS7_HOME=$data_home"
-expect_line 'OMPCODE_CENTOS7_PROFILE=test-profile'
-expect_line 'OMPCODE_CENTOS7_OFFLINE=1'
+expect_line "OMP_CONFIG_ROOT=$test_root/external omp"
+expect_line 'PI_CONFIG_DIR=legacy'
+expect_line 'OMP_OFFLINE=1'
+expect_line 'OMP_FUTURE_OPTION=preserved'
 expect_line 'OMPCODE_CENTOS7_LOCAL_ONLY=1'
+expect_line 'OMPCODE_CENTOS7_PROFILE=test-profile'
 expect_line 'ZCODE_ARMS_RUM_ENDPOINT='
+expect_line 'ZCODE_DATA_BASE_DIR='
+expect_line 'ZCODE_DESKTOP_HOME_DIR='
+expect_line 'ZCODE_DESKTOP_USER_DATA_DIR='
+expect_line 'ZCODE_DESKTOP_SESSION_DATA_DIR='
 expect_line 'ARG=--no-sandbox'
 expect_line 'ARG=--disable-gpu'
 expect_line 'ARG=--force-prefers-reduced-motion'
 expect_line 'ARG=--extra'
 expect_line 'ARG=value'
-if grep -Fxq 'ARG=--profile' <<<"$output" || grep -Fxq 'ARG=--offline' <<<"$output"; then
-  echo 'The launcher did not consume --profile or --offline.' >&2
+[[ ! -e "$user_home/.ompcode" && ! -e "$user_home/.omp" && ! -e "$test_root/external omp" ]]
+expect_symlink_target "$user_home/.config/ompcode-centos7/ibus" "$user_home/.config/ibus"
+[[ "$(cat -- "$user_home/.config/ompcode-centos7/ibus/bus/address-marker")" == ibus-socket-address ]]
+if grep -Eq 'ARG=--(home|offline|profile)$' <<<"$output"; then
+  echo 'Unexpected private launcher or removed flag forwarded to Electron.' >&2
   exit 1
 fi
-expect_symlink_target "$user_home/.ompcode" "$data_home/.ompcode"
-expect_symlink_target "$user_home/.omp" "$data_home/.omp"
-[[ -d "$data_home/.config/ompcode-centos7/OmpCode/session" ]]
-[[ -d "$data_home/.local/share/ompcode-centos7" ]]
-[[ -d "$data_home/.local/state/ompcode-centos7" ]]
-[[ -d "$data_home/.cache/ompcode-centos7" ]]
-[[ -d "$data_home/.tmp/ompcode-centos7" ]]
-expect_is_symlink "$data_home/.config/ompcode-centos7/ibus"
-expect_symlink_target "$data_home/.config/ompcode-centos7/ibus" "$user_home/.config/ibus"
-[[ "$(cat -- "$data_home/.config/ompcode-centos7/ibus/bus/address-marker")" == 'ibus-socket-address' ]]
 
-# The same destination is reusable on later launches.
-# 复用语义依赖符号链接检测；无法创建符号链接的平台（Git Bash 退化复制）跳过，
-# CentOS 7 上始终执行。
-if ((symlink_supported)); then
-  "$env_bin" -u OMPCODE_CENTOS7_HOME HOME="$user_home" "$launcher" --home "$data_home" >/dev/null
-fi
-
-# 参数矩阵补充：--profile（= 形式）不伴随 --offline——profile 生效但锁定变量必须为空。
-profile_online_home="$test_root/profile-online-home"
-profile_online_data="$test_root/profile-online-data"
-mkdir -p "$profile_online_home"
-profile_online_output=$("$env_bin" \
-  -u XDG_CONFIG_HOME -u XDG_DATA_HOME -u XDG_CACHE_HOME -u XDG_STATE_HOME -u TMPDIR \
-  -u PI_CONFIG_DIR -u ZCODE_DATA_BASE_DIR -u ZCODE_DESKTOP_HOME_DIR \
-  -u ZCODE_DESKTOP_USER_DATA_DIR -u ZCODE_DESKTOP_SESSION_DATA_DIR \
-  -u OMPCODE_CENTOS7_HOME \
-  HOME="$profile_online_home" "$launcher" --home "$profile_online_data" --profile=online-prof)
+# OMP 同源真值解析：保持环境原值，仅派生桌面门控。
+for offline in 1 true YES ' On '; do
+  output=$("$env_bin" HOME="$user_home" OMP_OFFLINE="$offline" "$launcher")
+  expect_line "OMP_OFFLINE=$offline"
+  expect_line 'OMPCODE_CENTOS7_LOCAL_ONLY=1'
+done
+for offline in '' 0 false off; do
+  output=$("$env_bin" HOME="$user_home" OMP_OFFLINE="$offline" OMPCODE_CENTOS7_LOCAL_ONLY=1 "$launcher")
+  expect_line "OMP_OFFLINE=$offline"
+  expect_line 'OMPCODE_CENTOS7_LOCAL_ONLY='
+done
+profile_online_output=$("$env_bin" -u OMP_OFFLINE HOME="$user_home" "$launcher" --profile=online-prof)
 grep -Fxq 'OMPCODE_CENTOS7_PROFILE=online-prof' <<<"$profile_online_output"
 grep -Fxq 'OMPCODE_CENTOS7_LOCAL_ONLY=' <<<"$profile_online_output"
-grep -Fxq 'OMPCODE_CENTOS7_OFFLINE=' <<<"$profile_online_output"
-expect_symlink_target "$profile_online_home/.ompcode" "$profile_online_data/.ompcode"
-
-conflict_home="$test_root/conflict-home"
-conflict_target="$test_root/conflict-target"
-mkdir -p "$conflict_home/.omp"
-set +e
-"$env_bin" HOME="$conflict_home" "$launcher" --home "$conflict_target" >/dev/null 2>&1
-conflict_status=$?
-set -e
-[[ "$conflict_status" == 2 ]]
-[[ -d "$conflict_home/.omp" && ! -e "$conflict_target" ]]
-
-# 逃逸受管路径的场景需要真实符号链接表达；无法创建符号链接的平台跳过，
-# CentOS 7 上始终执行（需求：解析到 --home 之外的受管路径被拒绝）。
-if ((symlink_supported)); then
-  escape_home="$test_root/escape-home"
-  escape_target="$test_root/escape-target"
-  outside_cache="$test_root/outside-cache"
-  mkdir -p "$escape_home" "$outside_cache"
-  mkdir -p "$escape_target"
-  ln -s "$outside_cache" "$escape_target/.cache"
-  set +e
-  "$env_bin" HOME="$escape_home" "$launcher" --home "$escape_target" >/dev/null 2>&1
-  escape_status=$?
-  set -e
-  [[ "$escape_status" == 2 ]]
-  [[ ! -e "$escape_home/.ompcode" && ! -e "$escape_home/.omp" ]]
-fi
 
 default_home="$test_root/default-home"
 mkdir -p "$default_home/.config/fcitx"
-# 在线（不传 --offline）参数矩阵：调用者环境里残留的锁定变量、旧 profile 与遥测
-# 出口必须按「唯一设置者是启动器」的规则处理——锁定变量清空、旧 profile 清空、
-# 遥测出口原样继承（与 Windows 全功能基准一致）。
-default_output=$("$env_bin" \
-  -u PI_CONFIG_DIR -u ZCODE_DATA_BASE_DIR -u ZCODE_DESKTOP_HOME_DIR \
-  -u ZCODE_DESKTOP_USER_DATA_DIR -u ZCODE_DESKTOP_SESSION_DATA_DIR \
+default_output=$("$env_bin" -u OMP_OFFLINE \
   XDG_CACHE_HOME="$test_root/preserved-cache" XDG_STATE_HOME="$test_root/preserved-state" \
   TMPDIR="$test_root/preserved-tmp" \
-  OMPCODE_CENTOS7_HOME=stale \
-  OMPCODE_CENTOS7_LOCAL_ONLY=1 OMPCODE_CENTOS7_OFFLINE=1 \
-  OMPCODE_CENTOS7_PROFILE=stale-profile \
+  OMPCODE_CENTOS7_LOCAL_ONLY=1 OMPCODE_CENTOS7_PROFILE=stale-profile \
   ZCODE_ARMS_RUM_ENDPOINT=https://arms.example.test ZCODE_TELEMETRY_REPORT_ENDPOINT=https://telemetry.example.test \
-  HOME="$default_home" \
-  "$launcher" --ordinary-arg)
+  HOME="$default_home" "$launcher" --ordinary-arg)
 grep -Fxq "HOME=$default_home" <<<"$default_output"
 grep -Fxq "XDG_CONFIG_HOME=$default_home/.config/ompcode-centos7" <<<"$default_output"
 grep -Fxq "XDG_DATA_HOME=$default_home/.local/share/ompcode-centos7" <<<"$default_output"
 grep -Fxq "XDG_CACHE_HOME=$test_root/preserved-cache" <<<"$default_output"
 grep -Fxq "XDG_STATE_HOME=$test_root/preserved-state" <<<"$default_output"
 grep -Fxq "TMPDIR=$test_root/preserved-tmp" <<<"$default_output"
-grep -Fxq 'OMPCODE_CENTOS7_HOME=' <<<"$default_output"
-# 不传 --offline 时锁定变量必须为空：启动器是唯一设置者，清掉调用者残留。
 grep -Fxq 'OMPCODE_CENTOS7_LOCAL_ONLY=' <<<"$default_output"
-grep -Fxq 'OMPCODE_CENTOS7_OFFLINE=' <<<"$default_output"
 grep -Fxq 'OMPCODE_CENTOS7_PROFILE=' <<<"$default_output"
-# 未锁定时遥测出口不被启动器改写，桌面保持全功能。
 grep -Fxq 'ZCODE_ARMS_RUM_ENDPOINT=https://arms.example.test' <<<"$default_output"
 grep -Fxq 'ZCODE_TELEMETRY_REPORT_ENDPOINT=https://telemetry.example.test' <<<"$default_output"
 [[ ! -e "$default_home/.ompcode" && ! -e "$default_home/.omp" ]]
 expect_is_symlink "$default_home/.config/ompcode-centos7/fcitx"
 expect_symlink_target "$default_home/.config/ompcode-centos7/fcitx" "$default_home/.config/fcitx"
-# 目标位置已有同名条目时不得覆盖。
 mkdir -p "$default_home/.config/ompcode-centos7/fcitx5"
-"$env_bin" HOME="$default_home" "$launcher" >/dev/null
+"$env_bin" -u OMP_OFFLINE HOME="$default_home" "$launcher" >/dev/null
 [[ -d "$default_home/.config/ompcode-centos7/fcitx5" && ! -L "$default_home/.config/ompcode-centos7/fcitx5" ]]
 
 # 使用真实子进程的 NUL 分隔 environ；只替换发现进程和查询总线的外部命令。
@@ -292,7 +233,7 @@ run_ime() {
     OMPCODE_TEST_PROBES="$test_root/probes" \
     OMPCODE_TEST_PIDS="$pid_other $pid_a" \
     OMPCODE_TEST_OWNER_A="$pid_a" OMPCODE_TEST_OWNER_B="$pid_b" \
-    "$@" "$launcher" --home "$test_root/ime-data" 2> "$test_root/ime-stderr")
+    "$@" "$launcher" 2> "$test_root/ime-stderr")
   # 输出为空说明启动器没走到桌面 stub；先回放启动器 stderr 便于定位平台差异。
   if [[ -z $output ]]; then
     cat "$test_root/ime-stderr" >&2

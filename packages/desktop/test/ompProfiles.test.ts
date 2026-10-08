@@ -19,3 +19,21 @@ test("只列出现有合法 profile，包含默认档", async (context) => {
     ["default", "work"],
   );
 });
+
+test("profile 枚举使用 OMP_CONFIG_ROOT，不混入旧 PI_CONFIG_DIR", async (context) => {
+  const home = await mkdtemp(join(tmpdir(), "omp-profile-root-"));
+  context.after(async () => {
+    assert.ok(resolve(home).startsWith(`${resolve(tmpdir())}${sep}`));
+    await rm(home, { recursive: true, force: true });
+  });
+  await mkdir(join(home, "data", "profiles", "work", "agent"), { recursive: true });
+  await mkdir(join(home, "legacy", "profiles", "old", "agent"), { recursive: true });
+  assert.deepEqual(
+    await listOmpProfiles(home, { OMP_CONFIG_ROOT: "~/data", PI_CONFIG_DIR: "legacy" }),
+    ["default", "work"],
+  );
+  assert.deepEqual(
+    await listOmpProfiles(home, { OMP_CONFIG_ROOT: "relative", PI_CONFIG_DIR: "legacy" }),
+    ["default", "old"],
+  );
+});

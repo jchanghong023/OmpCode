@@ -350,7 +350,7 @@ export function createSystemService(options: CreateSystemServiceOptions = {}): I
 
   return {
     async info(): Promise<SystemInfo> {
-      // 桌面 --home 改变应用数据根及展示的默认 home；SSH 等系统用户配置仍由原 HOME 读取。
+      // 开发/测试实例展示显式 home；SSH 等系统用户配置仍由原 HOME 读取。
       return {
         homedir: env.ZCODE_DESKTOP_HOME_DIR?.trim() || homedir(),
         platform: process.platform,

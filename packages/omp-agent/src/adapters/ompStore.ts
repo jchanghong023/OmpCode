@@ -1,6 +1,6 @@
 // omp 会话存储只读扫描：当前 profile 的 agent/sessions/<encoded-cwd>/*.jsonl。
 // 目录名编码与 oh-my-pi session-paths.ts 保持一致（home 前缀 `-`、tmp 前缀 `-tmp-`、绝对路径 `--…--`）。
-// PI_CONFIG_DIR 可整体重定位（omp 同源），生产不设置；POSIX 上 $XDG_DATA_HOME/omp
+// OMP_CONFIG_ROOT / PI_CONFIG_DIR 重定位与 Main 共用解析；POSIX 上 $XDG_DATA_HOME/omp
 // 迁移目录存在时 sessions 根对齐 omp DirResolver XDG 规则（见 ompSessionsRoot）。
 
 import { createReadStream, existsSync } from "node:fs";
@@ -9,16 +9,10 @@ import { homedir, tmpdir } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { resolveOmpProfileFromEnv } from "@zcode/shared/omp-profile";
+import { resolveOmpAgentDir } from "@zcode/shared/node";
 import type { OmpStorePort, OmpStoreSessionSummary } from "../app/ports.js";
 import { titleFromOmpEntries } from "../domain/coldHistory.js";
 import { logger } from "./logger.js";
-
-function configDirFor(env: NodeJS.ProcessEnv, home: string): string {
-  const configured = env.PI_CONFIG_DIR?.trim();
-  // omp 把相对 PI_CONFIG_DIR 解析在用户主目录下；Node 的相对 join 原先却
-  // 解析在 workspace cwd 下，导致模型运行成功而冷会话扫描永久找不到文件。
-  return configured ? resolve(home, configured) : join(home, ".omp");
-}
 
 /**
  * omp sessions 目录解析（S1-3，对齐 omp DirResolver XDG 规则，v18.4.8+fork.278
@@ -47,10 +41,7 @@ export function ompSessionsRoot(options: {
       return join(anchor, "sessions");
     }
   }
-  const configRoot = configDirFor(env, home);
-  return profile === "default"
-    ? join(configRoot, "agent", "sessions")
-    : join(configRoot, "profiles", profile, "agent", "sessions");
+  return join(resolveOmpAgentDir(home, env), "sessions");
 }
 
 function sessionsRoot(env: NodeJS.ProcessEnv): string {

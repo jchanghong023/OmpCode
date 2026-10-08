@@ -374,12 +374,16 @@ test("ompSessionsRoot：linux/darwin 且 $XDG_DATA_HOME/omp 存在时扁平化 a
   const exists = (path: string): boolean =>
     path === join(xdg, "omp") || path === join(xdg, "omp", "profiles", "work");
   const base = {
-    env: { XDG_DATA_HOME: xdg, PI_CONFIG_DIR: "/custom-omp" } as NodeJS.ProcessEnv,
+    env: {
+      XDG_DATA_HOME: xdg,
+      OMP_CONFIG_ROOT: "/custom-root",
+      PI_CONFIG_DIR: "/custom-omp",
+    } as NodeJS.ProcessEnv,
     home: "/home/u",
     exists,
   };
   // 默认 profile：锚 $XDG_DATA_HOME/omp，sessions 扁平挂在锚点下（无 agent/ 段），
-  // 且 PI_CONFIG_DIR 不改变 XDG data 根。
+  // 且 OMP_CONFIG_ROOT / PI_CONFIG_DIR 不改变已迁移的 XDG data 根（当前 OMP 同源）。
   assert.equal(ompSessionsRoot({ ...base, platform: "linux" }), join(xdg, "omp", "sessions"));
   assert.equal(ompSessionsRoot({ ...base, platform: "darwin" }), join(xdg, "omp", "sessions"));
   // 命名 profile：锚 $XDG_DATA_HOME/omp/profiles/<p>。

@@ -1,9 +1,9 @@
 import { z } from "zod";
 
 /**
- * 离线锁定（CentOS 7 启动器 `--offline`）的唯一门控状态接口。
+ * 离线锁定（CentOS 7 启动器继承 `OMP_OFFLINE`）的唯一门控状态接口。
  *
- * 激活链：CentOS 7 启动器解析到 `--offline` 时设置 `OMPCODE_CENTOS7_LOCAL_ONLY=1`
+ * 激活链：CentOS 7 启动器读取到有效的 `OMP_OFFLINE` 时设置 `OMPCODE_CENTOS7_LOCAL_ONLY=1`
  * （该变量的唯一设置者，Windows 不提供），桌面 Main/Host/Renderer 读取同一运行时
  * 变量关闭各自后端（需求见 docs/requirements/centos7-release.md「离线锁定的激活链」）。
  * 本模块把同一事实派生成严格类型 +
@@ -13,7 +13,7 @@ import { z } from "zod";
  * 本接口只表达「后端是否被关闭」，不承载 UI 文案与呈现策略。
  */
 
-/** CentOS 7 启动器 `--offline` 写入的离线锁定环境变量；唯一设置者是启动器。 */
+/** CentOS 7 启动器继承 `OMP_OFFLINE` 写入的离线锁定环境变量；唯一设置者是启动器。 */
 export const OMPCODE_LOCAL_ONLY_ENV = "OMPCODE_CENTOS7_LOCAL_ONLY";
 
 /**
@@ -44,7 +44,7 @@ export const offlineDisabledFeaturesSchema = z.strictObject({
 });
 
 export const offlineGateStateSchema = z.strictObject({
-  /** 当前进程是否处于离线锁定（启动器传入 `--offline`）。 */
+  /** 当前进程是否处于离线锁定（启动器继承有效的 `OMP_OFFLINE`）。 */
   localOnly: z.boolean(),
   disabledFeatures: offlineDisabledFeaturesSchema,
 });

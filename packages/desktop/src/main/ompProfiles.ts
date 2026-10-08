@@ -1,20 +1,10 @@
 import { readdir } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
-import { normalizeOmpProfileName, resolveOmpProfileFromEnv } from "@zcode/shared/omp-profile";
+import { join } from "node:path";
+import { normalizeOmpProfileName } from "@zcode/shared/omp-profile";
+import { resolveOmpConfigRoot } from "@zcode/shared/node";
 
-export function resolveOmpConfigRoot(
-  home = homedir(),
-  env: NodeJS.ProcessEnv = process.env,
-): string {
-  return resolve(home, env.PI_CONFIG_DIR?.trim() || ".omp");
-}
-
-export function resolveOmpAgentDir(home = homedir(), env: NodeJS.ProcessEnv = process.env): string {
-  const profile = resolveOmpProfileFromEnv(env);
-  const root = resolveOmpConfigRoot(home, env);
-  return profile === "default" ? join(root, "agent") : join(root, "profiles", profile, "agent");
-}
+export { resolveOmpConfigRoot, resolveOmpAgentDir } from "@zcode/shared/node";
 
 export async function listOmpProfiles(
   home = homedir(),

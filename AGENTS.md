@@ -8,7 +8,7 @@
 ## 项目定位与需求权威（Fork）
 
 - 本仓库是持续同步上游的个人 Fork；上游来源、跟踪目标和产品目的见 `docs/requirements/FORK.md`。同步操作只针对其中指定的上游 `main` HEAD，优先采用上游最新实现。同步上游的主要目的是跟进 UI 界面显示效果。
-- 产品仅支持 Windows 与 CentOS 7：两平台前端 UI 与功能界面完全一致，Windows 为全功能基准；平台差异只允许存在于底层依赖、打包链路和后端功能的参数门控（离线参数），不按平台分叉界面，不因平台能力差异删除或隐藏 UI 入口。
+- 产品仅支持 Windows 与 CentOS 7：两平台前端 UI 与功能界面完全一致，Windows 为全功能基准；平台差异只允许存在于底层依赖、打包链路和后端功能的环境门控（`OMP_OFFLINE`），不按平台分叉界面，不因平台能力差异删除或隐藏 UI 入口。
 - 自有改动与上游改动尽量结构隔离：fork 逻辑优先放独立目录或独立文件（`packages/omp-agent`、`Omp*` 前缀 UI 文件、`docs/requirements/`），对上游共享文件保持最小 diff，便于低冲突合并上游 UI 更新；详见 `docs/requirements/FORK.md` 的「上游同步策略与平台范围」。
 - 本项目完全由 AI Agent 实现和维护：质量不依赖用户手工读代码或人工回归，必须依靠可复现的自动化验证与文档约定。
 - 固定需求权威目录是 `docs/requirements/`，从 `README.md` 按功能边界定位文档；Fork 目的、差异需求、规划及验收标准只在该目录维护。根目录 `FORK.md` 仅保留跳转，不是第二份权威副本。
@@ -46,6 +46,7 @@
 - `packages/shared`：共享协议与类型；`packages/client`：Agent 客户端 SDK。
 - `packages/omp-agent`：omp RPC 核心适配器（对 host 讲 ZCode Protocol/v4，对内嵌 omp 二进制讲 omp RPC；本 Fork 的本地 Agent 核心）。
 - `packages/omp-agent/src/adapters/cliMain.ts`：Host 启动的 Agent stdio 入口。
+- OMP 环境沿应用进程链透传，`OMP_CONFIG_ROOT`、`OMP_OFFLINE` 兼容规则见 `docs/requirements/models-and-commands.md`；CentOS 7 启动器不再提供 `--home`、`--offline` 参数，不创建数据根链接。
 - `apps/zcode-cli`：保留的上游源码快照，不在根 workspace 中；运行时边界见 `docs/requirements/FORK.md`，未经用户要求不得接回产品。
 - 子目录规则注册表（全仓唯一）：[apps/zcode-cli/AGENTS.md](apps/zcode-cli/AGENTS.md)——独立 workspace 的上游 CLI 源码快照，承载 CLI 专属工作规范、跨平台与接口契约约束及 `pnpm --dir apps/zcode-cli typecheck/lint` 本地验证入口；其余目录不另设子目录 `AGENTS.md`，通用规则统一由本文件维护。
 - `CONTEXT.md`：插件商店领域词汇；修改相关 UI 前阅读。

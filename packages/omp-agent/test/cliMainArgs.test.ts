@@ -1,4 +1,4 @@
-// cliMain 的 omp 启动参数装配矩阵：CentOS 7 --offline/--profile 透传（分支 94c53d4）
+// cliMain 的 omp 启动参数装配矩阵：profile 参数与 OMP 环境变量互相独立。
 // 与 OMP_RPC_ARGS_JSON 开发参数的叠加顺序保持合并后行为不变。
 process.env.OMP_AGENT_NO_AUTO_START = "1";
 const { buildOmpExtraArgs } = await import("../src/adapters/cliMain.js");
@@ -21,10 +21,10 @@ test("OMP_RPC_ARGS_JSON 非法或非数组时被丢弃，不阻断启动", () =>
   assert.deepEqual(buildOmpExtraArgs({ OMP_RPC_ARGS_JSON: "   " }), []);
 });
 
-test("OMPCODE_CENTOS7_OFFLINE=1 透传 --offline，其余取值不透传", () => {
-  assert.deepEqual(buildOmpExtraArgs({ OMPCODE_CENTOS7_OFFLINE: "1" }), ["--offline"]);
-  assert.deepEqual(buildOmpExtraArgs({ OMPCODE_CENTOS7_OFFLINE: "0" }), []);
-  assert.deepEqual(buildOmpExtraArgs({ OMPCODE_CENTOS7_OFFLINE: "" }), []);
+test("OMP_OFFLINE 直接随环境透传，不转成已移除的 --offline 参数", () => {
+  for (const OMP_OFFLINE of ["1", "true", "0", ""]) {
+    assert.deepEqual(buildOmpExtraArgs({ OMP_OFFLINE }), []);
+  }
 });
 
 test("启动器设置 OMPCODE_CENTOS7_PROFILE 时按 OMP_PROFILE/PI_PROFILE 解析并透传 --profile", () => {
@@ -43,15 +43,15 @@ test("未设置启动器 profile 时不透传 --profile（GUI 历史选择由 om
   assert.deepEqual(buildOmpExtraArgs({ PI_PROFILE: "work" }), []);
 });
 
-test("offline 与 profile 参数固定排在开发参数之后", () => {
+test("profile 参数固定排在开发参数之后，offline 不产生额外参数", () => {
   assert.deepEqual(
     buildOmpExtraArgs({
       OMP_RPC_ARGS_JSON: '["--dev"]',
-      OMPCODE_CENTOS7_OFFLINE: "1",
+      OMP_OFFLINE: "1",
       OMPCODE_CENTOS7_PROFILE: "work",
       OMP_PROFILE: "work",
     }),
-    ["--dev", "--offline", "--profile", "work"],
+    ["--dev", "--profile", "work"],
   );
 });
 

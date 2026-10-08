@@ -6,6 +6,7 @@ import { mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { resolveOmpProfileFromEnv } from "@zcode/shared/omp-profile";
+import { resolveOmpConfigRoot } from "@zcode/shared/node";
 import { resolveOmpBinary } from "../contract.js";
 import { ServerApp } from "../app/serverApp.js";
 import { OmpDirectoryGateway } from "./ompDirectoryGateway.js";
@@ -75,7 +76,7 @@ export async function runCliMain(
   const workspaceKey = env.ZCODE_WORKSPACE_IDENTITY?.trim() || workspacePath;
   const gatewayRef: { server: ProtocolServer | null } = { server: null };
   const ompExtraArgs = buildOmpExtraArgs(env);
-  const ompFactory = createOmpProcessFactory(ompBinaryPath, ompExtraArgs);
+  const ompFactory = createOmpProcessFactory(ompBinaryPath, ompExtraArgs, env);
   // 目录进程的 available_commands_update → ServerApp 缓存 + workspace-config topic 推送，
   // 同时失效斜杠严格分发的目录缓存。构造顺序上 loader/resolver 先于 app，用 ref 解引用。
   const appRef: { app: ServerApp | null } = { app: null };
@@ -125,19 +126,14 @@ export async function runCliMain(
 
 /**
  * omp 启动参数装配（纯函数，UT 覆盖参数矩阵）。
- * CentOS 7 启动参数分别透传给 omp；profile 值与 GUI 历史使用同一选择
+ * profile 值与 GUI 历史使用同一选择；OMP_OFFLINE 直接随环境继承，不转成已移除的参数。
  * （desktop main 先把 OMPCODE_CENTOS7_PROFILE 复制到 OMP_PROFILE，此处按 OMP_PROFILE/PI_PROFILE 解析）。
  */
 export function buildOmpExtraArgs(env: NodeJS.ProcessEnv): string[] {
-  const centos7Offline = env.OMPCODE_CENTOS7_OFFLINE === "1";
   const launchProfile = env.OMPCODE_CENTOS7_PROFILE;
   const profile = launchProfile ? resolveOmpProfileFromEnv(env) : null;
   // OMP_RPC_ARGS_JSON：开发/测试用的附加 omp 启动参数（如 fake 核心脚本路径）。
-  return [
-    ...parseExtraArgs(env.OMP_RPC_ARGS_JSON),
-    ...(centos7Offline ? ["--offline"] : []),
-    ...(profile ? ["--profile", profile] : []),
-  ];
+  return [...parseExtraArgs(env.OMP_RPC_ARGS_JSON), ...(profile ? ["--profile", profile] : [])];
 }
 
 function parseExtraArgs(raw: string | undefined): string[] {
@@ -156,8 +152,11 @@ function parseExtraArgs(raw: string | undefined): string[] {
 
 function prepareStoragePath(env: NodeJS.ProcessEnv): string {
   // host 只用它做锁/复用记账；omp 核没有该库，路径保持与旧 CLI 一致以便复用判定。
-  const home = env.PI_CONFIG_DIR?.trim() || join(homedir(), ".ompcode");
-  const directory = join(home, "cli", "db");
+  const root = resolveOmpConfigRoot(homedir(), {
+    ...env,
+    PI_CONFIG_DIR: env.PI_CONFIG_DIR?.trim() || ".ompcode",
+  });
+  const directory = join(root, "cli", "db");
   try {
     mkdirSync(directory, { recursive: true });
   } catch {

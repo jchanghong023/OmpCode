@@ -568,7 +568,7 @@ export interface IPlatformService {
   ): Promise<CreateTempTextAttachmentResult>;
 
   /**
-   * 查询离线锁定门控状态（CentOS 7 启动器 `--offline`，Main 唯一所有者派生，见
+   * 查询离线锁定门控状态（CentOS 7 启动器继承 `OMP_OFFLINE`，Main 唯一所有者派生，见
    * offlineGate.ts）。仅 Desktop main 实现（ipcMain.handle(PlatformChannels.OfflineGateState)）；
    * Web/非桌面没有该运行时事实，缺省不实现——消费方把「未提供」按未锁定处理，
    * 与 Windows 全功能基准一致。
