@@ -121,6 +121,7 @@ import { ConversationDraftEmptyState } from "@/v4/ConversationDraftEmptyState.js
 import { ConversationDraftSuggestedPromptsContainer } from "@/v4/ConversationDraftSuggestedPromptsContainer.js";
 import { ConversationHeader, type PaneWorkspaceBadge } from "@/v4/ConversationHeader.js";
 import { ConversationQueuePanel } from "@/v4/ConversationQueuePanel.js";
+import { rowsWithoutQueuedInputs } from "@/v4/OmpQueuedInputRows.js";
 import { projectPendingGuideQueue } from "@/v4/pendingGuideProjection.js";
 import { PendingCommandRecoveryBanner } from "@/v4/PendingCommandRecoveryBanner.js";
 import { WorkspaceHookPendingBanner } from "@/v4/WorkspaceHookPendingBanner.js";
@@ -3745,6 +3746,13 @@ export function SessionPane({
     !isDraft && (lease === null || sessionLeaseReady) && snapshot?.sessionId === sessionId
       ? snapshot
       : null;
+  const visibleTimelineRows = useMemo(
+    () =>
+      timelineSnapshot
+        ? rowsWithoutQueuedInputs(timelineSnapshot.rows.window, timelineSnapshot.queue)
+        : [],
+    [timelineSnapshot?.rows.window, timelineSnapshot?.queue],
+  );
   const shareHandoverContext =
     snapshot?.sharedContextImport && "contextId" in snapshot.sharedContextImport
       ? snapshot.sharedContextImport
@@ -4533,13 +4541,13 @@ export function SessionPane({
         <ConversationQueuePanel
           key="conversation-queue"
           queue={pendingGuideProjection?.visibleQueue ?? snapshot.queue}
-          onDeleteItem={handleDeleteQueueItem}
-          onEditItem={handleEditQueueItem}
+          onDeleteItem={snapshot.availability.queueEdit.allowed ? handleDeleteQueueItem : undefined}
+          onEditItem={snapshot.availability.queueEdit.allowed ? handleEditQueueItem : undefined}
           pendingEditQueueItemId={
             queueEditActiveForCurrentComposer ? queueEditOperation.queueItemId : null
           }
-          onSendNow={handleSendQueuedNow}
-          onMoveItem={handleReorderQueueItem}
+          onSendNow={snapshot.availability.sendQueuedNow.allowed ? handleSendQueuedNow : undefined}
+          onMoveItem={snapshot.availability.queueEdit.allowed ? handleReorderQueueItem : undefined}
           onResume={handleResumeQueue}
         />
       ) : null}
@@ -4751,7 +4759,7 @@ export function SessionPane({
               scrollToBottomActionRef={timelineScrollToBottomRef}
               scrollToQueryActionRef={timelineScrollToQueryRef}
               selectionPanelLayoutContainerRef={conversationLayoutContainerRef}
-              rows={timelineSnapshot?.rows.window ?? []}
+              rows={visibleTimelineRows}
               pendingGuides={timelineSnapshot ? pendingGuideProjection?.pendingGuides : []}
               apiRetry={timelineSnapshot?.control.apiRetry ?? null}
               totalCount={timelineSnapshot?.rows.totalCount ?? 0}

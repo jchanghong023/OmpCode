@@ -2757,7 +2757,9 @@ export const zcodeOmpModelRolesResultSchema = z.object({
   revision: z.string().optional(),
   sessionModel: z
     .object({
-      sessionId: z.string(),
+      // 修复依据：OMP get_model_roles 返回 { model }，目录进程没有会话身份；
+      // 保留可选身份兼容已有宿主，不能因缺少 sessionId 拒绝整个角色目录。
+      sessionId: z.string().optional(),
       sessionGeneration: z.string().optional(),
       model: z
         .object({ provider: z.string().optional(), modelId: z.string().optional() })

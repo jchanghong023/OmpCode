@@ -1,0 +1,37 @@
+[
+  {
+    "event": "submitted",
+    "text": "hello",
+    "label": "发送",
+    "at": "2026-10-08T04:00:36.037Z"
+  },
+  {
+    "event": "submitted",
+    "text": "hello",
+    "label": "加入队列",
+    "at": "2026-10-08T04:00:36.404Z"
+  },
+  {
+    "event": "submitted",
+    "text": "hello",
+    "label": "加入队列",
+    "at": "2026-10-08T04:00:36.500Z"
+  },
+  {
+    "event": "queued",
+    "items": [
+      {
+        "id": "01a119ab-900e-73c2-9438-12e46e01b372",
+        "text": "hello"
+      },
+      {
+        "id": "01a119ab-9071-7b11-8154-eac9e0458ad6",
+        "text": "hello"
+      }
+    ]
+  },
+  {
+    "event": "completed",
+    "text": "命令面板\n\n搜索并执行当前工作区可用的命令。\n\n新建任务\nCtrl+N\n搜索\nCtrl+K\n自动化\n分组\n项目\n项目\n尚未打开项目\n任务\n\nhello\n\n刚刚\n\nhello\n\n3分\n\nhello\n\n3分\n\nhello\n\n4分\n\n写3个文件，文件名随意，内容分别是1-3，写完后删除，用todo工具跟踪进度。要求界面上有进度。\n写3个文件，文件名随意，内容分别是1-3，写完后删除，用todo工具跟踪进度。要求界面上有进度。\n\n14分\n显示效果\nhello\nhello\n复制\n已工作 7 秒\n\n你好！有什么可以帮你的？比如分析代码、修复问题、写脚本或查资料，直接说需求即可。\n\n复制\n12:00\nhello\n复制\n已工作 6 秒\n\nHi! Ready when you are — tell me what you'd like to do.\n\n复制\n12:00\nhello\n复制\n已工作 8 秒\n\nHello! 连续打了三声招呼——如果在测试连通性，一切正常。有实际任务随时发过来。\n\n复制\n12:00\n\n\n\n\n提出后续修改要求\n添加上下文\n计划模型\nzhipu-coding-plan/GLM-5.3-Flash\n最高\n关闭\n低\n高\n最高\n发送"
+  }
+]

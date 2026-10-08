@@ -13,7 +13,7 @@ import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { zcodeWorkspacePresentationSchema } from "@zcode/shared";
+import { zcodeOmpModelRolesResultSchema, zcodeWorkspacePresentationSchema } from "@zcode/shared";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";
@@ -538,6 +538,8 @@ ${stderrTail}`,
 ${stderrTail}`,
       );
       const roleIds = (roles.result!.roles ?? []).map((role) => role.roleId);
+      // 宿主也用此 schema 校验；只检查 roles 非空会漏掉 sessionModel 形状漂移。
+      zcodeOmpModelRolesResultSchema.parse(roles.result);
       assert.ok((roles.result!.roles ?? []).length > 0, "role 目录不得为空");
       console.log("[real-e2e] model roles:", roleIds.slice(0, 6).join(","));
 

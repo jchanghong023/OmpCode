@@ -53,7 +53,22 @@ Host 旧进程退出 → 比对当前登记身份 → 仅清理旧登记 → 重
 - `deleteSession` 表示永久删除：先确认 omp 文件删除成功，再移除索引和广播删除事实。已加载和冷会话遵守同一结果；存储失败时返回失败且历史仍可重新打开。`session/close` 只释放当前引擎，保留已落盘历史。
 - 相对 `PI_CONFIG_DIR` 由 omp 按用户主目录解析；主进程角色设置和适配器冷会话扫描使用同一规则。每个 topic 订阅的逻辑帧序号严格递增，取消订阅后清理计数，防止帧组装器把后续会话索引判为冲突。
 - Windows 临时工作区位于用户主目录内时，冷会话扫描按 omp 的临时目录编码定位历史文件；重启后能按稳定 ID 恢复该工作区的主会话及子代理记录。
-- 流式中 `guide` 输入仍属于当前 omp agent 轮，但在会话投影中建立新用户轮次；此前轮次的流式行、文件事实和头行在终态一并收口。`queue` 输入保留待启动的轮次，当前 agent 的输出和终态仍归当前轮，后续 `agent_start` 才激活下一轮。桌面连续流与 Web 可重放快照读取同一投影。
+- 流式中 `guide` 输入仍属于当前 omp agent 轮，但在会话投影中建立新用户轮次；此前轮次的流式行、文件事实和头行在终态一并收口。`queue` 输入保留待启动的轮次并发布至现有队列面板，等待期间不显示为正在执行。OMP 在同一 run 内消费 follow-up 时，以对应用户 `message_start` 激活队首并关联后续输出；没有该事件的旧核仍按既有 `agent_start` 与终态对账处理。相同文本的多次输入用独立 command ID 保持顺序。桌面连续流与 Web 可重放快照读取同一投影，Renderer 不建立第二份已接受队列。编辑、重排、删除与立即发送继续按 FORK 能力限制禁用。
+
+```mermaid
+sequenceDiagram
+  participant UI as Renderer
+  participant Adapter as ConversationProjection
+  participant Core as OMP 队列所有者
+  UI->>Adapter: 运行中连续发送（独立 command ID）
+  Adapter->>Core: follow_up / steer
+  Adapter-->>UI: 同序列 queue 派生投影（等待态）
+  Core-->>Adapter: message_start(user)，消费队首
+  Adapter-->>UI: 队首移出，后续输出关联该输入
+  Core-->>Adapter: agent_end / get_state 对账
+  Adapter-->>UI: 终态；Desktop 连续帧 / Web 同水位快照
+```
+
 - `edit` 文件变更以成功的工具结果为准。默认 hashline `input` 中的文件段提供路径，工具结果中的统一 diff 提供实际增删行；多文件调用分别归入当前轮。无可验证路径或 diff 时不编造增删数。
 - `SessionRegistry` 是会话对外身份与 sessions-index / workspace-config 序号的所有者。临时 ID 绑定 omp UUID 后，索引、会话 topic、快照和 legacy 读取必须指向同一会话；迁移期间已建立的旧 ID 订阅继续可用。恢复快照的 `toSeq` 必须是该 topic 当前水位，恢复后的下一条 delta 从该水位连续前进。
 - Host 的持久任务索引保留用户组织信息。临时 ID 迁移至 UUID 时，任务行、分组、排序、置顶、归档、未读和定时任务关联作为同一任务迁移；冷启动对账只清理真正不再存在的旧行。
@@ -74,6 +89,7 @@ web: replayable ───── 快照 + 断档恢复 ───┘
 
 - 冷会话标题取 title 或首条用户消息，行按 omp 文件内容作防御式投影；用户显式删除会话时删除对应 omp 会话文件，不静默清理历史。
 - 验收：冷恢复失败最多自动重试两次；profile 路径一致；guide/queue 的轮次归属、失败收口与文件变更统计在两种交付链路一致，缺少事实时不编造。
+- 验收：Windows 真实运行中连续三次输入 `hello`，队列展示独立条目，消费后逐项移出且输出可关联；失败、停止、进程退出与快照重放不得留下虚假的工作中条目。Todo 写入三个内容为 1–3 的文件并删除，开启「显示待办」时界面展示真实进度；子代理返回 `hello` 时运行态、完成态和只读详情与核心记录一致。
 - 验收：超过 100 个会话仍可列出并按稳定 ID 恢复；超过 4000 条记录的历史能够回读较早消息；已加载和冷会话永久删除都删掉对应文件并更新索引；模拟文件删除失败时命令失败、文件和索引不被报告为已删除。
 - 验收：在 Windows 用户目录下的系统临时目录创建会话并执行子代理，关闭并重新启动桌面应用后，任务列表中的稳定 ID 能打开完整主会话及子代理记录。
 

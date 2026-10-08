@@ -14,7 +14,7 @@
 
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { ConversationRow } from "@zcode/shared/zcode-protocol-v4";
+import { conversationSnapshotSchema, type ConversationRow } from "@zcode/shared/zcode-protocol-v4";
 import { ConversationEngine } from "../src/app/conversationEngine.js";
 import type {
   HostGateway,
@@ -80,6 +80,128 @@ function createEngine(
 
 const flushAsync = () => new Promise<void>((resolve) => setImmediate(resolve));
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+test("连续三条相同输入发布独立队列，核心消费后输出逐条归属且终态清空", async () => {
+  const harness = createEngine();
+  try {
+    await harness.engine.sendText("A", "a", "client");
+    harness.onEvent({ type: "agent_start" });
+    for (let i = 0; i < 3; i++) await harness.engine.sendText("hello", `hello-${i}`, "client");
+    const waiting = conversationSnapshotSchema.parse(harness.engine.projection.buildSnapshot());
+    assert.deepEqual(
+      waiting.queue.items.map((item) => item.sourceCommandId),
+      ["hello-0", "hello-1", "hello-2"],
+    );
+    assert.equal(new Set(waiting.queue.items.map((item) => item.queueItemId)).size, 3);
+    harness.engine.projection.drainPendingDeltas();
+    for (let i = 0; i < 3; i++) {
+      harness.onEvent({
+        type: "message_start",
+        message: { role: "user", content: [{ type: "text", text: "hello" }] },
+      });
+      assert.equal(harness.engine.projection.buildSnapshot().queue.items.length, 2 - i);
+      harness.onEvent({
+        type: "message_end",
+        message: { role: "user", content: [{ type: "text", text: "hello" }] },
+      });
+      assert.equal(harness.engine.projection.buildSnapshot().queue.items.length, 2 - i);
+      streamText(harness, `reply-${i}`);
+      const input = harness
+        .rows()
+        .find((row) => row.kind === "userInput" && row.sourceCommandId === `hello-${i}`)!;
+      assert.deepEqual(assistantTextsOf(harness, input.turnId), [`reply-${i}`]);
+    }
+    harness.onEvent({ type: "agent_end" });
+    await flushAsync();
+    assert.ok(headerStates(harness).every((header) => header.state === "completedSuccess"));
+    assert.equal(harness.engine.projection.buildSnapshot().queue.items.length, 0);
+    harness.engine.projection.drainPendingDeltas();
+    const replay = harness.engine.projection.deltasBetween(
+      waiting.seq,
+      harness.engine.projection.seq,
+    );
+    assert.ok(
+      replay?.some(
+        (delta) => delta.op === "state.updated" && delta.patch.queue?.items.length === 0,
+      ),
+      "Web 重放与 Desktop 连续帧共享清空队列事实",
+    );
+  } finally {
+    await harness.engine.dispose();
+  }
+});
+
+test("队列分发失败移除对应等待项，不误删另一条相同输入", async () => {
+  let rejectNext = false;
+  const harness = createEngine({
+    sendOutcome: async (command) =>
+      command.type === "follow_up" && rejectNext
+        ? { success: false, error: "rejected" }
+        : { success: true },
+  });
+  try {
+    await harness.engine.sendText("A", "a", "client");
+    harness.onEvent({ type: "agent_start" });
+    await harness.engine.sendText("hello", "accepted", "client");
+    rejectNext = true;
+    await harness.engine.sendText("hello", "failed", "client");
+    harness.engine.projection.drainPendingDeltas();
+    assert.deepEqual(
+      harness.engine.projection.buildSnapshot().queue.items.map((item) => item.sourceCommandId),
+      ["accepted"],
+    );
+    const failed = harness
+      .rows()
+      .find((row) => row.kind === "turnHeader" && row.sourceCommandId === "failed");
+    assert.equal(failed?.kind === "turnHeader" ? failed.state : null, "failed");
+  } finally {
+    await harness.engine.dispose();
+  }
+});
+
+test("首条 hello 的迟到回显不消费另外两条相同文本", async () => {
+  const harness = createEngine();
+  try {
+    await harness.engine.sendText("hello", "first", "client");
+    harness.onEvent({ type: "agent_start" });
+    await harness.engine.sendText("hello", "second", "client");
+    await harness.engine.sendText("hello", "third", "client");
+    harness.onEvent({ type: "message_start", message: { role: "user", content: "hello" } });
+    assert.equal(harness.engine.projection.buildSnapshot().queue.items.length, 2);
+    harness.onEvent({ type: "message_start", message: { role: "user", content: "hello" } });
+    assert.deepEqual(
+      harness.engine.projection.buildSnapshot().queue.items.map((item) => item.sourceCommandId),
+      ["third"],
+    );
+  } finally {
+    await harness.engine.dispose();
+  }
+});
+
+test("首发接受到 agent_start 之间的输入仍走 follow_up", async () => {
+  const commands: string[] = [];
+  const harness = createEngine({
+    sendOutcome: async (command) => {
+      commands.push(command.type);
+      return { success: true };
+    },
+  });
+  try {
+    await harness.engine.sendText("hello", "first", "client");
+    assert.equal(await harness.engine.sendText("hello", "second", "client"), "queue");
+    assert.equal(await harness.engine.sendText("hello", "third", "client"), "queue");
+    assert.deepEqual(
+      commands.filter((type) => ["prompt", "follow_up"].includes(type)),
+      ["prompt", "follow_up", "follow_up"],
+    );
+    harness.onEvent({ type: "agent_start" });
+    assert.equal(harness.engine.projection.buildSnapshot().queue.items.length, 2);
+    harness.onEvent({ type: "message_start", message: { role: "user", content: "hello" } });
+    assert.equal(harness.engine.projection.buildSnapshot().queue.items.length, 2);
+  } finally {
+    await harness.engine.dispose();
+  }
+});
 
 function headerStates(harness: EngineHarness): { turnId: string; state: unknown }[] {
   return harness
@@ -500,7 +622,7 @@ test("XR1②：序号未变（无新输入）时对账语义保持——期间�
 
 // ── A4：排队时新输入 → agent_start 合并收口更早排队轮 ──
 
-test("A4：B 排队冻结 → 发 C → C 的 agent_start 把 B 收口为合并终态，输出归 C、无悬挂 running 轮", async () => {
+test("A4：新 run 开始不提前清空 B；缺少用户消息事件时终态对账仍收口", async () => {
   let followUp: string[] = [];
   const harness = createEngine({ state: () => ({ queuedMessages: { followUp } }) });
   try {
@@ -516,8 +638,8 @@ test("A4：B 排队冻结 → 发 C → C 的 agent_start 把 B 收口为合并�
     followUp = [];
     const cDelivery = await harness.engine.sendText("C 文本", "cmd-c", "client");
     assert.equal(cDelivery, "startNow");
-    harness.onEvent({ type: "agent_start" }); // C 的 run：B 被合并收口，不等待独立 agent_start
-    assert.equal(harness.engine.projection.hasQueuedTurns(), false);
+    harness.onEvent({ type: "agent_start" }); // run 开始不能冒充 B 已消费。
+    assert.equal(harness.engine.projection.hasQueuedTurns(), true);
     streamText(harness, "C 的回复");
     harness.onEvent({ type: "agent_end" });
     await flushAsync();

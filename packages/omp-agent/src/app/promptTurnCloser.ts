@@ -82,7 +82,9 @@ export class EnginePromptTurnCloser {
   ): Promise<"startNow" | "queue"> {
     const host = this.host;
     host.ensureTitleFromText(text);
-    const streaming = host.isStreaming();
+    // 修复：首发已接受但 agent_start 尚未到达也属于 busy；后续输入不能再走 prompt。
+    const streaming =
+      host.isStreaming() || host.projection().stateSnapshot.control.phase === "running";
     const guide = streaming && host.followupMode() === "guide";
     // 修复（A5）：terminal agent_end 可能落在 beginUserTurn(guide) 与 steer 响应之间；
     // 在途标记让收口逻辑把无内容行的 guide 轮转回排队（由下一个 agent_start 激活），

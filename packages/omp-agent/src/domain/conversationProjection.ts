@@ -5,6 +5,7 @@
 // 轮生命周期/队列对账在 queuedTurnReconcile.ts，增量合并在 deltaMerge.ts（架构 maxFileLines=400）。
 
 import { buildOmpSubagentViewId } from "./ompFrames.js";
+import { consumeQueuedInputOf, publishQueuedInputsOf } from "./queuedInputProjection.js";
 import {
   PROTOCOL_V4_LIMITS,
   type ConversationDelta,
@@ -23,7 +24,6 @@ import { mergeProjectionRows } from "./projectionRowMerge.js";
 import { OmpSubagentProjection } from "./ompSubagentDirectory.js";
 import { readProjectionFileChanges } from "./projectionFileChanges.js";
 import {
-  activateQueuedTurnOf,
   beginUserTurnOf,
   failAllTurnsOf,
   failCommandTurnOf,
@@ -130,9 +130,10 @@ export class ConversationProjection {
   // ── 轮次与输入（语义在 queuedTurnReconcile.ts，投影侧委托）──
   beginUserTurn(input: BeginTurnInput): void {
     beginUserTurnOf(this.queuedReconcileHost, input);
+    publishQueuedInputsOf(this.queuedReconcileHost);
   }
-  activateQueuedTurn(): void {
-    activateQueuedTurnOf(this.queuedReconcileHost);
+  activateQueuedTurn(text?: string): void {
+    consumeQueuedInputOf(this.queuedReconcileHost, text);
   }
   /** 本地命令没有 agent_start；上一轮结束后由完成事实激活并收口队首。 */
   finishQueuedLocalOnlyTurn(): boolean {
@@ -165,7 +166,6 @@ export class ConversationProjection {
     finishTurnOf(this.queuedReconcileHost, outcome, error);
   }
   // ── 队列对账与竞态收口（A3/A4/A5）──
-  /** 是否存在本地排队轮（A3 对账触发条件）。 */
   hasQueuedTurns(): boolean {
     return this.queuedTurns.length > 0;
   }
@@ -334,6 +334,7 @@ export class ConversationProjection {
 
   /** pending → delta log（合并连续同构 op）；返回合并后的列表。 */
   drainPendingDeltas(): ConversationDelta[] {
+    publishQueuedInputsOf(this.queuedReconcileHost);
     if (this.pending.length === 0) {
       return [];
     }

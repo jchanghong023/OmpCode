@@ -1,0 +1,19 @@
+
+> [electron] [2026-10-08 12:02:41.460] [pid:74244] [renderer] [v4-store] running subagent projection changed {
+  [electron]   delivery: 'deltas',
+  [electron]   nextBackgroundWorkIds: [],
+  [electron]   nextIds: [ 'omp-subagent:AcceptedApe@omp-session-muz0g3xj-dn-6ba445' ],
+  [electron]   nextSeq: 74,
+  [electron]   previousIds: [],
+  [electron]   previousSeq: 70,
+  [electron]   topic: 'conversation/omp-session-muz0g3xj-dn-6ba445'
+  [electron] }
+> [electron] [2026-10-08 12:02:48.056] [pid:74244] [renderer] [v4-store] running subagent projection changed {
+  [electron]   delivery: 'deltas',
+  [electron]   nextBackgroundWorkIds: [],
+  [electron]   nextIds: [],
+  [electron]   nextSeq: 80,
+  [electron]   previousIds: [ 'omp-subagent:AcceptedApe@omp-session-muz0g3xj-dn-6ba445' ],
+  [electron]   previousSeq: 74,
+  [electron]   topic: 'conversation/omp-session-muz0g3xj-dn-6ba445'
+  [electron] }

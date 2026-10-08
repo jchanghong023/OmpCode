@@ -59,10 +59,8 @@ export class OmpEventProjector {
     switch (event.type) {
       case "agent_start":
         this.projection.activateQueuedTurn();
-        // 修复（A4）：当前轮已占位而仍有排队轮——omp 核心把它们合并进本 run（停止边界
-        // dequeue followUp，见 agent-loop.ts/agent-session.ts），不会再有独立 agent_start，
-        // 必须收口为合并终态，否则永久 running。
-        this.projection.mergeQueuedTurnsIntoActive();
+        // 修复：新 run 开始不代表全部 follow_up 已消费；用户 message_start 才逐项激活，
+        // 缺少用户事件的旧核仍由 terminal get_state 对账收口，不能提前清空可见队列。
         this.streaming = true;
         this.stopRequested = false;
         return;
@@ -96,6 +94,10 @@ export class OmpEventProjector {
       }
       case "message_start":
       case "message_end":
+        if (event.type === "message_start" && event.message.role === "user") {
+          const content = event.message.content;
+          this.projection.activateQueuedTurn(typeof content === "string" ? content : textOfContent(content ?? []));
+        }
         if (event.message.role === "assistant") {
           // 供应商错误（如 401 未授权模型）记在 assistant 消息的 stopReason/errorStatus 上，
           // 不走 notice 事件；不消费就会以「成功 + 空回复」静默收口（UI 实测缺陷）。
