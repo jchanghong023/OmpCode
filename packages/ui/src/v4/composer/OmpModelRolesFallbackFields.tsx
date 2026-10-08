@@ -6,6 +6,15 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { usePlatform } from "@/hooks/usePlatform.js";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
 import { Button } from "@/components/ui/button.js";
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectLabel,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select.js";
 import { logger } from "@/logger.js";
 import type { OmpModelCatalogEntry } from "./ompModelCatalog.js";
 import {
@@ -13,6 +22,10 @@ import {
   selectOmpRoleLevelValue,
   selectOmpRoleModelValue,
 } from "./ompModelRoleValue.js";
+
+// Radix Select 不接受空选项值；占位值仅用于 UI，不进入角色配置。
+const UNCONFIGURED_VALUE = "__omp_unconfigured__";
+const DEFAULT_LEVEL_VALUE = "__omp_default_level__";
 
 const BUILTIN_OMP_ROLES = [
   "default",
@@ -186,43 +199,58 @@ export function OmpModelRolesFallbackFields({
                 <span className="w-24 shrink-0 text-ui-base font-medium text-foreground">
                   {item.role}
                 </span>
-                <select
-                  aria-label={item.role}
-                  className="h-8 min-w-0 flex-1 rounded-md border border-border bg-surface px-2 text-ui-base text-foreground"
-                  value={known ? parsed.modelPart : ""}
-                  onChange={(event) => handleRoleChange(item.role, event.target.value)}
+                <Select
+                  value={known ? parsed.modelPart : UNCONFIGURED_VALUE}
+                  onValueChange={(value) =>
+                    handleRoleChange(item.role, value === UNCONFIGURED_VALUE ? "" : value)
+                  }
                 >
-                  {!known ? (
-                    <option value="">
-                      {item.value || intl.formatMessage({ id: "settings.ompModelRoles.unset" })}
-                    </option>
-                  ) : null}
-                  {providerGroups.map((group) => (
-                    <optgroup key={group.label} label={group.label}>
-                      {group.models.map((model) => (
-                        <option key={model.value} value={model.value}>
-                          {model.label}
-                        </option>
-                      ))}
-                    </optgroup>
-                  ))}
-                </select>
-                {entry?.thoughtLevels?.length ? (
-                  <select
-                    aria-label={`${item.role} ${intl.formatMessage({ id: "settings.ompModelRoles.thinkingLevel" })}`}
-                    className="h-8 w-28 shrink-0 rounded-md border border-border bg-surface px-2 text-ui-base text-foreground"
-                    value={parsed.levelSuffix ?? ""}
-                    onChange={(event) => handleLevelChange(item.role, event.target.value)}
-                  >
-                    <option value="">
-                      {intl.formatMessage({ id: "settings.ompModelRoles.levelDefault" })}
-                    </option>
-                    {entry.thoughtLevels.map((level) => (
-                      <option key={level} value={level}>
-                        {level}
-                      </option>
+                  <SelectTrigger aria-label={item.role} size="lg" className="min-w-0 flex-1">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent position="popper" align="start">
+                    {!known ? (
+                      <SelectItem value={UNCONFIGURED_VALUE}>
+                        {item.value || intl.formatMessage({ id: "settings.ompModelRoles.unset" })}
+                      </SelectItem>
+                    ) : null}
+                    {providerGroups.map((group) => (
+                      <SelectGroup key={group.label}>
+                        <SelectLabel>{group.label}</SelectLabel>
+                        {group.models.map((model) => (
+                          <SelectItem key={model.value} value={model.value}>
+                            {model.label}
+                          </SelectItem>
+                        ))}
+                      </SelectGroup>
                     ))}
-                  </select>
+                  </SelectContent>
+                </Select>
+                {entry?.thoughtLevels?.length ? (
+                  <Select
+                    value={parsed.levelSuffix ?? DEFAULT_LEVEL_VALUE}
+                    onValueChange={(value) =>
+                      handleLevelChange(item.role, value === DEFAULT_LEVEL_VALUE ? "" : value)
+                    }
+                  >
+                    <SelectTrigger
+                      aria-label={`${item.role} ${intl.formatMessage({ id: "settings.ompModelRoles.thinkingLevel" })}`}
+                      size="lg"
+                      className="w-28 shrink-0"
+                    >
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent position="popper" align="start">
+                      <SelectItem value={DEFAULT_LEVEL_VALUE}>
+                        {intl.formatMessage({ id: "settings.ompModelRoles.levelDefault" })}
+                      </SelectItem>
+                      {entry.thoughtLevels.map((level) => (
+                        <SelectItem key={level} value={level}>
+                          {level}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 ) : null}
               </div>
             );

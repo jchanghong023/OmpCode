@@ -1,6 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
 import { DesktopCommandIds } from "@zcode/shared";
 import { Button } from "@/components/ui/button.js";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select.js";
 import { usePlatform } from "@/hooks/usePlatform.js";
 import { useToolbarConfigOptions } from "@/hooks/useZCodeConfig.js";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
@@ -76,22 +83,29 @@ export function OmpModelRolesSection({
         <label htmlFor="omp-profile-select" className="text-ui-base font-medium text-foreground">
           {intl.formatMessage({ id: "settings.ompProfile.label" })}
         </label>
-        <select
-          id="omp-profile-select"
-          aria-label={intl.formatMessage({ id: "settings.ompProfile.label" })}
-          className="h-8 max-w-sm rounded-md border border-border bg-surface px-2 text-ui-base text-foreground"
+        <Select
           value={selectedProfile}
           disabled={!profileInfo || savingProfile}
-          onChange={(event) => void changeProfile(event.target.value)}
+          onValueChange={(profile) => void changeProfile(profile)}
         >
-          {(profileInfo?.profiles ?? [selectedProfile]).map((profile) => (
-            <option key={profile} value={profile}>
-              {profile === "default"
-                ? intl.formatMessage({ id: "settings.ompProfile.default" })
-                : profile}
-            </option>
-          ))}
-        </select>
+          <SelectTrigger
+            id="omp-profile-select"
+            aria-label={intl.formatMessage({ id: "settings.ompProfile.label" })}
+            size="lg"
+            className="w-full max-w-sm"
+          >
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent position="popper" align="start">
+            {(profileInfo?.profiles ?? [selectedProfile]).map((profile) => (
+              <SelectItem key={profile} value={profile}>
+                {profile === "default"
+                  ? intl.formatMessage({ id: "settings.ompProfile.default" })
+                  : profile}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
         {profileError ? (
           <p className="text-ui-caption text-foreground-subtle">
             {intl.formatMessage({ id: "settings.ompProfile.error" })}
