@@ -39,7 +39,10 @@ export const SubagentSessionSidePane = memo(function SubagentSessionSidePane({
 
   return (
     <V4PaneConversationProvider scope={scope}>
-      <div className="flex size-full min-h-0 flex-col">
+      <div
+        data-subagent-session-id={tab.childSessionId}
+        className="flex size-full min-h-0 flex-col"
+      >
         {/* Fork（omp-project-mode.md）：omp 合成地址的显式控制入口（Z15）；其余保持只读。 */}
         {tab.childSessionId.startsWith("omp-subagent:") ? (
           <OmpSubagentControlBar

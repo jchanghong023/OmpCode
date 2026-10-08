@@ -1,0 +1,46 @@
+[
+  {
+    "event": "todo-running",
+    "running": 0,
+    "todos": [
+      {
+        "status": "inProgress",
+        "text": "UI_ALPHA"
+      },
+      {
+        "status": "pending",
+        "text": "UI_BETA"
+      },
+      {
+        "status": "pending",
+        "text": "UI_DONE"
+      }
+    ]
+  },
+  {
+    "event": "two-running",
+    "running": 2,
+    "todos": [
+      {
+        "status": "inProgress",
+        "text": "UI_ALPHA"
+      },
+      {
+        "status": "pending",
+        "text": "UI_BETA"
+      },
+      {
+        "status": "pending",
+        "text": "UI_DONE"
+      }
+    ]
+  },
+  {
+    "event": "live-completed",
+    "cardIds": [
+      "v4-subagent-open-side-pane-omp-subagent:UiAlpha@omp-session-muz2pxjq-a-8d35f2",
+      "v4-subagent-open-side-pane-omp-subagent:UiBeta@omp-session-muz2pxjq-a-8d35f2"
+    ],
+    "result": "passed"
+  }
+]

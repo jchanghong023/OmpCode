@@ -30,7 +30,7 @@ export interface ProjectionAState {
   backgroundWorks: import("@zcode/shared/zcode-protocol-v4").BackgroundWorkSummary[];
   subagents: SubagentProjectionState;
   goal: null;
-  plan: null;
+  plan: import("@zcode/shared/zcode-protocol-v4").PlanState | null;
   workspaceHookAdmission: null;
 }
 

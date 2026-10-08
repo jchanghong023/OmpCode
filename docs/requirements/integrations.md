@@ -11,7 +11,9 @@
 - 每个 omp 会话进程在 ready 后订阅 `subagent_lifecycle` / `subagent_progress` / `subagent_event`。适配器校验并投影同一子代理 ID 的状态；重连或冷恢复从 `get_subagents` 取快照，记录从 `get_subagent_messages` 读取。订阅失败显式降级并记录错误，不能假装没有子代理。
 - omp 的 `get_subagents` 只包含当前进程内作业；完全重启后从父会话 `task`/`wait` 条目还原子代理 ID、状态，并从该会话同名子目录读取子代理 JSONL 记录。读取限制在已验证的子代理文件名和当前会话目录内。
 - `ConversationEngine` 是会话子代理投影的唯一 owner；UI 只消费已有 v4 `subagents` 与 `subagent` 行，不创建本地事实源。兼顾 `desktop-continuous` 与 `web-remote-replayable` 的 snapshot / delta 顺序。
-辅助对话的所有权、历史与无工具边界只在 [OMP 辅助对话](omp-core-integration.md#辅助对话原生-btw唯一需求权威) 维护，不将 BTW 当 task 子代理或普通会话。
+- OMP 子代理复用 ZCode 右上角独立「智能体」状态面板、输入区计数与主对话 Agent 卡片。每个子代理按真实 ID 单独展示任务与状态，并通过带父会话归属的 `childSessionId` 打开已有只读侧栏。一个 `task` 启动多个子代理时不得按到达顺序配对或合并成一个代理；已结束后仍保留面板的目录入口和胶囊摘要，冷恢复后同样可打开详情。
+- 主对话的子代理卡片保留启动轮归属。已有真实子代理行时，通过 OMP 提供的 `parentToolCallId` 替代同一父 task 的泛化卡片；没有关联依据或父工具失败时仍保留其详情，不靠名称、到达顺序或超时推断关联。
+  辅助对话的所有权、历史与无工具边界只在 [OMP 辅助对话](omp-core-integration.md#辅助对话原生-btw唯一需求权威) 维护，不将 BTW 当 task 子代理或普通会话。
 
 ### GUI 验收遗留问题
 
@@ -23,6 +25,11 @@
 omp task / 子代理事件 → OmpProcess 校验 → ConversationEngine 权威投影
   → v4 snapshot / delta → SessionPane 原有子代理状态面板与记录入口
 冷恢复 / 重连 → get_subagents + get_subagent_messages → 同一投影
+
+omp todo 成功结果 → ConversationEngine 的同一会话投影 owner
+  → 工具行 output.plan + 会话 plan → 同一 seq 的 snapshot / delta
+  → 原有时间线工具详情（按显示开关）+ 独立待办面板（持续显示）
+冷恢复 → 最后一条有效 todo 结果 → 同一 plan 状态
 
 @ 输入 → MentionPlugin 能力分组 → omp 文件搜索 → 文件引用 chip
 ```
@@ -38,6 +45,8 @@ omp task / 子代理事件 → OmpProcess 校验 → ConversationEngine 权威�
 4. 身份迁移按 [会话恢复要求](session-recovery.md) 验收。
 5. 项目输入 `@a.txt` 能选择文件，无 `plugins/referenceCatalog` 原始错误；ZCode 原生模式仍保留现有插件引用行为。
 6. 数据目录文案按 [全局隔离要求](FORK.md) 验收。
+7. 真实 GUI 启动两个不同任务的子代理：独立智能体面板与输入区计数显示两个运行项，主对话各有 Agent 卡片；分别打开正确详情。结束后运行计数归零、已结束目录保留两项；冷恢复仍可打开同一记录。无 Git/Goal/Todo 等其他状态时，已结束目录入口仍可见。
+8. OMP `todo` 的成功工具结果将完整 phases 清单投影到会话 v4 `plan`，独立待办面板持续显示任务状态与完成进度，不受「显示待办」工具行开关影响。后续更新替换同一清单；失败或畸形结果不覆盖已有清单，明确空清单清除面板。冷恢复及 Web 快照/增量恢复得到相同清单；GUI 可观察 pending → inProgress → completed，并在工具工作组折叠时仍可查看。
 
 ## 扩展、自动化与附件边界
 
@@ -59,6 +68,7 @@ omp task / 子代理事件 → OmpProcess 校验 → ConversationEngine 权威�
 
 - omp `confirm` 在会话交互面提供接受和拒绝按钮，并能按原请求 ID 回答。未完成交互不得显示无应答入口的遮罩。
 - omp 原生 `todo` 工具沿用待办工具身份和「显示待办」设置；`task` 卡片显示实际 agent 类型及任务文本。工具 UI 只读适配器投影，不维护第二套状态。
+- 「显示待办」仅控制时间线中的 todo 工具详情；右上角独立待办面板读取同一 owner 从成功结果派生的 v4 `plan`，不由 UI 从工具文本重建。实时顺序为工具结果 → 工具行与 plan 状态更新 → snapshot/delta → 原有面板；冷恢复从最后一条有效 todo 工具结果重建同一状态，不读取或修改 OMP 配置。
 - 设置 MCP 页的启用状态按 omp 配置语义计算：服务器 `enabled: false` 与用户级跨来源禁用/强制启用名单均生效；不把配置存在误报成已连接。
 - `confirm` 接受和拒绝均能收口；todo 默认隐藏、开启后显示清单；并发 task 可按 agent 与任务区分；不支持的反馈不出现空转操作。
 - MCP profile 与项目配置中的禁用和跨来源名单显示与 omp 一致；不显示配置里的密钥或命令参数。

@@ -83,6 +83,7 @@ import { WorkflowRetuneRow } from "@/ToolCallBlocks/renderers/WorkflowRetuneRow.
 import { workflowRunSettingsCeiling } from "@/components/workflow-timeline/workflowRunSettings.js";
 import { isAmendWorkflowToolCall } from "@/lib/workflowToolNames.js";
 import { ToolCallBlock } from "@/ToolCallBlocks.js";
+import { OmpSubagentRow } from "@/v4/OmpSubagentRow.js";
 import { resolveWorkflowRunOpenToolCallId } from "@/v4/workflowRunCardJoin.js";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
 import { useOptionalPlatform } from "@/hooks/usePlatform.js";
@@ -2173,7 +2174,11 @@ function ConversationRowViewImpl({
       }
       return <ToolCallRowView row={row} context={context} />;
     case "subagent":
-      return <SubagentRowView row={row} />;
+      return row.childSessionId?.startsWith("omp-subagent:") ? (
+        <OmpSubagentRow row={row} context={context} />
+      ) : (
+        <SubagentRowView row={row} />
+      );
     case "artifact":
       return <ArtifactRowView row={row} />;
     default:

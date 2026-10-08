@@ -445,6 +445,8 @@ test("omp 子代理事件投影为父会话的状态与可见记录，重复结�
     const rows = [...harness.collectRows().values()].filter((row) => row.kind === "subagent");
     assert.equal(rows.length, 1);
     assert.equal(rows[0]?.subagentType, "scout");
+    assert.equal(rows[0]?.childSessionId, `omp-subagent:fake-child-1@${sessionId}`);
+    assert.equal(rows[0]?.parentToolCallId, "task-parent");
     const subagentDeltas = harness
       .conversationFrames()
       .flatMap((frame) => (frame.payload.kind === "deltas" ? (frame.payload.deltas ?? []) : []))

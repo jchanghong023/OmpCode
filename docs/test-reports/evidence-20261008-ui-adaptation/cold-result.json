@@ -1,0 +1,10 @@
+[
+  {
+    "event": "cold-completed",
+    "cardIds": [
+      "v4-subagent-open-side-pane-omp-subagent:UiAlpha@01a119e7-8875-733e-9f53-9b842102063b",
+      "v4-subagent-open-side-pane-omp-subagent:UiBeta@01a119e7-8875-733e-9f53-9b842102063b"
+    ],
+    "result": "passed"
+  }
+]

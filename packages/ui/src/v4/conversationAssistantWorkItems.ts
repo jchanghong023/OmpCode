@@ -222,8 +222,8 @@ function pairSubagentRows(rows: readonly AssistantWorkRow[]): {
       agentToolRows.push(row);
       agentToolByTurnAndCallId.set(`${row.turnId}\0${row.toolCallId}`, row);
     } else if (row.kind === "subagent") {
-      // omp 子代理记录留在父会话行内展开；没有可订阅的 ZCode child session 时不可配对并隐藏。
-      if (!row.childSessionId) continue;
+      // OMP 一个 task 可启动多个代理；它们独立复用 Agent 卡片，不能套用一对一/FIFO 配对。
+      if (!row.childSessionId || row.childSessionId.startsWith("omp-subagent:")) continue;
       subagentRows.push(row);
     }
   }
@@ -295,6 +295,15 @@ export function buildAssistantWorkRenderItems(
     return !shouldDeferUnclassifiedShellToolCall(row);
   });
   const { subagentByAgentToolRowId, claimedSubagentRowIds } = pairSubagentRows(visibleRows);
+  const ompTaskParents = new Set(
+    visibleRows.flatMap((row) =>
+      row.kind === "subagent" &&
+      row.childSessionId?.startsWith("omp-subagent:") &&
+      row.parentToolCallId
+        ? [`${row.turnId}\0${row.parentToolCallId}`]
+        : [],
+    ),
+  );
   const preparedRows = prepareCuaGroups(
     visibleRows,
     enableCuaGrouping,
@@ -321,6 +330,15 @@ export function buildAssistantWorkRenderItems(
       continue;
     }
     if (isToolCallRow(row)) {
+      // 修复：有真实子代理行后不再重复渲染泛化 task 卡片；父工具失败仍保留错误详情。
+      if (
+        row.toolName === "task" &&
+        row.status !== "error" &&
+        ompTaskParents.has(`${row.turnId}\0${row.toolCallId}`)
+      ) {
+        index += 1;
+        continue;
+      }
       const pairedSubagent = subagentByAgentToolRowId.get(row.rowId);
       if (pairedSubagent) {
         items.push({

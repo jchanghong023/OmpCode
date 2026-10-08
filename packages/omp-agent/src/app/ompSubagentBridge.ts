@@ -14,6 +14,7 @@ type RecordState = {
   summaryText: string;
   startedAt: number;
   transcriptText?: string;
+  parentToolCallId?: string;
 };
 
 /**
@@ -62,6 +63,7 @@ export class OmpSubagentBridge {
           : subagentStatus(payload.progress.status ?? "running");
       this.update(payload.progress.id, {
         agent: payload.agent,
+        parentToolCallId: payload.parentToolCallId ?? prior?.parentToolCallId,
         status,
         summaryText: payload.assignment ?? payload.task ?? prior?.summaryText ?? payload.agent,
         startedAt: prior?.startedAt ?? Date.now(),
@@ -75,6 +77,7 @@ export class OmpSubagentBridge {
     const status = subagentStatus(payload.status);
     this.update(payload.id, {
       agent: payload.agent,
+      parentToolCallId: payload.parentToolCallId ?? prior?.parentToolCallId,
       status,
       summaryText: payload.description ?? prior?.summaryText ?? payload.agent,
       startedAt: prior?.startedAt ?? Date.now(),
@@ -133,6 +136,7 @@ export class OmpSubagentBridge {
       prior?.status && prior.status !== "running" ? prior.status : subagentStatus(snapshot.status);
     this.update(snapshot.id, {
       agent: snapshot.agent,
+      parentToolCallId: snapshot.parentToolCallId ?? prior?.parentToolCallId,
       status,
       summaryText:
         snapshot.description ??

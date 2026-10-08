@@ -1,4 +1,5 @@
 import type { ZCodePlanStep } from "@zcode/shared";
+import type { ConversationRow, PlanState } from "@zcode/shared/zcode-protocol-v4";
 
 /** omp todo 的权威 phases → GUI 清单投影；只消费工具结果，不猜测 op 输入。 */
 export function ompTodoPlan(details: unknown): ZCodePlanStep[] | null {
@@ -41,5 +42,35 @@ export function ompTodoPlan(details: unknown): ZCodePlanStep[] | null {
       if (steps.length > 200) return null;
     }
   }
-  return steps.length > 0 ? steps : null;
+  return steps;
+}
+
+/** 修复依据：独立待办面板消费 v4 plan，不能只把 OMP 清单留在工具输出中。 */
+export function ompTodoState(row: ConversationRow): PlanState | null | undefined {
+  if (row.kind !== "toolCall" || row.toolName !== "todo" || row.status !== "success")
+    return undefined;
+  const steps = row.output?.plan;
+  if (!steps) return undefined;
+  if (steps.length === 0) return null;
+  return {
+    items: steps.map((step) => ({
+      id: step.id,
+      content: step.title,
+      status: step.status === "in_progress" ? "inProgress" : step.status,
+    })),
+    updatedAt: row.endedAt ?? row.createdAt,
+  };
+}
+
+/** 冷恢复与记录替换取最后有效结果；失败结果不得清空已确认的清单。 */
+export function ompTodoStateFromRows(rows: Iterable<ConversationRow>): PlanState | null {
+  let plan: PlanState | null = null;
+  let lastRowId = -1;
+  for (const row of rows) {
+    const next = ompTodoState(row);
+    if (next === undefined || row.rowId <= lastRowId) continue;
+    plan = next;
+    lastRowId = row.rowId;
+  }
+  return plan;
 }

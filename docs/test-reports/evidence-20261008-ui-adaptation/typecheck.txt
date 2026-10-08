@@ -1,0 +1,7 @@
+
+> zcode@3.14.3 typecheck D:\code1111111111\forkZcode
+> tsc -b packages/rpc packages/provider packages/provider-node packages/shared packages/omp-agent packages/services packages/client packages/server packages/zcode-server-cli packages/ui packages/web packages/desktop/tsconfig.host.json
+
+packages/desktop/src/host/index.ts(2062,7): error TS7053: Element implicitly has an 'any' type because expression of type '"debug" | "warn"' can't be used to index type '{ info: (...args: unknown[]) => void; warn: (...args: unknown[]) => void; error: (...args: unknown[]) => void; }'.
+  Property 'debug' does not exist on type '{ info: (...args: unknown[]) => void; warn: (...args: unknown[]) => void; error: (...args: unknown[]) => void; }'.
+ ELIFECYCLE  Command failed with exit code 2.

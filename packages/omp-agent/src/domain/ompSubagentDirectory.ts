@@ -50,6 +50,7 @@ type SubagentInput = {
   summaryText: string;
   startedAt?: number;
   transcriptText?: string;
+  parentToolCallId?: string;
 };
 
 /** 子代理行 ID 与状态的单一 owner；父 ConversationProjection 提供行/状态写入出口。 */
@@ -75,6 +76,15 @@ export class OmpSubagentProjection {
     const state = this.host.state();
     if (state.availability === availability) return;
     this.host.patchState({ ...state, availability, revision: state.revision + 1 });
+  }
+
+  /** 冷历史与实时行使用同一父会话地址，复用 ZCode 原有详情入口。 */
+  withViewId(row: ConversationRow): ConversationRow {
+    if (row.kind !== "subagent" || !row.entityId?.startsWith("omp-subagent:")) return row;
+    return {
+      ...row,
+      childSessionId: this.host.viewIdOf(row.entityId.slice("omp-subagent:".length)),
+    };
   }
 
   hydrate(rows: readonly ConversationRow[]): SubagentProjectionState {
@@ -115,22 +125,29 @@ export class OmpSubagentProjection {
   upsert(input: SubagentInput): void {
     const rowId = this.rowIds.get(input.id);
     const prior = rowId === undefined ? null : this.host.rowAt(rowId);
+    const parentToolCallId =
+      input.parentToolCallId ?? (prior?.kind === "subagent" ? prior.parentToolCallId : undefined);
     if (
       prior?.kind === "subagent" &&
       prior.status === input.status &&
       prior.summaryText === input.summaryText &&
+      prior.parentToolCallId === parentToolCallId &&
       prior.transcriptText === input.transcriptText
     )
       return;
-    const turn = this.host.turnAnchor();
+    const turn = prior ?? this.host.turnAnchor();
     if (turn) {
       const nextRowId = rowId ?? this.host.nextRowId();
       const row: SubagentRow = {
         rowId: nextRowId,
-        turnId: turn.turnId,
-        productTurnId: turn.productTurnId,
+        // 修复：后台代理跨轮完成时仍归属启动轮，不能把旧卡片挪进当前用户轮。
+        turnId: prior?.turnId ?? turn.turnId,
+        productTurnId: prior?.productTurnId ?? turn.productTurnId,
         entityId: `omp-subagent:${input.id}`,
         kind: "subagent",
+        // 修复：目录已有可订阅地址，但主对话行缺失，导致只显示摘要而无法打开 Agent 卡片。
+        childSessionId: this.host.viewIdOf(input.id),
+        ...(parentToolCallId ? { parentToolCallId } : {}),
         subagentType: input.agent,
         status: input.status,
         summaryText: input.summaryText,
