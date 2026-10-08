@@ -1,0 +1,5 @@
+{
+  "passed": ["plan-approval/rejection"],
+  "coldModes": ["desktop-continuous", "web-remote-replayable"],
+  "result": "passed"
+}

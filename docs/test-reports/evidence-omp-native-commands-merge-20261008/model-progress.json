@@ -1,0 +1,21 @@
+{
+  "session": "omp-session-muzpc8o3-2-7513d7",
+  "selected": ["magic", "loop", "goal", "compact", "plan"],
+  "passed": [
+    "ultrathink",
+    "orchestrate",
+    "workflowz",
+    "fullsend",
+    "body-ultrathink",
+    "skill:*",
+    "loop",
+    "goal",
+    "compact-native",
+    "compact",
+    "plan-approval/rejection"
+  ],
+  "priorRunPassed": [],
+  "currentPhase": "complete",
+  "result": "passed",
+  "updatedAt": "2026-10-08T15:40:31.384Z"
+}

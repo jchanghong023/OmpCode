@@ -16,6 +16,8 @@ export interface OmpProjectorHooks {
   steerGuideCommandId?: () => string | null;
   /** A3：queue_update 事件到达（引擎 debounce 后回读 get_state 对账本地排队轮）。 */
   onQueueUpdate?: () => void;
+  /** 可见 custom 的显示与缺失 journal 的派生保存，由同一事实桥拥有。 */
+  onCustomMessage?: (message: unknown) => void;
 }
 
 export class OmpEventProjector {
@@ -58,7 +60,7 @@ export class OmpEventProjector {
   handleEvent(event: OmpSessionEventFrame): void {
     switch (event.type) {
       case "agent_start":
-        this.projection.activateQueuedTurn();
+        this.projection.activateQueuedTurn(undefined, true);
         // 修复：新 run 开始不代表全部 follow_up 已消费；用户 message_start 才逐项激活，
         // 缺少用户事件的旧核仍由 terminal get_state 对账收口，不能提前清空可见队列。
         this.streaming = true;
@@ -98,6 +100,7 @@ export class OmpEventProjector {
           const content = event.message.content;
           this.projection.activateQueuedTurn(
             typeof content === "string" ? content : textOfContent(content ?? []),
+            true,
           );
         }
         if (event.message.role === "assistant") {
@@ -116,7 +119,8 @@ export class OmpEventProjector {
           }
         }
         if (event.type === "message_end" && event.message.role === "custom") {
-          this.projection.appendCustomMessage(event.message);
+          if (this.hooks.onCustomMessage) this.hooks.onCustomMessage(event.message);
+          else this.projection.appendCustomMessage(event.message);
         }
         return;
       case "message_update":

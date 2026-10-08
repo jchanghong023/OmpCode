@@ -167,3 +167,129 @@ test("Host 停止读取时 Agent 缓冲有界并明确关闭", () => {
   server.dispose();
   output.destroy();
 });
+
+test("实际 NDJSON：同会话 pending send 等待回答时 resolveInteraction 先到达并释放 ACK", async () => {
+  const input = new PassThrough();
+  const output = new PassThrough();
+  const messages: Record<string, unknown>[] = [];
+  const handled: string[] = [];
+  const forwarded: unknown[] = [];
+  output.on("data", (chunk: Buffer) => {
+    for (const line of chunk.toString().trim().split("\n")) messages.push(JSON.parse(line));
+  });
+  let releaseSend!: () => void;
+  const pendingSend = new Promise<void>((resolve) => {
+    releaseSend = resolve;
+  });
+  const server = new ProtocolServer({
+    input,
+    output,
+    async handleRequest(method, params) {
+      assert.equal(method, "v4/command");
+      const envelope = params as { type: string };
+      forwarded.push(params);
+      handled.push(envelope.type);
+      if (envelope.type === "sendText") await pendingSend;
+      if (envelope.type === "resolveInteraction") releaseSend();
+      return { handled: envelope.type };
+    },
+  });
+  const send = (id: number, type: string) =>
+    input.write(
+      `${JSON.stringify({ id, method: "v4/command", params: { sessionId: "s", commandId: `c${id}`, type, payload: {} } })}\n`,
+    );
+  server.start();
+  try {
+    send(1, "sendText");
+    send(2, "renameSession");
+    await nextTurn();
+    assert.deepEqual(handled, ["sendText"]);
+    assert.deepEqual(messages, []);
+    send(3, "resolveInteraction");
+    await nextTurn();
+    assert.deepEqual(handled, ["sendText", "resolveInteraction", "renameSession"]);
+    assert.deepEqual(messages.map((message) => message.id).sort(), [1, 2, 3]);
+    assert.deepEqual(forwarded[1], {
+      sessionId: "s",
+      commandId: "c3",
+      type: "resolveInteraction",
+      payload: {},
+    });
+  } finally {
+    releaseSend();
+    input.end();
+    server.dispose();
+  }
+});
+
+test("实际 NDJSON：stop 不等同会话 send ACK，普通写入仍保序", async () => {
+  const input = new PassThrough();
+  const output = new PassThrough();
+  const messages: Record<string, unknown>[] = [];
+  const handled: string[] = [];
+  output.on("data", (chunk: Buffer) => {
+    for (const line of chunk.toString().trim().split("\n")) messages.push(JSON.parse(line));
+  });
+  let releaseSend!: () => void;
+  const pendingSend = new Promise<void>((resolve) => {
+    releaseSend = resolve;
+  });
+  const server = new ProtocolServer({
+    input,
+    output,
+    async handleRequest(method, params) {
+      const envelope = params as { type: string };
+      handled.push(`${method}:${envelope.type}`);
+      if (envelope.type === "sendText") await pendingSend;
+      return {};
+    },
+  });
+  const request = (id: number, method: string, type: string) =>
+    input.write(`${JSON.stringify({ id, method, params: { sessionId: "s", type } })}\n`);
+  server.start();
+  try {
+    request(1, "v4/command", "sendText");
+    request(2, "v4/command", "renameSession");
+    // 任意其他 method 携带 type:stop 不构成控制回路。
+    request(4, "session/rename", "stop");
+    input.write(
+      `${JSON.stringify({
+        id: 5,
+        method: "v4/command",
+        params: {
+          sessionId: "s",
+          commandId: "extra-envelope",
+          clientId: "client",
+          type: "sendText",
+          payload: { text: "next" },
+          issuedAt: Date.now(),
+          envelope: { type: "stop" },
+        },
+      })}\n`,
+    );
+    request(3, "v4/command", "stop");
+    await nextTurn();
+    assert.deepEqual(handled, ["v4/command:sendText", "v4/command:stop"]);
+    assert.deepEqual(
+      messages.map((message) => message.id),
+      [3],
+    );
+    releaseSend();
+    await nextTurn();
+    assert.deepEqual(handled, [
+      "v4/command:sendText",
+      "v4/command:stop",
+      "v4/command:renameSession",
+      "session/rename:stop",
+      "v4/command:sendText",
+    ]);
+    assert.deepEqual(
+      messages.map((message) => message.id),
+      [3, 1, 2, 4, 5],
+    );
+  } finally {
+    releaseSend();
+    input.end();
+    server.dispose();
+  }
+});

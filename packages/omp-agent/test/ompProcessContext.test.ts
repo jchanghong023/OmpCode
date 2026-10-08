@@ -107,3 +107,53 @@ test("目录 start 等待异步 v3 协商 ACK，ready 同批目录更新不丢�
     await directory.dispose();
   }
 });
+
+test(
+  "/context ACK 前后交错的原生业务输出仍交付，只有完整报告进入侧信道",
+  { timeout: 5000 },
+  async () => {
+    const core = `
+    const {createInterface}=require("node:readline");
+    const out=value=>process.stdout.write(JSON.stringify(value)+"\\n");
+    out({type:"ready",protocolVersion:1});
+    createInterface({input:process.stdin}).on("line",line=>{
+      const command=JSON.parse(line);
+      const response={type:"response",id:command.id,command:command.type,success:true,data:{}};
+      if(command.type==="prompt" && command.message==="/context") {
+        const frames=[
+          {type:"command_output",text:"Plan mode paused."},
+          {type:"command_output",text:"Context window: 200000 tokens (0% used)\\n  Messages [░░░░] 0% 312 tokens\\n  Free [████] 99% 199688 tokens"},
+          {...response,data:{agentInvoked:false}},
+          {type:"command_output",text:"Goal mode resumed."}
+        ];
+        process.stdout.write(frames.map(frame=>JSON.stringify(frame)).join("\\n")+"\\n");
+        setImmediate(()=>out({type:"command_output",text:"Plan mode disabled."}));
+      } else out(response);
+    });
+  `;
+    const output: string[] = [];
+    const processPort = createOmpProcessFactory(process.execPath, ["-e", core, "--"]).create({
+      cwd: process.cwd(),
+      onEvent() {},
+      onUiRequest() {},
+      onExit() {},
+      onCommandOutput: ({ text }) => output.push(text),
+    });
+    try {
+      await processPort.start();
+      assert.deepEqual(await processPort.readContextReport(), {
+        contextWindow: 200000,
+        entries: [
+          { label: "Messages", tokens: 312 },
+          { label: "Free", tokens: 199688 },
+        ],
+      });
+      const deadline = Date.now() + 1000;
+      while (output.length < 3 && Date.now() < deadline)
+        await new Promise((done) => setTimeout(done, 10));
+      assert.deepEqual(output, ["Plan mode paused.", "Goal mode resumed.", "Plan mode disabled."]);
+    } finally {
+      await processPort.dispose();
+    }
+  },
+);

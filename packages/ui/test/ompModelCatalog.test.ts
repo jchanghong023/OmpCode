@@ -46,3 +46,23 @@ test("已有会话从自身投影恢复模型和思考档位", () => {
     },
   );
 });
+
+test("原生命令临时模型的冷投影优先于旧提交的稀疏模型意图", () => {
+  assert.deepEqual(
+    ompSessionConfigToSelection({
+      provider: "mock",
+      model: "plan-model",
+      thought: "high",
+      modelSelection: {
+        providerId: "mock",
+        modelId: "execution-model",
+        options: { reasoningLevel: "max" },
+      },
+    }),
+    {
+      providerId: "mock",
+      modelId: "plan-model",
+      options: { reasoningLevel: "high" },
+    },
+  );
+});

@@ -15,6 +15,7 @@ import {
 } from "react";
 import { ZCODE_AGENT_PROVIDER, resolveExecutionState } from "@zcode/shared";
 import { applyComposerPlanTransition } from "@/v4/composer/composerPlanTransition.js";
+import { applyOmpComposerModelSync } from "@/v4/composer/OmpComposerModelSync.js";
 import type {
   ZCodeConfigOption,
   ModelSelection,
@@ -200,6 +201,7 @@ export function useDraftConfigControl(params: {
           };
   }
   if (sessionConfig) {
+    draft = applyOmpComposerModelSync(draft, sessionConfig);
     draft = applyComposerPlanTransition(draft, sessionConfig.planTransition);
     draft = applyComposerPermissionGrant(draft, sessionConfig.permissionGrant);
   }
@@ -289,13 +291,19 @@ export function useDraftConfigControl(params: {
     [currentState],
   );
   const updateDraftConfig = useCallback(
-    (update: (current: Partial<SessionConfigState>) => Partial<SessionConfigState>) => {
+    (
+      update: (current: Partial<SessionConfigState>) => Partial<SessionConfigState>,
+      edited: "model" | "thought",
+    ) => {
       const next = update(draftConfigRef.current);
       const mode = submissionModeSchema.safeParse(next.mode);
       updateComposerDraft((current) => ({
         ...current,
         mode: mode.success ? mode.data : current.mode,
         modelSelection: next.modelSelection,
+        ...(edited === "model"
+          ? { ompModelEdited: true as const, ompThoughtEdited: undefined }
+          : { ompThoughtEdited: true as const }),
         // 用户已经显式改选，不能再由导入时等待的默认初始化覆盖。
         ...(current.initializeFromNewTask
           ? { mode: mode.success ? mode.data : "build", initializeFromNewTask: undefined }
@@ -319,7 +327,14 @@ export function useDraftConfigControl(params: {
         // 自动对应只在本次提交被接纳后固定；旧 ACK 不得覆盖期间的新意图或新 scope。
         if (stateRef.current !== currentState || stateRef.current.draft.modelSelection !== original)
           return;
-        updateComposerDraft((current) => ({ ...current, modelSelection: selection }));
+        updateComposerDraft((current) => ({
+          ...current,
+          modelSelection: selection,
+          // accepted 已提交这份意图；以它作比较游标，随后原生临时模型事实可回投。
+          ompModelBaseline: selection,
+          ompModelEdited: undefined,
+          ompThoughtEdited: undefined,
+        }));
       };
     },
     [currentState, updateComposerDraft],
@@ -345,6 +360,9 @@ export function useDraftConfigControl(params: {
       updateComposerDraft((current) => ({
         ...replacement,
         lastPermissionGrantId: current.lastPermissionGrantId,
+        ompModelBaseline: current.ompModelBaseline,
+        ompModelEdited: true,
+        ompThoughtEdited: true,
         updatedAt: Date.now(),
       }));
     },
@@ -493,7 +511,7 @@ export function useDraftConfigControl(params: {
         workspacePath,
         workspaceIdentity: workspaceIdentity ?? null,
       });
-      updateDraftConfig((current) => applyDraftModelSelection(current, modelSelection));
+      updateDraftConfig((current) => applyDraftModelSelection(current, modelSelection), "model");
     },
     [ompCatalog, updateDraftConfig, workspaceIdentity, workspacePath],
   );
@@ -521,7 +539,7 @@ export function useDraftConfigControl(params: {
           },
           thought,
         };
-      });
+      }, "thought");
     },
     [updateDraftConfig],
   );

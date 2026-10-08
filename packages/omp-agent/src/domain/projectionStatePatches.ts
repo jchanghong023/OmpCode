@@ -9,6 +9,26 @@ import type {
 import type { ProjectionAState, TurnOutcome } from "./projectionTypes.js";
 import type { OmpContextReport } from "./ompContextReport.js";
 
+/** 等待交互也能停止；只派生停止可用性，不推断背景命令或模型轮的终态。 */
+export function withInteractionStopControl(state: ProjectionAState, patch: StatePatch): StatePatch {
+  if (!patch.control && !patch.pendingInteractions) return patch;
+  const pending = patch.pendingInteractions ?? state.pendingInteractions;
+  if (pending.length === 0 && state.pendingInteractions.length === 0) return patch;
+  const control = patch.control ?? state.control;
+  const running = control.phase === "running";
+  const stopState =
+    pending.length > 0
+      ? control.stopState === "stopping"
+        ? "stopping"
+        : "stoppable"
+      : running
+        ? control.stopState
+        : "idle";
+  const canStop = pending.length > 0 ? stopState !== "stopping" : running ? control.canStop : false;
+  if (canStop === control.canStop && stopState === control.stopState) return patch;
+  return { ...patch, control: { ...control, canStop, stopState } };
+}
+
 /** AskUserQuestion 首次交互暂停倒计时：autoResolution 置 snoozed；未登记或已暂停返回 null。 */
 export function snoozePendingInteractions(
   interactions: PendingInteraction[],

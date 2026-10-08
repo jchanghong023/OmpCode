@@ -9,10 +9,11 @@ import { homedir, tmpdir } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { resolveOmpProfileFromEnv } from "@zcode/shared/omp-profile";
-import { resolveOmpAgentDir } from "@zcode/shared/node";
+import { resolveOmpAgentDir, resolveOmpCodeDataRootFromEnv } from "@zcode/shared/node";
 import type { OmpStorePort, OmpStoreSessionSummary } from "../app/ports.js";
 import { titleFromOmpEntries } from "../domain/coldHistory.js";
 import { logger } from "./logger.js";
+import { createOmpCommandOutputStore } from "./OmpCommandOutputStore.js";
 import { safeInteractionAgentId } from "../domain/OmpInteractionIds.js";
 
 /**
@@ -93,6 +94,10 @@ function encodeRelative(prefix: string, relativePath: string): string {
 }
 
 export function createOmpStore(env: NodeJS.ProcessEnv = process.env): OmpStorePort {
+  const commandOutputs = createOmpCommandOutputStore(
+    ompCommandOutputsRoot(env),
+    env.ZCODE_WORKSPACE_IDENTITY,
+  );
   const sessionDirectory = async (cwd: string) =>
     join(sessionsRoot(env), await encodeSessionDirName(cwd));
   const summaryOf = async (
@@ -126,14 +131,19 @@ export function createOmpStore(env: NodeJS.ProcessEnv = process.env): OmpStorePo
     }
   };
   return {
+    appendCommandOutput: commandOutputs.appendCommandOutput,
+    readCommandOutputs: commandOutputs.readCommandOutputs,
+    associateCommandOutputs: commandOutputs.associateCommandOutputs,
+    deleteCommandOutputs: commandOutputs.deleteCommandOutputs,
+    flushCommandOutputs: commandOutputs.flushCommandOutputs,
     async listSessions(cwd: string): Promise<OmpStoreSessionSummary[]> {
       const directory = await sessionDirectory(cwd);
       let names: string[];
       try {
         names = await readdir(directory);
       } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
-        throw error;
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        names = [];
       }
       const files = names
         .filter((name) => name.endsWith(".jsonl"))
@@ -151,7 +161,22 @@ export function createOmpStore(env: NodeJS.ProcessEnv = process.env): OmpStorePo
       for (const summary of summaries.slice(0, 20)) {
         await withTitle(summary);
       }
-      return summaries;
+      // 本地命令可能不创建原生文件，仍沿同一列表返回可恢复的 GUI 派生历史。
+      const byId = new Map(summaries.map((summary) => [summary.sessionId, summary]));
+      for (const derived of await commandOutputs.listSessions(cwd)) {
+        const native = byId.get(derived.sessionId);
+        byId.set(
+          derived.sessionId,
+          native
+            ? {
+                ...native,
+                title: native.title ?? derived.title,
+                updatedAt: Math.max(native.updatedAt, derived.updatedAt),
+              }
+            : derived,
+        );
+      }
+      return [...byId.values()].sort((left, right) => right.updatedAt - left.updatedAt);
     },
 
     async findSession(cwd: string, sessionId: string): Promise<OmpStoreSessionSummary | null> {
@@ -160,15 +185,15 @@ export function createOmpStore(env: NodeJS.ProcessEnv = process.env): OmpStorePo
       try {
         names = await readdir(directory);
       } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
-        throw error;
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        names = [];
       }
       // ID 是文件名后缀；不需要读取整个目录中其它会话的 stat 与标题。
       const name = names
         .filter((candidate) => sessionIdOfFileName(candidate) === sessionId)
         .sort()
         .at(-1);
-      if (!name) return null;
+      if (!name) return commandOutputs.findSession(cwd, sessionId);
       const summary = await summaryOf(directory, name);
       if (summary) await withTitle(summary);
       return summary;
@@ -228,6 +253,15 @@ export function createOmpStore(env: NodeJS.ProcessEnv = process.env): OmpStorePo
       }
     },
   };
+}
+
+/** GUI 派生数据遵循 OmpCode 根；PI_CONFIG_DIR 只定位 OMP，不迁移应用数据。 */
+export function ompCommandOutputsRoot(env: NodeJS.ProcessEnv, home = homedir()): string {
+  const root =
+    resolveOmpCodeDataRootFromEnv(home, env) ??
+    (env.ZCODE_HOME?.trim() ||
+      join(env.ZCODE_DATA_BASE_DIR?.trim() || env.HOME?.trim() || home, ".ompcode"));
+  return join(root, "cli", "omp-command-output", resolveOmpProfileFromEnv(env));
 }
 
 function sessionIdOfFileName(name: string): string | null {

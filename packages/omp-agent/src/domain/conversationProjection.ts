@@ -14,7 +14,7 @@ import {
 import { createLogEpoch } from "./ids.js";
 import { initialAState, type ProjectionAState, type TurnOutcome } from "./projectionTypes.js";
 import { TurnFileFacts } from "./fileFacts.js";
-import { contextWindowPatch, modelConfigPatch, snoozePendingInteractions, usagePatch } from "./projectionStatePatches.js";
+import { contextWindowPatch, modelConfigPatch, snoozePendingInteractions, usagePatch, withInteractionStopControl } from "./projectionStatePatches.js";
 import { mergeDeltas, type LoggedDelta } from "./deltaMerge.js";
 import { mergeProjectionRows } from "./projectionRowMerge.js";
 import { OmpSubagentProjection } from "./ompSubagentDirectory.js";
@@ -36,9 +36,10 @@ import { ProjectionToolCallIndex } from "./projectionToolCallIndex.js";
 import { appendProjectionStreamDelta, closeProjectionStreamingRows, materializeStreamTextRow, type ProjectionStreamHost } from "./projectionStreamText.js";
 import { createMarkerRow, buildConversationSnapshot, conversationRowsRange, type ToolCallUpsert, type TurnContext } from "./projectionRows.js";
 import { appendOmpCustomMessage } from "./OmpCustomMessage.js";
+import { appendOmpCommandOutput, type OmpCommandOutputRecord } from "./OmpCommandOutput.js";
+import { ensureOmpNativeTurn } from "./ompNativeTurn.js";
 import { ompTodoState, ompTodoStateFromRows } from "./ompTodoPlan.js";
 
-// 输入轮载荷类型随轮生命周期移入 queuedTurnReconcile；re-export 保住既有 import 路径。
 export type { BeginTurnInput } from "./queuedTurnReconcile.js";
 
 export class ConversationProjection {
@@ -122,20 +123,21 @@ export class ConversationProjection {
   get lastError(): { code: string; message: string } | null {
     return this.lastErrorValue;
   }
-  // ── 轮次与输入（语义在 queuedTurnReconcile.ts，投影侧委托）──
   beginUserTurn(input: BeginTurnInput): void {
     beginUserTurnOf(this.queuedReconcileHost, input);
     publishQueuedInputsOf(this.queuedReconcileHost);
   }
-  activateQueuedTurn(text?: string): void {
+  activateQueuedTurn(text?: string, native = false): void {
     consumeQueuedInputOf(this.queuedReconcileHost, text);
+    if (native) ensureOmpNativeTurn(this.queuedReconcileHost, text);
   }
   /** 本地命令没有 agent_start；上一轮结束后由完成事实激活并收口队首。 */
-  finishQueuedLocalOnlyTurn(): boolean {
+  finishQueuedLocalOnlyTurn(sourceCommandId?: string): boolean {
     return finishQueuedLocalOnlyTurnOf(
       this.queuedReconcileHost,
       () => this.closeAssistantResponse(),
       (outcome) => this.finishTurn(outcome),
+      sourceCommandId,
     );
   }
   failCommandTurn(sourceCommandId: string, error: { code: string; message: string }): void {
@@ -148,9 +150,7 @@ export class ConversationProjection {
     failAllTurnsOf(this.queuedReconcileHost, error, (sourceCommandId, failure) => this.failCommandTurn(sourceCommandId, failure));
   }
   markStopRequested(): void {
-    if (this.state.control.phase !== "running") {
-      return;
-    }
+    if (!this.state.control.canStop) return;
     this.patchState({ control: { ...this.state.control, canStop: false, stopState: "stopping" } });
   }
   /** 记录本轮错误事实（provider/运行时）；下一次 finishTurn 以 failed 收口；null 清除（omp 自动重试成功）。 */
@@ -160,7 +160,6 @@ export class ConversationProjection {
   finishTurn(outcome: TurnOutcome, error?: { code: string; message: string }): void {
     finishTurnOf(this.queuedReconcileHost, outcome, error);
   }
-  // ── 队列对账与竞态收口（A3/A4/A5）──
   hasQueuedTurns(): boolean {
     return this.queuedTurns.length > 0;
   }
@@ -184,12 +183,14 @@ export class ConversationProjection {
   requeueActiveTurnAsQueued(outcome: TurnOutcome, error?: { code: string; message: string }): boolean {
     return requeueActiveTurnAsQueuedOf(this.queuedReconcileHost, outcome, error);
   }
-  // ── 流式文本与思考 ──
   appendAssistantText(delta: string): void {
     appendProjectionStreamDelta(this.streamHost, delta, "assistantText");
   }
   appendCustomMessage(message: unknown): void {
     appendOmpCustomMessage(this.streamHost, message);
+  }
+  appendCommandOutput(record: OmpCommandOutputRecord): void {
+    appendOmpCommandOutput(this.streamHost, record);
   }
   appendReasoning(delta: string): void {
     appendProjectionStreamDelta(this.streamHost, delta, "reasoning");
@@ -204,7 +205,6 @@ export class ConversationProjection {
     }
   }
 
-  // ── 工具调用 ──
   upsertToolCall(update: ToolCallUpsert): void {
     const turn = this.turn;
     if (!turn) return;
@@ -222,7 +222,6 @@ export class ConversationProjection {
   patchSideViewState(patch: Pick<StatePatch, "control" | "inputRouting" | "availability" | "config">): void {
     this.patchState(patch);
   }
-  // ── 状态面 ──
   addUsage(delta: { inputTokens?: number; outputTokens?: number; cacheReadTokens?: number; cacheWriteTokens?: number }): void {
     this.patchState(usagePatch(this.state, delta));
   }
@@ -272,7 +271,6 @@ export class ConversationProjection {
     return readProjectionFileChanges(targetRowId, this.rows, this.turn, this.turnFacts);
   }
 
-  // ── 读面 ──
   buildSnapshot(): ConversationSnapshot {
     return buildConversationSnapshot(
       {
@@ -380,6 +378,7 @@ export class ConversationProjection {
   private materializeStreamTextRow = (rowId: number): ConversationRow | undefined => materializeStreamTextRow(this.rows, this.pendingStreamTextByRowId, rowId);
 
   private patchState(patch: StatePatch): void {
+    patch = withInteractionStopControl(this.state, patch);
     this.state = { ...this.state, ...patch } as ProjectionAState;
     this.revisionValue += 1;
     this.pushPending({ op: "state.updated", patch: { ...patch, revision: this.revisionValue } as StatePatch });

@@ -60,3 +60,40 @@ export function finalizeFailedQueuedTurn(input: {
   }
   return true;
 }
+
+/** 本地 ACK 只完成控制提交；按 ID 标记 controlOnly，不能关闭普通队首或活跃模型轮。 */
+export function finalizeLocalCommandTurn(
+  input: {
+    queuedTurns: TurnContext[];
+    activeTurn: () => TurnContext | null;
+    inputTextByTurnId: Map<string, string>;
+    rowAt: (rowId: number) => ConversationRow | undefined;
+    upsertRow: (row: ConversationRow) => void;
+    turnFacts: Map<string, TurnFileFacts>;
+  },
+  sourceCommandId: string,
+): boolean {
+  const index = input.queuedTurns.findIndex((turn) => turn.sourceCommandId === sourceCommandId);
+  const active = input.activeTurn();
+  const turn =
+    index >= 0
+      ? input.queuedTurns[index]
+      : active?.sourceCommandId === sourceCommandId
+        ? active
+        : null;
+  if (!turn) return true;
+  const header = input.rowAt(turn.headerRowId);
+  if (header?.kind === "turnHeader") input.upsertRow({ ...header, executionKind: "controlOnly" });
+  if (index < 0) return false;
+  input.queuedTurns.splice(index, 1);
+  finalizeTurnContexts({
+    turns: [turn],
+    outcome: "success",
+    rowAt: input.rowAt,
+    upsertRow: input.upsertRow,
+    closeStreamingRows: () => {},
+    turnFacts: input.turnFacts,
+  });
+  input.inputTextByTurnId.delete(turn.turnId);
+  return true;
+}

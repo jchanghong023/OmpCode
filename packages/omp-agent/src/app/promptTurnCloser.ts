@@ -54,8 +54,8 @@ export class EnginePromptTurnCloser {
   }
 
   /** prompt 响应 data.agentInvoked=false 的同步完成事实（dispatch 成功路径）。 */
-  noteDispatchOutcome(data: unknown): void {
-    if (agentInvokedOf(data) === false) this.finishLocalOnly();
+  noteDispatchOutcome(data: unknown, sourceCommandId?: string): void {
+    if (agentInvokedOf(data) === false) this.finishLocalOnly(sourceCommandId);
   }
 
   /** terminal agent_end：补收积压的本地命令完成（引擎在清流式判定后调用）。 */
@@ -85,7 +85,8 @@ export class EnginePromptTurnCloser {
     // 修复：首发已接受但 agent_start 尚未到达也属于 busy；后续输入不能再走 prompt。
     const streaming =
       host.isStreaming() || host.projection().stateSnapshot.control.phase === "running";
-    const guide = streaming && host.followupMode() === "guide";
+    const slashCommand = originalText.trimStart().startsWith("/");
+    const guide = streaming && !slashCommand && host.followupMode() === "guide";
     // 修复（A5）：terminal agent_end 可能落在 beginUserTurn(guide) 与 steer 响应之间；
     // 在途标记让收口逻辑把无内容行的 guide 轮转回排队（由下一个 agent_start 激活），
     // 而不是被连带收口导致后续 drain 输出无轮承接。
@@ -95,7 +96,7 @@ export class EnginePromptTurnCloser {
       inputId: createId("input"),
       sourceCommandId,
       clientId,
-      routing: streaming ? host.followupMode() : "startNow",
+      routing: streaming ? (slashCommand ? "queue" : host.followupMode()) : "startNow",
     });
     // XR1 守卫：输入接受（本地入列）即递增对账序号，使在途的陈旧 get_state 回包跳过
     // 对账（新排队轮不被误收口）；接受点早于 dispatch 成功点，覆盖 dispatch 在途窗口。
@@ -133,7 +134,10 @@ export class EnginePromptTurnCloser {
           );
           return streaming ? "queue" : "startNow";
         }
-        this.noteDispatchOutcome(outcome.data);
+        // 重启/关闭后的旧 ACK 不得收口新进程的轮；输出本身也受进程实例 fence 保护。
+        if (host.currentProcess() !== process) return streaming ? "queue" : "startNow";
+        this.noteDispatchOutcome(outcome.data, sourceCommandId);
+        if (slashCommand && agentInvokedOf(outcome.data) === false) return "startNow";
       } catch (error) {
         // omp RPC 超时或进程退出会 reject，必须结束对应轮次。
         this.failTurn(sourceCommandId, "omp_prompt_failed", error);
@@ -152,8 +156,12 @@ export class EnginePromptTurnCloser {
   }
 
   /** 本地命令收口（prompt 响应 data.agentInvoked=false 或异步 prompt_result）。 */
-  private finishLocalOnly(): void {
+  private finishLocalOnly(sourceCommandId?: string): void {
     const host = this.host;
+    if (sourceCommandId && host.projection().finishQueuedLocalOnlyTurn(sourceCommandId)) {
+      host.flush();
+      return;
+    }
     if (host.isStreaming()) {
       this.pendingLocalOnlyCompletions += 1;
       return;

@@ -1018,8 +1018,9 @@ export class ZCodeAgentProcessManager {
         [ZCODE_RUNTIME_ENV_KEY]: runtimeEnv,
         ...spawnEnv,
         ...effectiveCommand.env,
-        // 身份/隔离语义使用 workspaceIdentity；cwd 继续使用 workspacePath。
-        ...buildAgentWorkspaceIdentityEnv(params.workspaceIdentity),
+        // 根因：本地 identity 缺省时不写环境补丁，会继承另一个工作区的 key，技能目录严格校验失败。
+        // Host 已按 identity.trim() || path 派生唯一 workspaceKey；始终覆盖继承值，cwd 仍用 path。
+        ...buildAgentWorkspaceIdentityEnv(workspaceKey),
         ...buildE2EAgentCoverageEnv(),
       },
       stdio: ["pipe", "pipe", "pipe"],

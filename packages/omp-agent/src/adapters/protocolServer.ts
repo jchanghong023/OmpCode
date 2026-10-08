@@ -58,6 +58,14 @@ function requestQueueKey(params: unknown): string {
   return "workspace";
 }
 
+/** 仅分类控制回路；完整 Envelope/会话/幂等验证仍由原 handleRequest 执行。 */
+function isInteractionControlRequest(method: string, params: unknown): boolean {
+  if (method !== "v4/command" || typeof params !== "object" || params === null) return false;
+  const record = params as Record<string, unknown>;
+  // parseCommandEnvelope 只解析 raw params 顶层；额外 envelope 字段不能改变传输调度。
+  return record.type === "resolveInteraction" || record.type === "stop";
+}
+
 // S5-3 依据：本服务端仅发出两类反向请求——interaction/requestUserInput 与
 // interaction/requestPermission，均为交互应答类（无非交互类反向请求经过 pending 表）。
 // omp 侧权限门 await 无超时（Promise.withResolvers，仅 abort/dispose 可解）、login secret
@@ -146,6 +154,14 @@ export class ProtocolServer implements HostGateway {
   }
 
   private handleHostRequest(id: string | number, method: string, params: unknown): void {
+    if (isInteractionControlRequest(method, params)) {
+      // 同步 prompt/confirm 尚未 ACK 时，回答/停止若等同一尾链会与等待用户形成死锁。
+      // 同轮微任务保留先收到请求的启动顺序，但控制回路不等待普通请求完成。
+      void Promise.resolve()
+        .then(() => this.processHostRequest(id, method, params))
+        .catch(() => {});
+      return;
+    }
     const key = requestQueueKey(params);
     const previous = this.dispatchTails.get(key) ?? Promise.resolve();
     const current = previous

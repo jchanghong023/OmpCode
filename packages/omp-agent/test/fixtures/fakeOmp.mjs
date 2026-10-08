@@ -6,6 +6,7 @@
 import { createInterface } from "node:readline";
 import { newStateFields } from "./fakeOmpNewCoreFrames.mjs";
 import { localCommandMessage, out, pendingUi, respond, runLocalCommand, runPromptTurn, shared, v3 } from "./fakeOmpHelpers.mjs";
+import { handleNativeCommand, nativeCommands } from "./fakeOmpNativeCommands.mjs";
 
 // 镜像真实 omp cli 的 flag 解析形状（args.ts reportUnrecognizedFlags → main.ts exit 2）：
 // 本 fake 识别 --mode rpc-ui [--no-session] [--resume <path>]（目录进程/会话进程两种拉起形态）。
@@ -46,6 +47,7 @@ readline.on("line", (line) => {
     }
     return;
   }
+  if (handleNativeCommand(command)) return;
   switch (command.type) {
     case "negotiate_protocol":
       v3.setNegotiatedVersion(command.protocolVersion);
@@ -95,6 +97,7 @@ readline.on("line", (line) => {
     case "get_available_commands":
       respond(command.id, "get_available_commands", true, {
         commands: [
+          ...nativeCommands,
           { name: "help", source: "builtin", description: "Show help" },
           { name: "ship", source: "extension", description: "Ship changes", input: { hint: "target" } },
           { name: "skill:agent-browser", source: "skill", description: "Browse websites" },

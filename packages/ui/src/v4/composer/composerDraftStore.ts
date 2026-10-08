@@ -24,6 +24,11 @@ export interface V4ComposerDraft {
   lastPlanTransitionId?: string;
   lastPermissionGrantId?: string;
   modelSelection?: ModelSelection;
+  /** 已观察或已受理的模型比较游标；模型事实仍由 OMP 拥有。 */
+  ompModelBaseline?: ModelSelection;
+  /** 显式的下一次提交意图，原生命令切模型不得覆盖它。 */
+  ompModelEdited?: true;
+  ompThoughtEdited?: true;
   /** 首次分享导入等待公共新任务初始化；不能由空 Session snapshot 抢先填充。 */
   initializeFromNewTask?: true;
   updatedAt: number;
@@ -93,6 +98,7 @@ function readDraft(value: unknown): V4ComposerDraft | null {
   if (!isRecord(value) || typeof value.text !== "string") return null;
   const mode = submissionModeSchema.safeParse(value.mode);
   const selection = modelSelectionSchema.safeParse(value.modelSelection);
+  const ompModelBaseline = modelSelectionSchema.safeParse(value.ompModelBaseline);
   // 坏 options 不应连带丢掉可确定的模型身份；不读取旧 provider/model/thought 别名。
   const identity = isRecord(value.modelSelection)
     ? modelSelectionSchema.safeParse({
@@ -133,6 +139,9 @@ function readDraft(value: unknown): V4ComposerDraft | null {
       ? { lastPlanTransitionId: value.lastPlanTransitionId }
       : {}),
     ...(modelSelection ? { modelSelection } : {}),
+    ...(ompModelBaseline.success ? { ompModelBaseline: ompModelBaseline.data } : {}),
+    ...(value.ompModelEdited === true ? { ompModelEdited: true as const } : {}),
+    ...(value.ompThoughtEdited === true ? { ompThoughtEdited: true as const } : {}),
     ...(value.initializeFromNewTask === true && !mode.success
       ? { initializeFromNewTask: true as const }
       : {}),

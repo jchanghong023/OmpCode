@@ -8,7 +8,7 @@ import { createId, ompSessionIdOfFilePath } from "../domain/ids.js";
 import { ConversationEngine } from "./conversationEngine.js";
 import { listLegacySessions } from "./legacySessionList.js";
 import { ProtocolError } from "./errors.js";
-import type { HostGateway, OmpDirectoryGatewayPort, OmpProcessFactory, OmpStorePort } from "./ports.js";
+import type { HostGateway, OmpDirectoryGatewayPort, OmpProcessFactory, OmpStorePort, OmpStoreSessionSummary } from "./ports.js";
 import type { SlashCommandResolver } from "./ompPromptDispatch.js";
 import { controlSubagent } from "./subagentControl.js";
 import { hydrateEngineFromCold } from "./coldHydration.js";
@@ -31,6 +31,8 @@ export interface RegistryDeps {
 
 export class SessionRegistry {
   private engines = new Map<string, ConversationEngine>();
+  /** 权威冷摘要学到的查找别名；只指向唯一已登记 owner，不持有第二份会话状态。 */
+  private engineAliases = new Map<string, string>();
   /** 并发 resume 去重：同 sessionId 只允许一次冷加载（见 resumeSession 修复说明）。 */
   private pendingResumes = new Map<string, Promise<ConversationEngine>>();
   /** 在途 createSession：resume/read 必须等其登记完成，否则会在注册空窗期构建冷引擎并覆盖活引擎（GUI 实测缺陷）。 */
@@ -81,7 +83,7 @@ export class SessionRegistry {
       const id = file ? ompSessionIdOfFilePath(file) : null;
       return id === sessionId;
     };
-    return this.engines.get(sessionId) ?? [...this.engines.values()].find(byOmpFile) ?? this.subagentViews?.getEngine(sessionId) ?? null;
+    return this.engines.get(sessionId) ?? this.engines.get(this.engineAliases.get(sessionId) ?? "") ?? [...this.engines.values()].find(byOmpFile) ?? this.subagentViews?.getEngine(sessionId) ?? null;
   }
   requireEngine(sessionId: string): ConversationEngine {
     const engine = this.getEngine(sessionId);
@@ -132,6 +134,10 @@ export class SessionRegistry {
       gateway: this.gateway,
       onIndexChange: (changed) => this.upsertEngineSummary(changed),
       onCommandsUpdate: this.onCommandsUpdate,
+      onCommandOutput: async (record, sessionPath) => {
+        await this.store.appendCommandOutput?.({ cwd: params.workspacePath, sessionId, sessionPath, title: this.getEngine(sessionId)?.projection.stateSnapshot.meta.title }, record);
+      },
+      flushCommandOutputs: () => this.store.flushCommandOutputs?.() ?? Promise.resolve(),
       ...(resumeSessionPath ? { resumeSessionPath } : {}),
       ...(initialTitle ? { initialTitle } : {}),
       ...(this.resolveSlashCommand ? { resolveSlashCommand: this.resolveSlashCommand } : {}),
@@ -152,6 +158,8 @@ export class SessionRegistry {
     await this.settlePendingCreates();
     const existing = this.getEngine(params.sessionId);
     if (existing) {
+      if (!this.gates.canResume(params.sessionId, existing.sessionId, ompSessionIdOfFilePath(existing.ompSessionFile) ?? existing.sessionId))
+        throw new ProtocolError(-32004, `session unavailable: ${params.sessionId}`);
       return existing;
     }
     const pending = this.pendingResumes.get(params.sessionId);
@@ -179,14 +187,34 @@ export class SessionRegistry {
       // 实测会在侧栏多出一行永不收敛的空会话）。
       throw new ProtocolError(-32004, `session unavailable: ${params.sessionId}`);
     }
-    const racedAfterCold = this.getEngine(params.sessionId);
+    const racedAfterCold = this.coldOwner(params, cold);
     if (racedAfterCold) {
-      return racedAfterCold;
+      return this.settleColdOwner(params.sessionId, racedAfterCold, cold);
     }
     const engine = this.createEngine(params.sessionId, params, cold.sessionPath, cold.title ?? undefined);
     // 冷行水合复用 coldHydration 的行投影；登记统一走登记门（墓碑 + winner 判定）。
     await hydrateEngineFromCold({ store: this.store, upsertEngineSummary: (e, o) => this.upsertEngineSummary(e, o) }, engine, cold.sessionPath, cold.createdAt, cold.updatedAt);
-    return this.gates.settleColdHydration(params.sessionId, engine);
+    return this.settleColdOwner(params.sessionId, engine, cold, this.coldOwner(params, cold));
+  }
+
+  private coldOwner(params: { workspaceId: string; workspacePath: string }, cold: OmpStoreSessionSummary): ConversationEngine | null {
+    const owner = this.getEngine(cold.sessionId);
+    // 根因：旧 GUI alias 仅在存储中识别；canonical 先恢复时另建引擎会争同一原生 lease。
+    // 权威摘要证明身份后仍核对 workspace 与文件 epoch，不能仅凭 UUID 复用邻域 owner。
+    return owner &&
+      (owner.workspaceId.trim() || owner.workspacePath) === (params.workspaceId.trim() || params.workspacePath) &&
+      owner.workspacePath === params.workspacePath &&
+      owner.ompSessionFile === (cold.sessionPath || null)
+      ? owner
+      : null;
+  }
+
+  private settleColdOwner(requestedId: string, candidate: ConversationEngine, cold: OmpStoreSessionSummary, winner: ConversationEngine | null = null): ConversationEngine {
+    const owner = this.gates.settleColdHydration(requestedId, candidate, cold.sessionId, winner ?? undefined);
+    if (requestedId !== owner.sessionId) this.engineAliases.set(requestedId, owner.sessionId);
+    // 已有文件的 UUID 由现有 file 查找负责；只有未落文件的冷锚点需要这个派生别名。
+    if (!owner.ompSessionFile && cold.sessionId !== owner.sessionId) this.engineAliases.set(cold.sessionId, owner.sessionId);
+    return owner;
   }
 
   async deleteSession(sessionId: string): Promise<void> {
@@ -202,7 +230,10 @@ export class SessionRegistry {
       gates: this.gates,
       directory: this.directory,
       getEngine: (sessionId) => this.getEngine(sessionId),
-      dropEngine: (sessionId) => this.engines.delete(sessionId),
+      dropEngine: (sessionId) => {
+        this.engines.delete(sessionId);
+        for (const [alias, ownerId] of this.engineAliases) if (ownerId === sessionId) this.engineAliases.delete(alias);
+      },
       removeIndexSession: (workspaceId, sessionId) => this.indexTopics.removeSession(workspaceId, sessionId),
       store: this.store,
       primaryWorkspace: () => this.primaryWorkspace,
@@ -235,6 +266,11 @@ export class SessionRegistry {
 
   upsertEngineSummary(engine: ConversationEngine, overrides?: { createdAt?: number; lastActivityAt?: number }): void {
     this.indexTopics.upsertEngineSummary(engine, overrides);
+    // 原生文件可晚于本地命令生成；身份关联只更新派生文件元信息，不写 OMP journal。
+    // 存储端记录并报告写入失败，flush 时仍会拒绝，不能把失败误报为持久化通过。
+    void this.store
+      .associateCommandOutputs?.({ cwd: engine.workspacePath, sessionId: engine.sessionId, sessionPath: engine.ompSessionFile, title: engine.projection.stateSnapshot.meta.title })
+      .catch(() => {});
   }
   /** legacy session/list：冷会话 + 引擎会话合并（形状对齐 zcodeSessionInfoSchema）。 */
   async listLegacySessions(workspacePath: string, workspaceKey: string): Promise<Record<string, unknown>[]> {
@@ -298,5 +334,6 @@ export class SessionRegistry {
     this.rekeyedEngineIds.clear();
     await Promise.all([...this.engines.values()].map((engine) => engine.dispose()));
     this.engines.clear();
+    this.engineAliases.clear();
   }
 }

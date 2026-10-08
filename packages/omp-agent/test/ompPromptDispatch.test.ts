@@ -148,18 +148,62 @@ test("普通文本 → prompt 携带 images（无 inputMode 字段）", async ()
   });
 });
 
-test("流式 + guide → steer 携带文本与附件（不做命令分发）", async () => {
+test("流式 + guide 的普通补充 → steer 携带文本与附件", async () => {
   const process = new StubProcess();
   const outcome = await dispatch(process, {
-    text: "/改成英文",
+    text: "改成英文",
     images: [IMAGE],
     streaming: true,
     followupMode: "guide",
-    resolveSlashCommand: resolverOf({ kind: "reject", reason: "unknown", commandName: "改成英文" }),
   });
   assert.equal(outcome.success, true);
   assert.equal(process.sent.length, 1);
-  assert.deepEqual(process.sent[0], { type: "steer", message: "/改成英文", images: [IMAGE] });
+  assert.deepEqual(process.sent[0], { type: "steer", message: "改成英文", images: [IMAGE] });
+});
+
+for (const followupMode of ["queue", "guide"] as const) {
+  test(`busy 原生命令仍走 prompt 并保留 ${followupMode} 的模型输入策略`, async () => {
+    const process = new StubProcess();
+    const message = "/compact soft  保留接口\n与验收\n";
+    const outcome = await dispatch(process, {
+      text: message,
+      streaming: true,
+      followupMode,
+      resolveSlashCommand: resolverOf(),
+    });
+    assert.equal(outcome.success, true);
+    assert.deepEqual(process.sent, [
+      {
+        type: "prompt",
+        message,
+        streamingBehavior: followupMode === "guide" ? "steer" : "followUp",
+      },
+    ]);
+  });
+}
+
+test("busy 未知命令、TUI-only 与附件先拒绝，不能进入模型队列或修改模型", async () => {
+  for (const reason of ["unknown", "tui_only"] as const) {
+    const process = new StubProcess();
+    const outcome = await dispatch(process, {
+      text: "/blocked",
+      streaming: true,
+      modelSelection: { provider: "other", model: "other" },
+      resolveSlashCommand: resolverOf({ kind: "reject", reason, commandName: "blocked" }),
+    });
+    assert.equal(outcome.code, `omp_command_${reason}`);
+    assert.deepEqual(process.sent, []);
+  }
+  const process = new StubProcess();
+  const outcome = await dispatch(process, {
+    text: "/wiki",
+    images: [IMAGE],
+    streaming: true,
+    modelSelection: { provider: "other", model: "other" },
+    resolveSlashCommand: resolverOf(),
+  });
+  assert.equal(outcome.code, "omp_command_attachments_unsupported");
+  assert.deepEqual(process.sent, []);
 });
 
 test("附件块前置仍按原始 slash 拒绝，且不得先修改模型", async () => {

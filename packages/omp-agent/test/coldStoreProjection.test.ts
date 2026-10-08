@@ -394,10 +394,9 @@ test("ompSessionsRoot：linux/darwin 且 $XDG_DATA_HOME/omp 存在时扁平化 a
 });
 
 test("ompSessionsRoot：锚点不存在回退 ~/.omp 布局；XDG_DATA_HOME 为空不参与；win32 不受影响", () => {
-  const xdg = "/xdg-data";
-  // Windows 上 resolve 会给虚拟 POSIX 路径补盘符；home 必须像生产 homedir 一样
-  // 是宿主的绝对路径，否则 join 生成的期望值与共享根解析的契约不一致。
+  // Windows 的 /home/u 是当前盘根路径；共享解析器使用绝对路径，测试也采用宿主解析后的 home。
   const home = resolve("/home/u");
+  const xdg = "/xdg-data";
   const never = (): boolean => false;
   const onlyAppRoot = (path: string): boolean => path === join(xdg, "omp");
   // 锚点不存在（未执行 omp config init-xdg 迁移）→ 回退 configRoot 布局。
@@ -439,5 +438,89 @@ test("ompSessionsRoot：锚点不存在回退 ~/.omp 布局；XDG_DATA_HOME 为�
       exists: onlyAppRoot,
     }),
     join(home, ".omp", "agent", "sessions"),
+  );
+});
+
+// ── 冷恢复 live/冷一致回归（GUI 全量冷恢复实测，2026-10-08 合并后复验）──
+
+test("rowsFromOmpEntries：team-dispatch 仅存 journal，不进入冷时间线；其他可见 custom 保留", () => {
+  const entries = [
+    {
+      type: "custom_message",
+      customType: "team-dispatch",
+      content: "/team 多模型讨论已启动（任务 bg_1）。",
+      display: true,
+      attribution: "agent",
+      id: "dispatch-1",
+      timestamp: 1,
+    },
+    {
+      type: "custom_message",
+      customType: "team-result",
+      content: "## /team 多模型讨论结果（team-result）",
+      display: true,
+      attribution: "agent",
+      id: "result-1",
+      timestamp: 2,
+    },
+  ];
+  const texts = rowsFromOmpEntries(entries).map((row) => ("text" in row ? row.text : ""));
+  assert.ok(!texts.some((text) => text.includes("多模型讨论已启动")), "调度通知不得进入冷时间线");
+  assert.ok(
+    texts.some((text) => text.includes("team-result")),
+    "可见 team-result 仍须显示",
+  );
+});
+
+test("rowsFromOmpEntries：/skill: 轮只有 skill-prompt（attribution=user）时推进轮边界，模型回复不并入上一用户轮", () => {
+  const entries = [
+    {
+      type: "message",
+      message: { role: "user", content: "ultrathink 正文提问", timestamp: 1 },
+    },
+    {
+      type: "message",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "NATIVE_BODY_RESULT" }],
+        timestamp: 2,
+      },
+    },
+    {
+      type: "custom_message",
+      customType: "skill-prompt",
+      content: "[IMPORTANT: User invoked the skill]",
+      display: true,
+      attribution: "user",
+      id: "skill-1",
+      timestamp: 3,
+    },
+    {
+      type: "message",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "NATIVE_SKILL_RESULT" }],
+        timestamp: 4,
+      },
+    },
+  ];
+  const rows = rowsFromOmpEntries(entries);
+  const turnOf = (text: string) => rows.find((row) => "text" in row && row.text === text)?.turnId;
+  const bodyTurn = turnOf("NATIVE_BODY_RESULT");
+  const skillTurn = turnOf("NATIVE_SKILL_RESULT");
+  assert.ok(bodyTurn && skillTurn, "两条模型回复都必须生成行");
+  assert.notEqual(
+    bodyTurn,
+    skillTurn,
+    "skill 回复不得与上一用户轮同组（组内 latest-assistant 会隐藏旧回复）",
+  );
+  assert.equal(
+    rows.filter((row) => row.turnId === bodyTurn && row.kind === "assistantText").length,
+    1,
+    "上一用户轮内只保留自身回复",
+  );
+  assert.ok(
+    rows.some((row) => row.entityId === "omp-native-custom:skill-1"),
+    "skill-prompt 自身保持独立显示组",
   );
 });

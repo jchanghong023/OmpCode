@@ -173,7 +173,7 @@ test("omp exit cancels a pending UI question", async () => {
   }
 });
 
-test("queued local command completes after the active agent ends", async () => {
+test("busy 本地命令通过 prompt 完成提交，原模型轮仍按 agent_end 收口", async () => {
   let agentEvent: ((event: { type: "agent_start" | "agent_end" }) => void) | undefined;
   const process: OmpSessionProcess = {
     ompSessionFile: null,
@@ -184,7 +184,8 @@ test("queued local command completes after the active agent ends", async () => {
     async dispose() {},
     respondUi() {},
     async send(command) {
-      if (command.type === "follow_up") return { success: true, data: { agentInvoked: false } };
+      if (command.type === "prompt" && command.message.startsWith("/"))
+        return { success: true, data: { agentInvoked: false } };
       return { success: true, data: { agentInvoked: true } };
     },
   };

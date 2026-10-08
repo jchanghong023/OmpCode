@@ -11,6 +11,8 @@ import {
 import type { ConversationEngine } from "./conversationEngine.js";
 import type { OmpStorePort } from "./ports.js";
 import { rowBaseFields } from "../domain/projectionTypes.js";
+import { mergeOmpCommandOutputHistory } from "../domain/OmpCommandOutputHistory.js";
+import { ompSessionIdOfFilePath } from "../domain/ids.js";
 
 export interface ColdHydrationHost {
   store: OmpStorePort;
@@ -28,8 +30,10 @@ export async function hydrateEngineFromCold(
   createdAt?: number,
   updatedAt?: number,
 ): Promise<void> {
+  let rows: ConversationRow[] = [];
+  let entries: unknown[] = [];
   if (sessionPath) {
-    const entries = await host.store.readSessionEntries(sessionPath);
+    entries = await host.store.readSessionEntries(sessionPath);
     const transcripts = new Map(
       await Promise.all(
         coldSubagentIds(entries)
@@ -43,9 +47,21 @@ export async function hydrateEngineFromCold(
           ),
       ),
     );
-    const rows: ConversationRow[] = rowsFromOmpEntries(entries, transcripts);
-    engine.hydrateRows(rows);
+    rows = rowsFromOmpEntries(entries, transcripts);
   }
+  const outputs =
+    (await host.store.readCommandOutputs?.(engine.workspacePath, engine.sessionId, sessionPath)) ??
+    [];
+  engine.hydrateRows(
+    outputs.length
+      ? mergeOmpCommandOutputHistory(
+          rows,
+          outputs,
+          entries,
+          ompSessionIdOfFilePath(sessionPath) ?? undefined,
+        )
+      : rows,
+  );
   host.upsertEngineSummary(engine, {
     createdAt: createdAt ?? Date.now(),
     lastActivityAt: updatedAt ?? Date.now(),

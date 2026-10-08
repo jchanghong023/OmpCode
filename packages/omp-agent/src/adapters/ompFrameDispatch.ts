@@ -23,6 +23,7 @@ import type { OmpAskRequest, OmpUiRequest } from "../app/ports.js";
 import { dispatchOmpUiFrame } from "./ompUiFrames.js";
 import { logger } from "./logger.js";
 import type { OmpBtwFrame } from "../domain/OmpBtwFrames.js";
+import { parseOmpContextReport } from "../domain/ompContextReport.js";
 
 /** safeParse 失败的 issue 摘要（首条 path+message，不含载荷，避免敏感内容入日志）。 */
 function issueSummary(error: {
@@ -123,7 +124,9 @@ export function dispatchOmpFrame(frame: unknown, deps: OmpFrameDispatchDeps): vo
         return;
       }
       const contextOutput = deps.getContextOutput();
-      if (contextOutput) {
+      // 原生 /context 整帧返回报告；等待窗口内仍会穿插计划退出等背景输出，
+      // 无 requestId 不能把全部 command_output 吞入报告，否则业务已完成却不可见。
+      if (contextOutput && parseOmpContextReport(parsed.data.text)) {
         contextOutput.push(parsed.data.text);
         return;
       }

@@ -1,0 +1,26 @@
+[
+  {
+    "scope": "live/local",
+    "commands": [
+      "wiki",
+      "repo",
+      "team",
+      "plan",
+      "loop",
+      "goal",
+      "advisor",
+      "ultrathink",
+      "orchestrate",
+      "workflowz",
+      "fullsend",
+      "compact",
+      "skill:native-command-fixture"
+    ],
+    "session": "omp-session-muznl7ue-2-5b586d",
+    "result": "passed"
+  },
+  {
+    "scope": "cold/both-delivery-modes",
+    "result": "passed"
+  }
+]
