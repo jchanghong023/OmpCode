@@ -4,7 +4,7 @@
 
 - 换核后 ZCode 账号体系整体废弃：启动登录门禁永久关闭、侧栏账号/套餐/用量 footer、命令面板登录登出、会话套餐配额横幅全部移除；凭据与模型走用户本机 omp 配置。
 
-- omp 的模型目录是会话模型候选的事实源；`~/.omp/agent/config.yml` 中的 `modelRoles` 是角色配置事实源。Desktop Main 负责配置文件读写，UI 仅通过 `IPlatformService` 请求。模型目录更新由 workspace-config topic 推送，UI 不另建模型缓存或账号目录。
+- omp 的模型目录是会话模型候选的事实源，当前有效根/profile 下的 `modelRoles` 由 OMP 持有。UI 通过 Host service 请求目录进程的 `get_model_roles`/`set_model_role`；仅本地旧核永久缺失角色能力时，才通过 `IPlatformService` 回落到 Desktop Main 的 YAML 读写。未就绪或暂不可用不得触发回落，远端缺能力不得写本机配置。模型目录更新由 workspace-config topic 推送，UI 不另建模型缓存或账号目录。
 - 工作区恢复取得的 presentation 只拥有 mode 与 slash command 元数据，不得用仅含 mode 的结果覆盖 workspace-config topic 已下发的 omp 模型及思考档位目录。并发顺序无论先后，store 合并时各自保留其所有者字段；重复恢复不清空目录。
 - workspace-config 的已接受快照由 Host syncer 在当前 workspace ingest 状态内保留最后一次投影；动态 UI 监听者注册时立即收到这一投影。这样初始 topic 帧早于设置页或侧栏监听时，目录不会因一次性事件丢失；runtime 换代时由新快照替换。
 - 工作区首次 presentation 读取同时返回 omp 的模型目录快照，确保尚未建立 v4 background 订阅的冷启动设置页也有候选；后续更新仍由 workspace-config topic 投影。适配器复用同一个目录加载 flight 与结果，避免两个入口同时拉起目录进程。
@@ -26,8 +26,11 @@
 ## 时序与失败语义
 
 ```text
-用户选择 role 模型 → UI 请求 Main → Main 读取并校验当前 YAML
-  → 仅修改目标 role → 备份原件 → 原子替换配置 → UI 显示结果
+用户打开角色编辑器 → UI 请求 Host service → OMP 目录进程 get_model_roles
+用户选择 role 模型 → UI 请求 Host service → OMP set_model_role
+  → OMP 保存目标 role 并返回修订 → UI 显示保存中/成功/失败/被覆盖
+  └→ 仅本地旧核永久缺能力 → IPlatformService → Main 校验当前 YAML
+      → 仅修改目标 role → 备份原件 → 原子替换配置 → UI 显示结果
 
 用户选择 profile → App Settings 持久化 → UI 提示重启
   → 下次 Main 启动读取设置 → Host/omp 继承 OMP_PROFILE
@@ -37,7 +40,7 @@
   └→ 共享根/profile 解析 → Main 配置目录与冷历史投影
 ```
 
-配置不存在时读取为空角色并显示内建角色；首次保存仅在目标文件仍不存在时原子创建最小配置，不覆盖并发创建的文件，也不制造虚假的备份。已有配置写入前保留原件备份。YAML 语法无效、`modelRoles` 类型错误或保存失败时显式报错；重复保存同一内容不创建无意义备份。
+本地 YAML 回落路径中，配置不存在时读取为空角色并显示内建角色；首次保存仅在目标文件仍不存在时原子创建最小配置，不覆盖并发创建的文件，也不制造虚假的备份。已有配置写入前保留原件备份。YAML 语法无效、`modelRoles` 类型错误或保存失败时显式报错；重复保存同一内容不创建无意义备份。
 
 ```mermaid
 sequenceDiagram

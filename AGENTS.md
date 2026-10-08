@@ -7,9 +7,8 @@
 
 ## 项目定位与需求权威（Fork）
 
-- 本仓库是持续同步上游的个人 Fork；上游来源、跟踪目标和产品目的见 `docs/requirements/FORK.md`。同步操作只针对其中指定的上游 `main` HEAD，优先采用上游最新实现。同步上游的主要目的是跟进 UI 界面显示效果。
-- 产品仅支持 Windows 与 CentOS 7：两平台前端 UI 与功能界面完全一致，Windows 为全功能基准；平台差异只允许存在于底层依赖、打包链路和后端功能的环境门控（`OMP_OFFLINE`），不按平台分叉界面，不因平台能力差异删除或隐藏 UI 入口。
-- 自有改动与上游改动尽量结构隔离：fork 逻辑优先放独立目录或独立文件（`packages/omp-agent`、`Omp*` 前缀 UI 文件、`docs/requirements/`），对上游共享文件保持最小 diff，便于低冲突合并上游 UI 更新；详见 `docs/requirements/FORK.md` 的「上游同步策略与平台范围」。
+- 本仓库是持续同步上游的个人 Fork；上游来源、跟踪目标、产品目的、支持平台及平台差异边界唯一维护于 [FORK 总纲](docs/requirements/FORK.md)。同步操作只针对其中指定的上游 `main` HEAD，优先采用上游最新实现；UI、依赖与环境门控改动须先核对该总纲及所属功能域。
+- 自有改动与上游改动按 [结构隔离约定](docs/requirements/FORK.md#上游同步策略与平台范围) 组织，对上游共享文件保持最小必要 diff。
 - 本项目完全由 AI Agent 实现和维护：质量不依赖用户手工读代码或人工回归，必须依靠可复现的自动化验证与文档约定。
 - 固定需求权威目录是 `docs/requirements/`，从 `README.md` 按功能边界定位文档；Fork 目的、差异需求、规划及验收标准只在该目录维护。根目录 `FORK.md` 仅保留跳转，不是第二份权威副本。
 - 新增、修改或取消本地差异需求，或预期用户可见行为变化时，MUST 检查并同步目录中对应文档；新独立功能域可新增文档并更新索引，每项需求只有一个维护位置。仅实现方式变化且需求不变时，不制造需求变更，也不得改写需求来合理化实现缺陷。入口、命令或开发规则变化时同步本文件。
@@ -27,7 +26,8 @@
 | 类型检查         | `pnpm typecheck`                              |
 | Lint             | `pnpm lint` / `pnpm lint:fix`                 |
 | 格式检查         | `pnpm fmt:check`                              |
-| 桌面开发         | `pnpm dev:desktop`                            |
+| 桌面开发         | `pnpm dev:desktop`（production 数据环境）     |
+| 隔离开发数据     | `pnpm dev:desktop:test`（使用 test 环境）     |
 | Web 开发         | `pnpm dev:web`                                |
 | 构建工作区       | `pnpm build`                                  |
 | Windows x64 打包 | `pnpm bundle:desktop -- --os=win --arch=x64`  |
@@ -46,9 +46,10 @@
 - `packages/shared`：共享协议与类型；`packages/client`：Agent 客户端 SDK。
 - `packages/omp-agent`：omp RPC 核心适配器（对 host 讲 ZCode Protocol/v4，对内嵌 omp 二进制讲 omp RPC；本 Fork 的本地 Agent 核心）。
 - `packages/omp-agent/src/adapters/cliMain.ts`：Host 启动的 Agent stdio 入口。
-- OMP 环境沿应用进程链透传；有效 `OMP_CONFIG_ROOT` 同时派生 `<OMP根>_ompcode` 应用根，设置页只读显示路径与环境变量设置方式；`OMP_CONFIG_ROOT`、`OMP_OFFLINE` 兼容规则见 `docs/requirements/models-and-commands.md`；CentOS 7 启动器不再提供 `--home`、`--offline` 参数，不创建数据根链接。
+- OMP 环境与数据路径改动先核对 [根目录与 profile 规则](docs/requirements/models-and-commands.md#产品规则与所有权)；启动器接口与分发验收见 [CentOS 7 分发需求](docs/requirements/centos7-release.md)。
 - `apps/zcode-cli`：保留的上游源码快照，不在根 workspace 中；运行时边界见 `docs/requirements/FORK.md`，未经用户要求不得接回产品。
 - 子目录规则注册表（全仓唯一）：[apps/zcode-cli/AGENTS.md](apps/zcode-cli/AGENTS.md)——独立 workspace 的上游 CLI 源码快照，承载 CLI 专属工作规范、跨平台与接口契约约束及 `pnpm --dir apps/zcode-cli typecheck/lint` 本地验证入口；其余目录不另设子目录 `AGENTS.md`，通用规则统一由本文件维护。
+- `.agents/skills/react-best-practices/AGENTS.md` 是随技能分发的参考资料，不是项目模块规则；文档系统分析与检查使用 `--exclude .agents/skills/react-best-practices` 排除此托管资料。
 - `CONTEXT.md`：插件商店领域词汇；修改相关 UI 前阅读。
 - `DESIGN.md`：UI 设计规范；修改 UI 前阅读。
 
@@ -62,11 +63,12 @@
 | ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | omp UT、协议模拟及真实核心测试合集 | `pnpm --filter @zcode/omp-agent test`；匹配 `test/*.test.ts`，包含真实核心文件，不只是 fake-omp                                                                                                                                                                                                                                                                                                                                                           |
 | 协议级 fake-omp 集成测试           | `pnpm --filter @zcode/omp-agent exec tsx --test test/adapter.e2e.test.ts`；不依赖真实模型，不覆盖真实 omp/GUI 边界                                                                                                                                                                                                                                                                                                                                        |
+| Agent 交互协议集成测试             | `pnpm --filter @zcode/omp-agent exec tsx --test test/agentInteractions.protocol.e2e.test.ts`；覆盖 stdio/v4 交互投影及读取，不替代真实核心或 GUI 验收                                                                                                                                                                                                                                                                                                     |
 | rpc-ui 核心命令真实 E2E            | 设置 `OMP_NATIVE_E2E=1` 后运行 `pnpm --filter @zcode/omp-agent exec tsx --test test/realNativeCommands.e2e.test.ts`；使用安装核、独立临时 OMP 根和既有 GLM 凭据，覆盖必接命令、索引/计划交互、状态生命周期及两链路冷恢复；未显式开启时跳过，不计通过                                                                                                                                                                                                      |
 | rpc-ui 核心命令 GUI E2E            | 完成类型检查后重建当前 adapter/Host，启动本工作树 Vite；`OMP_NATIVE_E2E=1 node packages/desktop/test/ompNativeCommands.launch.mjs` 创建独立桌面（CDP 9257），用返回的 `OMP_NATIVE_GUI_META` 运行 `node packages/desktop/test/ompNativeCommands.gui.e2e.mjs`；live 通过后以 `OMP_E2E_PHASE=capture` 只读采集完整历史，再以同一临时根重启执行 `OMP_E2E_PHASE=cold`；必须在指定沙箱项目内建任务，不连接日常实例                                              |
 | 真实内嵌核心 E2E                   | `pnpm --filter @zcode/omp-agent exec tsx --test test/real-omp.e2e.test.ts`；先准备 `pnpm --filter @zcode/desktop run prepare:agent-bundle`，使用已发布内嵌二进制及 omp 已有凭据；缺少二进制或设置 `OMP_AGENT_SKIP_REAL_E2E=1` 时跳过，跳过不能算通过                                                                                                                                                                                                      |
 | CentOS 7/Linux 侧功能验收          | 经 `jch-run-tests-in-wsl` 技能执行（用户指定）：从 Windows 仓库推送待测代码到指定 WSL2 发行版，以 Linux 原生仓库运行核心场景（工具调用会话、子代理、界面与 omp 数据一致性，模型 `zhipu-coding-plan/glm-5.3-flash`）；测试意图只在 Windows 侧解析一次                                                                                                                                                                                                      |
-| 其他包 UT/集成测试                 | `packages/{desktop,ui,services,client,server}/test/` 存在测试文件；按实际文件用根 `pnpm exec tsx --test <测试文件>` 执行，不能假定这些包有 `test` script                                                                                                                                                                                                                                                                                                  |
+| 其他包 UT/集成测试                 | `packages/{desktop,ui,services,shared,client,server}/test/` 存在测试文件；按实际文件用根 `pnpm exec tsx --test <测试文件>` 执行（`.mjs` 可用 `node --test`），不能假定这些包有 `test` script；`packages/web/test/` 当前不存在                                                                                                                                                                                                                             |
 | 桌面 GUI 冒烟                      | `node scripts/dev/gui-smoke-cdp.mjs`；需要当前测试桌面已启动、CDP 9230 及 localhost renderer，仅检查品牌/输入区并截图，不是完整功能 E2E                                                                                                                                                                                                                                                                                                                   |
 | 子代理 / Todo 界面适配 GUI E2E     | `node packages/desktop/test/ompStatusPanels.gui.e2e.mjs`；先启动隔离桌面并设置 `OMP_E2E_CDP_URL`、`OMP_E2E_EVIDENCE_DIR`；默认 live 调用既有 GLM-5.3-Flash 并创建只读测试会话，重启同一隔离桌面后以 `OMP_E2E_PHASE=cold` 验证恢复与两项子代理工具结果；不连接用户日常实例                                                                                                                                                                                 |
 | Agent 交互页 GUI E2E               | `node packages/desktop/test/ompAgentInteractions.launch.mjs` 以 `OMP_E2E_ISOLATED_ROOT` 启动专用桌面（端口由 `OMP_E2E_CDP_PORT` / `OMP_E2E_RENDERER_PORT` 指定）；`node packages/desktop/test/ompAgentInteractions.gui.e2e.mjs` 读取 `OMP_E2E_RUNTIME_MANIFEST`，同时设置 `OMP_E2E_EVIDENCE_DIR`、`OMP_E2E_RUN_ID`；先 live，再重启同一隔离目录以 `OMP_E2E_PHASE=cold` 验恢复。主会话及测试项目专属子代理使用既有 GLM-5.3-Flash，不修改用户模型角色配置。 |
@@ -80,6 +82,12 @@ Agent 交互页的已保存会话可执行 `node packages/desktop/test/ompAgentI
 `node packages/desktop/test/ompPerformanceHotPaths.mentions.e2e.mjs` 使用同一隔离 runtime manifest、evidence 目录和 run ID，验证真实 `@` 无命中补扫、新文件候选及同 Markdown 富节点的剪贴板/草稿恢复；Host 扫描次数由文件服务真实 I/O 测试独立计量。
 
 UI UT 使用 `@/` 路径别名时，从根执行 `pnpm exec tsx --tsconfig packages/ui/tsconfig.json --test <测试文件>`。性能对照入口为 `packages/ui/test/conversationTurnRenderBuilder.perf.ts`、`packages/ui/test/streamingContentPresentation.perf.ts` 和 `packages/services/test/workspaceFileIndex.perf.mts <baseline-git-ref>`；使用固定 Node 与相同样本，不将本地探针当作目标网络盘验收。
+
+CentOS 专项入口（均不调用模型）：
+
+- `bash scripts/publish/centos7/launch.test.sh`：参数、环境与 IBus 会话选择回归；IBus 的 `/proc` 与探测工具场景需要 Linux，非 Linux 跳过，不替代包级 GUI。
+- `node packages/desktop/test/centosPerformance.gui.e2e.mjs`：需要 Linux、`xvfb-run`、workspace Electron 与 esbuild；启动独立组件环境，脚本不会自动切换为 Electron 28，须按待验环境准备运行时。
+- `node packages/desktop/test/centosChineseFont.gui.e2e.mjs`：先启动隔离 Linux 桌面并设置 `OMP_E2E_CDP_URL`，检查中文正文/等宽字形；无宿主 CJK 字体验收须另外保证该环境，不等于完整发布 ZIP 验收。
 
 ## 实现与验证
 
@@ -107,7 +115,7 @@ UI UT 使用 `@/` 路径别名时，从根执行 `pnpm exec tsx --tsconfig packa
 - Desktop app 通过 stdio 与 Agent 通信。协议改动同步更新 `packages/shared/src/zcode-protocol/index.ts`，提供严格类型与运行时校验。
 - Main 负责窗口、原生操作、进程调度和消息转发，不承载 task/session 业务状态。
 - 每个窗口使用一个 window-scoped Local Host；本地 workspace 共享该 Host。远程 workspace 由窗口内的连接注册表管理，不另建 Desktop Remote Host。
-- 自建手机远控已取消，不恢复手机入口、中继、配对或专用桥接；通用 Web 客户端与 Host attachment 仍复用已有会话运行时。
+- 涉及已取消功能或其共享边界时先核对 [FORK 总纲](docs/requirements/FORK.md)，不得在重构或同步中恢复已取消需求。
 - Desktop 的 `desktop-continuous` 实时链路与 Web 的 `web-remote-replayable` 恢复链路必须明确区分。修改 stream、snapshot、queue 或重连时，同时验证两种语义。
 - 已接受的 busy/running 输入由 CLI/runtime `CommandInbox` 串行 admission；Renderer 只保留未提交草稿与 pending optimistic overlay，Host owner/lease 负责路由。
 - 保留 owner/lease、跨 Host 路由和 stale run 防护，不能仅根据单一路径删除边界判断。

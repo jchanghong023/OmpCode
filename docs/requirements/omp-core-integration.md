@@ -15,7 +15,7 @@
 - **命令与技能目录/补全**：命令目录事实源为目录进程 `get_available_commands`（v3 富目录：`inputHint` 顶层、`subcommands`、`source`、`execution`、`availability`、`revision`；v1 形状 `input:{hint}` 兼容解析），技能目录继续按其中 `source=skill` 命令投影（`skills/referenceCatalog` 语义不变）。动态补全经目录进程 `complete_command`（UTF-16 光标、替换区间、参数提示、零执行副作用）；静态名称过滤仍可在 UI 本地完成，二者合并呈现且过期结果丢弃。`available_commands_update` 事件使目录与补全缓存失效并即时推送。
 - **模型两种入口分离**：会话临时切换走会话级 `set_model`（不写配置）；角色持久配置走目录进程 `get_model_roles`/`set_model_role`（全部可配置 role 始终可见，含未配置项；逐 role 自动保存，含保存中/失败/被覆盖状态；用户级作用域）。两个入口不得共用同一按钮语义；OMP 未提供 v3 时角色编辑器回落到本地配置文件读写。
 - **子代理**：运行中目录来自父会话投影（`subagent_lifecycle`/`subagent_progress` 帧 + `get_subagents` 快照对账；新核快照仅含运行中子代理）；已结束目录来自投影持久行（冷恢复从会话文件重建）。只读详情以合成 `childSessionId`（`omp-subagent:<id>@<parentSessionId>`）订阅 `conversation/<childSessionId>` 打开，内容为经父会话进程 `get_subagent_messages`（`fromByte`/`nextByte`/`reset` 窗口续读）读取的已保存记录 + 实时 `subagent_event` 事件，查看不触发新的模型执行。控制操作为显式用户动作入口：停止 → `cancel_subagent`，发送消息 → `steer_subagent`；只读详情默认无副作用。
-- **连通性测试与 MCP 状态**：新核无 `test_model`/`list_mcp_servers`，按已知差异显式拒绝（-32601），见 [FORK.md](FORK.md)。
+- **连通性测试与 MCP 状态**：新核无 `test_model`/`list_mcp_servers`；`provider/testModelConnectivity` 显式拒绝（-32601），`mcp/list` 返回合法空状态表，不伪造服务状态。各自能力边界见 [FORK.md](FORK.md) 与 [原生集成](integrations.md)。
 
 ## 状态所有者与接口
 
@@ -35,7 +35,7 @@ OMP 身份 ←→ UI 地址投影：sessionId 即 omp 会话 ID；
 ```
 
 - `OmpDirectoryGateway` 是目录进程唯一所有者；`SessionRegistry` 决定会话创建/恢复/关闭/删除并持有「会话 → 引擎」映射。`ConversationEngine` 不感知目录进程，仅通过 `OmpSessionProcess` 端口与会话进程交互。
-- 协议方法（legacy JSON-RPC，均以能力缺失明确报错，不伪造）：
+- 公开协议方法（legacy JSON-RPC）；能力缺失、暂不可用与本地回落分别按本域及对应功能域规则处理，不伪造结果：
   - `workspace/completeOmpCommand`：text/cursor → complete_command 候选；
   - `workspace/ompModelRoles`：全部 RoleDescriptor（零会话可用）；
   - `workspace/ompSetModelRole`：roleId/scope/selection → 保存后的 role 与修订；
@@ -85,7 +85,7 @@ web-remote-replayable: 同一 owner → 水位增量 / 缺口快照；冷启动�
 
 ## 实现与验证状态
 
-- 本次辅助对话接入是新增 Fork GUI 授权；OMP 自身 rpc-ui 需求文档仍不承诺独立 BTW GUI，不将其当上游等价产品声明。当前源码已按 docs/rpc.md 与 RpcBtwController 接线；实际安装核的能力与真实模型按本节验收场景独立核对，未执行前不得声称已验收。新辅助回归测试、Windows/CentOS 7 GUI、Web 断连恢复仍交独立验收。
+- 辅助对话是本 Fork 的 GUI 接入需求，OMP 自身 rpc-ui 需求文档不承诺独立 BTW GUI，不将其当上游等价产品声明。2026-10-08 的 Windows 打包版提交 `ca04952` 已验证 bare `/btw` 空 pane、首问/追问、关闭重开与进程冷恢复，包含 live parent ID 与稳定 task UUID 分离场景；具体版本及边界见 [修复后验收](../test-reports/acceptance-2026-10-08.md)。该历史结果不代表当前工作树或全部 BTW 场景通过；完整交互、Web replayable 重连与 CentOS 7 真实模型 GUI 仍未验收。
 - 2026-10-07 需求重写与实施完成（适配 omp v18.8.0+fork.298 RPC 大改，实测核对安装二进制）：OMP 侧删除项目宿主（`--rpc-project` unknown flag）、旧 v3 fork 面（`permission_request`/`ask_request`/`ask_pause`/`test_model`/`list_mcp_servers`/`execute_command`/项目级子代理目录），收敛为 v3 三组能力（`commandCompletion`/`modelRoleConfig`/`sessionDirectory`）。ZCode 侧对应重写：删除项目模式层（ompProjectProcess/ompProjectReadyGate/ompProjectChannel/ompProjectGateway/projectSessionLifecycle 项目分支），新增目录进程网关（`adapters/ompDirectoryGateway.ts`，`--mode rpc-ui --no-session` 常驻 + v3 三态：available/unsupported/unavailable）；斜杠严格分发改适配层本地判定（`app/slashCommandResolver.ts` 目录缓存 + unknown 复核，未知命令 `omp_command_unknown`、tui_only `omp_command_tui_only`，绝不发给模型——实测证实新核会把未知 `/xxx` 当普通文本送入模型）；会话进程 ready 后 `set_ask_dialog` 启用富 ask（`extension_ui_request{method:"ask"}` 单帧问题集 → `answers` 按题回传）；审批降级为 extension runner 的 select(Approve/Deny) 通用询问；子代理控制改 `cancel_subagent`/`steer_subagent`、详情续读改父会话进程 `get_subagent_messages`（fromByte/nextByte，无 hasMore/recordTooLarge——上游游标单调推进即读尽）；冷会话改名/删除走目录进程 `rename_session`/`delete_session`（先结束承载进程再删，旧核回落本地文件路径）；`provider/testModelConnectivity` 与 `mcp/list` 按能力缺失/空状态表收口。
 - 自动化验证（2026-10-07 实际执行，均通过）：`pnpm --filter @zcode/omp-agent test` 217 项 0 失败 0 跳过（含 fake-omp 协议级 E2E 30 项：严格分发/审批两档/富 ask answers/snooze 无协议帧/能力缺失语义；真实内嵌核 E2E 3 项实际执行——流式→write 工具→审批→文件落盘→完成、本地命令收口+临时模型切换（`zhipu-coding-plan/glm-5.3-flash`）、v3 目录能力（complete_command 补全候选/get_model_roles role 目录/能力缺失语义），内嵌二进制取本地安装的 `omp/18.8.0+fork.298`（`OMP_RELEASE_BINARY_PATH` 注入，与 oh-my-pi 源码 HEAD 同日构建）；`pnpm typecheck`、`pnpm lint`（0w0e）、`pnpm fmt:check`、`pnpm architecture:check --changed`（0 违例）。连带面：`packages/ui/test/ompModelRolesFallback.test.ts` 7 项、`packages/services/test/workspaceConfigEvents.test.ts` 1 项通过。
 - 未验证范围（如实记录）：GUI 真实操作验收（Z01—Z17 的桌面链路）未执行——本轮为协议适配与自动化验证闭环，GUI 走查待后续按本文件验收场景补足；CentOS 7 侧（WSL）链路未跑。测试基建已知限制：adapter e2e 的行池按 rowId 合并多会话行，双会话断言需独立 harness（取消路径用例已拆分）。
