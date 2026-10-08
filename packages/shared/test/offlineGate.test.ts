@@ -13,7 +13,7 @@ test("离线锁定仅由启动器的精确激活值启用，其他功能门控�
       publicHelp: localOnly,
       community: localOnly,
       feedback: localOnly,
-      accountShare: localOnly,
+      account: localOnly,
       externalBrowser: localOnly,
       telemetry: localOnly,
       hostOnlineBots: localOnly,

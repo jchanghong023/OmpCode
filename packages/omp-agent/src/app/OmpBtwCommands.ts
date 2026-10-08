@@ -34,8 +34,7 @@ export async function dispatchOmpBtwCommand(
     }
     if (envelope.type === "sendText") {
       const payload = envelope.payload as CommandPayloadMap["sendText"];
-      if (payload.context_refs?.length || payload.planEnabled)
-        return reply.unsupported("side session shared contexts or plan mode");
+      if (payload.planEnabled) return reply.unsupported("side session plan mode");
       const result = await sideViews.send(id, payload, envelope);
       return reply.ack("accepted", { result });
     }

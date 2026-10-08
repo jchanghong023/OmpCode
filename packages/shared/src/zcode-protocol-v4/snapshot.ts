@@ -2,8 +2,6 @@
 // ConversationSnapshot A 区。
 // A 区更新语义 = 字段级整体替换（state.updated），绝不深合并——深合并是错乱之母。
 import { z } from "zod";
-import { sharedContextImportStateSchema } from "./shared-context-import.js";
-export { sharedContextImportStateSchema } from "./shared-context-import.js";
 import { conversationInputDispatchSchema, conversationInputIntentSchema } from "./input-intent.js";
 import {
   zcodeContextUsageBreakdownSchema,
@@ -176,14 +174,6 @@ export const sessionMetaStateSchema = z.object({
   titleSource: z.enum(["default", "generated", "custom"]),
 });
 export type SessionMetaState = z.infer<typeof sessionMetaStateSchema>;
-
-/**
- * 分享导入的只读来源标记。
- *
- * shared_context 正文只给模型使用，不能通过 userInput row 伪造到会话气泡里；
- * 这个 additive 元数据让 Desktop 在新会话中仍能明确告诉用户上下文来自哪里。
- */
-export type { SharedContextImportState } from "./shared-context-import.js";
 
 // ── usage。conflation：值未变不下发──
 export const sessionUsageStateSchema = z.object({
@@ -502,8 +492,6 @@ export const conversationSnapshotSchema = z.object({
   // additive 新增，必须带 default 才不破坏旧快照/旧发送端的解析——备份分支曾把它设为
   // 必填，shared 的 round-trip 测试在该分支上一直是红的（当时未跑 root vitest 漏网）。
   meta: sessionMetaStateSchema.default({ title: "", titleSource: "default" }),
-  // Additive：旧 CLI/旧快照不带该字段时仍按普通会话处理。
-  sharedContextImport: sharedContextImportStateSchema.optional(),
   config: sessionConfigStateSchema,
   // 持久化稳定事实供 live 客户端识别一次性提示；旧快照缺字段时不触发。
   modelTransition: sessionModelTransitionSchema.nullable().default(null),

@@ -140,11 +140,6 @@ export interface ComposerTextInsertRequest {
   mode?: "replace" | "prepend-if-missing";
 }
 
-export interface TimelineBottomRequest {
-  requestId: number;
-  taskId: string;
-}
-
 export interface WorkspaceZCodeUIState {
   /** 当前 workspace 激活中的 task */
   activeTaskId: string | null;
@@ -167,8 +162,6 @@ export interface WorkspaceZCodeUIState {
   draftRuntimeInvalidationVersion: number;
   composerTextInsertVersion: number;
   composerTextInsertRequest: ComposerTextInsertRequest | null;
-  timelineBottomRequestVersion: number;
-  timelineBottomRequest: TimelineBottomRequest | null;
   /** 草稿态错误需要跨页面保留，避免切走再回来后提示被本地 state 一起卸载 */
   draftError: ZCodeUiError | null;
   /** 模型切换中的并发保护 requestId；只允许最新请求落库 */
@@ -246,16 +239,6 @@ export interface ZCodeSessionStoreState {
     mode?: "replace" | "prepend-if-missing",
   ) => number;
   clearComposerTextInsertRequest: (
-    workspacePath: string,
-    requestId: number,
-    workspaceIdentity?: string,
-  ) => void;
-  requestTimelineBottom: (
-    workspacePath: string,
-    taskId: string,
-    workspaceIdentity?: string,
-  ) => number;
-  clearTimelineBottomRequest: (
     workspacePath: string,
     requestId: number,
     workspaceIdentity?: string,
@@ -521,8 +504,6 @@ export function createDefaultWorkspaceState(
     draftRuntimeInvalidationVersion: 0,
     composerTextInsertVersion: 0,
     composerTextInsertRequest: null,
-    timelineBottomRequestVersion: 0,
-    timelineBottomRequest: null,
     draftError: null,
     modelSwitchRequestId: null,
     modelSwitchPending: false,

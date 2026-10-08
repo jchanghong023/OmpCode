@@ -31,8 +31,8 @@ export const offlineDisabledFeaturesSchema = z.strictObject({
   community: z.boolean(),
   /** 反馈入口。 */
   feedback: z.boolean(),
-  /** 账号与分享。 */
-  accountShare: z.boolean(),
+  /** 账号（登录与账号相关流程）。 */
+  account: z.boolean(),
   /** 系统默认浏览器拉起外部 URL。 */
   externalBrowser: z.boolean(),
   /** 遥测与应用启动/日活调度。 */

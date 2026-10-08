@@ -13,7 +13,7 @@ function lockedState(localOnly: boolean): OfflineGateState {
       publicHelp: localOnly,
       community: localOnly,
       feedback: localOnly,
-      accountShare: localOnly,
+      account: localOnly,
       externalBrowser: localOnly,
       telemetry: localOnly,
       hostOnlineBots: localOnly,

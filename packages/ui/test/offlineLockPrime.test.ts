@@ -31,7 +31,7 @@ const LOCKED: OfflineGateState = {
     publicHelp: true,
     community: true,
     feedback: true,
-    accountShare: true,
+    account: true,
     externalBrowser: true,
     telemetry: true,
     hostOnlineBots: true,

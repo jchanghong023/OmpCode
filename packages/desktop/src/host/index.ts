@@ -39,7 +39,6 @@ import {
   IOffPeakTaskService,
   ISettingService,
   IWindowControllerService,
-  IConversationShareService,
   IZCodeAgentService,
   IZCodeTaskService,
   IZCodeSessionService,
@@ -144,7 +143,6 @@ import {
   materializeRemotePromptAttachments,
 } from "./remotePromptAttachments.js";
 import { createWindowHostAttachmentRegistry } from "./windowHostAttachmentRegistry.js";
-import { scopeConversationShareServiceForAttachment } from "./conversationShareAttachmentService.js";
 import {
   createWindowRemoteConnectionRegistry,
   type WindowRemoteConnectionCloseEvent,
@@ -217,7 +215,10 @@ function authorizeLocalMediaPreviewPath(path: string): Promise<string> {
   }
   const requestId = randomUUID();
   return new Promise<string>((resolve, reject) => {
-    pendingLocalMediaPreviewPathAuthorizations.set(requestId, { resolve, reject });
+    pendingLocalMediaPreviewPathAuthorizations.set(requestId, {
+      resolve,
+      reject,
+    });
     try {
       parentPort.postMessage({
         type: HostResponseTypes.LocalMediaPreviewPathAuthorizeRequest,
@@ -1106,7 +1107,10 @@ const runtimeProcessLifecycleReporter = {
     });
   },
   onException(event) {
-    parentPort?.postMessage({ type: HostResponseTypes.AgentProcessException, ...event });
+    parentPort?.postMessage({
+      type: HostResponseTypes.AgentProcessException,
+      ...event,
+    });
   },
 } satisfies NonNullable<Parameters<typeof createLocalServices>[0]>["processLifecycleReporter"];
 
@@ -1830,7 +1834,10 @@ const windowHostControllerRuntime = createWindowHostControllerRuntime({
         workspaceIdentity: remoteSession.workspaceIdentity,
       };
       if (remoteSession.sourceAvailability !== "online") {
-        return { scope: controllerScope, sourceAvailability: "offline" as const };
+        return {
+          scope: controllerScope,
+          sourceAvailability: "offline" as const,
+        };
       }
       const services = windowRemoteConnectionRegistry.resolveScopedServices(controllerScope);
       return {
@@ -1917,7 +1924,10 @@ function createControllerRoutedTaskService(
     get(target, property, receiver) {
       if (property === "setTaskPinned") {
         return async (params: Parameters<IZCodeTaskService["setTaskPinned"]>[0]) => {
-          const meta = await route(params, { kind: "pin", pinned: params.pinned });
+          const meta = await route(params, {
+            kind: "pin",
+            pinned: params.pinned,
+          });
           if (!meta) throw new Error("pin mutation 后 task 投影缺失");
           return meta;
         };
@@ -1944,7 +1954,11 @@ function createControllerRoutedTaskService(
       if (property === "deleteArchivedTasks") {
         return async (params: Parameters<IZCodeTaskService["deleteArchivedTasks"]>[0]) => {
           if (params.taskIds.length === 0) {
-            return { deletedTaskIds: [], skippedTaskIds: [], failedTaskIds: [] };
+            return {
+              deletedTaskIds: [],
+              skippedTaskIds: [],
+              failedTaskIds: [],
+            };
           }
           return windowHostControllerRuntime.service.deleteArchivedTasks({
             address: await windowHostControllerRuntime.resolveTaskAddress({
@@ -2038,19 +2052,6 @@ function exposeServicesOnMessagePort(
   if (connectionScope) {
     overrides.set(IZCodeAgentService.channelName, connectionScope.service);
   }
-  const conversationShareService = services.getOptional(IConversationShareService);
-  if (conversationShareService) {
-    // Share service 若继续持有 raw Agent，会绕过当前 MessagePort 已握手的 trusted carrier，
-    // rowsRange 会以 connection untrusted 拒绝。必须复用同一 attachment connection scope。
-    overrides.set(
-      IConversationShareService.channelName,
-      scopeConversationShareServiceForAttachment(
-        conversationShareService,
-        clientMode,
-        connectionScope?.service,
-      ),
-    );
-  }
   services.exposeOnChannelServer(server, overrides);
   let disposed = false;
   let flowUpdateChain = Promise.resolve();
@@ -2059,10 +2060,20 @@ function exposeServicesOnMessagePort(
     const update = flowUpdateChain.then(() => connectionScope.setTransportFlowState(state));
     flowUpdateChain = update.catch((error) => {
       const message = error instanceof Error ? error.message : String(error);
-      logger[resolveAttachmentFlowLogLevel(state, message)](
-        "failed to forward attachment connection flow state",
-        { state, message },
-      );
+      const level = resolveAttachmentFlowLogLevel(state, message);
+      // 本文件的 logger 只有 info/warn/error；预期清理的 debug 级与 logRpc 一样走
+      // rpcDebugLogger，否则 "debug" 键在类型上不存在（HEAD 上遗留的 TS7053）。
+      if (level === "debug") {
+        rpcDebugLogger.debug(undefined, "failed to forward attachment connection flow state", {
+          state,
+          message,
+        });
+      } else {
+        logger[level]("failed to forward attachment connection flow state", {
+          state,
+          message,
+        });
+      }
     });
     return update;
   };
@@ -2808,7 +2819,10 @@ parentPort.on("message", async (e: Electron.MessageEvent) => {
         (msg.workspacePath ? [msg.workspacePath] : []),
       env: msg.runtimeProcessEnvPatch,
       publish: (state) => {
-        parentPort?.postMessage({ type: HostResponseTypes.DatabaseStartupState, state });
+        parentPort?.postMessage({
+          type: HostResponseTypes.DatabaseStartupState,
+          state,
+        });
         if (state.phase === "ready") {
           for (const attach of pendingStartupAttachments.values()) {
             try {
@@ -2873,7 +2887,9 @@ parentPort.on("message", async (e: Electron.MessageEvent) => {
               },
               onAutomationManualRunRequested: dispatchManualAutomationRun,
               onOffPeakSchedulerWakeRequested: () => {
-                parentPort?.postMessage({ type: HostResponseTypes.OffPeakSchedulerWakeRequest });
+                parentPort?.postMessage({
+                  type: HostResponseTypes.OffPeakSchedulerWakeRequest,
+                });
               },
               onProviderProvisioningSourceChanged: (trigger) => {
                 parentPort?.postMessage({

@@ -18,7 +18,6 @@ interface WebImportMetaEnv {
 
 export interface WebZaiOAuthConfig extends WebZaiOAuthProviderConfig {
   devOrigin?: string;
-  shareRedirectUri: string;
   allowDevReturnToRedirect: boolean;
 }
 
@@ -59,8 +58,9 @@ function createWebZaiOAuthConfig(env: WebImportMetaEnv = {}): WebZaiOAuthConfig 
     bigmodelAuthorizeUrl: buildBigModelAuthorizeUrl(env.VITE_BIGMODEL_OAUTH_ORIGIN),
     // BigModel 用 appId 而不是 client_id，且默认值就是桌面端在用的 "zcode"。
     bigmodelAppId: env.VITE_BIGMODEL_OAUTH_APP_ID?.trim() || "zcode",
+    // 回调路径沿用 provider 注册的 /cn/share/callback（zcodeEndpoint 的 webShareCallbackUrl）；
+    // 分享页已删除，该路径现在只承载 Web OAuth 登录回调。
     redirectUri: zcodeEndpointUrls.webShareCallbackUrl,
-    shareRedirectUri: zcodeEndpointUrls.webShareCallbackUrl,
     ...(devOrigin ? { devOrigin } : {}),
     allowDevReturnToRedirect: env.VITE_WEB_REMOTE_ALLOW_DEV_RETURN_TO === "true",
   };
@@ -70,7 +70,3 @@ const env = ((import.meta as ImportMeta & { env?: WebImportMetaEnv }).env ??
   {}) as WebImportMetaEnv;
 
 export const WEB_ZAI_OAUTH_CONFIG: WebZaiOAuthConfig = createWebZaiOAuthConfig(env);
-
-export function resolveWebAuthDevReturnTo(config: WebZaiOAuthConfig): string | undefined {
-  return config.devOrigin ? `${config.devOrigin}/share/callback` : undefined;
-}

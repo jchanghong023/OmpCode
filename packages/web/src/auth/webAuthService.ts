@@ -144,16 +144,13 @@ export class WebAuthService {
     this.repo.clearPendingNonce();
     this.repo.clearPendingProvider();
 
-    const callbackRedirectUri = ["/cn/share/callback", "/share/callback"].includes(
-      new URL(url).pathname,
-    )
-      ? this.config.shareRedirectUri
-      : this.config.redirectUri;
+    // 回调路径 /share/callback、/cn/share/callback 是 provider 侧注册的固定重定向地址
+    // （zcodeEndpoint 的 webShareCallbackUrl）；分享页已删除，但登录回调仍落在该路径。
     const exchange = await this.provider.exchangeToken({
       code: callback.code,
       state: callback.state,
       provider,
-      redirectUri: callbackRedirectUri,
+      redirectUri: this.config.redirectUri,
     });
 
     this.repo.saveTokenSet(exchange.tokenSet, provider);
@@ -174,10 +171,6 @@ export class WebAuthService {
 
   restoreCachedSessionState() {
     return this.repo.loadCachedSessionState();
-  }
-
-  getZCodeJwtToken(): string | null {
-    return this.repo.loadZCodeJwtToken();
   }
 
   async logout(): Promise<void> {

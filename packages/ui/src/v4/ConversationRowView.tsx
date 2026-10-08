@@ -129,7 +129,6 @@ import {
 import { ConversationHookDetailsAction } from "@/v4/ConversationHookDetailsAction.js";
 import { formatModelChangeLabel } from "@/v4/composer/modelTriggerDisplay.js";
 import { formatMessageTimeLabel } from "@/v4/messageTimeLabel.js";
-import { parseConversationShareContext } from "@/lib/conversationShareContext.js";
 
 function RowShell({
   rowId,
@@ -874,13 +873,6 @@ const UserInputRowView = memo(function UserInputRowView({
       }),
     [bodyText, context.workspaceIdentity, context.workspacePath],
   );
-  // 只用于把历史消息里的 share URL 尾块从可见正文里剥掉。
-  // 该块已不再产出（见 ConversationComposer 的 promptText 注释）；这里保留解析，是为了让
-  // 接线修复到本次删除之间发出的消息不至于把裸 markup 当正文显示出来。
-  const parsedShareContext = useMemo(
-    () => parseConversationShareContext(parsedPrompt.visibleContent),
-    [parsedPrompt.visibleContent],
-  );
   const [editing, setEditing] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [draft, setDraft] = useState(row.text);
@@ -913,7 +905,7 @@ const UserInputRowView = memo(function UserInputRowView({
       : intl.formatMessage({
           id: `chat.edit.resetConversationAndFiles.${editWorkspaceRewindAvailability?.reason ?? "noFiles"}`,
         });
-  const visibleText = parsedShareContext.visibleContent;
+  const visibleText = parsedPrompt.visibleContent;
   const codeCommentContexts = parsedPrompt.codeComments;
   const webElementContexts = parsedPrompt.webElements;
   const pptxElementReferences = parsedPrompt.pptxElements;
@@ -947,7 +939,7 @@ const UserInputRowView = memo(function UserInputRowView({
 
   useEffect(() => {
     if (!editing) {
-      setDraft(parsedShareContext.visibleContent);
+      setDraft(parsedPrompt.visibleContent);
       setEditAttachments([...(row.attachments ?? [])]);
       setEditAttachmentIndices((row.attachments ?? []).map((_, index) => index));
       setEditPromptContexts(parsedPrompt);
@@ -971,20 +963,20 @@ const UserInputRowView = memo(function UserInputRowView({
   const handleOpenEdit = useCallback(() => {
     // v4 迁移时把 user query 编辑误接成“直接读取主 composer 提交”，
     // 主 composer 为空时点击只会 warn。这里恢复旧行内编辑态。
-    setDraft(parsedShareContext.visibleContent);
+    setDraft(parsedPrompt.visibleContent);
     setEditAttachments([...(row.attachments ?? [])]);
     setEditAttachmentIndices((row.attachments ?? []).map((_, index) => index));
     setEditPromptContexts(parsedPrompt);
     setEditing(true);
-  }, [parsedPrompt, parsedShareContext, row.attachments]);
+  }, [parsedPrompt, row.attachments]);
 
   const handleCancelEdit = useCallback(() => {
-    setDraft(parsedShareContext.visibleContent);
+    setDraft(parsedPrompt.visibleContent);
     setEditAttachments([...(row.attachments ?? [])]);
     setEditAttachmentIndices((row.attachments ?? []).map((_, index) => index));
     setEditPromptContexts(parsedPrompt);
     setEditing(false);
-  }, [parsedPrompt, parsedShareContext, row.attachments]);
+  }, [parsedPrompt, row.attachments]);
 
   const handleRemoveEditAttachment = useCallback((index: number) => {
     setEditAttachments((current) => current.filter((_, itemIndex) => itemIndex !== index));
@@ -999,7 +991,6 @@ const UserInputRowView = memo(function UserInputRowView({
       try {
         const result = await onEdit(
           { rowId: row.rowId, entityId: row.entityId! },
-          // 不再回写 share URL 尾块：它没有任何消费者，编辑历史消息时顺手清掉。
           serializeComposerPromptContexts(nextText, editPromptContexts),
           // 省略空数组会让 CLI 按 attachments 缺省语义恢复 canonical 原附件，
           // 因此 edit 必须始终提交当前完整列表，显式 [] 才能表达“删除全部”。

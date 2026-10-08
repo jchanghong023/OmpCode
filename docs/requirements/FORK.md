@@ -41,6 +41,12 @@
 - 通用 Web 客户端、SSH/WSL/Docker/Server 远程工作区、Host attachment 与 `web-remote-replayable` 交付协议仍保留，不因取消手机入口而删除可复用边界。会话与投影的状态所有者不变；Main 不再拥有手机中继状态或调度其启动、停止。
 - 验收：实际启动桌面后侧栏无手机远控入口、preload 无手机中继 API，应用不创建手机证书、不监听原手机中继端口；桌面正常渲染，通用帧分片/恢复及其他离线门控回归通过，类型检查、Lint 与架构检查通过。
 
+### 会话分享取消
+
+- 取消上游会话分享/导入的全部专用实现，两平台一致：桌面分享按钮、轮次选择面板与确认/成功 Dock、导入提示与只读分享时间线、分享 store、SessionPane 内整套分享派生计算与预检缓存；发布/导入服务目录、HTTP 客户端、上传下载、预检、进度事件及服务注册与远程代理；Web `/share`、`/cn/share` 分享页、预览客户端与专属样式；`zcode://share/import` 深链接、Main/Preload 回调与待处理队列；分享服务通道、平台接口、共享类型、协议中 `sharedContextImport` 与 `context_refs` 等分享专属字段及派生计算；专属翻译键与 `.env` 示例项。不保留禁用入口、空实现或兼容别名。
+- 删除边界：普通复制、附件、会话历史、通用 Web 功能与 Web 登录不属于分享，保留。Web OAuth 回调 URL 路径 `/share/callback`、`/cn/share/callback` 是 provider 侧注册的重定向地址，登录流程继续使用该路径，仅删除分享页渲染与分享专属的跳转参数。旧会话/快照中已持久化的分享残留不阻断读取：`shared_context` 消息词表保留在既有解码 schema 中，快照解析沿用未知键剥离语义；本地已存在的 `.zcode-share/` 目录与导入记录不批量删除。已发布到外部服务的分享记录的撤销不在本仓库范围，不因代码删除视为已撤回。
+- 验收：产品内无可执行分享链路——入口、路由、深链接、通道与服务注册全部清理，旧分享链接或 `zcode://share/import` 不触发导入或网络请求；普通聊天、附件、会话历史恢复正常；离线门控面只保留账号；类型检查、Lint、架构检查及相关 UT/E2E 通过。
+
 ## 数据、端口与更新隔离
 
 - 本应用全部业务数据根由 `~/.zcode` 改为 `~/.ompcode`（配置 v2、日志、任务索引、会话快照、凭据、CLI 配置、skills/commands/plugins 同步目录、telemetry、computer-use 运行日志等），默认 Electron userData（`%APPDATA%/OmpCode`）与单实例锁按产品名隔离；环境变量派生的数据根与缓存路径遵循 [根目录规则](models-and-commands.md#产品规则与所有权)；不读取、不迁移、不写入上游 ZCode 的 `~/.zcode`。workspace 内同名配置目录（`.ompcode/`）同样与 ZCode 的 `.zcode/` 错开。
@@ -62,6 +68,7 @@
 - Windows EXE 与 CentOS 7 ZIP 的 GitHub Actions 手动发布入口不提供任何自定义输入项：从 `main` 点击运行即可，发布 Tag 自动生成为 `v<UTC日期YYYYMMDD>-<时间HHmmss>-<run-id>-<run-attempt>`。同秒触发的两条流水线通过运行 ID 区分，重新运行全部 job 通过重试次数区分；构建 job 生成一次，发布 job 使用该输出。默认发布正式 Release，上传安装包与 SHA256 校验文件；发布流水线不单独运行测试。
 
 验收：两个运行面板均无 tag 或预发布输入项；生成的 Tag 包含日期时间，双平台并行触发与重新运行全部 job 不重复；发布使用构建输出的同一个 Tag，保留分支与已有 Tag 校验。
+
 - 内嵌 omp 的配置与边界：内嵌拷贝与用户已安装的 omp 使用完全相同的配置（同一配置、凭据与会话数据来源），行为与用户日常使用的 omp 保持一致；NEVER 覆盖、替换、修改或代为安装用户已安装的 omp，内嵌拷贝只存在于 ZCode 应用资源目录内。
 - 进程与端口边界：内嵌 omp 只以子进程形态经 stdio 通信，不监听任何端口；绝不探测、复用、终止或以其他方式影响用户机器上已在运行的 ZCode / omp 进程。本仓库自建的任何本地测试服务一律使用 `listen(0)` 临时端口，发生端口冲突时换临时端口重试，不占用固定端口。
 - CentOS 7 独立分发与安全限制见 [centos7-release.md](centos7-release.md)。

@@ -46,18 +46,13 @@ export function routeOmpBtwComposerInput(
     | {
         attachments?: readonly unknown[];
         contextAttachmentCount?: number;
-        sharedContextRefs?: readonly unknown[];
       }
     | undefined,
   open: (question: string) => Promise<boolean>,
 ): Promise<"sent" | "blocked"> | null {
   const command = resolveOmpBtwComposerCommand(text, appCommands);
   if (!command) return null;
-  if (
-    options?.attachments?.length ||
-    options?.contextAttachmentCount ||
-    options?.sharedContextRefs?.length
-  ) {
+  if (options?.attachments?.length || options?.contextAttachmentCount) {
     return Promise.reject(new Error("辅助对话只支持文本，不支持附件或结构化上下文"));
   }
   return open(command.text).then<"sent" | "blocked">((created) => (created ? "sent" : "blocked"));

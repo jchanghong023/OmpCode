@@ -145,8 +145,6 @@ const ompZhCNOverrides: Record<string, string> = {
   "chat.ompStatus.autoCompact": "自动压缩",
   "chat.ompStatus.autoFailed": "自动压缩切换失败",
   "settings.computerUse.disabledToast": "电脑控制已关闭，已有对话需重启 OmpCode 后生效。",
-  "conversationShare.permission.linkEditorHint": "可导入到 OmpCode",
-  "conversationShare.import.loginRequired": "该分享暂不支持匿名导入，请登录 OmpCode 后重试",
   "bots.description": "把外部聊天工具和 Webhook 接入 OmpCode 机器人。",
   "bots.setup.guide.weixin.create.2":
     "OmpCode 会直接保存 iLink 返回的 bot_token；扫码后请在微信里向 Bot 发送任意消息完成会话激活。",

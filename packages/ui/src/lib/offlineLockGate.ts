@@ -23,7 +23,7 @@ const OFFLINE_LOCK_NOT_LOCKED: OfflineGateState = {
     publicHelp: false,
     community: false,
     feedback: false,
-    accountShare: false,
+    account: false,
     externalBrowser: false,
     telemetry: false,
     hostOnlineBots: false,

@@ -26,7 +26,7 @@ function resolveZCodeEnv(value: string | undefined): "test" | "production" {
 export default defineConfig(({ mode }) => {
   // `.env*` 只提供链接常量；当前产品环境由启动脚本或 CI 注入 ZCODE_ENV。
   // 启动脚本通过 process.env 显式选择 test/production；它必须优先于 .env 文件，
-  // 否则 share:test 可能被 mode 的旧配置误解析到错误 endpoint。
+  // 否则测试环境的链接常量可能被 mode 的旧配置误解析到错误 endpoint。
   const env = { ...loadEnv(mode, REPO_ROOT, ""), ...process.env };
   const zcodeEnv = resolveZCodeEnv(env.ZCODE_ENV);
   const endpointEnv = {

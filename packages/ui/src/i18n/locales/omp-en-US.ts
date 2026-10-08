@@ -153,9 +153,6 @@ const ompEnUSOverrides: Record<string, string> = {
   "chat.ompStatus.autoFailed": "Could not change auto compact",
   "settings.computerUse.disabledToast":
     "Computer Use is disabled. Existing conversations require a OmpCode restart to take effect.",
-  "conversationShare.permission.linkEditorHint": "Import into OmpCode",
-  "conversationShare.import.loginRequired":
-    "This share cannot be imported anonymously. Sign in to OmpCode and try again",
   "bots.description": "Connect external chats and webhooks to OmpCode bots.",
   "bots.setup.guide.weixin.create.2":
     "OmpCode saves the bot_token returned by iLink automatically; after scanning, send any message to the bot in Weixin to activate the chat.",

@@ -468,45 +468,6 @@ export function createWorkspaceSlice(set: SetFn) {
       );
     },
 
-    requestTimelineBottom: (workspacePath: string, taskId: string, workspaceIdentity?: string) => {
-      let nextRequestId = 0;
-      set((state) =>
-        updateWorkspaceState(
-          state,
-          workspacePath,
-          (current) => {
-            const requestId = current.timelineBottomRequestVersion + 1;
-            nextRequestId = requestId;
-            return {
-              ...current,
-              timelineBottomRequestVersion: requestId,
-              timelineBottomRequest: { requestId, taskId },
-            };
-          },
-          workspaceIdentity,
-        ),
-      );
-      return nextRequestId;
-    },
-
-    clearTimelineBottomRequest: (
-      workspacePath: string,
-      requestId: number,
-      workspaceIdentity?: string,
-    ) => {
-      set((state) =>
-        updateWorkspaceState(
-          state,
-          workspacePath,
-          (current) =>
-            current.timelineBottomRequest?.requestId === requestId
-              ? { ...current, timelineBottomRequest: null }
-              : current,
-          workspaceIdentity,
-        ),
-      );
-    },
-
     startDraft: (
       workspacePath: string,
       provider?: ZCodeProvider,
