@@ -42,3 +42,27 @@
 测试入口与隔离启动前提见 [AGENTS.md](../../AGENTS.md)。GUI 顺序为 `live → capture → 重启同一测试根 → cold`，`capture` 只读取真实 timeline；cold 比较完整文本数组的内容、顺序与重复次数。不能以跨进程重建的 rowId 或仅选择过的输出子集充当恢复基线。
 
 Windows 范围验收完成。脱敏证据： [目录与索引/双链路](evidence-omp-native-commands-20261008/native-local-result.json)、[真实计划](evidence-omp-native-commands-20261008/native-plan-model-result.json)、[压缩](evidence-omp-native-commands-20261008/compact-native-result.json)、[GUI 覆盖](evidence-omp-native-commands-20261008/gui-coverage.json)、[GUI 完整冷恢复](evidence-omp-native-commands-20261008/gui-cold-result.json)、[最终 UT](evidence-omp-native-commands-20261008/unit-final-summary.txt)。
+
+## 合并 main 后复验（同日第二阶段）
+
+`codex/omp-rpc-ui-core-commands` 在上述验收后合并了本地 `main`（带入 Agent 交互页功能，`ompStore.ts`、`conversationEngine.ts` 等四处冲突解决），合并态当时未验证。本阶段在同一 Windows 环境对合并后的分支 HEAD `01aaca2` 重建产物并完整复验；Node 为 24.20.0（要求 24.14.0 的同族小版本，mise 不可用）。
+
+| 范围                                                     | 实际结果                                                                   |
+| -------------------------------------------------------- | -------------------------------------------------------------------------- |
+| `pnpm typecheck` / `pnpm lint` / `pnpm architecture:check --changed` | 全部通过，0 警告 0 违规；改动文件 `oxfmt --check` 通过                     |
+| omp-agent UT                                             | 330 测试：325 通过、0 失败、5 跳过（真实 E2E 单独执行）                    |
+| UI / services 测试                                       | UI 43/43（含双功能合并用例）、services 2/2                                 |
+| `real-omp.e2e.test.ts`                                   | 3/3 真实通过                                                               |
+| `realNativeCommands.e2e.test.ts`                         | 五个测试全部真实通过：compact 拒绝、team、N01/N03/N05、N02/N04 模型全场景、plan-controls（按设计以 `OMP_NATIVE_E2E_ROOT` 链式复用夹具） |
+| 核心命令 GUI live                                        | catalog、local、models、compact、team、plan、loop、goal 全部通过           |
+| GUI capture / cold（重启同一隔离根）                     | 94 条助手记录 live 采集；冷恢复内容、顺序、重复次数深度相等，通过           |
+
+## 复验修复的三处缺陷（均有证据）
+
+1. **stdio team 提示词与 yield schema 冲突**：`/team` 提问中的「所有结构化字段最多一句话，方案正文最多80字」使提案子代理省略必填结构化字段，被原生流程判 team-incomplete（提案子代理 2883 输出 tokens、无错误仍失败）。与 GUI 验收已通过的提问对齐，改为「提交完整结构化结果、无差异用空数组」后，同测试真实通过（140 秒五阶段 + 双链路冷恢复）。
+2. **team-dispatch 冷恢复多行**：omp 的 `team-dispatch` custom（attribution=agent、display=true）只写原生 journal，从不经 rpc-ui live 通道下发（live 时间线与 81 条派生存储记录均无该文本）；冷解析照 journal 显示破坏 N05 live/冷一致。修复：`rowsFromOmpEntries` 按类型过滤该 journal-only 通知；阶段进度已由 command_output 呈现、子代理明细已由 Agent Hub 呈现。
+3. **正文 ultrathink 冷恢复丢行**：`/skill:` 轮的原生 journal 只有 `skill-prompt` custom（attribution=user、display=true）而没有用户消息；冷重建不推进轮计数，skill 回复并入上一用户轮后，UI 组内 latest-assistant 规则隐藏了该轮的正文 ultrathink 模型回复（`NATIVE_BODY_ULTRATHINK_RESULT`，journal 中存在、live 可见、cold DOM 缺失）。修复：用户侧可见 custom 即轮边界。修复前失败对照见 `cold-history-comparison.json` 修复前基线（+team-dispatch / −BODY_ULTRATHINK）；修复后同一隔离根重启重跑 cold 通过。
+
+配套回归：`coldStoreProjection.test.ts` 新增两条 UT（team-dispatch 过滤、skill-prompt 轮边界）；`ompCommandOutputHistory.test.ts` 的分组语义用例改用中性 `team-progress` 示例类型（该用例主题是独立显示组与合法重复保留，非 team-dispatch 可见性）。
+
+脱敏证据：[GUI 覆盖与全量冷恢复](evidence-omp-native-commands-merge-20261008/)（目录内含 live/capture/cold 结果、94 行对比、stdio team 与模型进度）。CentOS 7 仍未验证；全仓 `pnpm fmt:check` 既有失败未变。

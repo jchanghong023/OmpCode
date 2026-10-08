@@ -191,6 +191,12 @@ export function rowsFromOmpEntries(
       record.type === "custom_message" ? record : record.message,
     );
     if (custom) {
+      // omp 的 team 后台调度通知只写 journal、从不经 rpc-ui live 通道下发（live 时间线与
+      // 派生存储均无该行）；冷恢复照 journal 显示会破坏 live/冷一致。阶段进度已有
+      // command_output 输出、子代理明细已有 Agent Hub，此处不重复进时间线。
+      if (record.type === "custom_message" && record.customType === "team-dispatch") {
+        continue;
+      }
       // 原生 custom 是独立显示事实；挂最近模型 turn 会让多个 team 结果被 UI 组的
       // latest-assistant 规则互相隐藏。用 journal entry ID 稳定分组，不推进模型轮。
       const displayId =
@@ -206,6 +212,15 @@ export function rowsFromOmpEntries(
           custom.timestamp ?? Date.now(),
         ),
       );
+      // /skill: 轮 journal 只有 skill-prompt（attribution=user）而无用户消息；不推进轮
+      // 计数会把后续回复并入上一用户轮，被组内 latest-assistant 规则隐藏（GUI 冷恢复
+      // 实测丢失正文 ultrathink 的模型回复）。用户侧可见 custom 即一轮的输入边界。
+      const attribution =
+        record.type === "custom_message" ? record.attribution : object(record.message)?.attribution;
+      if (attribution === "user") {
+        context.turnCounter += 1;
+        currentTurnId = `turn-cold-${context.turnCounter}`;
+      }
       continue;
     }
     if (

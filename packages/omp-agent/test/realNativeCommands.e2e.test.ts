@@ -552,8 +552,11 @@ test(
         /NATIVE_TEAM_COMMAND_ACCEPTANCE/,
       );
       const after = harness.cursor(session);
+      // 提示词不得约束"结构化字段最多一句话/正文最多80字"：该限制会让子代理省略 yield schema
+      // 必填字段（如 factDifferences[].topic）而被原生流程判失败（team-incomplete）。与 GUI 验收
+      // 已通过的提问一致，要求提交完整结构化结果、无差异时使用空数组（见 2026-10-08 验收报告）。
       const question =
-        "/team 只读验收范围已明确：阅读sample.ts和README.md，确认当前导出函数nativeAnswer返回42。唯一方案是保持现有函数名及返回值，不设计新命名、不修改文件。仍按原生团队流程完成独立调查、对齐、审查和汇总，证据引用实际文件；所有结构化字段最多一句话，方案正文最多80字；技能固定回复规则仅适用于显式skill调用，与本讨论无关。";
+        "/team 只读验收范围已明确：阅读sample.ts和README.md，确认当前导出函数nativeAnswer返回42。唯一方案是保持现有函数名及返回值，不设计新命名、不修改文件。仍按原生团队流程完成独立调查、对齐、审查和汇总，证据引用实际文件；各阶段必须通过原生 yield 提交该阶段 schema 要求的完整结构化结果，不省略必填字段，没有事实差异或需求理解差异时使用空数组、不编造差异，若有真实差异则完整填写各项必填字段；技能固定回复规则仅适用于显式skill调用，与本讨论无关。";
       assert.equal(
         (await harness.command(session, "sendText", { text: question })).status,
         "accepted",

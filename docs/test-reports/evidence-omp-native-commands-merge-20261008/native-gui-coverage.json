@@ -1,0 +1,36 @@
+{
+  "taskTestId": "task-item-01a11c34-f9b3-73f9-b619-d014594dc922",
+  "phase": "cold",
+  "requested": [
+    "local",
+    "models",
+    "team",
+    "plan"
+  ],
+  "coverage": {
+    "catalog": {
+      "status": "passed"
+    },
+    "local": {
+      "status": "passed"
+    },
+    "models": {
+      "status": "passed"
+    },
+    "compact": {
+      "status": "passed"
+    },
+    "team": {
+      "status": "passed"
+    },
+    "plan": {
+      "status": "passed"
+    },
+    "loop": {
+      "status": "passed"
+    },
+    "goal": {
+      "status": "passed"
+    }
+  }
+}

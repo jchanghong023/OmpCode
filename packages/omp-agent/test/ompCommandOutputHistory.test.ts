@@ -336,8 +336,10 @@ test("多条原生 custom 冷恢复各自独立稳定显示组，保留合法重
     {
       type: "custom_message",
       id: "dispatch-old",
-      customType: "team-dispatch",
-      content: "team-dispatch",
+      // team-dispatch 实测只写 journal、不经 live 通道下发，冷恢复已按类型过滤；
+      // 本测试关注分组合并语义，用中性的可见 custom 类型作代表。
+      customType: "team-progress",
+      content: "team-progress",
       display: true,
       timestamp: 300,
     },
@@ -352,8 +354,8 @@ test("多条原生 custom 冷恢复各自独立稳定显示组，保留合法重
     {
       type: "custom_message",
       id: "dispatch-new",
-      customType: "team-dispatch",
-      content: "team-dispatch",
+      customType: "team-progress",
+      content: "team-progress",
       display: true,
       timestamp: 500,
     },
@@ -376,7 +378,7 @@ test("多条原生 custom 冷恢复各自独立稳定显示组，保留合法重
   const custom = rows.filter((row) => row.kind === "assistantText" && row.text.startsWith("team-"));
   assert.deepEqual(
     custom.map((row) => row.kind === "assistantText" && row.text),
-    ["team-dispatch", "team-incomplete", "team-dispatch"],
+    ["team-progress", "team-incomplete", "team-progress"],
   );
   assert.equal(
     new Set(custom.map((row) => row.turnId)).size,

@@ -58,3 +58,5 @@ sequenceDiagram
 ## 实现与验收状态
 
 2026-10-08：核心对接已实施，按用户明确选择完成 Windows 验收；安装核为 `18.8.4+fork.304`。相关 UT、真实 OMP API、隔离 GUI、Desktop/Web 双链路及完整 GUI 冷恢复通过。CentOS 7 本次未验证，不计通过；全仓格式检查仍有本次未修改的既有失败。实际结果与保留失败见 [验收报告](../test-reports/omp-native-commands-2026-10-08.md)。
+
+2026-10-08（第二阶段）：分支合并本地 `main`（Agent 交互页功能）后重建产物完整复验：静态门禁、UT、真实 OMP E2E 五用例、GUI live/capture/cold（94 行深度相等）全部通过。修复三处实证缺陷：stdio team 提示词与 yield schema 冲突；`team-dispatch` journal-only 通知进入冷时间线破坏 live/冷一致；`/skill:` 轮 journal 无用户消息导致冷恢复轮合并、正文 ultrathink 回复被组内 latest-assistant 隐藏。行为仍以本文件规则为准，未新增需求；复验与证据见同报告「合并 main 后复验」。
