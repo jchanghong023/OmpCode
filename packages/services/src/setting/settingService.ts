@@ -63,8 +63,24 @@ function getSettingsFile() {
   return join(getSettingsDir(), "setting.json");
 }
 
+function applyCentos7DefaultLocale(value: unknown): unknown {
+  if (
+    process.platform !== "linux" ||
+    process.env.OMPCODE_CENTOS7_DEFAULT_LOCALE !== "zh-CN" ||
+    !value ||
+    typeof value !== "object" ||
+    Array.isArray(value) ||
+    "locale" in value ||
+    "localePreference" in value
+  ) {
+    return value;
+  }
+  // 只补缺失的语言设置；旧 locale 和显式 system 均需保留，不能在每次启动时强制中文。
+  return { ...value, locale: "zh-CN", localePreference: "zh-CN" };
+}
+
 function defaultSettings(): AppSettings {
-  return appSettingsSchema.parse({});
+  return appSettingsSchema.parse(applyCentos7DefaultLocale({}));
 }
 
 function buildCorruptSettingsBackupPath(settingsFile: string): string {
@@ -147,7 +163,9 @@ async function readSettingsWithMeta(): Promise<ReadSettingsResult> {
         };
       }
     }
-    const result = appSettingsSchema.safeParse(migrateLegacyAccountConnectionSettings(rawValue));
+    const result = appSettingsSchema.safeParse(
+      applyCentos7DefaultLocale(migrateLegacyAccountConnectionSettings(rawValue)),
+    );
     if (!result.success) {
       log(
         "read failed schema validation, returning defaults. error:",
@@ -398,7 +416,9 @@ export function createSettingServiceWithMigrations(): {
           )
             return;
           if (resolved.some((entry) => !entry.organizationId?.trim())) return;
-          const migrated = appSettingsSchema.parse(migrateLegacyAccountConnectionSettings(latest));
+          const migrated = appSettingsSchema.parse(
+            applyCentos7DefaultLocale(migrateLegacyAccountConnectionSettings(latest)),
+          );
           const selections: ProviderFamilyConnectionSelectionSettings = {
             ...migrated.providerFamilyConnectionSelections,
           };

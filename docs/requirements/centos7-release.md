@@ -3,6 +3,7 @@
 ## 平台界面与功能边界
 
 - CentOS 7 与 Windows 使用完全一致的前端 UI；Windows 为全功能基准，CentOS 7 不删除、不隐藏任何 UI 入口。
+- CentOS 7 默认使用简体中文界面（`zh-CN`）。启动器注入 `OMPCODE_CENTOS7_DEFAULT_LOCALE=zh-CN`，设置服务仅在没有已保存语言设置时采用该默认值；菜单与 renderer 继续读取同一设置。已有中文、英文或跟随系统的选择优先，用户仍可切换语言；不改写 `LANG`、`LC_ALL`、`LANGUAGE`，不改变 Windows 默认语言规则。
 - CentOS 7 启动器使用继承的 `OMP_OFFLINE` 环境变量作为企业离线锁定开关：启用时关闭公网更新、公网配置与遥测等后端，该变量原样透传给内嵌 omp；未启用时桌面为全功能，与 Windows 基准一致。被关闭功能的 UI 入口保留，入口触发时给出明确的禁用或失败反馈，不静默缺失。
 - 与 Windows 的差异只允许存在于底层依赖与打包：Windows 运行 Electron 44.x；CentOS 7 发布流水线在构建时切换为 Electron 28.3.3 与 Node 18 兼容依赖组合（原生 glibc 2.17 资产、启动器与离线开关）。OMP 核心、协议与 UI 代码两平台同源，桌面 Main/Host/renderer 代码不得使用 Electron 44 独有 API 而缺失 Electron 28 回退。
 
@@ -32,6 +33,8 @@
 - 运行时库不得静默加载自构建器更新的 OS。ZIP 保留可执行权限与符号链接；重定位不得破坏启动。缺失必需资源与不兼容 ELF 依赖在分发前失败。打包阶段还在临时端口上用打包的 Electron 运行时执行回环 SSH 握手；它不替代 CentOS 7 VM 验收。
 
 ## Acceptance
+
+- 在英文系统环境与无语言设置的全新数据根启动 CentOS 7 包，菜单与主界面默认简体中文；保存英文或跟随系统后重启仍保留该选择。仅有旧 `locale` 字段的设置也保留原语言。启动器不改变宿主语言环境变量，Windows 默认规则不受影响。
 
 ### IBus session selection
 

@@ -1226,9 +1226,6 @@ export function SessionPane({
     resolveInitialDraftConfig,
     handleDraftSelectModel,
     handleDraftSelectThought,
-    planModelActive,
-    planModelAvailable,
-    togglePlanModel,
     handleDraftSwitchMode,
     promoteComposerDraft,
     captureAcceptedModelSelection,
@@ -2575,7 +2572,7 @@ export function SessionPane({
         return "blocked" as const;
       }
 
-      // 空 /plan 与模式菜单相同，只编辑当前 Composer，不提前改写 Agent 执行状态。
+      // 空 /plan 只编辑当前 Composer，不提前改写 Agent 执行状态。
       if (slashCommand?.kind === "planShortcut") {
         handleDraftSwitchMode("plan");
         if (submission) submission = { ...submission, planEnabled: true };
@@ -4416,9 +4413,6 @@ export function SessionPane({
       onStop={handleStopFromButton}
       onSelectModel={handleSelectModel}
       onSelectThought={handleSelectThought}
-      planModelActive={planModelActive}
-      planModelAvailable={planModelAvailable}
-      onTogglePlanModel={selectionSideChat ? undefined : togglePlanModel}
       gitSummary={gitSummary}
       gitDirtyFileCount={gitDirtyFileCount}
       onOpenGitReview={

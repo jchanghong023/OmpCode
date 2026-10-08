@@ -432,9 +432,6 @@ interface ConversationComposerProps {
   ) => void;
   /** 选中思考深度；同时带上用户操作时看到的模型，避免异步回流后把 thought 归到另一模型。 */
   onSelectThought: (thought: string, modelContext: { provider: string; model: string }) => void;
-  planModelActive?: boolean;
-  planModelAvailable?: boolean;
-  onTogglePlanModel?: () => Promise<{ success: boolean; error?: string }>;
   gitSummary?: GitRepositorySummary | null;
   gitDirtyFileCount?: number;
   onOpenGitReview?: () => void;
@@ -526,9 +523,6 @@ function ConversationComposerImpl({
   onStop,
   onSelectModel,
   onSelectThought,
-  planModelActive = false,
-  planModelAvailable = false,
-  onTogglePlanModel,
   gitSummary,
   gitDirtyFileCount,
   onOpenGitReview,
@@ -2168,23 +2162,19 @@ function ConversationComposerImpl({
     ],
   );
 
-  // 左下：omp 计划模型 + CUA 入口 + 当前 session 后台任务入口。followupMode 由 app 设置页同步到 CLI，
+  // 左下：Git 状态 + CUA 入口 + 当前 session 后台任务入口。followupMode 由 app 设置页同步到 CLI，
   // 不在 composer 暴露局部开关；后台入口只消费同一 snapshot，不维护第二份任务状态。
   const leadingActionsNode = useMemo(
     () => (
       <>
         {/* omp 默认全权限；原权限/模式选择不适用于此 Fork，保留底层提交模式。 */}
-        {onTogglePlanModel ? (
+        {parentModelOnly ? null : (
           <OmpDesktopComposerStatus
-            scopeKey={configPickerScopeKey}
             gitSummary={gitSummary}
             gitDirtyFileCount={gitDirtyFileCount}
-            planModelActive={planModelActive}
-            planModelAvailable={planModelAvailable}
-            onTogglePlanModel={onTogglePlanModel}
             onOpenGitReview={onOpenGitReview}
           />
-        ) : null}
+        )}
         {/* 附件画廊重构曾整段覆盖 leadingActions，误删 CUA 常驻入口。
             入口自身继续负责平台、远程与设置可见性，不在 composer 重复判定。 */}
         {parentModelOnly ? null : (
@@ -2215,11 +2205,8 @@ function ConversationComposerImpl({
       backgroundWorkOpenTarget,
       onOpenRunningBackgroundWorks,
       onOpenGitReview,
-      onTogglePlanModel,
       onSwitchMode,
-      planModelActive,
       parentModelOnly,
-      planModelAvailable,
       provider,
       remoteSessionId,
       runningSubagentCount,

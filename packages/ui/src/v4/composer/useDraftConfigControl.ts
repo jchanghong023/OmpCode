@@ -44,7 +44,6 @@ import {
 } from "@/v4/composer/composerDraftStore.js";
 import { resolveAppFollowupMode } from "@/v4/composer/followupModeSettings.js";
 import { logger } from "@/logger.js";
-import { useOmpPlanModelToggle } from "@/v4/composer/useOmpPlanModelToggle.js";
 import { selectWorkspaceZCodeState, useZCodeSessionStore } from "@/store/zcodeSessionStore.js";
 
 /** 目录水合单飞（per workspaceKey）：draft、已有 session 和严格模式双挂载共享一次 RPC。 */
@@ -105,9 +104,6 @@ interface DraftConfigControl {
   ) => () => void;
   handleDraftSelectModel: (modelProvider: string, model: string) => void;
   handleDraftSelectThought: (thought: string) => void;
-  planModelActive: boolean;
-  planModelAvailable: boolean;
-  togglePlanModel: () => Promise<{ success: boolean; error?: string }>;
   handleDraftSwitchMode: (mode: string) => void;
 }
 
@@ -249,17 +245,13 @@ export function useDraftConfigControl(params: {
     [scopeKey, workspacePath, workspaceIdentity, scopeId],
   );
   const updateDraftConfig = useCallback(
-    (
-      update: (current: Partial<SessionConfigState>) => Partial<SessionConfigState>,
-      clearPlanModelToggle = false,
-    ) => {
+    (update: (current: Partial<SessionConfigState>) => Partial<SessionConfigState>) => {
       const next = update(draftConfigRef.current);
       const mode = submissionModeSchema.safeParse(next.mode);
       updateComposerDraft((current) => ({
         ...current,
         mode: mode.success ? mode.data : current.mode,
         modelSelection: next.modelSelection,
-        ...(clearPlanModelToggle ? { planModelReturnSelection: undefined } : {}),
         // 用户已经显式改选，不能再由导入时等待的默认初始化覆盖。
         ...(current.initializeFromNewTask
           ? { mode: mode.success ? mode.data : "build", initializeFromNewTask: undefined }
@@ -465,7 +457,7 @@ export function useDraftConfigControl(params: {
         workspacePath,
         workspaceIdentity: workspaceIdentity ?? null,
       });
-      updateDraftConfig((current) => applyDraftModelSelection(current, modelSelection), true);
+      updateDraftConfig((current) => applyDraftModelSelection(current, modelSelection));
     },
     [ompCatalog, updateDraftConfig, workspaceIdentity, workspacePath],
   );
@@ -497,16 +489,6 @@ export function useDraftConfigControl(params: {
     },
     [updateDraftConfig],
   );
-
-  const { available: planModelAvailable, toggle: togglePlanModel } = useOmpPlanModelToggle({
-    workspacePath,
-    workspaceIdentity,
-    scopeKey,
-    stateRef,
-    draftConfigRef,
-    catalog: ompCatalog,
-    updateComposerDraft,
-  });
 
   const handleDraftSwitchMode = useCallback(
     (mode: string) => {
@@ -543,9 +525,6 @@ export function useDraftConfigControl(params: {
     captureAcceptedModelSelection,
     handleDraftSelectModel,
     handleDraftSelectThought,
-    planModelActive: draft.planModelReturnSelection !== undefined,
-    planModelAvailable,
-    togglePlanModel,
     handleDraftSwitchMode,
   };
 }

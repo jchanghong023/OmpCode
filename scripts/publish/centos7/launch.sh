@@ -28,6 +28,9 @@ app="$package_root/app"
   exit 1
 }
 
+# CentOS 默认中文由设置服务在缺少语言偏好时采用，不改宿主 locale 或覆盖用户已保存的选择。
+export OMPCODE_CENTOS7_DEFAULT_LOCALE=zh-CN
+
 # 修复依据：主机的旧版 libstdc++ 不提供 Electron 28 与本地编译插件所需的 C++ 符号。
 # 仅优先使用随包发布的 C++ 库，不替换宿主的 glibc。
 if [[ -d "$package_root/lib" ]]; then

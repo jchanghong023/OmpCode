@@ -50,28 +50,50 @@ test("OMP_CONFIG_ROOT 派生应用根，设置读写与显示路径同源且不�
       }),
     );
     const original = await readFile(legacySettings, "utf8");
-    await withEnv({ ZCODE_DESKTOP_HOME_DIR: home, OMP_CONFIG_ROOT: ompRoot }, async () => {
-      const { service } = createSettingServiceWithMigrations();
-      const settings = await service.get();
-      assert.equal(settings.dataStoragePath, appRoot);
-      assert.equal(settings.dataBaseDir, undefined);
-      assert.equal(settings.lastActiveTaskByWorkspace, undefined);
-      await service.update({ locale: "zh-CN" });
-      assert.equal((await service.get()).locale, "zh-CN");
-      const persisted = JSON.parse(await readFile(activeSettings, "utf8"));
-      assert.equal(persisted.dataStoragePath, undefined);
-      assert.equal(persisted.locale, "zh-CN");
-      assert.equal(getAppConfigDir(), join(appRoot, "v2"));
-      assert.ok(getTasksIndexDatabasePath().startsWith(join(appRoot, "v2")));
-      assert.equal(getConversationWorkspaceDir(), join(appRoot, "workspace", "default"));
-      await assert.rejects(service.updateDataBaseDir(join(home, "another")), /OMP_CONFIG_ROOT/);
-      assert.equal(await readFile(legacySettings, "utf8"), original);
-    });
-    await withEnv({ ZCODE_DESKTOP_HOME_DIR: home, OMP_CONFIG_ROOT: undefined }, async () => {
-      const { service } = createSettingServiceWithMigrations();
-      assert.equal((await service.get()).locale, "en-US");
-      await assert.rejects(service.updateDataBaseDir(join(home, "another")), /OMP_CONFIG_ROOT/);
-    });
+    await withEnv(
+      {
+        ZCODE_DESKTOP_HOME_DIR: home,
+        OMP_CONFIG_ROOT: ompRoot,
+        OMPCODE_CENTOS7_DEFAULT_LOCALE: "zh-CN",
+      },
+      async () => {
+        const { service } = createSettingServiceWithMigrations();
+        const settings = await service.get();
+        assert.equal(settings.locale, "zh-CN");
+        assert.equal(settings.localePreference, process.platform === "linux" ? "zh-CN" : "system");
+        assert.equal(settings.dataStoragePath, appRoot);
+        assert.equal(settings.dataBaseDir, undefined);
+        assert.equal(settings.lastActiveTaskByWorkspace, undefined);
+        await service.update({ locale: "zh-CN" });
+        assert.equal((await service.get()).locale, "zh-CN");
+        const persisted = JSON.parse(await readFile(activeSettings, "utf8"));
+        assert.equal(persisted.dataStoragePath, undefined);
+        assert.equal(persisted.locale, "zh-CN");
+        assert.equal(getAppConfigDir(), join(appRoot, "v2"));
+        assert.ok(getTasksIndexDatabasePath().startsWith(join(appRoot, "v2")));
+        assert.equal(getConversationWorkspaceDir(), join(appRoot, "workspace", "default"));
+        await assert.rejects(service.updateDataBaseDir(join(home, "another")), /OMP_CONFIG_ROOT/);
+        assert.equal(await readFile(legacySettings, "utf8"), original);
+        await service.update({ locale: "en-US", localePreference: "system" });
+        const restored = await createSettingServiceWithMigrations().service.get();
+        assert.equal(restored.locale, "en-US");
+        assert.equal(restored.localePreference, "system");
+      },
+    );
+    await withEnv(
+      {
+        ZCODE_DESKTOP_HOME_DIR: home,
+        OMP_CONFIG_ROOT: undefined,
+        OMPCODE_CENTOS7_DEFAULT_LOCALE: "zh-CN",
+      },
+      async () => {
+        const { service } = createSettingServiceWithMigrations();
+        const saved = await service.get();
+        assert.equal(saved.locale, "en-US");
+        assert.equal(saved.localePreference, "en-US");
+        await assert.rejects(service.updateDataBaseDir(join(home, "another")), /OMP_CONFIG_ROOT/);
+      },
+    );
   } finally {
     await rm(home, { recursive: true, force: true });
   }
