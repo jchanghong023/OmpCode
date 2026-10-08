@@ -244,6 +244,12 @@ export interface WorkspaceShellLayoutProps extends Omit<AppProps, "baseFeedbackS
   handleAutoOpenAssistantPptx: (request: AssistantPreviewCardsAutoOpenRequest) => void;
   handleOpenBackgroundBash: (request: OpenBackgroundBashSideTabRequest) => void;
   handleOpenSubagentSession: (request: OpenScopedSubagentSideTabRequest) => void;
+  handleOpenOmpAgentInteractions: (
+    request: import("@/lib/workspaceSidePane.js").OpenOmpAgentInteractionsSideTabRequest,
+  ) => void;
+  handleBindOmpAgentInteractionsRoot: (
+    binding: import("@/lib/workspaceSidePane.js").OmpAgentInteractionsRootBinding,
+  ) => void;
   handleOpenSubagentDirectory: (
     request: import("@/lib/workspaceSidePane.js").OpenScopedSubagentDirectorySideTabRequest,
   ) => void;

@@ -244,6 +244,8 @@ export function App({
     handleOpenSubagentSession,
     handleOpenBackgroundBash,
     handleOpenSubagentDirectory,
+    handleOpenOmpAgentInteractions,
+    handleBindOmpAgentInteractionsRoot,
     handleSyncSubagentSessionTabs,
     handleOpenSelectionSideChat,
     handleOpenPlanDetail,
@@ -1160,6 +1162,8 @@ export function App({
         handleOpenSubagentSession={handleOpenSubagentSession}
         handleOpenBackgroundBash={handleOpenBackgroundBash}
         handleOpenSubagentDirectory={handleOpenSubagentDirectory}
+        handleOpenOmpAgentInteractions={handleOpenOmpAgentInteractions}
+        handleBindOmpAgentInteractionsRoot={handleBindOmpAgentInteractionsRoot}
         handleSyncSubagentSessionTabs={handleSyncSubagentSessionTabs}
         handleOpenSelectionSideChat={handleOpenSelectionSideChat}
         handleOpenPlanDetail={handleOpenPlanDetail}

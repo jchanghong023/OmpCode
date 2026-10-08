@@ -1,6 +1,5 @@
 // serverApp：ZCode Protocol（legacy + v4）方法分发的总装。
 // 由 adapters/protocolServer 驱动 IO；这里只做路由与结果组装。
-
 import { V4_METHODS, v4ConnectionFlowParamsSchema, type WorkspaceConfigState } from "@zcode/shared/zcode-protocol-v4";
 import { zcodeProtocolMethods, zcodeSkillsReferenceCatalogParamsSchema } from "@zcode/shared";
 import { createLegacyHandlers } from "./legacyMethods.js";
@@ -17,7 +16,8 @@ import { buildUsageStatsResponse } from "./usageStatsResponse.js";
 import type { HostGateway, OmpDirectoryGatewayPort, OmpProcessFactory, OmpStorePort } from "./ports.js";
 import type { SlashCommandResolver } from "./ompPromptDispatch.js";
 import { OmpBtwStore } from "./OmpBtwStore.js";
-
+import { OmpAgentInteractionStore } from "./OmpAgentInteractionStore.js";
+import { queryAgentInteractions } from "./OmpAgentInteractionQuery.js";
 export interface ServerAppDeps {
   ompFactory: OmpProcessFactory;
   store: OmpStorePort;
@@ -33,7 +33,6 @@ export interface ServerAppDeps {
   /** 斜杠命令目录解析器（严格分发）。 */
   resolveSlashCommand?: SlashCommandResolver;
 }
-
 export class ServerApp {
   readonly registry: SessionRegistry;
   private readonly commands: V4CommandService;
@@ -43,11 +42,12 @@ export class ServerApp {
   private readonly subagentViews: SubagentViewStore;
   private readonly directoryMethods: Record<string, (params: unknown) => Promise<unknown>>;
   private readonly sideViews: OmpBtwStore;
+  private readonly interactions: OmpAgentInteractionStore;
   private workspaceConfigCache: WorkspaceConfigState | null = null;
   private workspaceConfigLoading: Promise<WorkspaceConfigState> | null = null;
-
   constructor(deps: ServerAppDeps) {
     this.deps = deps;
+    this.interactions = new OmpAgentInteractionStore(deps.store);
     this.registry = new SessionRegistry({
       ompFactory: deps.ompFactory,
       store: deps.store,
@@ -71,8 +71,8 @@ export class ServerApp {
       loadWorkspaceConfig: () => this.getWorkspaceConfig(),
     });
   }
-
   async handleRequest(method: string, params: unknown): Promise<unknown> {
+    if (method === zcodeProtocolMethods.sessionAgentInteractions) return queryAgentInteractions(params, { ...this.deps, registry: this.registry, interactions: this.interactions });
     if (UNSUPPORTED_METHODS.has(method)) {
       throw new ProtocolError(-32601, `method not supported by omp core: ${method}`);
     }

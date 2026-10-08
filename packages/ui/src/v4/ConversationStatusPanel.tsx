@@ -34,6 +34,7 @@ import {
   SquareIcon,
   SquareTerminalIcon,
   Workflow,
+  WaypointsIcon,
 } from "lucide-react";
 import {
   TID_CHAT_SUMMARY_PANEL,
@@ -146,6 +147,7 @@ interface ConversationStatusPanelProps {
   onCancelBackgroundWork?: (workId: string) => void;
   onOpenSubagentSession?: (request: OpenSubagentSideTabRequest) => void;
   onOpenSubagentDirectory?: (request: OpenSubagentDirectorySideTabRequest) => void;
+  onOpenOmpAgentInteractions?: () => void;
   onOpenWorkflowRun?: (target: ConversationStatusPanelWorkflowRunTarget) => void;
   onOpenWorkflowRunDirectory?: (request: OpenWorkflowRunDirectorySideTabRequest) => void;
   className?: string;
@@ -1327,6 +1329,7 @@ function SubagentStatusSection({
   onOpenChange,
   onOpenSubagentDirectory,
   onOpenSubagentSession,
+  onOpenOmpAgentInteractions,
   open,
   parentSessionId,
   rootSessionId,
@@ -1339,6 +1342,7 @@ function SubagentStatusSection({
   onOpenChange?: (open: boolean) => void;
   onOpenSubagentDirectory?: (request: OpenSubagentDirectorySideTabRequest) => void;
   onOpenSubagentSession?: (request: OpenSubagentSideTabRequest) => void;
+  onOpenOmpAgentInteractions?: () => void;
   open?: boolean;
   parentSessionId?: string;
   rootSessionId?: string;
@@ -1357,7 +1361,7 @@ function SubagentStatusSection({
     const timer = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(timer);
   }, [subagents.length]);
-  if (subagents.length === 0 && endedSubagentCount <= 0) return null;
+  if (subagents.length === 0 && endedSubagentCount <= 0 && !onOpenOmpAgentInteractions) return null;
   const longestElapsedMs = subagents.reduce(
     (longest, item) => Math.max(longest, Math.max(0, now - (item.startedAt ?? now))),
     0,
@@ -1460,6 +1464,20 @@ function SubagentStatusSection({
         onOpen={onOpenSubagentDirectory}
         separated={subagents.length > 0}
       />
+      {onOpenOmpAgentInteractions ? (
+        <button
+          type="button"
+          data-testid="omp-agent-interactions-open"
+          onClick={onOpenOmpAgentInteractions}
+          className="flex min-h-8 w-full min-w-0 items-center gap-2 rounded-lg px-2 py-1.5 text-left text-ui-base text-foreground-subtle hover:bg-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-input-border-focused"
+        >
+          <WaypointsIcon aria-hidden className="size-4 shrink-0" />
+          <span className="min-w-0 flex-1 truncate">
+            {intl.formatMessage({ id: "ompInteractions.title" })}
+          </span>
+          <ChevronRightIcon aria-hidden className="size-3.5 shrink-0" />
+        </button>
+      ) : null}
     </StatusSection>
   );
 }
@@ -1571,6 +1589,7 @@ function StatusSummaryRow({
   gitWorktreeChangeSummary,
   model,
   onVariantChange,
+  canOpenAgentInteractions,
 }: {
   endedSubagentCount: number;
   /** 已结束 run 的目录计数；宿主给 0 表示目录入口不可渲染（缺会话或缺回调）。 */
@@ -1578,6 +1597,7 @@ function StatusSummaryRow({
   gitWorktreeChangeSummary?: { added: number; removed: number } | null;
   model: ConversationStatusPanelModel;
   onVariantChange?: (variant: ChatViewSummaryPanelVariant | null) => void;
+  canOpenAgentInteractions: boolean;
 }) {
   const { intl } = useZCodeIntl();
   const expandLabel = intl.formatMessage({ id: "chat.summaryPanel.showPanel" });
@@ -1703,6 +1723,10 @@ function StatusSummaryRow({
         {intl.formatMessage({ id: "chat.statusPanel.endedAgents" })} {endedSubagentCount}
       </span>
     </StatusSummaryMetric>
+  ) : canOpenAgentInteractions ? (
+    <StatusSummaryMetric icon={<BotIcon className="size-4 text-foreground-subtle" />}>
+      <span>{intl.formatMessage({ id: "chat.statusPanel.agents" })}</span>
+    </StatusSummaryMetric>
   ) : null;
 
   if (!summaryMetric) {
@@ -1759,6 +1783,7 @@ function ConversationStatusPanelImpl({
   onCancelBackgroundWork,
   onOpenSubagentSession,
   onOpenSubagentDirectory,
+  onOpenOmpAgentInteractions,
   onOpenWorkflowRun,
   onOpenWorkflowRunDirectory,
   className,
@@ -1828,7 +1853,9 @@ function ConversationStatusPanelImpl({
   );
   // 已结束目录入口过去渲染在 Agent StatusSection 之后，视觉和 DOM 都被提升成
   // 并列顶层 section。Agent 的运行态和已结束目录属于同一领域，统一由 Agent 折叠分组承载。
-  const canRenderAgents = model.runningSubagentWorks.length > 0 || canRenderEndedAgents;
+  const canRenderAgentInteractions = Boolean(parentSessionId && onOpenOmpAgentInteractions);
+  const canRenderAgents =
+    model.runningSubagentWorks.length > 0 || canRenderEndedAgents || canRenderAgentInteractions;
   const handlePanelModeChange = useCallback(
     (value: string) => {
       if (value === "auto") {
@@ -1873,7 +1900,12 @@ function ConversationStatusPanelImpl({
   // `model.hasContent` 只认**活的**内容（模型手上的投影都是活状态），所以「只剩历史」的
   // 会话会连整个胶囊一起消失——而那正是重启后打开一条旧对话的样子，run 目录的入口于是又没了。
   // 修复依据：OMP 完成后没有 Git/Goal 等状态，已结束子代理目录仍是独立面板的有效内容。
-  if (!model.hasContent && !canRenderEndedWorkflows && !canRenderEndedAgents) {
+  if (
+    !model.hasContent &&
+    !canRenderEndedWorkflows &&
+    !canRenderEndedAgents &&
+    !canRenderAgentInteractions
+  ) {
     return null;
   }
 
@@ -2070,6 +2102,9 @@ function ConversationStatusPanelImpl({
                 rootSessionId={rootSessionId}
                 onOpenSubagentSession={onOpenSubagentSession}
                 onOpenSubagentDirectory={onOpenSubagentDirectory}
+                onOpenOmpAgentInteractions={
+                  canRenderAgentInteractions ? onOpenOmpAgentInteractions : undefined
+                }
               />
             ) : null}
           </div>
@@ -2087,6 +2122,7 @@ function ConversationStatusPanelImpl({
           )}
         >
           <StatusSummaryRow
+            canOpenAgentInteractions={canRenderAgentInteractions}
             endedSubagentCount={canRenderEndedAgents ? endedSubagentCount : 0}
             model={model}
             // 与页脚同一道门（canRenderEndedWorkflows）：缺会话或缺回调时目录打不开，

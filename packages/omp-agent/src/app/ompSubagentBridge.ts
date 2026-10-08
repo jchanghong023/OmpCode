@@ -6,6 +6,7 @@ import {
 } from "../domain/ompFrames.js";
 import type { ConversationProjection } from "../domain/conversationProjection.js";
 import type { OmpSessionProcess } from "./ports.js";
+import { transcriptFromOmpEntries } from "../domain/coldHistory.js";
 
 type Status = "running" | "success" | "failed" | "cancelled";
 type RecordState = {
@@ -15,6 +16,7 @@ type RecordState = {
   startedAt: number;
   transcriptText?: string;
   parentToolCallId?: string;
+  observedProcessEpoch?: number;
 };
 
 /**
@@ -44,12 +46,27 @@ export class OmpSubagentBridge {
   private refreshFailed = false;
   /** 可用性复评单飞：帧风暴期间至多一个在途 refresh。 */
   private rechecking: Promise<void> | null = null;
+  private observedProcess: OmpSessionProcess | null = null;
+  private observedProcessEpoch = 0;
 
   constructor(
     private readonly projection: ConversationProjection,
     private readonly currentProcess: () => OmpSessionProcess | null,
     private readonly flush: () => void,
   ) {}
+
+  /** 仅当前进程真正观察到的 lifecycle/快照可证明现在状态；历史投影不能提供该证明。 */
+  observedSubagentStatus(id: string, process: OmpSessionProcess | null): Status | undefined {
+    const record = this.records.get(id);
+    if (
+      !process ||
+      this.currentProcess() !== process ||
+      this.observedProcess !== process ||
+      record?.observedProcessEpoch !== this.observedProcessEpoch
+    )
+      return undefined;
+    return record.status;
+  }
 
   handle(frame: OmpSubagentFrame): void {
     if (frame.type === "subagent_event") return;
@@ -151,7 +168,12 @@ export class OmpSubagentBridge {
   }
 
   private update(id: string, record: RecordState): void {
-    this.records.set(id, record);
+    const process = this.currentProcess();
+    if (this.observedProcess !== process) {
+      this.observedProcess = process;
+      this.observedProcessEpoch += 1;
+    }
+    this.records.set(id, { ...record, observedProcessEpoch: this.observedProcessEpoch });
     this.projection.upsertSubagent({ id, ...record });
     this.flush();
   }
@@ -166,17 +188,15 @@ export class OmpSubagentBridge {
         .send({ type: "get_subagent_messages", subagentId: id })
         .catch(() => null);
       if (this.currentProcess() !== process || !outcome?.success) return;
-      const data = outcome.data as
-        | { messages?: { role?: string; content?: { type?: string; text?: string }[] }[] }
-        | undefined;
-      const transcriptText = (data?.messages ?? [])
-        .flatMap((message) =>
-          (message.content ?? [])
-            .filter((part) => part.type === "text" && part.text)
-            .map((part) => `${message.role ?? "agent"}: ${part.text}`),
-        )
-        .join("\n\n")
-        .slice(0, 20_000);
+      const data = outcome.data as { messages?: unknown[] } | undefined;
+      // 真实 IRC/custom 的 content 可以是字符串；按数组 filter 会在子代理结束时崩溃。
+      // 复用冷历史文本转换，统一处理字符串/文本块与 custom.display，不执行原生 renderer。
+      const transcriptText = transcriptFromOmpEntries(
+        (Array.isArray(data?.messages) ? data.messages : []).map((message) => ({
+          type: "message",
+          message,
+        })),
+      );
       const current = this.records.get(id);
       if (current && transcriptText) this.update(id, { ...current, transcriptText });
     } finally {

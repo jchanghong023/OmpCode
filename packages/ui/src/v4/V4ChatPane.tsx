@@ -63,6 +63,9 @@ interface V4ChatPaneProps {
   onOpenBackgroundBash?: (request: OpenBackgroundBashSideTabRequest) => void;
   onOpenSubagentSession?: (request: OpenScopedSubagentSideTabRequest) => void;
   onOpenSubagentDirectory?: (request: OpenScopedSubagentDirectorySideTabRequest) => void;
+  onOpenOmpAgentInteractions?: (
+    request: import("@/lib/workspaceSidePane.js").OpenOmpAgentInteractionsSideTabRequest,
+  ) => void;
   onSyncSubagentSessionTabs?: (request: SyncSubagentSessionTabsRequest) => void;
   onOpenPlanDetail?: (request: OpenScopedPlanDetailSideTabRequest) => void;
   onOpenWorkflowRun?: (request: OpenScopedWorkflowRunSideTabRequest) => void;
@@ -110,6 +113,7 @@ export function V4ChatPane({
   onOpenSubagentSession,
   onOpenBackgroundBash,
   onOpenSubagentDirectory,
+  onOpenOmpAgentInteractions,
   onSyncSubagentSessionTabs,
   onOpenPlanDetail,
   onOpenWorkflowRun,
@@ -155,6 +159,7 @@ export function V4ChatPane({
         onOpenSubagentSession={onOpenSubagentSession}
         onOpenBackgroundBash={onOpenBackgroundBash}
         onOpenSubagentDirectory={onOpenSubagentDirectory}
+        onOpenOmpAgentInteractions={onOpenOmpAgentInteractions}
         onSyncSubagentSessionTabs={onSyncSubagentSessionTabs}
         onOpenPlanDetail={onOpenPlanDetail}
         onOpenWorkflowRun={onOpenWorkflowRun}

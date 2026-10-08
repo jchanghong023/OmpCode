@@ -16,12 +16,14 @@ import { deriveTitle } from "../domain/titleText.js";
 import { OmpSubagentBridge } from "./ompSubagentBridge.js";
 import type { EngineInit } from "./engineInit.js";
 import { OmpBtwEventBridge } from "./OmpBtwEventBridge.js";
+import { OmpAgentInteractionLog } from "../domain/OmpAgentInteractionLog.js";
 export class ConversationEngine {
   readonly sessionId: string;
   readonly workspaceId: string;
   readonly workspacePath: string;
   readonly projection: ConversationProjection;
   readonly projector: OmpEventProjector;
+  readonly agentInteractions = new OmpAgentInteractionLog();
   private readonly ompFactory: OmpProcessFactory | undefined;
   private readonly gateway: HostGateway;
   private readonly onIndexChange: (engine: ConversationEngine) => void;
@@ -53,7 +55,7 @@ export class ConversationEngine {
   private resumeSessionPath: string | undefined;
   private followupMode: SessionConfigState["followupMode"] = "queue";
   private titleInitialized: boolean;
-  /** prompt 轮收口与输入分发（抽出见 promptTurnCloser.ts）：经惰性宿主回写引擎状态。 */
+  /** prompt 轮收口与输入分发：经惰性宿主回写引擎状态。 */
   private readonly promptTurns = new EnginePromptTurnCloser({
     projection: () => this.projection,
     isStreaming: () => this.projector.isStreaming,
@@ -164,6 +166,7 @@ export class ConversationEngine {
       onCommandsUpdate: this.onCommandsUpdate,
       onBtwFrame: this.btw.emit,
       onSubagentFrame: (frame) => {
+        if (frame.type === "subagent_event") this.agentInteractions.ingest(frame.payload.id, frame.payload.event);
         this.subagents.handle(frame);
         this.forwardSubagentFrame?.(frame);
       },
@@ -222,6 +225,7 @@ export class ConversationEngine {
   }
   handleOmpEvent(event: OmpSessionEventFrame): void {
     if (this.disposed) return;
+    this.agentInteractions.ingest("$root", event);
     this.projectEvent(event);
   }
   /** v4 resolveInteraction 命令入口：把 UI 应答汇入等待中的交互。 */
@@ -325,7 +329,7 @@ export class ConversationEngine {
 
   /** 子代理控制/详情续读的进程面（subagentControl.ts 消费，结构化窄视图避免成环）。 */
   subagentProcessHost() {
-    return { ensureStarted: () => this.ensureOmpStarted(), currentProcess: () => this.ompProcess };
+    return { ensureStarted: () => this.ensureOmpStarted(), currentProcess: () => this.ompProcess, observedSubagentStatus: (id: string, process: OmpSessionProcess | null) => this.subagents.observedSubagentStatus(id, process) };
   }
 
   async dispose(): Promise<void> {
@@ -372,12 +376,10 @@ export class ConversationEngine {
   resync(subscriptionId: string, base: { logEpoch: string; seq: number } | null, forceSnapshot = false): { subscriptionId: string; mode: "snapshot" | "resume"; logEpoch: string } {
     return this.publisher.resync(subscriptionId, base, forceSnapshot);
   }
-
   scheduleFlush(): void {
     if (this.disposed) return;
     this.publisher.scheduleFlush(() => this.indexNotify.ping());
   }
-
   private notifyIndexChange(): void {
     if (this.disposed) return;
     this.onIndexChange(this);

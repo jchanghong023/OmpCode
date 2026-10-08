@@ -1,0 +1,264 @@
+[
+  {
+    "phase": "cold",
+    "rootSessionId": "01a11b7a-d2c9-77d0-8440-e439db928eaf",
+    "nodes": [
+      {
+        "id": "main",
+        "label": "main",
+        "parent": null,
+        "caption": "主智能体main"
+      },
+      {
+        "id": "InteractionAlpha",
+        "label": "InteractionAlpha",
+        "parent": "main",
+        "caption": "InteractionAlpha已完成"
+      },
+      {
+        "id": "InteractionBeta",
+        "label": "InteractionBeta",
+        "parent": "main",
+        "caption": "InteractionBeta状态未确认"
+      },
+      {
+        "id": "InteractionAlpha/InteractionAlpha.InteractionGamma",
+        "label": "InteractionAlpha.InteractionGamma",
+        "parent": "InteractionAlpha",
+        "caption": "InteractionAlpha.InteractionGamma已完成"
+      }
+    ],
+    "messages": [
+      {
+        "id": "send:main:call_43337044b72249c9b7349d83:InteractionAlpha",
+        "kind": "message",
+        "from": "main",
+        "to": "InteractionAlpha",
+        "timestamp": "1791462426319",
+        "timeBasis": "recorded",
+        "body": "主智能体InteractionAlpha记录时间20:27:06消息OMP_INTERACTIONS_20261008_9f930df7_V3_MAIN_TO_ALPHA",
+        "marker": "OMP_INTERACTIONS_20261008_9f930df7_V3_MAIN_TO_ALPHA"
+      },
+      {
+        "id": "message:159e2c2b24a5ff09",
+        "kind": "message",
+        "from": "InteractionAlpha",
+        "to": "main",
+        "timestamp": "1791462431890",
+        "timeBasis": "sent",
+        "body": "InteractionAlpha主智能体发送时间20:27:11消息OMP_INTERACTIONS_20261008_9f930df7_V3_ALPHA_TO_MAIN",
+        "marker": "OMP_INTERACTIONS_20261008_9f930df7_V3_ALPHA_TO_MAIN"
+      },
+      {
+        "id": "message:159e2c329f65ff0b",
+        "kind": "message",
+        "from": "InteractionBeta",
+        "to": "main",
+        "timestamp": "1791462439549",
+        "timeBasis": "sent",
+        "body": "InteractionBeta主智能体发送时间20:27:19消息OMP_INTERACTIONS_20261008_9f930df7_V3_BETA_TO_MAIN",
+        "marker": "OMP_INTERACTIONS_20261008_9f930df7_V3_BETA_TO_MAIN"
+      },
+      {
+        "id": "send:InteractionAlpha:call_fb794c8a3a9e4674aacb1183:InteractionBeta",
+        "kind": "message",
+        "from": "InteractionAlpha",
+        "to": "InteractionBeta",
+        "timestamp": "1791462426420",
+        "timeBasis": "recorded",
+        "body": "InteractionAlphaInteractionBeta记录时间20:27:06消息OMP_INTERACTIONS_20261008_9f930df7_V3_ALPHA_TO_BETA",
+        "marker": "OMP_INTERACTIONS_20261008_9f930df7_V3_ALPHA_TO_BETA"
+      },
+      {
+        "id": "message:159e2c39b725ff0e",
+        "kind": "message",
+        "from": "InteractionAlpha/InteractionAlpha.InteractionGamma",
+        "to": "InteractionAlpha",
+        "timestamp": "1791462446812",
+        "timeBasis": "sent",
+        "body": "InteractionAlpha.InteractionGammaInteractionAlpha发送时间20:27:26消息OMP_INTERACTIONS_20261008_9f930df7_V3_GAMMA_TO_ALPHA",
+        "marker": "OMP_INTERACTIONS_20261008_9f930df7_V3_GAMMA_TO_ALPHA"
+      }
+    ],
+    "native": {
+      "source": [
+        {
+          "body": "OMP_INTERACTIONS_20261008_9f930df7_V3_MAIN_TO_ALPHA",
+          "sends": [
+            {
+              "file": "2026-10-08T12-26-36-617Z_01a11b7a-d2c9-77d0-8440-e439db928eaf.jsonl",
+              "callId": "call_43337044b72249c9b7349d83",
+              "entryId": "ead6737a",
+              "from": "Main",
+              "to": "InteractionAlpha",
+              "timestamp": 1791462430970,
+              "hasMessageId": false,
+              "hasSentTimestamp": false
+            }
+          ],
+          "durableMessages": [],
+          "wrappers": [
+            {
+              "file": "InteractionAlpha.jsonl",
+              "entryId": "11611a42",
+              "timestamp": 1791462431893,
+              "contentType": "string",
+              "hasMessageId": false,
+              "hasSentTimestamp": false
+            }
+          ]
+        },
+        {
+          "body": "OMP_INTERACTIONS_20261008_9f930df7_V3_ALPHA_TO_MAIN",
+          "sends": [
+            {
+              "file": "InteractionAlpha.jsonl",
+              "callId": "call_86de6c4d74de4d838bd8133e",
+              "entryId": "4c238d67",
+              "from": "InteractionAlpha",
+              "to": "Main",
+              "timestamp": 1791462431891,
+              "hasMessageId": false,
+              "hasSentTimestamp": false
+            }
+          ],
+          "durableMessages": [
+            {
+              "file": "2026-10-08T12-26-36-617Z_01a11b7a-d2c9-77d0-8440-e439db928eaf.jsonl",
+              "entryId": "134c18a5",
+              "messageId": "159e2c2b24a5ff09",
+              "from": "InteractionAlpha",
+              "to": "Main",
+              "timestamp": 1791462431890
+            }
+          ],
+          "wrappers": []
+        },
+        {
+          "body": "OMP_INTERACTIONS_20261008_9f930df7_V3_BETA_TO_MAIN",
+          "sends": [
+            {
+              "file": "InteractionBeta.jsonl",
+              "callId": "call_8086cdf5c743445f988ab180",
+              "entryId": "de2785f9",
+              "from": "InteractionBeta",
+              "to": "Main",
+              "timestamp": 1791462439551,
+              "hasMessageId": false,
+              "hasSentTimestamp": false
+            }
+          ],
+          "durableMessages": [
+            {
+              "file": "2026-10-08T12-26-36-617Z_01a11b7a-d2c9-77d0-8440-e439db928eaf.jsonl",
+              "entryId": "b5d97a34",
+              "messageId": "159e2c329f65ff0b",
+              "from": "InteractionBeta",
+              "to": "Main",
+              "timestamp": 1791462439549
+            }
+          ],
+          "wrappers": []
+        },
+        {
+          "body": "OMP_INTERACTIONS_20261008_9f930df7_V3_ALPHA_TO_BETA",
+          "sends": [
+            {
+              "file": "InteractionAlpha.jsonl",
+              "callId": "call_fb794c8a3a9e4674aacb1183",
+              "entryId": "915b2f52",
+              "from": "InteractionAlpha",
+              "to": "InteractionBeta",
+              "timestamp": 1791462431892,
+              "hasMessageId": false,
+              "hasSentTimestamp": false
+            }
+          ],
+          "durableMessages": [],
+          "wrappers": []
+        },
+        {
+          "body": "OMP_INTERACTIONS_20261008_9f930df7_V3_GAMMA_TO_ALPHA",
+          "sends": [
+            {
+              "file": "InteractionAlpha.InteractionGamma.jsonl",
+              "callId": "call_3a0d53fac8dd4f87b41c808a",
+              "entryId": "43e60f37",
+              "from": "InteractionAlpha.InteractionGamma",
+              "to": "InteractionAlpha",
+              "timestamp": 1791462446813,
+              "hasMessageId": false,
+              "hasSentTimestamp": false
+            }
+          ],
+          "durableMessages": [
+            {
+              "file": "InteractionAlpha.jsonl",
+              "entryId": "ad8dc0f2",
+              "messageId": "159e2c39b725ff0e",
+              "from": "InteractionAlpha.InteractionGamma",
+              "to": "InteractionAlpha",
+              "timestamp": 1791462446812
+            }
+          ],
+          "wrappers": []
+        }
+      ],
+      "models": [
+        {
+          "file": "InteractionAlpha.InteractionGamma.jsonl",
+          "model": "zhipu-coding-plan/glm-5.3-flash"
+        },
+        {
+          "file": "InteractionAlpha.jsonl",
+          "model": "zhipu-coding-plan/glm-5.3-flash"
+        },
+        {
+          "file": "InteractionBeta.jsonl",
+          "model": "zhipu-coding-plan/glm-5.3-flash"
+        },
+        {
+          "file": "2026-10-08T12-26-36-617Z_01a11b7a-d2c9-77d0-8440-e439db928eaf.jsonl",
+          "model": "openai-codex/gpt-6.1-sol"
+        },
+        {
+          "file": "2026-10-08T12-26-36-617Z_01a11b7a-d2c9-77d0-8440-e439db928eaf.jsonl",
+          "model": "zhipu-coding-plan/glm-5.3-flash"
+        }
+      ],
+      "terminalAgents": [
+        {
+          "file": "InteractionAlpha.jsonl",
+          "entryId": "8feecadd",
+          "agentId": "InteractionAlpha.InteractionGamma",
+          "status": "completed"
+        },
+        {
+          "file": "2026-10-08T12-26-36-617Z_01a11b7a-d2c9-77d0-8440-e439db928eaf.jsonl",
+          "entryId": "b21857f7",
+          "agentId": "InteractionAlpha",
+          "status": "completed"
+        }
+      ]
+    }
+  },
+  {
+    "event": "missing-terminal-source",
+    "agentId": "InteractionBeta"
+  },
+  {
+    "event": "queries-paused",
+    "reason": "Switching to an agent detail stops interaction polling",
+    "queryCount": 2
+  },
+  {
+    "event": "queries-paused",
+    "reason": "Collapsing the side pane stops interaction polling",
+    "queryCount": 3
+  },
+  {
+    "event": "queries-paused",
+    "reason": "Closing the interaction tab stops polling",
+    "queryCount": 4
+  }
+]

@@ -2,7 +2,7 @@
 // 旧链路（task 索引、恢复兜底）只需要结构合法的摘要；流式主链路在 v4。
 
 import type { ConversationEngine } from "./conversationEngine.js";
-import { ZCODE_PROTOCOL_NAME, ZCODE_PROTOCOL_VERSION } from "@zcode/shared";
+import { ZCODE_PROTOCOL_NAME, ZCODE_PROTOCOL_VERSION, type ZCodeToolState } from "@zcode/shared";
 
 interface LegacyMessage {
   info: Record<string, unknown>;
@@ -177,7 +177,7 @@ function legacyMessages(engine: ConversationEngine, limit: number): LegacyMessag
   return messages;
 }
 
-function toolStateOf(status: string, input: unknown, output: string): Record<string, unknown> {
+function toolStateOf(status: string, input: unknown, output: string): ZCodeToolState {
   const jsonInput = (typeof input === "object" && input !== null ? input : {}) as Record<
     string,
     unknown
@@ -189,13 +189,13 @@ function toolStateOf(status: string, input: unknown, output: string): Record<str
     case "inputStreaming":
       return { status: "pending", input: jsonInput, raw: "" };
     case "error":
+      // 错误态严格协议仅接受 error，不接受 output；把真实正文放入 error，避免失败工具阻断历史读取/恢复。
       return {
-        status: "error" as never,
+        status: "error",
         input: jsonInput,
-        output,
         startedAt: Date.now(),
         completedAt: Date.now(),
-        error: "tool error",
+        error: output || "tool error",
       };
     default:
       return {

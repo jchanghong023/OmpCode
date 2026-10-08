@@ -109,6 +109,9 @@ interface V4WorkspaceChatAreaProps {
   onOpenBackgroundBash?: (request: OpenBackgroundBashSideTabRequest) => void;
   onOpenSubagentSession?: (request: OpenScopedSubagentSideTabRequest) => void;
   onOpenSubagentDirectory?: (request: OpenScopedSubagentDirectorySideTabRequest) => void;
+  onOpenOmpAgentInteractions?: (
+    request: import("@/lib/workspaceSidePane.js").OpenOmpAgentInteractionsSideTabRequest,
+  ) => void;
   onSyncSubagentSessionTabs?: (request: SyncSubagentSessionTabsRequest) => void;
   onOpenSelectionSideChat?: (request: OpenSelectionSideChatRequest) => void;
   onOpenPlanDetail?: (request: OpenScopedPlanDetailSideTabRequest) => void;
@@ -170,6 +173,7 @@ export function V4WorkspaceChatArea({
   onOpenSubagentSession,
   onOpenBackgroundBash,
   onOpenSubagentDirectory,
+  onOpenOmpAgentInteractions,
   onSyncSubagentSessionTabs,
   onOpenSelectionSideChat,
   onOpenPlanDetail,
@@ -295,6 +299,7 @@ export function V4WorkspaceChatArea({
       onOpenSubagentSession,
       onOpenBackgroundBash,
       onOpenSubagentDirectory,
+      onOpenOmpAgentInteractions,
       onSyncSubagentSessionTabs,
       onOpenSelectionSideChat,
       onOpenPlanDetail,
@@ -340,6 +345,7 @@ export function V4WorkspaceChatArea({
       onOpenSubagentSession,
       onOpenBackgroundBash,
       onOpenSubagentDirectory,
+      onOpenOmpAgentInteractions,
       onSyncSubagentSessionTabs,
       onOpenSelectionSideChat,
       onOpenPlanDetail,

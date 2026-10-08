@@ -166,6 +166,27 @@ export interface SubagentDirectorySidePaneTab {
   parentSessionId: string;
 }
 
+export interface OpenOmpAgentInteractionsSideTabRequest {
+  workspacePath: string;
+  workspaceIdentity?: string;
+  remoteSessionId?: string;
+  rootSessionId: string;
+}
+
+export interface OmpAgentInteractionsSidePaneTab extends OpenOmpAgentInteractionsSideTabRequest {
+  id: string;
+  type: "omp-agent-interactions";
+  ownerTaskId: string;
+  workspaceKey: string;
+  openedAt?: number;
+  liveRootSessionId?: string;
+}
+
+export interface OmpAgentInteractionsRootBinding extends OpenOmpAgentInteractionsSideTabRequest {
+  tabId: string;
+  canonicalRootSessionId: string;
+}
+
 export interface SelectionSideChatPaneTab {
   id: string;
   type: "selection-side-chat";
@@ -531,6 +552,7 @@ export type WorkspaceSidePaneTab =
   | BrowserUseSidePaneTab
   | SubagentSessionSidePaneTab
   | SubagentDirectorySidePaneTab
+  | OmpAgentInteractionsSidePaneTab
   | SelectionSideChatPaneTab
   | PlanDetailSidePaneTab
   | WorkflowRunSidePaneTab
@@ -1075,6 +1097,7 @@ function isWorkspaceGlobalSidePaneTab(tab: WorkspaceSidePaneTab): boolean {
 interface SidePaneVisibilityScope {
   workspaceKey: string | null;
   ownerTaskId: string | null;
+  remoteSessionId?: string | null;
 }
 
 function sidePaneTabMatchesWorkspace(
@@ -1120,6 +1143,12 @@ function getVisibleSidePaneTabsByScope(
   const ownerKey = sidePaneOwnerKey(scope.ownerTaskId);
   return tabs.filter((tab) => {
     if (!sidePaneTabMatchesWorkspace(tab, scope.workspaceKey)) return false;
+    if (tab.type === "omp-agent-interactions") {
+      return (
+        (tab.rootSessionId === scope.ownerTaskId || tab.liveRootSessionId === scope.ownerTaskId) &&
+        (tab.remoteSessionId ?? null) === (scope.remoteSessionId ?? null)
+      );
+    }
     if (isWorkspaceGlobalSidePaneTab(tab)) return true;
     if (tab.type === "browser-use") return tab.sessionId === scope.ownerTaskId;
     if (
@@ -1666,6 +1695,85 @@ export function openSubagentDirectorySidePane(
   return activateSidePaneTab(current, existing ? { ...existing, ...nextTab } : nextTab);
 }
 
+export function openOmpAgentInteractionsSidePane(
+  current: WorkspaceSidePaneState | null,
+  request: OpenOmpAgentInteractionsSideTabRequest,
+): WorkspaceSidePaneState {
+  const workspaceKey = request.workspaceIdentity?.trim() || request.workspacePath;
+  const id = [
+    "omp-agent-interactions",
+    workspaceKey,
+    request.remoteSessionId ?? "",
+    request.rootSessionId,
+  ]
+    .map(encodeSidePaneTabIdPart)
+    .join(":");
+  const existing = current?.tabs.find(
+    (tab): tab is OmpAgentInteractionsSidePaneTab =>
+      tab.type === "omp-agent-interactions" &&
+      tab.workspaceKey === workspaceKey &&
+      (tab.remoteSessionId ?? "") === (request.remoteSessionId ?? "") &&
+      (tab.rootSessionId === request.rootSessionId ||
+        tab.liveRootSessionId === request.rootSessionId),
+  );
+  const tab: OmpAgentInteractionsSidePaneTab = {
+    ...request,
+    ...existing,
+    workspacePath: request.workspacePath,
+    id: existing?.id ?? id,
+    type: "omp-agent-interactions",
+    workspaceKey,
+    ownerTaskId: existing?.rootSessionId ?? request.rootSessionId,
+    openedAt: existing?.openedAt ?? Date.now(),
+  };
+  return activateSidePaneTab(current, tab);
+}
+
+/** OMP 首次落盘会生成稳定根身份；旧 UI owner 仍通过 live 别名保留同一 tab。 */
+export function bindOmpAgentInteractionsRoot(
+  current: WorkspaceSidePaneState | null,
+  binding: OmpAgentInteractionsRootBinding,
+): WorkspaceSidePaneState | null {
+  if (!current) return current;
+  const workspaceKey = binding.workspaceIdentity?.trim() || binding.workspacePath;
+  const source = current.tabs.find(
+    (tab): tab is OmpAgentInteractionsSidePaneTab =>
+      tab.type === "omp-agent-interactions" &&
+      tab.id === binding.tabId &&
+      tab.workspaceKey === workspaceKey &&
+      tab.workspacePath === binding.workspacePath &&
+      (tab.remoteSessionId ?? "") === (binding.remoteSessionId ?? "") &&
+      tab.rootSessionId === binding.rootSessionId,
+  );
+  if (!source || source.rootSessionId === binding.canonicalRootSessionId) return current;
+  const collisions = current.tabs.filter(
+    (tab): tab is OmpAgentInteractionsSidePaneTab =>
+      tab.type === "omp-agent-interactions" &&
+      tab.id !== source.id &&
+      tab.workspaceKey === workspaceKey &&
+      (tab.remoteSessionId ?? "") === (source.remoteSessionId ?? "") &&
+      (tab.rootSessionId === binding.canonicalRootSessionId ||
+        tab.liveRootSessionId === binding.canonicalRootSessionId),
+  );
+  // 修复依据：用户可能在首读返回前已从目录打开稳定身份；归并时保留当前正在看的 tab。
+  const retained = collisions.find((tab) => tab.id === current.activeTabId) ?? source;
+  const merged: OmpAgentInteractionsSidePaneTab = {
+    ...retained,
+    rootSessionId: binding.canonicalRootSessionId,
+    liveRootSessionId: source.liveRootSessionId ?? source.rootSessionId,
+    ownerTaskId: binding.canonicalRootSessionId,
+  };
+  const mergedIds = new Set([source.id, ...collisions.map((tab) => tab.id)]);
+  const tabs = current.tabs.flatMap((tab) =>
+    tab.id === retained.id ? [merged] : mergedIds.has(tab.id) ? [] : [tab],
+  );
+  return {
+    ...current,
+    tabs,
+    activeTabId: mergedIds.has(current.activeTabId) ? retained.id : current.activeTabId,
+  };
+}
+
 export function syncSubagentSessionSidePaneTabs(
   current: WorkspaceSidePaneState | null,
   options: SyncSubagentSessionTabsRequest,
@@ -1922,7 +2030,16 @@ export function openWorkflowArtifactSidePane(
 export function isSidePaneTabVisibleForParent(
   tab: WorkspaceSidePaneTab,
   parentSessionId: string | null,
+  scope?: Pick<SidePaneVisibilityScope, "workspaceKey" | "remoteSessionId">,
 ): boolean {
+  if (tab.type === "omp-agent-interactions") {
+    return (
+      (tab.rootSessionId === parentSessionId || tab.liveRootSessionId === parentSessionId) &&
+      (!scope ||
+        (sidePaneTabMatchesWorkspace(tab, scope.workspaceKey) &&
+          (tab.remoteSessionId ?? null) === (scope.remoteSessionId ?? null)))
+    );
+  }
   if (tab.type === "browser-use") {
     return tab.sessionId === parentSessionId;
   }
@@ -1990,6 +2107,7 @@ function selectSidePaneTabsForParent(
       (tab) =>
         tab.type === "subagent-session" ||
         tab.type === "subagent-directory" ||
+        tab.type === "omp-agent-interactions" ||
         tab.type === "selection-side-chat" ||
         tab.type === "plan-detail" ||
         tab.type === "workflow-run" ||
@@ -2007,9 +2125,12 @@ export function closeVisibleOtherSidePaneTabs(
   current: WorkspaceSidePaneState | null,
   tabId: string,
   parentSessionId: string | null,
+  scope?: Pick<SidePaneVisibilityScope, "workspaceKey" | "remoteSessionId">,
 ): WorkspaceSidePaneState | null {
   if (!current) return null;
-  const visibleTabs = getVisibleSidePaneTabs(current, parentSessionId);
+  const visibleTabs = current.tabs.filter((tab) =>
+    isSidePaneTabVisibleForParent(tab, parentSessionId, scope),
+  );
   const target = visibleTabs.find((tab) => tab.id === tabId);
   if (!target) return current;
   const closingIds = new Set(visibleTabs.filter((tab) => tab.id !== tabId).map((tab) => tab.id));
@@ -2022,9 +2143,14 @@ export function closeVisibleOtherSidePaneTabs(
 export function closeVisibleSidePaneTabs(
   current: WorkspaceSidePaneState | null,
   parentSessionId: string | null,
+  scope?: Pick<SidePaneVisibilityScope, "workspaceKey" | "remoteSessionId">,
 ): WorkspaceSidePaneState | null {
   if (!current) return null;
-  const closingIds = new Set(getVisibleSidePaneTabs(current, parentSessionId).map((tab) => tab.id));
+  const closingIds = new Set(
+    current.tabs
+      .filter((tab) => isSidePaneTabVisibleForParent(tab, parentSessionId, scope))
+      .map((tab) => tab.id),
+  );
   const tabs = current.tabs.filter((tab) => !closingIds.has(tab.id));
   return tabs.length === 0 ? null : { tabs, activeTabId: "" };
 }

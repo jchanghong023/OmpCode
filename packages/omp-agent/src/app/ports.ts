@@ -122,6 +122,17 @@ export interface OmpStorePort {
   readSessionEntries(sessionPath: string): Promise<unknown[]>;
   /** omp 为 task 子代理在父会话同名目录保存的独立 JSONL。 */
   readSubagentEntries(sessionPath: string, subagentId: string): Promise<unknown[]>;
+  /** 只读交互页：受控后代路径与文件版本续读；未变文件不重复解析。 */
+  readInteractionEntries?(
+    sessionPath: string,
+    ancestry: readonly string[],
+    version?: string,
+  ): Promise<{
+    version: string;
+    available: boolean;
+    entries?: unknown[];
+    truncated?: boolean;
+  }>;
   deleteSession(sessionPath: string): Promise<boolean>;
 }
 

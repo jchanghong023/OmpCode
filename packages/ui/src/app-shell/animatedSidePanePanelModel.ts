@@ -1,5 +1,13 @@
 const MIN_PREVIEW_PANE_HEAVY_CONTENT_VISIBLE_INLINE_SIZE_PX = 96;
 
+export function shouldMountOmpAgentInteractionsTab(options: {
+  isSidePaneVisible: boolean;
+  isActiveTab: boolean;
+  isCurrentScope: boolean;
+}): boolean {
+  return options.isSidePaneVisible && options.isActiveTab && options.isCurrentScope;
+}
+
 export type OpenTabLauncherItemId =
   | "selection-side-conversation"
   | "review"

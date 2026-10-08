@@ -297,6 +297,8 @@ export const WorkspaceShellLayout = memo(function WorkspaceShellLayoutComponent(
   handleOpenSubagentSession,
   handleOpenBackgroundBash,
   handleOpenSubagentDirectory,
+  handleOpenOmpAgentInteractions,
+  handleBindOmpAgentInteractionsRoot,
   handleSyncSubagentSessionTabs,
   handleOpenSelectionSideChat,
   handleOpenPlanDetail,
@@ -1433,6 +1435,7 @@ export const WorkspaceShellLayout = memo(function WorkspaceShellLayoutComponent(
       onOpenFileLink={handleOpenMarkdownFileLink}
       onOpenBackgroundBash={handleOpenBackgroundBash}
       onOpenSubagentSession={handleOpenSubagentSession}
+      onBindOmpAgentInteractionsRoot={handleBindOmpAgentInteractionsRoot}
       onOpenWorkflowActorSession={handleOpenWorkflowActorSession}
       onOpenWorkflowWorkspace={handleOpenWorkflowWorkspace}
       onOpenWorkflowArtifact={handleOpenWorkflowArtifact}
@@ -1804,6 +1807,7 @@ export const WorkspaceShellLayout = memo(function WorkspaceShellLayoutComponent(
                               onOpenBackgroundBash={handleOpenBackgroundBash}
                               onOpenSubagentSession={handleOpenSubagentSession}
                               onOpenSubagentDirectory={handleOpenSubagentDirectory}
+                              onOpenOmpAgentInteractions={handleOpenOmpAgentInteractions}
                               onSyncSubagentSessionTabs={handleSyncSubagentSessionTabs}
                               onOpenSelectionSideChat={handleOpenSelectionSideChat}
                               onOpenPlanDetail={handleOpenPlanDetail}

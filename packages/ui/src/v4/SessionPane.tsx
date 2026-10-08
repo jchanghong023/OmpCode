@@ -346,6 +346,9 @@ export interface SessionPaneProps {
   onOpenBackgroundBash?: (request: OpenBackgroundBashSideTabRequest) => void;
   onOpenSubagentSession?: (request: OpenScopedSubagentSideTabRequest) => void;
   onOpenSubagentDirectory?: (request: OpenScopedSubagentDirectorySideTabRequest) => void;
+  onOpenOmpAgentInteractions?: (
+    request: import("@/lib/workspaceSidePane.js").OpenOmpAgentInteractionsSideTabRequest,
+  ) => void;
   onSyncSubagentSessionTabs?: (request: SyncSubagentSessionTabsRequest) => void;
   onOpenSelectionSideChat?: (request: OpenSelectionSideChatRequest) => void;
   onOpenPlanDetail?: (request: OpenScopedPlanDetailSideTabRequest) => void;
@@ -522,6 +525,7 @@ export function SessionPane({
   onOpenSubagentSession,
   onOpenBackgroundBash,
   onOpenSubagentDirectory,
+  onOpenOmpAgentInteractions,
   onSyncSubagentSessionTabs,
   onOpenSelectionSideChat,
   onOpenPlanDetail,
@@ -1701,6 +1705,22 @@ export function SessionPane({
     },
     [onOpenSubagentSession, remoteSessionId, rootSessionId, workspaceIdentity, workspacePath],
   );
+  const handleOpenOmpAgentInteractions = useCallback(() => {
+    if (!sessionId) return;
+    onOpenOmpAgentInteractions?.({
+      workspacePath,
+      ...(workspaceIdentity ? { workspaceIdentity } : {}),
+      ...(remoteSessionId ? { remoteSessionId } : {}),
+      rootSessionId: rootSessionId ?? sessionId,
+    });
+  }, [
+    onOpenOmpAgentInteractions,
+    remoteSessionId,
+    rootSessionId,
+    sessionId,
+    workspaceIdentity,
+    workspacePath,
+  ]);
   const handleOpenSubagentDirectory = useCallback(
     (request: import("@/lib/workspaceSidePane.js").OpenSubagentDirectorySideTabRequest) => {
       onOpenSubagentDirectory?.({
@@ -4700,6 +4720,16 @@ export function SessionPane({
                 : undefined
             }
             onCancelBackgroundWork={readOnly ? undefined : handleCancelBackgroundWork}
+            onOpenOmpAgentInteractions={
+              onOpenOmpAgentInteractions &&
+              !readOnly &&
+              !selectionSideChat &&
+              sessionId &&
+              !sessionId.startsWith("omp-subagent:") &&
+              (!rootSessionId || rootSessionId === sessionId)
+                ? handleOpenOmpAgentInteractions
+                : undefined
+            }
             onOpenSubagentSession={onOpenSubagentSession ? handleOpenSubagentSession : undefined}
             onOpenSubagentDirectory={
               onOpenSubagentDirectory ? handleOpenSubagentDirectory : undefined

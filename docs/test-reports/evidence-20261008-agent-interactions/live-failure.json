@@ -1,0 +1,41 @@
+{
+  "message": "Expected values to be strictly equal:\n+ actual - expected\n\n+ 'openai-codex/gpt-6.1-sol'\n- 'zhipu-coding-plan/glm-5.3-flash'\n",
+  "records": [
+    {
+      "id": "task:main:call_63c4ae17379d46c291a99ffb:InteractionAlpha:dispatch",
+      "kind": "task_dispatch",
+      "from": "main",
+      "to": "InteractionAlpha",
+      "timestamp": "1791462006983",
+      "timeBasis": "recorded",
+      "body": "主智能体InteractionAlpha记录时间20:20:06任务派发步骤：1) 用 write 工具向 Main 的真实 agent ID 发消息，正文仅 OMP_INTERACTIONS_20261008_9f930df7_V2_ALPHA_TO_MAIN（真实ID以当前 IRC Peers 列表为准）。2) 用 write 工具向 Beta（InteractionBeta）的真实 agent ID 发消息，正文仅 OMP_INTERACTIONS_20261008_9f930df7_V2_ALPHA_TO_BETA。3) 再用 task 工具（agent=interaction-test, effort=lo）创建嵌套子代理，name=InteractionGamma，其任务是：用 write 向父 Alpha 的真实 ID 发正文仅 OMP_INTERACTIONS_20261008_9f930df7_V2_GAMMA_TO_ALPHA 的消息，然后回复 GAMMA_DONE。4) 等待 Gamma 完成。完成后回复 ALPHA_DONE。发送失败时查实际ID重试，不得用普通文本假装发信。只读，不修改文件、不用git。"
+    },
+    {
+      "id": "task:InteractionAlpha:call_1e39db44d369473f986d1354:InteractionAlpha.InteractionGamma:dispatch",
+      "kind": "task_dispatch",
+      "from": "InteractionAlpha",
+      "to": "InteractionAlpha/InteractionAlpha.InteractionGamma",
+      "timestamp": "1791462036249",
+      "timeBasis": "recorded",
+      "body": "InteractionAlphaInteractionAlpha.InteractionGamma记录时间20:20:36任务派发# Target\nCommunication only. Do not modify files, use git, or change settings.\n\n# Change\n1) Use the write tool to send a message to agent://InteractionAlpha with body exactly: OMP_INTERACTIONS_20261008_9f930df7_V2_GAMMA_TO_ALPHA\n2) Then reply with GAMMA_DONE.\n\n# Acceptance\nThe message is delivered (write tool confirms delivery) and your final reply is GAMMA_DONE."
+    },
+    {
+      "id": "message:159e2ab59f0e9c22",
+      "kind": "message",
+      "from": "InteractionAlpha/InteractionAlpha.InteractionGamma",
+      "to": "InteractionAlpha",
+      "timestamp": "1791462049404",
+      "timeBasis": "sent",
+      "body": "InteractionAlpha.InteractionGammaInteractionAlpha发送时间20:20:49消息OMP_INTERACTIONS_20261008_9f930df7_V2_GAMMA_TO_ALPHA"
+    },
+    {
+      "id": "result:main:call_920f381e08344bec8feb9201:InteractionAlpha",
+      "kind": "task_result",
+      "from": "InteractionAlpha",
+      "to": "main",
+      "timestamp": "1791462065463",
+      "timeBasis": "recorded",
+      "body": "InteractionAlpha主智能体记录时间20:21:05任务结果<task-result id=\"InteractionAlpha\" agent=\"interaction-test\" status=\"completed\" duration=\"43.5s\">\n\n<output>\n{\n  \"alpha_to_main\": \"delivered\",\n  \"alpha_to_beta\": \"delivered\",\n  \"gamma_to_alpha\": \"delivered (OMP_INTERACTIONS_20261008_9f930df7_V2_GAMMA_TO_ALPHA received)\",\n  \"gamma_reply\": \"GAMMA_DONE\",\n  \"result\": \"ALPHA_DONE\"\n}\n</output>\n</task-result>\n\nInteractionAlpha is now idle — message it via `write agent://InteractionAlpha` to follow up; transcript at history://InteractionAlpha"
+    }
+  ]
+}
