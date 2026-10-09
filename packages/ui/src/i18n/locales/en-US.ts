@@ -4631,6 +4631,8 @@ const enUS: Record<string, string> = {
   "chat.toolCall.imageLoadFailed": "Failed to load image",
   "chat.toolCall.planFile": "Plan file",
   "chat.toolCall.result": "Result",
+  "chat.toolCall.parameters": "Parameters",
+  "chat.toolCall.error": "Error",
   "chat.toolCall.mcp.callDetails": "View call details",
   "chat.toolCall.mcp.result": "Result",
   "chat.toolCall.mcp.copyResult": "Copy result",

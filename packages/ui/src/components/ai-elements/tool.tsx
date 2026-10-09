@@ -22,6 +22,8 @@ import type { ComponentProps, ReactNode } from "react";
 import { isValidElement } from "react";
 
 import { CodeBlock } from "./code-block.js";
+import { useZCodeIntl } from "@/i18n/IntlProvider.js";
+import { hasToolInput, isJsonToolText } from "@/lib/toolContentPresentation.js";
 
 export type ToolProps = ComponentProps<typeof Collapsible>;
 
@@ -114,16 +116,21 @@ export type ToolInputProps = ComponentProps<"div"> & {
   input: ToolPart["input"];
 };
 
-export const ToolInput = ({ className, input, ...props }: ToolInputProps) => (
-  <div className={cn("space-y-2 overflow-hidden", className)} {...props}>
-    <h4 className="font-medium text-muted-foreground text-ui-base uppercase tracking-wide">
-      Parameters
-    </h4>
-    <div className="max-h-60 overflow-auto rounded-md bg-muted/50">
-      <CodeBlock code={JSON.stringify(input, null, 2)} language="json" />
+export const ToolInput = ({ className, input, ...props }: ToolInputProps) => {
+  const { intl } = useZCodeIntl();
+  // 修复依据：空参数块在多种工具详情里重复占位；统一判断并保留有效的 0/false。
+  if (!hasToolInput(input)) return null;
+  return (
+    <div className={cn("space-y-2 overflow-hidden", className)} {...props}>
+      <h4 className="font-medium text-muted-foreground text-ui-base uppercase tracking-wide">
+        {intl.formatMessage({ id: "chat.toolCall.parameters" })}
+      </h4>
+      <div className="max-h-60 overflow-auto rounded-md bg-muted/50">
+        <CodeBlock code={JSON.stringify(input, null, 2)} language="json" wrapLongLines />
+      </div>
     </div>
-  </div>
-);
+  );
+};
 
 export type ToolOutputProps = ComponentProps<"div"> & {
   output: ToolPart["output"];
@@ -131,25 +138,37 @@ export type ToolOutputProps = ComponentProps<"div"> & {
 };
 
 export const ToolOutput = ({ className, output, errorText, ...props }: ToolOutputProps) => {
-  if (!(output || errorText)) {
+  const { intl } = useZCodeIntl();
+  // 修复依据：truthiness 会吞掉有效的零和布尔结果，所有字符串按 JSON 渲染会挤出双层滚动。
+  if (!errorText && (output === undefined || output === null || output === "")) {
     return null;
   }
 
   let Output: ReactNode = null;
 
   if (!errorText) {
-    Output = <div>{output as ReactNode}</div>;
+    Output = isValidElement(output) ? (
+      output
+    ) : (
+      <div className="whitespace-pre-wrap break-words p-3">
+        {typeof output === "boolean" ? String(output) : (output as ReactNode)}
+      </div>
+    );
     if (typeof output === "object" && !isValidElement(output)) {
-      Output = <CodeBlock code={JSON.stringify(output, null, 2)} language="json" />;
+      Output = <CodeBlock code={JSON.stringify(output, null, 2)} language="json" wrapLongLines />;
     } else if (typeof output === "string") {
-      Output = <CodeBlock code={output} language="json" />;
+      Output = isJsonToolText(output) ? (
+        <CodeBlock code={output} language="json" wrapLongLines />
+      ) : (
+        <div className="whitespace-pre-wrap break-words p-3">{output}</div>
+      );
     }
   }
 
   return (
     <div className={cn("space-y-2", className)} {...props}>
       <h4 className="font-medium text-muted-foreground text-ui-base uppercase tracking-wide">
-        {errorText ? "Error" : "Result"}
+        {intl.formatMessage({ id: errorText ? "chat.toolCall.error" : "chat.toolCall.result" })}
       </h4>
       <div
         className={cn(

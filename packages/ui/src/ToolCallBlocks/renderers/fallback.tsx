@@ -1,5 +1,11 @@
 import { WrenchIcon } from "lucide-react";
-import { useCallback, type ReactNode } from "react";
+import { useCallback, useState, type ReactNode } from "react";
+import { MessageResponse } from "@/components/ai-elements/message.js";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible.js";
 import { ToolCallBody } from "@/ToolCallBlocks/ToolCallBody.js";
 import { ToolSnapshotFieldNotice } from "@/ToolCallBlocks/ToolSnapshotFieldNotice.js";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
@@ -32,6 +38,26 @@ export function FallbackToolCallBlock(context: FallbackToolCallBlockProps) {
     onOpenBrowserUrl,
   } = context;
   const { toolCall } = toolCallNode;
+  const [rawOpen, setRawOpen] = useState(false);
+  // 修复依据：通用卡将文本当 JSON 且重复展开 raw，空参数和 kind 进一步挤占结果空间。
+  const bodyDisplayModel = {
+    ...displayModel,
+    showKind: false,
+  };
+  const outputOverride =
+    typeof toolCall.output === "string" && /^\s{0,3}(?:#{1,6}\s|```)/m.test(toolCall.output) ? (
+      <MessageResponse
+        workspacePath={workspacePath}
+        theme={theme}
+        codePreviewSettings={codePreviewSettings}
+        onOpenCodeViewer={onOpenCodeViewer}
+        onOpenFileLink={onOpenFileLink}
+        onOpenExternalUrl={onOpenBrowserUrl}
+        className="min-w-0 break-words px-3 py-2"
+      >
+        {toolCall.output}
+      </MessageResponse>
+    ) : undefined;
   const kindLabel =
     toolCall.kind.length > 0
       ? toolCall.kind[0]!.toUpperCase() + toolCall.kind.slice(1)
@@ -43,7 +69,8 @@ export function FallbackToolCallBlock(context: FallbackToolCallBlockProps) {
       <>
         <ToolCallBody
           childToolList={childToolList}
-          displayModel={displayModel}
+          displayModel={bodyDisplayModel}
+          outputOverride={outputOverride}
           toolCall={toolCall}
           workspacePath={workspacePath}
           theme={theme}
@@ -61,16 +88,25 @@ export function FallbackToolCallBlock(context: FallbackToolCallBlockProps) {
           }
         />
         {!hasInlinePreview && !context.hideRawFallback ? (
-          <pre className="px-4 py-3 rounded-xl bg-surface text-ui-xs mt-1 text-foreground-subtle max-h-50 overflow-auto">
-            {JSON.stringify(toolCall, null, 2)}
-          </pre>
+          <Collapsible open={rawOpen} onOpenChange={setRawOpen} className="mt-2">
+            <CollapsibleTrigger className="rounded-lg px-2 py-1 text-ui-caption text-foreground-subtle hover:bg-hover">
+              {intl.formatMessage({ id: "chat.toolCall.cua.details.raw" })}
+            </CollapsibleTrigger>
+            <CollapsibleContent>
+              {rawOpen ? (
+                <pre className="px-3 py-2 rounded-lg bg-surface text-ui-xs mt-1 text-foreground-subtle max-h-50 overflow-auto whitespace-pre-wrap break-words">
+                  {JSON.stringify(toolCall, null, 2)}
+                </pre>
+              ) : null}
+            </CollapsibleContent>
+          </Collapsible>
         ) : null}
       </>
     ),
     [
       childToolList,
       codePreviewSettings,
-      displayModel,
+      bodyDisplayModel,
       handleLoadFullToolCallFields,
       hasInlinePreview,
       onOpenBrowserUrl,
@@ -79,6 +115,10 @@ export function FallbackToolCallBlock(context: FallbackToolCallBlockProps) {
       theme,
       toolCall,
       workspacePath,
+      outputOverride,
+      rawOpen,
+      intl,
+      context.hideRawFallback,
     ],
   );
 

@@ -81,7 +81,8 @@ export function PlanGuidanceToolCallBlock(context: ToolCallBlockRenderContext) {
   const guidanceMarkdown = extractGuidanceMarkdown(toolCall);
   const renderContent = useCallback(
     () =>
-      guidanceMarkdown ? (
+      // 修复依据：失败结果也可能携带正文，不能优先渲染正文而隐藏可读错误。
+      guidanceMarkdown && !errorText ? (
         <div className="ml-2 space-y-2 border-border border-l pl-3.5 border-border">
           <MessageResponse
             className="min-w-0 break-words [&_h1]:text-foreground-subtlest [&_h2]:text-foreground-subtlest [&_h3]:text-foreground-subtlest [&_li]:text-foreground-subtlest [&_p]:text-foreground-subtlest"

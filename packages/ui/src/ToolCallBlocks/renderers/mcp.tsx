@@ -15,6 +15,7 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible.js";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
+import { hasToolInput, isJsonToolText } from "@/lib/toolContentPresentation.js";
 import { ToolLayout } from "@/ToolCallBlocks/ToolLayout.js";
 import { ToolSnapshotFieldNotice } from "@/ToolCallBlocks/ToolSnapshotFieldNotice.js";
 import type { ToolCallBlockRenderContext } from "@/ToolCallBlocks/shared.js";
@@ -33,24 +34,13 @@ const COLLAPSIBLE_CODE_LAYOUT_STYLE = {
   contentVisibility: "visible",
 } as const;
 
-function looksLikeJson(value: string): boolean {
-  const trimmed = value.trim();
-  if (!(trimmed.startsWith("{") || trimmed.startsWith("["))) return false;
-  try {
-    JSON.parse(trimmed);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 function isCompactResult(value: string): boolean {
   const trimmed = value.trim();
   return (
     trimmed.length > 0 &&
     trimmed.length <= COMPACT_RESULT_MAX_LENGTH &&
     !trimmed.includes("\n") &&
-    !looksLikeJson(trimmed)
+    !isJsonToolText(trimmed)
   );
 }
 
@@ -171,7 +161,8 @@ export function McpToolCallBlock(context: ToolCallBlockRenderContext) {
   const wrapLinesLabel = intl.formatMessage({ id: "chat.toolCall.mcp.wrapLines" });
   const descriptionLabel = intl.formatMessage({ id: "chat.toolCall.mcp.description" });
   const parametersLabel = intl.formatMessage({ id: "chat.toolCall.mcp.parameters" });
-  const hasCallDetails = Boolean(presentation?.description || toolCall.input !== undefined);
+  const hasParameters = hasToolInput(toolCall.input);
+  const hasCallDetails = Boolean(presentation?.description || hasParameters);
   const resultText = stringifyMcpResult(toolCall.output);
   const visibleError =
     toolCall.status === "failed" ? (toolCall.error ?? context.errorText) : undefined;
@@ -223,8 +214,8 @@ export function McpToolCallBlock(context: ToolCallBlockRenderContext) {
               appTheme={context.theme}
               className="bg-card"
               code={resultText}
-              enableSyntaxHighlighting={looksLikeJson(resultText)}
-              language={looksLikeJson(resultText) ? "json" : "log"}
+              enableSyntaxHighlighting={isJsonToolText(resultText)}
+              language={isJsonToolText(resultText) ? "json" : "log"}
               renderMermaid={false}
               style={COLLAPSIBLE_CODE_LAYOUT_STYLE}
               wrapLongLines
@@ -279,7 +270,7 @@ export function McpToolCallBlock(context: ToolCallBlockRenderContext) {
                     </p>
                   </section>
                 ) : null}
-                {toolCall.input !== undefined ? (
+                {hasParameters ? (
                   <section className="space-y-1.5">
                     <h4 className="text-ui-sm font-medium text-foreground-subtlest">
                       {parametersLabel}
@@ -314,6 +305,7 @@ export function McpToolCallBlock(context: ToolCallBlockRenderContext) {
       descriptionLabel,
       handleLoadFullToolCallFields,
       hasCallDetails,
+      hasParameters,
       hasPrimaryResult,
       parametersLabel,
       presentation?.description,

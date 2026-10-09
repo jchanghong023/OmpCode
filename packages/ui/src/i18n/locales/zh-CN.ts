@@ -4364,6 +4364,8 @@ const zhCN: Record<string, string> = {
   "chat.toolCall.imageLoadFailed": "图片加载失败，文件可能已不可读",
   "chat.toolCall.planFile": "计划文件",
   "chat.toolCall.result": "结果",
+  "chat.toolCall.parameters": "调用参数",
+  "chat.toolCall.error": "错误",
   "chat.toolCall.mcp.callDetails": "查看调用详情",
   "chat.toolCall.mcp.result": "结果",
   "chat.toolCall.mcp.copyResult": "复制结果",

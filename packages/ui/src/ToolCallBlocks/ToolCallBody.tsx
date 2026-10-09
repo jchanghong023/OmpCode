@@ -20,6 +20,7 @@ export function ToolCallBody({
   childToolList,
   displayModel,
   inlinePreviewOverride,
+  outputOverride,
   toolCall,
   workspacePath,
   theme,
@@ -31,6 +32,7 @@ export function ToolCallBody({
   childToolList: ReactNode;
   displayModel: ToolDisplayModel;
   inlinePreviewOverride?: ToolInlinePreview;
+  outputOverride?: ReactNode;
   toolCall: TaskChatToolCallTreeNode["toolCall"];
   workspacePath: string;
   /** 应用主题（store 耦合剥离）：透传给 markdown / 代码块渲染，缺省按 "system" 兜底。 */
@@ -77,7 +79,7 @@ export function ToolCallBody({
             <ToolInput input={toolCall.input} />
           ) : null}
           {displayModel.showOutput ? (
-            <ToolOutput errorText={toolCall.error} output={toolCall.output} />
+            <ToolOutput errorText={toolCall.error} output={outputOverride ?? toolCall.output} />
           ) : null}
           {displayModel.showKind ? (
             <p className="text-ui-base text-muted-foreground">{toolCall.kind}</p>

@@ -82,6 +82,8 @@ Agent 交互页的已保存会话可执行 `node packages/desktop/test/ompAgentI
 
 主/子执行页联合 GUI 回归：先重建当前 adapter/Host，设置 `OMP_NATIVE_E2E=1` 执行 `node packages/desktop/test/ompExecutionPages.launch.mjs`，返回 `runtimePath`；启动器创建临时 OMP 根、固定 GLM-5.3-Flash 主/子角色及独占 Vite/CDP 端口。将返回路径传给 `OMP_E2E_RUNTIME_MANIFEST`，设置独立 `OMP_E2E_EVIDENCE_DIR`，运行 `node packages/desktop/test/ompExecutionPages.gui.e2e.mjs`。`OMP_E2E_PHASE=live` 在指定测试项目提交三代理创建 a–c 并广播 `hello` 的提示词，核对主会话、三个详情的完整工具记录、真实终态/只读控制与 Agent 交互页；关闭该启动器创建的进程，以同一临时根设置 `OMP_E2E_ISOLATED_ROOT` 重启后，`cold` 复验同一已保存会话，`saved` 只验证该 fixture 已登记的会话。禁止连接日常实例；live 会调用既有 GLM 凭据，cold/saved 不发起新模型轮次。结果按两阶段分别记录，不能合并不同源码快照。
 
+工具详情组件验收：`node packages/desktop/test/toolContentPresentation.components.e2e.mjs` 使用临时端口、独立 Electron/userData，限时 60 秒，不调用模型；覆盖有效零/布尔结果、空参数、普通文本/JSON/Markdown、原始数据开合、MCP 参数、计划错误、深浅主题及窄栏布局，不替代真实会话/冷恢复验收。
+
 性能热路径验收：`node packages/desktop/test/ompPerformanceHotPaths.components.e2e.mjs` 启动独立 Electron 组件环境，检查代码/思考/时间线及输入保存边界，不调用模型。`node packages/desktop/test/ompPerformanceHotPaths.gui.e2e.mjs` 复用专用隔离启动器及 `OMP_E2E_RUNTIME_MANIFEST`、`OMP_E2E_EVIDENCE_DIR`、`OMP_E2E_RUN_ID`，验证真实 GLM 发送、草稿与文件引用；`OMP_E2E_PHASE=live` 检查新建会话，`stable` 检查已有持久 ID 的会话，`cold` 在重启同一隔离目录后检查恢复，三者的结果分别报告。
 
 首次 Host 身份迁移的项目验收在上述启动器设置 `OMP_E2E_OPEN_TEST_PROJECT=1`，通过真实 `--open-workspace` 打开隔离根下的 `acceptance-project`；manifest 的 `requestedWorkspace` 由性能 GUI 与 mentions 脚本共用，不把默认工作区的全局任务列表当作项目 query cache。
