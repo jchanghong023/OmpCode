@@ -89,7 +89,7 @@ omp todo 成功结果 → ConversationEngine 的同一会话投影 owner
 
 - 会话中隐藏 omp 无法持久化的赞/踩反馈入口，保留复制等其他回复操作。
 - ZCode 插件安装/市场不可用，市场入口隐藏；旧 plugins/referenceCatalog 返回合法空目录，桌面不内嵌 ZCode 官方插件运行时与内置技能包。技能的独立需求见 [skills.md](skills.md)。
-- omp 子代理的详细过程查看（见 [omp-core-integration.md](omp-core-integration.md)）：目录项提供只读子会话下钻（合成 childSessionId `omp-subagent:<id>@<parent>`，内容为经父会话进程 `get_subagent_messages` 读取的已保存记录 + 实时事件）与控制入口（停止 → `cancel_subagent`、发送消息 → `steer_subagent`，经 `session/controlSubagent` 业务入口）。backgroundWorks 中的其他旧任务仍未发起。
+- omp 子代理的详情读面与控制协议唯一见 [OMP 核心接入](omp-core-integration.md#产品规则)，面板与目录入口按本页「子代理」维护；查看记录不触发新执行，控制结果真实显示。backgroundWorks 中的其他旧任务仍未发起。
 - 错峰任务仍不可用；自动化验收须跑通创建、立即运行、运行记录、暂停与恢复。
 
 ## 图片附件转发

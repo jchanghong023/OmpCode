@@ -1,6 +1,6 @@
 # OMP 核心接入（每会话一进程 + 目录进程 v3 能力）
 
-本域规定 ZCode 接入 OMP RPC 核心（`omp --mode rpc-ui`）的拓扑、能力面、输入分流与降级语义。基线为 omp `v18.8.0+fork.298` 起的协议面：上游单会话 RPC + v3 fork 最小面（`commandCompletion` / `modelRoleConfig` / `sessionDirectory`）；旧「项目宿主/多会话宿主」（`--rpc-project`）已被 OMP 侧删除，本仓库不再保留对应接入层。权威协议需求见 OMP 仓库 `docs-zh-CN/requirements/rpc-ui-protocol.md` 与 `docs/rpc.md`；本文件只维护 ZCode 侧的接入差异。与本域相关的既有规则仍以各所属文档为准：模型与命令见 [models-and-commands.md](models-and-commands.md)，技能见 [skills.md](skills.md)，恢复见 [session-recovery.md](session-recovery.md)，子代理与集成见 [integrations.md](integrations.md)。
+本域规定 ZCode 接入 OMP RPC 核心（`omp --mode rpc-ui`）的拓扑、能力面、输入分流与降级语义。基线为 omp `v18.8.0+fork.298` 起的协议面：上游单会话 RPC + v3 fork 最小面（`commandCompletion` / `modelRoleConfig` / `sessionDirectory`）；旧「项目宿主/多会话宿主」（`--rpc-project`）已被 OMP 侧删除，本仓库不再保留对应接入层。OMP 协议需求唯一权威为其仓库 `docs-zh-CN/requirements/rpc-ui-protocol.md`，英文 `docs/rpc.md` 仅作参考；本文件只维护 ZCode 侧的接入差异。与本域相关的既有规则仍以各所属文档为准：模型与命令见 [models-and-commands.md](models-and-commands.md)，技能见 [skills.md](skills.md)，恢复见 [session-recovery.md](session-recovery.md)，子代理与集成见 [integrations.md](integrations.md)。
 
 ## 产品规则
 
@@ -11,10 +11,10 @@
 - **交互回路**：会话进程 ready 后发送 `set_ask_dialog {enabled:true}`；此后 omp `ask` 以 `extension_ui_request{method:"ask"}` 单帧携带完整问题集（多题/多选/选项说明/preview/`recommended`），投影为 ZCode `ElicitationDialog` 富问答，「其他」自定义回答映射 `customInput`，应答经 `extension_ui_response{answers:[{id,selectedOptions,customInput}]}` 按题回传，取消整体收口；服务端超时自动按 recommended 收尾，适配器投影倒计时展示。未启用 ask 对话框（旧核）时 ask 沿用 `select`（选项）+ `editor`（自由文本，`promptStyle:true`）逐题降级路径。
 - **审批形态**：工具审批由 omp extension runner 发 `extension_ui_request{method:"select"}`（选项 `Approve`/`Deny`，提示携带工具名、原因与 `formatApprovalDetails` 行），沿通用询问回路呈现与应答；六档结构化审批卡（旧 v3 `permission_request`）已随 OMP 侧删除不再提供，会话级/始终允许等持久决策由 omp 自身 approvalMode 与 `tools.approval` 配置持有。omp 审批仅在用户 omp 审批配置生效时出现；默认 yolo 无确认。超时、销毁与断连一律 fail-closed 拒绝，无静默放行。
 - **extension_ui 其余方法**：`select/confirm/input/editor` 沿用通用询问回路（`sensitive` 投影密码输入，`editor` 携带 `prefill` 透传）；`notify/setStatus/setWidget/setTitle/set_editor_text/open_url` 无宿主呈现面，按取消回执不让 omp 挂起；`cancel+targetId` 立即收口等待中交互。
-- **原生扩展文本输出**：`pi.sendMessage` 的 `role:"custom"`、`display:true` 消息支持标准字符串/文本块内容，经 `message_end` 显示一次，冷恢复读取对应 `custom_message`（或合法 message 包装）内容；`display:false` 不显示、也不进入供 UI 使用的派生 transcript。仅投影普通文本，不运行 TUI 自定义 renderer、不承诺其布局/图片呈现；此消息不是 assistant 模型响应，不改变模型用量、当前错误、流式锚点或主轮结算，扩展未请求 triggerTurn 时不得制造模型调用。
+- **原生扩展文本输出**：`pi.sendMessage` 的 `role:"custom"`、`display:true` 消息支持标准字符串/文本块内容，经 `message_end` 显示一次，冷恢复读取对应 `custom_message`（或合法 message 包装）内容；`display:false` 不显示、也不进入供 UI 使用的派生 transcript。仅投影普通文本，不运行 TUI 自定义 renderer、不承诺其布局/图片呈现；此消息不是 assistant 模型响应，不改变模型用量、当前错误、流式锚点或主轮结算，扩展未请求 triggerTurn 时不得制造模型调用。技能注入的 `skill-prompt` 不是普通扩展正文，其 chip、原始输入及冷恢复呈现唯一按 [技能需求](skills.md) 管理，不以此通用规则展开技能全文。
 - **命令与技能目录/补全**：命令目录事实源为目录进程 `get_available_commands`（v3 富目录：`inputHint` 顶层、`subcommands`、`source`、`execution`、`availability`、`revision`；v1 形状 `input:{hint}` 兼容解析），技能目录继续按其中 `source=skill` 命令投影（`skills/referenceCatalog` 语义不变）。动态补全经目录进程 `complete_command`（UTF-16 光标、替换区间、参数提示、零执行副作用）；静态名称过滤仍可在 UI 本地完成，二者合并呈现且过期结果丢弃。`available_commands_update` 事件使目录与补全缓存失效并即时推送。
-- **模型两种入口分离**：会话临时切换走会话级 `set_model`（不写配置）；角色持久配置走目录进程 `get_model_roles`/`set_model_role`（全部可配置 role 始终可见，含未配置项；逐 role 自动保存，含保存中/失败/被覆盖状态；用户级作用域）。两个入口不得共用同一按钮语义；OMP 未提供 v3 时角色编辑器回落到本地配置文件读写。
-- **子代理**：运行中目录来自父会话投影（`subagent_lifecycle`/`subagent_progress` 帧 + `get_subagents` 快照对账；新核快照仅含运行中子代理）；已结束目录来自投影持久行（冷恢复从会话文件重建）。只读详情以合成 `childSessionId`（`omp-subagent:<id>@<parentSessionId>`）订阅 `conversation/<childSessionId>` 打开，内容为经父会话进程 `get_subagent_messages`（`fromByte`/`nextByte`/`reset` 窗口续读）读取的已保存记录 + 实时 `subagent_event` 事件，查看不触发新的模型执行。控制操作为显式用户动作入口：停止 → `cancel_subagent`，发送消息 → `steer_subagent`；只读详情默认无副作用。
+- **模型两种入口分离**：会话临时切换走会话级 `set_model`，用户级角色持久配置走目录进程 `get_model_roles`/`set_model_role`；不得共用同一按钮语义。角色清单、保存状态、修订冲突、profile 与旧核回落边界唯一按 [模型与命令](models-and-commands.md) 管理，提交时的临时选择按 [输入区](composer.md) 管理。
+- **子代理读面与控制接口**：运行中目录来自父会话投影（`subagent_lifecycle`/`subagent_progress` 帧 + `get_subagents` 快照对账；新核快照仅含运行中子代理）；已结束目录来自投影持久行，冷恢复从会话文件重建。详情以合成 `childSessionId`（`omp-subagent:<id>@<parentSessionId>`）订阅 `conversation/<childSessionId>`，正文、思考与工具行只从父会话进程 `get_subagent_messages` 的已保存记录重建（`fromByte`/`nextByte`/`reset` 续读）；实时 `subagent_event` 通知补读及状态更新，不另写执行记录。停止映射 `cancel_subagent`，发送消息映射 `steer_subagent`；面板与目录的用户可见规则唯一见 [子代理集成](integrations.md#子代理)，详情阅读与控制状态按下述执行页规则。
 - **执行页的记录与呈现**：主会话与子代理详情按真实顺序保留任务输入、每次工具调用及结果、助手回复和后续运行，不把不同输入或唤醒后的执行合并成只剩最后一句回复。OMP 的 `irc:incoming`、`irc:relay`、`async-result` 等运行时协调消息不作为助手正文在执行页铺开；代理通信和后台结果由 Agent 交互页提供精简内容及原文。已标注为 agent 来源的 IRC steering 输入只保留可读的发送方和消息正文，不展示模型侧的等待中断/XML 包装。普通用户正文和其他可见扩展输出保持原样。`agent://` 通信、作业控制等虚拟资源写入不计入文件变更，也不生成文件 diff 或文件链接。界面初次打开定位到任务结果；用户展开执行过程或向上滚动后保持所选位置，不因同一记录的重复补读跳到后续协调消息。
 - **子代理控制状态**：详情顶部的发送和停止入口只有在当前父会话 owner 能证明该子代理可控制时可用；纯冷历史或已结束记录保持只读并显示对应状态，不把可见「停止」按钮当成仍在执行的事实。控制命令仍由既有 `session/controlSubagent` 路径执行，失败不得伪报成功。
 - **连通性测试与 MCP 状态**：新核无 `test_model`/`list_mcp_servers`；`provider/testModelConnectivity` 显式拒绝（-32601），`mcp/list` 返回合法空状态表，不伪造服务状态。各自能力边界见 [FORK.md](FORK.md) 与 [原生集成](integrations.md)。
@@ -75,7 +75,7 @@ web-remote-replayable: 同一 owner → 水位增量 / 缺口快照；冷启动�
 6. **Z12** 无配置/无账号时仍显示全部可配置 role（含未配置项与自定义项）；选定模型后自动保存无需第二次保存；重启页面和 OMP 后配置一致；保存中、失败、被覆盖、无候选状态真实。
 7. **Z14** GUI 能发现并使用 ZCode 原先没有的 OMP 业务命令；详细子代理视图可展开每次工具调用及代理间通信，截断或缺失内容有明确提示。
 8. **Z15/Z05** 已开放的控制操作（停止/发送消息）经 `session/controlSubagent` 业务入口执行并呈现返回状态；只读详情保持观察无副作用；渲染器刷新后宿主重建视图、进程存活；OMP 重启后读取历史，不伪造执行完成或重发副作用。
-9. **Z02** 技能列表、开关等管理操作准确作用于 OMP（本项以目录/补全/执行为主，完整管理操作按 skills.md 既有验收）。
+9. **Z02** 技能目录、候选、补全与实际调用准确作用于目标 OMP；设置页保持只读，现有 RPC 不提供的安装、删除与开关不能伪装可用。完整业务规则及验收唯一见 [skills.md](skills.md)。
 10. **Z04** 并行会话执行、审批、问题、队列各归其会话；长操作接受不显示为已完成（沿用 session-recovery.md）。
 11. **Z16** 审批以 Approve/Deny 双档询问呈现并正确应答（omp 审批配置生效时）；`ask` 富问答（多题/多选/自定义/推荐项）单帧呈现、按题应答、取消与超时收口正确。
 12. **Z17** 冷会话改名（未加载）经 `rename_session` 真实生效；删除（已加载/冷）经 `delete_session` 后会话文件确已删除、索引移除；旧核回落本地文件删除路径不受影响。

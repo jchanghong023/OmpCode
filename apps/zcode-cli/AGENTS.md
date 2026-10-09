@@ -1,13 +1,10 @@
 # Agent 指令
 
-这里是 TypeScript Node.js Coding Agent CLI，支持主流模型和操作系统。通用工作规则遵循[根 AGENTS.md](../../AGENTS.md)；本文件补充 CLI 规则。Node.js 和包管理器版本以仓库根目录的 [mise.toml](../../mise.toml) 与 [package.json](../../package.json) 为准。
+这里保留上游 TypeScript Node.js Coding Agent CLI 的独立源码 workspace，不是 OmpCode 产品运行时。通用工作规则、固定需求目录和操作权限遵循[根 AGENTS.md](../../AGENTS.md)；本文件仅补充快照内部的 CLI 开发约束。其跨平台规则不扩大 Fork 产品支持范围，也不授权恢复该 CLI。工具版本以根 [mise.toml](../../mise.toml) 为准，子 workspace 的实际命令见本地 [package.json](package.json)。
 
 ## 工作规范（最重要）
 
-- 新增或修改行为前，先编写或更新对应 spec，明确产品规则、状态所有者、接口和验收场景，再实现代码。优先复用现有文档；缺少时按需创建文档及目录，不假定存在固定版本的设计目录。
-- 其次是测试 case 很关键，能证明结果是否符合预期
-- 留好轨迹，包括功能增加后，留下新的文档，bugfix 之后写下 bug 的原因在注释里
-- agent 友好的项目，留好日志或者接口，让 agent 能完全接手操作
+- CLI 行为或环境变量的文档维护仍使用根规则指定的 `docs/requirements/`，不另建 spec 权威目录；现有上游行为约束仅用于维护该快照，不自动转成本 Fork 的新增产品需求。
 - 长程任务优先：核心 agent loop 默认面向可持续运行的复杂任务设计，不用 tool call 次数做硬停止。资源与安全边界应由 token/context limit 自动 compact、用户取消、权限拒绝、工具超时、输出截断、provider retry 上限等明确条件承担。
 - 单个源文件默认不能超过 400 行；超过时必须优先按高内聚低耦合拆分模块，不能用大文件继续堆职责。
 - 字符串、数字等常量应提取为命名变量或常量，不要在业务逻辑中直接散落字面量，便于一处修改、统一维护。
@@ -102,6 +99,6 @@
 
 ## 验证
 
-- 在完成代码变更之前，从仓库根目录运行 `pnpm typecheck` 和 `pnpm lint`；涉及 CLI 代码时，还应运行 `pnpm --dir apps/zcode-cli typecheck` 和 `pnpm --dir apps/zcode-cli lint`。
-- 测试入口以目标包当前的 `package.json` 和实际测试文件为准，不假定存在统一的测试命令；行为变更应执行对应测试，交互变更应覆盖 E2E 场景。
-- 如实记录执行过的命令、结果和未验证范围；缺少测试入口、已有失败或环境限制不得写成通过。
+- 从仓库根目录执行 `pnpm --dir apps/zcode-cli typecheck`、`pnpm --dir apps/zcode-cli lint`，它们只覆盖独立 CLI workspace；不在根 workspace 或产品测试计划内。须先准备子 workspace 依赖，根包安装不能据此认定子包依赖齐全；命令存在不表示本次已执行或通过。
+- 本地启动/构建入口为 `pnpm --dir apps/zcode-cli dev`、`pnpm --dir apps/zcode-cli build`；不作为产品启动或分发方式，未经明确请求不运行快照。
+- 没有子 workspace 根 `test` script；按目标包 manifest 和实际测试文件定位 UT/集成/E2E。验证标准、当前允许的平台和结果记录遵循根规则，不因本地跨平台设计约束执行已取消的 Linux/CentOS/WSL 测试。

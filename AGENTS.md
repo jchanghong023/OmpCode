@@ -11,7 +11,7 @@
 - 本仓库是持续同步上游的个人 Fork；上游来源、跟踪目标、产品目的、支持平台及平台差异边界唯一维护于 [FORK 总纲](docs/requirements/FORK.md)。同步操作只针对其中指定的上游 `main` HEAD，优先采用上游最新实现；UI、依赖与环境门控改动须先核对该总纲及所属功能域。
 - 自有改动与上游改动按 [结构隔离约定](docs/requirements/FORK.md#上游同步策略与平台范围) 组织，对上游共享文件保持最小必要 diff。
 - 本项目完全由 AI Agent 实现和维护：质量不依赖用户手工读代码或人工回归，必须依靠可复现的自动化验证与文档约定。
-- 固定需求权威目录是 `docs/requirements/`，从 `README.md` 按功能边界定位文档；Fork 目的、差异需求、规划及验收标准只在该目录维护。根目录 `FORK.md` 仅保留跳转，不是第二份权威副本。
+- 固定需求权威目录是 `docs/requirements/`，从[需求索引](docs/requirements/README.md)按功能边界定位文档；Fork 目的、差异需求、规划及验收标准只在该目录维护。根目录 `FORK.md` 仅保留跳转，不是第二份权威副本。
 - 新增、修改或取消本地差异需求，或预期用户可见行为变化时，MUST 检查并同步目录中对应文档；新独立功能域可新增文档并更新索引，每项需求只有一个维护位置。仅实现方式变化且需求不变时，不制造需求变更，也不得改写需求来合理化实现缺陷。入口、命令或开发规则变化时同步本文件。
 - 已获授权的上游同步任务中先保全本地改动和差异需求，正常优先可靠合并；冲突难以可靠解决时，可以相关冲突部分的上游当前实现为基础，按 `docs/requirements/` 重新实现仍然有效的本地需求，不执着保留旧补丁。同步后 MUST 逐项核对目录中仍然有效的本地需求，而不是只检查是否存在 Git 冲突；重建后必须通过相应 UT 和 E2E 验证，未通过不得宣称同步完成。
 - 不据此丢弃无关本地改动、覆盖唯一需求依据或擅自重置整个仓库；无法可靠保留本地功能时中止同步，不静默丢弃。
@@ -31,7 +31,7 @@
 | Lint             | `pnpm lint` / `pnpm lint:fix`                                          |
 | 格式检查         | `pnpm fmt:check`                                                       |
 | 桌面开发         | `pnpm dev:desktop`（production 数据环境）                              |
-| 隔离开发数据     | `pnpm dev:desktop:test`（使用 test 环境）                              |
+| 桌面测试环境     | `pnpm dev:desktop:test`（`ZCODE_ENV=test`，不保证数据隔离）            |
 | Web 开发         | `pnpm dev:web`                                                         |
 | 构建工作区       | `pnpm build`                                                           |
 | Windows x64 打包 | `pnpm bundle:desktop -- --os=win --arch=x64`                           |
@@ -52,12 +52,14 @@
 - `packages/omp-agent/src/adapters/cliMain.ts`：Host 启动的 Agent stdio 入口。
 - OMP 环境与数据路径改动先核对 [根目录与 profile 规则](docs/requirements/models-and-commands.md#产品规则与所有权)；启动器接口与分发验收见 [CentOS 7 分发需求](docs/requirements/centos7-release.md)。
 - `apps/zcode-cli`：保留的上游源码快照，不在根 workspace 中；运行时边界见 `docs/requirements/FORK.md`，未经用户要求不得接回产品。
-- 子目录规则注册表（全仓唯一）：[apps/zcode-cli/AGENTS.md](apps/zcode-cli/AGENTS.md)——独立 workspace 的上游 CLI 源码快照，承载 CLI 专属工作规范、跨平台与接口契约约束及 `pnpm --dir apps/zcode-cli typecheck/lint` 本地验证入口；其余目录不另设子目录 `AGENTS.md`，通用规则统一由本文件维护。
+- 子目录规则注册表（全仓唯一）：[apps/zcode-cli/AGENTS.md](apps/zcode-cli/AGENTS.md)——独立上游 CLI 源码 workspace，保留其专属开发约束与本地验证入口；其余产品包共用本文件，不按目录层级机械新增规则文件。项目规则文件总数不得超过 8，托管技能参考资料按下项排除。
 - `.agents/skills/react-best-practices/AGENTS.md` 是随技能分发的参考资料，不是项目模块规则；文档系统分析与检查使用 `--exclude .agents/skills/react-best-practices` 排除此托管资料。
 - `CONTEXT.md`：插件商店领域词汇；修改相关 UI 前阅读。
 - `DESIGN.md`：UI 设计规范；修改 UI 前阅读。
 
 构建与测试须先按 `mise.toml` 准备 Node 24.14.0、pnpm 10.33.2 及 workspace 依赖；桌面完整构建/打包需要对应平台构建环境，运行时准备可能联网下载资产。上表及下表是源码中存在的入口，列出不等于本次已执行或已验证所有平台可用。
+
+`dev:desktop:test` 只选择产品 test 环境，不创建专用 OMP 根或 profile；真实验收必须使用下述隔离启动器并核对实际数据落点。环境变量与根目录规则见[模型与命令](docs/requirements/models-and-commands.md#产品规则与所有权)，不能将命令名称中的 `test` 当作隔离证明。
 
 ### 自动化验证入口
 
@@ -76,7 +78,7 @@
 | 子代理 / Todo 界面适配 GUI E2E     | `node packages/desktop/test/ompStatusPanels.gui.e2e.mjs`；先启动隔离桌面并设置 `OMP_E2E_CDP_URL`、`OMP_E2E_EVIDENCE_DIR`；默认 live 调用既有 GLM-5.3-Flash 并创建只读测试会话，重启同一隔离桌面后以 `OMP_E2E_PHASE=cold` 验证恢复与两项子代理工具结果；不连接用户日常实例                                                                                                                                                                                 |
 | Agent 交互页 GUI E2E               | `node packages/desktop/test/ompAgentInteractions.launch.mjs` 以 `OMP_E2E_ISOLATED_ROOT` 启动专用桌面（端口由 `OMP_E2E_CDP_PORT` / `OMP_E2E_RENDERER_PORT` 指定）；`node packages/desktop/test/ompAgentInteractions.gui.e2e.mjs` 读取 `OMP_E2E_RUNTIME_MANIFEST`，同时设置 `OMP_E2E_EVIDENCE_DIR`、`OMP_E2E_RUN_ID`；先 live，再重启同一隔离目录以 `OMP_E2E_PHASE=cold` 验恢复。主会话及测试项目专属子代理使用既有 GLM-5.3-Flash，不修改用户模型角色配置。 |
 
-真实模型验收使用用户 omp 既有配置中的 `zhipu-coding-plan/glm-5.3-flash`；审批等测试态通过运行时 flag 注入，不修改用户配置文件。真实测试会调用模型并创建测试会话，必须明确环境和范围；测试服务使用临时端口，不影响用户已有 ZCode/omp 进程。现有 GUI 走查与已知未验收范围见 `docs/test-reports/`，后续功能开发仍须补足相关真实入口到结果的 E2E。
+常规真实模型验收使用用户 omp 既有配置中的 `zhipu-coding-plan/glm-5.3-flash`；审批等测试态通过运行时 flag 注入，不修改用户配置文件。[指定模型桌面专项](docs/requirements/e2e.md)单独规定模型、隔离角色配置及认证安全前提，不得用常规 GLM 场景替代其验收。真实测试会调用模型并创建测试会话，必须明确环境和范围；测试服务使用临时端口，不影响用户已有 ZCode/omp 进程。现有 GUI 走查与已知未验收范围见 `docs/test-reports/`，后续功能开发仍须补足相关真实入口到结果的 E2E。
 
 Agent 交互页的已保存会话可执行 `node packages/desktop/test/ompAgentInteractions.visual.e2e.mjs`，复用上述 `OMP_E2E_RUNTIME_MANIFEST`、`OMP_E2E_EVIDENCE_DIR`、`OMP_E2E_RUN_ID`，验证摘要/原文开合、深浅主题与窄栏布局，不发起新的模型轮次。
 
@@ -95,10 +97,9 @@ UI UT 使用 `@/` 路径别名时，从根执行 `pnpm exec tsx --tsconfig packa
 ## 三级测试门禁
 
 - `pnpm fastcheck`：仅 Windows 本机，AI 可自主运行的快速反馈子集；硬上限 60 秒，超时必须终止本次进程树、输出 `TIMEOUT`/总秒数并失败，不代表全项目验收。`--budget-seconds` 只允许下调。
-- `pnpm fulltest --human-authorized`：Windows 全部适用的本地检查、单测/集成、隔离真实 OMP/GLM、性能、组件及产品 GUI、Windows 构建与本地打包。
-- `pnpm slowtest --human-authorized`：与 fulltest 相同的 Windows 完整计划，不追加跨平台、WSL、CentOS、VM、Citrix、目标网络盘专项或发布流水线。Windows 必需环境缺失、缺入口、跳过、取消或失败均不能算整体通过。
-- 每次 fulltest/slowtest 必须来自本次用户明确指令；本次用户已明确授权完整 Windows 测试。其他任务中的历史授权、技能、代理建议、提交/推送请求或“检查一下”不自动授权；`--human-authorized` 只能依据原始用户明确指令传入，不得绕过门禁执行完整、长时间子步骤。
-- 测试不触发、不等待、不验证任何发布 workflow，也不接受 `--publish-releases`。发布独立通过既有 `.github/workflows/release-windows.yml` 与 `.github/workflows/release-centos7.yml` 操作；本次用户此前明确授权的两平台正式发布仍有效，目标固定 `origin/main`，不代为提交/推送、不创建新发布入口、自定版本或 Tag，沿用既有 workflow 自动 Tag 规则。Windows 测试失败仍须先修复；发布结果不能替代测试通过。
+- fulltest/slowtest 的 Windows 完整计划、覆盖与失败语义唯一维护于[三级测试需求](docs/requirements/test-gates.md)，本节只规定执行权限与操作边界；快速子集通过不表示完整验收。
+- 每次 fulltest/slowtest 必须来自当前对话的用户明确指令。历史授权、仓库内「本次已授权」记录、技能调用、代理建议、提交/推送请求或“检查一下”不自动授权；`--human-authorized` 只能依据原始用户明确指令传入，不得绕过门禁执行完整、长时间子步骤。
+- 测试不触发、不等待、不验证任何发布 workflow，也不接受 `--publish-releases`。发布是独立外部操作，必须依据当前对话中仍有效的用户明确授权；历史文档不提供发布授权。既有入口、目标与 Tag 约定见[Fork 分发要求](docs/requirements/FORK.md#omp-侧依赖)，不代为提交/推送、不创建新发布入口、自定版本或 Tag。Windows 测试失败仍须先修复；发布结果不能替代测试通过。
 - 每次结果绑定本次 HEAD、未提交差异摘要、内容指纹与工具版本；源码变化后旧结果不能沿用或跨快照合并。真实 OMP/GLM 与 GUI 必须使用专用隔离 fixture 和数据根，不连接日常实例、不修改用户配置；历史失败、跳过和未验证记录不得改写成通过。
 - 尚未授权时只建立入口、执行 fastcheck 和入口机制的临时短桩自检；新编排文件可做显式逐文件语法/Lint/格式检查，不借此执行完整验收。保留原有质量检查和测试断言，不为通过门禁改写它们。需求、覆盖和环境配置见 [三级测试需求](docs/requirements/test-gates.md)。
 
@@ -125,12 +126,12 @@ UI UT 使用 `@/` 路径别名时，从根执行 `pnpm exec tsx --tsconfig packa
 
 ## 进程、协议与远程控制
 
-- Desktop app 通过 stdio 与 Agent 通信。协议改动同步更新 `packages/shared/src/zcode-protocol/index.ts`，提供严格类型与运行时校验。
+- Desktop app 通过 stdio 与 Agent 通信。协议改动按接口所属边界同步维护 `packages/shared/src/zcode-protocol/index.ts`（legacy）或 `packages/shared/src/zcode-protocol-v4/index.ts`（主链路），提供严格类型与运行时校验；不把 OMP 原生帧泄漏给 UI。
 - Main 负责窗口、原生操作、进程调度和消息转发，不承载 task/session 业务状态。
 - 每个窗口使用一个 window-scoped Local Host；本地 workspace 共享该 Host。远程 workspace 由窗口内的连接注册表管理，不另建 Desktop Remote Host。
 - 涉及已取消功能或其共享边界时先核对 [FORK 总纲](docs/requirements/FORK.md)，不得在重构或同步中恢复已取消需求。
 - Desktop 的 `desktop-continuous` 实时链路与 Web 的 `web-remote-replayable` 恢复链路必须明确区分。修改 stream、snapshot、queue 或重连时，同时验证两种语义。
-- 已接受的 busy/running 输入由 CLI/runtime `CommandInbox` 串行 admission；Renderer 只保留未提交草稿与 pending optimistic overlay，Host owner/lease 负责路由。
+- 产品输入经 omp-agent 的会话级调度与投影对接 OMP；运行中输入的接纳、消费及终态依据见[会话恢复](docs/requirements/session-recovery.md#冷历史与身份连续性)。不引用未接入产品的上游 CLI `CommandInbox` 作为运行时所有者。Renderer 只保留未提交草稿与 pending optimistic overlay，Host owner/lease 负责路由。
 - 保留 owner/lease、跨 Host 路由和 stale run 防护，不能仅根据单一路径删除边界判断。
 
 ## Workspace Identity

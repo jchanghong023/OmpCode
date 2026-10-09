@@ -23,7 +23,7 @@
 - 子代理独立状态面板、Agent 卡片与详情侧栏，以及 Todo 独立待办面板，属于第一阶段的常用界面；能够获取的数据应进入现有 ZCode 展示面。验收依据见 [集成需求](integrations.md)，不能仅以 OMP 执行成功或工具文本可见认定界面适配完成。
 - **后续阶段：围绕 OMP 独有能力开发新界面。** 只有现有 ZCode 界面无法完整表达该能力时，才在复用其设计体系的基础上增加专用界面；不以未来的新界面规划替代第一阶段已有界面的适配。
 
-本次初始化已确认该提交存在且为 HEAD 的共同基线；未获取或核验远端当前 main HEAD，不把尚未同步的上游变化识别为本地需求。以下本地要求仍需维护，尚未逐项证明上游等价满足。
+本地 Git 中该提交是 HEAD 与已缓存 `upstream/main` 的共同基线；本文件记录已合入基线，不代表远端当前 `main` HEAD。初始化不执行 fetch 或同步，也不把尚未同步的上游变化识别为本地需求。以下本地要求仍需维护，尚未逐项证明上游等价满足。
 
 ## 上游同步策略与平台范围
 
@@ -84,8 +84,8 @@
 
 - 对话流式输出、工具调用展示、权限确认、会话管理、文件变更展示：v4 conversation 投影（rows + state patch）按上游 wire schema 产出，全部下行帧经 `conversationTopicWireFrameSchema` 校验。
 - `desktop-continuous` 实时链路与 `web-remote-replayable` 恢复链路：同一投影、按订阅 `clientMode` 区分；断线重连按水位续传（delta log 有界保留，超界回退整快照 resync），两种语义不因换核回退。
-- omp RPC 帧格式不渗入 UI：适配层内闭环（`packages/omp-agent` 独占 omp 协议词汇）。会话进程在 ready 后发送 `set_ask_dialog {enabled:true}`，omp `ask` 以 `extension_ui_request{method:"ask"}` 单帧携带完整问题集，投影为 ZCode 原有 `ElicitationDialog` 富问答——多题、多选、选项说明与 preview、「其他」自定义回答（映射 `customInput`）、倒计时展示（服务端超时按 recommended 自动收尾）；应答按题回传（`extension_ui_response{answers}`），取消整体收口。`extension_ui_request` 的 `input`/`editor` 携带 `sensitive` 时投影为密码输入，`editor` 的 `prefill` 透传为编辑框初始值。未启用 ask 对话框的已发布二进制沿用既有降级路径：逐题 `select`/`editor`（`promptStyle:true`），「其他」由随后文本请求继续输入。
-- 工具审批由 omp extension runner 以 `extension_ui_request{method:"select"}`（`Approve`/`Deny` 两档，提示携带工具名、原因与明细行）发往宿主，沿通用询问回路呈现与应答；会话级/始终允许等持久决策由 omp 自身 approvalMode 与 `tools.approval` 配置持有。旧 v3 结构化权限卡（六档 `permission_request`）已随 OMP 侧 RPC 收敛删除，不再提供。超时、销毁与断连一律 fail-closed 拒绝本次调用，不存在静默放行路径。
+- omp RPC 帧格式不渗入 UI，适配层内闭环（`packages/omp-agent` 独占 omp 协议词汇）。富 ask、通用输入及旧核降级复用 ZCode 原有交互面，字段、应答与超时规则唯一见 [OMP 核心接入](omp-core-integration.md#产品规则)。
+- 工具审批复用同一通用询问回路；持久决策仍由 omp 自身配置持有，旧六档权限卡不恢复，超时/销毁/断连 fail-closed。具体呈现与应答唯一见 [OMP 核心接入](omp-core-integration.md#产品规则)。
 - 无法等价提供的能力：见「已知与允许的差异」逐项。
 
 验收：从真实公开入口新建会话，覆盖流式、工具调用、双向交互、实际文件变更、完成/中断、冷恢复；同时验证桌面实时交付与 Web 断线后的续传/超界快照恢复。协议模拟仅补充 wire 校验，不能代替真实核心及 GUI 链路。
@@ -143,3 +143,4 @@
 需求从原有权威 FORK 与对应 spec 迁入，未因当前实现降低要求。既有实现及历史验证不等于本次验收；统一证据边界见 [需求索引](README.md#实现与验证状态)。
 
 - 会话分享取消已有源码清理及历史静态/UT 记录；无分享入口、旧链接不触发导入或网络请求以及普通聊天/附件/恢复的完整 GUI 删除验收尚未执行，不视为完成验收。手机远控取消曾在 Windows 隔离桌面验证入口、API、证书与监听边界，CentOS 7 真机及发布包仍未验收。原结果与既有失败保留于 [历史验证记录](../test-reports/fork-baseline-validation.md#需求索引旧状态记录2026-10-09-归档)，本次只核对文档，不重跑功能测试。
+- 文档核对发现会话分享取消仍有实现缺口：`packages/web/src/auth/oauthStateCodec.ts` 的 OAuth `app_return_to` 白名单仍接受 `/share/<slug>` 与 `/cn/share/<slug>`，Web 回调仍使用该解析结果跳转。仅允许保留 provider 注册的 callback 地址，不允许保留分享专属跳转参数的既有需求不变；此处只记录源码证据，未修改代码或执行登录/GUI 验收。
