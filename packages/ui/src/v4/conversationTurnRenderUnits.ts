@@ -25,10 +25,7 @@ import type {
 } from "@/v4/conversationTurnWorkSegments.js";
 
 export type { AssistantWorkRow, ConversationTurnFlowItem } from "@/v4/conversationTurnFlowItems.js";
-export type {
-  ConversationTurnWorkSegment,
-  ConversationTurnWorkStatus,
-} from "@/v4/conversationTurnWorkSegments.js";
+export type { ConversationTurnWorkSegment } from "@/v4/conversationTurnWorkSegments.js";
 
 export interface ConversationTurnRenderUnit {
   key: string;

@@ -13,7 +13,7 @@ import { useTaskQueryCacheStore } from "@/store/taskQueryCacheStore.js";
 import { bumpTaskListMembershipVersion } from "@/v4/taskListMembershipVersion.js";
 import { getTaskListRowActivity } from "@/v4/taskListRowActivity.js";
 
-export interface TaskListRefreshE2EProbe {
+interface TaskListRefreshE2EProbe {
   matchingQueryCount: number;
   latestQueryStale: boolean | null;
   latestInvalidationVersion: number | null;
@@ -22,7 +22,7 @@ export interface TaskListRefreshE2EProbe {
   activityPhase: string | null;
 }
 
-export interface TaskListMembershipE2EProbe {
+interface TaskListMembershipE2EProbe {
   membershipKinds: TaskListQueryKind[];
   taskPresent: boolean;
 }

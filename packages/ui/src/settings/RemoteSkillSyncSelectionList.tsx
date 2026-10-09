@@ -12,7 +12,7 @@ export interface RemoteSkillSyncRow {
 const REMOTE_SKILL_SYNC_CARD_ACTION_SELECTOR =
   "button,input,a,textarea,select,label,[data-remote-skill-sync-card-action]";
 
-export function shouldToggleRemoteSkillSyncCardSelection({
+function shouldToggleRemoteSkillSyncCardSelection({
   exists,
   target,
 }: {

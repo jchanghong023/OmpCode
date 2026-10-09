@@ -5,8 +5,6 @@ import type { ZCodeDataSizeScanResult } from "./zcodeDataSizeScanner.js";
 import { readZCodeDataSizeTelemetryState, writeZCodeDataSizeTelemetryState, type ZCodeDataSizeTelemetryState } from "./zcodeDataSizeTelemetryState.js";
 import { scanZCodeDataDirectoryInWorker } from "./zcodeDataSizeWorkerClient.js";
 
-export type { ZCodeDataSizeTelemetryState } from "./zcodeDataSizeTelemetryState.js";
-
 const ZCODE_DATA_SIZE_SCAN_MAX_DURATION_MS = 30_000;
 const ZCODE_DATA_SIZE_SCAN_MAX_FILES = 200_000;
 const ZCODE_DATA_SIZE_DAILY_INTERVAL_MS = 24 * 60 * 60 * 1000;

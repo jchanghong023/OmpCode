@@ -27,13 +27,13 @@ import { ESTIMATED_TOKEN_CHAR_DIVISOR } from "@zcode/shared";
 // monitor 接口直接返回估算 token 数,反推字符数以保持现有 UI 字段语义。
 // ============================================================================
 
-export interface BigModelUsageModelSummaryPayload {
+interface BigModelUsageModelSummaryPayload {
   modelName?: string;
   totalTokens?: number;
   sortOrder?: number;
 }
 
-export interface BigModelUsageModelDataPayload {
+interface BigModelUsageModelDataPayload {
   modelName?: string;
   totalTokens?: number;
   tokensUsage?: number[];
@@ -71,12 +71,12 @@ export interface BigModelUsageToolUsagePayload {
   toolSummaryList?: BigModelUsageToolSummaryPayload[];
 }
 
-export interface BigModelCreditUsageMetricPayload {
+interface BigModelCreditUsageMetricPayload {
   value?: number | string | null;
   trend?: number | string | null;
 }
 
-export interface BigModelCreditUsageActivitySummaryPayload {
+interface BigModelCreditUsageActivitySummaryPayload {
   totalTokens?: number;
   peakDailyTokens?: number;
   peakDailyTokensDate?: string;
@@ -85,7 +85,7 @@ export interface BigModelCreditUsageActivitySummaryPayload {
   longestStreakDays?: number;
 }
 
-export interface BigModelCreditUsageActivitySeriesPayload {
+interface BigModelCreditUsageActivitySeriesPayload {
   date?: string;
   totalTokens?: number;
   modelCallCount?: number;
@@ -97,7 +97,7 @@ export interface BigModelCreditUsageActivityPayload {
   series?: BigModelCreditUsageActivitySeriesPayload[];
 }
 
-export interface BigModelCreditUsageModelDataPayload {
+interface BigModelCreditUsageModelDataPayload {
   modelCode?: string;
   modelName?: string;
   sortOrder?: number;
@@ -114,7 +114,7 @@ export interface BigModelCreditUsageModelDataPayload {
   outputTokensUsage?: BigModelUsageNumberSeries;
 }
 
-export interface BigModelCreditUsageMcpDataPayload {
+interface BigModelCreditUsageMcpDataPayload {
   mcpCode?: string;
   mcpName?: string;
   toolCode?: string;
@@ -165,7 +165,7 @@ export interface BigModelUsageModelPerformancePayload {
   liteDecodeSpeed?: number[];
 }
 
-export interface BigModelUsageToolDataPayload {
+interface BigModelUsageToolDataPayload {
   toolCode?: string;
   toolName?: string;
   sortOrder?: number;
@@ -173,7 +173,7 @@ export interface BigModelUsageToolDataPayload {
   totalUsageCount?: number;
 }
 
-export interface BigModelUsageToolSummaryPayload {
+interface BigModelUsageToolSummaryPayload {
   toolCode?: string;
   toolName?: string;
   totalUsageCount?: number;

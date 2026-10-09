@@ -10,7 +10,7 @@ import type {
 import { workflowRunStepCounts } from "@zcode/shared/zcode-protocol-v4";
 import { extractPlanToolCallContent, getPlanDirectoryTitle } from "@/lib/planToolCall.js";
 
-export interface ConversationStatusPanelGitModel {
+interface ConversationStatusPanelGitModel {
   branchName: string | null;
   headRefType: GitRepositorySummary["headRefType"];
   dirtyFileCount: number;
@@ -21,7 +21,7 @@ export interface ConversationStatusPanelGitModel {
   isClean: boolean;
 }
 
-export interface ConversationStatusPanelPlanModel {
+interface ConversationStatusPanelPlanModel {
   items: PlanState["items"];
   displayItems: PlanState["items"];
   completedCount: number;
@@ -37,7 +37,7 @@ export interface ConversationStatusPanelSessionPlanItem {
   planFilePath?: string;
 }
 
-export interface ConversationStatusPanelSessionPlansModel {
+interface ConversationStatusPanelSessionPlansModel {
   items: ConversationStatusPanelSessionPlanItem[];
 }
 

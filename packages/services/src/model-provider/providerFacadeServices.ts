@@ -74,14 +74,14 @@ export const IProviderSettingsService = createServiceDescriptor<IProviderSetting
   ServiceChannels.ProviderSettings,
 );
 
-export interface ProviderSettingsConnectivityTestInput {
+interface ProviderSettingsConnectivityTestInput {
   readonly workspacePath: string;
   readonly workspaceIdentity?: string;
   readonly providerId: ProviderId;
   readonly modelId: ModelId;
 }
 
-export interface ProviderSettingsConnectivityRequest {
+interface ProviderSettingsConnectivityRequest {
   readonly workspacePath: string;
   readonly workspaceIdentity?: string;
   readonly providerId: ProviderId;

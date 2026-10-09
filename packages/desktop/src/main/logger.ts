@@ -17,7 +17,7 @@ export const MAIN_LOG_MAX_QUEUED_BYTES = 4 * 1024 * 1024;
 /** 正常退出排空共享预算：Host 清理后与最终退出的全部 flush 共用，不逐次累加等待。 */
 export const MAIN_LOG_EXIT_FLUSH_BUDGET_MS = 1000;
 /** 单文件单批最大行数，防止一次性超大 append 阻塞事件循环。 */
-export const MAIN_LOG_MAX_BATCH_LINES = 256;
+const MAIN_LOG_MAX_BATCH_LINES = 256;
 
 let exitLogDeadline: number | undefined;
 export async function flushMainLogs(): Promise<void> {

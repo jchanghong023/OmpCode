@@ -29,7 +29,7 @@ interface AttachmentUploadWorkspace {
   workspaceIdentity?: string;
 }
 
-export interface AttachmentUploadProgress {
+interface AttachmentUploadProgress {
   phase: "uploading" | "committing";
   uploadedBytes: number;
   totalBytes: number;

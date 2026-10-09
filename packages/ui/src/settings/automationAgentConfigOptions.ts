@@ -1,11 +1,7 @@
-import type { ModelSelection, ZCodeConfigOption, ZCodeProvider } from "@zcode/shared";
+import type { ModelSelection, ZCodeConfigOption } from "@zcode/shared";
 import type { ModelSelectionView } from "@zcode/services";
 import type { ModelSelectGroup, ModelSelectGroupItem } from "@/ModelConfigSelect.js";
-import {
-  buildRegistryModelSelectGroups,
-  type ModelProviderGroupLabelOptions,
-} from "@/lib/modelSelectionGroups.js";
-import { decodeCustomModelValue, encodeCustomModelValue } from "@/lib/zcodeCustomModelValue.js";
+import { decodeCustomModelValue } from "@/lib/zcodeCustomModelValue.js";
 import { resolveV4ModelTriggerLabel } from "@/v4/composer/modelTriggerDisplay.js";
 import { highestOmpThoughtLevel, type OmpModelCatalog } from "@/v4/composer/ompModelCatalog.js";
 
@@ -38,27 +34,7 @@ export function resolveOmpAutomationSelection(
 /** 权限模式默认值：Ask before changes。 */
 export const AUTOMATION_DEFAULT_MODE = "build";
 
-/** 新建任务必须把目标 Host 的 preferredSelection 固化为具体模型，而不是保存虚拟“默认模型”。 */
-export function resolveAutomationPreferredModelValue(
-  view: Pick<ModelSelectionView, "preferredSelection">,
-): string | null {
-  const preferred = view.preferredSelection;
-  return preferred ? encodeCustomModelValue(preferred.providerId, preferred.modelId) : null;
-}
-
 const AUTOMATION_MODE_VALUES = ["build", "edit", "plan", "yolo"] as const;
-
-export function buildAutomationModelSelectGroups(params: {
-  selectedProvider: ZCodeProvider;
-  labels: ModelProviderGroupLabelOptions;
-  registrySelectionView: ModelSelectionView;
-}): ModelSelectGroup[] {
-  return buildRegistryModelSelectGroups(
-    params.selectedProvider,
-    params.registrySelectionView,
-    params.labels,
-  );
-}
 
 export function buildAutomationModeOption(currentValue: string): ZCodeConfigOption {
   return {

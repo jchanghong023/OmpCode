@@ -6,7 +6,7 @@ export interface CuaOperationWorkspaceTarget {
   workspaceIdentity?: string;
 }
 
-export interface CuaOperationState {
+interface CuaOperationState {
   active: boolean;
   sessionId: string;
   turnId: string;

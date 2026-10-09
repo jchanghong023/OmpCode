@@ -12,7 +12,7 @@ import type {
   SchedulerToMainMessage,
 } from "../scheduler/schedulerProtocol.js";
 
-export interface CronRunResultPayload {
+interface CronRunResultPayload {
   runId: string;
   ok: boolean;
   taskId?: string;
@@ -22,7 +22,7 @@ export interface CronRunResultPayload {
 }
 
 /** host → main 的闲时任务派发结果（与 cron 消息独立）。 */
-export interface OffPeakRunResultPayload {
+interface OffPeakRunResultPayload {
   offPeakTaskId: string;
   ok: boolean;
   conversationId?: string;

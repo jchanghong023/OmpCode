@@ -10,8 +10,6 @@ import {
   writeError,
 } from "./remoteMediaPreviewProxyHelpers.js";
 
-export { waitForDrainOrDisconnect } from "./remoteMediaPreviewProxyHelpers.js";
-
 const MEDIA_ROUTE_PREFIX = "/__zcode_media/";
 const DEFAULT_MAX_FILE_BYTES = 512 * 1024 * 1024;
 const DEFAULT_MAX_CONCURRENT_REQUESTS = 2;

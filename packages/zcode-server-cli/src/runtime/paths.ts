@@ -97,7 +97,7 @@ export function stablePathId(pathValue: string): string {
   return (hash >>> 0).toString(16).padStart(8, "0");
 }
 
-export function isPathWithin(rootPath: string, candidatePath: string): boolean {
+function isPathWithin(rootPath: string, candidatePath: string): boolean {
   const root = normalize(resolve(rootPath));
   const candidate = normalize(resolve(candidatePath));
   const diff = relative(root, candidate);

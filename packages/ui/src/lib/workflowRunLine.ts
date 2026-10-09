@@ -16,7 +16,7 @@ const WORKFLOW_RUN_RAIL_MAX_STATIONS = 6;
 /** 折叠时保留在运行站两侧的站点数。 */
 const RAIL_FOLD_RADIUS = 2;
 
-export interface WorkflowRunRailStation {
+interface WorkflowRunRailStation {
   name: string;
   status: SessionWorkflowPhaseSummary["status"];
   /** 进入本站的那一段轨道是否已被控制流走过（强色段）。 */

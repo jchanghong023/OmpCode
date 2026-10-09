@@ -90,14 +90,6 @@ export function mergeTaskIndexRowsWithSessions(params: {
   });
 }
 
-/** unreadAt join：map 已加载时以 tasks-index 为准，未加载时不动原 meta，避免首帧闪烁。 */
-export function joinTaskListUnreadAt(
-  tasks: ZCodeTaskMeta[],
-  unreadAtByTaskId: ReadonlyMap<string, number> | undefined,
-): ZCodeTaskMeta[] {
-  return joinTaskListMembershipMeta(tasks, { unreadAtByTaskId });
-}
-
 function joinTaskListMembershipMeta(
   tasks: ZCodeTaskMeta[],
   params: {

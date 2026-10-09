@@ -59,10 +59,6 @@ import {
 } from "@/v4/composer/ompModelCatalog.js";
 import { OmpModelRolesDialog } from "@/v4/composer/OmpModelRolesDialog.js";
 
-// 拆分件再导出（模式选择移居 V4ComposerModeControls，超行数拆分）：
-// 既有消费方（ConversationComposer）继续从本模块入口 import，接口面不变。
-export { V4ComposerModeSwitch } from "@/v4/composer/V4ComposerModeControls.js";
-
 const V4_COMPOSER_INPUT_SELECTOR = `[data-testid="${TID_V4_COMPOSER_INPUT}"]`;
 const MODEL_SELECTION_LOADING_STATE: ModelSelectionState = { status: "loading" };
 

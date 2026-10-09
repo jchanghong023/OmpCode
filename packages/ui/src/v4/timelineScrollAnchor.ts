@@ -22,7 +22,7 @@ interface TimelineScrollMetrics {
 }
 
 /** 距底部的剩余可滚动距离（内容不足一屏时为 0）。 */
-export function distanceToBottom(metrics: TimelineScrollMetrics): number {
+function distanceToBottom(metrics: TimelineScrollMetrics): number {
   return Math.max(0, metrics.contentHeight - metrics.viewportHeight - metrics.scrollTop);
 }
 

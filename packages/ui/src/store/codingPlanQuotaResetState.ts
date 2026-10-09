@@ -290,7 +290,7 @@ function isCodingPlanQuotaResetAutoPlayCandidate(
  * reservation 与 played 提交必须分离。等待 Main 期间组件可能卸载或切换 source；
  * 此阶段只占用带 token 的临时 lease，不写 played、不广播，也不把 busy 误判为已播放。
  */
-export async function reserveCodingPlanQuotaResetAutoPlay(params: {
+async function reserveCodingPlanQuotaResetAutoPlay(params: {
   broadcastService: Pick<IBroadcastService, "acquireClaim" | "releaseClaim">;
   readState: () => CodingPlanQuotaResetAutoPlayState;
   writeState: (
@@ -355,7 +355,7 @@ export async function reserveCodingPlanQuotaResetAutoPlay(params: {
  * 组件确认仍 mounted、source/candidate 匹配并即将展示时提交 reservation。
  * 本函数同步写本地 played，再发送 Main commit 与 played 广播；同一 JS task 内不会穿插卸载。
  */
-export function commitCodingPlanQuotaResetAutoPlay(params: {
+function commitCodingPlanQuotaResetAutoPlay(params: {
   broadcastService: Pick<IBroadcastService, "commitClaim" | "send">;
   writeState: (
     updater: (state: CodingPlanQuotaResetAutoPlayState) => CodingPlanQuotaResetAutoPlayState,
@@ -394,7 +394,7 @@ export function commitCodingPlanQuotaResetAutoPlay(params: {
   return true;
 }
 
-export async function releaseCodingPlanQuotaResetAutoPlay(params: {
+async function releaseCodingPlanQuotaResetAutoPlay(params: {
   broadcastService: Pick<IBroadcastService, "releaseClaim">;
   reservation: CodingPlanQuotaResetAutoPlayReservation;
 }): Promise<void> {

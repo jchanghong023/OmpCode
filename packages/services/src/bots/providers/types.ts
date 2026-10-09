@@ -14,7 +14,7 @@ export interface BotTypingTarget {
   providerContextToken?: string;
 }
 
-export interface BotProviderDownloadedAttachment {
+interface BotProviderDownloadedAttachment {
   attachment: BotInboundAttachment;
   data: Uint8Array;
 }
@@ -44,7 +44,7 @@ export interface BotStreamingReplyCardHandle {
 
 export type BotTransientInteractionCardHandle = BotStreamingReplyCardHandle;
 
-export interface BotProviderAcknowledgeResult {
+interface BotProviderAcknowledgeResult {
   handled?: boolean;
 }
 

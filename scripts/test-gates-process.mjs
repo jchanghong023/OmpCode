@@ -4,12 +4,12 @@ import { createHash } from "node:crypto";
 import { resolve, relative, isAbsolute } from "node:path";
 import { withPinnedNodePath } from "./mise-toolchain-env.mjs";
 
-export const activeChildren = new Set();
+const activeChildren = new Set();
 let commandsCancelled = false;
 export const elapsed = (start) => ((performance.now() - start) / 1000).toFixed(1);
 export const pause = (ms) => new Promise((done) => setTimeout(done, ms));
 
-export async function stopTree(child) {
+async function stopTree(child) {
   if (!child.pid) return;
   if (process.platform === "win32") {
     await new Promise((done) => {
@@ -64,6 +64,7 @@ export function startBudget(budget, started, onTimeout) {
   );
 }
 
+/** @lintignore 门禁自检会生成独立进程脚本，通过动态 file URL 导入该入口。 */
 export function startCommand(command, args = [], options = {}) {
   if (commandsCancelled) throw new Error("Gate cancelled; refusing to start another process");
   let executable = command;

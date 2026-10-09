@@ -23,6 +23,7 @@ import { isSameWorkspaceTab } from "@/store/tabWorkspaceIdentity.js";
 
 export const SETTINGS_TAB_ID = "__settings__" satisfies TabId;
 
+/** 窗口 tab 与 shell 共用的启动期可用性契约。 */
 export type WorkspaceAvailability = "available" | "unavailable-local-directory";
 
 export interface SettingsTabState {
@@ -43,7 +44,7 @@ export interface WorkspaceTabState extends TabState {
   workspacePurpose?: WorkspacePurpose;
 }
 
-export interface WorkspaceTabOptions {
+interface WorkspaceTabOptions {
   availability?: WorkspaceAvailability;
   remoteSessionId?: string;
   remoteTarget?: RemoteTarget;

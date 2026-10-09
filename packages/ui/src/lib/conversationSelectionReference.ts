@@ -6,7 +6,7 @@ const CONVERSATION_SELECTION_MAX_TOTAL_LENGTH = 16_000;
 
 export type ConversationSelectionContentType = "user" | "assistant" | "reasoning" | "tool";
 
-export interface ConversationSelectionText {
+interface ConversationSelectionText {
   text: string;
   path?: string;
 }

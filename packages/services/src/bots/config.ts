@@ -17,8 +17,6 @@ export const BOTS_LEGACY_CONFIG_FILE = "bot-config.json";
 export const BOTS_LEGACY_STATE_FILE = "bot-state.json";
 export const BOTS_V2_STATE_FILE = "bot-state.v2.json";
 export const BOTS_STATE_FILE = "bot-state.v3.json";
-export const BOTS_LEGACY_MODEL_CACHE_FILE = "bots-model-cache.json";
-export const BOTS_MODEL_CACHE_FILE = "bots-model-cache.v2.json";
 const BOT_CREDENTIAL_PREFIX = "bot";
 
 export function createDefaultBotsConfig(): BotsConfigFile {
@@ -26,10 +24,6 @@ export function createDefaultBotsConfig(): BotsConfigFile {
     version: 3,
     bots: [],
   };
-}
-
-export function createDefaultBotCommands(): BotCommandPolicy {
-  return { ...DEFAULT_BOT_COMMANDS };
 }
 
 export function normalizeBotCommandPolicy(

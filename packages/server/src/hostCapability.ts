@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import type { ServerRemoteHostCapability } from "@zcode/shared";
 
-export const DEFAULT_HOST_CAPABILITY_TTL_MS = 30_000;
+const DEFAULT_HOST_CAPABILITY_TTL_MS = 30_000;
 
 export interface HostCapabilityStoreOptions {
   ttlMs?: number;

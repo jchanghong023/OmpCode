@@ -393,8 +393,6 @@ export const botAllowedCommandsSchema = z
   })
   .strict();
 
-export const botCommandPolicySchema = botAllowedCommandsSchema;
-
 export const botCurrentOptionsSchema = z
   .object({
     modelSelection: modelSelectionSchema.optional(),

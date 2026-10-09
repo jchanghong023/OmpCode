@@ -1,19 +1,4 @@
-import {
-  BUILTIN_MODEL_PROVIDER_IDS,
-  type ProviderFamilyDomain,
-  type UsageEntitlementSnapshot,
-} from "@zcode/shared";
-import type { SidebarUsageCodingPlanProviderId } from "@/lib/sidebarUsageCodingPlanProviderPreference.js";
-
-export function resolveSidebarCodingPlanUpgradeFallbackProviderId(
-  providerFamilyDomain: ProviderFamilyDomain | null,
-): SidebarUsageCodingPlanProviderId {
-  // API Key 模式不会为 Coding Plan provider 注入套餐 key，头像升级入口因而
-  // 无法从权益或用量来源推导 provider；按 provider 家族域名回退到对应品牌的入口。
-  return providerFamilyDomain === "bigmodel"
-    ? BUILTIN_MODEL_PROVIDER_IDS.bigmodelIndividualCodingPlan
-    : BUILTIN_MODEL_PROVIDER_IDS.zaiIndividualCodingPlan;
-}
+import { type UsageEntitlementSnapshot } from "@zcode/shared";
 
 function normalizePlanLevel(value: string | null | undefined): string {
   return value?.trim().toLowerCase() ?? "";

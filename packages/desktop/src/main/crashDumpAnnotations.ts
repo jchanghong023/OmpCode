@@ -32,7 +32,7 @@ const SIZE_UNITS: Record<string, number> = {
 
 type CrashDumpAnnotations = Record<string, string>;
 
-export type CrashDumpOomKind = "code_space_exhausted" | "js_heap_exhausted" | "unknown";
+type CrashDumpOomKind = "code_space_exhausted" | "js_heap_exhausted" | "unknown";
 
 export interface CrashDumpV8OomSummary {
   processType: string | null;

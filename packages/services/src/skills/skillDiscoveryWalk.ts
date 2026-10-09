@@ -11,7 +11,6 @@ import {
 export {
   MAX_SKILL_SCAN_DEPTH,
   SKILL_FILE_NAME,
-  SKILL_SCAN_EXCLUDED_DIRECTORY_NAMES,
   shouldWalkSkillDirectoryEntry,
 } from "@zcode/shared";
 

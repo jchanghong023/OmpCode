@@ -7,7 +7,7 @@ export function interactionObject(value: unknown): Record<string, unknown> | nul
     ? (value as Record<string, unknown>)
     : null;
 }
-export function interactionTimestamp(value: unknown): number | undefined {
+function interactionTimestamp(value: unknown): number | undefined {
   const number =
     typeof value === "number" ? value : typeof value === "string" ? Date.parse(value) : NaN;
   return Number.isFinite(number) && number >= 0 ? Math.trunc(number) : undefined;

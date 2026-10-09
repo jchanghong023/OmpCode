@@ -1,24 +1,24 @@
 import type { TaskChatToolCall as ChatToolCall } from "@/lib/taskChatMessageTypes.js";
 
-export type NodeReplOperation = "run" | "reset" | "add-module-dir";
+type NodeReplOperation = "run" | "reset" | "add-module-dir";
 
-export interface NodeReplDisplayImage {
+interface NodeReplDisplayImage {
   base64: string;
   mimeType: string;
 }
 
-export interface NodeReplDisplayError {
+interface NodeReplDisplayError {
   summary: string;
   stack?: string;
 }
 
-export interface NodeReplPersistedResult {
+interface NodeReplPersistedResult {
   artifactPath: string;
   sizeLabel: string;
 }
 
 /** 本次 cell 操作的目标应用（Computer Use）；由 CLI 的 node_repl display 携带。 */
-export interface NodeReplCuaApp {
+interface NodeReplCuaApp {
   appKey: string;
   displayName?: string;
 }

@@ -1,7 +1,7 @@
 import { realpath as fsRealpath } from "node:fs/promises";
 import { realpathSync as fsRealpathSync, statSync as fsStatSync } from "node:fs";
 import { isAbsolute } from "node:path";
-import { LOCAL_MEDIA_PREVIEW_SCHEME, buildLocalMediaPreviewUrl } from "@zcode/shared";
+import { LOCAL_MEDIA_PREVIEW_SCHEME } from "@zcode/shared";
 
 interface LocalMediaPreviewSchemeRegistrar {
   registerSchemesAsPrivileged(
@@ -174,5 +174,3 @@ export function installLocalMediaPreviewProtocol(
   if (!registered) throw new Error("Failed to register local media preview protocol");
   installedProtocols.add(protocol);
 }
-
-export { buildLocalMediaPreviewUrl };

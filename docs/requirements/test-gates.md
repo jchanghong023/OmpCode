@@ -6,8 +6,9 @@
 
 - 根 `package.json` 提供 `pnpm fastcheck`、`pnpm fulltest`、`pnpm slowtest`；三个入口只允许 Windows 执行测试。`mise.toml` 固定 Node/pnpm，脚本复用当前运行时，拒绝版本不符，不安装工具或清除缓存。
 - `scripts/test-gates.mjs` 拥有权限检查、总时限、子进程树和最终状态；编排模块复用既有命令，测试与质量配置仍各自拥有断言及通过标准。结果记录 HEAD、未提交差异摘要、内容指纹及工具版本，不跨快照合并通过结论。
-- `fastcheck` 复用类型检查、Lint、变更架构/格式检查和固定的快速单测子集。总计最多 60 秒，提前预留进程清理时间；超时输出 `TIMEOUT` 和秒数、结束自己的进程树并以非零码退出。预算参数只能下调。
+- `fastcheck` 复用类型检查、Lint、变更架构/格式检查和固定的快速单测子集。全部变更文件都纳入格式检查，大量文件按 Windows 命令行长度上限分批，不截断名单。总计最多 60 秒，提前预留进程清理时间；超时输出 `TIMEOUT` 和秒数、结束自己的进程树并以非零码退出。预算参数只能下调。
 - `fulltest` 包含根静态检查、未被根命令覆盖的包级检查、当前 workspace 的 Windows 适用测试、真实 OMP API、性能对照、组件及产品 GUI、Windows 构建与本地打包。独立上游 CLI 快照不接回产品。
+- 未使用文件/依赖/导出检查按真实公开入口与调用图执行；仅精确登记现有动态加载、手动工具入口、架构契约、平台二进制及打包闭包，不用整包豁免掩盖死代码。已取消功能的无消费者代码和依赖删除，不接回产品。
 - `slowtest` 复用相同 Windows 完整检查，不追加 WSL、CentOS 专用测试、Linux/VM、Citrix/目标网络盘专项或发布流水线。缺少 Windows 必需环境仍记录未验证；取消的 CentOS 验收不再阻塞 Windows 结果，也不冒充通过。
 
 ```mermaid
@@ -23,6 +24,8 @@ flowchart TD
 
 - 真实 OMP 使用本机安装版本；源码权威及无安装时不验证的规则见 [FORK.md](FORK.md#omp-侧依赖)。缺少安装、凭据、二进制或测试发生跳过时，记录未验证而非通过，不静默使用旧缓存核或临时安装。
 - 产品 GUI 必须由专用隔离 fixture 提供，保持各场景要求的 profile、审批、扩展、历史和工作区；live/stable/cold、capture、before/after 按原测试定义运行，冷恢复需要同一数据根上的新进程。组件测试不代替产品 GUI。
+- 组件入口自己创建临时 Vite/Electron/userData，不依赖产品 GUI fixture，也不调用模型；两项现有组件入口都纳入完整计划。主/子执行页联合 GUI 按 `live → 同根新进程 cold` 验证，`saved` 不替代冷恢复。
+- 原生命令 API 全文件执行时，模型场景拥有本轮新建的隔离 fixture，计划控制场景复用该场景实际创建的计划；显式 `OMP_NATIVE_E2E_ROOT` 仅用于既有隔离 fixture 的手动恢复，不作为首次完整执行的必需输入。
 - `ZCODE_GATE_ENVIRONMENTS` 指向本机 fixture 配置 JSON。各阶段可配置 `prepare`/`cleanup` 命令及 `environmentFile`；准备器仅提供隔离运行环境，门禁仍直接执行既有测试。环境文件声明当前 `snapshot`、`isolatedRoot` 与 `env`，不能填写任意通过结果。具体格式见编排脚本；配置缺失时输出缺少的阶段 ID，不连接日常实例。
 - 性能文件索引对照需要显式 `ZCODE_GATE_PERF_BASELINE`；不猜测改前提交。测试环境配置不再接受或使用 WSL 发行版、Linux checkout 或跨平台工具链作为测试前提。
 - 发布独立于三个测试入口。测试不接受 `--publish-releases`，不发现或检查 workflow、不调用 GitHub CLI。两条既有 `.github/workflows/release-windows.yml` 与 `release-centos7.yml` 保留，发布须由原始用户另行明确授权，目标固定 `origin/main`；既有 workflow 生成 Tag，不另造版本或目标。Windows 验证失败仍须先修复，不能以发布成功代替测试通过。
@@ -61,5 +64,13 @@ flowchart TD
 - Electron 运行时定位修正后，通过真实组件 E2E 的门禁入口实测 `PASS`。隔离 R7 测试版 GUI 已重新打开并实际截图，专用 CDP 9268 / renderer 5268、既有沙箱数据根；不连接日常实例。全新 GUI fixture 的原侧栏超时已由失败截图定位为首跑职业引导；外部准备器按真实三步“跳过”入口完成引导，8.92 秒准备成功，实际页面断言确认引导消失、目标项目侧栏与 Lexical 输入区可见，并截图。原 GUI 冒烟命令完成；它的旧 textarea 诊断仍为 false，不用该字段冒充富输入框验证。
 - 正式发布独立使用既有已推送业务快照 `main@6338b0885bd84445e6d930f3e313654fe860fceb`；本轮测试范围与 Knip 配置调整和该业务版本分离。修正真实 bundle、GUI 与性能入口后，完整 Knip 仍报告 122 个未使用文件及依赖/导出等诊断，不记为通过，也不扩大到已取消功能的产品清理。Windows 完整门禁尚未全部通过；发布成功不替代测试结论。
 - 独立正式发布已完成：Windows [run 37865831354](https://github.com/jchanghong023/OmpCode/actions/runs/37865831354) 与 CentOS [run 37865830627](https://github.com/jchanghong023/OmpCode/actions/runs/37865830627) 均为 `completed/success`，自动 Tag 指向上述业务快照，正式 EXE/ZIP 及 SHA256 资产上传完成。这里只记录已授权发布的操作结果，不是流水线测试；没有执行 CentOS 测试。
+
+### 2026-10-10 门禁修复的阶段性证据
+
+- 首轮 `fulltest` 从 `b6c10bb3a73f62aaeb2d1c49cc1c29d7dee48d0f` 开始，794.0 秒 **FAIL**：Knip、原生命令计划 fixture、缺少性能/GUI 环境等未通过，运行期间源码变化也记录为未验证；这些阶段结果不能合并为当前快照通过。
+- 根据实际消费者清理已取消的旧供应商/账号/套餐、插件市场、静态 Hook 管理及空模块；内部 helper/type 不再暴露出口，重复公共别名迁移到唯一实际 schema，协议与状态所有者不变。仅精确登记动态调用、组件 fixture、架构契约、平台工具和生产打包闭包，保留有效测试断言。
+- 独立 `pnpm knip` 已以零退出码完成，仍有配置提示而非未使用项失败。两项真实 Electron 组件冒烟均通过：性能完整场景 21.84 秒，工具详情深浅主题/1100 与 360 宽度 20.34 秒；环境与截图位于本轮仓库外临时目录，不调用模型、不连接日常实例。
+- Windows 大量变更曾使格式阶段的命令行超过上限，未执行检查便失败；修复后真实 `fastcheck` **29.7 秒 PASS**，三批检查全部 294 个现存变更文件，类型、Lint、架构及 20 项快速用例通过。本次内容指纹 `838c1895630aabeb97b2b035c53e91d846c273d6d76544fb6a466cc01e843ce2`，仍是局部门禁证据，不替代最终完整运行。
+- 上述是局部验证，不代表 `fulltest` 已通过；最终完整结论必须来自修复后稳定快照的完整门禁输出，发布仍须在该结论之后独立执行。
 
 完整 Windows 测试使用 `pnpm fulltest --human-authorized` 或 `pnpm slowtest --human-authorized`；无需也不允许添加发布参数。所有真实 GUI 的配置位于仓库外，避免配置自身参与源码指纹计算；先以 `pnpm fulltest --plan` 查 Windows 阶段 ID，再由隔离 fixture 准备器生成对应环境文件。环境文件必须绑定本次 HEAD/内容指纹；真实 OMP 场景声明与本机安装路径一致的 `ompBinary`。

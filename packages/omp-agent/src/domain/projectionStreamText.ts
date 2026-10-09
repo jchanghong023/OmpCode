@@ -4,7 +4,7 @@
 import type { ConversationDelta, ConversationRow } from "@zcode/shared/zcode-protocol-v4";
 import { createStreamingRow, type TurnContext } from "./projectionRows.js";
 
-export function bufferStreamText(
+function bufferStreamText(
   pendingByRowId: Map<number, string[]>,
   rowId: number,
   delta: string,

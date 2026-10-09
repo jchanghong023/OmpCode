@@ -10,7 +10,7 @@ import {
   type StartupWindowBootstrap,
 } from "./startupWorkspace.js";
 
-export type ExplicitStartupWorkspaceSource = "open-workspace-arg" | "deep-link";
+type ExplicitStartupWorkspaceSource = "open-workspace-arg" | "deep-link";
 
 export interface ExplicitStartupWorkspaceRequest {
   path: string;

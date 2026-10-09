@@ -36,7 +36,6 @@ export function createAccountRequestAuthService(
 
 export type {
   AccountRequestAuthInput,
-  AccountAccessIdentityInput,
   AccountRequestAuthMaterial,
   AccountRequestAuthResolver,
 } from "./accountProviderRequestAuthService.js";

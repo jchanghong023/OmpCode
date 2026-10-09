@@ -9,7 +9,7 @@
 //    runtime 列为覆盖层；global/default 表示 user 配置本身就是生效来源）。
 
 /** -32601（旧核永久缺失）在 UI 侧的错误消息特征；与 useOmpCommandCompletion 保持一致。 */
-export const OMP_CAPABILITY_MISSING_MARKER = "not supported by omp core";
+const OMP_CAPABILITY_MISSING_MARKER = "not supported by omp core";
 
 export function isOmpCapabilityMissingError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);

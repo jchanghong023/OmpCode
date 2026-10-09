@@ -14,8 +14,6 @@ import type {
   useClaudeSessionMigration,
 } from "@/hooks/useClaudeSessionMigration.js";
 import { UNLIMITED_SCAN_LIMIT_INPUT } from "@/hooks/useClaudeSessionMigration.js";
-import { SettingsSyncSelectionStep } from "@/settings-sync/SettingsSyncSelectionStep.js";
-import type { useSettingsSync } from "@/hooks/useSettingsSync.js";
 import { Badge } from "@/components/ui/badge.js";
 import {
   ExternalAgentImportSelectionPanel,
@@ -217,44 +215,6 @@ export function OnboardingSessionsStep(props: {
                 </button>
               );
             })}
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-export function OnboardingAgentSettingsStep(props: {
-  settingsSync: ReturnType<typeof useSettingsSync>;
-}) {
-  const { intl } = useZCodeIntl();
-
-  const { discovery, loading, error } = props.settingsSync.state;
-
-  return (
-    <div className="flex h-full min-h-0 flex-1 flex-col rounded-xl bg-background border border-border overflow-y-auto">
-      <div className="flex min-h-0 flex-1 flex-col gap-1 border-b border-border p-2">
-        {discovery ? (
-          <SettingsSyncSelectionStep
-            discovery={discovery}
-            selectedKeys={props.settingsSync.state.selectedKeys}
-            onToggleSelection={props.settingsSync.actions.toggleSelection}
-            onSetCategorySelectionAllAgents={
-              props.settingsSync.actions.setCategorySelectionAllAgents
-            }
-          />
-        ) : loading ? (
-          <div className="flex items-center justify-center gap-2 py-8 text-ui-base text-foreground-subtle">
-            <Loader2Icon className="size-4 animate-spin" />
-            <span>{intl.formatMessage({ id: "common.loading" })}</span>
-          </div>
-        ) : error ? (
-          <div className="rounded-lg border border-warning/40 bg-warning/10 px-3 py-2 text-ui-base text-foreground">
-            {error}
-          </div>
-        ) : (
-          <div className="flex flex-1 items-center justify-center rounded-lg border border-dashed border-border bg-background-alt px-4 py-8 text-center text-ui-base text-foreground-subtle">
-            {intl.formatMessage({ id: "onboarding.agentSettings.empty" })}
           </div>
         )}
       </div>

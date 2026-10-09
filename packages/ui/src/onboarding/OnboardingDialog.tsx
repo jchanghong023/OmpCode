@@ -33,8 +33,6 @@ import { useOnboardingAgentsFileMigration } from "@/onboarding/useOnboardingAgen
 import { useServices } from "@/hooks/useServices.js";
 import { useExternalAgentImportCategoryState } from "@/settings/ExternalAgentImportDialog.js";
 
-export { shouldAutoScanOnboardingSessions } from "@/onboarding/useOnboardingMigration.js";
-
 const ONBOARDING_STEP_ORDER: OnboardingWizardStep[] = [
   "session",
   "skills-import",

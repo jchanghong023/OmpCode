@@ -242,9 +242,3 @@ export function VirtualizedGroupedTaskList({
     </div>
   );
 }
-
-export {
-  GROUPED_TASK_ROW_ESTIMATE_PX,
-  GROUPED_TASK_VIRTUALIZATION_THRESHOLD,
-  shouldVirtualizeGroupedTasks,
-};

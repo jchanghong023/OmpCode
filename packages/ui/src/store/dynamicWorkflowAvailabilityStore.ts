@@ -17,7 +17,7 @@ import { logger } from "@/logger.js";
 //     但**不记住失败**：换一份 service 实例会重试。手机 `/remote` 在工作区桥接前拿到的是
 //     unsupported 代理，必然抛错，桥接完成后 accessor 会换一份，那一次必须能纠正回来。
 
-export type DynamicWorkflowAvailabilityStatus = "loading" | "ready";
+type DynamicWorkflowAvailabilityStatus = "loading" | "ready";
 
 export interface DynamicWorkflowAvailabilitySnapshot {
   readonly status: DynamicWorkflowAvailabilityStatus;

@@ -22,7 +22,7 @@ function expectedBundleMeta(artifact, platformKey, binarySha256) {
   };
 }
 
-export function resolveNativeSearchBundleMetaPath(binaryPath) {
+function resolveNativeSearchBundleMetaPath(binaryPath) {
   return join(dirname(binaryPath), bundleMetaFileName);
 }
 

@@ -19,7 +19,7 @@ import type {
 const SPINE_CURVE_PX = 13;
 
 /** 一段竖轨。`from` / `to` 是对默认起止的覆盖（px，分别距节顶 / 节底），给曲线让位时才有。 */
-export interface SpineRailPiece {
+interface SpineRailPiece {
   track: number;
   ink: TimelineInk;
   /** `above` = 节顶到灯，`below` = 灯到节底，`full` = 整节穿过。 */
@@ -29,7 +29,7 @@ export interface SpineRailPiece {
 }
 
 /** 分支轨道离开 / 回到主轨的那 13px。 */
-export interface SpineCurvePiece {
+interface SpineCurvePiece {
   kind: "fork" | "merge";
   track: number;
   ink: TimelineInk;

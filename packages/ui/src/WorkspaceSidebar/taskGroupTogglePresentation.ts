@@ -1,4 +1,4 @@
-export type SidebarTaskGroupToggleMessageId =
+type SidebarTaskGroupToggleMessageId =
   | "workspaceSidebar.collapseAllGroups"
   | "workspaceSidebar.expandAllGroups";
 

@@ -34,4 +34,4 @@ export function createOAuthProviderAdapters(
   return adapters;
 }
 
-export type { OAuthProviderAdapter, OAuthProviderContext } from "./providerAdapter.js";
+export type { OAuthProviderAdapter } from "./providerAdapter.js";

@@ -30,6 +30,7 @@ import type {
 } from "@/lib/workspaceSidePane.js";
 import type { TreemappingSidePaneTab } from "@/lib/workspaceSidePane.js";
 import type { WorkspaceZCodeUIState } from "@/store/zcodeSessionStore.js";
+import type { WorkspaceAvailability } from "@/store/tabStore.js";
 import type { RemoteConnectionLogEntry } from "@/hooks/useRemoteConnectionLogs.js";
 import type { Theme } from "@/useTheme.js";
 import type {
@@ -44,7 +45,7 @@ import type {
 import type { TaskFindDialogProps } from "@/quickpick/TaskFindDialog.js";
 import type { AutomationsNavigationTab, OpenAutomationsMain } from "@/lib/taskNavigationHistory.js";
 
-export interface WorkspaceShellZCodeState {
+interface WorkspaceShellZCodeState {
   activeTaskId: WorkspaceZCodeUIState["activeTaskId"];
   draftFocusVersion: WorkspaceZCodeUIState["draftFocusVersion"];
   modelSwitchPending: WorkspaceZCodeUIState["modelSwitchPending"];
@@ -112,7 +113,7 @@ export interface AppProps {
   supportsEmbeddedBrowser?: boolean;
 }
 
-export interface GitChangeSummary {
+interface GitChangeSummary {
   added: number;
   removed: number;
 }
@@ -166,7 +167,7 @@ export interface WorkspaceShellLayoutProps extends Omit<AppProps, "baseFeedbackS
     workspaceIdentity?: string;
     workspacePurpose?: import("@zcode/shared").WorkspacePurpose;
     localWorkspacePath?: string;
-    availability?: import("@/store/tabStore.js").WorkspaceAvailability;
+    availability?: WorkspaceAvailability;
   }>;
   activeTaskId: string | null;
   /** 右侧栏按对话隔离的归属 id：草稿态 = draftSessionId，正式态 = activeTaskId（两者同值衔接）。 */

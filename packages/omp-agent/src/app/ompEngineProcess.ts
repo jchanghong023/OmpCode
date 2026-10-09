@@ -89,7 +89,7 @@ export async function refreshEngineStateAfterActivity(
 }
 
 /** 真实 omp 的 model_changed 无载荷：回读 get_state 落配置，模型变化补 modelChange 标记。 */
-export async function refreshEngineModelAfterChange(
+async function refreshEngineModelAfterChange(
   process: OmpSessionProcess | null,
   projection: ConversationProjection,
   applyState: (state: OmpStateData) => void,
@@ -180,7 +180,7 @@ export async function startEngineProcess(host: EngineProcessStartHost): Promise<
   }
 }
 
-export interface EngineProcessHooks {
+interface EngineProcessHooks {
   onEvent: Parameters<import("./ports.js").OmpProcessFactory["create"]>[0]["onEvent"];
   /** 反向交互请求（extension_ui 含富 ask）统一由交互代理应答。 */
   interaction: OmpInteractionProxy;
@@ -201,7 +201,7 @@ export interface EngineProcessHooks {
   onBtwFrame?: (frame: OmpBtwFrame) => void;
 }
 
-export function createEngineOmpProcess(
+function createEngineOmpProcess(
   factory: OmpProcessFactory,
   options: { cwd: string; resumeSessionPath?: string },
   hooks: EngineProcessHooks,
@@ -250,7 +250,7 @@ export interface EngineModelSelection {
   thought?: string;
 }
 
-export { readEngineContextDetails, projectEngineContextWindow } from "./ompEngineContextWindow.js";
+export { projectEngineContextWindow } from "./ompEngineContextWindow.js";
 
 export async function applyEngineThoughtLevel(
   level: string,

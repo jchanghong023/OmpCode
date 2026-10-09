@@ -22,7 +22,7 @@ export type ToolInlinePreview =
   | { type: "patch"; source: PatchCodeViewerSource }
   | { type: "image"; source: ImageCodeViewerSource };
 
-export interface ToolPlanResult {
+interface ToolPlanResult {
   plan: string;
   planFilePath?: string;
 }

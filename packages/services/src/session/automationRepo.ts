@@ -43,7 +43,7 @@ export const DISPATCH_MAX_ATTEMPTS = 5;
 export const CLAIM_STALE_MS = 10 * 60_000;
 
 /** 创建总数超过产品上限；错误码会跨 RPC 保留在 message 中供 UI 识别。 */
-export class AutomationCreateLimitError extends Error {
+class AutomationCreateLimitError extends Error {
   readonly code = AUTOMATION_CREATE_LIMIT_ERROR_CODE;
 
   constructor() {

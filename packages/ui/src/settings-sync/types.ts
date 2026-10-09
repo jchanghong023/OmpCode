@@ -5,7 +5,7 @@ import type {
   SettingsSyncImportResult,
 } from "@zcode/shared";
 
-export type SettingsSyncUiStep = "selection" | "importing" | "complete";
+type SettingsSyncUiStep = "selection" | "importing" | "complete";
 
 export interface SettingsSyncUiTask {
   id: string;

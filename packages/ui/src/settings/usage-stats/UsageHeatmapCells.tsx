@@ -13,7 +13,7 @@ const HEATMAP_LEVEL_STYLES = [
 
 export type TokenActivityMode = "daily" | "weekly" | "cumulative";
 
-export interface HeatmapDisplayCell {
+interface HeatmapDisplayCell {
   key: string;
   tooltipTitle?: string;
   level: AppUsageHeatmapCell["level"];

@@ -5,7 +5,7 @@ type FeatureRecommendedPrompt = DraftSuggestedPromptItem & {
 };
 
 // CentOS 7 推荐内容只使用本地任务和内置图标，不引用在线插件或公网素材。
-export const featureSuggestedPrompts: FeatureRecommendedPrompt[] = [
+const featureSuggestedPrompts: FeatureRecommendedPrompt[] = [
   {
     id: "local-disk-usage",
     mode: "office",

@@ -16,7 +16,7 @@ import {
 const HEX = Array.from({ length: 256 }, (_, i) => i.toString(16).padStart(2, "0"));
 
 /** uuid v7（RFC 9562）：48-bit Unix ms 时间戳 + 74-bit 随机；与 renderer 工厂同构。 */
-export function uuidv7(now: number = Date.now()): string {
+function uuidv7(now: number = Date.now()): string {
   const bytes = randomBytes(16);
   const ts = BigInt(now);
   bytes[0] = Number((ts >> 40n) & 0xffn);

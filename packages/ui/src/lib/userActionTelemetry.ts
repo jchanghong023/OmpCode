@@ -23,7 +23,7 @@ interface UserActionTelemetryClock {
 }
 
 export type UserActionTrigger = RendererActionTraceAttributes["trigger"];
-export type UserActionResultSource = NonNullable<RendererActionTraceAttributes["result_source"]>;
+type UserActionResultSource = NonNullable<RendererActionTraceAttributes["result_source"]>;
 
 interface StartUserActionInput {
   featureId: UserActionFeatureId;

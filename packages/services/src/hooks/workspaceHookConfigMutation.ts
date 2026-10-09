@@ -1,6 +1,1 @@
-export {
-  atomicWriteWorkspaceHookConfig,
-  writeWorkspaceHookConfiguredToggle,
-  WorkspaceHookMutationError,
-  type AtomicWorkspaceHookConfigWriteOptions,
-} from "@zcode/shared/workspace-hook-mutation";
+export { atomicWriteWorkspaceHookConfig } from "@zcode/shared/workspace-hook-mutation";

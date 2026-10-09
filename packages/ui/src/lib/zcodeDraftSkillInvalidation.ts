@@ -10,7 +10,7 @@ interface DeferredDraftRuntimeChangeParams {
   zcodeSessionService: Pick<IZCodeSessionService, "closeSession">;
 }
 
-export async function invalidateDeferredDraftSessionForRuntimeChange(
+async function invalidateDeferredDraftSessionForRuntimeChange(
   params: DeferredDraftRuntimeChangeParams,
 ): Promise<void> {
   if (!params.workspacePath) {

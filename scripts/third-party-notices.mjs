@@ -6,6 +6,7 @@ export const repositoryRoot = resolve(import.meta.dirname, "..");
 export const noticesFileName = "THIRD-PARTY-NOTICES.md";
 const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
 
+/** @lintignore server CLI 打包器通过 file URL 动态导入；必须保留真实声明读取入口。 */
 export async function readThirdPartyNotices(root = repositoryRoot) {
   // 开发和构建只消费已有声明；输入新鲜度由显式 license 检查负责，避免修改 skill 就阻断构建。
   return readFile(resolve(root, noticesFileName));
@@ -39,6 +40,7 @@ export async function stageThirdPartyNotices(directory, root = repositoryRoot) {
   await writeFile(resolve(directory, noticesFileName), bytes);
 }
 
+/** @lintignore server CLI 打包器通过 file URL 动态导入 Node 许可读取入口。 */
 export async function readNodeNotices(version, root = repositoryRoot) {
   const normalized = version.replace(/^v/u, "");
   const sources = JSON.parse(

@@ -5,7 +5,7 @@ import type {
 } from "@zcode/shared/zcode-protocol-v4";
 
 /** legacy 子代理目录只读页；同一父会话投影的状态与行是唯一事实源。 */
-export function buildOmpSubagentDirectory(
+function buildOmpSubagentDirectory(
   statuses: ReadonlyMap<string, SubagentRow["status"]>,
   rowIds: ReadonlyMap<string, number>,
   rowAt: (rowId: number) => ConversationRow | undefined,

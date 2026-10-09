@@ -15,7 +15,7 @@
  * 单独成模块而不是留在 stageCli.ts：后者末尾是顶层 `await main()`，import 即执行，
  * 无法在测试里引用。
  */
-export const DEFAULT_NODE_DIST_BASE = "https://cdn.npmmirror.com/binaries/node";
+const DEFAULT_NODE_DIST_BASE = "https://cdn.npmmirror.com/binaries/node";
 
 export function resolveNodeDistBase(env: NodeJS.ProcessEnv = process.env): string {
   const mirror = env.ZCODE_NODE_DIST_MIRROR?.trim();

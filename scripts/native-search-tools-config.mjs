@@ -8,7 +8,7 @@ export const NATIVE_SEARCH_DEPENDENCIES_DIR = join(repoRoot, "dependencies/nativ
 export const MACOS_NATIVE_SEARCH_DEPLOYMENT_TARGET = "12.0";
 export const LINUX_NATIVE_SEARCH_GLIBC_BASELINE = "2.28";
 
-export const NATIVE_SEARCH_RIPGREP_REVISION = "4649aa9700";
+const NATIVE_SEARCH_RIPGREP_REVISION = "4649aa9700";
 
 export const NATIVE_SEARCH_BFS_CONFIGURE_ARGS = Object.freeze([
   "--enable-release",
@@ -25,7 +25,7 @@ export const NATIVE_SEARCH_TOOL_VERSIONS = Object.freeze({
   ugrep: "7.8.4",
 });
 
-export const NATIVE_SEARCH_PREBUILT_RELEASES = Object.freeze({
+const NATIVE_SEARCH_PREBUILT_RELEASES = Object.freeze({
   bfs: `v${NATIVE_SEARCH_TOOL_VERSIONS.bfs}-1`,
   ripgrep: `v${NATIVE_SEARCH_TOOL_VERSIONS.ripgrep}-1`,
   ugrep: `v${NATIVE_SEARCH_TOOL_VERSIONS.ugrep}-1`,
@@ -37,7 +37,7 @@ const NATIVE_SEARCH_PREBUILT_RELEASE_OVERRIDES = Object.freeze({
   }),
 });
 
-export const NATIVE_SEARCH_SOURCE_ARCHIVES = Object.freeze([
+const NATIVE_SEARCH_SOURCE_ARCHIVES = Object.freeze([
   {
     id: "bfs",
     version: NATIVE_SEARCH_TOOL_VERSIONS.bfs,
@@ -144,7 +144,7 @@ export const NATIVE_SEARCH_OFFICIAL_RIPGREP_ASSETS = Object.freeze({
   }),
 });
 
-export const NATIVE_SEARCH_PRODUCER_ARCHIVE_SHA256_BY_TARGET = Object.freeze({
+const NATIVE_SEARCH_PRODUCER_ARCHIVE_SHA256_BY_TARGET = Object.freeze({
   "darwin-arm64": Object.freeze({
     bfs: "696f73eaff50d3c3de8a8ee36746a89693dd6ff0d010b05cd3b4b3eb2a369781",
     ugrep: "01ea803e3fc3b94e796a9376e4d062a5490fe08e5760c6173e72b8f31546a4f3",
@@ -229,7 +229,7 @@ export function normalizeNativeSearchArch(rawArch = process.arch) {
   }
 }
 
-export function resolveNativeSearchPrebuiltRelease(toolId, rawPlatform = process.platform) {
+function resolveNativeSearchPrebuiltRelease(toolId, rawPlatform = process.platform) {
   const platform = normalizeNativeSearchPlatform(rawPlatform);
   const release =
     NATIVE_SEARCH_PREBUILT_RELEASE_OVERRIDES[platform]?.[toolId] ??
@@ -259,7 +259,7 @@ export function getNativeSearchRuntimeToolIdsForPlatform(rawPlatform) {
   return NATIVE_SEARCH_RUNTIME_TOOL_IDS_BY_PLATFORM[platform];
 }
 
-export function getNativeSearchProducerOutputIds({ platform, arch }) {
+function getNativeSearchProducerOutputIds({ platform, arch }) {
   const normalizedPlatform = normalizeNativeSearchPlatform(platform);
   const normalizedArch = normalizeNativeSearchArch(arch);
   const platformKey = `${normalizedPlatform}-${normalizedArch}`;

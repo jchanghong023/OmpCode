@@ -53,14 +53,9 @@ export type LoginEntryPurpose = "app-login";
 export type { CodePreviewSettings } from "@/lib/codePreviewSettings.js";
 export { DEFAULT_CODE_PREVIEW_SETTINGS } from "@/lib/codePreviewSettings.js";
 
-export type LoginEntryAttemptStatus =
-  | "requested"
-  | "waiting"
-  | "succeeded"
-  | "cancelled"
-  | "failed";
+type LoginEntryAttemptStatus = "requested" | "waiting" | "succeeded" | "cancelled" | "failed";
 
-export interface LoginEntryAttempt {
+interface LoginEntryAttempt {
   id: number;
   providerId?: OAuthProviderId;
   purpose?: LoginEntryPurpose;

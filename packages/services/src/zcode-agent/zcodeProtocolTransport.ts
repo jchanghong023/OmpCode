@@ -1,7 +1,7 @@
 import type { Event, IDisposable } from "@zcode/rpc";
 import type { ZCodeProtocolMessage } from "@zcode/shared";
 
-export type ZCodeProtocolTransportKind = "stdio" | "websocket" | "memory";
+type ZCodeProtocolTransportKind = "stdio" | "websocket" | "memory";
 
 export interface ZCodeProtocolTransportClosedEvent {
   code?: number | null;

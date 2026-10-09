@@ -101,7 +101,7 @@ function readNativeDumpProcessRole(event: Record<string, unknown>): NativeDumpPr
   return "unknown";
 }
 
-export function filterAndEnrichNativeCrashEvents(
+function filterAndEnrichNativeCrashEvents(
   events: Array<Record<string, unknown>>,
   applicationName: string,
   runtimeExecutableName?: string,

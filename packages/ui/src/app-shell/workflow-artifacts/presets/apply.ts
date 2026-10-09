@@ -34,7 +34,7 @@ export type ArtifactItem = {
   item: unknown;
 };
 
-export type ChartSeriesModel = {
+type ChartSeriesModel = {
   /** recharts 的 dataKey；用序号而不是字段路径，点路径里的 "." 会被 recharts 当嵌套读法。 */
   key: string;
   field: string;
@@ -44,7 +44,7 @@ export type ChartSeriesModel = {
   colorIndex: number;
 };
 
-export type ChartPointModel = Record<string, number | string | null> & {
+type ChartPointModel = Record<string, number | string | null> & {
   /** 稳定 React key：只有新点播揭示动画，老点不重播。 */
   sequence: number;
   /** x 轴上的位置。非数值 x 时是到达序号。 */

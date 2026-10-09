@@ -63,7 +63,7 @@ export interface CuaPermissionDragPanel {
   destroy(): void;
 }
 
-export const CUA_PERMISSION_PANEL_STATE_CHANNEL = "zcode:cua-permission-panel-state";
+const CUA_PERMISSION_PANEL_STATE_CHANNEL = "zcode:cua-permission-panel-state";
 
 const DEFAULT_PANEL_SIZE: PanelSize = { width: 560, height: 124 };
 // 使用 0.15 秒跟踪间隔，兼顾位置同步开销与设置页拖动时的面板响应。

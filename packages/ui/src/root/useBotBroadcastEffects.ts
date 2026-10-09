@@ -15,7 +15,7 @@ import {
 import { resolveBotTaskStreamBroadcast } from "@/root/botsTaskStreamBroadcast.js";
 import { insertTaskIntoTaskCaches, syncTaskMetaToTaskCaches } from "@/lib/taskListMetaSync.js";
 
-export function syncBotTaskConfigOptionsToStore(params: {
+function syncBotTaskConfigOptionsToStore(params: {
   zcodeSessionStore: Pick<ReturnType<typeof useZCodeSessionStore.getState>, "setTaskConfigOptions">;
   workspacePath: string;
   workspaceIdentity?: string;
@@ -33,7 +33,7 @@ export function syncBotTaskConfigOptionsToStore(params: {
   );
 }
 
-export function shouldRefreshBotTaskList(event: string, hasTaskMeta: boolean): boolean {
+function shouldRefreshBotTaskList(event: string, hasTaskMeta: boolean): boolean {
   // Bugfix: Bot 新建任务时会随 created 广播携带 task meta，当前实现因此跳过整表刷新。
   // 但如果对应 workspace 的 task query cache 还没建立，增量写入没有落点，侧栏列表就不会主动拉到这个新任务。
   // created 事件频率低，保留一次版本 bump 作为兜底；其它高频事件仍优先走增量缓存更新，避免列表闪烁回归。
@@ -46,7 +46,7 @@ export function shouldRefreshBotTaskList(event: string, hasTaskMeta: boolean): b
   return event === "created" || event === "updated" || event === "completed" || event === "error";
 }
 
-export function shouldMirrorBotTaskStreamToStore(params: {
+function shouldMirrorBotTaskStreamToStore(params: {
   activeTaskId: string | null;
   taskId: string;
   workspaceIdentity?: string;

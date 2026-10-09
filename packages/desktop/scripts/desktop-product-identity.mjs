@@ -3,7 +3,7 @@
  * 典型用法是 `ZCODE_ENV=production ZCODE_PREVIEW_IDENTITY=1`，得到一个连接生产后端、
  * 可与正式版并排安装的 `ZCode Preview`。
  */
-export const ZCODE_PREVIEW_IDENTITY_ENV = "ZCODE_PREVIEW_IDENTITY";
+const ZCODE_PREVIEW_IDENTITY_ENV = "ZCODE_PREVIEW_IDENTITY";
 
 const PRODUCTION_IDENTITY = Object.freeze({
   flavor: "production",
@@ -23,7 +23,7 @@ const PREVIEW_IDENTITY = Object.freeze({
   cuaHelperInstallVariant: "preview",
 });
 
-export const desktopProductIdentities = Object.freeze({
+const desktopProductIdentities = Object.freeze({
   production: PRODUCTION_IDENTITY,
   preview: PREVIEW_IDENTITY,
 });
@@ -37,7 +37,7 @@ function normalizeDesktopZCodeEnv(env) {
  * `$ZCODE_PREVIEW_IDENTITY == "1"` 精确比较保持同一套语义。其它拼写在构建期直接失败，
  * 避免 `true` 之类在 YAML 路由层漏匹配、却在脚本层被当成开启，把 Preview 包打进生产验收目录。
  */
-export function isPreviewIdentityRequested(env = process.env) {
+function isPreviewIdentityRequested(env = process.env) {
   const value = env[ZCODE_PREVIEW_IDENTITY_ENV]?.trim() ?? "";
   if (value === "1") {
     return true;
@@ -90,8 +90,4 @@ export function resolveWindowsAppUserModelIdForFlavor(flavor, runtime = { isPack
     return "cn.aminer.zcode";
   }
   return desktopProductIdentities[flavor === "preview" ? "preview" : "production"].appId;
-}
-
-export function resolveWindowsAppUserModelId(env = process.env, runtime = { isPackaged: true }) {
-  return resolveWindowsAppUserModelIdForFlavor(resolveDesktopProductFlavor(env), runtime);
 }

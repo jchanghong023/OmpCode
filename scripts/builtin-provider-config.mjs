@@ -1,5 +1,5 @@
 import { loadEndpointEnv } from "./load-endpoint-env.mjs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { parseEnv } from "node:util";
 import { pathToFileURL } from "node:url";
@@ -8,7 +8,7 @@ import { tsImport } from "tsx/esm/api";
 const repositoryRoot = resolve(import.meta.dirname, "..");
 
 /** @param {{root?: string, env?: Record<string, string | undefined>}} options */
-export async function resolveBuiltinProviderBuildEnvironment({
+async function resolveBuiltinProviderBuildEnvironment({
   root = repositoryRoot,
   env = process.env,
 } = {}) {
@@ -64,13 +64,4 @@ export async function loadBuiltinProviderConfig({ root = repositoryRoot, env = p
       cause: error,
     });
   }
-}
-
-/** @param {{directory: string, root?: string, env?: Record<string, string | undefined>}} options */
-export async function stageBuiltinProviderConfig({ directory, ...options }) {
-  const config = await loadBuiltinProviderConfig(options);
-  await mkdir(directory, { recursive: true });
-  // bootstrap 可以复用 JS，但不能连带复用上一环境／上一版本的独立配置资源。
-  await writeFile(resolve(directory, "zcode-builtin.json"), config.content, "utf8");
-  return config;
 }

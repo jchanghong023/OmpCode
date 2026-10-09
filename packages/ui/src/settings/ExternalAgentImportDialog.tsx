@@ -322,10 +322,6 @@ function groupAgentsBySourceRootScope(
   }));
 }
 
-export function SkillsImportDialog(props: ExternalAgentImportDialogProps) {
-  return <ExternalAgentImportDialog {...props} category="skills" />;
-}
-
 export function CommandsImportDialog(props: ExternalAgentImportDialogProps) {
   return <ExternalAgentImportDialog {...props} category="commands" />;
 }

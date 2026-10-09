@@ -12,7 +12,6 @@ import {
 } from "electron";
 import type {
   BrowserWebmRecorderFactoryInput,
-  BrowserWebmRecorderFactory,
   BrowserWebmRecorderSession,
 } from "./browserVideoRecorder.js";
 import { resolveImportMetaDirname } from "../../shared/moduleDirname.js";
@@ -474,7 +473,3 @@ export async function createElectronBrowserWebmRecorder(
   };
   return recorder;
 }
-
-// 保持标准 factory 类型出口，调用方不注入诊断时不会产生按分片日志。
-export const defaultElectronBrowserWebmRecorder: BrowserWebmRecorderFactory =
-  createElectronBrowserWebmRecorder;

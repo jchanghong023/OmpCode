@@ -22,7 +22,7 @@ import { resolveWorkspaceEditorSelection } from "@/lib/workspaceEditorSelection.
 import { logger } from "@/logger.js";
 
 // 导出类型供共用时间线以 import type 引用（构建期擦除，不把 open-with 子树带进公开页 bundle）。
-export type OpenSplitButtonTarget =
+type OpenSplitButtonTarget =
   | {
       type: "website";
       url: string;

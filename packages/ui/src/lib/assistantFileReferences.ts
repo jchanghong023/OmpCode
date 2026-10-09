@@ -280,13 +280,3 @@ export function extractAssistantFileReferences(
 
   return references.sort((left, right) => left.start - right.start || left.end - right.end);
 }
-
-export function hasAssistantPreviewFileChangeCandidates(
-  content: string,
-  workspacePath: string,
-  options: AssistantFilePathResolveOptions = {},
-): boolean {
-  return extractAssistantFileReferences(content, workspacePath, options).some(
-    (reference) => reference.kind === "markdown" || reference.kind === "html",
-  );
-}

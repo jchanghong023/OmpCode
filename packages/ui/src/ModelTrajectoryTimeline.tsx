@@ -160,7 +160,7 @@ export function resolveTrajectoryTimelineItems(records: ZCodeModelTrajectoryReco
   });
 }
 
-export function resolveTrajectoryInputMessages({
+function resolveTrajectoryInputMessages({
   record,
   index,
   previousConversationMessageCount,

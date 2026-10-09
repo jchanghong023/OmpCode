@@ -1,31 +1,15 @@
 import type {
-  PluginStoreModeOrder,
   ZCodeAvailablePluginSummary,
   ZCodeInstalledPluginSummary,
   ZCodePluginInfo,
   ZCodePluginMarketplaceSummary,
   ZCodePluginStoreListing,
 } from "@zcode/shared";
-import {
-  sortPluginStoreEntries,
-  compareDocumentPluginPriority,
-  resolvePluginStoreCategory as resolveStoreCategory,
-  FALLBACK_PLUGIN_STORE_CATEGORY as FALLBACK_CATEGORY,
-  isPublicStoreMarketplaceId,
-  resolveLocalizedText,
-  resolvePluginDisplayName,
-  ZCODE_OFFICIAL_PLUGIN_MARKETPLACE_ID,
-} from "@zcode/shared";
-import { pluginSearchMatches } from "@/settings/pluginSearch.js";
+import { resolveLocalizedText, resolvePluginDisplayName } from "@zcode/shared";
 
-export {
-  formatCanonicalPluginName,
-  resolveLocalizedText,
-  resolvePluginDisplayName,
-} from "@zcode/shared";
+export { resolvePluginDisplayName } from "@zcode/shared";
 
 export { isTrustedImageUrl } from "@/lib/trustedImageUrl.js";
-export { isPublicStoreMarketplaceId };
 
 /**
  * 仅在名称唯一时允许从目录条目回退解析 listing。
@@ -67,9 +51,9 @@ export interface StorePluginItem {
   installedMeta?: ZCodeInstalledPluginSummary;
 }
 
-export type PluginUpdateStatus = NonNullable<ZCodeInstalledPluginSummary["updateStatus"]>;
+type PluginUpdateStatus = NonNullable<ZCodeInstalledPluginSummary["updateStatus"]>;
 
-export function isPluginUpdatePending(
+function isPluginUpdatePending(
   updateStatus: PluginUpdateStatus | undefined,
 ): updateStatus is Exclude<PluginUpdateStatus, "none"> {
   return updateStatus === "update-available" || updateStatus === "version-changed";
@@ -136,75 +120,7 @@ export const KNOWN_CATEGORY_LABEL_IDS: Record<string, string> = {
   other: "settings.plugins.store.category.other",
 };
 
-export {
-  FALLBACK_PLUGIN_STORE_CATEGORY as FALLBACK_CATEGORY,
-  PLUGIN_STORE_CATEGORY_ORDER as KNOWN_CATEGORY_ORDER,
-  resolvePluginStoreCategory as resolveStoreCategory,
-} from "@zcode/shared";
-
-interface StoreCategoryGroup {
-  category: string;
-  items: StorePluginItem[];
-}
-
-/** 个人分段的市场分组：marketplace 是排序键，title 是展示名。 */
-export interface PersonalMarketplaceGroup {
-  marketplace: string;
-  title: string;
-  items: StorePluginItem[];
-}
-
-const OFFICIAL_MARKETPLACE_ORDER: readonly string[] = [ZCODE_OFFICIAL_PLUGIN_MARKETPLACE_ID];
-
-/**
- * 市场源管理排序：官方源固定置顶；自定义源按最近刷新时间倒序，未刷新过的沉底。
- * 同一时间使用本地化名称稳定兜底，避免市场源顺序随持久化数组历史漂移。
- */
-export function sortMarketplaceSources(
-  marketplaces: readonly ZCodePluginMarketplaceSummary[],
-  locale: string,
-): ZCodePluginMarketplaceSummary[] {
-  const officialRank = new Map(OFFICIAL_MARKETPLACE_ORDER.map((id, index) => [id, index]));
-  return marketplaces.toSorted((left, right) => {
-    const leftRank = officialRank.get(left.id);
-    const rightRank = officialRank.get(right.id);
-    if (leftRank !== undefined || rightRank !== undefined) {
-      if (leftRank === undefined) return 1;
-      if (rightRank === undefined) return -1;
-      return leftRank - rightRank;
-    }
-
-    const leftAt = left.lastUpdated ?? "";
-    const rightAt = right.lastUpdated ?? "";
-    if (leftAt !== rightAt) return rightAt.localeCompare(leftAt);
-    const byName = left.name.localeCompare(right.name, locale);
-    return byName !== 0 ? byName : left.id.localeCompare(right.id, locale);
-  });
-}
-
-/**
- * 个人分段市场分组排序：按 lastUpdated 倒序——最近刷新/添加的市场在最上，
- * 用户添加成功跳转过来第一眼就能看到；无 lastUpdated（官方 seed 未刷新过）的沉底，
- * 同刻或都缺失时按显示名字母序稳定兜底。ISO 时间串的字典序即时间序。
- */
-export function sortPersonalMarketplaceGroups(
-  groups: PersonalMarketplaceGroup[],
-  marketplaces: readonly ZCodePluginMarketplaceSummary[],
-  locale: string,
-): PersonalMarketplaceGroup[] {
-  const lastUpdatedById = new Map(
-    marketplaces.flatMap((marketplace) =>
-      marketplace.lastUpdated ? ([[marketplace.id, marketplace.lastUpdated]] as const) : [],
-    ),
-  );
-  return groups.toSorted((left, right) => {
-    const leftAt = lastUpdatedById.get(left.marketplace) ?? "";
-    const rightAt = lastUpdatedById.get(right.marketplace) ?? "";
-    // 空串字典序小于任何时间串，倒序比较自然把缺失时间沉底。
-    if (leftAt !== rightAt) return rightAt.localeCompare(leftAt);
-    return left.title.localeCompare(right.title, locale);
-  });
-}
+export { resolvePluginStoreCategory as resolveStoreCategory } from "@zcode/shared";
 
 /**
  * 把 overview 数据 join 成商店条目集合。
@@ -293,99 +209,4 @@ export function buildStoreItems(input: {
     });
   }
   return [...items.values()];
-}
-
-/** 公开分段：Featured（CDN featured 名单按序）+ 分类聚合（无分类归 other，排最后）。 */
-export function selectFeaturedItems(
-  publicItems: StorePluginItem[],
-  marketplaces: ZCodePluginMarketplaceSummary[],
-): StorePluginItem[] {
-  const byName = new Map<string, StorePluginItem>();
-  for (const item of publicItems) {
-    if (!byName.has(item.name)) byName.set(item.name, item);
-  }
-  const featured: StorePluginItem[] = [];
-  const seen = new Set<string>();
-  for (const marketplace of marketplaces) {
-    if (!isPublicStoreMarketplaceId(marketplace.id)) continue;
-    for (const name of marketplace.featured ?? []) {
-      const item = byName.get(name);
-      if (item && !seen.has(item.id)) {
-        seen.add(item.id);
-        featured.push(item);
-      }
-    }
-  }
-  return featured;
-}
-
-export function groupItemsByCategory(
-  items: StorePluginItem[],
-  locale: string,
-  order?: PluginStoreModeOrder,
-): StoreCategoryGroup[] {
-  const groups = new Map<string, StorePluginItem[]>();
-  const sorted = sortPluginStoreEntries(
-    items,
-    (item) => ({
-      id: item.id,
-      category: item.listing?.category,
-      displayName: resolveItemDisplayName(item, locale),
-    }),
-    locale,
-    order,
-  );
-  for (const item of sorted) {
-    const category = resolveStoreCategory(item.listing?.category) ?? FALLBACK_CATEGORY;
-    const group = groups.get(category) ?? [];
-    group.push(item);
-    groups.set(category, group);
-  }
-  return [...groups.entries()].map(([category, items]) => ({ category, items }));
-}
-
-export function storeItemMatches(item: StorePluginItem, keyword: string, locale: string): boolean {
-  return pluginSearchMatches(
-    keyword,
-    [
-      item.name,
-      item.id,
-      item.marketplace,
-      resolveItemDisplayName(item, locale),
-      resolveItemDescription(item, locale) ?? "",
-      item.listing?.category ?? "",
-      item.listing?.author ?? "",
-    ],
-    [item.name, item.listing?.displayName, ...Object.values(item.listing?.displayNameI18n ?? {})],
-  );
-}
-
-/**
- * 已安装图标条排序：官方文档插件优先，其余内置/inline 按名称稳定排序；
- * 市场安装插件随后按安装时间倒序，同一时间再按名称排序。
- */
-export function sortInstalledStripItems(
-  items: StorePluginItem[],
-  locale: string,
-): StorePluginItem[] {
-  return items.toSorted((left, right) => {
-    const documentPriority = compareDocumentPluginPriority(left.id, right.id);
-    if (documentPriority !== 0) return documentPriority;
-
-    const leftIsBuiltin = Boolean(left.info && left.info.source !== "cache");
-    const rightIsBuiltin = Boolean(right.info && right.info.source !== "cache");
-    if (leftIsBuiltin !== rightIsBuiltin) return leftIsBuiltin ? -1 : 1;
-
-    const compareByName = () =>
-      resolveItemDisplayName(left, locale).localeCompare(
-        resolveItemDisplayName(right, locale),
-        locale,
-      );
-    if (leftIsBuiltin) return compareByName();
-
-    const leftAt = left.installedMeta?.installedAt ?? "";
-    const rightAt = right.installedMeta?.installedAt ?? "";
-    if (leftAt !== rightAt) return rightAt.localeCompare(leftAt);
-    return compareByName();
-  });
 }

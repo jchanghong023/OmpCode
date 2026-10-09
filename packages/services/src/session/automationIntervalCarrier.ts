@@ -8,7 +8,7 @@ import type {
 const MAX_SESSION_AUTOMATION_INTERVAL = 200;
 
 /** 会话侧自定义重复 carrier 配对、范围或互斥校验失败。 */
-export class InvalidAutomationIntervalCarrierError extends Error {
+class InvalidAutomationIntervalCarrierError extends Error {
   constructor(message: string) {
     super(`非法的自定义重复入参：${message}`);
     this.name = "InvalidAutomationIntervalCarrierError";

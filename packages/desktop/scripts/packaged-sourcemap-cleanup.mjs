@@ -20,7 +20,7 @@ const SOURCE_MAPPING_URL_LINE_RE = /(?:^|\r?\n)[ \t]*\/\/[#@][ \t]*sourceMapping
 const SOURCE_MAPPING_URL_BLOCK_RE =
   /(?:^|\r?\n)[ \t]*\/\*[#@][ \t]*sourceMappingURL=[\s\S]*?\*\/[ \t]*/g;
 
-export function stripSourceMappingUrlComments(source) {
+function stripSourceMappingUrlComments(source) {
   return source.replace(SOURCE_MAPPING_URL_LINE_RE, "").replace(SOURCE_MAPPING_URL_BLOCK_RE, "");
 }
 
@@ -42,7 +42,7 @@ function walkFiles(rootDir, visitor) {
   }
 }
 
-export function stripSourceMappingUrlCommentsInDirectory(rootDir) {
+function stripSourceMappingUrlCommentsInDirectory(rootDir) {
   const summary = { filesChanged: 0, referencesRemoved: 0 };
   walkFiles(rootDir, (filePath) => {
     if (!SOURCEMAP_REFERENCE_EXTENSIONS.has(extname(filePath))) {
@@ -63,7 +63,7 @@ export function stripSourceMappingUrlCommentsInDirectory(rootDir) {
   return summary;
 }
 
-export function removeSourceMapFilesInDirectory(rootDir) {
+function removeSourceMapFilesInDirectory(rootDir) {
   const summary = { filesRemoved: 0 };
   walkFiles(rootDir, (filePath) => {
     if (extname(filePath) !== ".map") {

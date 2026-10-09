@@ -138,14 +138,14 @@ function compareDottedVersions(left, right) {
   return 0;
 }
 
-export function getRequiredGlibcVersions(versionInfo) {
+function getRequiredGlibcVersions(versionInfo) {
   const versions = new Set(
     [...String(versionInfo).matchAll(/\bGLIBC_(\d+(?:\.\d+)+)\b/gu)].map((match) => match[1]),
   );
   return [...versions].sort(compareDottedVersions);
 }
 
-export function verifyLinuxGlibcBaseline(
+function verifyLinuxGlibcBaseline(
   versionInfo,
   binaryName,
   baseline = LINUX_NATIVE_SEARCH_GLIBC_BASELINE,
@@ -165,7 +165,7 @@ export function verifyLinuxGlibcBaseline(
   }
 }
 
-export function verifyMacosDeploymentTarget(
+function verifyMacosDeploymentTarget(
   buildVersion,
   binaryName,
   { allowLowerDeploymentTarget = false } = {},
@@ -255,7 +255,7 @@ function verifyLinuxBinary(binaryPath, { arch, allowedDependencies, glibcBaselin
   }
 }
 
-export function getAllowedLinuxNativeSearchDependencies(toolId, arch) {
+function getAllowedLinuxNativeSearchDependencies(toolId, arch) {
   const dynamicLoader = arch === "arm64" ? "ld-linux-aarch64.so.1" : "ld-linux-x86-64.so.2";
   const commonDependencies = [
     dynamicLoader,

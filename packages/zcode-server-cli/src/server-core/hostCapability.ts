@@ -4,7 +4,7 @@ import type { ServerRemoteHostCapability } from "@zcode/shared";
 // 与 packages/server/src/hostCapability.ts 保持一致的一次性短期 ticket 语义。
 // 依赖边界禁止从 @zcode/server 的入口导入实现，因此在新包内保留一份等价的
 // 纯内存实现，行为以旧 server 的兼容合同为准（TTL、一次性消费、过期清理）。
-export const DEFAULT_HOST_CAPABILITY_TTL_MS = 30_000;
+const DEFAULT_HOST_CAPABILITY_TTL_MS = 30_000;
 
 export interface HostCapabilityStoreOptions {
   ttlMs?: number;

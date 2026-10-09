@@ -2,7 +2,6 @@ import type {
   OnboardingRecordEntry,
   OnboardingRecordEntryInput,
   OnboardingRecordFile,
-  OnboardingDecision,
 } from "@zcode/shared";
 import { ServiceChannels, type AppSettings } from "@zcode/shared";
 import { createServiceDescriptor } from "../descriptors.js";
@@ -69,10 +68,3 @@ export type OnboardingRecordServiceFactory = (
 export const IOnboardingRecordService = createServiceDescriptor<IOnboardingRecordService>(
   ServiceChannels.OnboardingRecord,
 );
-
-export type {
-  OnboardingDecision,
-  OnboardingRecordEntry,
-  OnboardingRecordEntryInput,
-  OnboardingRecordFile,
-};

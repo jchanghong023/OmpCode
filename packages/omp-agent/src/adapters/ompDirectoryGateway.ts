@@ -22,11 +22,6 @@ export interface OmpDirectoryGatewayDeps {
   onCommandsUpdate?: (commands: unknown) => void;
 }
 
-/** 未协商 v3 的 omp 对目录命令的拒绝文案（isNegotiableRpcProtocolVersion 门控）。 */
-export function isUnknownCommand(error: string | undefined): boolean {
-  return typeof error === "string" && /unknown command/i.test(error);
-}
-
 export class OmpDirectoryGateway {
   private process: OmpSessionProcess | null = null;
   private starting: Promise<OmpSessionProcess | null> | null = null;

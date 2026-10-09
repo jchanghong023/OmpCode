@@ -332,11 +332,6 @@ export function ModelTrajectoryPane({
   );
 }
 
-export {
-  resolveTrajectoryInputMessages,
-  resolveTrajectoryTimelineItems,
-} from "@/ModelTrajectoryTimeline.js";
-
 function getModelTrajectorySourceDirectory(
   sourceFiles: readonly string[] | undefined,
 ): string | null {

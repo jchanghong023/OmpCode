@@ -39,21 +39,6 @@ function getChatToolbarShortcutKey(
   }
 }
 
-/** 计算 select 选项的下一次循环取值（模式循环用）。 */
-export function getNextConfigSelectValue(
-  option: Pick<ZCodeConfigOption, "type" | "currentValue" | "options">,
-): string | null {
-  if (option.type !== "select" || !option.options?.length) {
-    return null;
-  }
-
-  const currentValue = String(option.currentValue);
-  const currentIndex = option.options.findIndex((candidate) => candidate.value === currentValue);
-  const nextIndex = currentIndex === -1 ? 0 : (currentIndex + 1) % option.options.length;
-
-  return option.options[nextIndex]?.value ?? null;
-}
-
 interface ToolbarShortcutKeyboardEvent {
   key: string;
   code?: string;

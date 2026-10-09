@@ -40,7 +40,7 @@ export function restoreTargetNodePtyPrebuild({ desktopPackageRoot, targetPlatfor
   console.log(`[beforePack] node-pty prebuild restored: ${targetBinaryPath}`);
 }
 
-export function resolveSourceNodePtyPrebuildPath({ sourcePackageName, platformKey }) {
+function resolveSourceNodePtyPrebuildPath({ sourcePackageName, platformKey }) {
   const sourcePackageEntry = require.resolve(sourcePackageName);
   let currentDir = dirname(sourcePackageEntry);
 

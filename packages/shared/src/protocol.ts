@@ -122,7 +122,7 @@ export interface TabState {
   label: string;
 }
 
-export interface SSHRemoteTargetSnapshot {
+interface SSHRemoteTargetSnapshot {
   kind: "ssh";
   host: string;
   port?: number;
@@ -144,13 +144,13 @@ export interface SSHRemoteTargetSnapshot {
   privateKeyPassphraseCredentialKey?: string;
 }
 
-export interface WSLRemoteTargetSnapshot {
+interface WSLRemoteTargetSnapshot {
   kind: "wsl";
   distro?: string;
   user?: string;
 }
 
-export interface DockerRemoteTargetSnapshot {
+interface DockerRemoteTargetSnapshot {
   kind: "docker";
   container: string;
 }
@@ -160,7 +160,7 @@ export type RemoteTargetSnapshot =
   | WSLRemoteTargetSnapshot
   | DockerRemoteTargetSnapshot;
 
-export interface RemoteWorkspaceSessionSnapshot {
+interface RemoteWorkspaceSessionSnapshot {
   /** 远程 workspace 的真实绝对路径 */
   workspacePath: string;
   /** 发起远程连接时的本机 workspace 路径，仅用于 MCP filesystem 路径改写。 */
@@ -177,7 +177,7 @@ export interface RemoteWorkspaceSessionSnapshot {
   lastConnectionError?: string;
 }
 
-export interface LocalWorkspaceSessionEntry {
+interface LocalWorkspaceSessionEntry {
   kind: "local";
   workspacePath: string;
   /** 项目展示分类；旧数据缺省为 project，conversation 仍使用真实 workspacePath 作为 cwd/key。 */

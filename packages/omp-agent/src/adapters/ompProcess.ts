@@ -24,7 +24,7 @@ const USER_INPUT_COMMAND_TIMEOUT_MS = 600_000;
 const USER_INPUT_COMMAND_TYPES: ReadonlySet<string> = new Set(["prompt", "steer", "follow_up", "abort_and_prompt"]);
 
 /** 按命令类型选择请求超时（项目模式进程共用；UT 覆盖映射矩阵）。 */
-export function ompCommandTimeoutMs(command: { type?: unknown }): number {
+function ompCommandTimeoutMs(command: { type?: unknown }): number {
   return typeof command.type === "string" && USER_INPUT_COMMAND_TYPES.has(command.type) ? USER_INPUT_COMMAND_TIMEOUT_MS : COMMAND_TIMEOUT_MS;
 }
 

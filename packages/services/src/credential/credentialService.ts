@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { atomicWritePrivateTextFile, backupCorruptFile, withFileLock } from "@zcode/shared/node";
 import {
-  credentialKeySchema,
+  nonEmptyStringSchema as credentialKeySchema,
   credentialRecordSchema,
   credentialValueSchema,
   formatZodError,

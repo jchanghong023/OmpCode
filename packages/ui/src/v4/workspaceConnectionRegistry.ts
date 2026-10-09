@@ -57,7 +57,6 @@ interface WorkspaceConnectionScope {
 /** pane 持有的连接租约；release 幂等。 */
 /**
  * useSavedWorkflowLauncher 的推断返回类型包含 lease，声明生成要求保留可命名的导出。
- * @lintignore
  */
 export interface WorkspaceConnectionLease {
   readonly layer: SessionDataLayer;

@@ -6,16 +6,16 @@ import type { Plugin } from "vite";
 const require = createRequire(import.meta.url);
 const PDFJS_CMAP_OUTPUT_DIRECTORY = "pdfjs/cmaps";
 
-export interface PdfJsCMapAsset {
+interface PdfJsCMapAsset {
   fileName: string;
   source: Uint8Array;
 }
 
-export function resolvePdfJsCMapsDirectory(): string {
+function resolvePdfJsCMapsDirectory(): string {
   return join(dirname(require.resolve("pdfjs-dist/package.json")), "cmaps");
 }
 
-export async function listPdfJsCMapAssets(): Promise<PdfJsCMapAsset[]> {
+async function listPdfJsCMapAssets(): Promise<PdfJsCMapAsset[]> {
   const cMapsDirectory = resolvePdfJsCMapsDirectory();
   const entries = await readdir(cMapsDirectory, { withFileTypes: true });
   return Promise.all(

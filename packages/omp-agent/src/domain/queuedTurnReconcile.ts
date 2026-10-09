@@ -257,7 +257,7 @@ function turnHasContentOf(host: QueuedTurnReconcileHost, turn: TurnContext): boo
  *   收口；从未 seen 且缺席保持排队（等待宽限复查）。
  */
 export type QueueReconcileMode = "markOnly" | "forceClose";
-export const QUEUE_RECONCILE_MODE: unique symbol = Symbol("omp-agent.queueReconcileMode");
+const QUEUE_RECONCILE_MODE: unique symbol = Symbol("omp-agent.queueReconcileMode");
 type QueueReconcileTexts = string[] & { [QUEUE_RECONCILE_MODE]?: QueueReconcileMode };
 
 /** 给快照文本数组附着对账模式（由 promptQueueReconciler 在调用对账前标记）。 */

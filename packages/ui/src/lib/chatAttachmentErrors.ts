@@ -45,15 +45,3 @@ export class MissingInlinePdfContentError extends Error {
     this.sizeBytes = options.sizeBytes;
   }
 }
-
-export class MissingInlineImageContentError extends Error {
-  readonly filename: string;
-  readonly sizeBytes: number;
-
-  constructor(options: { filename: string; sizeBytes: number }) {
-    super("missing-inline-image-content");
-    this.name = "MissingInlineImageContentError";
-    this.filename = options.filename;
-    this.sizeBytes = options.sizeBytes;
-  }
-}

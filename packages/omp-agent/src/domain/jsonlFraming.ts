@@ -4,12 +4,3 @@
 export function encodeJsonlLine(value: unknown): string {
   return `${JSON.stringify(value)}\n`;
 }
-
-/** 解析一行；返回 null 表示空行（跳过），抛错表示非法 JSON（由调用方决定丢弃或终止）。 */
-export function decodeJsonlLine(line: string): unknown {
-  const trimmed = line.trim();
-  if (trimmed.length === 0) {
-    return null;
-  }
-  return JSON.parse(trimmed);
-}

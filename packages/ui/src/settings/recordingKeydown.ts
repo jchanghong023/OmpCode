@@ -10,7 +10,7 @@ import { formatShortcutBindingLabel } from "@/shortcuts/label.js";
 import type { RecordingState } from "./ShortcutBindingRow.js";
 
 /** 录制态提示文案格式化（react-intl formatMessage 的结构化子集，纯函数单测可注入桩实现）。 */
-export type RecordingMessageFormatter = (
+type RecordingMessageFormatter = (
   descriptor: { id: string },
   values?: Record<string, string>,
 ) => string;
@@ -26,7 +26,7 @@ export interface RecordingKeydownContext {
 }
 
 /** 一次录制按键触发的落盘动作（必须由调用方在 setState updater 之外恰好执行一次）。 */
-export type RecordingPersistAction =
+type RecordingPersistAction =
   | { kind: "clear"; commandId: ShortcutCommandId }
   | { kind: "append"; commandId: ShortcutCommandId; binding: string }
   | { kind: "replace"; commandId: ShortcutCommandId; bindingIndex: number; binding: string };

@@ -1,16 +1,16 @@
 import type { ZCodeAgentInteractionAgent, ZCodeAgentInteractionEvent } from "@zcode/shared";
 
 export const INTERACTION_NODE_WIDTH = 156;
-export const INTERACTION_NODE_HEIGHT = 72;
+const INTERACTION_NODE_HEIGHT = 72;
 
-export interface OmpInteractionNode {
+interface OmpInteractionNode {
   agent: ZCodeAgentInteractionAgent;
   x: number;
   y: number;
   depth: number;
 }
 
-export interface OmpInteractionRoute {
+interface OmpInteractionRoute {
   fromAgentId: string;
   toAgentId: string;
   events: readonly ZCodeAgentInteractionEvent[];

@@ -30,7 +30,7 @@ export interface BrowserTabShellRecord {
   updatedAt: number;
 }
 
-export interface BrowserTabNavigationEntry {
+interface BrowserTabNavigationEntry {
   url: string;
   title?: string;
   pageState?: string;

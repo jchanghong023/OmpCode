@@ -7,7 +7,7 @@ interface EntitledAccountProviderAccess {
   readonly label?: string;
 }
 
-export function resolveEntitledAccountProviderAccess(
+function resolveEntitledAccountProviderAccess(
   view: ProviderSettingsView | null | undefined,
   providerId: string,
 ): EntitledAccountProviderAccess | null {

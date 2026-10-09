@@ -17,15 +17,8 @@ import {
 import { decodeFilePathUriEscapes, getPathLeaf, toFileUrl } from "@/lib/path.js";
 import type { CodeViewerSource } from "@/lib/codeViewer.js";
 
-export {
-  extractAssistantFileReferences,
-  hasAssistantPreviewFileChangeCandidates,
-  isAssistantPreviewHtmlPath,
-} from "@/lib/assistantFileReferences.js";
-export type {
-  AssistantFileReference,
-  AssistantPreviewFileKind,
-} from "@/lib/assistantFileReferences.js";
+export { extractAssistantFileReferences } from "@/lib/assistantFileReferences.js";
+export type { AssistantFileReference } from "@/lib/assistantFileReferences.js";
 
 export const ASSISTANT_PREVIEW_CARD_CANDIDATE_LIMIT = CONVERSATION_PREVIEW_CARD_CANDIDATE_LIMIT;
 export const ASSISTANT_PREVIEW_CARD_VISIBLE_LIMIT = CONVERSATION_PREVIEW_CARD_VISIBLE_LIMIT;

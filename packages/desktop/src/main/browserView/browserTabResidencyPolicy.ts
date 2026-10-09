@@ -1,6 +1,6 @@
 export const BROWSER_TAB_LIMIT = 32;
 
-export type BrowserTabResidency =
+type BrowserTabResidency =
   | "live-visible"
   | "live-background"
   | "suspend-pending"

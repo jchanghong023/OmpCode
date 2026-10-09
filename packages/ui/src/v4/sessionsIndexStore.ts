@@ -91,7 +91,7 @@ interface ApplySessionsIndexResult {
 }
 
 /** 纯 apply：snapshot 全量替换；deltas 仅在衔接时逐条 upsert/remove。 */
-export function applySessionsIndexFrame(
+function applySessionsIndexFrame(
   current: SessionsIndexState,
   frame: SessionsIndexTopicFrame,
 ): ApplySessionsIndexResult {

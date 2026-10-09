@@ -37,7 +37,7 @@ function peRvaToFileOffset(buffer, rva, sectionTableOffset, sectionCount) {
   fail(`PE RVA 0x${rva.toString(16)} is outside mapped sections`);
 }
 
-export function readWindowsPeMetadata(binaryPath) {
+function readWindowsPeMetadata(binaryPath) {
   const buffer = readFileSync(binaryPath);
   if (buffer.length < 64 || buffer.toString("ascii", 0, 2) !== "MZ") {
     fail(`${basename(binaryPath)} is not a PE executable`);

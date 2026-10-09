@@ -63,8 +63,6 @@ export type {
   GitBranchComparisonChange,
   GitBranchComparisonSnapshot,
   GitCliRepo,
-  GitLineStat,
-  GitResolvedRepository,
   GitStatusEntry,
   GitStatusSnapshot,
 } from "./gitCliTypes.js";

@@ -1,6 +1,6 @@
 import type { McpServerConfig, ZCodeMcpServer } from "@zcode/shared";
 
-export const MCP_SECTIONS = ["zcodeagentmcp"] as const;
+const MCP_SECTIONS = ["zcodeagentmcp"] as const;
 
 export type ServerScope = (typeof MCP_SECTIONS)[number];
 export type ConfigStorageLevel = "user" | "workspace";

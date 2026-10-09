@@ -61,6 +61,8 @@ export const CENTOS7_PINNED_RUNTIME_DEPENDENCIES = Object.freeze({
   "@opentelemetry/sdk-metrics": "2.11.0",
   "@opentelemetry/sdk-trace-base": "2.11.0",
   "better-sqlite3": "9.6.0",
+  // 当前 updater 闭包已使用此版本；显式声明不改变原有 Node 18 运行时选型。
+  "builder-util-runtime": "9.7.0",
   "electron-updater": "6.8.9",
   "module-details-from-path": "1.0.4",
   "node-forge": "1.4.0",
@@ -75,6 +77,8 @@ export const CENTOS7_PINNED_RUNTIME_DEPENDENCIES = Object.freeze({
   yaml: "2.9.1",
   yauzl: "3.4.0",
   yazl: "3.3.1",
+  // 与现有 shared/protocol 验证闭包相同，只补齐 desktop 的直接依赖声明。
+  zod: "4.6.5",
 });
 
 const DESKTOP_MANIFEST_PATH = "packages/desktop/package.json";

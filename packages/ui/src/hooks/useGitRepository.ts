@@ -45,12 +45,12 @@ export interface GitPaneFileChange extends GitFileChange {
   diff: GitDiffResult | null;
 }
 
-export interface GitPaneSection {
+interface GitPaneSection {
   id: GitChangeSectionId;
   changes: GitPaneFileChange[];
 }
 
-export interface GitPaneDataset {
+interface GitPaneDataset {
   id: GitChangeSourceId;
   readonly: boolean;
   sections: GitPaneSection[];
@@ -58,7 +58,7 @@ export interface GitPaneDataset {
   turnIndex?: number | null;
 }
 
-export interface GitPaneSourceOption {
+interface GitPaneSourceOption {
   id: GitChangeSourceId;
   count: number;
   readonly: boolean;

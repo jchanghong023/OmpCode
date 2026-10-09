@@ -5,12 +5,9 @@ import {
   buildZCodeSourceHeadersFromContext,
   normalizeZCodeSourceHeaderValue,
   ZCODE_ENV,
-  ZCODE_SOURCE_HEADERS,
   ZCODE_VERSION,
 } from "@zcode/shared";
 import { getAppConfigDir } from "../paths.js";
-
-export { ZCODE_SOURCE_HEADERS };
 
 interface ZCodeSourceHeaderOptions {
   appVersion?: string;

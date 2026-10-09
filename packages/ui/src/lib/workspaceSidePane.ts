@@ -25,7 +25,7 @@ export type BrowserSidePaneMetadata = Partial<Pick<BrowserSidePaneTab, "faviconU
 
 export const BROWSER_USE_OPERATION_INDICATOR_DURATION_MS = 5_000;
 
-export interface GitSidePaneTab {
+interface GitSidePaneTab {
   id: "git";
   type: "git";
   ownerTaskId?: string | null;
@@ -33,7 +33,7 @@ export interface GitSidePaneTab {
   openedAt?: number;
 }
 
-export interface CodeViewerSidePaneTab {
+interface CodeViewerSidePaneTab {
   id: string;
   type: "code-viewer";
   ownerTaskId?: string | null;
@@ -56,7 +56,7 @@ export interface TreemappingSidePaneTab {
   source?: TreemappingSidePaneSource;
 }
 
-export interface WhiteboardSidePaneTab {
+interface WhiteboardSidePaneTab {
   id: string;
   type: "whiteboard";
   ownerTaskId?: string | null;
@@ -66,7 +66,7 @@ export interface WhiteboardSidePaneTab {
   title: string;
 }
 
-export interface ModelTrajectorySidePaneTab {
+interface ModelTrajectorySidePaneTab {
   id: string;
   type: "model-trajectory";
   ownerTaskId?: string | null;
@@ -77,7 +77,7 @@ export interface ModelTrajectorySidePaneTab {
   title?: string | null;
 }
 
-export interface DeveloperToolsSidePaneTab {
+interface DeveloperToolsSidePaneTab {
   id: "developer-tools";
   type: "developer-tools";
   ownerTaskId?: string | null;
@@ -85,7 +85,7 @@ export interface DeveloperToolsSidePaneTab {
   openedAt?: number;
 }
 
-export interface TerminalSidePaneTab {
+interface TerminalSidePaneTab {
   id: string;
   type: "terminal";
   ownerTaskId?: string | null;

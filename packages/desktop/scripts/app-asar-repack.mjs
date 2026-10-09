@@ -1,6 +1,6 @@
 import { access, rename, rm } from "node:fs/promises";
 
-export const ASAR_UNPACK_NATIVE_GLOB = "*.{node,dll,dylib,exe}";
+const ASAR_UNPACK_NATIVE_GLOB = "*.{node,dll,dylib,exe}";
 
 async function pathExists(path) {
   try {
@@ -11,7 +11,7 @@ async function pathExists(path) {
   }
 }
 
-export function createAppAsarPackArgs({ sourceDir, destinationPath, targetPlatformKey }) {
+function createAppAsarPackArgs({ sourceDir, destinationPath, targetPlatformKey }) {
   return [
     "pack",
     sourceDir,

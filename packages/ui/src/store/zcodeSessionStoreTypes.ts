@@ -70,7 +70,7 @@ export interface TaskRuntimeState {
   activeInputOwnerClientId?: string;
 }
 
-export interface DraftRuntimeState {
+interface DraftRuntimeState {
   status: ZCodeTaskRuntimeStatus;
   error: string | null;
 }
@@ -88,7 +88,7 @@ export interface TaskUsageState {
   breakdown?: ZCodeContextUsageBreakdownItem[];
 }
 
-export interface ElicitationAnswerDraft {
+interface ElicitationAnswerDraft {
   selectedValues: string[];
   customAnswer: string;
 }
@@ -133,7 +133,7 @@ export interface ComposerMentionPrefill {
   data?: MentionItemData;
 }
 
-export interface ComposerTextInsertRequest {
+interface ComposerTextInsertRequest {
   requestId: number;
   text: string;
   mention?: ComposerMentionPrefill;

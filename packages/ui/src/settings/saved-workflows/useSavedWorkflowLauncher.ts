@@ -32,10 +32,7 @@ interface SavedWorkflowLaunchRequest {
 }
 
 /** 错误原因 = 拒绝词表 ∪ 能力缺席 ∪ 兜底；直接映射 i18n key `workflows.hub.launch.error.<reason>`。 */
-export type SavedWorkflowLaunchErrorReason =
-  | SavedWorkflowStartRejectionReason
-  | "unsupported"
-  | "generic";
+type SavedWorkflowLaunchErrorReason = SavedWorkflowStartRejectionReason | "unsupported" | "generic";
 
 export interface SavedWorkflowLaunchError {
   reason: SavedWorkflowLaunchErrorReason;

@@ -8,7 +8,7 @@ import { readCuaActionDetail } from "@/ToolCallBlocks/renderers/cuaActionDetail.
 import { buildCuaAccessDetails } from "@/ToolCallBlocks/renderers/cuaAccessDetails.js";
 import { CuaToolCallDetails } from "@/ToolCallBlocks/renderers/cuaDetails.js";
 import { readCuaErrorDetails } from "@/ToolCallBlocks/renderers/cuaErrorDetails.js";
-import { CUA_FALLBACK_ICON } from "@/ToolCallBlocks/renderers/cuaIcon.js";
+import { CUA_TOOL_ICON } from "@/ToolCallBlocks/renderers/cuaIcon.js";
 import { CuaAppSummaryIcon } from "@/ToolCallBlocks/renderers/cuaAppSummaryIcon.js";
 import {
   readCuaActionTargetName,
@@ -430,7 +430,7 @@ export function buildCuaSummaryPresentation(
     toolName,
     icon:
       appName === genericAppName ? (
-        CUA_FALLBACK_ICON
+        CUA_TOOL_ICON
       ) : (
         <CuaAppSummaryIcon
           bundleId={bundleId}

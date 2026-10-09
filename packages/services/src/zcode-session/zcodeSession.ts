@@ -125,7 +125,7 @@ export interface ZCodeSessionInitializeResult {
   reasonCode?: "provider_not_ready";
 }
 
-export interface ZCodeSessionWorkspaceRuntimeIdentity {
+interface ZCodeSessionWorkspaceRuntimeIdentity {
   generation: number;
   identity: string;
   processId?: number;

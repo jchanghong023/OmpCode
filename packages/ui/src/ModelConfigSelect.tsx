@@ -55,7 +55,7 @@ export interface ModelSelectGroupItem {
   supportsVisionInput?: boolean;
 }
 
-export interface ModelSelectConnectionOption {
+interface ModelSelectConnectionOption {
   key: string;
   label: string;
   badgeLabel?: string;

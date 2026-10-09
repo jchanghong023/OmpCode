@@ -9,9 +9,23 @@
         "scripts/check-workspace-freshness.mjs",
         "scripts/mise-run.mjs",
         "scripts/dev/gui-smoke-cdp.mjs",
+        "scripts/build-desktop-agent-cli.mjs",
+        "scripts/licenses.mjs",
+        "scripts/generate-third-party-notices.mjs",
+        "scripts/dev/gui-pick-free.mjs",
+        "scripts/dev/gui-pick-ling.mjs",
+        "scripts/dev/gui-pick-model.mjs",
+        "scripts/dev/gui-send-cdp.mjs",
+        "scripts/dev/omp-stdio-tee.mjs",
+        "scripts/dev/zcode-stdio-tap.mjs",
+        "scripts/publish/centos7/build-native-assets.mjs",
+        "scripts/publish/centos7/merge-app-asar.mjs",
+        "scripts/publish/centos7/verify-ssh.mjs",
         "**/*.test.{js,cjs,mjs,jsx,ts,cts,mts,tsx}",
         "!apps/zcode-cli/**"
-      ]
+      ],
+      "release-it": { "config": [".release-it.mjs"] },
+      "ignoreDependencies": ["d3-path", "electron"]
     },
     "packages/*": {
       "entry": [
@@ -23,6 +37,11 @@
     "packages/desktop": {
       "entry": [
         "electron-builder.config.js",
+        "scripts/generate-omp-icons.mjs",
+        "scripts/ttft-otlp-receiver.mjs",
+        "scripts/write-dev-ready-marker.mjs",
+        "scripts/powershell-command.d.mts",
+        "scripts/target-platform.d.mts",
         "src/main/index.ts",
         "src/main/browserView/electronBrowserWebmRecorder.ts",
         "src/main/zcodeDataSizeWorker.ts",
@@ -42,8 +61,32 @@
         "**/*.test.{js,cjs,mjs,jsx,ts,cts,mts,tsx}",
         "test/*.e2e.mjs",
         "test/ompAgentInteractions.launch.mjs",
-        "test/ompNativeCommands.launch.mjs"
-      ]
+        "test/ompNativeCommands.launch.mjs",
+        "test/ompExecutionPages.launch.mjs",
+        "test/ompPerformanceHotPaths.draftHookFixture.jsx",
+        "test/ompPerformanceHotPaths.fileProviderFixture.jsx",
+        "test/ompPerformanceHotPaths.fixture.jsx",
+        "test/toolContentPresentation.fixture.jsx",
+        "test/fixtures/ompConfirmExtension.js"
+      ],
+      "ignoreDependencies": [
+        "@babel/runtime",
+        "@larksuiteoapi/node-sdk",
+        "@lydell/node-pty-linux-arm64",
+        "@lydell/node-pty-linux-x64",
+        "@zcode/provider",
+        "@zcode/provider-node",
+        "better-sqlite3",
+        "module-details-from-path",
+        "node-forge",
+        "ssh2",
+        "yauzl",
+        "@electron/asar",
+        "@electron/rebuild",
+        "istanbul-lib-instrument",
+        "tailwindcss"
+      ],
+      "ignoreBinaries": ["reg.exe", "where.exe", "plutil", "sips", "lipo"]
     },
     "packages/server": {
       "entry": [
@@ -52,21 +95,59 @@
         "src/entry-http.ts",
         "build-remote.ts",
         "**/*.test.{js,cjs,mjs,jsx,ts,cts,mts,tsx}"
+      ],
+      "ignoreDependencies": [
+        "@lydell/node-pty-darwin-arm64",
+        "@lydell/node-pty-darwin-x64",
+        "@lydell/node-pty-linux-arm64",
+        "@lydell/node-pty-linux-x64",
+        "axios",
+        "combined-stream",
+        "follow-redirects",
+        "form-data",
+        "node-forge",
+        "node-pty",
+        "proxy-from-env",
+        "undici",
+        "yaml",
+        "yauzl",
+        "yazl"
       ]
     },
     "packages/services": {
       "entry": [
         "src/index.ts",
         "src/storage/module.ts",
+        "src/storage/contract.ts",
         "**/*.test.{js,cjs,mjs,jsx,ts,cts,mts,tsx}",
         "test/*.perf.{ts,mts}"
-      ]
+      ],
+      "ignoreBinaries": ["plutil"]
     },
     "packages/omp-agent": {
       "entry": [
         "{index,src/index}.{js,cjs,mjs,jsx,ts,cts,mts,tsx}",
         "src/adapters/cliMain.ts",
+        "src/module.ts",
+        "src/contract.example.ts",
         "**/*.test.{js,cjs,mjs,jsx,ts,cts,mts,tsx}"
+      ]
+    },
+    "packages/ui": {
+      "entry": [
+        "{index,src/index}.{js,cjs,mjs,jsx,ts,cts,mts,tsx}",
+        "**/*.test.{js,cjs,mjs,jsx,ts,cts,mts,tsx}",
+        "test/*.perf.{ts,mts}"
+      ],
+      "ignoreDependencies": ["@xyflow/react", "ansi-to-react", "use-stick-to-bottom"]
+    },
+    "packages/web": { "ignoreDependencies": ["tailwindcss"] },
+    "packages/zcode-server-cli": {
+      "entry": [
+        "src/index.ts",
+        "**/*.test.{js,cjs,mjs,jsx,ts,cts,mts,tsx}",
+        "scripts/verify-remote-ssh-target.mjs",
+        "scripts/verify-remote-ssh.mjs"
       ]
     }
   },

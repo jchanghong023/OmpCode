@@ -7,10 +7,10 @@
 import { copyFileSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 
-export const AGENT_BUNDLE_SOURCE_RELATIVE = "packages/omp-agent/dist/omp-agent.cjs";
-export const AGENT_BUNDLE_ENTRY = "omp-agent.cjs";
+const AGENT_BUNDLE_SOURCE_RELATIVE = "packages/omp-agent/dist/omp-agent.cjs";
+const AGENT_BUNDLE_ENTRY = "omp-agent.cjs";
 
-export function resolveAgentBundlePaths({ repoRoot, platformKey }) {
+function resolveAgentBundlePaths({ repoRoot, platformKey }) {
   const glmDir = resolve(repoRoot, "packages", "desktop", "bundled-agents", platformKey, "glm");
   return {
     cliBundlePath: resolve(repoRoot, AGENT_BUNDLE_SOURCE_RELATIVE),

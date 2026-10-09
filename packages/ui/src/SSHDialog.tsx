@@ -64,7 +64,7 @@ interface RemoteConnectionDialogProps {
   preferredWslDistro?: string;
 }
 
-export function RemoteConnectionDialog({
+export function SSHDialog({
   onConnect,
   onSelectProject,
   onCancelSession,
@@ -635,5 +635,3 @@ export function RemoteConnectionDialog({
     </>
   );
 }
-
-export const SSHDialog = RemoteConnectionDialog;

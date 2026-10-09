@@ -34,6 +34,8 @@ const testOptions = {
     : "Set OMP_NATIVE_E2E=1: creates isolated sessions and calls existing GLM credentials",
   timeout: 1_200_000,
 };
+// 完整执行先创建真实模型夹具，后续计划控制复用同根；不能要求首跑已有历史。
+let modelFixtureRoot: string | undefined;
 
 class NativeHarness {
   readonly frames: RecordValue[] = [];
@@ -882,6 +884,7 @@ test(
   async () => {
     const existingRoot = process.env.OMP_NATIVE_E2E_ROOT;
     const fixture = await prepareNativeFixture(existingRoot);
+    modelFixtureRoot = fixture.root;
     const selected = new Set(
       (process.env.OMP_NATIVE_E2E_SCENARIOS ?? "magic,loop,goal,compact,plan").split(","),
     );
@@ -1254,7 +1257,7 @@ test(
   "N04 plan-controls-only preserves delayed pause output during native context reads",
   testOptions,
   async () => {
-    const existingRoot = process.env.OMP_NATIVE_E2E_ROOT;
+    const existingRoot = process.env.OMP_NATIVE_E2E_ROOT ?? modelFixtureRoot;
     assert.ok(
       existingRoot,
       "Reuse an existing isolated native model fixture with a real plan draft",

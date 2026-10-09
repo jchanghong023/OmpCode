@@ -11,7 +11,6 @@ import {
   assertValidAutomationIntervalCarrier,
   forceIntervalCarrierRecurring,
 } from "#src/session/automationIntervalCarrier.js";
-export { InvalidAutomationIntervalCarrierError } from "#src/session/automationIntervalCarrier.js";
 import {
   buildIntervalScheduleRule,
   buildRelativeDelaySchedule,

@@ -147,7 +147,7 @@ function parseLinuxProcStat(
 }
 
 /** 解析 `/proc/<pid>/status` 里的 `VmRSS:\t 1234 kB` */
-export function parseLinuxVmRssKb(content: string): number {
+function parseLinuxVmRssKb(content: string): number {
   const match = /^VmRSS:\s*(\d+)\s*kB/m.exec(content);
   return match ? Number(match[1]) : 0;
 }

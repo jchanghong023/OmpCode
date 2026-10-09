@@ -7,7 +7,7 @@ import type {
 
 type FeedbackTab = "submit" | "tickets";
 
-export interface FeedbackAttachmentDraft {
+interface FeedbackAttachmentDraft {
   readonly filename: string;
   readonly contentType: string;
   readonly dataBase64: string;

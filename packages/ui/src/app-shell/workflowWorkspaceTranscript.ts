@@ -12,7 +12,7 @@ import type { WorkflowRunState, WorkflowRunWorkspaceNode } from "@zcode/shared/z
 import type { WorkflowCausalityGraphData } from "@/components/workflow-graph/types.js";
 import type { PhaseNaming } from "@/components/workflow-graph/phase-name.js";
 
-export type WorkspaceCardKind = "read" | "search" | "git" | "terminal" | "step";
+type WorkspaceCardKind = "read" | "search" | "git" | "terminal" | "step";
 
 /** 一张卡的静态素材（不含状态——状态在 `workspaceCardStatus`，因为它还要叠活投影）。 */
 export interface WorkspaceCardModel {

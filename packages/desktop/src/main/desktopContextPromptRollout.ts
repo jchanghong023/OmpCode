@@ -2,7 +2,6 @@ import {
   buildZCodeEndpointUrls,
   buildZCodeSourceHeadersFromContext,
   ZCODE_ENV,
-  ZCODE_DESKTOP_CONTEXT_PROMPT_ENABLED_ENV,
 } from "@zcode/shared";
 import {
   createSingleFeatureRollout,
@@ -10,10 +9,7 @@ import {
   type SingleFeatureRolloutLogger,
 } from "./singleFeatureRollout.js";
 
-export { ZCODE_DESKTOP_CONTEXT_PROMPT_ENABLED_ENV };
-
 type DesktopContextPromptRolloutLogger = SingleFeatureRolloutLogger;
-export const DESKTOP_CONTEXT_PROMPT_CACHE_TTL_MS = 60 * 60 * 1_000;
 const DESKTOP_CONTEXT_PROMPT_MAX_RESPONSE_BYTES = 1024 * 1024;
 
 interface DesktopContextPromptConfig {

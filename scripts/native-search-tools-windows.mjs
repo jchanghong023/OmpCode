@@ -17,7 +17,7 @@ function toCmakePath(path) {
   return path.replaceAll("\\", "/");
 }
 
-export function resolveNativeWindowsBuildConfig({
+function resolveNativeWindowsBuildConfig({
   platform = process.platform,
   arch = process.arch,
   hostPlatform = process.platform,

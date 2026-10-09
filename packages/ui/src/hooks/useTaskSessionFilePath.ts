@@ -4,7 +4,6 @@ import { useZCodeTaskService } from "@/hooks/useZCodeTaskService.js";
 
 /**
  * useWorkspaceActiveTaskState 的导出返回类型间接引用此接口，声明生成要求它可导出。
- * @lintignore
  */
 export interface TaskSessionFilePathState {
   path: string | null;

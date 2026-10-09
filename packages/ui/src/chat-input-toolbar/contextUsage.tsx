@@ -205,7 +205,7 @@ function buildContextUsageProgressSegments(segments: readonly ContextUsageBreakd
   }));
 }
 
-export function getRenderableTaskUsage<T extends { used: number; size: number }>(
+function getRenderableTaskUsage<T extends { used: number; size: number }>(
   taskUsage: T | null,
   allowZeroUsage = false,
 ): T | null {
@@ -225,10 +225,6 @@ export function getRenderableTaskUsage<T extends { used: number; size: number }>
   }
 
   return taskUsage;
-}
-
-export function getContextCompressionCommand(_provider: ZCodeProvider): string {
-  return "/compact";
 }
 
 // 自动/运营完成（startedAt 为空）当前生效的 used_at；手动完成不进入触发器交互。

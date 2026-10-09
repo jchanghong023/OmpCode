@@ -3,7 +3,6 @@ import {
   type StorePluginItem,
 } from "@/settings/pluginStoreListing.js";
 import type {
-  SkillSummary,
   ZCodeCommand,
   ZCodeInstalledPluginSummary,
   ZCodePluginInfo,
@@ -81,31 +80,6 @@ export function selectPluginsForScope(
   return [...plugins];
 }
 
-export function selectSkillsForScope(
-  skills: readonly SkillSummary[],
-  scopedPlugins: readonly Pick<ZCodePluginInfo, "id" | "name" | "enabled">[],
-  scope: ZCodePluginScope,
-): SkillSummary[] {
-  const enabledPlugins = scopedPlugins.filter((plugin) => plugin.enabled);
-  const scopedPluginIds = new Set(enabledPlugins.map((plugin) => plugin.id));
-  const scopedPluginIdsByName = new Map<string, string[]>();
-  for (const plugin of enabledPlugins) {
-    const name = canonicalPluginName(plugin.name);
-    scopedPluginIdsByName.set(name, [...(scopedPluginIdsByName.get(name) ?? []), plugin.id]);
-  }
-  return skills.filter((skill) => {
-    if (skill.scope !== "plugin") {
-      return skill.scope === scope;
-    }
-    if (skill.pluginId) return scopedPluginIds.has(skill.pluginId);
-    const matchingIds = skill.pluginName
-      ? scopedPluginIdsByName.get(canonicalPluginName(skill.pluginName))
-      : undefined;
-    // 旧协议没有 pluginId 时，仅在名称唯一的兼容场景下回退，避免跨 marketplace 合并。
-    return matchingIds?.length === 1;
-  });
-}
-
 export function selectCommandsForScope(
   commands: readonly ZCodeCommand[],
   scopedPlugins: readonly Pick<ZCodePluginInfo, "id" | "name" | "enabled">[],
@@ -129,54 +103,4 @@ export function selectCommandsForScope(
     const matchingIds = scopedPluginIdsByName.get(canonicalPluginName(command.pluginName));
     return matchingIds?.length === 1;
   });
-}
-
-interface SkillSourceGroup {
-  id: string;
-  label: string;
-  pluginId?: string;
-  skills: SkillSummary[];
-  source: "direct" | "plugin";
-}
-
-export function groupScopedSkillsBySource(
-  skills: readonly SkillSummary[],
-  directLabel: string,
-): SkillSourceGroup[] {
-  const direct: SkillSummary[] = [];
-  const pluginGroups = new Map<string, SkillSourceGroup>();
-  for (const skill of skills) {
-    if (skill.scope !== "plugin") {
-      direct.push(skill);
-      continue;
-    }
-    const pluginName = skill.pluginName?.trim();
-    if (!pluginName) continue;
-    const pluginId = skill.pluginId?.trim();
-    const id = pluginId || canonicalPluginName(pluginName);
-    const group = pluginGroups.get(id) ?? {
-      id: `plugin:${id}`,
-      label: pluginName,
-      ...(pluginId ? { pluginId } : {}),
-      skills: [],
-      source: "plugin" as const,
-    };
-    group.skills.push(skill);
-    pluginGroups.set(id, group);
-  }
-  return [
-    ...(direct.length > 0
-      ? [
-          {
-            id: "direct",
-            label: directLabel,
-            skills: direct,
-            source: "direct" as const,
-          },
-        ]
-      : []),
-    ...Array.from(pluginGroups.values()).sort((left, right) =>
-      left.label.localeCompare(right.label),
-    ),
-  ];
 }

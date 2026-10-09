@@ -12,7 +12,7 @@ import type { WorkflowRunCardSummary } from "@/ToolCallBlocks/fileSummaryTypes.j
  * 产物清单**以通知载荷为底**：它随通知持久化，冷恢复也在；投影 / journal 只是在它之上
  * 补字节数、出处、看板 spec。
  */
-export type WorkflowTerminalNotification = Extract<WorkflowNotificationMeta, { kind: "terminal" }>;
+type WorkflowTerminalNotification = Extract<WorkflowNotificationMeta, { kind: "terminal" }>;
 
 export interface WorkflowTurnCompletion {
   runId: string;

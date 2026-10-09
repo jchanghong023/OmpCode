@@ -38,7 +38,7 @@ export async function resolveZCodeStorageRoot(options?: SubagentStorageOptions):
   return resolveConfigPath(storageDir, options);
 }
 
-export function resolveConfigPath(path: string, options?: SubagentStorageOptions): string {
+function resolveConfigPath(path: string, options?: SubagentStorageOptions): string {
   const expanded = path.startsWith(HOME_PREFIX)
     ? join(resolveUserHomeDir(options), path.slice(HOME_PREFIX.length))
     : path;

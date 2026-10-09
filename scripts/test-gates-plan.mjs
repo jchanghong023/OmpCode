@@ -5,9 +5,10 @@ import { exists, gitText } from "./test-gates-process.mjs";
 
 const pnpm = (id, args, extra = {}) => ({ id, command: "pnpm", args, ...extra });
 const node = (id, args, extra = {}) => ({ id, command: "node", args, ...extra });
-export const guiPhases = {
+const guiPhases = {
   "ompAgentInteractions.gui.e2e.mjs": ["live", "cold"],
   "ompAgentInteractions.visual.e2e.mjs": ["visual"],
+  "ompExecutionPages.gui.e2e.mjs": ["live", "cold"],
   "ompStatusPanels.gui.e2e.mjs": ["live", "cold"],
   "ompNativeCommands.gui.e2e.mjs": ["live", "capture", "cold"],
   "ompPerformanceHotPaths.gui.e2e.mjs": ["live", "stable", "cold"],
@@ -46,6 +47,21 @@ export async function fastPlan() {
   ].filter((name) => /\.(?:m?[jt]sx?|json|md|ya?ml|toml|css|html)$/u.test(name));
   const formatFiles = [];
   for (const name of changed) if (await exists(name)) formatFiles.push(name);
+  // 修复：pnpm exec 在 Windows 会经 cmd 转发；大量文件超过 8191 字符时还未检查就失败。
+  // 为命令前缀、引号和工具路径保留余量，分批检查完整名单，不放宽 60 秒总预算。
+  const formatBatches = [];
+  let batch = [];
+  let argumentLength = 0;
+  for (const name of formatFiles) {
+    if (argumentLength + name.length + 3 > 6000 && batch.length) {
+      formatBatches.push(batch);
+      batch = [];
+      argumentLength = 0;
+    }
+    batch.push(name);
+    argumentLength += name.length + 3;
+  }
+  if (batch.length) formatBatches.push(batch);
   return [
     pnpm("typecheck", ["typecheck"]),
     pnpm("lint", ["lint"]),
@@ -68,9 +84,14 @@ export async function fastPlan() {
       "packages/ui/test/ompModelRolesFallback.test.ts",
       "packages/ui/test/bufferedStreamingText.test.ts",
     ]),
-    ...(formatFiles.length
-      ? [pnpm("format-changed", ["exec", "oxfmt", "--check", ...formatFiles])]
-      : []),
+    ...formatBatches.map((files, index) =>
+      pnpm(index ? `format-changed-${index + 1}` : "format-changed", [
+        "exec",
+        "oxfmt",
+        "--check",
+        ...files,
+      ]),
+    ),
   ];
 }
 
@@ -141,15 +162,29 @@ export async function fullPlan() {
       realOmp: true,
     }),
   );
-  const standalone = "ompPerformanceHotPaths.components.e2e.mjs";
-  stages.push(
-    node("components-hotpaths", [`packages/desktop/test/${standalone}`], {
-      electron: true,
-      env: { OMP_COMPONENT_PHASE: "complete" },
-    }),
-  );
+  // 组件入口自行拥有临时环境；不能把它们当作缺少产品 fixture 的未知 GUI。
+  const components = [
+    ["ompPerformanceHotPaths.components.e2e.mjs", "components-hotpaths"],
+    ["toolContentPresentation.components.e2e.mjs", "components-tool-content"],
+  ];
+  for (const [file, id] of components) {
+    stages.push(
+      node(id, [`packages/desktop/test/${file}`], {
+        electron: true,
+        ...(id === "components-hotpaths"
+          ? {
+              env: {
+                OMP_COMPONENT_PHASE: "complete",
+                OMP_COMPONENT_CDP_PORT: "19347",
+                OMP_COMPONENT_RENDERER_PORT: "15347",
+              },
+            }
+          : {}),
+      }),
+    );
+  }
   for (const file of (await filesAt("packages/desktop/test")).filter(
-    (name) => name.endsWith(".e2e.mjs") && name !== standalone,
+    (name) => name.endsWith(".e2e.mjs") && !components.some(([file]) => file === name),
   )) {
     const simple = ["ompStartup.gui.e2e.mjs", "ompSkills.gui.e2e.mjs", "ompConfirm.gui.e2e.mjs"];
     for (const phase of guiPhases[file] ?? ["live"]) {

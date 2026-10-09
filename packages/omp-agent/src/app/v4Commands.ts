@@ -2,7 +2,6 @@
 // omp 无法等价提供的命令以 fault.command.unsupportedByOmpCore 拒绝（差异记录在 FORK.md）。
 
 import {
-  commandPayloadSchemas,
   COMMANDS_REQUIRING_BASE_REVISION,
   parseCommandEnvelope,
   PROTOCOL_V4_LIMITS,
@@ -387,5 +386,3 @@ function interactionAnswerOf(
   }
   return { action: "cancel" };
 }
-
-export { commandPayloadSchemas };

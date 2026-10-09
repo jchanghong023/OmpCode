@@ -94,7 +94,7 @@ export const SETTINGS_USER_ACTION_FEATURES = {
   ],
 } as const;
 
-export type CoreUserActionFeatureId = keyof typeof CORE_USER_ACTION_FEATURES;
+type CoreUserActionFeatureId = keyof typeof CORE_USER_ACTION_FEATURES;
 export type SettingsUserActionFeatureId = keyof typeof SETTINGS_USER_ACTION_FEATURES;
 export type UserActionFeatureId = CoreUserActionFeatureId | SettingsUserActionFeatureId;
 

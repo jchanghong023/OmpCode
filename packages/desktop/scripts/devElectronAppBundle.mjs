@@ -1,11 +1,11 @@
 import { access, cp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
-export const DEV_ELECTRON_PROTOCOL_SCHEME = "zcode";
-export const DEV_ELECTRON_APP_NAME = "ZCode Dev";
-export const DEV_ELECTRON_APP_BUNDLE_ID = "dev.zcode.app.development";
+const DEV_ELECTRON_PROTOCOL_SCHEME = "zcode";
+const DEV_ELECTRON_APP_NAME = "ZCode Dev";
+const DEV_ELECTRON_APP_BUNDLE_ID = "dev.zcode.app.development";
 // 副本布局版本，见 prepareDevElectronAppBundle 中的指纹说明。
-export const DEV_ELECTRON_BUNDLE_FORMAT = 2;
+const DEV_ELECTRON_BUNDLE_FORMAT = 2;
 
 function escapeXml(value) {
   return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll('"', "&quot;");
@@ -41,14 +41,14 @@ function appendProtocolDeclaration(plist) {
  * raw Electron 的 Info.plist 没有 CFBundleURLTypes，系统只能把 zcode 交给
  * com.github.Electron；这里仅修改启动副本，避免污染 node_modules 中的 Electron。
  */
-export function patchDevElectronInfoPlist(plist) {
+function patchDevElectronInfoPlist(plist) {
   let patched = replacePlistString(plist, "CFBundleDisplayName", DEV_ELECTRON_APP_NAME);
   patched = replacePlistString(patched, "CFBundleIdentifier", DEV_ELECTRON_APP_BUNDLE_ID);
   patched = replacePlistString(patched, "CFBundleName", DEV_ELECTRON_APP_NAME);
   return appendProtocolDeclaration(patched);
 }
 
-export function resolveDevElectronAppBundlePath({ runtimeRoot, electronVersion, arch }) {
+function resolveDevElectronAppBundlePath({ runtimeRoot, electronVersion, arch }) {
   return join(runtimeRoot, `${electronVersion}-${arch}`, `${DEV_ELECTRON_APP_NAME}.app`);
 }
 

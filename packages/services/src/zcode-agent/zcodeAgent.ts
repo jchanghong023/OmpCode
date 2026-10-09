@@ -174,7 +174,7 @@ export interface ZCodeAgentRunAutomationNowResult {
   status: "queued" | "duplicate";
 }
 
-export interface ZCodeAgentWorkspaceRuntimeIdentity {
+interface ZCodeAgentWorkspaceRuntimeIdentity {
   generation: number;
   identity: string;
   processId?: number;
@@ -262,7 +262,7 @@ export interface ZCodeAgentGrantWorkspaceHookTrustParams extends ZCodeAgentWorks
   hookDeclarationDigest: string;
 }
 
-export interface ZCodeAgentSendPromptParamsBase extends ZCodeAgentSessionTarget {
+interface ZCodeAgentSendPromptParamsBase extends ZCodeAgentSessionTarget {
   modelSelection?: ModelSelection;
   modelExecution?: import("@zcode/shared/zcode-protocol-v4").CommandPayloadMap["sendText"]["modelExecution"];
   inputId?: string;

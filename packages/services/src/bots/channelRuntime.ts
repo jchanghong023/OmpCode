@@ -5,7 +5,7 @@ import type { BotConfig, BotProviderCallbackResult, BotRuntimeInfo } from "@zcod
 import { getAppConfigDir } from "../paths.js";
 
 export const BOT_RUNTIME_LOCK_RETRY_MS = 10_000;
-export const BOT_RUNTIME_LOCK_LEASE_MS = 30_000;
+const BOT_RUNTIME_LOCK_LEASE_MS = 30_000;
 const BOT_RUNTIME_LOCK_HEARTBEAT_MS = 10_000;
 const BOT_RUNTIME_LOCK_CLEANUP_RETRY_DELAYS_MS = [100, 250, 500] as const;
 
@@ -71,7 +71,7 @@ function isNodeError(error: unknown): error is NodeJS.ErrnoException {
   return error instanceof Error && "code" in error;
 }
 
-export function isBotRuntimeLockConflictError(error: unknown): boolean {
+function isBotRuntimeLockConflictError(error: unknown): boolean {
   return (
     isNodeError(error) &&
     (error.code === "EEXIST" ||

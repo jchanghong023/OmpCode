@@ -59,7 +59,7 @@ function matchesNoProxy(url: URL, value: string | undefined): boolean {
   });
 }
 
-export function resolveHostProxyForUrl(
+function resolveHostProxyForUrl(
   requestUrl: string | URL,
   options: HostApiNetworkOptions,
 ): HostProxyRoute {

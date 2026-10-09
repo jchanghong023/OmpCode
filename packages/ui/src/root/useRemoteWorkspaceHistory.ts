@@ -46,8 +46,6 @@ import {
 import { useRemoteConnectionEntryVisibility } from "@/hooks/useRemoteConnectionEntryVisibility.js";
 import { markRemoteWorkspaceRunningTasksFailed } from "@/lib/remoteWorkspaceSessionRuntime.js";
 
-export { reconnectRemoteWorkspaceHistoryEntry };
-
 async function bindRemoteWorkspaceContextAndGetSession(params: {
   platform: Pick<IPlatformService, "bindRemoteWorkspaceSessionContext">;
   sessionId: string;

@@ -20,8 +20,6 @@ import {
   resolveToolCallIdentity,
 } from "@/lib/toolIdentity.js";
 
-export { buildUnifiedDiff } from "@/lib/toolDiffPreview.js";
-
 export const FILE_VIEWER_MAX_TEXT_BYTES = 256 * 1024;
 export interface FileCodeViewerSource extends CodeViewerWorkspaceScope {
   type: "file";
@@ -29,7 +27,7 @@ export interface FileCodeViewerSource extends CodeViewerWorkspaceScope {
   path: string;
 }
 
-export interface CodeReviewAnchor {
+interface CodeReviewAnchor {
   requestId: string;
   title: string;
   body: string;
@@ -83,7 +81,7 @@ export interface MediaCodeViewerSource extends CodeViewerWorkspaceScope {
   url?: string;
 }
 
-export interface PdfCodeViewerSource extends CodeViewerWorkspaceScope {
+interface PdfCodeViewerSource extends CodeViewerWorkspaceScope {
   type: "pdf";
   title: string;
   path: string;

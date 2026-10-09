@@ -5,7 +5,7 @@ import {
   type GitEnvironmentProvider,
 } from "./gitEnvironmentProvider.js";
 
-export interface GitCommandExecutionOptions {
+interface GitCommandExecutionOptions {
   cwd: string;
   args: string[];
   timeoutMs?: number;

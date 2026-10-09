@@ -1,6 +1,6 @@
 export const DESKTOP_ZOOM_MIN_LEVEL = -3;
 export const DESKTOP_ZOOM_MAX_LEVEL = 5;
-export const DESKTOP_ZOOM_FACTOR_STEP = 1.1;
+const DESKTOP_ZOOM_FACTOR_STEP = 1.1;
 
 export function clampDesktopZoomLevel(level: number) {
   return Math.min(DESKTOP_ZOOM_MAX_LEVEL, Math.max(DESKTOP_ZOOM_MIN_LEVEL, level));

@@ -32,7 +32,6 @@ import {
   taskRealtimeReasonSchema,
   taskRunLeaseAcquireRequestSchema,
   taskRunLeaseResultSchema,
-  taskRunLeaseTargetSchema,
   taskStreamMirrorPublishOpSchema,
   taskStreamMirrorTargetSchema,
 } from "./task-realtime-core.js";
@@ -60,7 +59,6 @@ export function formatZodError(error: z.ZodError): string {
 export const nonEmptyStringSchema = z.string().trim().min(1);
 export const stringArraySchema = z.array(z.string());
 export const credentialRecordSchema = z.record(z.string(), z.string());
-export const credentialKeySchema = nonEmptyStringSchema;
 export const credentialValueSchema = z.string();
 
 export const sshConnectOptionsSchema = z.object({
@@ -801,7 +799,7 @@ export const hostTaskRunLeaseAcquireResponseSchema = z.object({
 
 export const hostTaskRunLeaseReleaseResponseSchema = z.object({
   type: z.literal("task-run-lease-release"),
-  target: taskRunLeaseTargetSchema,
+  target: taskStreamMirrorTargetSchema,
 });
 
 export const hostTaskOwnerCommandRequestResponseSchema = z.object({
@@ -1195,10 +1193,6 @@ export const zcodeTaskGoalChangedPatchSchema = z.object({
   target: zcodeTaskGoalSchema.nullable(),
   previousTarget: zcodeTaskGoalSchema.nullable().optional(),
 });
-
-export const zcodeTaskTargetStatusSchema = zcodeTaskGoalStatusSchema;
-export const zcodeTaskTargetSchema = zcodeTaskGoalSchema;
-export const zcodeTaskTargetChangedPatchSchema = zcodeTaskGoalChangedPatchSchema;
 
 // Legacy 文件允许省略 mode；先校验共同元信息，再用 safeExtend 收紧现代任务契约，
 // 避免在带迁移 refinement 的对象上放宽字段导致模块加载失败或绕过关联校验。

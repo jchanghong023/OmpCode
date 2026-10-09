@@ -6,7 +6,6 @@ import type {
   ZCodeProviderAccountAccess,
 } from "@zcode/shared";
 import type { IUsageStatsService } from "@zcode/services";
-import { useOptionalBaseWorkspaceServices } from "@/hooks/useWorkspaceServices.js";
 import { useStableAccountAccess } from "@/hooks/useStableAccountAccess.js";
 import { logger } from "@/logger.js";
 import {
@@ -143,11 +142,6 @@ export interface UseUsageEntitlementOptions {
   cacheKey?: string;
   refreshOnMount?: boolean;
   mountRefreshReason?: "initial" | "access";
-}
-
-export function useUsageEntitlement(options: UseUsageEntitlementOptions = {}) {
-  const services = useOptionalBaseWorkspaceServices();
-  return useUsageEntitlementWithService(services?.usageStatsService, options);
 }
 
 export function useUsageEntitlementWithService(

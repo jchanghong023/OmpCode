@@ -1,4 +1,3 @@
-import type { ZCodeUsage } from "@zcode/shared";
 import type { TaskUsageState } from "@/store/zcodeSessionStoreTypes.js";
 
 interface TaskUsageKeyParams {
@@ -72,32 +71,4 @@ export function buildTaskContextUsageFromUsageUpdate(
   }
 
   return usageWithRetainedBreakdown;
-}
-
-export function buildPromptCompletionUsageFallback(
-  params: TaskUsageKeyParams & {
-    currentUsage: TaskUsageState | null | undefined;
-    currentContextWindow?: number | null;
-    usage?: ZCodeUsage;
-  },
-): TaskUsageState | null {
-  const { currentUsage, currentContextWindow, usage } = params;
-  const contextWindow = currentContextWindow ?? currentUsage?.size ?? null;
-  if (!contextWindow || contextWindow <= 0) {
-    return null;
-  }
-  if (!usage || !Number.isFinite(usage.totalTokens) || usage.totalTokens <= 0) {
-    return null;
-  }
-  if (taskContextUsageUpdateKeys.has(buildTaskUsageKey(params))) {
-    return null;
-  }
-
-  // Bugfix: task_complete.usage 是本轮 prompt 的 token 统计，不是上下文窗口快照。
-  // 只有从未收到过正数 usage_update 的 provider 才把它当弱 fallback，避免覆盖 zcode-cli/GLM 的真实 context used。
-  return {
-    ...currentUsage,
-    size: contextWindow,
-    used: Math.min(contextWindow, Math.max(currentUsage?.used ?? 0, usage.totalTokens)),
-  };
 }

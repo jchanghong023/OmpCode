@@ -32,7 +32,7 @@ const FEISHU_WEBSOCKET_START_TIMEOUT_MS = 20_000;
 const FEISHU_WEBSOCKET_READY_POLL_MS = 100;
 // 修复原因：飞书 Card JSON 2.0 最多允许 200 个组件或元素。预留 20 个元素给
 // 状态行和服务端计数差异，避免长任务在更新阶段被 11310 拒绝后整轮熔断。
-export const FEISHU_STREAMING_CARD_TAGGED_ELEMENT_BUDGET = 180;
+const FEISHU_STREAMING_CARD_TAGGED_ELEMENT_BUDGET = 180;
 const WEBSOCKET_OPEN_READY_STATE = 1;
 
 interface FeishuAccessTokenResponse {
@@ -1008,11 +1008,11 @@ function countTaggedElements(value: unknown): number {
   );
 }
 
-export function countFeishuCardTaggedElements(state: BotStreamingReplyCardState): number {
+function countFeishuCardTaggedElements(state: BotStreamingReplyCardState): number {
   return countTaggedElements(buildFeishuStreamingCardPayload(state));
 }
 
-export function splitFeishuStreamingCardStates(
+function splitFeishuStreamingCardStates(
   state: BotStreamingReplyCardState,
 ): BotStreamingReplyCardState[] {
   const blockGroups: BotStreamingReplyCardState["blocks"][] = [];
@@ -1424,7 +1424,7 @@ async function readFeishuAppSecret(
   return deps.loadCredential(bot.credentialRef);
 }
 
-export function createFeishuWebSocketEventHandlers(params: {
+function createFeishuWebSocketEventHandlers(params: {
   bot: BotConfig;
   onPayload: (payload: unknown) => Promise<BotOutboundMessage | undefined>;
 }) {

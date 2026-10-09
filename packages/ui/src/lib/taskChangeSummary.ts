@@ -11,14 +11,6 @@ interface TaskChangeSummaryIntl {
   formatMessage: (desc: { id: string }, values?: Record<string, string>) => string;
 }
 
-interface AggregatedFileChange {
-  path: string;
-  originalContent: string | null;
-  finalContent: string;
-  writeCount: number;
-  lastTurnIndex: number;
-}
-
 function trimTrailingSeparators(path: string): string {
   return path.replace(/[\\/]+$/, "");
 }
@@ -80,64 +72,6 @@ export function toWorkspaceRelativePath(workspacePath: string, filePath: string)
   return normalizedFilePath;
 }
 
-export function buildTaskChangeSummary(
-  fileChanges: readonly ZCodePersistedFileChange[] | undefined,
-): ZCodeTaskChangeSummary | null {
-  if (!fileChanges || fileChanges.length === 0) {
-    return null;
-  }
-
-  const changedFileMap = new Map<string, AggregatedFileChange>();
-
-  for (const turn of fileChanges) {
-    for (const snapshot of turn.snapshots) {
-      const existing = changedFileMap.get(snapshot.path);
-      if (existing) {
-        existing.finalContent = snapshot.afterContent;
-        existing.writeCount += snapshot.writeCount;
-        existing.lastTurnIndex = turn.turnIndex;
-        continue;
-      }
-
-      changedFileMap.set(snapshot.path, {
-        path: snapshot.path,
-        originalContent: snapshot.beforeContent,
-        finalContent: snapshot.afterContent,
-        writeCount: snapshot.writeCount,
-        lastTurnIndex: turn.turnIndex,
-      });
-    }
-  }
-
-  if (changedFileMap.size === 0) {
-    return null;
-  }
-
-  let added = 0;
-  let removed = 0;
-  const files: ZCodeTaskChangedFileSummary[] = Array.from(changedFileMap.values())
-    .map((file) => {
-      const fileStat = computeLineChangeStat(file.originalContent, file.finalContent);
-      added += fileStat.added;
-      removed += fileStat.removed;
-      return {
-        path: file.path,
-        added: fileStat.added,
-        removed: fileStat.removed,
-        writeCount: file.writeCount,
-        lastTurnIndex: file.lastTurnIndex,
-      };
-    })
-    .sort((left, right) => left.path.localeCompare(right.path));
-
-  return {
-    fileCount: files.length,
-    added,
-    removed,
-    files,
-  };
-}
-
 export function buildTurnChangeSummary(
   turn: ZCodePersistedFileChange | null | undefined,
 ): ZCodeTaskChangeSummary | null {
@@ -195,28 +129,4 @@ export function buildTurnChangeSummary(
     removed,
     files,
   };
-}
-
-/**
- * 从 fileChanges 中按轮次构建 per-turn 文件变更摘要。
- * 用于在每条 assistant 消息下方显示该轮的文件改动。
- */
-export function buildPerTurnChangeSummaries(
-  fileChanges: readonly ZCodePersistedFileChange[] | undefined,
-): Map<number, ZCodeTaskChangeSummary> {
-  const result = new Map<number, ZCodeTaskChangeSummary>();
-  if (!fileChanges || fileChanges.length === 0) {
-    return result;
-  }
-
-  for (const turn of fileChanges) {
-    const summary = buildTurnChangeSummary(turn);
-    if (!summary) {
-      continue;
-    }
-
-    result.set(turn.turnIndex, summary);
-  }
-
-  return result;
 }

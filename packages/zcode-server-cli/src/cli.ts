@@ -51,24 +51,21 @@ const stdout = (io: CliIO, value: unknown): void =>
 const stderr = (io: CliIO, value: unknown): void =>
   io.stderr?.write(`${value instanceof Error ? value.message : String(value)}\n`);
 
-export function serviceRegistrationEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+function serviceRegistrationEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
   return env.ZCODE_SERVER_SKIP_SERVICE_REGISTRATION !== "1";
 }
 
-export function daemonStartupMode(env: NodeJS.ProcessEnv = process.env): "service" | "fallback" {
+function daemonStartupMode(env: NodeJS.ProcessEnv = process.env): "service" | "fallback" {
   return serviceRegistrationEnabled(env) ? "service" : "fallback";
 }
 
-export function isRegisteredServiceEntry(args: readonly string[]): boolean {
+function isRegisteredServiceEntry(args: readonly string[]): boolean {
   return args.includes("--service-entry");
 }
 
-export const SERVER_SERVICE_ARGS = ["serve", "--supervisor"] as const;
+const SERVER_SERVICE_ARGS = ["serve", "--supervisor"] as const;
 
-export function shouldRegisterService(
-  daemonRequested: boolean,
-  supervisorProcess: boolean,
-): boolean {
+function shouldRegisterService(daemonRequested: boolean, supervisorProcess: boolean): boolean {
   return daemonRequested && !supervisorProcess;
 }
 
@@ -310,7 +307,7 @@ async function runServe(
 // 旧 Core ready 等待以及旧 Core ready 超时后的再次停止，默认有界预算约为 51 秒，另需
 // 为 current/pending 文件操作和 IPC 调度留出余量。客户端超时必须覆盖完整回滚路径，
 // 否则 CLI 会在 update 仍在后台执行时误报超时。
-export const APPLY_UPDATE_TIMEOUT_MS = 90_000;
+const APPLY_UPDATE_TIMEOUT_MS = 90_000;
 
 async function runControl(
   command: string,

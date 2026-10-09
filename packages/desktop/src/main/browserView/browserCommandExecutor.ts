@@ -25,13 +25,7 @@ import { now, readState } from "./browserCommandState.js";
 import type { ControlledView } from "./browserCommandTypes.js";
 import { handlePlaywrightAction } from "./browserPlaywrightExecutor.js";
 
-export { isAllowedBrowserUrl } from "./browserCommandState.js";
-export type {
-  BrowserPoint,
-  ControlledView,
-  ControlledViewCdp,
-  ControlledViewWebContents,
-} from "./browserCommandTypes.js";
+export type { ControlledView } from "./browserCommandTypes.js";
 
 /**
  * 核心子集：navigate / getState / screenshot / snapshot / click / type / press / scroll；

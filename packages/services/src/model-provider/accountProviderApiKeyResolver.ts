@@ -10,7 +10,7 @@ import {
   type RemoteCustomerInfo,
 } from "./accountProviderApiTypes.js";
 
-export function pickOrgAndProject(customerInfo: RemoteCustomerInfo): {
+function pickOrgAndProject(customerInfo: RemoteCustomerInfo): {
   organizationId: string;
   projectId: string;
 } | null {

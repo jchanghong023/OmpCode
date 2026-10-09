@@ -1,20 +1,11 @@
 import { memo, useMemo } from "react";
 import type { BundledTheme } from "shiki";
-import {
-  buildHighlightedLightweightDiffCode,
-  getHighlightedLightweightDiffLine,
-  HighlightedLightweightDiffPreview,
-} from "@/components/ui/highlighted-lightweight-diff-preview.js";
+import { HighlightedLightweightDiffPreview } from "@/components/ui/highlighted-lightweight-diff-preview.js";
 import { inferCodeLanguage, type PatchCodeViewerSource } from "@/lib/codeViewer.js";
 import { getPlainTextPatchPreviewLines } from "@/lib/patchDiffPreview.js";
 import type { CodePreviewSettings } from "@/lib/codePreviewSettings.js";
 import { DEFAULT_CODE_PREVIEW_SETTINGS } from "@/lib/codePreviewSettings.js";
 import type { Theme } from "@/useTheme.js";
-
-export {
-  buildHighlightedLightweightDiffCode as buildInlineDiffHighlightCode,
-  getHighlightedLightweightDiffLine as getInlineDiffHighlightLine,
-};
 
 function resolveInlineDiffHighlightTheme(
   theme: Theme | undefined,

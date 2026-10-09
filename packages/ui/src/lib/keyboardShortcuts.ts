@@ -94,16 +94,6 @@ function matchesPrimaryModifier(
   return isApple ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey;
 }
 
-export function matchesCtrlShortcut(event: PrimaryShortcutKeyboardEvent, key: string): boolean {
-  return (
-    event.ctrlKey &&
-    !event.metaKey &&
-    !event.shiftKey &&
-    !event.altKey &&
-    matchesShortcutKey(event, key)
-  );
-}
-
 function matchesShortcutKey(
   event: Pick<PrimaryShortcutKeyboardEvent, "key" | "code">,
   key: string,

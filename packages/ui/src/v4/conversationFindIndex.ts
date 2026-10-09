@@ -3,7 +3,7 @@ import type { ChatSearchResultHighlightRequest } from "@/v4/legacyChatViewTypes.
 import type { ConversationTurnRenderUnit } from "@/v4/conversationTurnRenderUnits.js";
 import { projectAssistantCodeComments } from "@/lib/assistantCodeComment.js";
 
-export type ConversationFindRowKind = "userInput" | "assistantText";
+type ConversationFindRowKind = "userInput" | "assistantText";
 
 export interface ConversationFindMatch {
   globalIndex: number;

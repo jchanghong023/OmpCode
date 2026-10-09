@@ -15,12 +15,9 @@ import {
   type ZCodeMessageWithParts,
   type ModelSelection,
   type ZCodeSessionMode,
-  type ZCodeSessionSettingsState,
   type ZCodeSessionStateSnapshot,
 } from "@zcode/shared";
 
-const MODEL_CONFIG_ID = "model";
-const THOUGHT_LEVEL_CONFIG_ID = "thought_level";
 const MODE_CONFIG_ID = "mode";
 const ZCODE_AGENT_MODE_OPTIONS = [
   {
@@ -85,60 +82,6 @@ export function parseModelPickerValue(value: string): ModelSelection {
   return parseSharedModelSelection(value);
 }
 
-export function zcodeSessionSettingsToConfigOptions(
-  settings: ZCodeSessionSettingsState,
-): ZCodeConfigOption[] {
-  const configOptions: ZCodeConfigOption[] = [
-    {
-      id: MODEL_CONFIG_ID,
-      name: "Model",
-      category: "model",
-      type: "select",
-      currentValue: formatModelPickerValue(settings.model.current),
-      options: settings.model.available.map((model) => {
-        const modelThoughtLevels = model.reasoning?.levels.map((level) => level.value);
-        const modelDefaultThoughtLevel =
-          model.reasoning?.defaultLevel &&
-          modelThoughtLevels?.includes(model.reasoning.defaultLevel)
-            ? model.reasoning.defaultLevel
-            : undefined;
-        return {
-          value: formatModelPickerValue(model.ref),
-          name: model.label,
-          description: model.description,
-          modelProviderId: model.ref.providerId,
-          modelProviderName: model.providerLabel ?? model.ref.providerId,
-          ...(modelThoughtLevels ? { modelThoughtLevels } : {}),
-          ...(modelDefaultThoughtLevel ? { modelDefaultThoughtLevel } : {}),
-        };
-      }),
-    },
-    {
-      id: MODE_CONFIG_ID,
-      name: "Mode",
-      category: "mode",
-      type: "select",
-      currentValue: normalizeAvailableZCodeMode(settings.mode.current),
-      options: getZCodeAgentModeSelectOptions(),
-    },
-  ];
-  if (settings.thoughtLevel.enabled) {
-    configOptions.push({
-      id: THOUGHT_LEVEL_CONFIG_ID,
-      name: "Thought Level",
-      category: "thought_level",
-      type: "select",
-      currentValue: resolveSettingsThoughtLevelCurrentValue(settings.thoughtLevel) ?? "",
-      options: settings.thoughtLevel.available.map((level) => ({
-        value: level.value,
-        name: level.label,
-        description: level.description,
-      })),
-    });
-  }
-  return configOptions;
-}
-
 export function zcodeWorkspacePresentationToConfigOptions(
   mode: ZCodeSessionMode,
 ): ZCodeConfigOption[] {
@@ -152,23 +95,6 @@ export function zcodeWorkspacePresentationToConfigOptions(
       options: getZCodeAgentModeSelectOptions(),
     },
   ];
-}
-
-function resolveSettingsThoughtLevelCurrentValue(
-  thoughtLevel: ZCodeSessionSettingsState["thoughtLevel"],
-): string | undefined {
-  const thoughtLevelValues = new Set(thoughtLevel.available.map((level) => level.value));
-  const currentThoughtLevel =
-    thoughtLevel.current && thoughtLevelValues.has(thoughtLevel.current)
-      ? thoughtLevel.current
-      : undefined;
-  const defaultThoughtLevel =
-    thoughtLevel.defaultLevel && thoughtLevelValues.has(thoughtLevel.defaultLevel)
-      ? thoughtLevel.defaultLevel
-      : undefined;
-  // ZCode Protocol 的 defaultLevel 是模型事实，current 为空时表示用户尚未显式修改。
-  // 实时模型状态事件也要投影默认值，否则工具栏会拿到空 currentValue，出现没有档位被选中的 UI。
-  return currentThoughtLevel ?? defaultThoughtLevel ?? thoughtLevel.available[0]?.value;
 }
 
 export function zcodeSessionSnapshotToTaskMeta(snapshot: ZCodeSessionStateSnapshot): ZCodeTaskMeta {

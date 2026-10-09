@@ -11,7 +11,6 @@
     "lint": "oxlint"
   },
   "dependencies": {
-    "@zcode/model-option-map": "workspace:*",
     "@zcode/shared": "workspace:*",
     "zod": "4.6.5"
   },

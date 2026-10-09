@@ -41,7 +41,7 @@ export function groupResourceUsage(
   });
 }
 
-export function roundPercent(value: number): number {
+function roundPercent(value: number): number {
   return Number.isFinite(value) ? Math.round(value * 10) / 10 : 0;
 }
 

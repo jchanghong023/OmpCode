@@ -7,13 +7,13 @@ export interface RemoteEnvelope<T> {
   data?: T;
 }
 
-export interface RemoteProjectInfo {
+interface RemoteProjectInfo {
   projectId?: string;
   projectName?: string;
   projectType?: number | string | null;
 }
 
-export interface RemoteOrganizationInfo {
+interface RemoteOrganizationInfo {
   organizationId?: string;
   organizationName?: string;
   projects?: RemoteProjectInfo[];

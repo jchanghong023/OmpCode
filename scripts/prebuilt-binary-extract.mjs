@@ -35,7 +35,7 @@ function resolveTarArchiveArg(archivePath, cwd) {
   return toTarPosixPath(archivePath);
 }
 
-export function extractPrebuiltArchive({ archivePath, archiveExt, extractDir, cwd }) {
+function extractPrebuiltArchive({ archivePath, archiveExt, extractDir, cwd }) {
   mkdirSync(extractDir, { recursive: true });
   if (archiveExt === "zip") {
     if (process.platform === "win32") {
@@ -64,7 +64,7 @@ export function extractPrebuiltArchive({ archivePath, archiveExt, extractDir, cw
   );
 }
 
-export function findPrebuiltBinary(rootDir, binaryName) {
+function findPrebuiltBinary(rootDir, binaryName) {
   const entries = readdirSync(rootDir, { withFileTypes: true });
   for (const entry of entries) {
     const fullPath = join(rootDir, entry.name);

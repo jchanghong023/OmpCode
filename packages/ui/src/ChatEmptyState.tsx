@@ -47,10 +47,6 @@ import {
   type WorkspacePurpose,
 } from "@zcode/shared";
 import { runUserAction, runUserActionAsync } from "@/lib/userActionTelemetry.js";
-export {
-  getScratchWorkspaceLocationHint,
-  getScratchWorkspaceNameErrorKind,
-} from "@/ChatEmptyScratchWorkspaceDialog.js";
 
 // ---------------------------------------------------------------------------
 // Workspace 路径工具函数

@@ -49,12 +49,6 @@ function readRuntimePackage(moduleLookupRoots, moduleName, parentPackagePath = n
   return null;
 }
 
-export function collectRuntimeModuleClosure(moduleNames, moduleLookupRoots) {
-  return collectRuntimeModuleClosureEntries(moduleNames, moduleLookupRoots).map(
-    (entry) => entry.moduleName,
-  );
-}
-
 export function collectRuntimeModuleClosureEntries(moduleNames, moduleLookupRoots) {
   const collected = [];
   const visited = new Set();

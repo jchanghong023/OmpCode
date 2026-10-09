@@ -43,7 +43,7 @@ export function resolveAutomationStatusKind(
 /** cron builder 支持的频率类型（覆盖 Feishu 自定义重复里最常用的几种）。 */
 export type CronFrequency = "hourly" | "daily" | "weekdays" | "weekly" | "monthly" | "custom";
 export type CustomRepeatUnit = "minute" | "hourly" | "daily" | "weekly" | "monthly" | "yearly";
-export type CustomMonthlyMode = "date" | "weekday";
+type CustomMonthlyMode = "date" | "weekday";
 
 export interface CronBuilderState {
   frequency: CronFrequency;

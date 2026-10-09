@@ -26,7 +26,7 @@ interface BigModelBizEnvelope<T> {
   data?: T | null;
 }
 
-export type BigModelTeamPlanApiKeyEnsureStatus = "existing" | "created" | "missing";
+type BigModelTeamPlanApiKeyEnsureStatus = "existing" | "created" | "missing";
 
 export interface BigModelTeamPlanApiKeyEnsureResult {
   apiKey: BigModelTeamPlanApiKeySummary | null;
@@ -34,7 +34,7 @@ export interface BigModelTeamPlanApiKeyEnsureResult {
   status: BigModelTeamPlanApiKeyEnsureStatus;
 }
 
-export interface BigModelTeamPlanApiKeyEnsureDiagnostics {
+interface BigModelTeamPlanApiKeyEnsureDiagnostics {
   create?: BigModelBizEnvelopeDiagnostics & {
     dataHasApiKey: boolean;
     dataKeyType: number | null;
@@ -46,7 +46,7 @@ export interface BigModelTeamPlanApiKeyEnsureDiagnostics {
   };
 }
 
-export interface BigModelBizEnvelopeDiagnostics {
+interface BigModelBizEnvelopeDiagnostics {
   code: number | null;
   msg: string | null;
   success: boolean | null;

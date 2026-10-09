@@ -19,7 +19,7 @@ function workspaceKey(
 }
 
 /** 公开事件与冷列表使用相同校验、身份边界和唯一草稿迁移入口。 */
-export function consumeComposerDraftMigration(
+function consumeComposerDraftMigration(
   scope: WorkspaceDraftMigrationScope,
   value: unknown,
   kind: "event" | "meta",

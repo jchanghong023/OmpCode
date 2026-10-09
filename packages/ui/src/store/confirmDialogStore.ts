@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { logger } from "@/logger.js";
 
-export interface ConfirmDialogRequest {
+interface ConfirmDialogRequest {
   title: string;
   testId?: string;
   description?: string;

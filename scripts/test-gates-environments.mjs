@@ -14,7 +14,7 @@ export async function environmentConfig() {
 // 配置例：stages[阶段ID] = { prepare:{command,args}, environmentFile, cleanup:{command,args} }。
 // prepare 是用户提供的隔离 fixture 生命周期适配器，不是检查或另一技能。
 // environmentFile = { snapshot:{head,contentHash}, isolatedRoot, env:{...} }。
-export async function fixtureStage(stage, context) {
+async function fixtureStage(stage, context) {
   const setup = context.environments.stages?.[stage.id];
   if (!setup)
     return missing(

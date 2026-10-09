@@ -1,8 +1,6 @@
-import type { AppUsageRange } from "@zcode/shared";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
 import { formatCompactTokenNumber } from "@/lib/tokenNumberFormat.js";
 
-export const RANGE_OPTIONS: AppUsageRange[] = ["7d", "30d"];
 export const USAGE_STATS_TABS_LIST_CLASS =
   "flex h-7 rounded-full bg-surface p-0.5 group-data-horizontal/tabs:h-7";
 export const USAGE_STATS_TABS_TRIGGER_CLASS =

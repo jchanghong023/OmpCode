@@ -146,12 +146,12 @@ const CONCURRENT_LIMIT_MESSAGE_PATTERNS = ["concurrent", "concurrency", "并发"
 
 const MODEL_SCOPED_CONCURRENT_LIMIT_MESSAGE_PATTERNS = ["model", "模型"];
 
-export const START_PLAN_BUSY_AUTO_RETRY_EXHAUSTED_MESSAGE =
+const START_PLAN_BUSY_AUTO_RETRY_EXHAUSTED_MESSAGE =
   "Start Plan is busy and automatic model stream recovery reached the maximum retry count.";
 
 export type StartPlanConcurrentLimitBannerReason = "initial-busy" | "retry-exhausted-busy";
 
-export const GLM_QUOTA_BANNER_BUSINESS_CODES = [
+const GLM_QUOTA_BANNER_BUSINESS_CODES = [
   "1308",
   "1309",
   "1310",
@@ -233,7 +233,7 @@ export function resolveStartPlanConcurrentLimitBannerReason(
 }
 
 /** 与 core `model-errors.ts` 中 anomaly guard 文案保持一致。 */
-export const SUSPICIOUS_EMPTY_MODEL_RESULT_MESSAGE =
+const SUSPICIOUS_EMPTY_MODEL_RESULT_MESSAGE =
   "Model returned no text, no tool calls, and no usage before completing the turn.";
 
 /**

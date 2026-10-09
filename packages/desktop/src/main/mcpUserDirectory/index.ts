@@ -19,9 +19,6 @@ import type { McpConfigKeyName } from "./types.js";
 import { isRecord, readJsonObject, writeTextAtomic } from "./utils.js";
 import { migrateLegacyCommonMcp } from "./legacy.js";
 
-// 重新导出类型和函数
-export type { McpConfigKeyName, McpSourceDescriptor } from "./types.js";
-export { MCP_SOURCE_DESCRIPTORS, getSourceDescriptor } from "./types.js";
 export { migrateLegacyCommonMcp } from "./legacy.js";
 
 interface DirectoryMcpDescriptor {

@@ -1,7 +1,6 @@
 import { z } from "zod";
 import { modelConfigDataSchema } from "@zcode/shared/model-config";
 import { manualModelConfigSchema } from "./manual-model-config.js";
-export { manualModelConfigSchema, type ManualModelConfig } from "./manual-model-config.js";
 import {
   apiKeyAccessDataSchema,
   personalProviderApiDataSchema,
@@ -23,20 +22,20 @@ const patternSchema = z
     }
   }, "无效匹配正则");
 
-export const modelMatchConfigRuleSchema = z
+const modelMatchConfigRuleSchema = z
   .object({
     modelMatch: patternSchema,
     config: modelConfigDataSchema,
   })
   .strict();
-export const modelApiMatchConfigRuleSchema = modelMatchConfigRuleSchema.extend({
+const modelApiMatchConfigRuleSchema = modelMatchConfigRuleSchema.extend({
   apiTypeMatch: patternSchema,
 });
-export const providerSiteMatchConfigRuleSchema = modelMatchConfigRuleSchema.extend({
+const providerSiteMatchConfigRuleSchema = modelMatchConfigRuleSchema.extend({
   baseUrlMatch: patternSchema,
   apiTypeMatch: patternSchema.optional(),
 });
-export const templateModelConfigRuleSchema = z
+const templateModelConfigRuleSchema = z
   .object({
     templateId: idSchema,
     modelId: idSchema,

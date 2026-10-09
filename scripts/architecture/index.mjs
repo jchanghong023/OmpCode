@@ -386,5 +386,3 @@ export function formatMarkdownReport(result) {
   }
   return lines.join("\n");
 }
-
-export { loadPolicy };

@@ -1,8 +1,5 @@
 export type {
-  EditKindLabelId,
   EditKindSource,
-  EditOperationKind,
-  RawToolCallFileSummary,
   ToolCallBlockRenderContext,
   WorkflowDraftPosition,
   WorkflowRunCardSummary,

@@ -18,7 +18,7 @@ export interface FeedbackUploadProgress {
   totalBytes: number;
 }
 
-export interface FeedbackCreateOptions {
+interface FeedbackCreateOptions {
   operationId?: string;
 }
 

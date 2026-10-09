@@ -8,14 +8,14 @@ import {
 } from "@zcode/shared";
 import { normalizeAskUserQuestionInput, readAskUserQuestionInput } from "@/lib/askUserQuestion.js";
 
-export type ToolCallPresentationFamily =
+type ToolCallPresentationFamily =
   | ZCodeToolFamily
   | "plan-guidance"
   | "switch-mode"
   | "explore"
   | "unknown";
 
-export type ToolCallIdentitySource =
+type ToolCallIdentitySource =
   | "toolName"
   | "kind"
   | "title"

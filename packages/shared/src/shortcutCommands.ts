@@ -42,7 +42,7 @@ export type ShortcutCommandId =
  * composer = 聊天输入框聚焦时由 Lexical 键盘行为插件消费，其余分发方零感知。
  * Enter 族键因此可以安全入表——杀伤半径被限制在输入框内。
  */
-export type ShortcutScope = "global" | "composer";
+type ShortcutScope = "global" | "composer";
 
 export interface ShortcutCommandEntry {
   readonly id: ShortcutCommandId;

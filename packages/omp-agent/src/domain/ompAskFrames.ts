@@ -4,7 +4,7 @@
 
 import { z } from "zod";
 
-export const ompAskOptionSchema = z.object({
+const ompAskOptionSchema = z.object({
   label: z.string(),
   description: z.string().optional(),
   preview: z.string().optional(),

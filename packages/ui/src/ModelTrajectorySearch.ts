@@ -6,7 +6,7 @@ import {
   trajectoryToolOutputs,
 } from "@/ModelTrajectoryToolPayload.js";
 
-export type TrajectorySearchField = "content" | "tool-name" | "tool-id";
+type TrajectorySearchField = "content" | "tool-name" | "tool-id";
 
 export interface TrajectorySearchMatch {
   key: string;

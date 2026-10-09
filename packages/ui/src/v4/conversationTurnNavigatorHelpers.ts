@@ -1,6 +1,6 @@
 import type { ConversationTurnRenderUnit } from "@/v4/conversationTurnRenderUnits.js";
 
-export type ConversationTurnNavigatorAssistantPreviewKind = "empty" | "running" | "text";
+type ConversationTurnNavigatorAssistantPreviewKind = "empty" | "running" | "text";
 
 export interface ConversationTurnNavigatorItem {
   key: string;

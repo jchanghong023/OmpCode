@@ -1,15 +1,5 @@
 // feedback 与模型连通性曾分别维护错误码列表，导致 Undici 建连超时只在部分链路被识别。
 // 统一沿 cause/AggregateError 链归一化错误，避免调用方再次因运行时包装层级不同而漏判。
-const NETWORK_FAILURE_CODES = new Set([
-  "UND_ERR_CONNECT_TIMEOUT",
-  "UND_ERR_CONNECT_ERROR",
-  "ENOTFOUND",
-  "ETIMEDOUT",
-  "ENETUNREACH",
-  "EHOSTUNREACH",
-  "ECONNREFUSED",
-  "ECONNRESET",
-]);
 
 const RETRYABLE_CONNECTION_ESTABLISHMENT_CODES = new Set([
   "UND_ERR_CONNECT_TIMEOUT",
@@ -27,11 +17,6 @@ interface NetworkErrorDetails {
 
 export function getNetworkErrorCodes(error: unknown): string[] {
   return [...collectNetworkErrorDetails(error).codes].sort();
-}
-
-export function isNetworkFailure(error: unknown): boolean {
-  const { codes } = collectNetworkErrorDetails(error);
-  return [...codes].some((code) => NETWORK_FAILURE_CODES.has(code));
 }
 
 export function isRetryableConnectionEstablishmentError(error: unknown): boolean {

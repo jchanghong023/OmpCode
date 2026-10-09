@@ -4,14 +4,6 @@ import type { ZCodeTaskMeta } from "@zcode/shared";
 import type { GroupedDraftTaskPlacement } from "@/store/zcodeSessionStoreTypes.js";
 import { taskKey } from "@/workspace-grouped-tasks/ids.js";
 
-function cloneView(view: ZCodeGroupedTaskView): ZCodeGroupedTaskView {
-  return {
-    nodes: view.nodes.map((node) =>
-      node.type === "task" ? { ...node } : { ...node, tasks: [...node.tasks] },
-    ),
-  };
-}
-
 function cloneNodes(view: ZCodeGroupedTaskView): ZCodeGroupedTaskViewNode[] {
   return [...view.nodes];
 }
@@ -72,31 +64,6 @@ function insertTaskIntoGroup(
   nextGroupNode.tasks.splice(insertIndex < 0 ? nextGroupNode.tasks.length : insertIndex, 0, task);
   nodes[groupIndex] = nextGroupNode;
   return { nodes };
-}
-
-function removeTaskFromGroupedView(
-  view: ZCodeGroupedTaskView,
-  targetTaskKey: string,
-): ZCodeGroupedTaskView {
-  const nextView = cloneView(view);
-  for (const node of nextView.nodes) {
-    if (node.type !== "group") {
-      continue;
-    }
-    const taskIndex = node.tasks.findIndex((task) => taskKey(task) === targetTaskKey);
-    if (taskIndex >= 0) {
-      node.tasks.splice(taskIndex, 1);
-      return nextView;
-    }
-  }
-
-  const nodeIndex = nextView.nodes.findIndex(
-    (node) => node.type === "task" && taskKey(node.task) === targetTaskKey,
-  );
-  if (nodeIndex >= 0) {
-    nextView.nodes.splice(nodeIndex, 1);
-  }
-  return nextView;
 }
 
 function filterGroupedViewByTaskKeys(
@@ -562,7 +529,6 @@ function moveTaskToTopByMenu(
 
 export {
   areAllGroupedTaskGroupsExpanded,
-  cloneView,
   filterGroupedViewByTaskKeys,
   findTaskInGroupedView,
   getGroupedTaskGroupIds,
@@ -574,8 +540,6 @@ export {
   moveTaskToRootAroundGroup,
   moveTaskOverTask,
   pruneCollapsedGroupedTaskGroupIds,
-  removeTaskFromGroupedView,
   replaceTaskInGroupedView,
   resolveGroupedDraftTaskPlacementForTask,
 };
-export type { GroupedTaskInsertPosition };

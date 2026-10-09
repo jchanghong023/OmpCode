@@ -5,7 +5,6 @@ import {
   collectTelemetryRendererContext,
   isZaiCodingPlanProviderId,
   sanitizeTelemetryEventDetail,
-  type BuiltinModelProviderId,
   type IPlatformService,
 } from "@zcode/shared";
 import { logger } from "@/logger.js";
@@ -25,10 +24,6 @@ export function resolveProviderTelemetryLabel(providerId: string): string {
   }
 
   return providerId;
-}
-
-export function resolvePresetModelProviderTelemetryLabel(presetId: BuiltinModelProviderId): string {
-  return resolveProviderTelemetryLabel(presetId);
 }
 
 type ReportTelemetryPlatform = Pick<IPlatformService, "reportTelemetryEvent">;

@@ -53,7 +53,7 @@ import type {
   ZCodeTaskGroupColor,
 } from "#src/session/zcodeTaskListTypes.js";
 
-export interface ZCodeTaskSnapshotWithEtagResult {
+interface ZCodeTaskSnapshotWithEtagResult {
   snapshot: ZCodeTaskSnapshot | null;
   etag?: string;
   notModified?: boolean;

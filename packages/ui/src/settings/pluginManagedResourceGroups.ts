@@ -1,7 +1,6 @@
 import type {
   PluginCommand,
   McpServerStatus,
-  SkillSummary,
   UserCommand,
   ZCodeCommand,
   ZCodeMcpServer,
@@ -146,31 +145,6 @@ function normalizedQueryMatches(query: string, values: readonly (string | undefi
     return true;
   }
   return values.some((value) => value?.toLowerCase().includes(keyword));
-}
-
-export function groupSkillsByPlugin(
-  skills: SkillSummary[],
-  query: string,
-): ResourceGroups<SkillSummary, SkillSummary> {
-  const seenPaths = new Set<string>();
-  const local: SkillSummary[] = [];
-  const plugin: SkillSummary[] = [];
-  for (const skill of skills) {
-    const normalizedPath = skill.path.replaceAll("\\", "/").toLowerCase();
-    if (seenPaths.has(normalizedPath)) {
-      continue;
-    }
-    seenPaths.add(normalizedPath);
-    if (!normalizedQueryMatches(query, [skill.name, skill.description, skill.pluginName])) {
-      continue;
-    }
-    if (skill.scope === "plugin") {
-      plugin.push(skill);
-    } else {
-      local.push(skill);
-    }
-  }
-  return { local, plugin };
 }
 
 export function groupCommandsByPlugin(

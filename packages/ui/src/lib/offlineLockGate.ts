@@ -58,11 +58,6 @@ export function isOfflineLocked(): boolean {
   return currentState.localOnly;
 }
 
-/** 逐功能禁用态只读口（键含义见 offlineGate.ts，全部 true 表示后端已关闭）。 */
-export function getOfflineDisabledFeatures(): OfflineDisabledFeatures {
-  return currentState.disabledFeatures;
-}
-
 /**
  * 供测试或未来同步快照提供方写入状态；业务代码不得绕过平台通道调用。
  * 输入经运行时校验，非法输入忽略并保持原状态。
@@ -110,12 +105,6 @@ export function subscribeOfflineLock(listener: () => void): () => void {
 
 export function getOfflineLockSnapshot(): OfflineGateState {
   return currentState;
-}
-
-/** React 消费口：整体锁定态（localOnly）。 */
-export function useOfflineLock(): boolean {
-  return useSyncExternalStore(subscribeOfflineLock, getOfflineLockSnapshot, getOfflineLockSnapshot)
-    .localOnly;
 }
 
 /** React 消费口：单个功能的禁用态（键见 offlineGate.ts 的门控面清单）。 */

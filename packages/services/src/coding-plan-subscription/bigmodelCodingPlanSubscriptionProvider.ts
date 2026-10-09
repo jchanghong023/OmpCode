@@ -1325,7 +1325,7 @@ function dropUndefined(value: Record<string, unknown>): Record<string, unknown> 
  * 来自 ZCode Built-in Provider / Model Config。
  * mock 模式（ZCODE_OFFPEAK_MOCK=1）只替代产品曝光与套餐状态；模型候选仍来自 Registry。
  */
-export function resolveOffPeakClientConfig(
+function resolveOffPeakClientConfig(
   payload: ZCodeClientConfigEnvelope,
   env: NodeJS.ProcessEnv,
   modelSelectionView: ModelSelectionView = EMPTY_OFF_PEAK_MODEL_SELECTION_VIEW,

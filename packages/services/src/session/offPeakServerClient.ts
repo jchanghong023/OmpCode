@@ -16,7 +16,7 @@ import {
 } from "./offPeakRuntimeModel.js";
 
 /** 服务端准入态（两轴状态机的服务端轴）。 */
-export const offPeakTicketStateSchema = z.enum([
+const offPeakTicketStateSchema = z.enum([
   "queued",
   "ready",
   "active",
@@ -24,7 +24,7 @@ export const offPeakTicketStateSchema = z.enum([
   "settled",
   "not_found",
 ]);
-export type OffPeakTicketState = z.infer<typeof offPeakTicketStateSchema>;
+type OffPeakTicketState = z.infer<typeof offPeakTicketStateSchema>;
 
 // 响应字段 snake_case 按服务端 v2；宽容解析（loose），未知字段不报错。
 // ⚠ next_poll_after 单位按"秒"实现（与 Retry-After 同惯例）。
@@ -90,7 +90,7 @@ const errorBodySchema = z
   })
   .passthrough();
 
-export interface OffPeakTakeTicketResult {
+interface OffPeakTakeTicketResult {
   ticketId: string;
   state: OffPeakTicketState;
   position?: number;
@@ -99,14 +99,14 @@ export interface OffPeakTakeTicketResult {
   registeredAt: number;
 }
 
-export interface OffPeakTicketStatusEntry {
+interface OffPeakTicketStatusEntry {
   ticketId: string;
   state: OffPeakTicketState;
   position?: number;
   activeDeadline?: number;
 }
 
-export interface OffPeakBatchStatusResult {
+interface OffPeakBatchStatusResult {
   nextPollAfterMs?: number;
   tickets: OffPeakTicketStatusEntry[];
 }

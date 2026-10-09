@@ -1,6 +1,5 @@
 import { modelSelectionSchema, type ModelSelection } from "@zcode/shared/model-selection";
 import { submissionModeSchema, type SubmissionMode } from "@zcode/shared/zcode-protocol-v4";
-import type { ModelSelectionView } from "@zcode/services";
 import { logger } from "@/logger.js";
 
 // 沿用旧 key，读取时兼容只保存 ModelSelection 的历史记录。
@@ -96,53 +95,6 @@ export function captureComposerRecentSubmission(
       });
     }
   };
-}
-
-export function resolveDraftInitialModelSelection(
-  view: ModelSelectionView | null,
-  recent: ModelSelection | null,
-): { readonly selection: ModelSelection | null; readonly invalidated: boolean } {
-  // Registry 尚未到达时不能把已有草稿意图误判为失效；先原样保留，等同一 Hook
-  // 收到 View 后再做语义校验。
-  if (!view) return { selection: recent, invalidated: false };
-  if (recent) {
-    const model = findModel(view, recent);
-    if (!model) return { selection: null, invalidated: true };
-    const reasoning = recent.options?.reasoningLevel;
-    if (
-      reasoning === undefined ||
-      !model.config.optionSpecs.reasoningLevel.values.includes(reasoning)
-    ) {
-      // 仍保留 Provider/Model 身份，但清空失效档位；Composer 不弹泛化通知，
-      // 让空的 Reasoning 控件直接要求用户作出新的明确选择。
-      return {
-        selection: { providerId: recent.providerId, modelId: recent.modelId },
-        invalidated: true,
-      };
-    }
-    return { selection: recent, invalidated: false };
-  }
-  return {
-    selection:
-      view.preferredSelection && isSelectionInView(view, view.preferredSelection)
-        ? view.preferredSelection
-        : null,
-    invalidated: recent !== null,
-  };
-}
-
-function isSelectionInView(view: ModelSelectionView, selection: ModelSelection): boolean {
-  const model = findModel(view, selection);
-  if (!model) return false;
-  const reasoning = selection.options?.reasoningLevel;
-  const reasoningSpec = model.config.optionSpecs.reasoningLevel;
-  return reasoning !== undefined && reasoningSpec.values.includes(reasoning);
-}
-
-function findModel(view: ModelSelectionView, selection: ModelSelection) {
-  return view.providers
-    .find((provider) => provider.providerId === selection.providerId)
-    ?.models.find((candidate) => candidate.modelId === selection.modelId);
 }
 
 function normalizeSparseModelSelection(selection: ModelSelection): ModelSelection | null {

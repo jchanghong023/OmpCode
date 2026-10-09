@@ -327,7 +327,7 @@ function toErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-export interface CodingPlanQuotaResetTypeController {
+interface CodingPlanQuotaResetTypeController {
   entry: CodingPlanQuotaResetUiEntry | null;
   /** 服务端下发的手动重置机会可见。 */
   opportunityVisible: boolean;

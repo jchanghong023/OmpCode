@@ -26,10 +26,6 @@ import {
   shouldStartRemoteSyncOperation,
 } from "@/settings/RemoteSyncActions.js";
 
-export {
-  RemoteSkillSyncSelectionList,
-  shouldToggleRemoteSkillSyncCardSelection,
-} from "@/settings/RemoteSkillSyncSelectionList.js";
 export type { RemoteSkillSyncRow } from "@/settings/RemoteSkillSyncSelectionList.js";
 
 type Step = "loading" | "selection" | "preflighting" | "syncing" | "complete";

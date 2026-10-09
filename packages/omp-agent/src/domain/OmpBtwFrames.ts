@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { ConversationRow } from "@zcode/shared/zcode-protocol-v4";
 import { rowBaseFields } from "./projectionTypes.js";
 
-export const ompBtwTurnSchema = z.object({
+const ompBtwTurnSchema = z.object({
   question: z.string(),
   answer: z.string(),
   status: z.enum(["running", "complete", "cancelled", "error", "interrupted"]),
@@ -10,7 +10,7 @@ export const ompBtwTurnSchema = z.object({
   updatedAt: z.number(),
   error: z.string().optional(),
 });
-export const ompBtwRecordSchema = ompBtwTurnSchema.extend({
+const ompBtwRecordSchema = ompBtwTurnSchema.extend({
   id: z.string().min(1),
   leafId: z.string().nullable(),
   followUps: z.array(ompBtwTurnSchema).optional(),

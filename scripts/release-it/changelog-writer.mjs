@@ -15,7 +15,7 @@ export const RELEASE_CHANGELOG_PARSER_OPTS = {
   headerCorrespondence: ["type", "scope", "subject"],
 };
 
-export function extractCommitBodyBullets(body) {
+function extractCommitBodyBullets(body) {
   if (typeof body !== "string" || body.trim() === "") {
     return [];
   }

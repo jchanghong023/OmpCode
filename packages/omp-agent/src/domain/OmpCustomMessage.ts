@@ -134,20 +134,6 @@ export function visibleOmpCustomDisplay(value: unknown): {
   return { ...visible, customType: (value as { customType: string }).customType };
 }
 
-export function ompCustomDisplayKey(customType: string, text: string): string {
-  return JSON.stringify([customType, text]);
-}
-
-/** 原生 history 包装与直接 custom entry 共用同一可见性判断。 */
-export function nativeOmpCustomDisplayCounts(entries: readonly unknown[]): Map<string, number> {
-  const counts = new Map<string, number>();
-  for (const visible of nativeOmpCustomDisplays(entries)) {
-    const key = ompCustomDisplayKey(visible.customType, visible.text);
-    counts.set(key, (counts.get(key) ?? 0) + 1);
-  }
-  return counts;
-}
-
 export function nativeOmpCustomDisplays(
   entries: readonly unknown[],
 ): NonNullable<ReturnType<typeof visibleOmpCustomDisplay>>[] {

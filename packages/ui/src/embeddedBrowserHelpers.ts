@@ -88,11 +88,6 @@ export interface BrowserState {
   title: string;
 }
 
-export interface BrowserNavigationRequest {
-  id: string;
-  url: string;
-}
-
 export const INITIAL_BROWSER_STATE: BrowserState = {
   canGoBack: false,
   canGoForward: false,
@@ -119,7 +114,7 @@ export function isCertificateBrowserLoadErrorCode(code: number | null | undefine
   return code >= CERTIFICATE_LOAD_ERROR_CODE_MIN && code <= CERTIFICATE_LOAD_ERROR_CODE_MAX;
 }
 
-export function isAllowedBrowserUrl(url: string): boolean {
+function isAllowedBrowserUrl(url: string): boolean {
   try {
     return ALLOWED_BROWSER_PROTOCOLS.has(new URL(url).protocol);
   } catch {

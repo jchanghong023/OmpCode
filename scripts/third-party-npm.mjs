@@ -15,7 +15,7 @@ const unsupportedCanvas = new Set([
 const noticeName =
   /(?:^|[._-])(?:licen[sc]es?|copying|notice|copyright|unlicense|third.party|ofl)(?:[._-]|$)/iu;
 
-export async function readPackageNotices(directory) {
+async function readPackageNotices(directory) {
   const files = [];
   async function visit(path) {
     for (const entry of await readdir(path, { withFileTypes: true })) {
@@ -65,7 +65,7 @@ function productionPackages(projects) {
   return required;
 }
 
-export function assertProductionGraphs(lockedProjects, installedProjects) {
+function assertProductionGraphs(lockedProjects, installedProjects) {
   const locked = productionPackages(lockedProjects);
   const installed = productionPackages(installedProjects);
   const missing = [...locked].filter(

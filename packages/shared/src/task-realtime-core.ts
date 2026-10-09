@@ -288,7 +288,6 @@ const taskStreamMirrorBatchEventRawSchema = taskRealtimeEnvelopeSchema
     terminal: z.boolean(),
   })
   .strict();
-export const taskRunLeaseTargetSchema = taskStreamMirrorTargetSchema;
 export const taskRunLeaseAcquireRequestSchema = taskStreamMirrorTargetRawSchema
   .extend({
     leaseRequestId: nonEmptyString,

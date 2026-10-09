@@ -13,8 +13,8 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
-export const CENTOS7_DESKTOP_ENV_FLAG = "OMPCODE_CENTOS7_DESKTOP";
-export const CENTOS7_DESKTOP_MANIFEST_FIELD = "ompCodeCentos7Desktop";
+const CENTOS7_DESKTOP_ENV_FLAG = "OMPCODE_CENTOS7_DESKTOP";
+const CENTOS7_DESKTOP_MANIFEST_FIELD = "ompCodeCentos7Desktop";
 
 const defaultDesktopPackageRoot = resolve(import.meta.dirname, "..");
 

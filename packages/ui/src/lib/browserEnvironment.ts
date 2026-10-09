@@ -1,4 +1,4 @@
-export interface BrowserReadableStorageLike {
+interface BrowserReadableStorageLike {
   getItem(key: string): string | null;
 }
 

@@ -5,7 +5,7 @@ import type { OmpContextReport } from "../domain/ompContextReport.js";
 import type { OmpSessionProcess, OmpStateData } from "./ports.js";
 
 /** /context 只补充估算分项；应用前由引擎再次核对会话、总量和轮次。 */
-export function readEngineContextDetails(
+function readEngineContextDetails(
   process: OmpSessionProcess,
   isCurrent: () => boolean,
   apply: (report: OmpContextReport) => void,

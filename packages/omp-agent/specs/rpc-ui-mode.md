@@ -54,6 +54,10 @@ command_output → 当前进程 fence → 唯一记录 ID → 独立文本行 + 
 desktop-continuous / web-remote-replayable → 同一投影，不同交付边界
 ```
 
+## 内部符号与公共出口
+
+包入口只暴露 `contract.ts` 的启动契约。仅在定义文件内使用的帧 schema、投影默认值和进程接线 helper 不再导出；没有消费者的类型与 helper 移除。实际帧解析、目录命令载荷、进程 fence、会话 owner 和事件时序保持原路径，不因静态清理放宽协议验证。`module.ts` 与 `contract.example.ts` 是架构入口，不按产品无引用文件删除。
+
 ## 验证入口
 
 相关真实边界、模拟回归与未执行范围按产品权威文档记录；本 spec 不把静态检查或 fake 核心通过写成真实验收。

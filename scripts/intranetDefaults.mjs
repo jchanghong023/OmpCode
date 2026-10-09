@@ -1,19 +1,12 @@
 import { loadEndpointEnv } from "./load-endpoint-env.mjs";
 const endpointEnv = await loadEndpointEnv();
-export const DEFAULT_INTRANET_MACHINE_HOST = "";
-export function resolveIntranetMachineHost(env = { ...endpointEnv, ...process.env }) {
+const DEFAULT_INTRANET_MACHINE_HOST = "";
+function resolveIntranetMachineHost(env = { ...endpointEnv, ...process.env }) {
   // 自建镜像机器地址统一从 INTRANET_MACHINE_HOST 读取，避免多处硬编码漏改。
   return env.INTRANET_MACHINE_HOST?.trim() || DEFAULT_INTRANET_MACHINE_HOST;
 }
 
-export const INTRANET_MACHINE_HOST = resolveIntranetMachineHost();
-export const INTRANET_ASSET_SERVICE_PORT = 12345;
-export const INTRANET_ASSET_BASE_URL = INTRANET_MACHINE_HOST
-  ? `http://${INTRANET_MACHINE_HOST}:${INTRANET_ASSET_SERVICE_PORT}/zcode`
-  : "";
-export const INTRANET_DEPS_BASE_URL = INTRANET_ASSET_BASE_URL
-  ? `${INTRANET_ASSET_BASE_URL}/deps`
-  : "";
+const INTRANET_ASSET_SERVICE_PORT = 12345;
 
 export function resolveIntranetDepsBaseUrl(env = process.env) {
   env = { ...endpointEnv, ...env };

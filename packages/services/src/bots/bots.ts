@@ -57,18 +57,18 @@ export interface BotAutomationRunWatchParams {
   workspaceIdentity?: string;
 }
 
-export interface BotWeixinRegistrationBeginResult {
+interface BotWeixinRegistrationBeginResult {
   qrCode: string;
   qrUrl: string;
   interval: number;
   expiresAt: number;
 }
 
-export interface BotWeixinRegistrationPollParams {
+interface BotWeixinRegistrationPollParams {
   qrCode: string;
 }
 
-export type BotWeixinRegistrationPollResult =
+type BotWeixinRegistrationPollResult =
   | {
       status: "pending" | "scanned";
       interval: number;
@@ -83,11 +83,11 @@ export type BotWeixinRegistrationPollResult =
       message?: string;
     };
 
-export interface BotFeishuRegistrationBeginParams {
+interface BotFeishuRegistrationBeginParams {
   domain?: "feishu" | "lark";
 }
 
-export interface BotFeishuRegistrationBeginResult {
+interface BotFeishuRegistrationBeginResult {
   deviceCode: string;
   qrUrl: string;
   userCode: string;
@@ -97,13 +97,13 @@ export interface BotFeishuRegistrationBeginResult {
   pollDomain?: "feishu" | "lark";
 }
 
-export interface BotFeishuRegistrationPollParams {
+interface BotFeishuRegistrationPollParams {
   deviceCode: string;
   domain?: "feishu" | "lark";
   pollDomain?: "feishu" | "lark";
 }
 
-export type BotFeishuRegistrationPollResult =
+type BotFeishuRegistrationPollResult =
   | {
       status: "pending";
       interval: number;

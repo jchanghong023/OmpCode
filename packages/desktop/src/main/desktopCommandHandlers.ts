@@ -16,7 +16,6 @@ import {
   ZCODE_PRODUCT_FLAVOR,
   buildZCodeEndpointUrls,
   getCommunityUrlFromConfigs,
-  getFeedbackUrlFromConfig,
   resolveHelpAppConfig,
   normalizeZCodeEndpointOrigin,
   resolveZCodeEndpointOrigin,
@@ -130,7 +129,7 @@ async function clearAllDataAndRelaunch(options: {
   app.exit(0);
 }
 
-export async function clearCodingPlanWebviewStorage(options: {
+async function clearCodingPlanWebviewStorage(options: {
   logger: {
     info: (...args: unknown[]) => void;
     warn: (...args: unknown[]) => void;
@@ -171,52 +170,6 @@ function resolveLocalAppConfigPath(options?: {
 async function readLocalAppConfig(readLocalConfig?: () => unknown): Promise<unknown> {
   const localConfigPath = resolveLocalAppConfigPath();
   return readLocalConfig?.() ?? JSON.parse(await readFile(localConfigPath, "utf-8"));
-}
-
-async function resolveRemoteAppConfigValue(options: {
-  fetchRemoteConfig?: () => Promise<unknown>;
-  readLocalConfig?: () => unknown;
-  resolveFromConfig: (config: unknown) => string | undefined;
-  logPrefix: "feedback" | "community";
-  logger: {
-    warn: (...args: unknown[]) => void;
-  };
-}): Promise<string | undefined> {
-  try {
-    const remoteConfig = await fetchRemoteAppConfig(options.fetchRemoteConfig);
-    const remoteResolvedValue = options.resolveFromConfig(remoteConfig);
-    if (remoteResolvedValue) {
-      return remoteResolvedValue;
-    }
-  } catch (error) {
-    options.logger.warn(`[${options.logPrefix}] failed to fetch remote config:`, error);
-  }
-
-  try {
-    const localConfig = await readLocalAppConfig(options.readLocalConfig);
-    const localResolvedValue = options.resolveFromConfig(localConfig);
-    if (localResolvedValue) {
-      return localResolvedValue;
-    }
-  } catch (error) {
-    options.logger.warn(`[${options.logPrefix}] failed to read local config:`, error);
-  }
-
-  return undefined;
-}
-
-export async function resolveFeedbackUrl(options: {
-  fetchRemoteConfig?: () => Promise<unknown>;
-  readLocalConfig?: () => unknown;
-  logger: {
-    warn: (...args: unknown[]) => void;
-  };
-}): Promise<string | undefined> {
-  return resolveRemoteAppConfigValue({
-    ...options,
-    logPrefix: "feedback",
-    resolveFromConfig: getFeedbackUrlFromConfig,
-  });
 }
 
 export async function resolveCommunityUrl(options: {
@@ -454,10 +407,7 @@ function resolveChangelogUrl(
   return locale === "zh-CN" ? `${origin}/cn/changelog` : `${origin}/en/changelog`;
 }
 
-export async function openChangelog(
-  locale: Locale,
-  endpointOrigin = DEFAULT_ZCODE_ENDPOINT_ORIGIN,
-) {
+async function openChangelog(locale: Locale, endpointOrigin = DEFAULT_ZCODE_ENDPOINT_ORIGIN) {
   await openDesktopExternalUrl(resolveChangelogUrl(locale, endpointOrigin));
 }
 

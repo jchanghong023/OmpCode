@@ -80,18 +80,6 @@ function readEntryModel(entry: JsonLineRecord): string | undefined {
   return readTrimmedString(entry.model) ?? readTrimmedString(message?.model);
 }
 
-function isClaudeNativeSidechainEntry(entry: JsonLineRecord): boolean {
-  const message = isObjectRecord(entry.message) ? entry.message : undefined;
-  const request = isObjectRecord(entry.request) ? entry.request : undefined;
-  return (
-    entry.isSidechain === true || message?.isSidechain === true || request?.isSidechain === true
-  );
-}
-
-export function hasClaudeNativeSidechainMarker(entries: readonly JsonLineRecord[]): boolean {
-  return entries.some(isClaudeNativeSidechainEntry);
-}
-
 function sanitizeClaudeVisibleText(text: string): string {
   return text
     .replace(IDE_OPENED_FILE_TAG_RE, " ")
@@ -212,36 +200,6 @@ function extractClaudeAssistantText(entry: JsonLineRecord): string | null {
   }
   const visibleText = stripClaudeNativeSyntheticNoResponsePlaceholderText(text);
   return visibleText.length > 0 ? visibleText : null;
-}
-
-export function extractClaudeNativeSessionHeadInfo(entries: readonly JsonLineRecord[]): {
-  workspacePath?: string;
-  previewTitle?: string;
-  createdAt?: number;
-} {
-  let workspacePath: string | undefined;
-
-  for (const entry of entries) {
-    const userText = extractClaudeUserText(entry);
-    const assistantText = extractClaudeAssistantText(entry);
-    // 扫描阶段不能用任意头部事件的 cwd 判定 workspace，
-    // 因为 queue/progress 等前置记录可能带着更深层的临时 cwd。
-    // 这里必须等到第一条“真正可见的业务消息”出现后，才把它的 cwd 视为 session 归属。
-    if (!workspacePath && (userText || assistantText)) {
-      workspacePath = readEntryWorkspacePath(entry);
-    }
-    if (!userText) {
-      continue;
-    }
-
-    return {
-      workspacePath,
-      previewTitle: deriveSessionTitle(userText, []),
-      createdAt: readEntryTimestamp(entry),
-    };
-  }
-
-  return { workspacePath };
 }
 
 function parseClaudeNativeSessionRecords(params: {

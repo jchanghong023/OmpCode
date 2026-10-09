@@ -54,7 +54,7 @@ export async function controlSubagent(
  * 返回，如 "Subagent not running: <id>"）。状态词对齐上游真值（cancelled/stopping 语义
  * 由上游消息承载），适配器不伪造同步完成。
  */
-export async function sendSubagentControl(
+async function sendSubagentControl(
   process: OmpSessionProcess,
   subagentId: string,
   action: "send_message" | "stop",

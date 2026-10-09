@@ -1,7 +1,7 @@
 import { lstat, opendir } from "node:fs/promises";
 import { join } from "node:path";
 
-export type ZCodeDataSizePartialReason = "file_limit" | "io_error" | "time_limit";
+type ZCodeDataSizePartialReason = "file_limit" | "io_error" | "time_limit";
 
 export type ZCodeDataSizeScanResult = {
   bytes: number;

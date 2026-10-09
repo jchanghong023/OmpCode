@@ -39,7 +39,7 @@ export function AutomationsPageTitle({
  * 不在标题下再长一排标签——定时任务 / 闲时任务的胶囊行留在「自动化」内部，两级各用一种视觉。
  * 字号沿用 AutomationsSection 原 h1 的标题层级。
  */
-export function AutomationsPageTitleSwitch({
+function AutomationsPageTitleSwitch({
   value,
   onValueChange,
 }: {

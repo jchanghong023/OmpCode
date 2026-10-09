@@ -2,7 +2,6 @@
 // zcode-protocol-v4 为准；这里只负责产出合法载荷，不重复声明协议约束。
 
 import type {
-  ConversationRow,
   SubagentProjectionState,
   SessionActionAvailability,
   SessionConfigState,
@@ -34,7 +33,7 @@ export interface ProjectionAState {
   workspaceHookAdmission: null;
 }
 
-export function emptyUsage(): SessionUsageState {
+function emptyUsage(): SessionUsageState {
   return {
     contextWindow: null,
     cumulative: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
@@ -42,9 +41,9 @@ export function emptyUsage(): SessionUsageState {
 }
 
 /** omp 核心当前无法等价提供的动作，用稳定的 guard id 呈现禁用态（同步 FORK.md 已知差异）。 */
-export const OMP_UNSUPPORTED_GUARD = "fault.command.unsupportedByOmpCore";
+const OMP_UNSUPPORTED_GUARD = "fault.command.unsupportedByOmpCore";
 
-export function defaultAvailability(): SessionActionAvailability {
+function defaultAvailability(): SessionActionAvailability {
   return {
     fork: { allowed: false, reasonCode: OMP_UNSUPPORTED_GUARD },
     compact: { allowed: true },
@@ -112,5 +111,3 @@ export function rowBaseFields(init: RowBaseInit) {
     createdAtSeq: init.createdAtSeq,
   };
 }
-
-export type { ConversationRow };

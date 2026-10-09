@@ -1,6 +1,6 @@
 import type { ZCodeAgentInteractionEvent } from "@zcode/shared";
 
-export type OmpInteractionSummaryFieldType =
+type OmpInteractionSummaryFieldType =
   | "status"
   | "duration"
   | "result"
@@ -8,7 +8,7 @@ export type OmpInteractionSummaryFieldType =
   | "reported_message_count"
   | "structured_count";
 
-export interface OmpInteractionSummaryField {
+interface OmpInteractionSummaryField {
   type: OmpInteractionSummaryFieldType;
   value: string;
   key?: string;

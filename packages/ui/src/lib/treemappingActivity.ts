@@ -5,7 +5,7 @@ import { readRawToolCallFileSummaries } from "@/ToolCallBlocks/fileSummaries.js"
 import { resolveToolCallIdentity } from "@/lib/toolIdentity.js";
 
 export type TreemappingFileKind = "viewed" | "written" | "modified" | "deleted";
-export type TreemappingEventAction = "view" | "write" | "modify" | "delete";
+type TreemappingEventAction = "view" | "write" | "modify" | "delete";
 
 export interface TreemappingActivityEvent {
   toolCallId: string;
@@ -30,7 +30,7 @@ export interface TreemappingFileActivity {
   events: TreemappingActivityEvent[];
 }
 
-export interface TreemappingDirectoryActivity {
+interface TreemappingDirectoryActivity {
   path: string;
   views: number;
   lastTouchedAt: number;

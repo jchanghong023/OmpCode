@@ -39,7 +39,6 @@ import {
   readWorkflowSaved,
   readWorkflowScript,
 } from "@/ToolCallBlocks/renderers/createWorkflowInput.js";
-export { readWorkflowKindMessageId } from "@/ToolCallBlocks/renderers/createWorkflowInput.js";
 import {
   readFallbackOutputText,
   readWorkflowDisplay,

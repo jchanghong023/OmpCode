@@ -21,7 +21,7 @@ function replaceRequired(source, needle, replacement, label) {
  * 这里不复制整份上游模板，避免 electron-builder 升级时静默带入旧模板；每次打包
  * 都必须命中下面的结构锚点，模板结构变化会立即失败并提醒维护者重新对齐。
  */
-export function patchNsisInstallSectionSource(source) {
+function patchNsisInstallSectionSource(source) {
   const sourceEol = source.includes("\r\n") ? "\r\n" : "\n";
   let patched = source.replaceAll("\r\n", "\n").replaceAll("\r", "\n");
   if (patched.includes(PATCH_MARKER)) {
@@ -97,5 +97,3 @@ export function restoreNsisInstallSectionFileSync({ filePath, originalSource }) 
     writeFileSync(filePath, originalSource, "utf8");
   }
 }
-
-export { PATCH_MARKER };

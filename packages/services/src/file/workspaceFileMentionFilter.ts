@@ -73,7 +73,7 @@ export interface WorkspaceFileSearchDecision {
   traverse: boolean;
 }
 
-export interface WorkspaceFileSearchFilterContext {
+interface WorkspaceFileSearchFilterContext {
   /**
    * `.zcodeignore` 规则加载成功时为 true：目录排除的单一真相源是规则文件，
    * 内置目录黑名单退役（用户从文件里删掉 node_modules/ 就应恢复搜索），

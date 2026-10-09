@@ -1,7 +1,7 @@
 import { createContext } from "react";
 import type { TrajectoryVisualRole } from "@/ModelTrajectoryRoleStyles.js";
 
-export interface TrajectoryExpansionCommand {
+interface TrajectoryExpansionCommand {
   expanded: boolean;
   version: number;
 }

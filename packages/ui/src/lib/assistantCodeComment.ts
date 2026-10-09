@@ -10,9 +10,9 @@ import {
   type AssistantFilePathResolveOptions,
 } from "@/lib/assistantFileReferences.js";
 
-export type AssistantCodeCommentPriority = 0 | 1 | 2 | 3;
+type AssistantCodeCommentPriority = 0 | 1 | 2 | 3;
 
-export interface AssistantCodeComment {
+interface AssistantCodeComment {
   body: string;
   endLine?: number;
   file: string;

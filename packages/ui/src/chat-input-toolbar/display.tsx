@@ -43,11 +43,7 @@ import {
 import { ZCODE_MODE_OPTION_DESCRIPTION_IDS, ZCODE_MODE_OPTION_LABEL_IDS } from "./display-help.js";
 import { RollingToolbarLabel } from "@/chat-input-toolbar/RollingToolbarLabel.js";
 
-export {
-  ChatContextUsage,
-  getContextCompressionCommand,
-  getRenderableTaskUsage,
-} from "@/chat-input-toolbar/contextUsage.js";
+export { ChatContextUsage } from "@/chat-input-toolbar/contextUsage.js";
 
 type ConfigSelectTriggerSize = ComponentProps<typeof SelectTrigger>["size"];
 type ConfigSelectTriggerVariant = ComponentProps<typeof SelectTrigger>["variant"];
@@ -133,7 +129,7 @@ export function ChatApiRetryStatus({
   );
 }
 
-export function getModeOptionDisplayLabel(
+function getModeOptionDisplayLabel(
   intl: ReturnType<typeof useZCodeIntl>["intl"],
   provider: ZCodeProvider | undefined,
   entry: Pick<ZCodeConfigSelectValue, "name" | "value">,
@@ -157,7 +153,7 @@ function getModeOptionLabelMessageId(
   return ZCODE_MODE_OPTION_LABEL_IDS[provider]?.[entry.value] ?? null;
 }
 
-export function getModeOptionDescriptionMessageId(
+function getModeOptionDescriptionMessageId(
   provider: ZCodeProvider | undefined,
   entry: Pick<ZCodeConfigSelectValue, "value">,
 ): string | null {
@@ -203,7 +199,7 @@ function isHighPermissionModeValue(value: unknown): boolean {
   return value === "yolo";
 }
 
-export function resolveModeOptionIcon(value: unknown): LucideIcon {
+function resolveModeOptionIcon(value: unknown): LucideIcon {
   if (isHighPermissionModeValue(value)) {
     return ShieldAlertIcon;
   }

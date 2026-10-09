@@ -22,7 +22,7 @@ interface ModelConfigSyncWorkspaceSnapshot {
   taskListCache: ZCodeTaskMeta[] | null;
 }
 
-export function parseCustomProviderIdFromSupplierKey(supplierKey: string): string | null {
+function parseCustomProviderIdFromSupplierKey(supplierKey: string): string | null {
   const normalizedSupplierKey = supplierKey.trim();
   if (normalizedSupplierKey.startsWith(CUSTOM_SUPPLIER_KEY_PREFIX)) {
     const providerId = normalizedSupplierKey.slice(CUSTOM_SUPPLIER_KEY_PREFIX.length).trim();

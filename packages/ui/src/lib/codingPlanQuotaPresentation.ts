@@ -19,10 +19,7 @@ const TOKEN_LIMIT_TYPES = new Set(["TOKENS_LIMIT", "CREDIT_LIMIT"]);
  */
 const TOOL_LIMIT_TYPES = new Set(["TIME_LIMIT"]);
 
-export function isSameLimitCategory(
-  limitType: string,
-  queryType: UsageQuotaLimit["type"],
-): boolean {
+function isSameLimitCategory(limitType: string, queryType: UsageQuotaLimit["type"]): boolean {
   if (limitType === queryType) {
     return true;
   }

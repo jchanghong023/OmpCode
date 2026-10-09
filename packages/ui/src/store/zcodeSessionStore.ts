@@ -41,11 +41,6 @@ if (shouldExposeE2EStoreBridge()) {
 export * from "./zcodeSessionStoreTypes.js";
 export * from "./zcodeSessionStoreSelectors.js";
 // Re-export navigation types used externally:
-export type {
-  TaskNavigationHistory,
-  TaskNavEntry,
-  WorkspaceNavEntry,
-} from "@/lib/taskNavigationHistory.js";
 
 // 内存诊断计数器：workspace 桶全仓无删除路径，先落日志。
 uiMemoryDiagnosticsRegistry.register("sessionStore", () => ({

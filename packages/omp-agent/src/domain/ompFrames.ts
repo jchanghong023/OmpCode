@@ -46,7 +46,6 @@ export const ompResponseFrameSchema = z.object({
   error: z.string().optional(),
   code: z.string().optional(),
 });
-export type OmpResponseFrame = z.infer<typeof ompResponseFrameSchema>;
 
 // ── 扩展 UI 请求（审批 select / 确认 / 输入 / 富 ask / 打开 URL）──
 export const ompExtensionUiRequestFrameSchema = z.object({
@@ -80,7 +79,6 @@ export const ompExtensionUiRequestFrameSchema = z.object({
   // requestRpcAskDialog → {method:"ask", questions, timeout}）。
   questions: z.array(ompAskQuestionSchema).optional(),
 });
-export type OmpExtensionUiRequestFrame = z.infer<typeof ompExtensionUiRequestFrameSchema>;
 
 export type OmpExtensionUiResponseFrame =
   | { type: "extension_ui_response"; id: string; value: string }
@@ -88,18 +86,9 @@ export type OmpExtensionUiResponseFrame =
   | { type: "extension_ui_response"; id: string; cancelled: true; timedOut?: boolean }
   | { type: "extension_ui_response"; id: string; answers: OmpAskAnswerFrame[] };
 
-// ── host tool / host uri（omp 回调宿主工具；当前适配器不注册 host 工具，仅容错识别）──
-export const ompHostToolCallFrameSchema = z.object({
-  type: z.literal("host_tool_call"),
-  id: z.string(),
-  toolCallId: z.string().optional(),
-  toolName: z.string(),
-  arguments: z.unknown().optional(),
-});
-
 // ── 会话事件（AgentSessionEvent 原样转发）──
 
-export const ompAgentMessageSchema = z
+const ompAgentMessageSchema = z
   .object({
     role: z.string(),
     content: ompMessageContentSchema.optional(),
@@ -122,9 +111,8 @@ export const ompAgentMessageSchema = z
     errorMessage: z.string().optional(),
   })
   .passthrough();
-export type OmpAgentMessage = z.infer<typeof ompAgentMessageSchema>;
 
-export const ompAssistantMessageEventSchema = z
+const ompAssistantMessageEventSchema = z
   .object({
     type: z.string(),
     contentIndex: z.number().optional(),
@@ -135,7 +123,7 @@ export const ompAssistantMessageEventSchema = z
   .passthrough();
 export type OmpAssistantMessageEvent = z.infer<typeof ompAssistantMessageEventSchema>;
 
-export const ompAgentToolResultSchema = z
+const ompAgentToolResultSchema = z
   .object({
     content: z
       .array(z.object({ type: z.string(), text: z.string().optional() }).passthrough())
@@ -212,7 +200,6 @@ export const ompCommandOutputFrameSchema = z.object({
   type: z.literal("command_output"),
   text: z.string(),
 });
-export type OmpCommandOutputFrame = z.infer<typeof ompCommandOutputFrameSchema>;
 
 export const ompSessionInfoUpdateFrameSchema = z.object({
   type: z.literal("session_info_update"),
@@ -246,7 +233,6 @@ export const ompAvailableCommandsFrameSchema = z.object({
       .passthrough(),
   ),
 });
-export type OmpAvailableCommandsFrame = z.infer<typeof ompAvailableCommandsFrameSchema>;
 
 // omp task 子代理事件；保留扩展字段，但身份与状态必须校验后才能进入会话投影。
 export const ompSubagentFrameSchema = z.discriminatedUnion("type", [

@@ -1,6 +1,6 @@
 // 子代理只读详情的 UI 地址（omp-core-integration.md）：`omp-subagent:<subagentId>@<parentSessionId>`。
 
-export const OMP_SUBAGENT_VIEW_PREFIX = "omp-subagent:";
+const OMP_SUBAGENT_VIEW_PREFIX = "omp-subagent:";
 export function buildOmpSubagentViewId(parentSessionId: string, subagentId: string): string {
   return `${OMP_SUBAGENT_VIEW_PREFIX}${subagentId}@${parentSessionId}`;
 }

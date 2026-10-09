@@ -184,7 +184,7 @@ function formatAppUsageDays(
   })}`;
 }
 
-export function formatAppUsageDuration(
+function formatAppUsageDuration(
   durationMs: number,
   intl: ReturnType<typeof useZCodeIntl>["intl"],
 ): string {

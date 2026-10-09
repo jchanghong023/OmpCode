@@ -3,7 +3,7 @@ import type { AttachmentRef } from "@zcode/shared/zcode-protocol-v4";
 import { shouldExposeE2EStoreBridge } from "@/lib/e2eStoreBridge.js";
 import type { ChatComposerAttachment } from "@/lib/chatAttachments.js";
 
-export type ComposerAttachmentUploadStatus =
+type ComposerAttachmentUploadStatus =
   | "waitingSession"
   | "queued"
   | "uploading"

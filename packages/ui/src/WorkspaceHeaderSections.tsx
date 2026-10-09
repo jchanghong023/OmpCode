@@ -56,10 +56,7 @@ import { refreshWorkspacePluginCapabilitiesAfterRemoteSync } from "@/lib/remoteP
 import { useMcpStore } from "@/store/mcpStore.js";
 
 export type { WorkspaceHeaderState, WorkspaceHeaderTitleSectionProps };
-export {
-  WorkspaceHeaderActionSection,
-  type WorkspaceHeaderActionSectionProps,
-} from "@/WorkspaceHeaderSections/WorkspaceHeaderActionSection.js";
+export { WorkspaceHeaderActionSection } from "@/WorkspaceHeaderSections/WorkspaceHeaderActionSection.js";
 
 function shouldShowRemoteSkillSyncAction(params: {
   remoteSessionId?: string | null;

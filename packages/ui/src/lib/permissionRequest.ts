@@ -1,12 +1,7 @@
 import { PERMISSION_FULL_ACCESS_OPTION_ID } from "@zcode/shared/zcode-protocol-v4";
 import type { ZCodePermissionOption } from "@zcode/shared";
 
-export {
-  getPermissionRequestPreview,
-  type PermissionRequestFileChange,
-  type PermissionRequestPreview,
-  type PermissionRequestScope,
-} from "@zcode/shared";
+export { getPermissionRequestPreview, type PermissionRequestScope } from "@zcode/shared";
 
 type PermissionOptionDisplayKind =
   | "allowOnce"

@@ -101,11 +101,11 @@ interface OfficialMcpCredentialResolverDeps {
   };
 }
 
-export type OfficialMcpPlanScope =
+type OfficialMcpPlanScope =
   | { targetType: "PERSONAL" }
   | { targetType: "TEAM"; organizationId: string; projectId: string };
 
-export type OfficialMcpWireScope = OfficialMcpPlanScope | null;
+type OfficialMcpWireScope = OfficialMcpPlanScope | null;
 
 /** 解析成功后的凭证快照。仅在 host/service 进程内存活，脱敏后才允许过 RPC。 */
 export interface OfficialMcpCredentialSnapshot {

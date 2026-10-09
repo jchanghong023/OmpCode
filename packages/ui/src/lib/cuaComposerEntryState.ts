@@ -15,7 +15,7 @@ import type { StatusDotTone } from "@/settings/StatusDot.js";
  * 无 "disabled"（插件未启用）态：电脑控制默认关闭后，未启用
  * 不再渲染成灰点拉新按钮，而是整个不渲染（见 isEntryVisible 的插件门），该态因此不可达。
  */
-export type CuaComposerEntryUiState =
+type CuaComposerEntryUiState =
   | "starting"
   /** 懒启动：Helper 未运行（正常空闲，首次使用自动启动）——中性灰点，不是错误。 */
   | "idle"

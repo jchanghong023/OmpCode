@@ -192,8 +192,4 @@ function VirtualizedGroupedTopLevelList({
   );
 }
 
-export {
-  GROUPED_TOP_LEVEL_VIRTUALIZATION_THRESHOLD,
-  VirtualizedGroupedTopLevelList,
-  shouldVirtualizeGroupedTopLevelNodes,
-};
+export { VirtualizedGroupedTopLevelList };
