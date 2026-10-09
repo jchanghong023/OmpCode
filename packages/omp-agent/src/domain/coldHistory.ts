@@ -3,7 +3,11 @@
 import type { ConversationRow } from "@zcode/shared/zcode-protocol-v4";
 import { rowBaseFields } from "./projectionTypes.js";
 import { ompTodoPlan } from "./ompTodoPlan.js";
-import { readableOmpAgentInput, visibleOmpCustomMessage } from "./OmpCustomMessage.js";
+import {
+  readableOmpAgentInput,
+  readableOmpSkillInput,
+  visibleOmpCustomMessage,
+} from "./OmpCustomMessage.js";
 import { coldSubagents } from "./OmpColdSubagents.js";
 
 interface ColdContext {
@@ -28,6 +32,11 @@ export function transcriptFromOmpEntries(entries: readonly unknown[]): string {
   for (const entry of entries) {
     const record = object(entry);
     const message = object(record?.message);
+    const skill = readableOmpSkillInput(record?.type === "custom_message" ? record : message);
+    if (skill) {
+      parts.push(`user: ${skill.text}`);
+      continue;
+    }
     const custom = visibleOmpCustomMessage(
       record?.type === "custom_message" ? record : message,
       true,
@@ -127,6 +136,27 @@ export function rowsFromOmpEntries(
       continue;
     }
     const record = entry as Record<string, unknown>;
+    const customMessage = record.type === "custom_message" ? record : object(record.message);
+    if (customMessage?.customType === "skill-prompt") {
+      // 修复：隐藏技能正文仍须保留用户轮边界，否则冷恢复会吞掉上一轮的模型回复。
+      if (customMessage.attribution === "user") {
+        context.turnCounter += 1;
+        currentTurnId = `turn-cold-${context.turnCounter}`;
+        const skill = readableOmpSkillInput(customMessage);
+        if (skill) {
+          rows.push(
+            makeRow(
+              context,
+              currentTurnId,
+              "userInput",
+              { kind: "userInput", text: skill.text, origin: "realUser" },
+              skill.timestamp ?? Date.now(),
+            ),
+          );
+        }
+      }
+      continue;
+    }
     const custom = visibleOmpCustomMessage(
       record.type === "custom_message" ? record : record.message,
     );
@@ -152,9 +182,7 @@ export function rowsFromOmpEntries(
           custom.timestamp ?? Date.now(),
         ),
       );
-      // /skill: 轮 journal 只有 skill-prompt（attribution=user）而无用户消息；不推进轮
-      // 计数会把后续回复并入上一用户轮，被组内 latest-assistant 规则隐藏（GUI 冷恢复
-      // 实测丢失正文 ultrathink 的模型回复）。用户侧可见 custom 即一轮的输入边界。
+      // 其他用户侧可见 custom 仍是一轮的输入边界；技能边界已在正文过滤前处理。
       const attribution =
         record.type === "custom_message" ? record.attribution : object(record.message)?.attribution;
       if (attribution === "user") {

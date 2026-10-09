@@ -1,7 +1,7 @@
 const LINK_MENTION_MARKDOWN_PATTERN =
   /\[((?:\\.|[^\\\]])*)\]\((?:<((?:\\.|[^>])*?)>|((?:\\.|[^)])*))\)/g;
 const INLINE_MENTION_TOKEN_PATTERN =
-  /(^|\s)(\$[a-zA-Z0-9._-]+|\/[a-zA-Z0-9._-]+|@[a-zA-Z0-9._-]+|#sess_[a-zA-Z0-9._-]+)(?=$|\s)/g;
+  /(^|\s)(\$[a-zA-Z0-9._-]+|\/skill:[a-zA-Z0-9._-]+|\/[a-zA-Z0-9._-]+|@[a-zA-Z0-9._-]+|#sess_[a-zA-Z0-9._-]+)(?=$|\s)/g;
 
 function escapeMarkdownLabel(label: string): string {
   return label.replaceAll("\\", "\\\\").replaceAll("[", "\\[").replaceAll("]", "\\]");
@@ -155,6 +155,9 @@ function parseInlineMentionTokens(segment: string): MentionTextPart[] {
     }
     if (token.startsWith("$")) {
       parts.push({ type: "skill", label: token.slice(1) });
+    } else if (token.startsWith("/skill:")) {
+      // 修复：omp 原生调用 token 应复用技能 chip，协议原文仍用于发送、复制和编辑。
+      parts.push({ type: "skill", label: token.slice("/skill:".length) });
     } else if (token.startsWith("/")) {
       parts.push({ type: "command", label: token.slice(1) });
     } else if (token.startsWith("@")) {

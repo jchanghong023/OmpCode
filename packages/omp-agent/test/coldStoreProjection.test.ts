@@ -489,9 +489,10 @@ test("rowsFromOmpEntries：/skill: 轮只有 skill-prompt（attribution=user）�
     {
       type: "custom_message",
       customType: "skill-prompt",
-      content: "[IMPORTANT: User invoked the skill]",
+      content: "[IMPORTANT: User invoked the skill]\n\nPRIVATE_SKILL_BODY",
       display: true,
       attribution: "user",
+      details: { name: "native-command-fixture", prompt: "/skill:native-command-fixture  参数" },
       id: "skill-1",
       timestamp: 3,
     },
@@ -519,8 +520,12 @@ test("rowsFromOmpEntries：/skill: 轮只有 skill-prompt（attribution=user）�
     1,
     "上一用户轮内只保留自身回复",
   );
+  assert.deepEqual(
+    rows.filter((row) => row.kind === "userInput").map((row) => row.text),
+    ["ultrathink 正文提问", "/skill:native-command-fixture  参数"],
+  );
   assert.ok(
-    rows.some((row) => row.entityId === "omp-native-custom:skill-1"),
-    "skill-prompt 自身保持独立显示组",
+    rows.every((row) => !("text" in row) || !row.text.includes("PRIVATE_SKILL_BODY")),
+    "技能正文不进入历史显示",
   );
 });

@@ -21,8 +21,11 @@ export function mergeOmpCommandOutputHistory(
   const nativeCustom = nativeOmpCustomDisplays(nativeEntries);
   const seenOutputIds = new Set<string>();
   for (const output of outputs) {
-    // 修复：旧 GUI 派生显示记录仍留存；不能在冷恢复时把已迁至交互页的提示包重新塞回正文。
-    if (isOmpCoordinationCustomType(output.customType)) continue;
+    // 修复：旧 GUI 曾把技能全文和协调提示存成显示记录；冷恢复也必须排除这些上下文。
+    if (output.customType === "skill-prompt" || isOmpCoordinationCustomType(output.customType)) {
+      byEntity.delete(`omp-command-output:${output.id}`);
+      continue;
+    }
     if (seenOutputIds.has(output.id)) continue;
     seenOutputIds.add(output.id);
     const entityId = `omp-command-output:${output.id}`;

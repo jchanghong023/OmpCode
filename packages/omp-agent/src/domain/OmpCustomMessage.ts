@@ -22,6 +22,8 @@ const customFields = {
   content: ompMessageContentSchema,
   display: z.boolean(),
   timestamp: z.union([z.number(), z.string()]).optional(),
+  attribution: z.string().optional(),
+  details: z.unknown().optional(),
 };
 const customMessageSchema = z.union([
   z.object({ role: z.literal("custom"), ...customFields }),
@@ -48,6 +50,41 @@ export function readableOmpAgentInput(value: unknown): { text: string; sender?: 
   return null;
 }
 
+/** 技能正文是模型上下文；冷历史只从核心的显示元数据还原用户调用。 */
+export function readableOmpSkillInput(value: unknown): { text: string; timestamp?: number } | null {
+  if (
+    !value ||
+    typeof value !== "object" ||
+    !("customType" in value) ||
+    value.customType !== "skill-prompt"
+  )
+    return null;
+  const parsed = customMessageSchema.safeParse(value);
+  if (
+    !parsed.success ||
+    parsed.data.customType !== "skill-prompt" ||
+    parsed.data.attribution !== "user"
+  )
+    return null;
+  const { details, timestamp } = parsed.data;
+  if (!details || typeof details !== "object" || Array.isArray(details)) return null;
+  const prompt = "prompt" in details ? details.prompt : undefined;
+  const name = "name" in details ? details.name : undefined;
+  const args = "args" in details ? details.args : undefined;
+  const text =
+    typeof prompt === "string" && prompt.trim()
+      ? prompt
+      : typeof name === "string" && /^[a-zA-Z0-9._-]+$/u.test(name)
+        ? `/skill:${name}${typeof args === "string" && args ? ` ${args}` : ""}`
+        : null;
+  if (text === null) return null;
+  const createdAt = typeof timestamp === "number" ? timestamp : Date.parse(timestamp ?? "");
+  return {
+    text,
+    ...(Number.isFinite(createdAt) ? { timestamp: createdAt } : {}),
+  };
+}
+
 /** 同时消费 live AgentMessage 和持久化 custom_message entry；隐藏/非文本消息不泄露到 UI。 */
 export function visibleOmpCustomMessage(
   value: unknown,
@@ -58,6 +95,8 @@ export function visibleOmpCustomMessage(
   if (
     !parsed.success ||
     !parsed.data.display ||
+    // 修复：display=true 是 omp TUI 的技能组件入口，不代表可把注入正文当助手回复。
+    parsed.data.customType === "skill-prompt" ||
     (!includeCoordination && isOmpCoordinationCustomType(parsed.data.customType))
   )
     return null;
