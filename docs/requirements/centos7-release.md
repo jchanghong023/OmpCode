@@ -42,18 +42,27 @@
 
 - 仅 CentOS 启动器拥有输入法环境选择，先于私有 XDG 路径与 Electron 启动。X11 下选择 IBus（或无显式替代）时，只检查初始 `DISPLAY` 与调用者完全一致的当前 UID `ibus-daemon` 进程。按数据读取其 NUL 分隔的 `/proc/<pid>/environ`，绝不 source。仅本地 Unix 会话总线地址合格。
 - 用命令局部 `DBUS_SESSION_BUS_ADDRESS` 以 `gdbus --session` 校验每个候选：`org.freedesktop.DBus.GetConnectionUnixProcessID(org.freedesktop.IBus)` 必须返回该守护进程 PID。每次探测限时两秒。保留已匹配且校验通过的调用者总线；否则采纳唯一校验通过的候选。歧义候选、不可读/消失进程、缺失工具与失败探测不得阻止 Electron 启动或导致猜测选择；自动对齐无法完成时告警。
-- 仅向应用及其子进程导出选定的会话总线。未设置/空的 `GTK_IM_MODULE` 与 `XMODIFIERS` 默认为 IBus；保留显式替代输入法。保留显式 `IBUS_ADDRESS`；缺失时在 XDG 隔离前用原 HOME/XDG 环境与选定会话总线查询 `ibus address`（限时两秒）。保留守护进程生命周期、父 shell、其他用户与持久输入法设置。
+- 没有可验证候选时，仅在当前 UID 完全没有 `ibus-daemon` 且没有显式 `IBUS_ADDRESS` 的情况下自动启动。先以当前用户缓存目录中的 `flock` 串行化启动，再重新检查候选与进程；并发启动器复用已就绪会话。存在但无法验证的守护进程、其他 DISPLAY 的同用户守护进程、歧义或显式地址均不触发替换或第二次启动。
+- 自动启动复用可连接且未注册 `org.freedesktop.IBus` 的调用者 Unix 会话总线，否则通过 `dbus-launch --close-stderr` 创建当前用户的新总线；输出按键值数据读取，不使用二进制输出拆分或 `eval`。以原 HOME/XDG 环境运行 `ibus-daemon --daemonize`，不使用 `--replace` 或 `--xim`：OmpCode 使用 GTK IBus 连接，共享 X server 的全局 XIM 不由应用接管。进程后台运行，关闭应用不主动停止它；启动锁描述符不传给后台进程。
+- 启动后在五秒就绪窗口内轮询，沿用同一候选校验路径观察服务注册，每次探测仍限时两秒；只有 PID、UID、DISPLAY 与选定总线均满足条件后才接入。总线创建与启动命令分别限时三秒、五秒，锁等待限时五秒；缺失工具、锁失败、启动失败或未就绪时输出具体原因并继续启动 Electron，不改动父 shell。失败时回收本次新建总线，成功会话由用户会话持有；不停止已有守护进程、不强制设置引擎、不改写持久配置。
+- 仅向应用及其子进程导出选定的会话总线。未设置/空的 `GTK_IM_MODULE` 与 `XMODIFIERS` 默认为 IBus；保留显式替代输入法。保留显式 `IBUS_ADDRESS`；缺失时在 XDG 隔离前用原 HOME/XDG 环境与选定会话总线查询 `ibus address`（限时两秒）。保留已有守护进程生命周期、父 shell、其他用户与持久输入法设置。
 - 回归依据：IBus 1.5.17 的 GTK 模块单独在会话总线上监视 `org.freedesktop.IBus`。可用的私有 IBus 连接、`libpinyin` 引擎与 `FocusIn`/光标通知不能证明按键处理已启用：缺少会话总线名称时 `_daemon_is_running` 保持 false，`filter_keypress` 回退为简单输入。把应用会话总线对齐守护进程后在用户主机恢复了中文输入。仅链接配置目录不能修复该状态。
 
 ```mermaid
 flowchart TD
     A[Launcher: caller environment] --> B[Same UID and DISPLAY daemon candidates]
     B --> C[Validate session bus service owner PID]
-    C --> D[Keep matching bus or select unique bus]
-    D --> E[Export child environment, isolate XDG, start Electron]
+    C --> D{Verified session available?}
+    D -->|Yes| E[Export child environment, isolate XDG, start Electron]
+    D -->|No daemon for this UID| F[Lock, recheck, start user bus and IBus]
+    F --> H{New daemon passes the same PID check?}
+    H -->|Yes| E
+    H -->|No| G
+    D -->|Existing daemon or failure| G[Report reason and keep caller environment]
+    G --> E
 ```
 
-- 启动器行为仍须正确处理分裂总线、已正确环境、XDG 隔离前的地址发现、显式覆盖、其他 DISPLAY/用户、歧义会话、探测失败与无守护进程；不再要求专属启动器自动回归或包级 Linux GUI 测试。公司主机手动环境修复曾确认中文输入恢复，但不证明当前打包启动器在该环境已验收。
+- 启动器行为仍须正确处理分裂总线、已正确环境、XDG 隔离前的地址发现、显式覆盖、其他 DISPLAY/用户、歧义会话、探测失败，以及无守护进程时的自动启动、并发启动复用、失效总线替换与启动失败清理；不再要求专属启动器自动回归或包级 Linux GUI 测试。公司主机手动环境修复曾确认中文输入恢复；另有用户的手动创建总线与启动 IBus 结果显示 PID/总线校验通过，但这些证据不证明当前自动启动代码或打包启动器在该环境已验收。
 
 ### 包完整性与运行行为
 
@@ -71,3 +80,5 @@ flowchart TD
 ## 实现与验证状态
 
 需求从 CentOS 7 专有分支的权威 spec 迁入并按单分支、Electron 双轨与 `OMP_OFFLINE` 环境门控决策改写；未因当前实现降低要求。既有实现及历史验证不等于本次验收；统一证据边界见 [需求索引](README.md#实现与验证状态)。
+
+2026-10-09：启动器加入无守护进程时的用户 IBus 自动启动、启动锁与同一路径的 PID 校验，并补充中文根因注释。仅完成 Shell 语法、差异空白与架构静态检查；未执行 Linux/CentOS 启动器测试或目标主机中文输入验收，未构建或发布新包。
