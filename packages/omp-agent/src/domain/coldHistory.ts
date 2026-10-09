@@ -3,7 +3,8 @@
 import type { ConversationRow } from "@zcode/shared/zcode-protocol-v4";
 import { rowBaseFields } from "./projectionTypes.js";
 import { ompTodoPlan } from "./ompTodoPlan.js";
-import { visibleOmpCustomMessage } from "./OmpCustomMessage.js";
+import { readableOmpAgentInput, visibleOmpCustomMessage } from "./OmpCustomMessage.js";
+import { coldSubagents } from "./OmpColdSubagents.js";
 
 interface ColdContext {
   sessionId: string;
@@ -12,75 +13,10 @@ interface ColdContext {
   turnCounter: number;
 }
 
-interface ColdSubagent {
-  id: string;
-  agent: string;
-  summary: string;
-  status: "running" | "success" | "failed" | "cancelled";
-  parentToolCallId: string;
-  startedAt: number;
-  endedAt?: number;
-  resultText?: string;
-}
-
 function object(value: unknown): Record<string, unknown> | null {
   return typeof value === "object" && value !== null && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : null;
-}
-
-function coldSubagents(entries: readonly unknown[]): Map<string, ColdSubagent> {
-  const agents = new Map<string, ColdSubagent>();
-  for (const entry of entries) {
-    const message = object(object(entry)?.message);
-    if (message?.role !== "toolResult") continue;
-    const details = object(message.details);
-    if (message.toolName === "task" && typeof message.toolCallId === "string") {
-      for (const raw of Array.isArray(details?.progress) ? details.progress : []) {
-        const progress = object(raw);
-        if (!progress || typeof progress.id !== "string" || !progress.id) continue;
-        agents.set(progress.id, {
-          id: progress.id,
-          agent: typeof progress.agent === "string" ? progress.agent : "task",
-          summary: (typeof progress.description === "string"
-            ? progress.description
-            : typeof progress.assignment === "string"
-              ? progress.assignment
-              : typeof progress.task === "string"
-                ? progress.task
-                : progress.id
-          )
-            .replace(/\s+/g, " ")
-            .slice(0, 180),
-          status: "running",
-          parentToolCallId: message.toolCallId,
-          startedAt:
-            typeof message.timestamp === "number" ? Math.trunc(message.timestamp) : Date.now(),
-        });
-      }
-    }
-    if (message.toolName === "wait") {
-      for (const raw of Array.isArray(details?.jobs) ? details.jobs : []) {
-        const job = object(raw);
-        if (!job || typeof job.id !== "string") continue;
-        const prior = agents.get(job.id);
-        if (!prior) continue;
-        prior.status =
-          job.status === "completed"
-            ? "success"
-            : job.status === "failed"
-              ? "failed"
-              : job.status === "aborted"
-                ? "cancelled"
-                : "running";
-        if (prior.status !== "running")
-          prior.endedAt =
-            typeof message.timestamp === "number" ? Math.trunc(message.timestamp) : Date.now();
-        if (typeof job.resultText === "string") prior.resultText = job.resultText;
-      }
-    }
-  }
-  return agents;
 }
 
 export function coldSubagentIds(entries: readonly unknown[]): string[] {
@@ -92,7 +28,10 @@ export function transcriptFromOmpEntries(entries: readonly unknown[]): string {
   for (const entry of entries) {
     const record = object(entry);
     const message = object(record?.message);
-    const custom = visibleOmpCustomMessage(record?.type === "custom_message" ? record : message);
+    const custom = visibleOmpCustomMessage(
+      record?.type === "custom_message" ? record : message,
+      true,
+    );
     if (custom) {
       parts.push(`custom: ${custom.text}`);
       continue;
@@ -164,6 +103,7 @@ function collectExitPendingToolCallIds(entries: readonly unknown[]): Set<string>
 export function rowsFromOmpEntries(
   entries: unknown[],
   subagentTranscripts: ReadonlyMap<string, string> = new Map(),
+  childRecords: ReadonlyMap<string, readonly unknown[]> = new Map(),
 ): ConversationRow[] {
   // 修复（S7-3，§8.2/§15.2(5)）：中断集合 = omp 显式退出诊断（session_exit.pendingToolCalls
   // 可消费则优先并入）∪ 配对扫描出的无完成事实调用。已落盘 toolResult 的完成事实恒胜出
@@ -179,7 +119,7 @@ export function rowsFromOmpEntries(
   const rows: ConversationRow[] = [];
   // toolResult 配对从 O(n²) rows.find 改为 Map（行为等价）。
   const toolRows = new Map<string, Extract<ConversationRow, { kind: "toolCall" }>>();
-  const agents = coldSubagents(entries);
+  const agents = coldSubagents(entries, childRecords);
   const context: ColdContext = { sessionId: "cold", nextRowId: 1, createdAtSeq: 1, turnCounter: 0 };
   let currentTurnId = "turn-cold-0";
   for (const entry of entries) {
@@ -259,16 +199,24 @@ export function rowsFromOmpEntries(
       if (message.role === "user") {
         context.turnCounter += 1;
         currentTurnId = `turn-cold-${context.turnCounter}`;
-        const text = content
-          .filter((block) => block.type === "text")
-          .map((block) => block.text ?? "")
-          .join("\n");
+        const readable = readableOmpAgentInput(message);
+        const text =
+          readable?.text ??
+          content
+            .filter((block) => block.type === "text")
+            .map((block) => block.text ?? "")
+            .join("\n");
         rows.push(
           makeRow(
             context,
             currentTurnId,
             "userInput",
-            { kind: "userInput", text, origin: "realUser" },
+            {
+              kind: "userInput",
+              text,
+              origin: readable?.sender ? "mailbox" : "realUser",
+              ...(readable?.sender ? { originMeta: { senderLabel: readable.sender } } : {}),
+            },
             timestamp,
           ),
         );

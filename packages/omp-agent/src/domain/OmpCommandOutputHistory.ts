@@ -2,7 +2,7 @@
 import type { ConversationRow } from "@zcode/shared/zcode-protocol-v4";
 import type { OmpCommandOutputRecord } from "./OmpCommandOutput.js";
 import { rowBaseFields } from "./projectionTypes.js";
-import { nativeOmpCustomDisplays } from "./OmpCustomMessage.js";
+import { isOmpCoordinationCustomType, nativeOmpCustomDisplays } from "./OmpCustomMessage.js";
 
 export function mergeOmpCommandOutputHistory(
   rows: ConversationRow[],
@@ -21,6 +21,8 @@ export function mergeOmpCommandOutputHistory(
   const nativeCustom = nativeOmpCustomDisplays(nativeEntries);
   const seenOutputIds = new Set<string>();
   for (const output of outputs) {
+    // 修复：旧 GUI 派生显示记录仍留存；不能在冷恢复时把已迁至交互页的提示包重新塞回正文。
+    if (isOmpCoordinationCustomType(output.customType)) continue;
     if (seenOutputIds.has(output.id)) continue;
     seenOutputIds.add(output.id);
     const entityId = `omp-command-output:${output.id}`;

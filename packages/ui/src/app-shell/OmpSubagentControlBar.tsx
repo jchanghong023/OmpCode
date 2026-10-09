@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button.js";
 import { useWorkspaceServicesResolution } from "@/hooks/useWorkspaceServices.js";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
 import { parseOmpSubagentViewIdOf } from "@/lib/ompSubagentViewId.js";
+import { useOmpSubagentControlState } from "@/hooks/useOmpSubagentControlState.js";
 
 /**
  * Fork（omp-project-mode.md）：子代理只读详情顶部的显式控制条（Z15）。
@@ -32,11 +33,13 @@ export const OmpSubagentControlBar = memo(function OmpSubagentControlBar({
   const [busy, setBusy] = useState(false);
   const controlInFlight = useRef(false);
   const target = useMemo(() => parseOmpSubagentViewIdOf(childSessionId), [childSessionId]);
+  const control = useOmpSubagentControlState(target?.parentSessionId, childSessionId);
 
   const send = useCallback(
     async (action: "send_message" | "stop") => {
       // Enter 不经过禁用按钮；用同步闩阻止同一条消息被重复提交。
-      if (!target || !resolution.rpcReady || controlInFlight.current) return;
+      if (!target || !resolution.rpcReady || !control.controllable || controlInFlight.current)
+        return;
       if (action === "send_message" && !message.trim()) return;
       controlInFlight.current = true;
       setBusy(true);
@@ -64,7 +67,16 @@ export const OmpSubagentControlBar = memo(function OmpSubagentControlBar({
         setBusy(false);
       }
     },
-    [intl, message, remoteSessionId, resolution, target, workspaceIdentity, workspacePath],
+    [
+      control.controllable,
+      intl,
+      message,
+      remoteSessionId,
+      resolution,
+      target,
+      workspaceIdentity,
+      workspacePath,
+    ],
   );
 
   if (!target) {
@@ -72,10 +84,13 @@ export const OmpSubagentControlBar = memo(function OmpSubagentControlBar({
   }
 
   return (
-    <div className="border-b border-border bg-surface px-3 py-2">
+    <div
+      data-subagent-control-state={control.status}
+      className="border-b border-border bg-surface px-3 py-2"
+    >
       <div className="flex items-center gap-2">
         <input
-          disabled={busy || !resolution.rpcReady}
+          disabled={busy || !resolution.rpcReady || !control.controllable}
           className="min-w-0 flex-1 rounded-md border border-input-border bg-background px-2 py-1 text-ui-sm text-foreground placeholder:text-foreground-subtlest focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-input-border-focused"
           placeholder={intl.formatMessage({ id: "ompSubagentControl.sendPlaceholder" })}
           value={message}
@@ -91,7 +106,7 @@ export const OmpSubagentControlBar = memo(function OmpSubagentControlBar({
           type="button"
           variant="ghost"
           size="sm"
-          disabled={busy || !resolution.rpcReady || !message.trim()}
+          disabled={busy || !resolution.rpcReady || !control.controllable || !message.trim()}
           onClick={() => void send("send_message")}
         >
           <SendIcon aria-hidden className="size-3.5" />
@@ -101,13 +116,20 @@ export const OmpSubagentControlBar = memo(function OmpSubagentControlBar({
           type="button"
           variant="ghost"
           size="sm"
-          disabled={busy || !resolution.rpcReady}
+          disabled={busy || !resolution.rpcReady || !control.controllable}
           onClick={() => void send("stop")}
         >
           <SquareIcon aria-hidden className="size-3 fill-current" />
           {intl.formatMessage({ id: "ompSubagentControl.stop" })}
         </Button>
       </div>
+      {!control.controllable ? (
+        <p className="mt-1 text-ui-sm text-foreground-subtlest">
+          {intl.formatMessage({ id: `subagentDirectory.status.${control.status}` })}
+          {" · "}
+          {intl.formatMessage({ id: "ompSubagentControl.readOnly" })}
+        </p>
+      ) : null}
       {status ? (
         <p className="mt-1 truncate text-ui-sm text-foreground-subtlest">{status}</p>
       ) : null}

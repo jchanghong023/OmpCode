@@ -80,7 +80,9 @@ function taskOutput(body: string): { text: string; status?: string; duration?: s
       return "";
     },
   );
-  const output = /^\s*<output\s*>([\s\S]*)<\/output>\s*$/u.exec(wrapper[2]!);
+  const output = /^\s*(?:<meta\b[^<>]*\/?>\s*)?<output\s*>([\s\S]*)<\/output>\s*$/u.exec(
+    wrapper[2]!,
+  );
   if (!valid || remainder.trim() || !output) return null;
   const duration = attributes.duration;
   return {
@@ -90,12 +92,29 @@ function taskOutput(body: string): { text: string; status?: string; duration?: s
   };
 }
 
+/** 已知后台交付包装只影响摘要；完整原文仍保留给显式展开。 */
+function asyncDeliveryOutput(body: string): { text: string } | null {
+  const unwrapped =
+    /^<system-notice>\s*([\s\S]*?)\s*<\/system-notice>$/u.exec(body.trim())?.[1] ?? body;
+  const match =
+    /^Background job ([A-Za-z0-9_.-]+) has completed\. Resume your work using the result below\.\s*([\s\S]*)$/u.exec(
+      unwrapped.trim(),
+    );
+  if (!match) return null;
+  const footer = new RegExp(
+    `\\n\\n${match[1]!.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")} is now idle\\b[\\s\\S]*$`,
+    "u",
+  );
+  return { text: match[2]!.replace(footer, "").trim() };
+}
+
 export function summarizeOmpInteractionContent(
   event: Pick<ZCodeAgentInteractionEvent, "kind" | "body">,
 ): OmpInteractionContentSummary {
   const { body } = event;
-  const wrapped = event.kind === "task_result" ? taskOutput(body) : null;
-  const text = wrapped?.text ?? body;
+  const delivery = event.kind === "task_result" ? asyncDeliveryOutput(body) : null;
+  const wrapped = event.kind === "task_result" ? taskOutput(delivery?.text ?? body) : null;
+  const text = wrapped?.text ?? delivery?.text ?? body;
   const parsed = parseJson(text);
   const fields: OmpInteractionSummaryField[] = [];
   const add = (type: OmpInteractionSummaryFieldType, value: string, key?: string) => {
@@ -106,7 +125,7 @@ export function summarizeOmpInteractionContent(
   if (wrapped?.duration) add("duration", wrapped.duration);
   const metadataFieldCount = fields.length;
 
-  let recognized = Boolean(wrapped);
+  let recognized = Boolean(wrapped || delivery);
   if (record(parsed.value)) {
     const data = parsed.value;
     const status = readable(data.status);

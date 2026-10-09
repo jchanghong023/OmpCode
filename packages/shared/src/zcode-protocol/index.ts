@@ -1539,7 +1539,7 @@ export const zcodeSessionRunningSubagentSchema = zcodeSessionSubagentBaseSchema.
 export type ZCodeSessionRunningSubagent = z.infer<typeof zcodeSessionRunningSubagentSchema>;
 
 export const zcodeSessionEndedSubagentSchema = zcodeSessionSubagentBaseSchema.extend({
-  status: z.enum(["success", "failed", "cancelled", "lost"]),
+  status: z.enum(["success", "failed", "cancelled", "lost", "unknown"]),
 });
 export type ZCodeSessionEndedSubagent = z.infer<typeof zcodeSessionEndedSubagentSchema>;
 

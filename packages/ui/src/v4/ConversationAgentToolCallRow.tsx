@@ -1,4 +1,7 @@
 import { useCallback, useMemo } from "react";
+import { BotIcon } from "lucide-react";
+import { Button } from "@/components/ui/button.js";
+import { useZCodeIntl } from "@/i18n/IntlProvider.js";
 import { TID_V4_ROW, TID_V4_SUBAGENT_OPEN_SIDE_PANE, testId } from "@zcode/shared";
 import { ToolCallBlock } from "@/ToolCallBlocks.js";
 import { getAgentPrimaryText } from "@/ToolCallBlocks/renderers/agentHelpers.js";
@@ -43,6 +46,7 @@ export function ConversationAgentToolCallRow({
   item: Extract<ConversationAssistantWorkRenderItem, { kind: "agentToolCall" }>;
   context: ConversationRowRenderContext;
 }) {
+  const { intl } = useZCodeIntl();
   const toolCallNode = useMemo(() => toolCallRowToLegacyNode(item.row), [item.row]);
   const childSessionId = item.subagentRow.childSessionId;
   const subagentType = item.subagentRow.subagentType;
@@ -79,19 +83,35 @@ export function ConversationAgentToolCallRow({
       data-conversation-selectable="true"
       data-testid={testId(TID_V4_ROW, String(item.row.rowId))}
     >
-      <ToolCallBlock
-        toolCallNode={toolCallNode}
-        workspacePath={context.workspacePath}
-        theme={context.theme}
-        codePreviewSettings={context.codePreviewSettings}
-        showTodoToolCalls={context.messageStreamShowTodos === true}
-        onOpenCodeViewer={context.onOpenCodeViewer}
-        onOpenFileLink={context.onOpenFileLink}
-        onOpenBrowserUrl={context.onOpenBrowserUrl}
-        onOpenAutomationsMain={context.onOpenAutomationsMain}
-        agentSummaryAction={agentSummaryAction}
-        authoritativeAgentType={subagentType}
-      />
+      {item.subagentRow.status === "unknown" ? (
+        <Button
+          variant="ghost"
+          className="flex h-auto w-full min-w-0 items-center justify-start gap-2 px-0 text-ui-base"
+          disabled={!canOpenChildSession}
+          data-testid={agentSummaryAction?.testId}
+          onClick={handleOpenChildSession}
+        >
+          <BotIcon aria-hidden className="size-4 shrink-0 text-foreground-subtle" />
+          <span className="min-w-0 flex-1 truncate text-left">{title}</span>
+          <span className="shrink-0 text-ui-sm text-foreground-subtlest">
+            {intl.formatMessage({ id: "subagentDirectory.status.unknown" })}
+          </span>
+        </Button>
+      ) : (
+        <ToolCallBlock
+          toolCallNode={toolCallNode}
+          workspacePath={context.workspacePath}
+          theme={context.theme}
+          codePreviewSettings={context.codePreviewSettings}
+          showTodoToolCalls={context.messageStreamShowTodos === true}
+          onOpenCodeViewer={context.onOpenCodeViewer}
+          onOpenFileLink={context.onOpenFileLink}
+          onOpenBrowserUrl={context.onOpenBrowserUrl}
+          onOpenAutomationsMain={context.onOpenAutomationsMain}
+          agentSummaryAction={agentSummaryAction}
+          authoritativeAgentType={subagentType}
+        />
+      )}
     </div>
   );
 }

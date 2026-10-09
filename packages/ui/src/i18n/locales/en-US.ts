@@ -747,6 +747,8 @@ const enUS: Record<string, string> = {
   "subagentDirectory.status.failed": "Failed",
   "subagentDirectory.status.cancelled": "Cancelled",
   "subagentDirectory.status.lost": "Lost",
+  "subagentDirectory.status.unknown": "Status unconfirmed",
+  "ompSubagentControl.readOnly": "Read-only execution record",
   "chat.statusPanel.endedAgents": "Ended",
   "chat.statusPanel.endedWorkflows": "Ended workflows",
   "workflowDirectory.title": "Workflow runs",

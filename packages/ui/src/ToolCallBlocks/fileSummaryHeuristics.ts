@@ -260,6 +260,8 @@ export function buildFallbackRawToolCallFileSummary(
   source?: EditKindSource,
 ): RawToolCallFileSummary[] {
   const path = readToolCallPathCandidate(source);
+  // 修复：虚拟资源写入不能生成文件 chip、伪造 +1 行或可点击的文件 diff。
+  if (path && /^[a-z][a-z0-9+.-]*:\/\//iu.test(path) && !/^file:\/\//iu.test(path)) return [];
   if (!path) {
     return [];
   }

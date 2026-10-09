@@ -1,5 +1,6 @@
 import type { ZCodeAgentInteractionAgent, ZCodeAgentInteractionEvent } from "@zcode/shared";
 import { safeInteractionAgentId } from "./OmpInteractionIds.js";
+import { ompAsyncResultEvents } from "./OmpAgentAsyncResult.js";
 
 export function interactionObject(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" && !Array.isArray(value)
@@ -25,6 +26,7 @@ export interface InteractionSource {
 export interface InteractionChild extends ZCodeAgentInteractionAgent {
   rawId: string;
   ancestry: string[];
+  statusAt?: number;
 }
 export function childrenFromInteractionRecords(
   source: InteractionSource,
@@ -44,7 +46,12 @@ export function childrenFromInteractionRecords(
         const id = rawId ? interactionChildId(source.agentId, rawId) : undefined;
         const child = id ? children.get(id) : undefined;
         // 只有已证明归属的 task job 结果能更新状态；同名 bash/eval 与主会话结束不作推断。
-        if (job?.type === "task" && status && child) children.set(child.id, { ...child, status });
+        if (job?.type === "task" && status && child)
+          children.set(child.id, {
+            ...child,
+            status,
+            statusAt: interactionTimestamp(message.timestamp ?? record?.timestamp),
+          });
       }
       continue;
     }
@@ -65,6 +72,7 @@ export function childrenFromInteractionRecords(
         known: true,
         ancestry: [...ancestry, rawId],
         ...(string(progress?.status) ? { status: String(progress?.status) } : {}),
+        statusAt: interactionTimestamp(message.timestamp ?? record?.timestamp),
       });
     }
   }
@@ -135,6 +143,14 @@ export function observationsFromInteractionRecords(
     const message = interactionObject(record.message);
     const entryKey = string(record.id) ?? `entry-${index}`;
     incoming(record.type === "custom_message" ? record : message, entryKey);
+    const custom = record.type === "custom_message" ? record : message;
+    for (const event of ompAsyncResultEvents(custom, {
+      agentId: source.agentId,
+      entryKey,
+      source: source.source,
+      knownChild: context.knownChild,
+    }))
+      add(event, "task");
     if (!message) continue;
     const timestamp = interactionTimestamp(message.timestamp ?? record.timestamp);
     if (message.role === "assistant") {
@@ -302,7 +318,10 @@ export function interactionEntryFromEvent(value: unknown): unknown | null {
   if (!event) return null;
   if (event.type === "irc_message" || event.type === "message_end") {
     const message = interactionObject(event.message);
-    if (message?.role === "custom" && String(message.customType).startsWith("irc:"))
+    if (
+      message?.role === "custom" &&
+      (String(message.customType).startsWith("irc:") || message.customType === "async-result")
+    )
       return { type: "message", message };
     if (message?.role === "assistant") {
       const content = (Array.isArray(message.content) ? message.content : []).filter((value) => {

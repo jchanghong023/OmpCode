@@ -14,6 +14,7 @@ import { mergeInteractionObservations } from "../domain/OmpAgentInteractionMerge
 import { buildOmpSubagentViewId } from "../domain/ompViewIds.js";
 import { ompSessionIdOfFilePath } from "../domain/ids.js";
 import { ProtocolError } from "./errors.js";
+import { ompHistoryOutcome } from "../domain/OmpSubagentHistory.js";
 import type { ConversationEngine } from "./conversationEngine.js";
 import type { OmpStorePort, OmpSessionProcess } from "./ports.js";
 
@@ -208,6 +209,19 @@ export class OmpAgentInteractionStore {
         }
       }
     }
+    // 修复：自动送达的结果没有 wait.jobs；交互节点与执行页用同一子记录终态规则，
+    // 不把 task.progress.pending 当成现在仍在执行，也不从最终正文猜测完成。
+    for (const source of history) {
+      const child = children.get(source.agentId);
+      if (!child || source.entries.length === 0) continue;
+      const outcome = ompHistoryOutcome(source.entries);
+      if (
+        terminalStatuses.has(child.status ?? "") &&
+        (outcome.at === undefined || (child.statusAt !== undefined && outcome.at < child.statusAt))
+      )
+        continue;
+      children.set(child.id, { ...child, status: outcome.status, statusAt: outcome.at });
+    }
     const observedStatuses = new Map<string, string | undefined>();
     for (const child of children.values()) {
       const status = processHost?.observedSubagentStatus?.(child.rawId, currentProcess);
@@ -223,7 +237,7 @@ export class OmpAgentInteractionStore {
     ]);
     const aliases = new Map<string, string[]>();
     for (const child of children.values()) {
-      const { rawId, ancestry, ...agent } = child;
+      const { rawId, ancestry, statusAt: _statusAt, ...agent } = child;
       const observedStatus = observedStatuses.get(child.id);
       agents.set(agent.id, {
         ...agent,

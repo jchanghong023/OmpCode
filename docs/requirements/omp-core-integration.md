@@ -15,6 +15,8 @@
 - **命令与技能目录/补全**：命令目录事实源为目录进程 `get_available_commands`（v3 富目录：`inputHint` 顶层、`subcommands`、`source`、`execution`、`availability`、`revision`；v1 形状 `input:{hint}` 兼容解析），技能目录继续按其中 `source=skill` 命令投影（`skills/referenceCatalog` 语义不变）。动态补全经目录进程 `complete_command`（UTF-16 光标、替换区间、参数提示、零执行副作用）；静态名称过滤仍可在 UI 本地完成，二者合并呈现且过期结果丢弃。`available_commands_update` 事件使目录与补全缓存失效并即时推送。
 - **模型两种入口分离**：会话临时切换走会话级 `set_model`（不写配置）；角色持久配置走目录进程 `get_model_roles`/`set_model_role`（全部可配置 role 始终可见，含未配置项；逐 role 自动保存，含保存中/失败/被覆盖状态；用户级作用域）。两个入口不得共用同一按钮语义；OMP 未提供 v3 时角色编辑器回落到本地配置文件读写。
 - **子代理**：运行中目录来自父会话投影（`subagent_lifecycle`/`subagent_progress` 帧 + `get_subagents` 快照对账；新核快照仅含运行中子代理）；已结束目录来自投影持久行（冷恢复从会话文件重建）。只读详情以合成 `childSessionId`（`omp-subagent:<id>@<parentSessionId>`）订阅 `conversation/<childSessionId>` 打开，内容为经父会话进程 `get_subagent_messages`（`fromByte`/`nextByte`/`reset` 窗口续读）读取的已保存记录 + 实时 `subagent_event` 事件，查看不触发新的模型执行。控制操作为显式用户动作入口：停止 → `cancel_subagent`，发送消息 → `steer_subagent`；只读详情默认无副作用。
+- **执行页的记录与呈现**：主会话与子代理详情按真实顺序保留任务输入、每次工具调用及结果、助手回复和后续运行，不把不同输入或唤醒后的执行合并成只剩最后一句回复。OMP 的 `irc:incoming`、`irc:relay`、`async-result` 等运行时协调消息不作为助手正文在执行页铺开；代理通信和后台结果由 Agent 交互页提供精简内容及原文。已标注为 agent 来源的 IRC steering 输入只保留可读的发送方和消息正文，不展示模型侧的等待中断/XML 包装。普通用户正文和其他可见扩展输出保持原样。`agent://` 通信、作业控制等虚拟资源写入不计入文件变更，也不生成文件 diff 或文件链接。界面初次打开定位到任务结果；用户展开执行过程或向上滚动后保持所选位置，不因同一记录的重复补读跳到后续协调消息。
+- **子代理控制状态**：详情顶部的发送和停止入口只有在当前父会话 owner 能证明该子代理可控制时可用；纯冷历史或已结束记录保持只读并显示对应状态，不把可见「停止」按钮当成仍在执行的事实。控制命令仍由既有 `session/controlSubagent` 路径执行，失败不得伪报成功。
 - **连通性测试与 MCP 状态**：新核无 `test_model`/`list_mcp_servers`；`provider/testModelConnectivity` 显式拒绝（-32601），`mcp/list` 返回合法空状态表，不伪造服务状态。各自能力边界见 [FORK.md](FORK.md) 与 [原生集成](integrations.md)。
 
 ## 状态所有者与接口
@@ -80,10 +82,33 @@ web-remote-replayable: 同一 owner → 水位增量 / 缺口快照；冷启动�
 13. **审查补充边界（无模型回归）**：目录首次查询必须等待协议协商结束；延迟 v3 ACK 不得永久误判为旧核。会话在 ready/状态水合中关闭后不得残留进程或复活投影，旧进程的 exit/模型回读不得影响新进程。未知/TUI-only/带附件斜杠输入被拒时，不先改变会话模型；思考档位被核心拒绝时不得报告成功。select 只回传用户实际选择的合法选项，缺失、未知及相互冲突的选择均取消，不默认 Approve；input/editor 的 GUI 结构化单题答案须无损回传。永久删除覆盖临时 ID、稳定 UUID 和尚未落盘的草稿；核心删除失败保留索引。已结束子代理在父进程重启后从受限的持久文件读到完整详情，终态最后一批记录与重写 reset 对已打开详情订阅可见，关闭详情/Host 后不留后台重读。
 14. **协议与冷历史补充**：同 chunkId 的 count/byteLength 必须恒定，重复片拒绝整个序列，实收不得超过声明长度；过期命令失败不得关闭新的活跃轮。合法用户 content 字符串与 blocks 均恢复正文、标题和子代理 transcript，畸形块不打断其他记录。主 v4 与 legacy 压缩失败均不得报告 accepted。
 15. **Editor/Input 衔接**：无 prefill 的 editor 仍为空的临时多行编辑器，可取消；敏感输入不进入持久草稿，按 [composer.md](./composer.md) 验收 7 记录。
+16. **主/子执行页联合回归**：真实 GUI 并行创建 a、b、c 并广播 `hello`，逐一打开三个正确归属的详情；展开后每个工具 ID 与核心记录一一对应，文件写入、通信工具和最终回复均可见。切换详情、关闭重开、重复补读和冷恢复不丢记录、不串代理、不改变手动阅读位置；主会话与三项详情的终态及控制可用性一致。执行页不铺开 IRC/后台结果的模型提示包，普通正文与扩展输出不被误过滤；每项均截图核对，Agent 交互页另按其唯一需求验收。
 
 核心五项（普通消息、技能调用+补全、内置命令+补全、子代理过程、模型双入口）必须逐项真实 GUI 操作验收并记录证据；协议类型检查或页面可打开不替代操作验收。
 
 ## 上游审查补充验收与目录所有者时序
+
+主代理的单条助手回复 `stop` 不代表整个执行结束；后台交付仍可能继续驱动模型，运行态由核心 `agent_end` / settled 事实收口。子代理持久终态遵循 OMP `yield` 契约：成功的非空字符串数组为增量，`complete: true`、无类型或字符串类型的成功交付才结束；失败的工具调用不能冒充任务终态。执行页和交互页使用同一持久终态解释，只有实时生命周期能够证明当前仍在运行。
+
+```mermaid
+sequenceDiagram
+  participant Core as OMP（运行与落盘事实 owner）
+  participant Adapter as 会话投影
+  participant Query as 交互只读查询
+  participant UI as 主代理 / 子代理 / Agent 交互页
+  Core-->>Adapter: 实时子生命周期、工具与回复
+  Adapter-->>UI: 当前运行状态与执行记录
+  Core->>Core: 保存父 task 归属、子 yield / stopReason 与通信
+  Note over Core,Adapter: 主回复 stop 后仍可消费后台交付；agent_end 才收口
+  Core-->>Adapter: agent_end / settled
+  Adapter-->>UI: 主执行结束
+  UI->>Adapter: 重开 / 冷恢复
+  Adapter->>Core: 按已证明父归属读取子记录
+  Adapter-->>UI: 持久终态；缺少证据时为未知
+  UI->>Query: 查看交互
+  Query->>Core: 同一父归属和子记录、实际通信 / 交付
+  Query-->>UI: 同一终态解释、真实方向与可展开原文
+```
 
 以下仅补充既有目录崩溃重建与命令缓存失效规则，不表示本次验证已完成。
 

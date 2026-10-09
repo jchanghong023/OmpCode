@@ -41,6 +41,8 @@ function normalizePath(path: string | undefined): string | null {
   if (typeof path !== "string" || path.trim().length === 0) {
     return null;
   }
+  // 修复：write 也承载 agent:// 通信和 proc:// 控制，URI 收件人不是真实文件变更。
+  if (/^[a-z][a-z0-9+.-]*:\/\//iu.test(path) && !/^file:\/\//iu.test(path)) return null;
   return path.replace(/\\/g, "/");
 }
 

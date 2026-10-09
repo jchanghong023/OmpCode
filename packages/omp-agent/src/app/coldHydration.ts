@@ -34,20 +34,17 @@ export async function hydrateEngineFromCold(
   let entries: unknown[] = [];
   if (sessionPath) {
     entries = await host.store.readSessionEntries(sessionPath);
-    const transcripts = new Map(
+    const childRecords = new Map(
       await Promise.all(
         coldSubagentIds(entries)
           .slice(0, 20)
-          .map(
-            async (id) =>
-              [
-                id,
-                transcriptFromOmpEntries(await host.store.readSubagentEntries(sessionPath, id)),
-              ] as const,
-          ),
+          .map(async (id) => [id, await host.store.readSubagentEntries(sessionPath, id)] as const),
       ),
     );
-    rows = rowsFromOmpEntries(entries, transcripts);
+    const transcripts = new Map(
+      [...childRecords].map(([id, records]) => [id, transcriptFromOmpEntries(records)]),
+    );
+    rows = rowsFromOmpEntries(entries, transcripts, childRecords);
   }
   const outputs =
     (await host.store.readCommandOutputs?.(engine.workspacePath, engine.sessionId, sessionPath)) ??

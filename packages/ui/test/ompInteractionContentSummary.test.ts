@@ -21,6 +21,26 @@ const screenshotBody = `<task-result id="InteractionAlpha" agent="interaction-te
 
 InteractionAlpha is now idle — message it via \`write agent://InteractionAlpha\` to follow up; transcript at history://InteractionAlpha`;
 
+test("自动送达与 wait 的 meta 包装默认只显示结果字段，原始协调提示仍可展开", () => {
+  const wrapped =
+    '<task-result id="Alpha" status="completed" duration="2s">\n<meta lines="1" size="20B" />\n<output>{"result":"ready"}</output>\n</task-result>';
+  const body = `<system-notice>\nBackground job Alpha has completed. Resume your work using the result below.\n${wrapped}\n\nAlpha is now idle — message it via agent://Alpha\n</system-notice>`;
+  for (const input of [wrapped, body]) {
+    const summary = summarizeOmpInteractionContent({ kind: "task_result", body: input });
+    assert.equal(summary.body, input);
+    assert.equal(summary.summary, "");
+    assert.deepEqual(
+      summary.fields.map(({ type, value }) => ({ type, value })),
+      [
+        { type: "status", value: "completed" },
+        { type: "duration", value: "2s" },
+        { type: "result", value: "ready" },
+      ],
+    );
+    assert.doesNotMatch(JSON.stringify(summary.fields), /Resume your work|agent:\/\/|<meta/u);
+  }
+});
+
 test("real task-result extracts execution status, duration, result, child result and reported send count", () => {
   const view = summarizeOmpInteractionContent({ kind: "task_result", body: screenshotBody });
   assert.equal(view.body, screenshotBody);

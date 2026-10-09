@@ -28,12 +28,39 @@ const customMessageSchema = z.union([
   z.object({ type: z.literal("custom_message"), ...customFields }),
 ]);
 
+/** 模型侧协调提示由交互观察读面保留原文，不混入主/子执行页的助手正文。 */
+export function isOmpCoordinationCustomType(value: unknown): boolean {
+  return value === "irc:incoming" || value === "irc:relay" || value === "async-result";
+}
+
+/** 仅规范核心标注的 agent steering；用户自己输入的同名包装必须原样保留。 */
+export function readableOmpAgentInput(value: unknown): { text: string; sender?: string } | null {
+  if (!value || typeof value !== "object") return null;
+  const message = value as { attribution?: unknown; steering?: unknown; content?: unknown };
+  if (message.attribution !== "agent" || typeof message.content !== "string") return null;
+  if (message.steering === true) {
+    const match =
+      /^(?:\[Wait interrupted by message\]\s*)?<irc from="[^"]+" agent="([^"]+)">\r?\n([\s\S]*)\r?\n<\/irc>$/u.exec(
+        message.content,
+      );
+    if (match) return { text: match[2]!, sender: match[1]! };
+  }
+  return null;
+}
+
 /** 同时消费 live AgentMessage 和持久化 custom_message entry；隐藏/非文本消息不泄露到 UI。 */
 export function visibleOmpCustomMessage(
   value: unknown,
+  includeCoordination = false,
 ): { text: string; timestamp?: number } | null {
   const parsed = customMessageSchema.safeParse(value);
-  if (!parsed.success || !parsed.data.display) return null;
+  // 修复：这些是给模型的通信/后台结果提示包；直接当回复显示会把尾部指导铺满执行页。
+  if (
+    !parsed.success ||
+    !parsed.data.display ||
+    (!includeCoordination && isOmpCoordinationCustomType(parsed.data.customType))
+  )
+    return null;
   const { content, timestamp } = parsed.data;
   let text: string;
   if (typeof content === "string") text = content;

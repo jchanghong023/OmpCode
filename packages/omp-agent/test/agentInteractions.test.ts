@@ -77,6 +77,82 @@ const spawn = (id: string, agent = "child", task = "assignment") =>
     progress: [{ id: agent, agent: "task", assignment: task, status: "running" }],
   });
 
+test("后台交付结果 live/history 幂等，节点由同一子记录终态核对，原文及方向保留", async () => {
+  const body =
+    '<system-notice>\nBackground job Alpha has completed. Resume your work using the result below.\n{"result":"done"}\n</system-notice>';
+  const custom = {
+    role: "custom",
+    customType: "async-result",
+    display: true,
+    content: body,
+    details: { jobs: [{ jobId: "Alpha", type: "task", durationMs: 20 }] },
+    timestamp: T + 30,
+  };
+  const h = harness({
+    "": [
+      spawn("spawn", "Alpha"),
+      { type: "custom_message", id: "entry", ...custom, timestamp: new Date(T + 30).toISOString() },
+    ],
+    Alpha: [
+      {
+        type: "message",
+        message: {
+          role: "assistant",
+          stopReason: "stop",
+          timestamp: T + 25,
+          content: [{ type: "text", text: "done" }],
+        },
+      },
+    ],
+  });
+  h.engine.agentInteractions.ingest("$root", { type: "message_end", message: custom });
+  h.engine.agentInteractions.ingest("$root", { type: "message_end", message: custom });
+  const snapshot = await h.query();
+  assert.equal(snapshot.agents.find((agent) => agent.id === "Alpha")?.status, "success");
+  const results = snapshot.events.filter((event) => event.kind === "task_result");
+  assert.equal(results.length, 1);
+  assert.equal(results[0]?.body, body);
+  assert.equal(results[0]?.fromAgentId, "Alpha");
+  assert.equal(results[0]?.toAgentId, "main");
+  assert.equal(results[0]?.source, "live_and_history");
+  zcodeSessionAgentInteractionsResultSchema.parse(snapshot);
+});
+
+test("批量后台结果只关联各自真实 job 段，未知身份不补造结果", async () => {
+  const h = harness({
+    "": [
+      spawn("a", "Alpha"),
+      spawn("b", "Beta"),
+      {
+        type: "custom_message",
+        customType: "async-result",
+        display: true,
+        timestamp: T + 50,
+        content:
+          "<system-notice>\n2 background jobs have completed. Resume your work using the results below.\n\n── Job Alpha (alpha label) ──\nalpha result\n── Job Beta ──\nbeta result\n</system-notice>",
+        details: {
+          jobs: [
+            { jobId: "Alpha", type: "task" },
+            { jobId: "Beta", type: "task" },
+            { jobId: "unproven", type: "task" },
+          ],
+        },
+      },
+    ],
+    Alpha: [],
+    Beta: [],
+  });
+  assert.deepEqual(
+    (await h.query()).events
+      .filter((e) => e.kind === "task_result")
+      .map((e) => [e.fromAgentId, e.body]),
+    [
+      ["Alpha", "alpha result"],
+      ["Beta", "beta result"],
+    ],
+  );
+});
+
 test("原生 write agent:// 的正文和真实 receipts 保留，广播不补造接收人，用户干预不当通信", async () => {
   const h = harness({
     "": [

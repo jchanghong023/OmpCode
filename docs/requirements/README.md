@@ -17,6 +17,7 @@
 | [centos7-release.md](centos7-release.md)           | CentOS 7 原生 glibc 2.17 兼容包、Electron 双轨构建、离线锁定与发布边界                                                                                  |
 | [centos7-performance.md](centos7-performance.md)   | CentOS 7 无 GPU 桌面的动画、流式合批与日志性能策略                                                                                                      |
 | [test-gates.md](test-gates.md)                     | Windows-only 三级测试编排、覆盖关系、隔离环境及验证状态；full/slow 同计划且与两平台发布分离，执行权限见根 AGENTS.md                                     |
+| [e2e.md](e2e.md)                                   | OpenAI Codex / GPT-6 Luna / High 的真实桌面专项验收：角色设置持久化、三个子代理文件操作、广播回复、GUI 与重启恢复；执行可行性及阻塞项在本文维护         |
 
 需求或预期用户可见行为变化时，先更新对应文档及验收场景；新独立功能域可新增文档并更新索引。实现设计可解释状态所有权和时序，但不得重复定义另一套产品规则。`docs/specs/` 中保留的一次性依赖升级和 Lint 清理资料是工程任务记录，不是长期产品需求或自动执行授权。
 

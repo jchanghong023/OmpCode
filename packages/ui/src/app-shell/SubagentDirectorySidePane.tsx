@@ -57,6 +57,7 @@ function StatusIcon({ status }: { status: DirectoryItem["status"] }) {
     case "cancelled":
       return <BanIcon aria-hidden className={className} />;
     case "lost":
+    case "unknown":
       return <CircleDashedIcon aria-hidden className={className} />;
   }
 }

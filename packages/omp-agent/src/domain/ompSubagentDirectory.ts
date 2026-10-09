@@ -153,7 +153,9 @@ export class OmpSubagentProjection {
         summaryText: input.summaryText,
         ...(input.transcriptText ? { transcriptText: input.transcriptText } : {}),
         ...(input.startedAt ? { startedAt: input.startedAt } : {}),
-        ...(input.status !== "running" ? { endedAt: Date.now() } : {}),
+        ...(input.status !== "running" && input.status !== "unknown"
+          ? { endedAt: Date.now() }
+          : {}),
         createdAt: prior?.createdAt ?? Date.now(),
         createdAtSeq: prior?.createdAtSeq ?? this.host.sequence() + 1,
       };
