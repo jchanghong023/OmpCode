@@ -188,15 +188,27 @@ export function observationsFromInteractionRecords(
         if (!rawTo || !["injected", "woken", "revived", "failed"].includes(String(outcome)))
           continue;
         const to = context.resolveAgent(rawTo);
+        // 新核回执保留总线消息 ID；冷历史接收时间不能拿来猜发送身份。
+        const messageId = string(receipt?.id);
+        const sentTimestamp = interactionTimestamp(receipt?.ts);
+        const observedTimestamp = sentTimestamp ?? call?.timestamp;
         add(
           {
-            eventId: `send:${source.agentId}:${callId}:${rawTo}`,
+            eventId: messageId
+              ? `message:${messageId}`
+              : `send:${source.agentId}:${callId}:${rawTo}`,
+            ...(messageId ? { messageId } : {}),
             kind: "message",
             fromAgentId: from,
             toAgentId: to,
             body,
-            ...(call?.timestamp !== undefined ? { timestamp: call.timestamp } : {}),
-            timeBasis: call?.timestamp === undefined ? "unknown" : "recorded",
+            ...(observedTimestamp !== undefined ? { timestamp: observedTimestamp } : {}),
+            timeBasis:
+              sentTimestamp !== undefined
+                ? "sent"
+                : observedTimestamp === undefined
+                  ? "unknown"
+                  : "recorded",
             delivery: outcome as "injected" | "woken" | "revived" | "failed",
             source: source.source,
             ...(details.to === "all"

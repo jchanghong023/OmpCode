@@ -282,11 +282,17 @@ export class SubagentViewStore {
     if (!view) return;
     const parsed = ompSessionEventFrameSchema.safeParse(frame.payload.event);
     if (!parsed.success) return;
-    // 事件在视图内无活动轮可投影（appendStreamDelta/upsertToolCall 均以 turn 为前置），
-    // 行的唯一实时来源是「事件触发的记录重读」；状态面（usage/错误事实）保持既有转发。
+    // 唤醒后 agent_start/user message_start 会建立活动轮；把整条事件送进 projector
+    // 会与记录补读双写同一工具。详情只转发用量/错误状态，所有行由补读唯一持有。
     // 防御（A9）：单帧投影异常跳过，不断事件流（与主会话 handleOmpEvent 同理）。
     try {
-      view.projector.handleEvent(parsed.data);
+      const event = parsed.data;
+      if (
+        event.type === "notice" ||
+        (event.type === "message_end" && event.message.role === "assistant") ||
+        event.type === "thinking_level_changed"
+      )
+        view.projector.handleEvent(event);
     } catch (error) {
       viewWarn("omp view event projection failed", {
         type: parsed.data.type,

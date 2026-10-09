@@ -223,12 +223,16 @@ function OmpModelRolesEditor(
         [roleId]: { saving: true, savedAt: null, error: null, effectiveNote: null },
       }));
       try {
+        // 核心按逐角色修订执行 CAS；遗漏此值会使真实 GUI 保存报 invalid_params。
+        // 复用目录/保存响应中的目标角色事实，不拿其他角色或整个目录的修订代替。
+        const expectedRevision = rpcRoles.find((role) => role.roleId === roleId)?.revision;
         const result = await services.zcodeAgentService.setOmpModelRole({
           workspacePath,
           ...(workspaceIdentity ? { workspaceIdentity } : {}),
           roleId,
           scope: "user",
           selection,
+          ...(expectedRevision !== undefined ? { expectedRevision } : {}),
         });
         if (requestGeneration !== generation.current) return;
         setRpcRoles((current) =>
@@ -285,7 +289,7 @@ function OmpModelRolesEditor(
         if (requestGeneration === generation.current) savingRoles.current.delete(roleId);
       }
     },
-    [services, workspaceIdentity, workspacePath, resolution.isRemoteTarget, writeBlocked],
+    [rpcRoles, services, workspaceIdentity, workspacePath, resolution.isRemoteTarget, writeBlocked],
   );
 
   if (!open && !inline) return null;

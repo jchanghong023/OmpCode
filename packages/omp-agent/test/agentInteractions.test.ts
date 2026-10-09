@@ -77,6 +77,65 @@ const spawn = (id: string, agent = "child", task = "assignment") =>
     progress: [{ id: agent, agent: "task", assignment: task, status: "running" }],
   });
 
+test("成功回执的真实消息 ID 与冷接收记录幂等，同正文不同 ID 不合并", async () => {
+  const received = (id: string) => ({
+    type: "custom_message",
+    id: `record-${id}`,
+    timestamp: T + 1000,
+    customType: "irc:incoming",
+    display: true,
+    details: { id, from: "child", message: "same body" },
+    content: "wrapped",
+  });
+  const h = harness({
+    "": [spawn("spawn"), received("actual-1"), received("actual-2")],
+    child: [
+      call("send-1", "write", { path: "agent://Main", content: "same body" }),
+      result("send-1", "write", {
+        message: {
+          op: "send",
+          from: "child",
+          to: "Main",
+          receipts: [{ to: "Main", outcome: "injected", id: "actual-1", ts: T + 10 }],
+        },
+      }),
+      call("send-2", "write", { path: "agent://Main", content: "same body" }, T + 50),
+      result(
+        "send-2",
+        "write",
+        {
+          message: {
+            op: "send",
+            from: "child",
+            to: "Main",
+            receipts: [{ to: "Main", outcome: "injected", id: "actual-2", ts: T + 60 }],
+          },
+        },
+        T + 70,
+      ),
+    ],
+  });
+  const snapshot = await h.query();
+  const messages = snapshot.events.filter((event) => event.kind === "message");
+  assert.deepEqual(
+    messages.map((event) => event.messageId),
+    ["actual-1", "actual-2"],
+  );
+  assert.deepEqual(
+    messages.map((event) => [
+      event.fromAgentId,
+      event.toAgentId,
+      event.timestamp,
+      event.timeBasis,
+      event.delivery,
+    ]),
+    [
+      ["child", "main", T + 10, "sent", "injected"],
+      ["child", "main", T + 60, "sent", "injected"],
+    ],
+  );
+});
+
 test("后台交付结果 live/history 幂等，节点由同一子记录终态核对，原文及方向保留", async () => {
   const body =
     '<system-notice>\nBackground job Alpha has completed. Resume your work using the result below.\n{"result":"done"}\n</system-notice>';

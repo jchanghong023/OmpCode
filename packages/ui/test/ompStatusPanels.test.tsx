@@ -90,6 +90,7 @@ test("每个 OMP 子代理使用真实任务、终态和独立详情入口渲染
     } as SubagentRow;
     const html = render(createElement(OmpSubagentRow, { row, context }));
     assert.match(html, new RegExp(`独立任务 ${index}`, "u"));
+    assert.match(html, new RegExp(`${index} · 独立任务 ${index}`, "u"));
     assert.ok(html.includes(`omp-subagent:${index}@parent`));
     assert.doesNotMatch(html, /查看子代理记录/u);
   }

@@ -173,6 +173,77 @@ test("subagent_event 触发重读合并：行实时增长、同内容不重复�
   assert.equal(harness.seq(), seqBefore + 1, "同内容重读不得产生增量");
 });
 
+test("已打开详情收到新运行生命周期与工具流时，同一原生工具仅显示一次", async () => {
+  let record: unknown[] = [entryUser("original assignment")];
+  let served = 0;
+  const harness = await createStore(async () => {
+    const entries = record.slice(served);
+    served = record.length;
+    return { success: true, data: { entries, nextByte: served * 4096 } };
+  });
+  const event = (value: unknown) =>
+    harness.store.ingestFrame(PARENT, {
+      type: "subagent_event",
+      payload: { id: "sa-1", event: value },
+    } as OmpSubagentFrame);
+  event({ type: "agent_start" });
+  event({
+    type: "message_start",
+    message: { role: "user", content: [{ type: "text", text: "resume" }] },
+  });
+  event({
+    type: "tool_execution_start",
+    toolCallId: "yield-resume",
+    toolName: "yield",
+    args: { data: "verified" },
+  });
+  event({
+    type: "tool_execution_end",
+    toolCallId: "yield-resume",
+    toolName: "yield",
+    result: { content: [{ type: "text", text: "Result submitted." }] },
+    isError: false,
+  });
+  record.push(
+    entryUser("resume"),
+    {
+      type: "message",
+      message: {
+        role: "assistant",
+        timestamp: T0 + 1,
+        content: [
+          { type: "toolCall", id: "yield-resume", name: "yield", arguments: { data: "verified" } },
+        ],
+      },
+    },
+    {
+      type: "message",
+      message: {
+        role: "toolResult",
+        timestamp: T0 + 2,
+        toolCallId: "yield-resume",
+        toolName: "yield",
+        content: [{ type: "text", text: "Result submitted." }],
+        isError: false,
+      },
+    },
+  );
+  event({ type: "agent_end", isTerminal: true });
+  harness.store.ingestFrame(PARENT, {
+    type: "subagent_lifecycle",
+    payload: { id: "sa-1", agent: "task", status: "completed" },
+  });
+  await waitFor(() => harness.calls() > 2, "生命周期收尾补读");
+  await sleep(100);
+  const tools = harness.engine.projection
+    .rowsRange(undefined, 100)
+    .rows.filter((row) => row.kind === "toolCall");
+  assert.equal(tools.length, 1, "事件与补读不能双写同一工具");
+  assert.equal(tools[0]?.toolCallId, "yield-resume");
+  assert.equal(tools[0]?.status, "success");
+  harness.store.dispose();
+});
+
 test("lifecycle 终态后停止重读调度（终态帧补读一次）", async () => {
   const harness = await createStore(async ({ fromByte }) =>
     fromByte

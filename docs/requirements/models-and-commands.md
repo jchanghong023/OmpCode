@@ -14,6 +14,7 @@
 - Host 启动 omp 适配器不依赖旧 ZCode Provider Registry 的 provider/model 就绪门禁。适配器先启动并从 omp 读取目录，提交时才校验所选模型；omp 无可用模型时由其自身返回明确错误。
 - 首屏及会话输入区不展示旧 ZCode 的“当前没有可用模型／升级／配置”横幅；旧注册表为空不能阻断 omp，真实 omp 错误仍按错误码展示。
 - 更改角色时只改用户选择的 role，保留配置文件其他字段、注释与未触及的 role。写前备份，写入失败时原配置可恢复。模型名中的冒号属于模型 ID，只有目录确认的思考档位后缀才按档位解析。本地旧核 YAML 回落也必须提供「自动」（`auto`）与「未配置」（`unset`）选择；自动保存该角色的自动语义，未配置删除目标 role 的持久字段而非过滤掉这次变更或写入组件占位值。此要求不改变新核 RPC 优先及远端/暂不可用不回落的边界。
+- RPC 角色编辑器保存时必须携带最新读取的目标角色 `revision` 作为 `expectedRevision`，不使用其他角色或目录整体的修订。成功返回的角色描述更新此角色的下一次保存依据；核心报告修订冲突时显式失败并保留待保存选择，不覆盖外部改动或绕过核心直写配置。旧核未提供角色修订时不补造修订值。验收从真实设置页依次保存 default/task 模型与 High，连续修改同一角色采用更新后的修订；两个角色独立保存，重开和重启读回一致。
 - 角色选择器允许在模型支持的档位中选择思考等级。切换模型时保留新模型也支持的原等级；不支持时使用新模型的缺省等级，未设置缺省则不写档位后缀。
 - omp profile 选择由 App Settings 持久化；Desktop Main 启动时读取并通过 `OMP_PROFILE` 传给 Host/内嵌 omp。默认或已有命名 profile 来自 omp 配置根目录，角色配置与历史扫描使用同一 profile 路径。保存后只标记待重启，不能热切换现有会话；待重启时角色编辑器不写旧 profile。
 - 模型设置页的 profile、角色模型和思考档位选择器统一复用 ZCode 的 `Select` 组件及输入框/菜单主题，不使用系统原生下拉框；会话工具栏复用的角色编辑器及旧核回落分支采用相同样式。保持现有候选分组、键盘操作、禁用状态与保存语义。
@@ -35,7 +36,10 @@ sequenceDiagram
   User->>UI: 打开编辑器 / 选择 role 模型、auto 或 unset
   UI->>Host: 读取角色 / 保存目标 role
   alt 支持角色 RPC
-    Host->>OMP: get_model_roles / set_model_role
+    Host->>OMP: get_model_roles（逐角色 revision）
+    OMP-->>UI: 角色与各自修订
+    UI->>Host: 保存目标 role 与 expectedRevision
+    Host->>OMP: set_model_role（同一角色修订）
     OMP-->>UI: 角色与修订，呈现保存成功/失败/被覆盖
   else 仅本地旧核永久缺能力
     Host-->>UI: 永久能力缺失
