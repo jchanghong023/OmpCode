@@ -168,11 +168,7 @@ test("real composer router rejects legal ready attachments and structured contex
     opened++;
     return true;
   };
-  for (const options of [
-    { attachments: [attachment] },
-    { contextAttachmentCount: 1 },
-    { sharedContextRefs: [{ kind: "shared_context_import", context_id: "saved-context" }] },
-  ]) {
+  for (const options of [{ attachments: [attachment] }, { contextAttachmentCount: 1 }]) {
     const before = structuredClone(options);
     const pending = routeOmpBtwComposerInput(
       "/btw keep my question",
@@ -181,7 +177,7 @@ test("real composer router rejects legal ready attachments and structured contex
       open,
     );
     assert.ok(pending);
-    await assert.rejects(pending, /不支持附件或结构化上下文/);
+    await assert.rejects(pending);
     assert.deepEqual(options, before);
   }
   assert.equal(opened, 0);

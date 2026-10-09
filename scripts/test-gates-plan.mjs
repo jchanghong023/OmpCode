@@ -136,19 +136,11 @@ export async function fullPlan() {
     }
   }
   stages.push(pnpm("workspace-build", ["build"], { realOmp: true }));
-  if (process.platform === "win32")
-    stages.push(
-      pnpm("windows-local-package", ["bundle:desktop", "--", "--os=win", "--arch=x64"], {
-        realOmp: true,
-      }),
-    );
-  else
-    stages.push({
-      id: "centos7-local-package",
-      command: "bash",
-      args: ["scripts/publish/centos7/build-zip.sh"],
-      packageInputs: true,
-    });
+  stages.push(
+    pnpm("windows-local-package", ["bundle:desktop", "--", "--os=win", "--arch=x64"], {
+      realOmp: true,
+    }),
+  );
   const standalone = "ompPerformanceHotPaths.components.e2e.mjs";
   stages.push(
     node("components-hotpaths", [`packages/desktop/test/${standalone}`], {
@@ -159,26 +151,14 @@ export async function fullPlan() {
   for (const file of (await filesAt("packages/desktop/test")).filter(
     (name) => name.endsWith(".e2e.mjs") && name !== standalone,
   )) {
-    if (file.startsWith("centos") && process.platform === "win32") continue;
-    if (file === "centosPerformance.gui.e2e.mjs") {
-      stages.push(
-        node("centos-runtime-performance", [`packages/desktop/test/${file}`], { electron: true }),
-      );
-      continue;
-    }
-    const simple = [
-      "ompStartup.gui.e2e.mjs",
-      "ompSkills.gui.e2e.mjs",
-      "ompConfirm.gui.e2e.mjs",
-      "centosChineseFont.gui.e2e.mjs",
-    ];
+    const simple = ["ompStartup.gui.e2e.mjs", "ompSkills.gui.e2e.mjs", "ompConfirm.gui.e2e.mjs"];
     for (const phase of guiPhases[file] ?? ["live"]) {
       stages.push(
         node(`gui:${file}:${phase}`, [`packages/desktop/test/${file}`], {
           fixture: true,
           file,
           phase,
-          realOmp: !file.startsWith("centos"),
+          realOmp: true,
           unknownGui: !guiPhases[file] && !simple.includes(file),
           ...(file === "ompNativeCommands.gui.e2e.mjs"
             ? {
@@ -192,21 +172,8 @@ export async function fullPlan() {
       );
     }
   }
-  if (process.platform !== "win32")
-    stages.push({
-      id: "centos-launcher",
-      command: "bash",
-      args: ["scripts/publish/centos7/launch.test.sh"],
-    });
   stages.push(
     node("desktop-gui-smoke", ["scripts/dev/gui-smoke-cdp.mjs"], { fixture: true, phase: "smoke" }),
   );
   return stages;
 }
-
-export const extendedStages = [
-  { id: "wsl-linux", kind: "wsl" },
-  ...["centos7-vm-package", "citrix-ime", "target-network-disk"].map((id) => ({ id, kind: "gap" })),
-  { id: "release-windows", kind: "release", workflow: "release-windows.yml" },
-  { id: "release-centos7", kind: "release", workflow: "release-centos7.yml" },
-];

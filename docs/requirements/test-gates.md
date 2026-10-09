@@ -1,26 +1,22 @@
 # 三级测试入口
 
-本域只维护测试编排、覆盖关系与验收，不修改既有检查内容或通过标准。Agent 执行权限唯一维护于 [AGENTS.md](../../AGENTS.md#三级测试门禁)。
+本域只维护 **Windows 本机**测试编排、覆盖关系与验收。AI 不执行 CentOS/Linux/WSL 测试；CentOS 专用测试已取消。Windows 既有功能断言保持原标准。测试不触发、不等待、不验证任何发布流水线；两平台构建与发布是独立外部操作，不属于测试结果。Agent 执行权限唯一维护于 [AGENTS.md](../../AGENTS.md#三级测试门禁)。
 
 ## 所有者与入口
 
-- 根 `package.json` 提供 `pnpm fastcheck`、`pnpm fulltest`、`pnpm slowtest`；`mise.toml` 固定 Node/pnpm，脚本复用当前运行时。入口拒绝版本不符，不安装工具或清除缓存。
+- 根 `package.json` 提供 `pnpm fastcheck`、`pnpm fulltest`、`pnpm slowtest`；三个入口只允许 Windows 执行测试。`mise.toml` 固定 Node/pnpm，脚本复用当前运行时，拒绝版本不符，不安装工具或清除缓存。
 - `scripts/test-gates.mjs` 拥有权限检查、总时限、子进程树和最终状态；编排模块复用既有命令，测试与质量配置仍各自拥有断言及通过标准。结果记录 HEAD、未提交差异摘要、内容指纹及工具版本，不跨快照合并通过结论。
 - `fastcheck` 复用类型检查、Lint、变更架构/格式检查和固定的快速单测子集。总计最多 60 秒，提前预留进程清理时间；超时输出 `TIMEOUT` 和秒数、结束自己的进程树并以非零码退出。预算参数只能下调。
-- `fulltest` 包含根静态检查、未被根命令覆盖的包级检查、当前 workspace 全部测试文件、真实 OMP API、性能对照、组件及产品 GUI、当前平台构建与本地打包。独立上游 CLI 快照不接回产品，也不把跨平台检查混入本级。
-- `slowtest` 包含相同本机完整检查，加上 Windows→WSL 的 Linux 原生检出、CentOS 运行时/字体/启动器、真 VM 包级、Citrix IME、目标网络盘及现有 Windows EXE/CentOS ZIP 发布流水线。没有现成自动入口或缺少环境的项目明确 `UNVERIFIED`，不伪造替代测试。
+- `fulltest` 包含根静态检查、未被根命令覆盖的包级检查、当前 workspace 的 Windows 适用测试、真实 OMP API、性能对照、组件及产品 GUI、Windows 构建与本地打包。独立上游 CLI 快照不接回产品。
+- `slowtest` 复用相同 Windows 完整检查，不追加 WSL、CentOS 专用测试、Linux/VM、Citrix/目标网络盘专项或发布流水线。缺少 Windows 必需环境仍记录未验证；取消的 CentOS 验收不再阻塞 Windows 结果，也不冒充通过。
 
 ```mermaid
 flowchart TD
   A[原始用户指令] --> B[入口权限检查]
   B --> C[fastcheck: 60 秒内子集]
-  B --> D[fulltest: 本机全部适用检查]
-  D --> E[slowtest: WSL 与平台专项]
-  E --> F[既有 main 发布流水线]
+  B --> D[fulltest / slowtest: Windows 本机完整检查]
   C --> G[时长与真实状态]
   D --> G
-  E --> G
-  F --> G
 ```
 
 ## 环境与失败语义
@@ -28,26 +24,33 @@ flowchart TD
 - 真实 OMP 使用本机安装版本；源码权威及无安装时不验证的规则见 [FORK.md](FORK.md#omp-侧依赖)。缺少安装、凭据、二进制或测试发生跳过时，记录未验证而非通过，不静默使用旧缓存核或临时安装。
 - 产品 GUI 必须由专用隔离 fixture 提供，保持各场景要求的 profile、审批、扩展、历史和工作区；live/stable/cold、capture、before/after 按原测试定义运行，冷恢复需要同一数据根上的新进程。组件测试不代替产品 GUI。
 - `ZCODE_GATE_ENVIRONMENTS` 指向本机 fixture 配置 JSON。各阶段可配置 `prepare`/`cleanup` 命令及 `environmentFile`；准备器仅提供隔离运行环境，门禁仍直接执行既有测试。环境文件声明当前 `snapshot`、`isolatedRoot` 与 `env`，不能填写任意通过结果。具体格式见编排脚本；配置缺失时输出缺少的阶段 ID，不连接日常实例。
-- 性能文件索引对照需要显式 `ZCODE_GATE_PERF_BASELINE`；不猜测改前提交。WSL 需要显式发行版与 Linux 原生 checkout，进入后先核对同一源码指纹与原生工具链，不自动安装环境或同步覆盖其他 checkout。
-- 本机失败或缺少验证阻止后续发布。发布仅复用 `.github/workflows/release-windows.yml` 与 `release-centos7.yml`，目标固定 `origin/main`；需要显式发布授权、干净工作树和远端同一 HEAD。由原 workflow 生成 Tag，不另造版本或目标，不自动提交/推送。必须读到对应 run 的最终结论；触发、运行中、等待超时都不是通过。
-- CI 环境拒绝本地 `slowtest`，防止递归触发。源码变化后不能沿用此前环境或 pipeline 结果。所有阶段记录耗时，失败、取消、跳过和缺环境保持非通过状态。
+- 性能文件索引对照需要显式 `ZCODE_GATE_PERF_BASELINE`；不猜测改前提交。测试环境配置不再接受或使用 WSL 发行版、Linux checkout 或跨平台工具链作为测试前提。
+- 发布独立于三个测试入口。测试不接受 `--publish-releases`，不发现或检查 workflow、不调用 GitHub CLI。两条既有 `.github/workflows/release-windows.yml` 与 `release-centos7.yml` 保留，发布须由原始用户另行明确授权，目标固定 `origin/main`；既有 workflow 生成 Tag，不另造版本或目标。Windows 验证失败仍须先修复，不能以发布成功代替测试通过。
+- 源码变化后不能沿用此前测试结果。所有 Windows 测试阶段记录耗时，失败、取消、跳过和缺环境保持非通过状态；CentOS 产品支持及构建期产物完整性约束不因此取消。
 
 ## 验收
 
 1. 三个标准入口及只读 `--plan` 存在；没有授权的 full/slow 在执行任何检查之前拒绝。
 2. fastcheck 实测不超过 60 秒，报告暖/冷缓存边界；禁止为计时清除缓存。
-3. 用临时目录短桩验证超时及子进程清理、失败传播、缺工具非通过、本机失败阻止远端、CI 反递归；不执行真实 full/slow 或流水线。
-4. 全量单测与 GUI 脚本按当前文件发现，新增未登记 GUI 不被静默遗漏；所有适用缺口进入最终状态。
-5. fulltest 不启动 WSL 或远程流水线；slowtest 逐阶段绑定同一快照，发布成功需要正确 run ID/HEAD 的最终成功结论。
+3. 用临时目录短桩验证超时及子进程清理、失败传播、缺工具非通过、预算不能放宽和未授权拒绝；不执行真实 full/slow 或任何流水线测试。
+4. 全量 Windows 单测与 GUI 脚本按当前文件发现，新增未登记 GUI 不被静默遗漏；所有 Windows 适用缺口进入最终状态。
+5. 三个入口均不调用 WSL 或远程流水线；fulltest 与 slowtest 的执行计划相同，包含 Windows 构建/打包及真实核心、组件与产品 GUI。发布和测试状态分开报告。
 
 ## 实现与验证状态
 
-首次建立入口时仅执行自动 fastcheck 与入口机制验证；历史未授权时未运行 fulltest/slowtest，不表示通过。当前续作已获得本次用户对完整 slowtest、提交/推送全部当前工作区与两条 origin/main 正式发布的明确授权。真 VM、Citrix 和目标网络盘当前没有统一自动验收入口，仍须记录为项目验证缺口，不因发布请求另造替代或降低标准。
+首次建立入口及下列历史运行曾采用跨平台/发布联合门禁。2026-10-09 用户明确取消 CentOS 测试，并要求 AI 只测 Windows、slowtest 删除流水线测试；现行规则以上文 Windows-only 边界为准。此前 FAIL 与缺环境记录保留为历史证据，不改写为通过；已取消的测试不再成为现行 Windows 测试前提。两平台发布授权仍独立于测试。
 
 - 2026-10-09，Node 24.14.0 / pnpm 10.33.2、Windows x64：fastcheck 重跑耗时 5.0 秒（现有暖缓存，未验证冷缓存）。类型、Lint、变更架构及 18 项快速单测通过；整体 FAIL，原因是本次门禁任务之外的 9 个已修改/新增文件格式不合规，未修改或排除它们。首轮 6.3 秒期间还发生并发源码变化，入口如实拒绝合并为同一快照通过结论；随后复跑上述受影响阶段。
 - 入口自检 2.6 秒通过，覆盖临时桩的失败传播、缺工具、Node spec reporter 跳过识别、预算不能放宽、未授权拒绝、前序失败阻止远端、CI 反递归及超时进程树清理。没有运行真实 fulltest/slowtest、WSL 或流水线。
 - 只读计划与文件对照确认：当前 Windows fulltest 包含 46 阶段、147 个现有测试文件和 21 个产品 GUI 阶段，未遗漏当前测试文件，未混入 WSL/远端；slowtest 追加 WSL（含 CentOS 运行时、字体与启动器）、三项既有目标环境验收缺口及两条既有发布流水线。GUI fixture 配置及跨平台/发布环境尚未执行验证。
 - 新增的六个 `scripts/test-gates*.mjs` 文件分别执行 `node --check <文件>`，均通过；显式指定这六个文件的 `pnpm exec oxlint <文件列表>`（0 警告/错误）与 `pnpm exec oxfmt --check <文件列表>` 通过。没有按目录或全仓执行新入口的专项豁免检查。
 - 续作发现并修复源码指纹的两种误判：LF/CRLF stderr 诊断曾混入 diff；逐 Buffer 解码还会在中文 UTF-8 字符跨管道边界时产生数量不稳定的替换符。现在两条流各自连续 UTF-8 解码，指纹只取成功 Git 命令的 stdout，失败保留 stderr。实际临时 Git 仓库覆盖大段中文 diff、警告开关、真实编辑与缺失目录诊断；新增回归修复前失败，最终自检 4.7 秒通过，当前 87 项变更连续两次指纹一致。未关闭保护或放宽快照条件。
+- 授权完整执行 `pnpm slowtest --human-authorized --publish-releases`：干净快照 `6338b0885bd84445e6d930f3e313654fe860fceb`，Node 24.14.0 / pnpm 10.33.2，916.1 秒，整体 **FAIL**。类型、Lint、格式、全量架构、普通 OMP 366 项、真实 OMP 3 项、构建及 Windows 本地测试包通过；原生命令 4/5，另有 services/UI 测试失败、6 项跳过，Knip 未通过，组件与 21 项 GUI fixture 未完成。不得将此前核心 374/374 或独立 GUI 通过合并为该门禁通过。
+- 收尾修正只限验证正确性：TTL 测试从首次扫描前统一受控时钟；`/btw` 测试删除已取消的旧上下文字段和实现文案断言，保留真实附件/上下文拒绝与草稿不变约束，定向 28/28 通过。Electron 门禁按 Desktop 的实际模块解析定位已提升至根目录的运行时；外部 fixture 固定 Node 24.14.0 并删除 `ELECTRON_RUN_AS_NODE`，不以空字符串冒充禁用。
+- 原生命令 fixture 缺少 `OMP_NATIVE_E2E_ROOT`，已关联此前真实计划验收的隔离目录，未改用户配置。WSL 实际 Node 为 20.19.0 / 24.21.0，未发现精确 24.14.0；真 VM、Citrix IME 与目标网络盘缺统一自动入口。两条发布阶段因前序非通过被门禁拒绝，**未触发正式发布**，不能标记成功。
+- Windows-only 切换实际复验：调整后的 Windows 路径、RPC 参数、数据根、环境白名单、正常 HTTP 重定向、node:sqlite、门控、TTL 与 `/btw` 相关定向测试 **49/49**，0 失败、0 跳过；真实 CLI 自检 **6.9 秒通过**（只读 full/slow 计划一致、旧发布参数拒绝、权限/指纹/超时与自有进程清理）。`fastcheck` **11.0 秒通过**，类型、Lint（0 警告/错误）、变更架构、20 项快速用例与 26 个变更文件格式通过；该次内容指纹 `281c158cde9abb60b263de152d0ffdbc06929fb83327146c7eb2b58c54b28508`。不代表完整 Windows 门禁通过。
+- Electron 运行时定位修正后，通过真实组件 E2E 的门禁入口实测 `PASS`。隔离 R7 测试版 GUI 已重新打开并实际截图，专用 CDP 9268 / renderer 5268、既有沙箱数据根；不连接日常实例。全新 GUI fixture 的原侧栏超时已由失败截图定位为首跑职业引导；外部准备器按真实三步“跳过”入口完成引导，8.92 秒准备成功，实际页面断言确认引导消失、目标项目侧栏与 Lexical 输入区可见，并截图。原 GUI 冒烟命令完成；它的旧 textarea 诊断仍为 false，不用该字段冒充富输入框验证。
+- 正式发布独立使用既有已推送业务快照 `main@6338b0885bd84445e6d930f3e313654fe860fceb`；本轮测试范围与 Knip 配置调整和该业务版本分离。修正真实 bundle、GUI 与性能入口后，完整 Knip 仍报告 122 个未使用文件及依赖/导出等诊断，不记为通过，也不扩大到已取消功能的产品清理。Windows 完整门禁尚未全部通过；发布成功不替代测试结论。
+- 独立正式发布已完成：Windows [run 37865831354](https://github.com/jchanghong023/OmpCode/actions/runs/37865831354) 与 CentOS [run 37865830627](https://github.com/jchanghong023/OmpCode/actions/runs/37865830627) 均为 `completed/success`，自动 Tag 指向上述业务快照，正式 EXE/ZIP 及 SHA256 资产上传完成。这里只记录已授权发布的操作结果，不是流水线测试；没有执行 CentOS 测试。
 
-后续可由用户明确授权运行 `pnpm fulltest --human-authorized` 或 `pnpm slowtest --human-authorized`；正式双平台发布另需明确授权后使用 `--publish-releases`。所有真实 GUI 的配置应位于仓库外，避免配置自身参与源码指纹计算；先以 `pnpm fulltest --plan` 查阶段 ID，再由隔离 fixture 准备器生成对应环境文件。环境文件必须绑定本次 HEAD/内容指纹；真实 OMP 场景还必须声明与本机安装路径一致的 `ompBinary`。WSL 配置额外指定 Linux 原生 `environmentConfig`、`performanceBaseline`，并校验 CentOS 7 与原生 Linux 工具链。
+完整 Windows 测试使用 `pnpm fulltest --human-authorized` 或 `pnpm slowtest --human-authorized`；无需也不允许添加发布参数。所有真实 GUI 的配置位于仓库外，避免配置自身参与源码指纹计算；先以 `pnpm fulltest --plan` 查 Windows 阶段 ID，再由隔离 fixture 准备器生成对应环境文件。环境文件必须绑定本次 HEAD/内容指纹；真实 OMP 场景声明与本机安装路径一致的 `ompBinary`。

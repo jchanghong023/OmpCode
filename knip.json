@@ -7,24 +7,68 @@
         ".release-it.mjs",
         ".vscode/*.mjs",
         "scripts/check-workspace-freshness.mjs",
-        "scripts/mise-run.mjs"
+        "scripts/mise-run.mjs",
+        "scripts/dev/gui-smoke-cdp.mjs",
+        "**/*.test.{js,cjs,mjs,jsx,ts,cts,mts,tsx}",
+        "!apps/zcode-cli/**"
+      ]
+    },
+    "packages/*": {
+      "entry": [
+        "{index,src/index}.{js,cjs,mjs,jsx,ts,cts,mts,tsx}",
+        "**/*.test.{js,cjs,mjs,jsx,ts,cts,mts,tsx}",
+        "test/*.perf.{ts,mts}"
       ]
     },
     "packages/desktop": {
       "entry": [
         "electron-builder.config.js",
-        "scripts/sign-windows-hook.cjs",
+        "src/main/index.ts",
+        "src/main/browserView/electronBrowserWebmRecorder.ts",
+        "src/main/zcodeDataSizeWorker.ts",
+        "src/main/storageScanWorker.ts",
+        "src/preload/embeddedBrowserJavaScriptDialog.ts",
+        "src/preload/codingPlanWebview.ts",
+        "src/preload/browserVideoRecorder.ts",
+        "src/preload/index.ts",
+        "src/preload/resourceManager.ts",
+        "src/preload/cuaPermissionPanel.ts",
+        "src/host/index.ts",
+        "src/host/tasksStorageWorker.ts",
+        "src/scheduler/index.ts",
         "src/renderer/*.html",
         "src/renderer/cuaPermissionPanel.ts",
-        "src/renderer/src/resource-manager.tsx"
+        "src/renderer/src/resource-manager.tsx",
+        "**/*.test.{js,cjs,mjs,jsx,ts,cts,mts,tsx}",
+        "test/*.e2e.mjs",
+        "test/ompAgentInteractions.launch.mjs",
+        "test/ompNativeCommands.launch.mjs"
       ]
     },
     "packages/server": {
-      "entry": ["src/index.ts", "src/entry-stdio.ts", "build-remote.ts"]
+      "entry": [
+        "src/index.ts",
+        "src/entry-stdio.ts",
+        "src/entry-http.ts",
+        "build-remote.ts",
+        "**/*.test.{js,cjs,mjs,jsx,ts,cts,mts,tsx}"
+      ]
     },
     "packages/services": {
-      "entry": ["src/index.ts", "src/storage/module.ts"]
+      "entry": [
+        "src/index.ts",
+        "src/storage/module.ts",
+        "**/*.test.{js,cjs,mjs,jsx,ts,cts,mts,tsx}",
+        "test/*.perf.{ts,mts}"
+      ]
+    },
+    "packages/omp-agent": {
+      "entry": [
+        "{index,src/index}.{js,cjs,mjs,jsx,ts,cts,mts,tsx}",
+        "src/adapters/cliMain.ts",
+        "**/*.test.{js,cjs,mjs,jsx,ts,cts,mts,tsx}"
+      ]
     }
   },
-  "ignore": [".agents/**", "docs/**", "packages/ui/src/components/**"]
+  "ignore": [".agents/**", "docs/**", "packages/ui/src/components/**", "apps/zcode-cli/**"]
 }

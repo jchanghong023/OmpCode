@@ -1,8 +1,8 @@
 # Electron 44 ↔ 28 API 差异清单（W2 双运行时兼容审计）
 
-> 状态：W2 审计交付（对应 `docs/test-reports/refactor-plan.md` W2-2 与 `docs/requirements/centos7-release.md`「Ownership and boundaries」）。
+> 状态：历史 W2 审计交付（对应 `docs/test-reports/refactor-plan.md` W2-2）；其中实验、扫描及通过记录仅证明当时范围，不是当前测试入口或 CentOS 验收结论。现行产品标准见 `docs/requirements/centos7-release.md`「Ownership and boundaries」。
 > 运行时基线：Windows 全功能基准 = Electron 44.4.5（内嵌 Node 22+，`node:sqlite` 可用）；CentOS 7 发布构建 = Electron 28.3.3（Chromium 120、内嵌 Node 18.18.2）。
-> 机器可检查部分由扫描测试固化：`packages/desktop/test/electronApiCompatAudit.test.ts`（`pnpm exec tsx --test packages/desktop/test/electronApiCompatAudit.test.ts`）。新增 Main/Host/renderer 代码不得引入清单外仅 Electron 44 可用的 API；扫描失败即违规，豁免必须落入测试内 baseline 并登记所有者。
+> CentOS 专属 API 扫描自动测试已取消，不再提供运行命令或测试 baseline 登记要求。新增 Main/Host/renderer 代码仍不得引入清单外仅 Electron 44 可用的 API，产品兼容清单与构建期约束保留；AI 仅按 [现行测试需求](requirements/test-gates.md) 在 Windows 本机测试，不进入 Linux/WSL/VM，也不测试、触发、等待或验证发布 workflow。
 
 ## 1. 双 ABI 实测结论：better-sqlite3 9.6.0 不能单驱动
 
@@ -53,13 +53,13 @@ Electron 命名空间面审计：Main/Host/preload 的通用 import 包含 Brows
 
 扫描范围 `packages/ui/src` + `packages/desktop/src/renderer`，对照 Chromium 120（Electron 28）可用的 CSS/JS 基线。
 
-### 已发现并登记的差异（降级可用，不阻塞启动；完整清单由扫描测试 baseline 固化）
+### 历史已发现并登记的差异（降级可用，不阻塞启动；当时完整清单由扫描测试 baseline 固化）
 
 `field-sizing`（Chromium 123）与 `scrollbar-width`/`scrollbar-color`（Chromium 121）在 Chromium 120 上属性被忽略，属渐进增强降级，不阻塞功能：
 
 - `field-sizing-content`（内容自适应）：`components/ui/textarea.tsx`、`components/ai-elements/prompt-input-textarea.tsx`（prompt 输入框）、`settings/model-provider-section/ProviderModelMetadataFields.tsx`、`ProviderModelReasoningLevelEditor.tsx` —— Chromium 120 上退化为固定 min 高度、内部滚动，输入仍可用。如需像素级一致由 W4 加 JS autosize 回退。
 - `field-sizing-fixed`（显式固定）：`GitActionMenu.tsx`、`feedback/FeatureRequestDialog.tsx`、`feedback/FeedbackSubmitSections.tsx` —— 元素本身带固定 h/min-h，默认行为即 fixed，Chromium 120 无实际差异。
-- `scrollbar-width: none`（隐藏滚动条）：`styles.css`、`presentation/presentationPdfPrintExport.ts`、`settings/model-provider-section/codingPlanEmbeddedWebview.ts`、`v4/ConversationDraftSuggestedPrompts.tsx` —— Chromium 120 上滚动条变为系统默认可见样式；`styles.css` 的 `scrollbar-color` 同理回落默认配色。视觉走查（P2）确认可接受即可，否则 W4 补 `::-webkit-scrollbar` 回退（120 支持）。
+- `scrollbar-width: none`（隐藏滚动条）：`styles.css`、`presentation/presentationPdfPrintExport.ts`、`settings/model-provider-section/codingPlanEmbeddedWebview.ts`、`v4/ConversationDraftSuggestedPrompts.tsx` —— Chromium 120 上滚动条变为系统默认可见样式；`styles.css` 的 `scrollbar-color` 同理回落默认配色。原 P2/W4 计划曾要求目标平台视觉走查及按需 `::-webkit-scrollbar` 回退（120 支持）；该专属测试计划已取消，历史清单不证明真实观感已验收。
 
 ### 已核查无差异
 
@@ -76,6 +76,6 @@ Electron 命名空间面审计：Main/Host/preload 的通用 import 包含 Brows
 
 ## 6. 验证状态与未验证范围
 
-- 本机已验证：better-sqlite3 9.6.0 对 Electron 28 headers 编译通过、对 Node 24 headers 两种 C++ 标准均失败；sqlite UT/typecheck/lint（见提交记录）；扫描测试全绿（§3 的 4 处 Node 18.18 破坏点已修复并移出 baseline，扫描 0 违规 0 baseline）。
-- 本机未验证（不在此宣称）：Electron 28.3.3 真实运行时内加载 better-sqlite3 二进制、CentOS 7 glibc 2.17 构建器编译、§3 修复在 Electron 28 运行时的实测、渲染层 field-sizing/scrollbar 降级的真实观感——按计划由 C1 金丝雀 + P2 VM 验收与 UI 走查覆盖（centos7-release.md「Package acceptance」），不得以本清单替代。
-- 后续新增 Main/Host/renderer 代码如再引入清单外差异，按扫描测试提示登记 baseline（附所有者与修复建议）。
+- 历史本机已验证：better-sqlite3 9.6.0 对 Electron 28 headers 编译通过、对 Node 24 headers 两种 C++ 标准均失败；sqlite UT/typecheck/lint（见提交记录）；当时扫描测试全绿（§3 的 4 处 Node 18.18 破坏点已修复并移出 baseline，扫描 0 违规 0 baseline）。这些历史事实保留，不作为当前工作树通过结论。
+- 未验证边界仍保留：Electron 28.3.3 真实运行时内加载 better-sqlite3 二进制、CentOS 7 glibc 2.17 构建器编译、§3 修复在 Electron 28 运行时的实测、渲染层 field-sizing/scrollbar 降级的真实观感。原 C1/P2 VM 与 UI 专属测试安排已取消，不再作为 Windows 测试或 workflow 修改前提；不得以本清单、取消测试或发布成功冒称已验收。
+- 后续兼容行为及构建期完整性仍遵循现行 CentOS 产品需求；不恢复已取消的扫描测试、baseline 或 Linux 专属 UT 入口。

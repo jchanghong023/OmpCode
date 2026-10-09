@@ -5,14 +5,12 @@ import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
   commandOutput,
-  exists,
   stopAll,
   pause,
   startBudget,
   snapshot,
   gitText,
 } from "./test-gates-process.mjs";
-import { remoteAllowed } from "./test-gates-remote.mjs";
 
 export async function selfTest() {
   const root = await mkdtemp(join(tmpdir(), "ompcode-gates-selftest-"));
@@ -93,31 +91,40 @@ export async function selfTest() {
   } finally {
     process.chdir(previousCwd);
   }
-  assert.equal(
-    remoteAllowed({ records: [{ status: "FAIL" }], inCi: false, authorizedRelease: true }),
-    false,
-  );
-  const remoteMarker = join(root, "remote-triggered");
-  if (remoteAllowed({ records: [{ status: "FAIL" }], inCi: false, authorizedRelease: true }))
-    await writeFile(remoteMarker, "triggered");
-  assert.equal(await exists(remoteMarker), false);
-  assert.equal(
-    remoteAllowed({ records: [{ status: "PASS" }], inCi: true, authorizedRelease: true }),
-    false,
-  );
   const denied = await commandOutput("node", ["scripts/test-gates.mjs", "fulltest"], {
     quiet: true,
   });
   assert.equal(denied.code, 2);
   assert.match(denied.output, /HUMAN AUTHORIZATION REQUIRED/u);
-  const deniedSlow = await commandOutput(
-    "node",
-    ["scripts/test-gates.mjs", "slowtest", "--human-authorized"],
-    { quiet: true, env: { CI: "true" } },
+  const plans = [];
+  for (const level of ["fulltest", "slowtest"]) {
+    const result = await commandOutput("node", ["scripts/test-gates.mjs", level, "--plan"], {
+      quiet: true,
+    });
+    assert.equal(result.code, 0, result.output);
+    const start = result.output.indexOf("{");
+    const finish = result.output.lastIndexOf("\n}");
+    plans.push(JSON.parse(result.output.slice(start, finish + 2)).stages);
+  }
+  assert.deepEqual(plans[0], plans[1], "Both complete gates must expose the same Windows plan");
+  assert.deepEqual(plans[1].find((stage) => stage.id === "windows-local-package")?.args, [
+    "bundle:desktop",
+    "--",
+    "--os=win",
+    "--arch=x64",
+  ]);
+  assert.ok(
+    plans[1].every((stage) => ["node", "pnpm"].includes(stage.command)),
+    "Windows test stages cannot dispatch external target runners",
   );
-  assert.equal(deniedSlow.code, 2);
-  assert.match(deniedSlow.output, /CI must not recursively/u);
-  // 只运行临时短桩，绝不调用真实 fulltest/slowtest 或远端流水线。
+  const obsoleteFlag = await commandOutput(
+    "node",
+    ["scripts/test-gates.mjs", "slowtest", "--plan", "--publish-releases"],
+    { quiet: true },
+  );
+  assert.equal(obsoleteFlag.code, 1);
+  assert.match(obsoleteFlag.output, /Unknown gate argument/u);
+  // 只运行临时短桩与只读 Windows 计划，不执行完整测试或发布操作。
   const testTimeout = join(root, "timeout.mjs");
   await writeFile(
     testTimeout,
@@ -133,6 +140,6 @@ export async function selfTest() {
   assert.throws(() => process.kill(pid, 0), "Owned grandchild must be terminated");
   await stopAll();
   console.log(
-    "Self-tests PASS: failure, missing tool, permission rejection, prior failure blocks remote, CI recursion, timeout and owned grandchild cleanup",
+    "Self-tests PASS: failure, missing tool, permission rejection, source fingerprint, timeout and owned grandchild cleanup",
   );
 }

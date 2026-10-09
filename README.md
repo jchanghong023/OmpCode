@@ -94,9 +94,11 @@ pnpm bundle:desktop -- --os win --arch x64
 
 See the root and package `package.json` files for additional commands.
 
+AI testing is Windows-only: `pnpm fastcheck` is capped at 60 seconds; `pnpm fulltest --human-authorized` and `pnpm slowtest --human-authorized` use the same complete Windows plan and require explicit user authorization for the current task. Tests do not test, trigger, wait for, or validate release workflows, and do not accept a publishing flag. See [test requirements](docs/requirements/test-gates.md) and [execution rules](AGENTS.md#三级测试门禁).
+
 ## Manual release packaging
 
-In GitHub Actions, run **Release Windows EXE** or **Release CentOS 7 ZIP** from `main`; both workflows refuse other refs. The Windows workflow only packages and publishes; CentOS packaging also verifies an SSH handshake with its bundled Electron before publishing, but neither runs the full test suite. Windows requires a unique tag matching the current `package.json` version (`v<version>-omp.N`, e.g. `v3.14.3-omp.1`). The CentOS 7 tag is optional: leave it empty to auto-generate `v<version>-centos7-<run-id>-<run-attempt>`, or supply any unused tag (naming is not restricted).
+In GitHub Actions, independently run the existing **Release Windows EXE** (`release-windows.yml`) or **Release CentOS 7 ZIP** (`release-centos7.yml`) from `main`, only with explicit release authorization; both workflows refuse other refs. Neither workflow accepts custom inputs: tags are generated as `v<UTC-YYYYMMDD>-<HHmmss>-<run-id>-<run-attempt>`, and releases include the package and its SHA256 checksum. Do not create another release entry point, version, or custom tag. CentOS packaging retains its required asset, ELF, SSH handshake, archive, and checksum validation before publishing; these are independent build-integrity constraints, not stages of the Windows test gates. A successful release is not a passing test result. See the authoritative [distribution rules](docs/requirements/FORK.md#omp-侧依赖).
 
 The CentOS workflow publishes `OmpCode-<version>-centos7-x64.zip` and its `.sha256` checksum. Copy both files to the offline machine, then extract and launch as a regular user:
 
@@ -106,7 +108,7 @@ unzip -q OmpCode-3.14.3-centos7-x64.zip -d "$HOME"
 "$HOME/OmpCode-3.14.3-centos7-x64/bin/ompcode-centos7"
 ```
 
-The ZIP runs Electron 28 directly on the host's glibc 2.17, with an embedded omp and CentOS-compatible native addons and search tools. It needs no root access, PRoot, `ptrace`, bind mounts, host Node/omp upgrade, package installation or network access. A graphical session with the system's standard desktop libraries remains necessary; the VMware CentOS 7 X11 session passed, but the company Citrix X Server's XKB/GLX support has not been verified. The launcher uses private XDG paths under HOME; normal application startup may register a user-level `zcode://` desktop entry, not a system-wide installation.
+The ZIP runs Electron 28 directly on the host's glibc 2.17, with an embedded omp and CentOS-compatible native addons and search tools. It needs no root access, PRoot, `ptrace`, bind mounts, host Node/omp upgrade, package installation or network access. A graphical session with the system's standard desktop libraries remains necessary. Historical VMware CentOS 7 X11 evidence does not establish acceptance of the current ZIP; the company Citrix X Server's XKB/GLX support remains unverified. Dedicated CentOS/VM/Citrix automated tests are canceled, not counted as passes; CentOS product support and packaging constraints remain in force. The launcher uses private XDG paths under HOME; normal application startup may register a user-level `zcode://` desktop entry, not a system-wide installation.
 
 **Chromium sandboxing is disabled** in this compatibility build. Electron 28 and CentOS 7 are end-of-life; use only trusted workspaces ([Electron platform policy](https://github.com/electron/electron#platform-support)).
 

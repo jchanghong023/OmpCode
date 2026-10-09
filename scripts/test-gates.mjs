@@ -1,7 +1,6 @@
 import { readFile } from "node:fs/promises";
-import { fastPlan, fullPlan, extendedStages, installedOmp } from "./test-gates-plan.mjs";
-import { environmentConfig, regularStage, wslStage } from "./test-gates-environments.mjs";
-import { releaseStage } from "./test-gates-remote.mjs";
+import { fastPlan, fullPlan, installedOmp } from "./test-gates-plan.mjs";
+import { environmentConfig, regularStage } from "./test-gates-environments.mjs";
 import {
   elapsed,
   stageResult,
@@ -17,23 +16,8 @@ const args = process.argv.slice(2);
 const level = args.shift();
 const value = (flag) => args[args.indexOf(flag) + 1];
 const authorized = args.includes("--human-authorized");
-const knownFlags = new Set([
-  "--human-authorized",
-  "--publish-releases",
-  "--plan",
-  "--budget-seconds",
-  "--expected-head",
-  "--expected-content",
-  "--expected-platform",
-  "--expected-distro",
-]);
-const valueFlags = new Set([
-  "--budget-seconds",
-  "--expected-head",
-  "--expected-content",
-  "--expected-platform",
-  "--expected-distro",
-]);
+const knownFlags = new Set(["--human-authorized", "--plan", "--budget-seconds"]);
+const valueFlags = new Set(["--budget-seconds"]);
 let timer;
 let finishing = false;
 
@@ -58,20 +42,11 @@ async function validateToolchain() {
   const agent = process.env.npm_config_user_agent;
   if (agent && !agent.startsWith(`pnpm/${pnpm} `))
     throw new Error(`pnpm ${pnpm} required; current ${agent.split(" ")[0]}`);
-  let distribution;
-  if (process.platform === "linux") {
-    const release = await readFile("/etc/os-release", "utf8");
-    distribution = {
-      id: release.match(/^ID="?([^"\n]+)"?$/mu)?.[1],
-      version: release.match(/^VERSION_ID="?([^"\n]+)"?$/mu)?.[1],
-    };
-  }
   return {
     node: process.versions.node,
     pnpm: agent?.split(" ")[0] ?? "not invoked through pnpm",
     platform: process.platform,
     arch: process.arch,
-    distribution,
   };
 }
 
@@ -83,6 +58,9 @@ for (const signal of ["SIGINT", "SIGTERM"])
   });
 
 try {
+  // 用户明确限定 AI 只测 Windows；拒绝非 Windows 运行，不能退回已取消的 Linux 测试路径。
+  if (process.platform !== "win32")
+    throw new Error("AI testing is Windows-only; run these gates on Windows");
   if (level === "--self-test") {
     await (await import("./test-gates-selftest.mjs")).selfTest();
     await finish("PASS", 0);
@@ -98,13 +76,6 @@ try {
     const planOnly = args.includes("--plan");
     if (["fulltest", "slowtest"].includes(level) && !planOnly && !authorized) {
       await finish("NOT RUN — HUMAN AUTHORIZATION REQUIRED", 2);
-    } else if (
-      level === "slowtest" &&
-      (process.env.GITHUB_ACTIONS === "true" || process.env.CI === "true")
-    ) {
-      await finish("UNVERIFIED_PERMISSION", 2, {
-        reason: "CI must not recursively invoke local slowtest",
-      });
     } else {
       if (level === "fastcheck" && !planOnly) {
         const budget = args.includes("--budget-seconds") ? Number(value("--budget-seconds")) : 60;
@@ -115,26 +86,11 @@ try {
         });
       }
       const tools = await validateToolchain();
-      if (args.includes("--expected-platform") && tools.platform !== value("--expected-platform"))
-        throw new Error("Cross-platform gate requires native target tools");
-      if (
-        args.includes("--expected-distro") &&
-        value("--expected-distro") === "centos7" &&
-        !(tools.distribution?.id === "centos" && tools.distribution.version.split(".")[0] === "7")
-      )
-        throw new Error(
-          "CentOS 7 validation requires a CentOS 7 native environment; other Linux distributions are not equivalent",
-        );
       const source = await snapshot();
-      if (args.includes("--expected-head") && source.head !== value("--expected-head"))
-        throw new Error("Source HEAD differs from the requested cross-platform snapshot");
-      if (args.includes("--expected-content") && source.contentHash !== value("--expected-content"))
-        throw new Error("Working-tree content differs from the requested cross-platform snapshot");
       if (level === "--snapshot") {
         await finish("PASS", 0, { snapshot: source, tools });
       } else {
         const stages = level === "fastcheck" ? await fastPlan() : await fullPlan();
-        if (level === "slowtest") stages.push(...extendedStages);
         if (planOnly) {
           console.log(JSON.stringify({ snapshot: source, tools, stages }, null, 2));
           await finish("PLAN ONLY — NOT RUN", 0);
@@ -145,8 +101,6 @@ try {
             environments: await environmentConfig(),
             guiProcesses: new Map(),
             records: [],
-            authorizedRelease: args.includes("--publish-releases"),
-            inCi: process.env.CI === "true" || process.env.GITHUB_ACTIONS === "true",
           };
           console.log(
             JSON.stringify({
@@ -157,14 +111,6 @@ try {
           );
           for (const stage of stages) {
             const result = await stageResult(stage, async () => {
-              if (stage.kind === "wsl") return await wslStage(context);
-              if (stage.kind === "release") return await releaseStage(stage, context);
-              if (stage.kind === "gap")
-                return {
-                  status: "UNVERIFIED_MISSING_ENV",
-                  reason:
-                    "Existing requirements have no unified automated entry for this target environment; no substitute assertion is invented",
-                };
               if (stage.unknownGui)
                 return {
                   status: "UNVERIFIED_MISSING_ENV",

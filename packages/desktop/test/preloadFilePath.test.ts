@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import ts from "@typescript/typescript6";
 
-// 用实际 preload 函数体验证两代 Electron 的能力边界，不启动应用或读取用户数据。
+// 用实际 preload 函数体验证 Windows 文件路径桥接，不启动应用或读取用户数据。
 const preload = readFileSync(new URL("../src/preload/index.ts", import.meta.url), "utf8");
 const body = /getPathForFile: \(file: File\): string \| null => \{([\s\S]*?)\n  \},/u.exec(
   preload,
@@ -33,11 +33,6 @@ test("Electron 44 原生 File 无 path 时使用 webUtils", () => {
   });
   assert.equal(resolvePath(file), "C:\\temp\\attachment.txt");
   assert.equal(received, file);
-});
-
-test("Electron 28 缺少 webUtils 时保留 File.path 回退", () => {
-  assert.equal(bridge(undefined)({ path: " /tmp/attachment.txt " }), "/tmp/attachment.txt");
-  assert.equal(bridge({})({ path: "/tmp/attachment.txt" }), "/tmp/attachment.txt");
 });
 
 test("无本地路径不能伪装成本地附件", () => {

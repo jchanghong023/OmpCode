@@ -53,7 +53,7 @@ sequenceDiagram
 3. **N03 索引与交互**：在隔离临时项目验证 wiki/repo 状态、确认建立、检索/更新、取消/失败与删除；不改用户项目。计划正文、批准/拒绝与模式/模型恢复使用真实 OMP 交互回路。
 4. **N04 状态生命周期**：team 真实讨论与 advisor 开关/查询；goal 创建、暂停、恢复、预算及删除；loop 有限轮次、停止和会话隔离；魔法命令与技能真实模型结果；compact 参数、过程与终态。模型验收使用既有 `zhipu-coding-plan/glm-5.3-flash`，不修改用户配置。
 5. **N05 历史与双链路**：本地命令输出及真实模型输出 live/冷恢复可见且不重复；Desktop continuous 与 Web replayable 重连不重发副作用；并行会话与旧进程延迟结果不串流，停止通道可用。
-6. **N06 门禁与平台**：相关 UT、集成、真实 OMP E2E、隔离桌面 GUI 及 CentOS 7/Linux 场景按实际环境执行；`pnpm typecheck`、`pnpm lint`、架构与变更格式检查通过。跳过、失败和未经过的边界必须记录，不以 fake 或静态检查代替真实验收。
+6. **N06 Windows 门禁**：仅在 Windows 本机执行相关 UT、集成、真实 OMP E2E 与隔离桌面 GUI，包含 `pnpm typecheck`、`pnpm lint`、架构与变更格式检查；不追加 CentOS/Linux/WSL 场景或发布流水线测试。跳过、失败和未经过的边界必须记录，不以 fake 或静态检查代替真实验收；两平台产品入口与行为一致的规则不变。
 
 ## 实现与验收状态
 

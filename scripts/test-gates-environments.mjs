@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
-import { isAbsolute, join } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
+import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { commandOutput, inside, sameSnapshot, exists } from "./test-gates-process.mjs";
 
@@ -106,74 +107,31 @@ export async function fixtureStage(stage, context) {
   return outcome;
 }
 
-export async function wslStage(context) {
-  if (process.platform !== "win32")
-    return missing("Configure a Windows-side second-platform runner; current OS is already Linux");
-  const target = context.environments.wsl;
-  if (
-    !target?.distribution ||
-    !target.checkout?.startsWith("/") ||
-    target.checkout.startsWith("/mnt/")
-  )
-    return missing(
-      "Specify wsl.distribution and a separate Linux-native wsl.checkout; do not share Windows caches",
-    );
-  const result = await commandOutput("wsl.exe", [
-    "--distribution",
-    target.distribution,
-    "--cd",
-    target.checkout,
-    "--exec",
-    "env",
-    `ZCODE_GATE_ENVIRONMENTS=${target.environmentConfig ?? ""}`,
-    `ZCODE_GATE_PERF_BASELINE=${target.performanceBaseline ?? ""}`,
-    "node",
-    "scripts/mise-run.mjs",
-    "pnpm",
-    "fulltest",
-    "--human-authorized",
-    "--expected-head",
-    context.snapshot.head,
-    "--expected-content",
-    context.snapshot.contentHash,
-    "--expected-platform",
-    "linux",
-    "--expected-distro",
-    "centos7",
-  ]);
-  return {
-    status: result.code ? "FAIL" : result.skipped ? "UNVERIFIED_MISSING_ENV" : "PASS",
-    exitCode: result.code,
-  };
-}
-
 export async function regularStage(stage, context) {
   if (stage.realOmp && !context.omp)
     return missing("No installed omp; real validation is not run and omp is not downloaded");
   if (stage.fixture) return await fixtureStage(stage, context);
-  if (
-    stage.electron &&
-    !(await exists(
-      join(
-        "packages/desktop/node_modules/electron/dist",
-        process.platform === "win32" ? "electron.exe" : "electron",
-      ),
-    ))
-  )
-    return missing("Workspace Electron runtime is absent");
+  if (stage.electron) {
+    let electronDirectory;
+    try {
+      // pnpm 可以将 Electron 提升至根目录；按 Desktop 的真实模块解析定位，不假定包内存在 node_modules。
+      const require = createRequire(join(process.cwd(), "packages/desktop/package.json"));
+      electronDirectory = dirname(require.resolve("electron/package.json"));
+    } catch {
+      return missing("Workspace Electron module is absent");
+    }
+    if (
+      !(await exists(
+        join(electronDirectory, "dist", process.platform === "win32" ? "electron.exe" : "electron"),
+      ))
+    )
+      return missing("Workspace Electron runtime is absent");
+  }
   const args = [...stage.args];
   if (stage.baseline) {
     if (!process.env.ZCODE_GATE_PERF_BASELINE)
       return missing("Set ZCODE_GATE_PERF_BASELINE to the intended comparison commit");
     args.push(process.env.ZCODE_GATE_PERF_BASELINE);
-  }
-  if (stage.packageInputs) {
-    const manifest = JSON.parse(await readFile("package.json", "utf8"));
-    const desktop = "packages/desktop/dist/linux-unpacked";
-    const native = "packages/desktop/dist/centos7-native";
-    if (!(await exists(desktop)) || !(await exists(native)))
-      return missing("CentOS glibc-2.17 desktop/native build inputs are absent");
-    args.push(desktop, native, manifest.version, "packages/desktop/dist");
   }
   const env = { ...stage.env };
   if (stage.realOmp)

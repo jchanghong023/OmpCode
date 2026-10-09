@@ -54,13 +54,12 @@ test("OMP_CONFIG_ROOT 派生应用根，设置读写与显示路径同源且不�
       {
         ZCODE_DESKTOP_HOME_DIR: home,
         OMP_CONFIG_ROOT: ompRoot,
-        OMPCODE_CENTOS7_DEFAULT_LOCALE: "zh-CN",
       },
       async () => {
         const { service } = createSettingServiceWithMigrations();
         const settings = await service.get();
         assert.equal(settings.locale, "zh-CN");
-        assert.equal(settings.localePreference, process.platform === "linux" ? "zh-CN" : "system");
+        assert.equal(settings.localePreference, "system");
         assert.equal(settings.dataStoragePath, appRoot);
         assert.equal(settings.dataBaseDir, undefined);
         assert.equal(settings.lastActiveTaskByWorkspace, undefined);
@@ -84,7 +83,6 @@ test("OMP_CONFIG_ROOT 派生应用根，设置读写与显示路径同源且不�
       {
         ZCODE_DESKTOP_HOME_DIR: home,
         OMP_CONFIG_ROOT: undefined,
-        OMPCODE_CENTOS7_DEFAULT_LOCALE: "zh-CN",
       },
       async () => {
         const { service } = createSettingServiceWithMigrations();

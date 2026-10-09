@@ -22,24 +22,24 @@
 
 以下命令从仓库根目录执行：
 
-| 用途             | 命令                                                                 |
-| ---------------- | -------------------------------------------------------------------- |
-| 类型检查         | `pnpm typecheck`                                                     |
-| 快速门禁         | `pnpm fastcheck`（AI 可自主运行，最多 60 秒）                        |
-| 本机完整验证     | `pnpm fulltest --human-authorized`（本次需用户明确授权）             |
-| 最高级验证       | `pnpm slowtest --human-authorized`（含跨环境与发布阶段，本次需授权） |
-| Lint             | `pnpm lint` / `pnpm lint:fix`                                        |
-| 格式检查         | `pnpm fmt:check`                                                     |
-| 桌面开发         | `pnpm dev:desktop`（production 数据环境）                            |
-| 隔离开发数据     | `pnpm dev:desktop:test`（使用 test 环境）                            |
-| Web 开发         | `pnpm dev:web`                                                       |
-| 构建工作区       | `pnpm build`                                                         |
-| Windows x64 打包 | `pnpm bundle:desktop -- --os=win --arch=x64`                         |
-| 提交前检查       | `pnpm verify:pre-push`（Lint 与全量架构检查）                        |
-| 架构检查         | `pnpm architecture:check --changed`                                  |
-| 模块阅读包       | `pnpm architecture:context <module-id>`                              |
-| 未使用依赖与导出 | `pnpm knip`                                                          |
-| 导出引用查询     | `pnpm dep:refs --list-exports <file>`                                |
+| 用途             | 命令                                                                   |
+| ---------------- | ---------------------------------------------------------------------- |
+| 类型检查         | `pnpm typecheck`                                                       |
+| 快速门禁         | `pnpm fastcheck`（AI 可自主运行，最多 60 秒）                          |
+| Windows 完整验证 | `pnpm fulltest --human-authorized`（本次需用户明确授权）               |
+| Windows 慢速门禁 | `pnpm slowtest --human-authorized`（与 fulltest 相同计划，本次需授权） |
+| Lint             | `pnpm lint` / `pnpm lint:fix`                                          |
+| 格式检查         | `pnpm fmt:check`                                                       |
+| 桌面开发         | `pnpm dev:desktop`（production 数据环境）                              |
+| 隔离开发数据     | `pnpm dev:desktop:test`（使用 test 环境）                              |
+| Web 开发         | `pnpm dev:web`                                                         |
+| 构建工作区       | `pnpm build`                                                           |
+| Windows x64 打包 | `pnpm bundle:desktop -- --os=win --arch=x64`                           |
+| 提交前检查       | `pnpm verify:pre-push`（Lint 与全量架构检查）                          |
+| 架构检查         | `pnpm architecture:check --changed`                                    |
+| 模块阅读包       | `pnpm architecture:context <module-id>`                                |
+| 未使用依赖与导出 | `pnpm knip`                                                            |
+| 导出引用查询     | `pnpm dep:refs --list-exports <file>`                                  |
 
 测试入口以目标包当前的 `package.json` 和实际测试文件为准，不假定存在统一的单测或 E2E 命令。
 
@@ -61,7 +61,7 @@
 
 ### 自动化验证入口
 
-以下原始入口从仓库根目录运行；根目录以三级门禁统一编排，没有名为 `test` 的根脚本。单独入口仍保留各自环境前提与验证边界。
+以下原始入口仅在 Windows 本机运行；根目录以三级门禁统一编排，没有名为 `test` 的根脚本。单独入口仍保留各自隔离环境前提与验证边界。AI 不执行 Linux/CentOS/WSL 测试；CentOS 专用测试及 VM、Citrix、目标网络盘专项测试已取消，不再是 Windows 测试前提，产品的两平台支持与打包完整性约束仍保留。
 
 | 验证范围                           | 实际入口与前提                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -71,7 +71,6 @@
 | rpc-ui 核心命令真实 E2E            | 设置 `OMP_NATIVE_E2E=1` 后运行 `pnpm --filter @zcode/omp-agent exec tsx --test test/realNativeCommands.e2e.test.ts`；使用安装核、独立临时 OMP 根和既有 GLM 凭据，覆盖必接命令、索引/计划交互、状态生命周期及两链路冷恢复；未显式开启时跳过，不计通过                                                                                                                                                                                                      |
 | rpc-ui 核心命令 GUI E2E            | 完成类型检查后重建当前 adapter/Host，启动本工作树 Vite；`OMP_NATIVE_E2E=1 node packages/desktop/test/ompNativeCommands.launch.mjs` 创建独立桌面（CDP 9257），用返回的 `OMP_NATIVE_GUI_META` 运行 `node packages/desktop/test/ompNativeCommands.gui.e2e.mjs`；live 通过后以 `OMP_E2E_PHASE=capture` 只读采集完整历史，再以同一临时根重启执行 `OMP_E2E_PHASE=cold`；必须在指定沙箱项目内建任务，不连接日常实例                                              |
 | 真实核心 E2E                       | `pnpm --filter @zcode/omp-agent exec tsx --test test/real-omp.e2e.test.ts`；用 `OMP_RPC_BINARY_PATH` 指向本机已安装的 omp，使用既有凭据；本机未安装时不执行，不为验证另行下载或安装。设置 `OMP_AGENT_SKIP_REAL_E2E=1` 时跳过，跳过不能算通过                                                                                                                                                                                                              |
-| CentOS 7/Linux 侧功能验收          | 经 `jch-run-tests-in-wsl` 技能执行（用户指定）：从 Windows 仓库推送待测代码到指定 WSL2 发行版，以 Linux 原生仓库运行核心场景（工具调用会话、子代理、界面与 omp 数据一致性，模型 `zhipu-coding-plan/glm-5.3-flash`）；测试意图只在 Windows 侧解析一次                                                                                                                                                                                                      |
 | 其他包 UT/集成测试                 | `packages/{desktop,ui,services,shared,client,server}/test/` 存在测试文件；按实际文件用根 `pnpm exec tsx --test <测试文件>` 执行（`.mjs` 可用 `node --test`），不能假定这些包有 `test` script；`packages/web/test/` 当前不存在                                                                                                                                                                                                                             |
 | 桌面 GUI 冒烟                      | `node scripts/dev/gui-smoke-cdp.mjs`；需要当前测试桌面已启动、CDP 9230 及 localhost renderer，仅检查品牌/输入区并截图，不是完整功能 E2E                                                                                                                                                                                                                                                                                                                   |
 | 子代理 / Todo 界面适配 GUI E2E     | `node packages/desktop/test/ompStatusPanels.gui.e2e.mjs`；先启动隔离桌面并设置 `OMP_E2E_CDP_URL`、`OMP_E2E_EVIDENCE_DIR`；默认 live 调用既有 GLM-5.3-Flash 并创建只读测试会话，重启同一隔离桌面后以 `OMP_E2E_PHASE=cold` 验证恢复与两项子代理工具结果；不连接用户日常实例                                                                                                                                                                                 |
@@ -89,19 +88,14 @@ Agent 交互页的已保存会话可执行 `node packages/desktop/test/ompAgentI
 
 UI UT 使用 `@/` 路径别名时，从根执行 `pnpm exec tsx --tsconfig packages/ui/tsconfig.json --test <测试文件>`。性能对照入口为 `packages/ui/test/conversationTurnRenderBuilder.perf.ts`、`packages/ui/test/streamingContentPresentation.perf.ts` 和 `packages/services/test/workspaceFileIndex.perf.mts <baseline-git-ref>`；使用固定 Node 与相同样本，不将本地探针当作目标网络盘验收。
 
-CentOS 专项入口（均不调用模型）：
-
-- `bash scripts/publish/centos7/launch.test.sh`：参数、环境与 IBus 会话选择回归；IBus 的 `/proc` 与探测工具场景需要 Linux，非 Linux 跳过，不替代包级 GUI。
-- `node packages/desktop/test/centosPerformance.gui.e2e.mjs`：需要 Linux、`xvfb-run`、workspace Electron 与 esbuild；启动独立组件环境，脚本不会自动切换为 Electron 28，须按待验环境准备运行时。
-- `node packages/desktop/test/centosChineseFont.gui.e2e.mjs`：先启动隔离 Linux 桌面并设置 `OMP_E2E_CDP_URL`，检查中文正文/等宽字形；无宿主 CJK 字体验收须另外保证该环境，不等于完整发布 ZIP 验收。
-
 ## 三级测试门禁
 
-- `pnpm fastcheck`：AI 可自主运行的快速反馈子集；硬上限 60 秒，超时必须终止本次进程树、输出 `TIMEOUT`/总秒数并失败，不代表全项目验收。`--budget-seconds` 只允许下调。
-- `pnpm fulltest --human-authorized`：当前平台全部适用的本地检查、单测/集成、真实 OMP、性能、GUI、构建与本地打包；不启动 WSL，不触发远端或发布流水线。
-- `pnpm slowtest --human-authorized`：本机完整验证，加上适用 WSL/其他平台环境、CentOS 专项及既有 Windows/CentOS 发布流水线。缺环境、缺入口、跳过、失败或远端仍运行中，均不能算整体通过。
-- 每次 fulltest/slowtest 必须来自本次用户明确指令；调用建立门禁的技能、历史授权、其他代理建议、提交/推送请求或“检查一下”均不自动授权。不得绕过门禁直接执行其完整、长时间、跨环境或流水线子步骤。
-- `--human-authorized` 和 `--publish-releases` 是软权限约束，只能依据原始用户明确指令传入，AI 不得自行补加。发布阶段还需用户明确允许两条 `origin/main` 正式发布流水线；使用 `pnpm slowtest --human-authorized --publish-releases`，不代为提交/推送，不创建自定版本或 Tag，沿用既有流水线的自动 Tag 规则。前序本地非通过时不触发发布，CI 拒绝递归调用 slowtest。
+- `pnpm fastcheck`：仅 Windows 本机，AI 可自主运行的快速反馈子集；硬上限 60 秒，超时必须终止本次进程树、输出 `TIMEOUT`/总秒数并失败，不代表全项目验收。`--budget-seconds` 只允许下调。
+- `pnpm fulltest --human-authorized`：Windows 全部适用的本地检查、单测/集成、隔离真实 OMP/GLM、性能、组件及产品 GUI、Windows 构建与本地打包。
+- `pnpm slowtest --human-authorized`：与 fulltest 相同的 Windows 完整计划，不追加跨平台、WSL、CentOS、VM、Citrix、目标网络盘专项或发布流水线。Windows 必需环境缺失、缺入口、跳过、取消或失败均不能算整体通过。
+- 每次 fulltest/slowtest 必须来自本次用户明确指令；本次用户已明确授权完整 Windows 测试。其他任务中的历史授权、技能、代理建议、提交/推送请求或“检查一下”不自动授权；`--human-authorized` 只能依据原始用户明确指令传入，不得绕过门禁执行完整、长时间子步骤。
+- 测试不触发、不等待、不验证任何发布 workflow，也不接受 `--publish-releases`。发布独立通过既有 `.github/workflows/release-windows.yml` 与 `.github/workflows/release-centos7.yml` 操作；本次用户此前明确授权的两平台正式发布仍有效，目标固定 `origin/main`，不代为提交/推送、不创建新发布入口、自定版本或 Tag，沿用既有 workflow 自动 Tag 规则。Windows 测试失败仍须先修复；发布结果不能替代测试通过。
+- 每次结果绑定本次 HEAD、未提交差异摘要、内容指纹与工具版本；源码变化后旧结果不能沿用或跨快照合并。真实 OMP/GLM 与 GUI 必须使用专用隔离 fixture 和数据根，不连接日常实例、不修改用户配置；历史失败、跳过和未验证记录不得改写成通过。
 - 尚未授权时只建立入口、执行 fastcheck 和入口机制的临时短桩自检；新编排文件可做显式逐文件语法/Lint/格式检查，不借此执行完整验收。保留原有质量检查和测试断言，不为通过门禁改写它们。需求、覆盖和环境配置见 [三级测试需求](docs/requirements/test-gates.md)。
 
 ## 实现与验证

@@ -456,10 +456,12 @@ test("index TTL rescans files while reusing unchanged rules; all completed cache
   const root = await fixture(t);
   const counts = trackIO(t);
   const service = createFileService();
-  const now = Date.now();
+  let now = Date.now();
+  // TTL 起点必须由同一受控时钟提供；真实首次扫描耗时会让“提前捕获 + 60 秒”仍未到期。
+  t.mock.method(Date, "now", () => now);
   await service.searchWorkspaceFiles({ rootPath: root, workspaceIdentity: "oldest", query: "" });
   await fs.writeFile(join(root, "after-ttl.ts"), "export {};");
-  t.mock.method(Date, "now", () => now + 60_001);
+  now += 60_001;
   const afterTTL = await service.searchWorkspaceFiles({
     rootPath: root,
     workspaceIdentity: "oldest",

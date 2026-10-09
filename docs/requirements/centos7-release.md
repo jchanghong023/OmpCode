@@ -9,7 +9,7 @@
 
 ## Product behavior
 
-- 手动分发的 `release-centos7.yml` 从 `main` 构建唯一的 CentOS 7 x64 自包含 ZIP；不维护独立发布分支。ZIP 以原生 glibc 2.17 方案在 Linux 3.10 上运行，不需要 PRoot、Ubuntu userspace、root 权限、宿主包安装或网络，也不替换用户已安装的 omp。修改 GitHub 发布 workflow 前必须在 CentOS 7 VM 完整验证应用。
+- 手动分发的 `release-centos7.yml` 从 `main` 构建唯一的 CentOS 7 x64 自包含 ZIP；不维护独立发布分支。ZIP 以原生 glibc 2.17 方案在 Linux 3.10 上运行，不需要 PRoot、Ubuntu userspace、root 权限、宿主包安装或网络，也不替换用户已安装的 omp。CentOS 专属自动测试及修改 workflow 前的 VM 验收前提已取消；两平台发布独立于 Windows 测试，构建期完整性约束不变。
 - 自包含 ZIP 及其 SHA256 校验文件是 CentOS 7 唯一分发格式。不产出或恢复任何内嵌 PRoot/Ubuntu userspace 或依赖其运行的 RPM/安装器（早期 `OmpCode-3.14.3-centos7-x64.rpm` 属已废弃的 PRoot 设计）。PRoot 仅允许作为开发/打包便利（在旧 glibc 宿主内运行 Node/pnpm），不得出现在任何分发产物或用户可见启动路径中。
 - Electron 选型：Windows 基线运行 Electron 44.x；CentOS 7 构建任务在构建时把桌面依赖切换为 Electron 28.3.3 及 Node 18 兼容版本（实测 Electron 29.4.6 需 GLIBC_2.18、30.5.1 需 GLIBC_2.25，官方 28.3.3 二进制可在 glibc 2.17 上以非 root 用户打开渲染窗口）。仓库 manifest 与 lockfile 按 Windows 基线维护；版本切换只发生在 CentOS 7 构建任务内，且必须使用精确版本保证可重现。CentOS 7 构建的运行时依赖集至少包括 `undici` 精确 `6.23.0`（8.x 需 Node 20+）与 `better-sqlite3` 精确 `9.6.0`，Node 18 兼容组合最初从原 CentOS 7 专有分支 lockfile 提取；当前精确版本清单由 `main` 中的 `scripts/prepare-centos7-build.mjs` 钉住，构建不依赖已删除的专有分支。sqlite 访问层必须双运行时可用：Windows/Electron 44（Node 22）走 `node:sqlite`，CentOS 7/Electron 28（Node 18.18）走 better-sqlite3，由同一封装模块按运行时选择驱动，任务索引、自动化与 Cookie 库的数据行为两平台等价，禁止散落的双写路径。CentOS 7 构建同时启用 `__OMPCODE_CENTOS7_DESKTOP__` 发布构建标记，供 UI 层的 CentOS 专用渲染性能策略识别（见 [centos7-performance.md](centos7-performance.md)）；该标记不得触及界面结构、入口或功能（见 [FORK.md](FORK.md)「界面统一」）。
 - ZIP 包含应用、内嵌 omp、兼容的 `node-pty`、经 `ssh2` 与 Electron 内置 crypto 的 SSH、原生搜索可执行文件，以及离线启动所需的 glibc 2.17 兼容 C++/GUI 库与字体。宿主无 CJK 字体时，Linux 桌面 renderer 必须自带可再分发的简体中文字形，覆盖设置、菜单、会话正文与代码，并在 ZIP 内保留字体许可。不分发 `ssh2` 的可选 `sshcrypto.node` 加速器（Electron 28 用 OpenSSL 1.1.1，glibc-2.17 Node 20 构建器提供 OpenSSL 3 头文件，按其编译的可加载加速器在 SSH 密钥交换时失败）。不捆绑或替换 glibc；需要更高 GLIBC 符号的二进制必须在打包期失败，不得成为运行期意外。
@@ -28,11 +28,13 @@
 ## Ownership and boundaries
 
 - Electron 的 `ELECTRON_RUN_AS_NODE` 子进程执行既有 omp 适配器；omp 在其配置目录（默认 `~/.omp`，可由环境重定位）保留配置、会话与凭据所有权。内嵌 omp 与用户自行安装的可执行文件保持隔离。启动路径不使用 `ptrace`、bind mount 或 `OMPCODE_CENTOS7_BIND`；工作目录是普通宿主路径。
-- Electron 28 内嵌 Node 18.18.2，而应用使用更新的 Node API（含 `fs/promises.glob` 与 `node:sqlite`）。这些路径必须提供真实等价实现与兼容依赖版本，不降级用户可见功能。Electron 28 缺少 `webUtils` 与 `webContents.navigationHistory`；替代实现必须保留文件附件与浏览器历史行为，不得静默禁用。Electron 44 → 28 的 API 差异面必须维护构建期可检查的清单（已知项：`webUtils`、`webContents.navigationHistory`、`node:sqlite`、`fs/promises.glob`）；新增 Main/renderer 代码不得引入清单外仅 Electron 44 可用的 API。验收须覆盖文件拖拽附件与浏览器历史导航在 CentOS 7 包上与 Windows 行为一致。
+- Electron 28 内嵌 Node 18.18.2，而应用使用更新的 Node API（含 `fs/promises.glob` 与 `node:sqlite`）。这些路径必须提供真实等价实现与兼容依赖版本，不降级用户可见功能。Electron 28 缺少 `webUtils` 与 `webContents.navigationHistory`；替代实现必须保留文件附件与浏览器历史行为，不得静默禁用。Electron 44 → 28 的 API 差异面必须维护构建期可检查的清单（已知项：`webUtils`、`webContents.navigationHistory`、`node:sqlite`、`fs/promises.glob`）；新增 Main/renderer 代码不得引入清单外仅 Electron 44 可用的 API。文件拖拽附件与浏览器历史导航在 CentOS 7 包上必须与 Windows 行为一致；该产品规则不要求 AI 执行 CentOS 测试。
 - 无 root 解压无法安装 Chromium setuid 沙箱。启动器使用 `--no-sandbox`，这是显式安全限制，尤其配合已停止维护的 Electron/Chromium 版本；使用时应避免不可信工作区。CentOS 7 宿主可能无 GPU，启动器默认向 Electron 传递 `--disable-gpu`，同时保持软件渲染可用。仍需图形 X11/Wayland 会话；缺失 XKB/GLX 的服务器可能独立于 glibc 兼容性失败。
-- 运行时库不得静默加载自构建器更新的 OS。ZIP 保留可执行权限与符号链接；重定位不得破坏启动。缺失必需资源与不兼容 ELF 依赖在分发前失败。打包阶段还在临时端口上用打包的 Electron 运行时执行回环 SSH 握手；它不替代 CentOS 7 VM 验收。
+- 运行时库不得静默加载自构建器更新的 OS。ZIP 保留可执行权限与符号链接；重定位不得破坏启动。缺失必需资源与不兼容 ELF 依赖在分发前失败。打包阶段仍在临时端口上用打包的 Electron 运行时执行回环 SSH 握手；这是独立构建的产物完整性约束，不是测试门禁的 workflow 阶段，也不能证明目标宿主已验收。
 
-## Acceptance
+## 产品标准与构建期约束
+
+以下保留 CentOS 产品行为及包完整性标准，不是 AI 的 Linux/CentOS/WSL、VM 或 Citrix 自动测试计划。CentOS 专用 UT、启动器回归及 Linux GUI 测试已取消；共享逻辑的 Windows 适用断言保持原标准。AI 测试范围与执行权限见 [三级测试需求](test-gates.md) 与 [AGENTS.md](../../AGENTS.md#三级测试门禁)，不测试、触发、等待或验证发布 workflow。历史报告及未验证边界保留，不宣称本次 CentOS 包或目标宿主已验收。
 
 - 在英文系统环境与无语言设置的全新数据根启动 CentOS 7 包，菜单与主界面默认简体中文；保存英文或跟随系统后重启仍保留该选择。仅有旧 `locale` 字段的设置也保留原语言。启动器不改变宿主语言环境变量，Windows 默认规则不受影响。
 
@@ -51,20 +53,20 @@ flowchart TD
     D --> E[Export child environment, isolate XDG, start Electron]
 ```
 
-- 自动化启动器回归须覆盖分裂总线修复、已正确环境、XDG 隔离前的地址发现、显式覆盖、排除其他 DISPLAY/用户、歧义会话、探测失败与无守护进程。真实 GUI 验收：从 tcsh 以错误的继承会话总线与既有同用户/同 DISPLAY IBus 守护进程启动打包启动器，在聊天输入输入 `ni` 并提交中文。公司主机手动环境修复已确认；自动启动器仍需在该环境做包级 GUI 验证。
+- 启动器行为仍须正确处理分裂总线、已正确环境、XDG 隔离前的地址发现、显式覆盖、其他 DISPLAY/用户、歧义会话、探测失败与无守护进程；不再要求专属启动器自动回归或包级 Linux GUI 测试。公司主机手动环境修复曾确认中文输入恢复，但不证明当前打包启动器在该环境已验收。
 
-### Package acceptance
+### 包完整性与运行行为
 
-- 在 CentOS 7 x64 VM（`glibc 2.17`、内核 `3.10.0-1160.el7.x86_64`）上，非 root 用户把 ZIP 解压到 HOME 下，不安装任何内容，启动启动器并看到 OmpCode UI。宿主无 CJK 字体时，中文设置与菜单标签及任意中文会话文本显示为字形而不是空框；英文保持可读。实测内嵌 omp 会话、集成终端与原生搜索；用打包的 `ssh2` 客户端完成 SSH 握手，并确认 `app.asar` 与 `app.asar.unpacked` 均无可选原生加密加速器。
-- 以区别于已保存 App Settings profile 的命名 `--profile` 启动：内嵌 omp 收到该 profile，UI 的角色与历史读取同一命名 profile。设置 `OMP_OFFLINE=1` 时每个内嵌 omp 进程继承该变量且不收到旧 `--offline` 参数，且桌面处于离线锁定：启动桌面、打开设置、显示推荐内容并使用内嵌浏览器期间追踪网络连接，Main、Renderer、Host 与调度器不连接公网；内嵌浏览器打开解析到私有 IP 的企业 DNS 名并拒绝公网 URL；仅 omp 可达其配置的企业 API；逐项检查被关功能入口（公网更新、公网配置/帮助/社区/反馈、账号、外部浏览器）均为禁用态并附「离线锁定中已关闭」说明，且无对应公网请求。未启用 `OMP_OFFLINE` 时桌面为全功能，与 Windows 行为一致：内嵌浏览器可打开公网 URL、更新检查按 Windows 语义可用、应用日志输出全部级别。缺失或无效 profile 名在 Electron 启动前以明确错误退出。
-- 离线 HTTP 重定向回归（无需模型）：临时回环服务返回指向公网 URL 的 302 时，Host 全局 fetch 与 undici 出口均拒绝，不能向重定向目标发起请求；普通非离线请求仍保留原重定向行为。
-- 检查内嵌推荐目录与 UI 资产：每条推荐都可用本地工具运行，每个推荐图标已内嵌，没有动画来源指向公网主机。
-- 带 `OMP_CONFIG_ROOT` 与不同 `PI_CONFIG_DIR` 启动时二者原样进入 Electron/Host/omp，目录解析按根目录环境规则验收；启动器不创建 `~/.ompcode` 或 `~/.omp` 链接，帮助不再列出 `--home` 或 `--offline`，OmpCode 的只读数据目录界面按根目录规则展示，不再提供路径选择或保存。既有 XDG 默认值、输入法配置链接、profile 参数与 `OMP_OFFLINE` 环境门控保留。
+- CentOS 7 x64（`glibc 2.17`、Linux 3.10）上的非 root 用户必须能够把 ZIP 解压到 HOME 下，无需安装额外内容即可启动 OmpCode UI。宿主无 CJK 字体时，中文设置与菜单标签及任意中文会话文本应显示为字形而不是空框，英文保持可读。内嵌 omp 会话、集成终端、原生搜索与 SSH 必须可用；`app.asar` 与 `app.asar.unpacked` 均不得包含可选原生加密加速器。这些产品规则保留，但不再要求 AI 执行 VM 专项测试。
+- 以区别于已保存 App Settings profile 的命名 `--profile` 启动时，内嵌 omp 接收该 profile，UI 的角色与历史读取同一命名 profile。设置 `OMP_OFFLINE=1` 时每个内嵌 omp 进程继承该变量且不接收旧 `--offline` 参数，桌面处于离线锁定：启动桌面、打开设置、显示推荐内容及使用内嵌浏览器均不得使 Main、Renderer、Host 与调度器连接公网；内嵌浏览器可打开解析到私有 IP 的企业 DNS 名并拒绝公网 URL；仅 omp 可达其配置的企业 API。被关功能入口（公网更新、公网配置/帮助/社区/反馈、账号、外部浏览器）均为禁用态并附「离线锁定中已关闭」说明，无对应公网请求。未启用 `OMP_OFFLINE` 时桌面为全功能，与 Windows 行为一致：内嵌浏览器可打开公网 URL、更新检查按 Windows 语义可用、应用日志输出全部级别。缺失或无效 profile 名在 Electron 启动前以明确错误退出。以上是产品行为标准，不要求 AI 在 Linux 包上追踪网络或执行专属 GUI 测试。
+- CentOS 离线网络产品行为标准：回环服务返回指向公网 URL 的 302 时，Host 全局 fetch 与 undici 出口均拒绝，不能向重定向目标发起请求；普通非离线请求仍保留原重定向行为。这不是当前 Windows 离线测试或新增测试要求；现行 Windows API 正常重定向由 `packages/services/test/nodeApiNetwork.test.ts` 覆盖。
+- 内嵌推荐目录与 UI 资产必须满足：每条推荐都可用本地工具运行，每个推荐图标已内嵌，没有动画来源指向公网主机。
+- 带 `OMP_CONFIG_ROOT` 与不同 `PI_CONFIG_DIR` 启动时二者原样进入 Electron/Host/omp，目录解析遵循根目录环境规则；启动器不创建 `~/.ompcode` 或 `~/.omp` 链接，帮助不再列出 `--home` 或 `--offline`，OmpCode 的只读数据目录界面按根目录规则展示，不再提供路径选择或保存。既有 XDG 默认值、输入法配置链接、profile 参数与 `OMP_OFFLINE` 环境门控保留。
 - 关闭或无效的 Host stdout/stderr 描述符不能把普通 RPC 日志变成未捕获异常；结构化日志仍到达 Main。发布 workflow 无自定义输入项，自动生成日期时间 Tag，仍拒绝复用 Tag 或错误分支；重新运行全部 job 时生成不同 Tag。
-- 检查每个分发可执行文件与原生插件的 GLIBC 需求 ≤ 2.17，并在宿主 `libstdc++` 缺所需符号时提供其 C++ 运行时。发布 ZIP 不含 PRoot 或 Ubuntu 根文件系统，不修改宿主 glibc 或既有 omp 安装。仅在该 VM 验收通过后，才允许调整手动 CentOS workflow 的构建方式。
-- Windows 基线保护：CentOS 7 构建的版本切换不得持久改写仓库 manifest 与 lockfile（CI 工作区内的临时改写不回传仓库）；Windows 发布产物仍基于 Electron 44.x 且 `node:sqlite` 路径可用。renderer 做一次 CentOS 7 包（Chromium 120）与 Windows 的 UI 走查对比：界面结构、入口与交互一致，渲染性能策略差异除外。
-- 双轨回归（无需模型）：Electron 44 的原生 File 经 `webUtils.getPathForFile` 得到本地附件路径；Electron 28 缺少该能力时才读取 `File.path`。两者都不能把空路径伪装成本地文件。慢磁盘下正常退出的所有 Main 日志排空调用共用一秒预算，不得在已超预算后重新等待无界队列。
-- 公司 Citrix X Server 是独立验收环境：通过 VM 的 X11 显示不代表公司服务器的 XKB 或 GLX 能力可用。
+- 每个分发可执行文件与原生插件的 GLIBC 需求必须 ≤ 2.17，宿主 `libstdc++` 缺所需符号时提供其 C++ 运行时；由独立构建的打包校验保证。发布 ZIP 不含 PRoot 或 Ubuntu 根文件系统，不修改宿主 glibc 或既有 omp 安装；不再以 VM 测试作为调整手动 CentOS workflow 构建方式的前提。
+- Windows 基线保护：CentOS 7 构建的版本切换不得持久改写仓库 manifest 与 lockfile（CI 工作区内的临时改写不回传仓库）；Windows 发布产物仍基于 Electron 44.x 且 `node:sqlite` 路径可用。CentOS 7 包（Chromium 120）与 Windows 的界面结构、入口与交互保持一致，渲染性能策略差异除外；不追加跨平台 GUI 走查。
+- Windows 本机共享兼容逻辑回归（无需模型）：Electron 44 的原生 File 经 `webUtils.getPathForFile` 得到本地附件路径；Electron 28 缺少该能力时才读取 `File.path`。两者都不能把空路径伪装成本地文件。慢磁盘下正常退出的所有 Main 日志排空调用共用一秒预算，不得在已超预算后重新等待无界队列；不要求在 Linux 运行专属 UT。
+- 公司 Citrix X Server 的 XKB 或 GLX 能力不由历史 VM X11 结果推断；该目标环境仍未验证，已取消其专项测试前提，不把取消写成通过。
 
 ## 实现与验证状态
 

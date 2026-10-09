@@ -26,7 +26,7 @@ function lockedState(localOnly: boolean): OfflineGateState {
   };
 }
 
-test("缺省（平台应答到达前）视为未锁定，Windows 与未加锁 CentOS 7 全功能", () => {
+test("缺省（平台应答到达前）视为未锁定，Windows 保持全功能", () => {
   assert.equal(isOfflineLocked(), false);
   assert.equal(getOfflineLockSnapshot().localOnly, false);
   // 逐功能缺省同样全部未关闭（offlineGate.ts 门控面键与 localOnly 同源）。

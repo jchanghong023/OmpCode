@@ -61,7 +61,7 @@ desktop-continuous: 同一 topic owner → 连续实时帧
 web-remote-replayable: 同一 owner → 水位增量 / 缺口快照；冷启动从 get_btw_history 重建
 ```
 
-验收：空入口零模型请求；参数/划词首问真实流式；同主题追问在 sidecar 的 followUps 中且主 transcript 不增长；主回合 streaming 时 BTW 正常执行；另一 tab 或父会话的停止不影响当前 BTW/主回合；complete/error/cancelled/interrupted 正确；历史入口发现全部主题并在关闭重开、Host/OMP 重启后继续；旧核能力错误、未知主题及保存失败明确显示；桌面连续与 Web 重连水位恢复均无重复发送。Windows/CentOS 7 真 GUI 与真实模型逐项记录独立验收，静态检查不替代。
+验收：空入口零模型请求；参数/划词首问真实流式；同主题追问在 sidecar 的 followUps 中且主 transcript 不增长；主回合 streaming 时 BTW 正常执行；另一 tab 或父会话的停止不影响当前 BTW/主回合；complete/error/cancelled/interrupted 正确；历史入口发现全部主题并在关闭重开、Host/OMP 重启后继续；旧核能力错误、未知主题及保存失败明确显示；桌面连续与 Web 重连水位恢复均无重复发送。AI 仅在 Windows 本机以隔离真 GUI 与真实模型逐项记录验收，静态检查不替代；CentOS 产品行为仍与 Windows 一致，但专属测试已取消，不宣称已验收。
 
 ## 验收场景
 
