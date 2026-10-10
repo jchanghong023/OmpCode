@@ -195,7 +195,9 @@ export default defineConfig([
     platform: "node",
     target: "node18",
     external: ["electron"],
-    noExternal: ["@zcode/shared"],
+    // 修复：沙箱 preload 无法 require npm 模块；Zod 外置会令整个 bridge 加载失败并留下灰屏。
+    // 只内联共享协议及其校验库，保留 Electron 提供的 IPC 模块和现有沙箱设置。
+    noExternal: ["@zcode/shared", "zod"],
     outExtension: () => ({ js: ".cjs" }),
     define: createSharedDefines(),
     esbuildOptions(options) {

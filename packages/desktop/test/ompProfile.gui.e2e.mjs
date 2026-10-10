@@ -24,7 +24,7 @@ try {
       .isVisible()
       .catch(() => false))
   ) {
-    await page.getByTestId("task-settings-button").click({ force: true });
+    await page.getByRole("button", { name: "设置", exact: true }).last().click();
     await page.getByRole("button", { name: "模型设置" }).click();
   }
   const selector = page.getByRole("combobox", { name: "OMP Profile" });
@@ -32,14 +32,15 @@ try {
 
   if (phase === "before") {
     assert.equal(profileInfo.activeProfile, "default");
-    assert.equal(await selector.inputValue(), "default");
     const oldRoles = await page.evaluate(() => window.zcode.readOmpModelRoles());
     assert.equal(oldRoles.success, true);
     assert.equal(
       oldRoles.roles.some((role) => role.role === "profileMarker"),
       false,
     );
-    await selector.selectOption("codex-e2e");
+    // Profile 使用共享 Select；从真实菜单选择，不能继续调用原生 selectOption。
+    await selector.click();
+    await page.getByRole("option", { name: "codex-e2e", exact: true }).click();
     await page
       .getByText("Profile 已保存。请重启应用后使用该 profile 的配置、模型和会话。")
       .waitFor();
@@ -53,7 +54,7 @@ try {
     console.log("omp GUI profile: saved selection; old profile remains active until restart");
   } else {
     assert.equal(profileInfo.activeProfile, "codex-e2e");
-    assert.equal(await selector.inputValue(), "codex-e2e");
+    assert.equal((await selector.innerText()).trim(), "codex-e2e");
     await section.waitFor({ state: "visible" });
     const namedRoles = await page.evaluate(() => window.zcode.readOmpModelRoles());
     assert.equal(namedRoles.success, true);
