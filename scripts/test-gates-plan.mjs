@@ -214,6 +214,13 @@ export async function fullPlan() {
         env: { NODE_ENV: "production", ZCODE_TARGET_OS: "win32", ZCODE_TARGET_ARCH: "x64" },
       },
     ),
+    // 根因：Electron 缺失时 require 会下载并解压；并发 GUI 可覆盖正在启动的 exe，触发 EBUSY。
+    // 由门禁先完成共享运行时准备，再并行启动消费者；下载计费，已有安装和缓存保持复用。
+    node("electron-runtime-prepare", [
+      "--input-type=module",
+      "--eval",
+      "import { createRequire } from 'node:module'; import { resolve } from 'node:path'; const require = createRequire(resolve('packages/desktop/package.json')); console.log(`Electron runtime prepared: ${require('electron')}`);",
+    ]),
     // 构建和 staging 共享产物，先完成；之后真实 OMP、组件和 GUI 各自使用独立沙箱。
     pnpm(
       "real-omp.e2e.test.ts",

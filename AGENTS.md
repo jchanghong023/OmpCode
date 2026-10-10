@@ -18,7 +18,7 @@
 
 ## 命令与仓库结构
 
-开工前运行 `node scripts/check-workspace-freshness.mjs` 检查基线。Node 版本以 `mise.toml` 为准。
+开工前运行 `node scripts/check-workspace-freshness.mjs` 检查基线。Node 支持范围以根 `package.json` 的 `engines.node` 为准；`mise.toml` 固定版本是可复现开发基线，不要求门禁运行时精确相等。
 
 以下命令从仓库根目录执行：
 
@@ -57,7 +57,7 @@
 - `CONTEXT.md`：插件商店领域词汇；修改相关 UI 前阅读。
 - `DESIGN.md`：UI 设计规范；修改 UI 前阅读。
 
-构建与测试须先按 `mise.toml` 准备 Node 24.14.0、pnpm 10.33.2 及 workspace 依赖；桌面完整构建/打包需要对应平台构建环境，运行时准备可能联网下载资产。上表及下表是源码中存在的入口，列出不等于本次已执行或已验证所有平台可用。
+构建与测试须准备满足根 `package.json` 支持范围的 Node、`mise.toml` 固定的 pnpm 10.33.2 及 workspace 依赖；需要可复现环境时使用 mise 的 Node 24.14.0 基线，不因系统 Node 更新而要求降级。桌面完整构建/打包需要对应平台构建环境，运行时准备可能联网下载资产。上表及下表是源码中存在的入口，列出不等于本次已执行或已验证所有平台可用。
 
 `dev:desktop:test` 只选择产品 test 环境，不创建专用 OMP 根或 profile；真实验收必须使用下述隔离启动器并核对实际数据落点。环境变量与根目录规则见[模型与命令](docs/requirements/models-and-commands.md#产品规则与所有权)，不能将命令名称中的 `test` 当作隔离证明。
 

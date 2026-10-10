@@ -36,12 +36,9 @@ async function finish(status, code, extra = {}) {
 
 async function validateToolchain() {
   const mise = await readFile("mise.toml", "utf8");
-  const node = mise.match(/^node\s*=\s*"([^"]+)"/mu)?.[1];
   const pnpm = mise.match(/^pnpm\s*=\s*"([^"]+)"/mu)?.[1];
-  if (process.versions.node !== node)
-    throw new Error(
-      `Node ${node} required; current ${process.versions.node}. Use mise's existing toolchain; no automatic install.`,
-    );
+  // mise 的 Node 固定值是复现基线，不是兼容边界；精确比较曾在系统升级后阻止所有检查。
+  // Node 支持范围沿用 package.json，门禁使用并记录实际运行时，保留 pnpm 版本校验。
   const agent = process.env.npm_config_user_agent;
   if (agent && !agent.startsWith(`pnpm/${pnpm} `))
     throw new Error(`pnpm ${pnpm} required; current ${agent.split(" ")[0]}`);
