@@ -33,7 +33,7 @@ const HOST_RESTART_MAX_BACKOFF_MS = 30_000;
  * spawn，若 spawn 时清零，连续快速崩溃会在每次 reload 后被归零，退避恒为 1s，
  * 形成崩溃热循环。
  */
-export function nextHostRestartDelayMs(
+function nextHostRestartDelayMs(
   aliveMs: number,
   previousAttempts: number,
 ): { delayMs: number; attempts: number } {

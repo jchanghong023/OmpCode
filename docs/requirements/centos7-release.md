@@ -68,7 +68,7 @@ flowchart TD
 
 - CentOS 7 x64（`glibc 2.17`、Linux 3.10）上的非 root 用户必须能够把 ZIP 解压到 HOME 下，无需安装额外内容即可启动 OmpCode UI。宿主无 CJK 字体时，中文设置与菜单标签及任意中文会话文本应显示为字形而不是空框，英文保持可读。内嵌 omp 会话、集成终端、原生搜索与 SSH 必须可用；`app.asar` 与 `app.asar.unpacked` 均不得包含可选原生加密加速器。这些产品规则保留，但不再要求 AI 执行 VM 专项测试。
 - 以区别于已保存 App Settings profile 的命名 `--profile` 启动时，内嵌 omp 接收该 profile，UI 的角色与历史读取同一命名 profile。设置 `OMP_OFFLINE=1` 时每个内嵌 omp 进程继承该变量且不接收旧 `--offline` 参数，桌面处于离线锁定：启动桌面、打开设置、显示推荐内容及使用内嵌浏览器均不得使 Main、Renderer、Host 与调度器连接公网；内嵌浏览器可打开解析到私有 IP 的企业 DNS 名并拒绝公网 URL；仅 omp 可达其配置的企业 API。被关功能入口（公网更新、公网配置/帮助/社区/反馈、账号、外部浏览器）均为禁用态并附「离线锁定中已关闭」说明，无对应公网请求。未启用 `OMP_OFFLINE` 时桌面为全功能，与 Windows 行为一致：内嵌浏览器可打开公网 URL、更新检查按 Windows 语义可用、应用日志输出全部级别。缺失或无效 profile 名在 Electron 启动前以明确错误退出。以上是产品行为标准，不要求 AI 在 Linux 包上追踪网络或执行专属 GUI 测试。
-- CentOS 离线网络产品行为标准：回环服务返回指向公网 URL 的 302 时，Host 全局 fetch 与 undici 出口均拒绝，不能向重定向目标发起请求；普通非离线请求仍保留原重定向行为。这不是当前 Windows 离线测试或新增测试要求；现行 Windows API 正常重定向由 `packages/services/test/nodeApiNetwork.test.ts` 覆盖。
+- CentOS 离线网络产品行为标准：回环服务返回指向公网 URL 的 302 时，Host 全局 fetch 与 undici 出口均拒绝，不能向重定向目标发起请求；普通非离线请求仍保留原重定向行为。这不是当前 Windows 离线测试或新增测试要求；通用网络专项已从精简测试中删除，不再声明门禁验证该边界。
 - 内嵌推荐目录与 UI 资产必须满足：每条推荐都可用本地工具运行，每个推荐图标已内嵌，没有动画来源指向公网主机。
 - 带 `OMP_CONFIG_ROOT` 与不同 `PI_CONFIG_DIR` 启动时二者原样进入 Electron/Host/omp，目录解析遵循根目录环境规则；启动器不创建 `~/.ompcode` 或 `~/.omp` 链接，帮助不再列出 `--home` 或 `--offline`，OmpCode 的只读数据目录界面按根目录规则展示，不再提供路径选择或保存。既有 XDG 默认值、输入法配置链接、profile 参数与 `OMP_OFFLINE` 环境门控保留。
 - 关闭或无效的 Host stdout/stderr 描述符不能把普通 RPC 日志变成未捕获异常；结构化日志仍到达 Main。发布 workflow 无自定义输入项，自动生成日期时间 Tag，仍拒绝复用 Tag 或错误分支；重新运行全部 job 时生成不同 Tag。

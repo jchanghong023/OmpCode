@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 
 // 只合并展示值，不能在 transport/store 中丢弃增量或改变 seq。
-export function createLatestTextBuffer(publish: (text: string) => void, intervalMs: number) {
+function createLatestTextBuffer(publish: (text: string) => void, intervalMs: number) {
   let timer: ReturnType<typeof setTimeout> | undefined;
   let latest = "";
   return {

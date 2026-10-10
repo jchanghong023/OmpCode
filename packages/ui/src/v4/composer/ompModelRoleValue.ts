@@ -1,5 +1,4 @@
-import type { ModelSelection } from "@zcode/shared/model-selection";
-import { highestOmpThoughtLevel, type OmpModelCatalogEntry } from "./ompModelCatalog.js";
+import type { OmpModelCatalogEntry } from "./ompModelCatalog.js";
 
 export interface ParsedOmpRoleValue {
   modelPart: string;
@@ -62,22 +61,4 @@ export function selectOmpRoleLevelValue(
   );
   if (!entry || (level && !entry.thoughtLevels?.includes(level))) return currentValue;
   return level ? `${modelPart}:${level}` : modelPart;
-}
-
-export function ompRoleValueToSelection(
-  value: string,
-  catalog: readonly OmpModelCatalogEntry[],
-): ModelSelection | null {
-  const parsed = parseOmpRoleValue(value, catalog);
-  const slash = parsed.modelPart.indexOf("/");
-  if (slash <= 0 || slash >= parsed.modelPart.length - 1) return null;
-  const entry = catalog.find(
-    (candidate) => `${candidate.providerId}/${candidate.modelId}` === parsed.modelPart,
-  );
-  const reasoningLevel = parsed.levelSuffix ?? highestOmpThoughtLevel(entry);
-  return {
-    providerId: parsed.modelPart.slice(0, slash),
-    modelId: parsed.modelPart.slice(slash + 1),
-    options: reasoningLevel ? { reasoningLevel } : undefined,
-  };
 }

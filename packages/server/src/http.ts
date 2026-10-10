@@ -397,8 +397,7 @@ function isInsideDirectory(root: string, candidate: string): boolean {
   return diff === "" || (!diff.startsWith("..") && !diff.includes(`..${sep}`));
 }
 
-// 导出供安全回归测试直接验证路径解析语义（无需启动 HTTP 服务）。
-export async function resolveStaticFile(
+async function resolveStaticFile(
   staticRoot: string,
   pathname: string,
   spaFallback: boolean,
@@ -447,10 +446,7 @@ function staticContentType(filePath: string): string {
   return staticMimeTypes[extname(filePath).toLowerCase()] ?? "application/octet-stream";
 }
 
-export function resolveHttpBindHost(
-  host: string | undefined,
-  authToken: string | undefined,
-): string {
+function resolveHttpBindHost(host: string | undefined, authToken: string | undefined): string {
   const bindHost = host?.trim() || "127.0.0.1";
   const isLoopback =
     bindHost === "localhost" ||

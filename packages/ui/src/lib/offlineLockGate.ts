@@ -42,7 +42,7 @@ function sameGateState(a: OfflineGateState, b: OfflineGateState): boolean {
 }
 
 function applyState(next: OfflineGateState): void {
-  // 逐键值比较而非引用比较：不同来源（Main 应答/测试写入）的同值状态不得重复广播。
+  // 逐键值比较而非引用比较：同值的平台应答不得重复广播。
   if (sameGateState(next, currentState)) {
     return;
   }
@@ -56,20 +56,6 @@ function applyState(next: OfflineGateState): void {
  */
 export function isOfflineLocked(): boolean {
   return currentState.localOnly;
-}
-
-/**
- * 供测试或未来同步快照提供方写入状态；业务代码不得绕过平台通道调用。
- * 输入经运行时校验，非法输入忽略并保持原状态。
- */
-export function applyOfflineLockState(state: OfflineGateState): void {
-  let validated: OfflineGateState;
-  try {
-    validated = parseOfflineGateState(state);
-  } catch {
-    return;
-  }
-  applyState(validated);
 }
 
 let primedPlatform: IPlatformService | null = null;
@@ -96,14 +82,14 @@ export function primeOfflineLockFromPlatform(platform: IPlatformService): void {
     });
 }
 
-export function subscribeOfflineLock(listener: () => void): () => void {
+function subscribeOfflineLock(listener: () => void): () => void {
   listeners.add(listener);
   return () => {
     listeners.delete(listener);
   };
 }
 
-export function getOfflineLockSnapshot(): OfflineGateState {
+function getOfflineLockSnapshot(): OfflineGateState {
   return currentState;
 }
 

@@ -1,27 +1,21 @@
-import { readdir, readFile } from "node:fs/promises";
 import { join, delimiter } from "node:path";
 import { homedir } from "node:os";
 import { exists, gitText } from "./test-gates-process.mjs";
 
-const pnpm = (id, args, extra = {}) => ({ id, command: "pnpm", args, ...extra });
-const node = (id, args, extra = {}) => ({ id, command: "node", args, ...extra });
-const guiPhases = {
-  "ompAgentInteractions.gui.e2e.mjs": ["live", "cold"],
-  "ompAgentInteractions.visual.e2e.mjs": ["visual"],
-  "ompExecutionPages.gui.e2e.mjs": ["live", "cold"],
-  "ompStatusPanels.gui.e2e.mjs": ["live", "cold"],
-  "ompNativeCommands.gui.e2e.mjs": ["live", "capture", "cold"],
-  "ompPerformanceHotPaths.gui.e2e.mjs": ["live", "stable", "cold"],
-  "ompPerformanceHotPaths.mentions.e2e.mjs": ["mentions"],
-  "ompReviewedDefects.gui.e2e.mjs": ["live", "recovery"],
-  "ompProfile.gui.e2e.mjs": ["before", "after"],
-  "ompRecovery.gui.e2e.mjs": ["recovery"],
-};
+const pnpm = (id, args, extra = {}) => ({ id, command: "pnpm", args, kind: "check", ...extra });
+const node = (id, args, extra = {}) => ({ id, command: "node", args, kind: "check", ...extra });
 
-async function filesAt(dir) {
-  if (!(await exists(dir))) return [];
-  return (await readdir(dir)).sort();
-}
+const staticPlan = (all) => [
+  pnpm("typecheck", ["typecheck"], { kind: "compile" }),
+  pnpm("lint", ["lint"]),
+  pnpm(all ? "architecture-all" : "architecture-changed", [
+    "architecture:check",
+    ...(all ? [] : ["--changed"]),
+  ]),
+  ...(all
+    ? [pnpm("format-all", ["fmt:check"]), pnpm("unused-dependencies-exports", ["knip"])]
+    : []),
+];
 
 export async function installedOmp() {
   const candidates = [process.env.OMP_RPC_BINARY_PATH];
@@ -44,11 +38,11 @@ export async function fastPlan() {
       ...(await gitText(["diff", "--name-only", "-z", "HEAD"])).split("\0"),
       ...(await gitText(["ls-files", "--others", "--exclude-standard", "-z"])).split("\0"),
     ]),
-  ].filter((name) => /\.(?:m?[jt]sx?|json|md|ya?ml|toml|css|html)$/u.test(name));
+  ].filter((name) => /\.(?:[cm]?[jt]sx?|json|md|ya?ml|toml|css|html)$/u.test(name));
   const formatFiles = [];
   for (const name of changed) if (await exists(name)) formatFiles.push(name);
   // 修复：pnpm exec 在 Windows 会经 cmd 转发；大量文件超过 8191 字符时还未检查就失败。
-  // 为命令前缀、引号和工具路径保留余量，分批检查完整名单，不放宽 60 秒总预算。
+  // 为命令前缀、引号和工具路径保留余量，分批检查完整名单，不放宽 60 秒计费预算。
   const formatBatches = [];
   let batch = [];
   let argumentLength = 0;
@@ -63,27 +57,7 @@ export async function fastPlan() {
   }
   if (batch.length) formatBatches.push(batch);
   return [
-    pnpm("typecheck", ["typecheck"]),
-    pnpm("lint", ["lint"]),
-    pnpm("architecture-changed", ["architecture:check", "--changed"]),
-    pnpm("quick-shared-client", [
-      "exec",
-      "tsx",
-      "--test",
-      "packages/shared/test/offlineGate.test.ts",
-      "packages/shared/test/ompPaths.test.ts",
-      "packages/client/test/websocketDisconnect.test.ts",
-    ]),
-    pnpm("quick-ui", [
-      "exec",
-      "tsx",
-      "--tsconfig",
-      "packages/ui/tsconfig.json",
-      "--test",
-      "packages/ui/test/composerSnapshot.test.ts",
-      "packages/ui/test/ompModelRolesFallback.test.ts",
-      "packages/ui/test/bufferedStreamingText.test.ts",
-    ]),
+    ...staticPlan(false),
     ...formatBatches.map((files, index) =>
       pnpm(index ? `format-changed-${index + 1}` : "format-changed", [
         "exec",
@@ -92,123 +66,199 @@ export async function fastPlan() {
         ...files,
       ]),
     ),
-  ];
+  ].map((stage) => ({ ...stage, parallelGroup: "static" }));
 }
+
+const coreTests = {
+  "omp-agent": [
+    "adapter.e2e",
+    "coldStoreProjection",
+    "conversationEngineStatus",
+    "conversationRecovery",
+    "frameAssembler",
+    "ompCommandOutputHistory",
+    "ompCustomMessages",
+    "ompExecutionHistory",
+    "ompInteractionMapping",
+    "ompInteractionProxy",
+    "ompProjectorInterruptedToolRow",
+    "ompStore",
+    "projectionToolCallIndex",
+    "projectionTurnLifecycle",
+    "promptResultSemantics",
+    "protocolServerConcurrency",
+    "queueReconciliation",
+    "sessionLifecycleGates",
+    "sessionRegistry.identity",
+    "sessionRegistryAliases",
+    "sessionRegistryConcurrency",
+    "topicFlowControl",
+    "topicWireBudget",
+    "v4InteractionAck",
+  ],
+  services: [
+    "ompConcurrentStartup",
+    "ompTaskIdMigration",
+    "zcodeProtocolClientRejectionTiming",
+    "zcodeTaskIdMigrationEvent",
+    "zcodeTaskIndexRekeyDelta",
+    // 上游原有测试不参加 Fork 精简，仍由两级门禁执行。
+    "importedClaudeRecovery",
+    "nonCliAcpRetirement",
+    "providerConfigMigration",
+  ],
+  shared: ["editorPrefill", "ompPaths", "taskIdMigration"],
+  client: ["websocketDisconnect"],
+  server: ["remoteConnectionStore"],
+  ui: [
+    "conversationRecoveryBudget",
+    "ompAttachmentRejection",
+    "ompComposerModelSync",
+    "ompModelCatalog",
+    "ompNativeCommandRouting",
+    "ompPresentationIdentity",
+    "ompQueuedInputRows",
+    "ompVirtualWriteSummary",
+    "ompWorkspaceConfigOptions",
+    "nonCliAcpRetirement",
+  ],
+};
 
 export async function fullPlan() {
   const stages = [
-    pnpm("typecheck", ["typecheck"]),
-    pnpm("lint", ["lint"]),
-    pnpm("format-all", ["fmt:check"]),
-    pnpm("architecture-all", ["architecture:check"]),
-    pnpm("unused-dependencies-exports", ["knip"]),
-    node("gate-entry-selftest", ["scripts/test-gates.mjs", "--self-test"]),
-  ];
-  const packages = (await readdir("packages", { withFileTypes: true })).filter((entry) =>
-    entry.isDirectory(),
-  );
-  for (const entry of packages) {
-    const root = `packages/${entry.name}`;
-    if (!(await exists(`${root}/package.json`))) continue;
-    const manifest = JSON.parse(await readFile(`${root}/package.json`, "utf8"));
-    if (["formal-proof", "model-option-map"].includes(entry.name)) {
-      for (const script of ["typecheck", "lint"])
-        if (manifest.scripts?.[script])
-          stages.push(pnpm(`${entry.name}-${script}`, ["--dir", root, script]));
-    }
-    const tests = (await filesAt(`${root}/test`)).filter((name) =>
-      /\.(?:test|spec)\.(?:tsx?|mjs)$/u.test(name),
-    );
-    const ordinary = tests.filter(
-      (name) => !["real-omp.e2e.test.ts", "realNativeCommands.e2e.test.ts"].includes(name),
-    );
-    if (ordinary.length)
-      stages.push(
-        pnpm(`${entry.name}-tests`, [
+    ...staticPlan(true),
+    node("gate-entry-selftest", ["scripts/test-gates.mjs", "--self-test"], { kind: "test" }),
+    pnpm("formal-proof-typecheck", ["--filter", "@zcode/formal-proof", "typecheck"]),
+  ].map((stage) => ({ ...stage, parallelGroup: "offline-core" }));
+  for (const [name, files] of Object.entries(coreTests))
+    stages.push(
+      pnpm(
+        `${name}-core-tests`,
+        [
           "exec",
           "tsx",
-          ...(entry.name === "ui" ? ["--tsconfig", "packages/ui/tsconfig.json"] : []),
+          ...(name === "ui" ? ["--tsconfig", "packages/ui/tsconfig.json"] : []),
           "--test",
-          ...ordinary.map((name) => `${root}/test/${name}`),
-        ]),
-      );
-    for (const file of tests.filter((name) => !ordinary.includes(name)))
-      stages.push(
-        pnpm(file, ["exec", "tsx", "--test", `${root}/test/${file}`], {
-          realOmp: true,
-          env: { OMP_NATIVE_E2E: "1" },
-        }),
-      );
-    for (const file of (await filesAt(`${root}/test`)).filter((name) =>
-      /\.perf\.(?:ts|mts)$/u.test(name),
-    )) {
-      stages.push(
-        pnpm(
-          file,
-          [
-            "exec",
-            "tsx",
-            ...(entry.name === "ui" ? ["--tsconfig", "packages/ui/tsconfig.json"] : []),
-            `${root}/test/${file}`,
-          ],
-          { baseline: file === "workspaceFileIndex.perf.mts" },
-        ),
-      );
-    }
-  }
-  stages.push(pnpm("workspace-build", ["build"], { realOmp: true }));
-  stages.push(
-    pnpm("windows-local-package", ["bundle:desktop", "--", "--os=win", "--arch=x64"], {
-      realOmp: true,
-    }),
-  );
-  // 组件入口自行拥有临时环境；不能把它们当作缺少产品 fixture 的未知 GUI。
-  const components = [
-    ["ompPerformanceHotPaths.components.e2e.mjs", "components-hotpaths"],
-    ["toolContentPresentation.components.e2e.mjs", "components-tool-content"],
-  ];
-  for (const [file, id] of components) {
-    stages.push(
-      node(id, [`packages/desktop/test/${file}`], {
-        electron: true,
-        ...(id === "components-hotpaths"
-          ? {
-              env: {
-                OMP_COMPONENT_PHASE: "complete",
-                OMP_COMPONENT_CDP_PORT: "19347",
-                OMP_COMPONENT_RENDERER_PORT: "15347",
-              },
-            }
-          : {}),
-      }),
+          "--test-concurrency=2",
+          ...files.map((file) => `packages/${name}/test/${file}.test.ts`),
+          ...(name === "ui"
+            ? [
+                "packages/ui/test/fallbackToolPresentation.test.tsx",
+                "packages/ui/test/rpcUiElicitation.test.tsx",
+                "packages/ui/test/toolContentPresentation.test.tsx",
+              ]
+            : []),
+        ],
+        { kind: "test", parallelGroup: "offline-core" },
+      ),
     );
-  }
-  for (const file of (await filesAt("packages/desktop/test")).filter(
-    (name) => name.endsWith(".e2e.mjs") && !components.some(([file]) => file === name),
-  )) {
-    const simple = ["ompStartup.gui.e2e.mjs", "ompSkills.gui.e2e.mjs", "ompConfirm.gui.e2e.mjs"];
-    for (const phase of guiPhases[file] ?? ["live"]) {
+  stages.push(
+    node("desktop-build-metadata", ["packages/desktop/scripts/build-metadata.mjs"]),
+    node("adapter-build", ["packages/omp-agent/scripts/bundle.mjs"], {
+      kind: "compile",
+      // 修复依据：bundle 只调用 esbuild，不运行 OMP；安装门控仅属于真实核心/GUI。
+      parallelGroup: "local-compiles",
+    }),
+    ...[
+      ["desktop-main-host-preload-build", "@zcode/desktop", ["tsup"]],
+      ["desktop-renderer-build", "@zcode/desktop", ["vite", "build", "--no-emptyOutDir"]],
+      ["web-renderer-build", "@zcode/web", ["vite", "build", "--no-emptyOutDir"]],
+      ["formal-proof-build", "@zcode/formal-proof", ["vite", "build", "--no-emptyOutDir"]],
+      ["model-option-map-build", "@zcode/model-option-map", ["tsc"]],
+      ["server-http-build", "@zcode/server", ["tsup"]],
+      ["server-cli-build", "@zcode/server-cli", ["tsup"]],
+    ].map(([id, name, args]) =>
+      pnpm(id, ["--filter", name, "exec", ...args], {
+        kind: "compile",
+        parallelGroup: "local-compiles",
+        env: { NODE_ENV: "production", ZCODE_TARGET_OS: "win32", ZCODE_TARGET_ARCH: "x64" },
+      }),
+    ),
+    pnpm("server-remote-build-validation", ["--filter", "@zcode/server", "build:remote"], {
+      parallelGroup: "local-assets",
+    }),
+    node(
+      "adapter-stage",
+      [
+        "--input-type=module",
+        "--eval",
+        "import { stageAgentBundle } from './packages/desktop/scripts/stage-omp-agent-bundle.mjs'; stageAgentBundle({ repoRoot: process.cwd(), platformKey: `${process.platform}-${process.arch}` });",
+      ],
+      { parallelGroup: "local-assets" },
+    ),
+    node("embedded-omp-assets", ["packages/desktop/scripts/fetch-omp-release.mjs"], {
+      parallelGroup: "local-assets",
+      env: { OMP_RELEASE_SKIP: "0", ZCODE_TARGET_OS: "win32", ZCODE_TARGET_ARCH: "x64" },
+    }),
+    node("native-search-assets", ["scripts/prepare-native-search-tools.mjs"], {
+      parallelGroup: "local-assets",
+      env: { ZCODE_TARGET_OS: "win32", ZCODE_TARGET_ARCH: "x64" },
+    }),
+    pnpm(
+      "desktop-windows-unpacked-packaging",
+      [
+        "--filter",
+        "@zcode/desktop",
+        "exec",
+        "electron-builder",
+        "--config",
+        "electron-builder.config.js",
+        "--win",
+        "--x64",
+        "--dir",
+        "--publish",
+        "never",
+      ],
+      {
+        packaging: true,
+        env: { NODE_ENV: "production", ZCODE_TARGET_OS: "win32", ZCODE_TARGET_ARCH: "x64" },
+      },
+    ),
+    // 构建和 staging 共享产物，先完成；之后真实 OMP、组件和 GUI 各自使用独立沙箱。
+    pnpm(
+      "real-omp.e2e.test.ts",
+      ["exec", "tsx", "--test", "packages/omp-agent/test/real-omp.e2e.test.ts"],
+      { kind: "test", realOmp: true, parallelGroup: "isolated-runtime" },
+    ),
+    node(
+      "components-tool-content",
+      ["packages/desktop/test/toolContentPresentation.components.e2e.mjs"],
+      { kind: "test", electron: true, parallelGroup: "isolated-runtime" },
+    ),
+  );
+  for (const [file, phases] of [
+    ["ompStartup.gui.e2e.mjs", ["live"]],
+    ["ompReviewedDefects.gui.e2e.mjs", ["live"]],
+  ])
+    for (const phase of phases)
       stages.push(
         node(`gui:${file}:${phase}`, [`packages/desktop/test/${file}`], {
+          kind: "test",
+          parallelGroup: "isolated-runtime",
           fixture: true,
           file,
           phase,
           realOmp: true,
-          unknownGui: !guiPhases[file] && !simple.includes(file),
-          ...(file === "ompNativeCommands.gui.e2e.mjs"
-            ? {
-                env: {
-                  OMP_NATIVE_GUI_SCENARIOS: "local,models,compact,team,plan",
-                  OMP_NATIVE_GUI_RESUME: "0",
-                },
-              }
-            : {}),
         }),
       );
-    }
-  }
+  // recovery 复用 identity live 的持久化根目录，必须跨过 live 和进程清理屏障。
   stages.push(
-    node("desktop-gui-smoke", ["scripts/dev/gui-smoke-cdp.mjs"], { fixture: true, phase: "smoke" }),
+    node(
+      "gui:ompReviewedDefects.gui.e2e.mjs:recovery",
+      ["packages/desktop/test/ompReviewedDefects.gui.e2e.mjs"],
+      {
+        kind: "test",
+        fixture: true,
+        file: "ompReviewedDefects.gui.e2e.mjs",
+        phase: "recovery",
+        realOmp: true,
+      },
+    ),
   );
   return stages;
+}
+
+export async function slowPlan() {
+  // 项目禁止 Linux/WSL；当前 Windows 本地覆盖与 full 完全一致，不重复执行 full。
+  return await fullPlan();
 }

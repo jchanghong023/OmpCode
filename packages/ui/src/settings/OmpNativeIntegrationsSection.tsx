@@ -6,7 +6,7 @@ import { useZCodeIntl } from "@/i18n/IntlProvider.js";
 
 type Kind = "extension" | "mcp" | "hook";
 
-export interface OmpNativeIntegrationsViewProps {
+interface OmpNativeIntegrationsViewProps {
   kind: Kind;
   title: string;
   description: string;
@@ -19,9 +19,9 @@ export interface OmpNativeIntegrationsViewProps {
 
 /**
  * omp 原生配置只读视图；目录入口交给系统文件管理器，运行态不伪装成已连接。
- * 与 SkillsSection 的 OmpSkillsCatalogView 同为纯展示测试接缝：数据加载留在 Section。
+ * 数据加载留在 Section，展示组件仅在本模块消费。
  */
-export function OmpNativeIntegrationsView({
+function OmpNativeIntegrationsView({
   kind,
   title,
   description,

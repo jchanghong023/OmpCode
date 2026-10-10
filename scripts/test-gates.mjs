@@ -1,34 +1,37 @@
 import { readFile } from "node:fs/promises";
-import { fastPlan, fullPlan, installedOmp } from "./test-gates-plan.mjs";
-import { environmentConfig, regularStage } from "./test-gates-environments.mjs";
-import {
-  elapsed,
-  stageResult,
-  snapshot,
-  sameSnapshot,
-  stopAll,
-  startBudget,
-  cancelCommands,
-} from "./test-gates-process.mjs";
+import { fastPlan, fullPlan, slowPlan, installedOmp } from "./test-gates-plan.mjs";
+import { regularStage, restorePackagingState } from "./test-gates-environments.mjs";
+import { createGateRun } from "./test-gates-run.mjs";
+import { createGateClock, gateBudget, snapshot, sameSnapshot } from "./test-gates-process.mjs";
 
-const started = performance.now();
+const clock = createGateClock();
 const args = process.argv.slice(2);
 const level = args.shift();
 const value = (flag) => args[args.indexOf(flag) + 1];
 const authorized = args.includes("--human-authorized");
 const knownFlags = new Set(["--human-authorized", "--plan", "--budget-seconds"]);
 const valueFlags = new Set(["--budget-seconds"]);
-let timer;
-let finishing = false;
-
+const validLevel = ["fastcheck", "fulltest", "slowtest"].includes(level);
+let budget = validLevel ? gateBudget(level) : null;
+let argumentError;
+try {
+  if (validLevel && args.includes("--budget-seconds"))
+    budget = gateBudget(level, Number(value("--budget-seconds")));
+} catch (error) {
+  argumentError = error;
+}
+const gate = createGateRun({
+  level,
+  limitSeconds: budget,
+  clock,
+  authorized,
+  timed: validLevel && !args.includes("--plan") && !argumentError,
+  cleanup: restorePackagingState,
+});
 async function finish(status, code, extra = {}) {
-  if (finishing) return;
-  finishing = true;
-  clearTimeout(timer);
-  await stopAll();
-  console.log(`${level}: ${status}, ${elapsed(started)}s`);
-  console.log(JSON.stringify({ level, status, seconds: Number(elapsed(started)), ...extra }));
-  process.exitCode = code;
+  const report = await gate.finish(status, code, extra);
+  process.exitCode = report.exitCode;
+  return report;
 }
 
 async function validateToolchain() {
@@ -50,14 +53,10 @@ async function validateToolchain() {
   };
 }
 
-for (const signal of ["SIGINT", "SIGTERM"])
-  process.once(signal, async () => {
-    cancelCommands();
-    await finish("CANCELLED", 130);
-    process.exit(130);
-  });
+// Signals and owned-process cleanup share the reusable lifecycle.
 
 try {
+  if (argumentError) throw argumentError;
   // 用户明确限定 AI 只测 Windows；拒绝非 Windows 运行，不能退回已取消的 Linux 测试路径。
   if (process.platform !== "win32")
     throw new Error("AI testing is Windows-only; run these gates on Windows");
@@ -77,30 +76,36 @@ try {
     if (["fulltest", "slowtest"].includes(level) && !planOnly && !authorized) {
       await finish("NOT RUN — HUMAN AUTHORIZATION REQUIRED", 2);
     } else {
-      if (level === "fastcheck" && !planOnly) {
-        const budget = args.includes("--budget-seconds") ? Number(value("--budget-seconds")) : 60;
-        // 为 Windows taskkill 留出最多四秒；不得等满一分钟后再开始清理进程。
-        timer = startBudget(budget, started, async () => {
-          await finish("TIMEOUT", 124, { budgetSeconds: budget });
-          process.exit(124);
-        });
-      }
       const tools = await validateToolchain();
       const source = await snapshot();
       if (level === "--snapshot") {
         await finish("PASS", 0, { snapshot: source, tools });
       } else {
-        const stages = level === "fastcheck" ? await fastPlan() : await fullPlan();
+        const stages = await (level === "fastcheck"
+          ? fastPlan()
+          : level === "slowtest"
+            ? slowPlan()
+            : fullPlan());
         if (planOnly) {
-          console.log(JSON.stringify({ snapshot: source, tools, stages }, null, 2));
+          console.log(
+            JSON.stringify(
+              {
+                snapshot: source,
+                tools,
+                limitSeconds: budget,
+                concurrency: 3,
+                stages,
+              },
+              null,
+              2,
+            ),
+          );
           await finish("PLAN ONLY — NOT RUN", 0);
         } else {
           const context = {
             snapshot: source,
             omp: await installedOmp(),
-            environments: await environmentConfig(),
             guiProcesses: new Map(),
-            records: [],
           };
           console.log(
             JSON.stringify({
@@ -109,35 +114,21 @@ try {
               cache: "existing cache; cold cache not verified",
             }),
           );
-          for (const stage of stages) {
-            const result = await stageResult(stage, async () => {
-              if (stage.unknownGui)
-                return {
+          const report = await gate.run(
+            stages,
+            (stage) => regularStage(stage, context),
+            async (records) => {
+              const current = await snapshot();
+              if (!sameSnapshot(source, current))
+                records.push({
+                  id: "source-snapshot",
                   status: "UNVERIFIED_MISSING_ENV",
-                  reason:
-                    "New GUI entry needs its original fixture/phase mapping before full coverage can be claimed",
-                };
-              return await regularStage(stage, context);
-            });
-            context.records.push(result);
-            if (level === "fastcheck" && result.status !== "PASS") break;
-          }
-          const current = await snapshot();
-          if (!sameSnapshot(source, current))
-            context.records.push({
-              id: "source-snapshot",
-              status: "UNVERIFIED_MISSING_ENV",
-              reason: "Source changed during validation; results belong to different snapshots",
-            });
-          const passed = context.records.every(
-            (record) => record.status === "PASS" || record.status === "SKIPPED_NOT_APPLICABLE",
+                  reason: "Source changed during validation; results belong to different snapshots",
+                });
+              return { snapshot: source, tools };
+            },
           );
-          const failed = context.records.some((record) => record.status === "FAIL");
-          await finish(
-            passed ? "PASS" : failed ? "FAIL" : "UNVERIFIED — REQUIRED ENVIRONMENT UNAVAILABLE",
-            passed ? 0 : 1,
-            { snapshot: source, tools, stages: context.records },
-          );
+          process.exitCode = report.exitCode;
         }
       }
     }

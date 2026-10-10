@@ -256,7 +256,7 @@ export function createOmpStore(env: NodeJS.ProcessEnv = process.env): OmpStorePo
 }
 
 /** GUI 派生数据遵循 OmpCode 根；PI_CONFIG_DIR 只定位 OMP，不迁移应用数据。 */
-export function ompCommandOutputsRoot(env: NodeJS.ProcessEnv, home = homedir()): string {
+function ompCommandOutputsRoot(env: NodeJS.ProcessEnv, home = homedir()): string {
   const root =
     resolveOmpCodeDataRootFromEnv(home, env) ??
     (env.ZCODE_HOME?.trim() ||

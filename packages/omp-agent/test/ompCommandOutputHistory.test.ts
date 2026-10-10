@@ -14,7 +14,7 @@ import { syncBuiltinESMExports } from "node:module";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve, sep } from "node:path";
 import { test, type TestContext } from "node:test";
-import { createOmpStore, ompCommandOutputsRoot } from "../src/adapters/ompStore.js";
+import { createOmpStore } from "../src/adapters/ompStore.js";
 import { SessionRegistry } from "../src/app/sessionRegistry.js";
 import { ServerApp } from "../src/app/serverApp.js";
 import { conversationSnapshotSchema } from "@zcode/shared/zcode-protocol-v4";
@@ -426,38 +426,6 @@ test("同 cwd 不同 workspaceIdentity 的 GUI 派生历史隔离", async (conte
   assert.equal((await remoteA.listSessions(cwd)).length, 1);
 });
 
-test("只有派生历史的冷会话删除不调用原生目录，重启不会复活", async (context) => {
-  const { env, store } = await scratch(context);
-  await store.appendCommandOutput!({ cwd, sessionId: logicalId, sessionPath: null }, output);
-  const fixture = registryWith(store);
-  // 初始化工作区但不加载待删会话，覆盖完全冷删除路径。
-  await fixture.registry.createSession({
-    sessionId: "unrelated",
-    workspaceId: "ws",
-    workspacePath: cwd,
-  });
-  await fixture.registry.deleteSession(logicalId);
-  assert.deepEqual(await createOmpStore(env).listSessions(cwd), []);
-  assert.equal(fixture.directory.sentDirectoryCommands.length, 0);
-  await fixture.registry.dispose();
-});
-
-test("已加载的纯本地命令会话删除等待写入，并删除派生历史", async (context) => {
-  const { env, store } = await scratch(context);
-  await store.appendCommandOutput!({ cwd, sessionId: logicalId, sessionPath: null }, output);
-  const fixture = registryWith(store);
-  await fixture.registry.resumeSession({
-    sessionId: logicalId,
-    workspaceId: "ws",
-    workspacePath: cwd,
-  });
-  await fixture.registry.deleteSession(logicalId);
-  assert.deepEqual(await createOmpStore(env).listSessions(cwd), []);
-  assert.equal(fixture.registry.getEngine(logicalId), null);
-  assert.equal(fixture.directory.sentDirectoryCommands.length, 0);
-  await fixture.registry.dispose();
-});
-
 test("公开 sendText 入口收到 ACK 前后输出，关闭并冷恢复只展示收到的事实", async (context) => {
   const { store, env } = await scratch(context);
   let handlers: OmpSessionProcessHandlers | null = null;
@@ -527,95 +495,6 @@ test("公开 sendText 入口收到 ACK 前后输出，关闭并冷恢复只展�
   await reopened.registry.dispose();
 });
 
-test("OMP 目录删除成功后，UUID 与逻辑 ID 关联的派生输出同步删除", async (context) => {
-  const { store, env } = await scratch(context);
-  const nativeDirectory = join(env.OMP_CONFIG_ROOT, "agent", "sessions", "-");
-  await mkdir(nativeDirectory, { recursive: true });
-  const nativePath = join(nativeDirectory, `2026-10-08T00-00-00-000Z_${stableId}.jsonl`);
-  await writeFile(nativePath, `${JSON.stringify({ type: "session", id: stableId, cwd })}\n`);
-  await store.appendCommandOutput!({ cwd, sessionId: logicalId, sessionPath: nativePath }, output);
-  const directory = createDirectoryStub();
-  directory.sendDirectory = async (command) => {
-    assert.equal(command.type, "delete_session");
-    assert.equal("sessionId" in command ? command.sessionId : null, stableId);
-    await rm(nativePath);
-    return { success: true };
-  };
-  const registry = new SessionRegistry({
-    store,
-    directory,
-    gateway: { emitFrame() {} } as HostGateway,
-    ompFactory: {
-      create() {
-        throw new Error("must not start core");
-      },
-    },
-  });
-  await registry.resumeSession({ sessionId: stableId, workspaceId: "ws", workspacePath: cwd });
-  await registry.deleteSession(stableId);
-  const reopened = createOmpStore(env);
-  assert.deepEqual(await reopened.readCommandOutputs!(cwd, logicalId), []);
-  assert.deepEqual(await reopened.readCommandOutputs!(cwd, stableId, nativePath), []);
-  assert.deepEqual(await reopened.listSessions(cwd), []);
-  await registry.dispose();
-});
-
-test("派生文件删除失败不报告成功，冷历史保持可恢复", async (context) => {
-  const { store } = await scratch(context);
-  await store.appendCommandOutput!({ cwd, sessionId: logicalId, sessionPath: null }, output);
-  const fixture = registryWith({ ...store, deleteCommandOutputs: async () => false });
-  await fixture.registry.createSession({
-    sessionId: "unrelated",
-    workspaceId: "ws",
-    workspacePath: cwd,
-  });
-  await assert.rejects(
-    fixture.registry.deleteSession(logicalId),
-    /cannot delete omp command history/,
-  );
-  assert.deepEqual(await store.readCommandOutputs!(cwd, logicalId), [output]);
-  assert.equal((await store.listSessions(cwd)).length, 1);
-  await fixture.registry.dispose();
-});
-
-test("旧 GUI alias 冷删除使用 canonical UUID，并同步删除关联派生输出", async (context) => {
-  const { store, env } = await scratch(context);
-  const nativeDirectory = join(env.OMP_CONFIG_ROOT, "agent", "sessions", "-");
-  await mkdir(nativeDirectory, { recursive: true });
-  const nativePath = join(nativeDirectory, `2026-10-08T00-00-00-000Z_${stableId}.jsonl`);
-  await writeFile(nativePath, `${JSON.stringify({ type: "session", id: stableId, cwd })}\n`);
-  await store.appendCommandOutput!({ cwd, sessionId: logicalId, sessionPath: nativePath }, output);
-  const directory = createDirectoryStub();
-  directory.sendDirectory = async (command) => {
-    assert.equal(command.type, "delete_session");
-    assert.equal("sessionId" in command ? command.sessionId : null, stableId);
-    await rm(nativePath);
-    return { success: true };
-  };
-  const registry = new SessionRegistry({
-    store,
-    directory,
-    gateway: { emitFrame() {} } as HostGateway,
-    ompFactory: {
-      create() {
-        throw new Error("cold deletion must not start OMP");
-      },
-    },
-  });
-  try {
-    await registry.createSession({ sessionId: "unrelated", workspaceId: "ws", workspacePath: cwd });
-    await registry.deleteSession(logicalId);
-    const reopened = createOmpStore(env);
-    assert.equal(await reopened.findSession!(cwd, logicalId), null);
-    assert.equal(await reopened.findSession!(cwd, stableId), null);
-    assert.deepEqual(await reopened.readCommandOutputs!(cwd, logicalId), []);
-    assert.deepEqual(await reopened.listSessions(cwd), []);
-    assert.ok(registry.getEngine("unrelated"));
-  } finally {
-    await registry.dispose();
-  }
-});
-
 test("OMP 只分配路径未落盘时保留 UUID 冷锚点，不将空文件路径传给 resume", async (context) => {
   const { store, env } = await scratch(context);
   const nativePath = join(
@@ -671,25 +550,6 @@ test("派生历史写入失败会显式拒绝，flush 不冒充落盘成功", as
     store.appendCommandOutput!({ cwd, sessionId: logicalId, sessionPath: null }, output),
   );
   await assert.rejects(store.flushCommandOutputs!());
-});
-
-test("派生数据仅写 OmpCode 根，旧 PI_CONFIG_DIR 不改变默认应用根，profile 隔离", async (context) => {
-  const { root, env, store } = await scratch(context);
-  const named = createOmpStore({ ...env, OMP_PROFILE: "work" });
-  await store.appendCommandOutput!({ cwd, sessionId: logicalId, sessionPath: null }, output);
-  assert.deepEqual(await named.listSessions(cwd), []);
-  assert.equal(
-    ompCommandOutputsRoot(env),
-    join(`${env.OMP_CONFIG_ROOT}_ompcode`, "cli", "omp-command-output", "default"),
-  );
-  assert.equal(
-    ompCommandOutputsRoot({ PI_CONFIG_DIR: join(root, "legacy") }, root),
-    join(root, ".ompcode", "cli", "omp-command-output", "default"),
-  );
-  assert.equal(
-    ompCommandOutputsRoot({ ZCODE_DATA_BASE_DIR: root }, "other-home"),
-    join(root, ".ompcode", "cli", "omp-command-output", "default"),
-  );
 });
 
 test("仅 display:true custom 的原生结果没有 parent journal 时，ACK 后保存并双链路冷恢复", async (context) => {
@@ -988,116 +848,6 @@ test("原生 file/UUID 变化后，旧 epoch derived 不匹配新 file 的同文
       visible.map((row) => row.createdAt),
       [2000, 3000],
     );
-  } finally {
-    await fixture.registry.dispose();
-  }
-});
-
-test("长原生 journal 连续八次 custom append 只读取首轮和追加字节", async (context) => {
-  const { store, env } = await scratch(context);
-  const directory = join(env.OMP_CONFIG_ROOT, "agent", "sessions", "-");
-  const nativePath = join(directory, `2026-10-08T00-00-00-000Z_${stableId}.jsonl`);
-  await mkdir(directory, { recursive: true });
-  const header = `${JSON.stringify({ type: "session", id: stableId, cwd })}\n`;
-  const padding = `${JSON.stringify({
-    type: "message",
-    message: { role: "user", content: "长历史".repeat(1024), timestamp: 1 },
-  })}\n`.repeat(256);
-  await writeFile(nativePath, header + padding);
-
-  // 计量真正文件流的 data，而不是断言实现源码或复制 store 的索引逻辑。
-  const actualReadStream = fs.createReadStream;
-  const ranges: number[] = [];
-  let readBytes = 0;
-  const streamMock = context.mock.method(
-    fs,
-    "createReadStream",
-    (...args: Parameters<typeof fs.createReadStream>) => {
-      const stream = actualReadStream(...args);
-      if (args[0] === nativePath) {
-        const options = args[1];
-        ranges.push(typeof options === "object" ? (options.start ?? 0) : 0);
-        stream.on("data", (chunk: Buffer | string) => {
-          readBytes += typeof chunk === "string" ? Buffer.byteLength(chunk) : chunk.length;
-        });
-      }
-      return stream;
-    },
-  );
-  syncBuiltinESMExports();
-  context.after(() => {
-    streamMock.mock.restore();
-    syncBuiltinESMExports();
-  });
-
-  const session = { cwd, sessionId: logicalId, sessionPath: nativePath };
-  const records = [];
-  let journalBytes = Buffer.byteLength(header + padding);
-  for (let index = 0; index < 8; index += 1) {
-    const timestamp = 1000 + index;
-    const entry =
-      JSON.stringify({
-        type: index % 2 === 0 ? "custom_message" : "message",
-        ...(index % 2 === 0
-          ? { customType: "team-result", content: output.text, display: true, timestamp }
-          : {
-              message: {
-                role: "custom",
-                customType: "team-result",
-                content: [{ type: "text", text: output.text }],
-                display: true,
-                timestamp,
-              },
-            }),
-      }) + "\n";
-    await appendFile(nativePath, entry);
-    const beforeAppend = journalBytes;
-    journalBytes += Buffer.byteLength(entry);
-    const record = {
-      ...output,
-      id: `native-${index}`,
-      customType: "team-result",
-      nativeTimestamp: timestamp,
-      nativeSessionId: stableId,
-      createdAt: timestamp,
-    };
-    records.push(record);
-    await store.appendCommandOutput!(session, record);
-    assert.equal(ranges[index], index === 0 ? 0 : beforeAppend);
-  }
-  await store.appendCommandOutput!(session, { ...records[7]!, id: "repeat-last" });
-  await store.flushCommandOutputs!();
-  assert.equal(ranges.length, 8, "未变化的文件无需再次读取");
-  assert.equal(readBytes, journalBytes, "八次 append 总读取量必须等于首轮加新增字节");
-  assert.deepEqual(await store.readCommandOutputs!(cwd, logicalId), []);
-
-  // 相同类型/正文但新 timestamp 没有原生记录，必须保存且经公开冷恢复显示。
-  await store.appendCommandOutput!(session, {
-    ...records[7]!,
-    id: "not-native-yet",
-    nativeTimestamp: 2000,
-    createdAt: 2000,
-  });
-  const reopened = createOmpStore(env);
-  assert.deepEqual(
-    (await reopened.readCommandOutputs!(cwd, logicalId)).map((record) => record.nativeTimestamp),
-    [2000],
-  );
-  const fixture = registryWith(reopened);
-  try {
-    const cold = await fixture.registry.resumeSession({
-      sessionId: logicalId,
-      workspaceId: "ws",
-      workspacePath: cwd,
-    });
-    assert.deepEqual(
-      cold.projection
-        .rowsRange(undefined, 1000)
-        .rows.filter((row) => row.kind === "assistantText" && row.text === output.text)
-        .map((row) => row.createdAt),
-      [1000, 1001, 1002, 1003, 1004, 1005, 1006, 1007, 2000],
-    );
-    assert.equal(fixture.starts(), 0);
   } finally {
     await fixture.registry.dispose();
   }

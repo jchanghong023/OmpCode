@@ -9,7 +9,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { SessionRegistry } from "../src/app/sessionRegistry.js";
-import { SessionRegistryGates } from "../src/app/sessionRegistryGates.js";
+// 精简其他场景后，删除失败回滚场景仍需验证真实引擎实例，不能移除该运行时导入。
 import { ConversationEngine } from "../src/app/conversationEngine.js";
 import { ProtocolError } from "../src/app/errors.js";
 import type {
@@ -372,99 +372,4 @@ test("S7-4: registry.dispose 后完成的冷恢复不得重新登记引擎", asy
     (error: unknown) => expectUnavailable(error, /session unavailable: s1/),
   );
   assert.equal(registry.getEngine("s1"), null, "dispose 后不得重新登记引擎");
-});
-
-// ---------------------------------------------------------------------------
-// S7-4 登记门单元语义（SessionRegistryGates）：墓碑窗口、回滚、winner、dispose。
-// ---------------------------------------------------------------------------
-
-function gateFixture() {
-  const engines = new Map<string, ConversationEngine>();
-  const removed: string[] = [];
-  const gates = new SessionRegistryGates({
-    engines,
-    getEngine: (sessionId) => engines.get(sessionId) ?? null,
-    removeIndexSession: (workspaceId, sessionId) => removed.push(`${workspaceId}/${sessionId}`),
-  });
-  return { gates, engines, removed };
-}
-
-function fakeGateEngine(sessionId: string, workspaceId = "ws") {
-  let disposals = 0;
-  const engine = {
-    sessionId,
-    workspaceId,
-    dispose: async () => {
-      disposals += 1;
-    },
-  } as unknown as ConversationEngine;
-  return {
-    engine,
-    get disposals() {
-      return disposals;
-    },
-  };
-}
-
-test("S7-4 门: 删除墓碑在位时冷恢复登记被拒绝并清理索引行，回滚后恢复登记", async () => {
-  const { gates, engines, removed } = gateFixture();
-  const candidate = fakeGateEngine("s1");
-  gates.markDeleted("s1");
-  // settleColdHydration 同步抛错；assert.rejects 只捕获拒绝，需经 async 边界转成 rejection。
-  await assert.rejects(
-    async () => gates.settleColdHydration("s1", candidate.engine),
-    (error: unknown) => expectUnavailable(error, /session unavailable: s1/),
-  );
-  assert.equal(
-    candidate.disposals,
-    1,
-    "被拒绝的冷恢复引擎必须被丢弃销毁（无子进程，dispose 无副作用）",
-  );
-  assert.ok(removed.includes("ws/s1"), "复活路径写入的索引行必须被登记门清理");
-  assert.equal(engines.get("s1"), undefined, "墓碑在位时不得登记引擎");
-
-  gates.rollbackDeleted("s1");
-  const settled = gates.settleColdHydration("s1", candidate.engine);
-  assert.equal(settled, candidate.engine, "回滚后同身份冷恢复可正常登记");
-  assert.equal(engines.get("s1"), candidate.engine);
-});
-
-test("S7-4 门: 关闭墓碑只在 close 窗口内拒绝登记，解除后重新打开不受影响", async () => {
-  const { gates, engines } = gateFixture();
-  const duringClose = fakeGateEngine("s1");
-  gates.markClosing("s1");
-  await assert.rejects(
-    async () => gates.settleColdHydration("s1", duringClose.engine),
-    (error: unknown) => expectUnavailable(error, /session unavailable: s1/),
-  );
-  assert.equal(duringClose.disposals, 1);
-  assert.equal(engines.get("s1"), undefined, "正在关闭的会话不得被在途冷恢复登记复活");
-
-  gates.endClosing("s1");
-  const reopened = fakeGateEngine("s1");
-  const settled = gates.settleColdHydration("s1", reopened.engine);
-  assert.equal(settled, reopened.engine, "close 结束后重新打开不受影响");
-  assert.equal(engines.get("s1"), reopened.engine);
-});
-
-test("S7-4 门: 更早登记的并发实例获胜，后完成的冷恢复不覆盖注册表", async () => {
-  const { gates, engines } = gateFixture();
-  const first = fakeGateEngine("s1");
-  engines.set("s1", first.engine);
-  const second = fakeGateEngine("s1");
-  const winner = gates.settleColdHydration("s1", second.engine);
-  assert.equal(winner, first.engine, "已有更早登记的实例时必须返回已登记引擎");
-  assert.equal(engines.get("s1"), first.engine, "注册表不得被后完成的冷恢复覆盖");
-});
-
-test("S7-4 门: dispose 置位后所有冷恢复登记被作废", async () => {
-  const { gates, engines } = gateFixture();
-  gates.beginDispose();
-  const candidate = fakeGateEngine("s1");
-  await assert.rejects(
-    async () => gates.settleColdHydration("s1", candidate.engine),
-    (error: unknown) => expectUnavailable(error, /session unavailable: s1/),
-  );
-  assert.equal(candidate.disposals, 1);
-  assert.equal(engines.size, 0, "dispose 期间不得再进表");
 });

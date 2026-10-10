@@ -44,7 +44,7 @@ function updaterInstance(): AutoUpdaterInstance {
  * 必须与 AppUpdater 构造器同口径（semver.parse 严格解析，不做 coerce）：
  * "0.0" 非法；"0.0.0" 合法。校验必须先于 electron-updater 实例构造。
  */
-export function isUpdaterRuntimeVersionUsable(version: string): boolean {
+function isUpdaterRuntimeVersionUsable(version: string): boolean {
   return semver.parse(version) !== null;
 }
 

@@ -15,7 +15,7 @@ import { useCallback, useLayoutEffect, useRef, type Ref } from "react";
 let fieldSizingSupport: boolean | null = null;
 
 /** 结果按进程缓存：能力检测是纯静态事实，逐次调用 CSS.supports 没有收益。 */
-export function supportsCssFieldSizing(): boolean {
+function supportsCssFieldSizing(): boolean {
   if (fieldSizingSupport === null) {
     fieldSizingSupport =
       typeof CSS !== "undefined" &&
@@ -26,7 +26,7 @@ export function supportsCssFieldSizing(): boolean {
 }
 
 /** 先复位再测量，让 scrollHeight 反映完整内容而不是上一次的行数。 */
-export function resizeTextareaToContent(element: HTMLTextAreaElement): void {
+function resizeTextareaToContent(element: HTMLTextAreaElement): void {
   element.style.height = "auto";
   element.style.height = `${element.scrollHeight}px`;
 }

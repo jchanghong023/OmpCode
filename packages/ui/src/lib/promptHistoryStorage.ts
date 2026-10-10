@@ -28,7 +28,7 @@ function getBrowserStorage(): StorageLike | null {
 // 历史自然保留；带 identity 的远程 workspace 换新键正是本修复要达成的身份隔离，
 // 若把旧的路径键历史搬进 identity 键反而会重新引入跨 identity 串历史，故接受这部分
 // 纯本地 UX 数据的一次性丢失。
-export function resolvePromptHistoryStorageKey(workspacePath: string, workspaceIdentity?: string) {
+function resolvePromptHistoryStorageKey(workspacePath: string, workspaceIdentity?: string) {
   const workspaceKey = workspaceIdentity?.trim() || workspacePath;
   return `${PROMPT_HISTORY_STORAGE_KEY_PREFIX}${workspaceKey}`;
 }

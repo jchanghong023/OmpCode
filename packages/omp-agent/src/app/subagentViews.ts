@@ -59,8 +59,8 @@ export interface SubagentViewDeps {
   store?: Pick<OmpStorePort, "readSessionEntries" | "readSubagentEntries">;
 }
 
-/** 视图所需的注册表面（SessionRegistry 的结构化窄视图，测试可替身）。 */
-export interface SubagentViewRegistry {
+/** 视图所需的注册表面：SessionRegistry 的结构化窄视图。 */
+interface SubagentViewRegistry {
   getEngine(sessionId: string): ConversationEngine | null;
   resumeSession(params: {
     sessionId: string;

@@ -1,19 +1,30 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, writeFile, readFile } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
+import { join } from "node:path";
+import { exerciseEntryMechanisms } from "./test-gates-entry-selftest.mjs";
 import {
   commandOutput,
   stopAll,
-  pause,
-  startBudget,
+  gateBudget,
   snapshot,
   gitText,
+  runStages,
+  exists,
 } from "./test-gates-process.mjs";
 
 export async function selfTest() {
   const root = await mkdtemp(join(tmpdir(), "ompcode-gates-selftest-"));
+  // 修复依据：断言提前失败也必须释放本次短桩进程和临时根，不能只在成功路径清理。
+  try {
+    await runSelfTest(root);
+  } finally {
+    await stopAll();
+    await rm(root, { recursive: true, force: true });
+  }
+}
+
+async function runSelfTest(root) {
   const failure = join(root, "failure.mjs");
   const sleeper = join(root, "sleeper.mjs");
   const missingTool = join(root, "no-such-tool.exe");
@@ -29,7 +40,7 @@ export async function selfTest() {
   assert.equal(failed.code, 7);
   const absent = await commandOutput(missingTool, [], { quiet: true });
   assert.notEqual(absent.code, 0);
-  assert.throws(() => startBudget(61, performance.now(), () => {}));
+  assert.throws(() => gateBudget("fastcheck", 61));
   const skipped = join(root, "skip.mjs");
   await writeFile(skipped, "console.log('ℹ skipped 1');\n");
   const skipResult = await commandOutput("node", [skipped], { quiet: true });
@@ -96,26 +107,93 @@ export async function selfTest() {
   });
   assert.equal(denied.code, 2);
   assert.match(denied.output, /HUMAN AUTHORIZATION REQUIRED/u);
-  const plans = [];
-  for (const level of ["fulltest", "slowtest"]) {
-    const result = await commandOutput("node", ["scripts/test-gates.mjs", level, "--plan"], {
-      quiet: true,
-    });
-    assert.equal(result.code, 0, result.output);
-    const start = result.output.indexOf("{");
-    const finish = result.output.lastIndexOf("\n}");
-    plans.push(JSON.parse(result.output.slice(start, finish + 2)).stages);
+  for (const [level, maximum] of [
+    ["fastcheck", 60],
+    ["fulltest", 900],
+    ["slowtest", 1500],
+  ]) {
+    const rejected = await commandOutput(
+      "node",
+      ["scripts/test-gates.mjs", level, "--plan", "--budget-seconds", String(maximum + 1)],
+      { quiet: true },
+    );
+    assert.equal(rejected.code, 1, `${level} cannot relax its charged budget`);
+    assert.match(rejected.output, /may only be lowered/u);
   }
-  assert.deepEqual(plans[0], plans[1], "Both complete gates must expose the same Windows plan");
-  assert.deepEqual(plans[1].find((stage) => stage.id === "windows-local-package")?.args, [
-    "bundle:desktop",
-    "--",
-    "--os=win",
-    "--arch=x64",
-  ]);
+
+  const events = join(root, "events.jsonl");
+  const probe = join(root, "parallel-probe.mjs");
+  // Windows 启动耗时不等，短桩先同步开始屏障，避免把真实并发误判为串行。
+  await writeFile(
+    probe,
+    `
+import assert from 'node:assert/strict';
+import {appendFile,access,writeFile} from 'node:fs/promises';
+import {join} from 'node:path';
+const [root,id,...dependencies]=process.argv.slice(2);
+for(const dependency of dependencies) await access(join(root,dependency+'.ready'));
+await appendFile(join(root,'events.jsonl'),JSON.stringify({id,event:'start'})+'\\n');
+await writeFile(join(root,id+'.started'),'started');
+const peer=id==='a'?'b':id==='b'?'a':undefined;
+const deadline=performance.now()+5000;
+if(peer) while(!await access(join(root,peer+'.started')).then(()=>true,()=>false)){
+  assert.ok(performance.now()<deadline,'Concurrent peer did not start');
+  await new Promise(done=>setTimeout(done,10));
+}
+await new Promise(done=>setTimeout(done,200));
+await writeFile(join(root,id+'.ready'),'done');
+await appendFile(join(root,'events.jsonl'),JSON.stringify({id,event:'end'})+'\\n');
+`,
+  );
+  const execute = async (stage) => {
+    const result = await commandOutput(stage.command, stage.args, { quiet: true });
+    return { status: result.code === 0 ? "PASS" : "FAIL", exitCode: result.code };
+  };
+  const prerequisites = ["a", "b", "c"].map((id) => ({
+    id,
+    parallelGroup: "offline",
+    command: "node",
+    args: [probe, root, id],
+  }));
+  const records = await runStages(
+    [
+      ...prerequisites,
+      { id: "dependent", command: "node", args: [probe, root, "dependent", "a", "b", "c"] },
+    ],
+    execute,
+    2,
+  );
   assert.ok(
-    plans[1].every((stage) => ["node", "pnpm"].includes(stage.command)),
-    "Windows test stages cannot dispatch external target runners",
+    records.every((record) => record.status === "PASS"),
+    "Dependencies must finish before their consumer starts",
+  );
+  let active = 0;
+  let peak = 0;
+  for (const event of (await readFile(events, "utf8"))
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line))) {
+    active += event.event === "start" ? 1 : -1;
+    peak = Math.max(peak, active);
+  }
+  assert.equal(peak, 2, "Independent children must run in parallel without exceeding the limit");
+  const afterFailure = join(root, "after-failure.mjs");
+  await writeFile(
+    afterFailure,
+    `import{writeFile}from'node:fs/promises';await writeFile(${JSON.stringify(join(root, "should-not-run"))},'invalid');`,
+  );
+  const failedStages = await runStages(
+    [
+      { id: "failure", command: "node", args: [failure] },
+      { id: "blocked-consumer", command: "node", args: [afterFailure] },
+    ],
+    execute,
+  );
+  assert.equal(failedStages[0].status, "FAIL");
+  assert.equal(
+    await exists(join(root, "should-not-run")),
+    false,
+    "Failed prerequisites must block subsequent stages",
   );
   const obsoleteFlag = await commandOutput(
     "node",
@@ -124,22 +202,9 @@ export async function selfTest() {
   );
   assert.equal(obsoleteFlag.code, 1);
   assert.match(obsoleteFlag.output, /Unknown gate argument/u);
-  // 只运行临时短桩与只读 Windows 计划，不执行完整测试或发布操作。
-  const testTimeout = join(root, "timeout.mjs");
-  await writeFile(
-    testTimeout,
-    `import{startCommand,startBudget}from ${JSON.stringify(pathToFileURL(resolve("scripts/test-gates-process.mjs")).href)};const t=performance.now();startCommand('node',[${JSON.stringify(stub)}]);startBudget(5,t,r=>{console.log('TIMEOUT '+r.seconds.toFixed(1)+'s');process.exit(124)});\n`,
-  );
-  const start = performance.now();
-  const timeout = await commandOutput("node", [testTimeout], { quiet: true });
-  assert.equal(timeout.code, 124);
-  assert.match(timeout.output, /TIMEOUT \d+\.\ds/u);
-  assert.ok(performance.now() - start < 6000);
-  const pid = Number(await readFile(childPid, "utf8"));
-  await pause(100);
-  assert.throws(() => process.kill(pid, 0), "Owned grandchild must be terminated");
-  await stopAll();
+  // 临时短桩复用真实生命周期，验证三种入口的全部退出路径和编译专用区间计费。
+  await exerciseEntryMechanisms(root, { failure, tree: stub, childPid });
   console.log(
-    "Self-tests PASS: failure, missing tool, permission rejection, source fingerprint, timeout and owned grandchild cleanup",
+    "Self-tests PASS: failure propagation, bounded parallel children, dependency barrier, hard budget rejection, permissions, source fingerprint, timeout and owned grandchild cleanup",
   );
 }

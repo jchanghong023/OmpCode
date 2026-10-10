@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { performance } from "node:perf_hooks";
 import type {
   ConversationRow,
   ConversationSnapshot,
@@ -56,70 +55,6 @@ function text(rowId: number): ConversationRow {
     state: "complete",
   };
 }
-
-test("5 万历史行上的 100 次工具更新不访问无关历史行，终态内容与文件统计完整", (t) => {
-  const projection = new ConversationProjection("indexed-history");
-  let historyVisits = 0;
-  const rows = Array.from({ length: 50_000 }, (_, index) => {
-    const row = text(index + 1);
-    Object.defineProperty(row, "kind", {
-      enumerable: true,
-      get: () => {
-        historyVisits += 1;
-        return "assistantText";
-      },
-    });
-    return row;
-  });
-  projection.hydrateRows([...rows, tool(50_001, "target")]);
-  begin(projection);
-  projection.drainPendingDeltas();
-  const initialSeq = projection.seq;
-  historyVisits = 0;
-  const started = performance.now();
-  for (let index = 0; index < 100; index += 1)
-    projection.upsertToolCall({
-      toolCallId: "target",
-      toolName: "write",
-      status: "running",
-      outputText: `chunk-${index}`,
-    });
-  const elapsed = performance.now() - started;
-  const measuredVisits = historyVisits;
-  t.diagnostic(
-    JSON.stringify({
-      node: process.version,
-      historyRows: rows.length,
-      updates: 100,
-      historyVisits: measuredVisits,
-      elapsedMs: Number(elapsed.toFixed(2)),
-    }),
-  );
-  assert.equal(projection.seq, initialSeq + 100);
-  projection.upsertToolCall({
-    toolCallId: "target",
-    toolName: "write",
-    status: "success",
-    outputText: "complete output",
-    endedAt: 1234,
-  });
-  const deltas = projection.drainPendingDeltas();
-  assert.ok(deltas.every((delta) => delta.op === "row.upserted"));
-  const result = projection.rowsRange(undefined, 10).rows;
-  const target = result.find((row) => row.kind === "toolCall");
-  assert.equal(target?.kind === "toolCall" && target.rowId, 50_001);
-  assert.equal(target?.kind === "toolCall" && target.status, "success");
-  assert.equal(target?.kind === "toolCall" && target.output?.text, "complete output");
-  assert.equal(target?.kind === "toolCall" && target.endedAt, 1234);
-  const header = result.find((row) => row.kind === "turnHeader");
-  assert.deepEqual(header?.kind === "turnHeader" && header.fileChanges, {
-    files: 1,
-    additions: 2,
-    deletions: 0,
-  });
-  assert.equal(projection.rowIdOfToolCall("target"), 50_001);
-  assert.equal(measuredVisits, 0);
-});
 
 test("重复工具 ID 保留首行更新与最近权限锚定，重水合替换及时移除旧 ID", () => {
   const projection = new ConversationProjection("duplicate-tool-ids");

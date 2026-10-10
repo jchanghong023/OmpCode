@@ -37,13 +37,13 @@ description = "Run the root linter."
 run = "mise exec -- node scripts/mise-run.mjs pnpm lint"
 
 [tasks.fastcheck]
-description = "Run bounded quick checks (at most 60 seconds)."
+description = "Run static/format/compile checks only; non-compilation budget at most 60 seconds."
 run = "mise exec -- node scripts/mise-run.mjs pnpm fastcheck"
 
 [tasks.fulltest]
-description = "Run complete local checks; requires this run's human authorization."
+description = "Run all Windows checks/tests; non-compilation budget 900 seconds; explicit run or active gate-skill authorization required."
 run = "mise exec -- node scripts/mise-run.mjs pnpm fulltest"
 
 [tasks.slowtest]
-description = "Run complete local, cross-environment and release checks; requires authorization."
+description = "Run the Windows fulltest plan once; no applicable WSL extension, CI or release; non-compilation budget 1500 seconds; authorization required."
 run = "mise exec -- node scripts/mise-run.mjs pnpm slowtest"

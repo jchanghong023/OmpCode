@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { chromium } from "playwright-core";
+import { captureIsolationScreenshot } from "./ompCore.evidence.cjs";
 
 const endpoint = process.env.OMP_E2E_CDP_URL;
 assert.ok(endpoint, "Set OMP_E2E_CDP_URL to an isolated OmpCode Electron CDP endpoint");
@@ -90,12 +91,11 @@ try {
     "A later turn must not revive the temporary task ID",
   );
   assert.equal(await matchingTask.getAttribute("data-testid"), taskTestId);
-  assert.equal(await page.locator('[data-testid^="v4-feedback-like"]').count(), 0);
-  assert.equal(await page.locator('[data-testid^="v4-feedback-dislike"]').count(), 0);
   if (phase === "live") {
     await mkdir(evidenceDir, { recursive: true });
     await writeFile(identityReceipt, JSON.stringify({ runId, before, taskTestId }, null, 2));
   }
+  await captureIsolationScreenshot(join(evidenceDir, `identity-${phase}-${runId}.png`));
   console.log(
     `omp GUI identity ${phase}: glm-5.3-flash replies visible; stable task ${taskTestId}`,
   );

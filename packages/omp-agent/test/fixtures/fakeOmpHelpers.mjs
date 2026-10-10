@@ -8,8 +8,8 @@ export const out = (frame) => process.stdout.write(`${JSON.stringify(frame)}\n`)
 let counter = 0;
 export const nextId = () => `fake-${++counter}`;
 
-// v3 ready 公告 [1,2,3]；当前 ask 和审批均使用 extension_ui_request/response，
-// 目录能力由协议协商启用，不恢复已删除的 permission_request/ask_request。
+// v3 ready 公告 [1,2,3]；审批使用真实 extension_ui_request/response，
+// 不恢复已删除的 permission_request 协议。
 export const v3 = createV3Surface({ out, nextId });
 
 // 会话级可变状态（原 fakeOmp.mjs 模块变量，改经 shared 对象共享）。
@@ -20,10 +20,8 @@ export const shared = {
   // SLOW_TOOL_HOLD：工具在途保持态（tool_execution_start 后不收口），abort 时镜像真实 omp
   // v18.3.5+fork.265 的中断序列（P2 验收 D1）：end(isError) → 尾随 update → agent_end。
   slowToolCallId: null,
-  setModelCalls: 0,
   currentModel: { provider: "mock", id: "mock-1" },
   autoCompactionEnabled: true,
-  subagentSubscription: "off",
   subagents: [],
 };
 const deniedTools = new Set();
@@ -60,7 +58,7 @@ export function respond(id, command, success, data) {
 // omp 原生附件顺序（rpc-session-host textPrefix，S5-8 对齐）：文本附件上下文前置于用户
 // 消息。本地命令匹配取末段命令文本（最后一个以 "/" 开头的行起），兼容附件前缀在前/在后
 // 两种装配顺序；报告哨兵（image-report/text-report）支持无斜杠形态（斜杠+附件已被适配层
-// 严格分发拒绝）；非命令场景标记（HOLD/ASK_ME/ABORT_AT_START 等）仍按原始全文匹配。
+// 严格分发拒绝）；非命令场景标记（HOLD/ABORT_AT_START 等）仍按原始全文匹配。
 export function localCommandMessage(message) {
   if (typeof message !== "string") return message;
   const lines = message.split("\n");
@@ -72,134 +70,11 @@ export function localCommandMessage(message) {
 }
 
 export function runLocalCommand(message) {
-  const report = v3.localReport(message);
-  if (report) return report;
-  if (message === "/model-report") {
-    out({ type: "command_output", text: `set_model calls: ${shared.setModelCalls}` });
-    return { agentInvoked: false };
-  }
-  if (message.startsWith("/title ")) {
-    const title = message.slice("/title ".length).trim();
-    out({ type: "session_info_update", title, sessionId: "fake-session-1" });
-    out({ type: "command_output", text: `title set to ${title}` });
-    return { agentInvoked: false };
-  }
-  if (message === "/config-new") {
-    out({
-      type: "config_update",
-      model: { provider: "mock", id: "mock-9" },
-      thinkingLevel: "high",
-    });
-    out({ type: "command_output", text: "config updated" });
-    return { agentInvoked: false };
-  }
-  if (message === "/install-ship2") {
-    out({ type: "command_output", text: "installed ship2" });
-    out({
-      type: "available_commands_update",
-      commands: [
-        { name: "help", source: "builtin", description: "Show help" },
-        {
-          name: "ship",
-          source: "extension",
-          description: "Ship changes",
-          input: { hint: "target" },
-        },
-        { name: "ship2", source: "extension", description: "Ship twice" },
-      ],
-    });
-    return { agentInvoked: false };
-  }
-  return null;
+  return v3.localReport(message);
 }
 
 export async function runPromptTurn(message, promptId) {
   out({ type: "agent_start" });
-  if (message === "ASK_ME") {
-    if (v3.isV3() && v3.isAskDialogEnabled()) {
-      await v3.runAskTurn(emitTextTurn);
-      return;
-    }
-    // 未协商 v3：ask 降级路径（4.0/4.3）——真实 omp 走逐题 select，这里以文本收口即可。
-    emitTextTurn("legacy ask degraded");
-    return;
-  }
-  if (message === "SECRET_INPUT") {
-    if (v3.isV3()) {
-      const token = await new Promise((resolve) => {
-        const id = nextId();
-        pendingUi.set(id, (cmd) => resolve(cmd.value));
-        out({
-          type: "extension_ui_request",
-          id,
-          method: "input",
-          title: "Login",
-          message: "Enter access token",
-          sensitive: true,
-        });
-      });
-      emitTextTurn(`token received: ${token}`);
-      return;
-    }
-    // v1/v2 不携带 sensitive（4.3：login secret 输入 v3 解禁）；回落普通文本轮。
-    emitTextTurn("legacy secret rejected");
-    return;
-  }
-  if (message === "CUSTOM_TERMINAL_MESSAGE") {
-    out({ type: "message_start", message: { role: "assistant", content: [] } });
-    out({
-      type: "message_end",
-      message: { role: "assistant", content: [{ type: "text", text: "Skill completed" }] },
-    });
-    out({
-      type: "agent_end",
-      messages: [
-        { role: "custom", content: "Skill invocation context" },
-        { role: "assistant", content: [{ type: "text", text: "Skill completed" }] },
-      ],
-      isTerminal: true,
-    });
-    return;
-  }
-  if (message === "SUBAGENT_REPORT") {
-    const agent = {
-      id: "fake-child-1",
-      index: 0,
-      agent: "scout",
-      agentSource: "bundled",
-      description: "Inspect project",
-      status: "active",
-      lastUpdate: Date.now(),
-      parentToolCallId: "task-parent",
-    };
-    shared.subagents = [agent];
-    if (shared.subagentSubscription !== "off") {
-      out({ type: "subagent_lifecycle", payload: { ...agent, status: "started" } });
-      out({
-        type: "subagent_progress",
-        payload: {
-          index: 0,
-          agent: "scout",
-          agentSource: "bundled",
-          task: "Inspect project",
-          parentToolCallId: "task-parent",
-          progress: { id: agent.id, status: "running", recentOutput: ["reading files"] },
-        },
-      });
-    }
-    await new Promise((resolve) => setTimeout(resolve, 30));
-    shared.subagents = [{ ...agent, status: "completed", lastUpdate: Date.now() }];
-    if (shared.subagentSubscription !== "off") {
-      out({ type: "subagent_lifecycle", payload: { ...agent, status: "completed" } });
-      out({ type: "subagent_lifecycle", payload: { ...agent, status: "completed" } });
-    }
-    out({
-      type: "message_end",
-      message: { role: "assistant", content: [{ type: "text", text: "Subagent done" }] },
-    });
-    out({ type: "agent_end", messages: [], isTerminal: true });
-    return;
-  }
   if (message === "/failmodel") {
     out({ type: "message_start", message: { role: "assistant", content: [] } });
     out({

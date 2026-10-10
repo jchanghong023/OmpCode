@@ -307,12 +307,13 @@ const WIRED_LIMIT = 128;
 // 内联 fake 单会话核：ready 通告 128 字节重组上限；set_subagent_subscription 前先发一条
 // 声明 129 字节的超限分片（若接线生效必须被拒，否则会被当作 "{}" 重组）；compact 的
 // 响应拆成 2 片限内分片返回（若接线误伤则无法重组，命令超时失败）。
+// 当前会话启动会启用 ask；夹具须回握手 ACK，不能让分片验收无意义等待 10 秒超时。
 const FAKE_SESSION_CORE = `
 const { createInterface } = require("node:readline");
 process.stdout.write(JSON.stringify({ type: "ready", protocolVersion: 1, supportedProtocolVersions: [1, 2], maxReassembledFrameBytes: ${WIRED_LIMIT} }) + "\\n");
 createInterface({ input: process.stdin }).on("line", (line) => {
   let cmd; try { cmd = JSON.parse(line); } catch { return; }
-  if (cmd.type === "negotiate_protocol" || cmd.type === "set_subagent_subscription") {
+  if (cmd.type === "negotiate_protocol" || cmd.type === "set_subagent_subscription" || cmd.type === "set_ask_dialog") {
     if (cmd.type === "set_subagent_subscription") {
       process.stdout.write(JSON.stringify({ type: "rpc_chunk", chunkId: "oversize", index: 0, count: 1, byteLength: ${WIRED_LIMIT + 1}, data: Buffer.from("{}").toString("base64") }) + "\\n");
     }

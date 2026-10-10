@@ -8,14 +8,13 @@ import { getAppConfigDir, maybeThrowInjectedFsFault } from "@zcode/services/node
 // 无 GPU 桌面的交互与日志共用 Main 事件循环；每条同步 mkdir/append 在慢盘上会阻塞 UI。
 // 文件日志走本模块内的唯一有界异步队列（不做平台分叉），仍按原路径和日期记录。
 //
-// 队列的时间/容量上限必须显式定义为常量并被回归测试引用
-// （centos7-performance.md：参考值 25ms 合批窗口与 4MiB 队列上限、退出 1 秒排空预算）。
+// 同一进程的排空窗口、队列容量和退出预算共用以下唯一常量。
 /** 同一轮日志的合批窗口：窗口内同文件行合并成一次 appendFile，持续写入不能被无限延期。 */
-export const MAIN_LOG_FLUSH_WINDOW_MS = 25;
+const MAIN_LOG_FLUSH_WINDOW_MS = 25;
 /** 队列容量上限（不含正在写的一批）：超限行计数并在后续文件记录中报告，console 仍可见。 */
-export const MAIN_LOG_MAX_QUEUED_BYTES = 4 * 1024 * 1024;
+const MAIN_LOG_MAX_QUEUED_BYTES = 4 * 1024 * 1024;
 /** 正常退出排空共享预算：Host 清理后与最终退出的全部 flush 共用，不逐次累加等待。 */
-export const MAIN_LOG_EXIT_FLUSH_BUDGET_MS = 1000;
+const MAIN_LOG_EXIT_FLUSH_BUDGET_MS = 1000;
 /** 单文件单批最大行数，防止一次性超大 append 阻塞事件循环。 */
 const MAIN_LOG_MAX_BATCH_LINES = 256;
 

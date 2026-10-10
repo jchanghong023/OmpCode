@@ -1,6 +1,6 @@
 // fake omp：讲 omp RPC-UI 的最小假核心，供适配器集成测试使用。
 // 行为脚本：prompt → 流式文本 → write 工具（先 select 审批）→ 完成收口。
-// v3 fork surface 行为（富 ask/审批 select/v3 目录命令）在 fakeOmpV3.mjs。
+// v3 协商与 select(Approve/Deny) 审批回执在 fakeOmpV3.mjs。
 // 目录进程拉起形态 --mode rpc-ui --no-session 亦由本 fake 承载（get_state 等命令照常）。
 
 import { createInterface } from "node:readline";
@@ -69,25 +69,10 @@ readline.on("line", (line) => {
       });
       return;
     case "set_subagent_subscription":
-      if (process.env.FAKE_OMP_SUBAGENT_SUBSCRIBE_FAIL === "1") {
-        respond(command.id, "set_subagent_subscription", false, { error: "subscription unavailable" });
-        return;
-      }
-      shared.subagentSubscription = command.level;
       respond(command.id, "set_subagent_subscription", true, { level: command.level });
       return;
     case "get_subagents":
       respond(command.id, "get_subagents", true, { subagents: shared.subagents });
-      return;
-    case "get_subagent_messages":
-      respond(command.id, "get_subagent_messages", true, {
-        sessionFile: "fake-child.jsonl",
-        fromByte: 0,
-        nextByte: 1,
-        reset: false,
-        entries: [],
-        messages: [{ role: "assistant", content: [{ type: "text", text: "Read README and reported findings." }] }],
-      });
       return;
     case "get_available_models":
       respond(command.id, "get_available_models", true, {
@@ -99,20 +84,11 @@ readline.on("line", (line) => {
         commands: [
           ...nativeCommands,
           { name: "help", source: "builtin", description: "Show help" },
-          { name: "ship", source: "extension", description: "Ship changes", input: { hint: "target" } },
-          { name: "skill:agent-browser", source: "skill", description: "Browse websites" },
-          { name: "skill:architecture-governance", source: "skill", description: "Check architecture" },
-          // fake 专属本地命令（严格分发按目录判定，必须随目录下发）：
-          { name: "later", source: "builtin", description: "Delayed output" },
-          { name: "title", source: "builtin", description: "Set session title", input: { hint: "<title>" } },
-          { name: "model-report", source: "builtin", description: "Report set_model calls" },
-          { name: "config-new", source: "builtin", description: "Emit config_update" },
-          { name: "install-ship2", source: "builtin", description: "Emit available_commands_update" },
+          // 保留测试使用的本地命令随目录下发，严格分发按目录判定。
           { name: "failmodel", source: "builtin", description: "Fail a model turn" },
           { name: "image-report", source: "builtin", description: "Report prompt images", input: { hint: "<label>" } },
           { name: "text-report", source: "builtin", description: "Report prompt text" },
           { name: "approval-report", source: "builtin", description: "Report approval responses" },
-          { name: "ask-report", source: "builtin", description: "Report ask responses" },
           { name: "context", source: "builtin", description: "Context report" },
         ],
       });
@@ -150,14 +126,6 @@ readline.on("line", (line) => {
       if (commandText === "/help") {
         out({ type: "command_output", text: "Fake help output" });
         respond(command.id, "prompt", true, { agentInvoked: false });
-        return;
-      }
-      if (commandText === "/later") {
-        respond(command.id, "prompt", true, {});
-        setTimeout(() => {
-          out({ type: "command_output", text: "Delayed output" });
-          out({ type: "prompt_result", id: command.id, agentInvoked: false });
-        }, 10);
         return;
       }
       if (command.message === "ABORT_AT_START") {
@@ -228,7 +196,6 @@ readline.on("line", (line) => {
       out({ type: "agent_end", messages: [], isTerminal: true });
       return;
     case "set_model":
-      shared.setModelCalls += 1;
       shared.currentModel = { provider: command.provider, id: command.modelId };
       respond(command.id, "set_model", true, {});
       out({ type: "model_changed", model: shared.currentModel });
@@ -236,16 +203,6 @@ readline.on("line", (line) => {
     case "set_thinking_level":
       respond(command.id, "set_thinking_level", true, {});
       out({ type: "thinking_level_changed", thinkingLevel: command.level });
-      return;
-    case "compact":
-      respond(command.id, "compact", true, {});
-      return;
-    case "set_auto_compaction":
-      shared.autoCompactionEnabled = command.enabled;
-      respond(command.id, "set_auto_compaction", true, {});
-      return;
-    case "set_session_name":
-      respond(command.id, "set_session_name", true, {});
       return;
     case "set_ask_dialog":
       // 上游 v1 命令（rpc.md）：任何协商状态都接受，无 v3 门控。
@@ -266,16 +223,6 @@ readline.on("line", (line) => {
       } else {
         v3.rejectForkCommand(command);
       }
-      return;
-    case "cancel_subagent":
-      respond(command.id, "cancel_subagent", true, { cancelled: true });
-      return;
-    case "steer_subagent":
-      if (!command.message || String(command.message).length === 0) {
-        respond(command.id, "steer_subagent", false, { error: "steer_subagent requires a message" });
-        return;
-      }
-      respond(command.id, "steer_subagent", true);
       return;
     case "test_model":
     case "list_mcp_servers":

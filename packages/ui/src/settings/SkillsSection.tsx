@@ -43,7 +43,7 @@ function filterCatalogSkills(
 }
 
 /** 设置页只投影 omp 可执行目录；本地 SKILL.md 扫描不能代表 omp 的启用事实。 */
-export function OmpSkillsCatalogView({
+function OmpSkillsCatalogView({
   skills,
   searchQuery,
   loading,

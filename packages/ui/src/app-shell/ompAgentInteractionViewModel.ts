@@ -1,6 +1,6 @@
 import type { ZCodeAgentInteractionAgent, ZCodeAgentInteractionEvent } from "@zcode/shared";
 
-export const INTERACTION_NODE_WIDTH = 156;
+const INTERACTION_NODE_WIDTH = 156;
 const INTERACTION_NODE_HEIGHT = 72;
 
 interface OmpInteractionNode {

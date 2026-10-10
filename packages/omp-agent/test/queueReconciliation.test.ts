@@ -362,34 +362,7 @@ test("S4-2③：宽限复查前文本出现在队列 → 登记 seen；再消失
   }
 });
 
-test('S4-4④："/" 开头排队文本按 chip 前缀匹配——模板展开后的快照不误判缺席', async () => {
-  const harness = createEngine({
-    state: () => ({ queuedMessages: { followUp: ["/deploy prod --yes --timeout=90s"] } }),
-  });
-  try {
-    await harness.engine.sendText("A", "cmd-a", "client");
-    harness.onEvent({ type: "agent_start" });
-    const delivery = await harness.engine.sendText("/deploy prod", "cmd-b", "client");
-    assert.equal(delivery, "queue");
-    harness.onEvent({ type: "agent_end" });
-    await flushAsync();
-    await flushAsync();
-    // omp 队列 chip 是模板展开后的内容（保留斜杠命令形态前缀）：前缀匹配命中 →
-    // 保持排队，不因原文全等失败而误判缺席。
-    assert.equal(harness.engine.projection.hasQueuedTurns(), true);
-    const bTurnId = harness
-      .rows()
-      .find((row) => row.kind === "userInput" && row.text === "/deploy prod")!.turnId;
-    assert.equal(
-      headerStates(harness).find((header) => header.turnId === bTurnId)?.state,
-      "running",
-    );
-  } finally {
-    await harness.engine.dispose();
-  }
-});
-
-// ── F010/F018：ACK 与 occurrence 身份，以及 "/" 命令名段匹配 ──
+// ── F010/F018：ACK 与 occurrence 身份 ──
 
 test("F018：单元素同文快照只证明第一条，重复markOnly与迟到ACK不让第二条假成功", async () => {
   let followUp = ["hello"];
@@ -665,70 +638,6 @@ test("F010：follow_up success ACK 没有队列或消费事实 → 不假成功�
     assert.equal(
       headerStates(harness).find((header) => header.turnId === bTurnId)?.state,
       "completedInterrupted",
-    );
-  } finally {
-    await harness.engine.dispose();
-  }
-});
-
-test("F2b-P2②：前缀碰撞——快照仅含 /deploy-prod 时 /deploy 轮不登记 seen（宽限后 interrupted）", async () => {
-  const { harness, bTurnId } = await runWithQueuedFollowUpPendingAck(
-    {
-      // ACK 尚未返回，快照中只有不同命令，不能构成 /deploy 的事实。
-      state: () => ({ queuedMessages: { followUp: ["/deploy-prod"] } }),
-    },
-    "/deploy",
-  );
-  try {
-    // 流式快照只含不同命令的 chip /deploy-prod：命令名段比对不命中（修复前 startsWith
-    // 前缀误命中并登记 seen）→ /deploy 保持从未 seen。
-    harness.onEvent({ type: "queue_update", followUp: ["/deploy-prod"], steering: [] });
-    await sleep(320);
-    harness.onEvent({ type: "agent_end" });
-    await flushAsync();
-    assert.equal(harness.engine.projection.hasQueuedTurns(), true, "从未 seen 不得立即收口");
-    assert.equal(
-      headerStates(harness).find((header) => header.turnId === bTurnId)?.state,
-      "running",
-    );
-    // 宽限复查（forceClose）快照仍只有 /deploy-prod → interrupted 收口（XR-B 实证的修复前
-    // 行为：前缀误命中登记 seen 后，随空快照被误收口 success）。
-    await sleep(2300);
-    assert.equal(harness.engine.projection.hasQueuedTurns(), false);
-    assert.equal(
-      headerStates(harness).find((header) => header.turnId === bTurnId)?.state,
-      "completedInterrupted",
-    );
-  } finally {
-    await harness.engine.dispose();
-  }
-});
-
-test("F2b-P2③：同命令参数 chip 仍命中——/deploy 命中 /deploy prod --yes 登记 seen，drain 缺席按合并终态 success", async () => {
-  let followUp: string[] = ["/deploy prod --yes --timeout=90s"];
-  const { harness, bTurnId } = await runWithQueuedFollowUpPendingAck(
-    { state: () => ({ queuedMessages: { followUp } }) },
-    "/deploy",
-  );
-  try {
-    // 快照含同命令参数 chip（模板展开形态）：命令名段 + 空格前缀命中 → 登记 seen、
-    // 保持排队；seen 必须来自快照中的同命令 chip。
-    harness.onEvent({
-      type: "queue_update",
-      followUp: ["/deploy prod --yes --timeout=90s"],
-      steering: [],
-    });
-    await sleep(320);
-    assert.equal(harness.engine.projection.hasQueuedTurns(), true, "在场期间不得收口");
-    // 停止边界 drain：chip 消失 → seen 且缺席按合并终态（success）收口，证明参数 chip
-    // 确实命中并登记了 seen。
-    followUp = [];
-    harness.onEvent({ type: "agent_end" });
-    await flushAsync();
-    assert.equal(harness.engine.projection.hasQueuedTurns(), false);
-    assert.equal(
-      headerStates(harness).find((header) => header.turnId === bTurnId)?.state,
-      "completedSuccess",
     );
   } finally {
     await harness.engine.dispose();

@@ -22,24 +22,24 @@
 
 以下命令从仓库根目录执行：
 
-| 用途             | 命令                                                                   |
-| ---------------- | ---------------------------------------------------------------------- |
-| 类型检查         | `pnpm typecheck`                                                       |
-| 快速门禁         | `pnpm fastcheck`（AI 可自主运行，最多 60 秒）                          |
-| Windows 完整验证 | `pnpm fulltest --human-authorized`（本次需用户明确授权）               |
-| Windows 慢速门禁 | `pnpm slowtest --human-authorized`（与 fulltest 相同计划，本次需授权） |
-| Lint             | `pnpm lint` / `pnpm lint:fix`                                          |
-| 格式检查         | `pnpm fmt:check`                                                       |
-| 桌面开发         | `pnpm dev:desktop`（production 数据环境）                              |
-| 桌面测试环境     | `pnpm dev:desktop:test`（`ZCODE_ENV=test`，不保证数据隔离）            |
-| Web 开发         | `pnpm dev:web`                                                         |
-| 构建工作区       | `pnpm build`                                                           |
-| Windows x64 打包 | `pnpm bundle:desktop -- --os=win --arch=x64`                           |
-| 提交前检查       | `pnpm verify:pre-push`（Lint 与全量架构检查）                          |
-| 架构检查         | `pnpm architecture:check --changed`                                    |
-| 模块阅读包       | `pnpm architecture:context <module-id>`                                |
-| 未使用依赖与导出 | `pnpm knip`                                                            |
-| 导出引用查询     | `pnpm dep:refs --list-exports <file>`                                  |
+| 用途             | 命令                                                                       |
+| ---------------- | -------------------------------------------------------------------------- |
+| 类型检查         | `pnpm typecheck`                                                           |
+| 快速门禁         | `pnpm fastcheck`（仅静态/格式/编译，非编译预算 60 秒）                     |
+| Windows 完整验证 | `pnpm fulltest --human-authorized`（非编译预算 900 秒）                    |
+| Windows 慢速门禁 | `pnpm slowtest --human-authorized`（同 fulltest 覆盖，非编译预算 1500 秒） |
+| Lint             | `pnpm lint` / `pnpm lint:fix`                                              |
+| 格式检查         | `pnpm fmt:check`                                                           |
+| 桌面开发         | `pnpm dev:desktop`（production 数据环境）                                  |
+| 桌面测试环境     | `pnpm dev:desktop:test`（`ZCODE_ENV=test`，不保证数据隔离）                |
+| Web 开发         | `pnpm dev:web`                                                             |
+| 构建工作区       | `pnpm build`                                                               |
+| Windows x64 打包 | `pnpm bundle:desktop -- --os=win --arch=x64`                               |
+| 提交前检查       | `pnpm verify:pre-push`（Lint 与全量架构检查）                              |
+| 架构检查         | `pnpm architecture:check --changed`                                        |
+| 模块阅读包       | `pnpm architecture:context <module-id>`                                    |
+| 未使用依赖与导出 | `pnpm knip`                                                                |
+| 导出引用查询     | `pnpm dep:refs --list-exports <file>`                                      |
 
 测试入口以目标包当前的 `package.json` 和实际测试文件为准，不假定存在统一的单测或 E2E 命令。
 
@@ -65,43 +65,37 @@
 
 以下原始入口仅在 Windows 本机运行；根目录以三级门禁统一编排，没有名为 `test` 的根脚本。单独入口仍保留各自隔离环境前提与验证边界。AI 不执行 Linux/CentOS/WSL 测试；CentOS 专用测试及 VM、Citrix、目标网络盘专项测试已取消，不再是 Windows 测试前提，产品的两平台支持与打包完整性约束仍保留。
 
-| 验证范围                           | 实际入口与前提                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| omp UT、协议模拟及真实核心测试合集 | `pnpm --filter @zcode/omp-agent test`；匹配 `test/*.test.ts`，包含真实核心文件，不只是 fake-omp                                                                                                                                                                                                                                                                                                                                                           |
-| 协议级 fake-omp 集成测试           | `pnpm --filter @zcode/omp-agent exec tsx --test test/adapter.e2e.test.ts`；不依赖真实模型，不覆盖真实 omp/GUI 边界                                                                                                                                                                                                                                                                                                                                        |
-| Agent 交互协议集成测试             | `pnpm --filter @zcode/omp-agent exec tsx --test test/agentInteractions.protocol.e2e.test.ts`；覆盖 stdio/v4 交互投影及读取，不替代真实核心或 GUI 验收                                                                                                                                                                                                                                                                                                     |
-| rpc-ui 核心命令真实 E2E            | 设置 `OMP_NATIVE_E2E=1` 后运行 `pnpm --filter @zcode/omp-agent exec tsx --test test/realNativeCommands.e2e.test.ts`；使用安装核、独立临时 OMP 根和既有 GLM 凭据，覆盖必接命令、索引/计划交互、状态生命周期及两链路冷恢复；未显式开启时跳过，不计通过                                                                                                                                                                                                      |
-| rpc-ui 核心命令 GUI E2E            | 完成类型检查后重建当前 adapter/Host，启动本工作树 Vite；`OMP_NATIVE_E2E=1 node packages/desktop/test/ompNativeCommands.launch.mjs` 创建独立桌面（CDP 9257），用返回的 `OMP_NATIVE_GUI_META` 运行 `node packages/desktop/test/ompNativeCommands.gui.e2e.mjs`；live 通过后以 `OMP_E2E_PHASE=capture` 只读采集完整历史，再以同一临时根重启执行 `OMP_E2E_PHASE=cold`；必须在指定沙箱项目内建任务，不连接日常实例                                              |
-| 真实核心 E2E                       | `pnpm --filter @zcode/omp-agent exec tsx --test test/real-omp.e2e.test.ts`；用 `OMP_RPC_BINARY_PATH` 指向本机已安装的 omp，使用既有凭据；本机未安装时不执行，不为验证另行下载或安装。设置 `OMP_AGENT_SKIP_REAL_E2E=1` 时跳过，跳过不能算通过                                                                                                                                                                                                              |
-| 其他包 UT/集成测试                 | `packages/{desktop,ui,services,shared,client,server}/test/` 存在测试文件；按实际文件用根 `pnpm exec tsx --test <测试文件>` 执行（`.mjs` 可用 `node --test`），不能假定这些包有 `test` script；`packages/web/test/` 当前不存在                                                                                                                                                                                                                             |
-| 桌面 GUI 冒烟                      | `node scripts/dev/gui-smoke-cdp.mjs`；需要当前测试桌面已启动、CDP 9230 及 localhost renderer，仅检查品牌/输入区并截图，不是完整功能 E2E                                                                                                                                                                                                                                                                                                                   |
-| 子代理 / Todo 界面适配 GUI E2E     | `node packages/desktop/test/ompStatusPanels.gui.e2e.mjs`；先启动隔离桌面并设置 `OMP_E2E_CDP_URL`、`OMP_E2E_EVIDENCE_DIR`；默认 live 调用既有 GLM-5.3-Flash 并创建只读测试会话，重启同一隔离桌面后以 `OMP_E2E_PHASE=cold` 验证恢复与两项子代理工具结果；不连接用户日常实例                                                                                                                                                                                 |
-| Agent 交互页 GUI E2E               | `node packages/desktop/test/ompAgentInteractions.launch.mjs` 以 `OMP_E2E_ISOLATED_ROOT` 启动专用桌面（端口由 `OMP_E2E_CDP_PORT` / `OMP_E2E_RENDERER_PORT` 指定）；`node packages/desktop/test/ompAgentInteractions.gui.e2e.mjs` 读取 `OMP_E2E_RUNTIME_MANIFEST`，同时设置 `OMP_E2E_EVIDENCE_DIR`、`OMP_E2E_RUN_ID`；先 live，再重启同一隔离目录以 `OMP_E2E_PHASE=cold` 验恢复。主会话及测试项目专属子代理使用既有 GLM-5.3-Flash，不修改用户模型角色配置。 |
+| 验证范围                           | 实际入口与前提                                                                                                                                                                                                                               |
+| ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| omp UT、协议模拟及真实核心测试合集 | `pnpm --filter @zcode/omp-agent test`；匹配 `test/*.test.ts`，包含真实核心文件，不只是 fake-omp                                                                                                                                              |
+| 协议级 fake-omp 集成测试           | `pnpm --filter @zcode/omp-agent exec tsx --test test/adapter.e2e.test.ts`；不依赖真实模型，不覆盖真实 omp/GUI 边界                                                                                                                           |
+| 真实核心 E2E                       | `pnpm --filter @zcode/omp-agent exec tsx --test test/real-omp.e2e.test.ts`；用 `OMP_RPC_BINARY_PATH` 指向本机已安装的 omp，使用既有凭据；本机未安装时不执行，不为验证另行下载或安装。设置 `OMP_AGENT_SKIP_REAL_E2E=1` 时跳过，跳过不能算通过 |
+| OMP 消费端与上游 UT/集成测试       | `packages/{ui,services,shared,client,server}/test/` 保留 OMP 输入、协议、工具结果、身份和恢复核心测试及所有上游原有测试；按真实文件用根 `pnpm exec tsx --test <测试文件>` 执行，不能假定各包有 `test` script                                 |
+| 桌面 GUI 冒烟                      | `node scripts/dev/gui-smoke-cdp.mjs`；需要当前测试桌面已启动、CDP 9230 及 localhost renderer，仅检查品牌/输入区并截图，不是完整功能 E2E                                                                                                      |
 
-常规真实模型验收使用用户 omp 既有配置中的 `zhipu-coding-plan/glm-5.3-flash`；审批等测试态通过运行时 flag 注入，不修改用户配置文件。[指定模型桌面专项](docs/requirements/e2e.md)单独规定模型、隔离角色配置及认证安全前提，不得用常规 GLM 场景替代其验收。真实测试会调用模型并创建测试会话，必须明确环境和范围；测试服务使用临时端口，不影响用户已有 ZCode/omp 进程。现有 GUI 走查与已知未验收范围见 `docs/test-reports/`，后续功能开发仍须补足相关真实入口到结果的 E2E。
+真实核心验收使用用户 omp 既有配置中的 `zhipu-coding-plan/glm-5.3-flash`；审批通过运行时 flag 注入，不修改用户配置文件。模型测试只使用专用隔离根与测试会话，不连接日常实例，缺少安装/凭据或跳过不能算通过。
 
-Agent 交互页的已保存会话可执行 `node packages/desktop/test/ompAgentInteractions.visual.e2e.mjs`，复用上述 `OMP_E2E_RUNTIME_MANIFEST`、`OMP_E2E_EVIDENCE_DIR`、`OMP_E2E_RUN_ID`，验证摘要/原文开合、深浅主题与窄栏布局，不发起新的模型轮次。
+fulltest/slowtest 保留两个专用产品 GUI：`packages/desktop/test/ompStartup.gui.e2e.mjs` 检查真实启动与模型目录；`packages/desktop/test/ompReviewedDefects.gui.e2e.mjs` 以 `OMP_E2E_PHASE=live` 创建两轮真实消息，再由同根新进程以 `recovery` 验证稳定 UUID、唯一侧栏项及历史。门禁用 `ompCore.launch.mjs` 自动创建隔离根与独占端口并持有完整子进程树，通过测试启动层保持窗口隐藏且不可全局聚焦；只用 CDP/DOM，不连接日常实例，不接管鼠标或前台焦点。
 
-主/子执行页联合 GUI 回归：先重建当前 adapter/Host，设置 `OMP_NATIVE_E2E=1` 执行 `node packages/desktop/test/ompExecutionPages.launch.mjs`，返回 `runtimePath`；启动器创建临时 OMP 根、固定 GLM-5.3-Flash 主/子角色及独占 Vite/CDP 端口。将返回路径传给 `OMP_E2E_RUNTIME_MANIFEST`，设置独立 `OMP_E2E_EVIDENCE_DIR`，运行 `node packages/desktop/test/ompExecutionPages.gui.e2e.mjs`。`OMP_E2E_PHASE=live` 在指定测试项目提交三代理创建 a–c 并广播 `hello` 的提示词，核对主会话、三个详情的完整工具记录、真实终态/只读控制与 Agent 交互页；关闭该启动器创建的进程，以同一临时根设置 `OMP_E2E_ISOLATED_ROOT` 重启后，`cold` 复验同一已保存会话，`saved` 只验证该 fixture 已登记的会话。禁止连接日常实例；live 会调用既有 GLM 凭据，cold/saved 不发起新模型轮次。结果按两阶段分别记录，不能合并不同源码快照。
+工具详情组件验收：`node packages/desktop/test/toolContentPresentation.components.e2e.mjs` 创建临时端口、独立 Electron/userData，不调用模型，验证有效零/布尔、空参数、文本/JSON/Markdown、原始数据开合及错误。它不替代真实模型/冷恢复。
 
-工具详情组件验收：`node packages/desktop/test/toolContentPresentation.components.e2e.mjs` 使用临时端口、独立 Electron/userData，限时 60 秒，不调用模型；覆盖有效零/布尔结果、空参数、普通文本/JSON/Markdown、原始数据开合、MCP 参数、计划错误、深浅主题及窄栏布局，不替代真实会话/冷恢复验收。
-
-性能热路径验收：`node packages/desktop/test/ompPerformanceHotPaths.components.e2e.mjs` 启动独立 Electron 组件环境，检查代码/思考/时间线及输入保存边界，不调用模型。`node packages/desktop/test/ompPerformanceHotPaths.gui.e2e.mjs` 复用专用隔离启动器及 `OMP_E2E_RUNTIME_MANIFEST`、`OMP_E2E_EVIDENCE_DIR`、`OMP_E2E_RUN_ID`，验证真实 GLM 发送、草稿与文件引用；`OMP_E2E_PHASE=live` 检查新建会话，`stable` 检查已有持久 ID 的会话，`cold` 在重启同一隔离目录后检查恢复，三者的结果分别报告。
-
-首次 Host 身份迁移的项目验收在上述启动器设置 `OMP_E2E_OPEN_TEST_PROJECT=1`，通过真实 `--open-workspace` 打开隔离根下的 `acceptance-project`；manifest 的 `requestedWorkspace` 由性能 GUI 与 mentions 脚本共用，不把默认工作区的全局任务列表当作项目 query cache。
-
-`node packages/desktop/test/ompPerformanceHotPaths.mentions.e2e.mjs` 使用同一隔离 runtime manifest、evidence 目录和 run ID，验证真实 `@` 无命中补扫、新文件候选及同 Markdown 富节点的剪贴板/草稿恢复；Host 扫描次数由文件服务真实 I/O 测试独立计量。
-
-UI UT 使用 `@/` 路径别名时，从根执行 `pnpm exec tsx --tsconfig packages/ui/tsconfig.json --test <测试文件>`。性能对照入口为 `packages/ui/test/conversationTurnRenderBuilder.perf.ts`、`packages/ui/test/streamingContentPresentation.perf.ts` 和 `packages/services/test/workspaceFileIndex.perf.mts <baseline-git-ref>`；使用固定 Node 与相同样本，不将本地探针当作目标网络盘验收。
+UI UT 的 `@/` 路径别名使用 `pnpm exec tsx --tsconfig packages/ui/tsconfig.json --test <真实测试文件>`。已删除的原生命令大全、Agent 多页/状态专项、技能/profile/mentions 和性能基准不再是可运行测试入口；历史报告仅作历史证据。
 
 ## 三级测试门禁
 
-- `pnpm fastcheck`：仅 Windows 本机，AI 可自主运行的快速反馈子集；硬上限 60 秒，超时必须终止本次进程树、输出 `TIMEOUT`/总秒数并失败，不代表全项目验收。`--budget-seconds` 只允许下调。
-- fulltest/slowtest 的 Windows 完整计划、覆盖与失败语义唯一维护于[三级测试需求](docs/requirements/test-gates.md)，本节只规定执行权限与操作边界；快速子集通过不表示完整验收。
-- 每次 fulltest/slowtest 必须来自当前对话的用户明确指令。历史授权、仓库内「本次已授权」记录、技能调用、代理建议、提交/推送请求或“检查一下”不自动授权；`--human-authorized` 只能依据原始用户明确指令传入，不得绕过门禁执行完整、长时间子步骤。
-- 测试不触发、不等待、不验证任何发布 workflow，也不接受 `--publish-releases`。发布是独立外部操作，必须依据当前对话中仍有效的用户明确授权；历史文档不提供发布授权。既有入口、目标与 Tag 约定见[Fork 分发要求](docs/requirements/FORK.md#omp-侧依赖)，不代为提交/推送、不创建新发布入口、自定版本或 Tag。Windows 测试失败仍须先修复；发布结果不能替代测试通过。
+- `pnpm fastcheck`：仅 Windows 本机，只运行静态分析、格式和增量编译，不执行任何测试（包括快速 UT、冒烟和门禁自检）。AI 只在相关修改成批完成且确有验证需要时选择执行；非编译预算最多 60 秒，不给纯编译继承此墙钟限制。
+- 三级计划、计时与失败语义唯一维护于[三级测试需求](docs/requirements/test-gates.md)：fulltest 包含全部 fastcheck 原语和现存适用当前平台测试（包括隔离 GUI），非编译预算最多 900 秒；slowtest 包含 fulltest 一次，非编译预算最多 1500 秒。项目无适用 WSL 测试扩展，报告 `SKIPPED_NOT_APPLICABLE`，slowtest 与 fulltest 覆盖相同。不再按耗时区分层级，参数只能下调预算。
+- 复用原有检查定义、质量配置和测试断言。此前授权删除的 Fork 专项不恢复；上游原有测试保留。不为门禁速度缩减现存适用测试，超预算 Fork 按完整上游差异与依赖图确定受影响模块范围，逐项声明遗漏的整仓覆盖，不能跳过受影响失败项。
+- fulltest/slowtest 需要当前用户明确执行指令；显式调用 `jch-fastcheck-fulltest-slowtest-gates` 本身授权该任务所需三级运行与必要复验，不逐次询问，任务结束后失效。历史授权、代理建议、提交/推送或“检查一下”不授权。`--human-authorized` 是软约束，只反映原始明确指令或当前显式技能授权，不是 Agent 自行决定；不能绕过门禁执行内部长步骤。
+- 三个入口只在本机运行，不调用 CI、远端/发布流水线、Computer Use，不移动/点击全局鼠标、不抢前台焦点。不接受 `--publish-releases`，不推送、不创建 Tag、不发布；独立分发 workflow 保留不动。接管鼠标的测试保留单独入口，必须另外获得用户明确指令，状态为 `NOT_RUN_SEPARATE_USER_INSTRUCTION_REQUIRED`，不记为门禁失败或通过。
 - 每次结果绑定本次 HEAD、未提交差异摘要、内容指纹与工具版本；源码变化后旧结果不能沿用或跨快照合并。真实 OMP/GLM 与 GUI 必须使用专用隔离 fixture 和数据根，不连接日常实例、不修改用户配置；历史失败、跳过和未验证记录不得改写成通过。
-- 尚未授权时只建立入口、执行 fastcheck 和入口机制的临时短桩自检；新编排文件可做显式逐文件语法/Lint/格式检查，不借此执行完整验收。保留原有质量检查和测试断言，不为通过门禁改写它们。需求、覆盖和环境配置见 [三级测试需求](docs/requirements/test-gates.md)。
+- 尚未授权时只执行 fastcheck 和临时短桩自检，不借专项入口执行完整门禁。保留既有质量检查及精简后有效的核心行为断言，不为通过放宽判据；删除的非核心/非 OMP/冗余/长耗时专项不能宣称已验收。
+
+### 构建与缓存纪律
+
+- 每个入口用单一单调时钟报告 `total / compile_excluded / budgeted / limit / status`，至少一位小数；只排除纯编译活跃且无非编译工作活跃的区间并集。准备、发现、静态检查、测试、等待、快照与清理计费，编译与这些工作重叠仍计费一次。任何成功、失败、缺环境、TIMEOUT 或已处理取消都输出完整计时，超时结束所属进程树并非零退出。
+- 使用现有 `tsc -b` composite/incremental、固定 dist/out 及稳定 Vite 缓存；连续 fastcheck 不调用 clean、删除产物或切换配置/缓存目录来强制重编译。不清缓存测冷性能；只有自然冷缓存样本才可称冷缓存。安全独立阶段必须并行，改写源文件、共享不兼容产物与 live/cold 顺序保留依赖屏障。
+- 技能迁移只修改编排、准备、计时及必要文档，不改产品行为或既有测试判据；临时短桩门禁自检独立于 fastcheck。没有适用 WSL 扩展不安装/启动 WSL；不可用扩展与适用扩展失败不得混为一谈。
 
 ## 实现与验证
 

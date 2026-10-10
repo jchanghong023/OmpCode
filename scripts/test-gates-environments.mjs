@@ -1,151 +1,169 @@
-import { readFile } from "node:fs/promises";
-import { dirname, isAbsolute, join } from "node:path";
+import assert from "node:assert/strict";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
-import { homedir } from "node:os";
-import { commandOutput, inside, sameSnapshot, exists } from "./test-gates-process.mjs";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
+import { createInterface } from "node:readline";
+import { commandOutput, startCommand, stopCommand } from "./test-gates-process.mjs";
+import { readIsolationEvidence } from "../packages/desktop/test/ompCore.evidence.cjs";
 
 const missing = (reason) => ({ status: "UNVERIFIED_MISSING_ENV", reason });
+let packagingState;
+let packagingCleanup;
 
-export async function environmentConfig() {
-  const path = process.env.ZCODE_GATE_ENVIRONMENTS;
-  return path ? JSON.parse(await readFile(path, "utf8")) : { stages: {} };
+async function snapshotPackagingState() {
+  assert.equal(process.platform, "win32", "Local packaging validation is Windows-only");
+  assert.ok(!packagingState, "Packaging must not overlap another packaging operation");
+  const require = createRequire(resolve("packages/desktop/package.json"));
+  const template = join(
+    dirname(require.resolve("app-builder-lib/package.json")),
+    "templates",
+    "nsis",
+    "installSection.nsh",
+  );
+  // Windows native-prebuild hook explicitly skips mutations; NSIS is the sole dependency write.
+  packagingState = { template, bytes: await readFile(template) };
+  console.log("Local packaging dependency snapshot: Windows NSIS template (1 file)");
 }
 
-// 配置例：stages[阶段ID] = { prepare:{command,args}, environmentFile, cleanup:{command,args} }。
-// prepare 是用户提供的隔离 fixture 生命周期适配器，不是检查或另一技能。
-// environmentFile = { snapshot:{head,contentHash}, isolatedRoot, env:{...} }。
-async function fixtureStage(stage, context) {
-  const setup = context.environments.stages?.[stage.id];
-  if (!setup)
-    return missing(
-      `Configure ZCODE_GATE_ENVIRONMENTS stage ${stage.id}; no daily instance is used`,
-    );
-  if (setup.prepare && !setup.cleanup)
-    return missing("A fixture preparation command must have an owned-process cleanup command");
-  async function executeFixture() {
-    if (setup.prepare) {
-      const result = await commandOutput(setup.prepare.command, setup.prepare.args ?? [], {
-        env: setup.prepare.env,
-      });
-      if (result.code) return { status: "FAIL", reason: "Fixture preparation failed" };
-    }
-    if (!setup.environmentFile) return missing("Fixture must provide environmentFile");
-    const fixture = JSON.parse(await readFile(setup.environmentFile, "utf8"));
-    if (!sameSnapshot(context.snapshot, fixture.snapshot))
-      return missing("Fixture build/source snapshot differs from this gate");
-    if (stage.realOmp && fixture.ompBinary !== context.omp)
-      return missing("Fixture Host must use the installed omp binary recorded by this run");
-    const root = fixture.isolatedRoot;
-    if (!root || !isAbsolute(root) || root === process.cwd() || root === homedir())
-      return missing("Fixture needs a separate absolute isolatedRoot");
-    const env = { ...fixture.env, ...stage.env };
-    if (stage.phase === "before" || stage.phase === "after")
-      env.OMP_E2E_PROFILE_PHASE = stage.phase;
-    else if (stage.phase) env.OMP_E2E_PHASE = stage.phase;
-    if (stage.realOmp) {
-      env.OMP_RPC_BINARY_PATH = context.omp;
-      env.OMP_NATIVE_E2E_BINARY = context.omp;
-      env.OMP_E2E_OMP_BINARY = context.omp;
-      env.OMP_NATIVE_E2E = "1";
-    }
-    for (const key of [
-      "ZCODE_DATA_BASE_DIR",
-      "ZCODE_DESKTOP_USER_DATA_DIR",
-      "OMP_E2E_WORKSPACE",
-      "OMP_CONFIG_ROOT",
-    ]) {
-      if (env[key] && !inside(root, env[key])) return missing(`${key} is outside the fixture root`);
-    }
-    const runtimePath = env.OMP_E2E_RUNTIME_MANIFEST ?? env.OMP_NATIVE_GUI_META;
-    if (runtimePath) {
-      if (!inside(root, runtimePath)) return missing("Runtime metadata is outside fixture root");
-      const runtime = JSON.parse(await readFile(runtimePath, "utf8"));
-      if (!inside(root, runtime.runRoot ?? runtime.root ?? ""))
-        return missing("Runtime data root is not isolated");
-      const endpoint = new URL(runtime.endpoint ?? runtime.cdpUrl);
-      if (
-        !["localhost", "127.0.0.1"].includes(endpoint.hostname) ||
-        ["9229", "9230"].includes(endpoint.port)
-      )
-        return missing("Runtime must use a dedicated local CDP endpoint");
-      const pid = runtime.electronPid ?? runtime.pid;
-      const key = stage.file ?? stage.id;
-      const previous = context.guiProcesses.get(key);
-      if (["cold", "after", "recovery"].includes(stage.phase) && previous && previous.pid === pid)
-        return missing("Cold/recovery phase requires a restarted fixture process");
-      if (previous && ["cold", "after"].includes(stage.phase) && previous.root !== root)
-        return missing("Cold/recovery phase must reuse its live data root");
-      context.guiProcesses.set(key, { pid, root });
-    } else if (!fixture.dedicatedEndpoint) {
-      return missing(
-        "Legacy GUI fixture must explicitly own its endpoint and supply dedicatedEndpoint",
-      );
-    }
-    const result = await commandOutput(stage.command, stage.args, { env });
-    return {
-      status: result.code ? "FAIL" : result.skipped ? "UNVERIFIED_MISSING_ENV" : "PASS",
-      exitCode: result.code,
-      ...(result.skipped ? { reason: "Existing check reported skipped/unverified coverage" } : {}),
-    };
-  }
-  let outcome;
-  try {
-    outcome = await executeFixture();
-  } catch (error) {
-    outcome = { status: "FAIL", reason: error.message };
-  }
-  if (setup.cleanup) {
-    const result = await commandOutput(setup.cleanup.command, setup.cleanup.args ?? [], {
-      env: setup.cleanup.env,
+export function restorePackagingState() {
+  if (packagingCleanup) return packagingCleanup;
+  packagingCleanup = Promise.resolve()
+    .then(async () => {
+      if (!packagingState) return;
+      const { template, bytes } = packagingState;
+      if (!(await readFile(template)).equals(bytes)) await writeFile(template, bytes);
+      packagingState = undefined;
+      console.log("Local packaging dependency restoration: complete (1 file)");
+    })
+    .finally(() => {
+      packagingCleanup = undefined;
     });
-    if (result.code)
-      outcome = {
-        status: "FAIL",
-        reason: `Fixture cleanup failed; owned processes may remain (check status: ${outcome.status})`,
-      };
+  return packagingCleanup;
+}
+
+async function verifyIsolation(runtime, launcher) {
+  assert.equal(launcher.exitCode, null, "Isolated GUI launcher must remain alive");
+  assert.equal(launcher.signalCode, null, "Isolated GUI launcher must not be terminated");
+  const isolation = await readIsolationEvidence(runtime.isolationEvidence);
+  assert.equal(isolation.electronPid, runtime.electronPid, "Verify the current isolated Electron");
+  assert.equal(isolation.mode, "hidden-native-windows");
+  assert.equal(isolation.verified, true, isolation.failure ?? "Native window isolation failed");
+  assert.ok(isolation.windows.length, "Native isolation requires actual window evidence");
+  assert.ok(
+    isolation.windows.every(
+      (win) => win.visible === false && win.focused === false && win.focusable === false,
+    ),
+    "All native windows must remain hidden, unfocused, and nonfocusable",
+  );
+  const age = Date.now() - Date.parse(isolation.checkedAt);
+  assert.ok(age >= 0 && age < 5000, "Native window evidence must be current, not a stale receipt");
+  return { ...isolation, evidence: runtime.isolationEvidence };
+}
+
+async function fixtureStage(stage, context) {
+  let fixture = context.guiProcesses.get(stage.file);
+  if (!fixture) {
+    fixture = {
+      root: await mkdtemp(join(tmpdir(), "ompcode-core-gui-")),
+      runId: `CORE_${Date.now()}`,
+    };
+    context.guiProcesses.set(stage.file, fixture);
   }
-  return outcome;
+  const launcher = startCommand("node", ["packages/desktop/test/ompCore.launch.mjs"], {
+    env: {
+      OMP_E2E_ISOLATED_ROOT: fixture.root,
+      OMP_E2E_STARTUP: stage.file === "ompStartup.gui.e2e.mjs" ? "1" : "0",
+      OMP_RPC_BINARY_PATH: context.omp,
+    },
+  });
+  try {
+    const runtime = await new Promise((done, reject) => {
+      const lines = createInterface({ input: launcher.stdout });
+      lines.on("line", (line) => {
+        if (line.startsWith("OMP_CORE_GUI_READY=")) {
+          try {
+            done(JSON.parse(line.slice("OMP_CORE_GUI_READY=".length)));
+          } catch (error) {
+            reject(error);
+          }
+        } else if (line.startsWith("OMP_CORE_GUI_FAILED=")) {
+          reject(
+            new Error(`${line.slice("OMP_CORE_GUI_FAILED=".length)}; evidence ${fixture.root}`),
+          );
+        } else console.log(line);
+      });
+      launcher.stderr.on("data", (data) => process.stderr.write(data));
+      launcher.once("error", reject);
+      launcher.once("close", (code) =>
+        reject(
+          new Error(`Core GUI launcher exited before readiness: ${code}; evidence ${fixture.root}`),
+        ),
+      );
+    });
+    console.log(`Core GUI evidence: ${fixture.root}`);
+    await verifyIsolation(runtime, launcher);
+    if (stage.phase === "recovery" && runtime.electronPid === fixture.pid)
+      throw new Error("Recovery must use a new Electron process in the same isolated root");
+    fixture.pid = runtime.electronPid;
+    const result = await commandOutput(stage.command, stage.args, {
+      env: {
+        OMP_E2E_CDP_URL: runtime.endpoint,
+        OMP_E2E_RENDERER_URL: runtime.rendererUrl,
+        OMP_E2E_SCREENSHOT_URL: runtime.screenshotUrl,
+        OMP_E2E_RUNTIME_MANIFEST: join(fixture.root, "runtime.json"),
+        OMP_E2E_EVIDENCE_DIR: join(fixture.root, "evidence"),
+        OMP_E2E_RUN_ID: fixture.runId,
+        OMP_E2E_PHASE: stage.phase,
+      },
+    });
+    const isolation = await verifyIsolation(runtime, launcher);
+    console.log(`Core GUI isolation: ${JSON.stringify(isolation)}`);
+    return { ...outcome(result), isolation };
+  } finally {
+    // 启动器一直存活；正常结束及总时限都能终止完整测试树，不能留下 detached supervisor。
+    await stopCommand(launcher);
+  }
+}
+
+function outcome(result) {
+  return {
+    status: result.code ? "FAIL" : result.skipped ? "UNVERIFIED_MISSING_ENV" : "PASS",
+    exitCode: result.code,
+    ...(result.skipped ? { reason: "Existing test reported skipped/unverified coverage" } : {}),
+  };
 }
 
 export async function regularStage(stage, context) {
   if (stage.realOmp && !context.omp)
     return missing("No installed omp; real validation is not run and omp is not downloaded");
   if (stage.fixture) return await fixtureStage(stage, context);
-  if (stage.electron) {
-    let electronDirectory;
-    try {
-      // pnpm 可以将 Electron 提升至根目录；按 Desktop 的真实模块解析定位，不假定包内存在 node_modules。
-      const require = createRequire(join(process.cwd(), "packages/desktop/package.json"));
-      electronDirectory = dirname(require.resolve("electron/package.json"));
-    } catch {
-      return missing("Workspace Electron module is absent");
-    }
-    if (
-      !(await exists(
-        join(electronDirectory, "dist", process.platform === "win32" ? "electron.exe" : "electron"),
-      ))
-    )
-      return missing("Workspace Electron runtime is absent");
-  }
-  const args = [...stage.args];
-  if (stage.baseline) {
-    if (!process.env.ZCODE_GATE_PERF_BASELINE)
-      return missing("Set ZCODE_GATE_PERF_BASELINE to the intended comparison commit");
-    args.push(process.env.ZCODE_GATE_PERF_BASELINE);
-  }
   const env = { ...stage.env };
+  let args = stage.args;
+  let packagingOutput;
+  if (stage.packaging) {
+    packagingOutput = await mkdtemp(join(tmpdir(), "ompcode-local-package-"));
+    args = [...args, `--config.directories.output=${packagingOutput}`];
+    Object.assign(env, {
+      ZCODE_DESKTOP_DIST_DIR: packagingOutput,
+      CSC_IDENTITY_AUTO_DISCOVERY: "false",
+      CSC_LINK: "",
+      WIN_CSC_LINK: "",
+      CSC_KEY_PASSWORD: "",
+      WIN_CSC_KEY_PASSWORD: "",
+    });
+    console.log(`Local unpacked packaging evidence: ${packagingOutput}`);
+    await snapshotPackagingState();
+  }
   if (stage.realOmp)
     Object.assign(env, {
       OMP_RPC_BINARY_PATH: context.omp,
-      OMP_NATIVE_E2E_BINARY: context.omp,
       OMP_AGENT_SKIP_REAL_E2E: "0",
     });
-  const result = await commandOutput(stage.command, args, { env });
-  return {
-    status: result.code ? "FAIL" : result.skipped ? "UNVERIFIED_MISSING_ENV" : "PASS",
-    exitCode: result.code,
-    ...(result.skipped
-      ? { reason: "Existing test reported skips; applicable coverage is not fully verified" }
-      : {}),
-  };
+  try {
+    const result = outcome(await commandOutput(stage.command, args, { env }));
+    return packagingOutput ? { ...result, packagingOutput } : result;
+  } finally {
+    if (stage.packaging) await restorePackagingState();
+  }
 }

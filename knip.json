@@ -30,8 +30,7 @@
     "packages/*": {
       "entry": [
         "{index,src/index}.{js,cjs,mjs,jsx,ts,cts,mts,tsx}",
-        "**/*.test.{js,cjs,mjs,jsx,ts,cts,mts,tsx}",
-        "test/*.perf.{ts,mts}"
+        "**/*.test.{js,cjs,mjs,jsx,ts,cts,mts,tsx}"
       ]
     },
     "packages/desktop": {
@@ -39,6 +38,7 @@
         "electron-builder.config.js",
         "scripts/generate-omp-icons.mjs",
         "scripts/ttft-otlp-receiver.mjs",
+        "scripts/fetch-omp-release.mjs",
         "scripts/write-dev-ready-marker.mjs",
         "scripts/powershell-command.d.mts",
         "scripts/target-platform.d.mts",
@@ -60,14 +60,8 @@
         "src/renderer/src/resource-manager.tsx",
         "**/*.test.{js,cjs,mjs,jsx,ts,cts,mts,tsx}",
         "test/*.e2e.mjs",
-        "test/ompAgentInteractions.launch.mjs",
-        "test/ompNativeCommands.launch.mjs",
-        "test/ompExecutionPages.launch.mjs",
-        "test/ompPerformanceHotPaths.draftHookFixture.jsx",
-        "test/ompPerformanceHotPaths.fileProviderFixture.jsx",
-        "test/ompPerformanceHotPaths.fixture.jsx",
-        "test/toolContentPresentation.fixture.jsx",
-        "test/fixtures/ompConfirmExtension.js"
+        "test/ompCore.launch.mjs",
+        "test/toolContentPresentation.fixture.jsx"
       ],
       "ignoreDependencies": [
         "@babel/runtime",
@@ -119,8 +113,7 @@
         "src/index.ts",
         "src/storage/module.ts",
         "src/storage/contract.ts",
-        "**/*.test.{js,cjs,mjs,jsx,ts,cts,mts,tsx}",
-        "test/*.perf.{ts,mts}"
+        "**/*.test.{js,cjs,mjs,jsx,ts,cts,mts,tsx}"
       ],
       "ignoreBinaries": ["plutil"]
     },
@@ -136,8 +129,7 @@
     "packages/ui": {
       "entry": [
         "{index,src/index}.{js,cjs,mjs,jsx,ts,cts,mts,tsx}",
-        "**/*.test.{js,cjs,mjs,jsx,ts,cts,mts,tsx}",
-        "test/*.perf.{ts,mts}"
+        "**/*.test.{js,cjs,mjs,jsx,ts,cts,mts,tsx}"
       ],
       "ignoreDependencies": ["@xyflow/react", "ansi-to-react", "use-stick-to-bottom"]
     },

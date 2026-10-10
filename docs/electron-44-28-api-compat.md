@@ -23,7 +23,7 @@
 | ------------------------------- | ------------------------------------------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `node:sqlite`                   | Node 22+ 内置                               | 无（Node 18.18） | `packages/services/src/session/tasksDatabase/sqlite.ts` 双驱动；四个使用点（`chromeCookieManager.ts`、`automationRepo.ts`、`offPeakTaskRepo.ts`、`taskIndexRepo.ts`、`tasksDatabase/startup.ts`）全部经 `createDatabaseSync` 单入口，无散落直连（grep 核查） |
 | `fs/promises.glob`              | Node 22+                                    | 无               | `packages/services/src/system/sshConfigAlias.ts`：`nativeGlob` 可选探测 + `expandPathGlob` 回退（第 289 行三元）                                                                                                                                             |
-| `webUtils.getPathForFile`       | webUtils 自 Electron 29；32+ 移除 File.path | 无               | `packages/desktop/src/preload/index.ts` `getPathForFile`：先检测 `webUtils.getPathForFile`，仅缺少能力时回退 File 的非标准 `path` 属性；`preloadFilePath.test.ts` 覆盖两代能力与空路径                                                                       |
+| `webUtils.getPathForFile`       | webUtils 自 Electron 29；32+ 移除 File.path | 无               | `packages/desktop/src/preload/index.ts` `getPathForFile`：先检测 `webUtils.getPathForFile`，仅缺少能力时回退 File 的非标准 `path` 属性；原专用测试已随核心门禁减重删除，历史验证不代表当前覆盖                                                               |
 | `webContents.navigationHistory` | Electron 31+                                | 无               | 全库未使用 `navigationHistory`（grep 核查）；浏览器历史走 `<webview>`/webContents 经典 `canGoBack/goBack/goForward`（`browserCommandTypes.ts`、`browserGuestManager.ts`），Electron 28 可用                                                                  |
 
 Electron 命名空间面审计：Main/Host/preload 的通用 import 包含 BrowserWindow、Menu、MessageChannelMain、MessagePortMain、NativeImage、Notification、Tray、UtilityProcess、WebContents、WebFrameMain、app、contextBridge、crashReporter、dialog、ipcMain、ipcRenderer、nativeImage、nativeTheme、powerMonitor、powerSaveBlocker、screen、session、shell、utilityProcess、webContents、webFrame，均在 Electron 28 存在；preload 另使用 `webUtils`，必须能力检测后调用，28 走 `File.path` 回退。浏览器 guest 实现为 `<webview>`（Electron 28 支持），无实际 `WebContentsView`/`BaseWindow`/`BrowserView` 类使用。
@@ -70,7 +70,7 @@ Electron 命名空间面审计：Main/Host/preload 的通用 import 包含 Brows
 
 ## 5. 双后端行为等价边界（sqlite，机器已验证部分）
 
-- 内存库 UT：`packages/services/test/tasksDatabaseBackendEquivalence.test.ts`（默认/强制后端选择、同脚本快照、备份、busy、只读、NOTADB、关闭后语句、适配层桩映射）；既有 `tasksDatabaseCompatibility.test.ts` 保留（bigint 只读回读、在线备份、busy 码）。仓库级行为由 `servicesDefectFixes`/`ompTaskIdMigration`/`ompProfileTaskIndexPath`/`importedClaudeRecovery`/`nonCliAcpRetirement` 覆盖。
+- 双后端专项 UT 曾验证默认/强制后端、快照、备份、busy、只读、NOTADB、bigint 和关闭后语句；2026-10-10 按用户要求删除非核心专项，这些是历史结果而非当前入口。保留的 `packages/services/test/ompTaskIdMigration.test.ts` 仍验证 OMP 稳定身份迁移与真实 SQLite 冷读取，不替代完整后端等价性验证。
 - 已确认并固化的两后端差异：超精度整数默认读取——node:sqlite 抛 `RangeError`，better-sqlite3 返回不精确 number。等价边界=所有可能超 2^53 的列必须 `setReadBigInts(true)`（`chromeCookieManager` 的 `expires_utc`、迁移校验均已如此）。
 - TEXT 内嵌 NUL：驱动读取/比较语义不可依赖（`taskIndexRepo.ts` 已用 JSON 编码 node_key 规避，注释在案）；等价性只在无 NUL 文本上要求。
 

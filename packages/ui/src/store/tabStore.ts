@@ -21,7 +21,7 @@ import {
 } from "@/lib/workspaceExpansionPreference.js";
 import { isSameWorkspaceTab } from "@/store/tabWorkspaceIdentity.js";
 
-export const SETTINGS_TAB_ID = "__settings__" satisfies TabId;
+const SETTINGS_TAB_ID = "__settings__" satisfies TabId;
 
 /** 窗口 tab 与 shell 共用的启动期可用性契约。 */
 export type WorkspaceAvailability = "available" | "unavailable-local-directory";
