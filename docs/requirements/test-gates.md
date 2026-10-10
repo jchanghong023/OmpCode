@@ -24,6 +24,7 @@ flowchart TD
 
 - 真实 OMP 使用本机安装版本；源码权威及无安装时不验证的规则见 [FORK.md](FORK.md#omp-侧依赖)。缺少安装、凭据、二进制或测试发生跳过时，记录未验证而非通过，不静默使用旧缓存核或临时安装。
 - 产品 GUI 必须由专用隔离 fixture 提供，保持各场景要求的 profile、审批、扩展、历史和工作区；live/stable/cold、capture、before/after 按原测试定义运行，冷恢复需要同一数据根上的新进程。组件测试不代替产品 GUI。
+- GUI 判据基于产品契约与独立的真实持久记录，不把候选文案、自动生成的会话标题或单一旧版终态包装当作产品事实。身份迁移按实际稳定会话 ID 验证唯一侧栏项及同根重启连续性；技能按 `$` 与原生 `/skill:` 入口分别验证；压缩必须发生真实成功终态，不能把重复压缩的拒绝算通过。
 - 组件入口自己创建临时 Vite/Electron/userData，不依赖产品 GUI fixture，也不调用模型；两项现有组件入口都纳入完整计划。主/子执行页联合 GUI 按 `live → 同根新进程 cold` 验证，`saved` 不替代冷恢复。
 - 产品 GUI 必须使用当前构建的真实 Main/Preload。Preload 需内联其第三方运行依赖，保持既有沙箱与 context isolation 设置；不能因沙箱无法加载 npm 模块而留下空白 Renderer，也不能注入假 bridge、关闭沙箱或加空值兜底冒充通过。
 - 原生命令 API 全文件执行时，模型场景拥有本轮新建的隔离 fixture，计划控制场景复用该场景实际创建的计划；显式 `OMP_NATIVE_E2E_ROOT` 仅用于既有隔离 fixture 的手动恢复，不作为首次完整执行的必需输入。
@@ -75,5 +76,10 @@ flowchart TD
 - 上述是局部验证，不代表 `fulltest` 已通过；最终完整结论必须来自修复后稳定快照的完整门禁输出，发布仍须在该结论之后独立执行。
 - 随后的稳定修复快照 `73b7a5c` 进入真实 GUI 后仍全灰，已取消该失败运行并清理其专用窗口。实际 Electron 控制台报 `Unable to load preload script` / `module not found: zod`：preload 产物外置了 Zod，沙箱无法加载，`window.zcode` 未注入。此前静态/组件检查不能替代该产品 GUI 边界，此快照没有完整通过，也未触发发布。
 - Preload 内联 Zod 后，当前 Main/Preload/Renderer 已实际重建；真实宿主窗口截图确认侧栏、项目和输入区恢复，启动 GUI 检查以零退出码完成，目录外的已配 default role 保留且可打开真实 GLM 候选。删除 GUI 对旧原生 `select/options` 的实现假设，改用现有可访问菜单；Profile `before → 同根新进程 after` 两阶段亦以零退出码完成，保存后仍使用旧 profile、重启后命名配置生效。以上仍是定向验收；最终完整运行采用新的隔离根，不复用已切换 profile 的诊断 fixture。
+- 稳定快照 `e71ca87eb98ce594189f40454ade759cc508e871` 的 `fulltest` **1672.2 秒 FAIL**：真实原生命令 team、交互页 cold、原生命令 GUI live/capture/cold、恢复准备器、身份 live/recovery 与技能候选未全部通过。启动/Profile、子代理状态、执行页 live/cold、性能 live/stable/cold、mentions、组件、构建与打包等已完成阶段不能合并成完整通过；两平台发布尚未触发。
+- 修复后的定向真实原生命令执行 **4/4、0 失败、0 跳过**，300.3 秒：独立 team 完成有效结构化报告、只读文件约束、失败面及双链路冷历史；完整对象用原生 `yield {data: object}` 单次终结，不再误提交到 proposal 正文字段。小会话压缩拒绝、真实模型命令/有限循环/目标/压缩/计划及延迟控制场景也通过；未将该定向结果冒充原生命令全文件或完整门禁。
+- 原生命令 GUI `live → capture → 同根新进程 cold` **404.9 秒通过**：只执行一次真实压缩，保留失败拒绝；同一 UUID 的 91 项真实助手行完整采集并逐项冷恢复。身份 GUI `live → recovery` **75.0 秒通过**，两轮真实 GLM 回复、唯一侧栏项及同一持久 UUID 连续性均保留，不再用截断标题定位。
+- 新隔离根上的交互页 `live/cold`、技能设置/`$`/原生 `/skill:` 候选及工具会话真实写读后同根冷重启，联合定向执行 **234.1 秒通过**。交互页从实际沙箱项目建任务，避免全局新任务逃逸到没有验收 agent 的默认工作区；独立证据读取覆盖原生顶层 async-result，并按父子身份核对终态。技能沿既有 GUI 默认预算等待真实目录结果，不用额外五秒门限截断核心启动。恢复准备器记录实际持久 UUID，关闭已核对身份的 renderer target 并等待原进程退出，避免等待 Electron 退出时丢失的 `Browser.close` 应答；不替换会话、不注入工具结果。
+- 上述仍为修复阶段定向证据；正式完整门禁使用另一套全新隔离根及稳定快照，不能跨此前失败、定向运行或源码快照合并通过结论。
 
 完整 Windows 测试使用 `pnpm fulltest --human-authorized` 或 `pnpm slowtest --human-authorized`；无需也不允许添加发布参数。所有真实 GUI 的配置位于仓库外，避免配置自身参与源码指纹计算；先以 `pnpm fulltest --plan` 查 Windows 阶段 ID，再由隔离 fixture 准备器生成对应环境文件。环境文件必须绑定本次 HEAD/内容指纹；真实 OMP 场景声明与本机安装路径一致的 `ompBinary`。

@@ -7,6 +7,8 @@ const endpoint = process.env.OMP_E2E_CDP_URL;
 assert.ok(endpoint, "Set OMP_E2E_CDP_URL to an isolated OmpCode Electron CDP endpoint");
 const workspace = process.env.OMP_E2E_WORKSPACE;
 assert.ok(workspace, "Set OMP_E2E_WORKSPACE to the isolated test workspace");
+const taskId = process.env.OMP_E2E_RECOVERY_TASK_ID;
+assert.ok(taskId, "Set OMP_E2E_RECOVERY_TASK_ID to the actual persisted prerequisite UUID");
 
 const browser = await chromium.connectOverCDP(endpoint);
 try {
@@ -20,10 +22,8 @@ try {
   if (await back.isVisible()) {
     await back.click({ force: true });
   }
-  const task = page
-    .locator('li[data-testid^="task-item-"]')
-    .filter({ hasText: "gui-e2e-omp.txt" })
-    .first();
+  // 标题可被 OMP 截断或重命名；必须消费准备器实际完成并重启的同一会话 UUID。
+  const task = page.getByTestId(`task-item-${taskId}`);
   await task.waitFor({ state: "visible" });
   await task.click({ force: true });
   const rows = page.locator('[data-testid^="v4-row-"]');

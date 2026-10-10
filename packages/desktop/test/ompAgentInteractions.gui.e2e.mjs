@@ -4,6 +4,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { chromium } from "playwright-core";
 import { collectInteractionSourceEvidence } from "./ompAgentInteractionSourceEvidence.mjs";
+import { createProjectTask } from "./ompPerformanceHotPaths.guiChecks.mjs";
 
 const manifestPath = process.env.OMP_E2E_RUNTIME_MANIFEST;
 const evidenceDir = process.env.OMP_E2E_EVIDENCE_DIR;
@@ -127,7 +128,9 @@ try {
       await closeInteractions();
     }
     assert.equal(await view.count(), 0, "Interaction content stays absent until explicitly opened");
-    await page.getByRole("button", { name: "新建任务", exact: true }).last().click();
+    // 指定项目启动器只在该项目安装验收 agent；全局“新建任务”会逃逸到默认工作区。
+    if (runtime.requestedWorkspace) await createProjectTask(page, runtime.requestedWorkspace);
+    else await page.getByRole("button", { name: "新建任务", exact: true }).last().click();
     const model = page.getByTestId("chat-model-select-trigger").first();
     await model.waitFor({ state: "visible" });
     if ((await model.getAttribute("aria-label")) !== "zhipu-coding-plan/GLM-5.3-Flash") {
@@ -260,22 +263,19 @@ try {
   for (const model of latestModels.values())
     assert.equal(model.model.toLowerCase(), "zhipu-coding-plan/glm-5.3-flash");
   for (const node of [alpha, beta, gamma]) {
-    const terminal = native.terminalAgents.find(
-      (item) => item.agentId === node.label && ["completed", "success"].includes(item.status),
+    const terminal = native.terminalAgents.findLast(
+      (item) => item.agentId === node.label && item.parentAgentId === node.parent,
     );
-    if (terminal)
-      assert.match(
-        node.caption,
-        /已完成|成功/u,
-        `Persisted terminal state for ${node.label} must be visible`,
+    if (terminal) {
+      assert.ok(
+        ["completed", "success"].includes(terminal.status),
+        `The real task ${node.label} failed: ${terminal.status} at ${terminal.path}#${terminal.entryId}`,
       );
-    else {
+      assert.match(node.caption, /已完成|成功/u, `Persisted terminal: ${node.label}`);
+    } else {
       if (phase === "cold")
-        assert.match(
-          node.caption,
-          /状态未确认/u,
-          "A cold agent without a terminal source must not claim to be running",
-        );
+        assert.match(node.caption, /状态未确认/u, "Cold state without terminal must stay unknown");
+      else assert.doesNotMatch(node.caption, /已完成|成功/u, "Completion needs terminal evidence");
       evidence.push({ event: "missing-terminal-source", agentId: node.id });
     }
   }

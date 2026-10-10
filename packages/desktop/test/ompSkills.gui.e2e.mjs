@@ -106,16 +106,20 @@ try {
     .click();
   const composer = page.getByTestId("v4-composer-input");
   const skillName = expectedNames[0];
-  const optionName = new RegExp(
-    `^\\$?${skillName.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")} omp`,
-    "u",
-  );
-  for (const prefix of ["$", "/"]) {
+  // `$` 显示技能名，斜杠面板显示原生 `/skill:<name>`；不能用同一旧文案匹配两个入口。
+  for (const [input, label] of [
+    [`$${skillName}`, skillName],
+    [`/skill:${skillName}`, `/skill:${skillName}`],
+  ]) {
+    const escapedLabel = label.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
     await composer.click({ timeout: 5000 });
     await composer.press("ControlOrMeta+A");
     await composer.press("Backspace");
-    await composer.fill(`${prefix}${skillName}`);
-    await page.getByRole("option", { name: optionName }).waitFor({ timeout: 5000 });
+    await composer.fill(input);
+    // 真实目录仍可能处于“搜索中”；按既有 GUI 默认预算等待实际候选，不额外截断核心启动。
+    await page
+      .getByRole("option", { name: new RegExp(`^${escapedLabel}(?:\\s|$)`, "u") })
+      .waitFor();
   }
   console.log(
     `omp GUI skills: settings, $ and / match ${expectedNames.length} callable omp skills`,

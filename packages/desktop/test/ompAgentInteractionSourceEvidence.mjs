@@ -1,15 +1,16 @@
 // 只读取本启动器隔离workspace对应的OMP测试桶，提取测试marker的事实字段。
 import assert from "node:assert/strict";
 import { readdir, readFile } from "node:fs/promises";
-import { homedir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, isAbsolute, join, relative, sep } from "node:path";
 
 export async function collectInteractionSourceEvidence(runRoot, expectedBodies) {
-  const sessionRoot = join(homedir(), ".omp/agent/sessions");
+  assert.ok(isAbsolute(runRoot), "Read only the launcher's absolute isolated run root");
+  const sessionRoot = join(runRoot, "home/.omp/agent/sessions");
   const buckets = (await readdir(sessionRoot, { withFileTypes: true })).filter(
     (entry) => entry.isDirectory() && entry.name.includes(basename(runRoot)),
   );
   assert.equal(buckets.length, 1, "Only read the unique test workspace bucket");
+  const bucketRoot = join(sessionRoot, buckets[0].name);
   const source = expectedBodies.map((body) => ({
     body,
     sends: [],
@@ -33,22 +34,81 @@ export async function collectInteractionSourceEvidence(runRoot, expectedBodies) 
         .filter(Boolean)
         .map((line) => JSON.parse(line));
       const calls = new Map();
+      const ancestry = relative(bucketRoot, path).split(sep).slice(1);
+      if (ancestry.length) ancestry[ancestry.length - 1] = basename(entry.name, ".jsonl");
+      const parentAgentId = ancestry.join("/") || "main";
+      const children = new Set();
+      const recordTerminal = (row, agentId, status, field) => {
+        if (
+          children.has(agentId) &&
+          ["completed", "success", "failed", "cancelled", "aborted"].includes(status)
+        )
+          terminalAgents.push({
+            file: entry.name,
+            path,
+            entryId: row.id,
+            parentAgentId,
+            agentId,
+            status,
+            field,
+            timestamp: Date.parse(row.timestamp),
+          });
+      };
       for (const row of entries) {
         if (row.type === "model_change") models.push({ file: entry.name, model: row.model });
+        // 修复：原生后台结果直接落在 custom_message，不在 row.message 中；
+        // jobs 证明任务身份，匹配的 task-result 包装才证明终态，不能读提示语猜完成。
+        if (row.type === "custom_message" && row.customType === "async-result") {
+          const content =
+            typeof row.content === "string"
+              ? row.content
+              : Array.isArray(row.content)
+                ? row.content.map((part) => (part.type === "text" ? part.text : "")).join("\n")
+                : "";
+          const results = [...content.matchAll(/<task-result\b([^>]*)>[\s\S]*?<\/task-result>/gu)];
+          for (const [index, job] of (row.details?.jobs ?? []).entries()) {
+            if (job.type !== "task") continue;
+            const agentId = job.agentUrlId ?? job.jobId;
+            if (job.status !== undefined) {
+              recordTerminal(row, agentId, job.status, `details.jobs[${index}].status`);
+              continue;
+            }
+            for (const result of results) {
+              const id = /\bid="([^"]+)"/u.exec(result[1])?.[1];
+              const status = /\bstatus="([^"]+)"/u.exec(result[1])?.[1];
+              if (id === job.jobId || id === agentId)
+                recordTerminal(
+                  row,
+                  agentId,
+                  status,
+                  `content.task-result[id="${id}"].status (details.jobs[${index}])`,
+                );
+            }
+          }
+        }
         const message = row.message;
         if (!message) continue;
-        for (const state of [
-          ...(message.details?.jobs ?? []),
-          ...(message.details?.results ?? []),
-          ...(message.details?.progress ?? []),
-        ])
-          if (["completed", "success", "failed", "cancelled", "aborted"].includes(state.status))
-            terminalAgents.push({
-              file: entry.name,
-              entryId: row.id,
-              agentId: state.agentUrlId ?? state.id,
-              status: state.status,
-            });
+        if (message.role === "toolResult" && message.toolName === "task")
+          for (const key of ["progress", "results"])
+            for (const [index, state] of (message.details?.[key] ?? []).entries()) {
+              if (typeof state.id !== "string" || !state.id) continue;
+              children.add(state.id);
+              recordTerminal(
+                row,
+                state.id,
+                state.status,
+                `message.details.${key}[${index}].status`,
+              );
+            }
+        if (message.role === "toolResult" && message.toolName === "wait")
+          for (const [index, state] of (message.details?.jobs ?? []).entries())
+            if (state.type === "task")
+              recordTerminal(
+                row,
+                state.agentUrlId ?? state.id,
+                state.status,
+                `message.details.jobs[${index}].status`,
+              );
         if (Array.isArray(message.content))
           for (const part of message.content) {
             if (part.type === "toolCall" && part.name === "write")
@@ -94,6 +154,6 @@ export async function collectInteractionSourceEvidence(runRoot, expectedBodies) 
       }
     }
   }
-  await visit(join(sessionRoot, buckets[0].name));
+  await visit(bucketRoot);
   return { source, models, terminalAgents };
 }

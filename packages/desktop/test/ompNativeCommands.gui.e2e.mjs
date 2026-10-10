@@ -25,7 +25,10 @@ const evidenceDir = process.env.OMP_E2E_EVIDENCE_DIR ?? meta.evidence;
 const phase = process.env.OMP_E2E_PHASE ?? "live";
 assert.ok(["live", "capture", "cold"].includes(phase));
 const scenarioNames = ["local", "models", "compact", "team", "plan"];
-const scenarios = (process.env.OMP_NATIVE_GUI_SCENARIOS ?? "local,models,team,plan").split(",");
+// 压缩只由独立 compact 场景执行；models 内再调用会让紧随其后的压缩被原生以 Already compacted 拒绝。
+const scenarios = (process.env.OMP_NATIVE_GUI_SCENARIOS ?? "local,models,compact,team,plan").split(
+  ",",
+);
 assert.ok(scenarios.every((name) => scenarioNames.includes(name)));
 await mkdir(evidenceDir, { recursive: true });
 const statePath = join(evidenceDir, "native-gui-state.json");
@@ -545,7 +548,6 @@ async function models() {
   await command("/goal show", /No goal set/iu, "goal-empty");
   state.passed.push("goal");
   await save();
-  await compact();
   await shot("model-lifecycle");
   state.passed.push("models");
   await save();
@@ -577,8 +579,9 @@ async function team() {
   const functionName = /export function (\w+)\(/u.exec(source)?.[1];
   assert.ok(functionName, "Expected the isolated fixture's existing function");
   // 各阶段经原生 yield schema 提交；三句上限不能要求删掉必填字段，真实 schema 失败仍不算通过。
+  // 真实 API 失败显示：完整对象被字符串化并仅写入 proposal 增量字段，无 data 终结仍缺根字段；须一次提交完整对象。
   const after = await send(
-    `/team 这是极小范围的只读方案验收：保持 sample.ts 中现有导出函数 ${functionName} 名字、实现与行为原样不动，不增加或修改任何文件。只比较“保留现状”这一个方案，所有讨论和审查阶段都只读，不扩展命名或重构需求。方案正文简短，但各阶段必须通过原生 yield 提交该阶段 schema 要求的完整结构化结果，不省略必填字段。没有事实差异或需求理解差异时使用空数组，不编造差异；若有真实差异，完整填写各项必填字段（事实差异包括 topic、contradiction、proposalsInvolved、sourceToCheck）。最终给出原生选择方案报告。`,
+    `/team 这是极小范围的只读方案验收：保持 sample.ts 中现有导出函数 ${functionName} 名字、实现与行为原样不动，不增加或修改任何文件。只比较“保留现状”这一个方案，所有讨论和审查阶段都只读，不扩展命名或重构需求。方案正文简短，但各阶段必须通过原生 yield 以 {data: 完整结构化对象} 单次终结提交该阶段 schema 要求的全部必填字段，省略 type，不将 data 序列化为字符串，不把完整对象提交为 type:["proposal"] 等增量字段，不使用没有 data 的 type:"result" 代替完整对象。没有事实差异或需求理解差异时使用空数组，不编造差异；若有真实差异，完整填写各项必填字段（事实差异包括 topic、contradiction、proposalsInvolved、sourceToCheck）。最终给出原生选择方案报告。`,
   );
   const started = Date.now();
   const observed = await waitFor(
