@@ -6,8 +6,12 @@ const pnpm = (id, args, extra = {}) => ({ id, command: "pnpm", args, kind: "chec
 const node = (id, args, extra = {}) => ({ id, command: "node", args, kind: "check", ...extra });
 
 const staticPlan = (all) => [
-  pnpm("typecheck", ["typecheck"], { kind: "compile" }),
+  pnpm("typecheck", ["typecheck", "--stopBuildOnErrors"], { kind: "compile" }),
   pnpm("lint", ["lint"]),
+  pnpm("formal-proof-typecheck", ["--filter", "@zcode/formal-proof", "typecheck"], {
+    kind: "compile",
+  }),
+  pnpm("formal-proof-lint", ["--filter", "@zcode/formal-proof", "lint"]),
   pnpm(all ? "architecture-all" : "architecture-changed", [
     "architecture:check",
     ...(all ? [] : ["--changed"]),
@@ -107,8 +111,9 @@ const coreTests = {
     "nonCliAcpRetirement",
     "providerConfigMigration",
     "serviceLoggerRuntime",
+    "ompDiagnosticLog",
   ],
-  shared: ["editorPrefill", "ompPaths", "taskIdMigration"],
+  shared: ["editorPrefill", "ompPaths", "taskIdMigration", "feedbackPrivacy"],
   client: ["websocketDisconnect"],
   server: ["remoteConnectionStore"],
   ui: [
@@ -129,7 +134,6 @@ export async function fullPlan() {
   const stages = [
     ...staticPlan(true),
     node("gate-entry-selftest", ["scripts/test-gates.mjs", "--self-test"], { kind: "test" }),
-    pnpm("formal-proof-typecheck", ["--filter", "@zcode/formal-proof", "typecheck"]),
   ].map((stage) => ({ ...stage, parallelGroup: "offline-core" }));
   for (const [name, files] of Object.entries(coreTests))
     stages.push(
@@ -140,6 +144,7 @@ export async function fullPlan() {
           "tsx",
           ...(name === "ui" ? ["--tsconfig", "packages/ui/tsconfig.json"] : []),
           "--test",
+          "--test-reporter=tap",
           "--test-concurrency=2",
           ...files.map((file) => `packages/${name}/test/${file}.test.ts`),
           ...(name === "ui"
@@ -225,7 +230,13 @@ export async function fullPlan() {
     // 构建和 staging 共享产物，先完成；之后真实 OMP、组件和 GUI 各自使用独立沙箱。
     pnpm(
       "real-omp.e2e.test.ts",
-      ["exec", "tsx", "--test", "packages/omp-agent/test/real-omp.e2e.test.ts"],
+      [
+        "exec",
+        "tsx",
+        "--test",
+        "--test-reporter=tap",
+        "packages/omp-agent/test/real-omp.e2e.test.ts",
+      ],
       { kind: "test", realOmp: true, parallelGroup: "isolated-runtime" },
     ),
     node(

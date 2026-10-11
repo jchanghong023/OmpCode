@@ -64,55 +64,59 @@ export function createGateClock(started = performance.now()) {
   };
 }
 
-function stopTree(child) {
-  if (stoppingTrees.has(child)) return stoppingTrees.get(child);
-  const stopping = stopOwnedTree(child);
-  stoppingTrees.set(child, stopping);
-  return stopping;
+function stopTrees(children) {
+  const pending = children.filter(
+    (child) => activeChildren.has(child) && !stoppingTrees.has(child),
+  );
+  if (pending.length) {
+    const stopping = stopOwnedTrees(pending);
+    for (const child of pending) stoppingTrees.set(child, stopping);
+  }
+  return Promise.all(children.map((child) => stoppingTrees.get(child)));
 }
 
-async function stopOwnedTree(child) {
-  if (!activeChildren.has(child)) return;
-  const closed = new Promise((done) => child.once("close", done));
-  if (!child.pid || child.exitCode !== null || child.signalCode !== null) {
-    await closed;
-    return;
-  }
-  if (process.platform === "win32") {
-    await new Promise((done) => {
-      const killer = spawn("taskkill", ["/PID", String(child.pid), "/T", "/F"], {
-        windowsHide: true,
-        stdio: "ignore",
-      });
-      const timer = setTimeout(() => {
-        killer.kill();
-        done();
-      }, 4000);
-      killer.once("error", () => {
-        clearTimeout(timer);
-        done();
-      });
-      killer.once("exit", () => {
-        clearTimeout(timer);
-        done();
-      });
+async function stopOwnedTrees(children) {
+  const closed = children.map((child) => new Promise((done) => child.once("close", done)));
+  const running = children.filter(
+    (child) => child.pid && child.exitCode === null && child.signalCode === null,
+  );
+  if (running.length && process.platform === "win32") {
+    // Windows 每次 /T 都枚举进程；并发 taskkill 争用会拖慢清理，批量终止本门禁所属根。
+    // 不能提前杀掉清理器再等待未终止的子进程；保留完整清理耗时和真实预算结果。
+    await new Promise((done, reject) => {
+      const killer = spawn(
+        "taskkill",
+        [...running.flatMap((child) => ["/PID", String(child.pid)]), "/T", "/F"],
+        { windowsHide: true, stdio: "ignore" },
+      );
+      killer.once("error", reject);
+      killer.once("exit", done);
     });
   } else {
-    try {
-      process.kill(-child.pid, "SIGKILL");
-    } catch {
-      /* Owned tree already exited. */
+    for (const child of running) {
+      try {
+        process.kill(-child.pid, "SIGKILL");
+      } catch {
+        /* Owned tree already exited. */
+      }
     }
   }
-  await closed;
+  await Promise.all(closed);
 }
 
-export async function stopAll() {
-  await Promise.all([...activeChildren].map(stopTree));
+export async function stopAll(clock) {
+  // 首诊断到达时编译阶段尚未退出，taskkill 等待曾被误算为纯编译；清理必须显式计费。
+  // 复用门禁时钟的活跃区间计数，和超时/finish 的清理重叠也只计同一段墙钟时间。
+  const endCleanup = clock?.enter("check");
+  try {
+    await stopTrees([...activeChildren]);
+  } finally {
+    endCleanup?.();
+  }
 }
 
 export async function stopCommand(child) {
-  await stopTree(child);
+  await stopTrees([child]);
   // Ownership ends on close, after all pipe output and stage cleanup settle.
 }
 
@@ -141,7 +145,7 @@ export function startBudget(limitSeconds, clock, onTimeout, level = "fastcheck")
     cancelCommands();
     const endCleanup = clock.enter("check");
     try {
-      await stopAll();
+      await stopAll(clock);
       await onTimeout({
         ...clock.read(),
         limitSeconds,
@@ -201,14 +205,32 @@ export async function commandOutput(command, args = [], options = {}) {
   let output = "";
   let diagnostics = "";
   let skipped = false;
-  let tail = "";
+  const tails = { stdout: "", stderr: "" };
+  let reportedFailure;
+  let failureCleanup;
   const collect = (data, fromStderr = false) => {
     const text = data;
     if (options.stdoutOnly && fromStderr) diagnostics += text;
     else output += text;
     if (!options.quiet) process.stdout.write(text);
-    tail = (tail + text).slice(-12000);
+    // stdout/stderr 分片互相交错但不是一条流；共用 tail 会切断真诊断或拼成伪失败帧。
+    const stream = fromStderr ? "stderr" : "stdout";
+    const tail = (tails[stream] = (tails[stream] + text).slice(-12000));
     skipped ||= /# SKIP|(?:#|ℹ) skipped [1-9]|\[UNVERIFIED|requires .*; skipped/u.test(tail);
+    // TAP 只解析 stdout，TypeScript 分别解析两条连续流，不等嵌套整组退出。
+    // 立即封住新进程并终止全部所属树，原诊断和最终计时仍保留。
+    if (!reportedFailure) {
+      const failed =
+        (options.failFastTests && !fromStderr
+          ? tail.match(/^\s*not ok \d+ - [^\r\n]+/mu)
+          : undefined) ??
+        (options.failFastCompiler ? tail.match(/^[^\r\n]*\berror TS\d+: [^\r\n]+/mu) : undefined);
+      if (failed) {
+        reportedFailure = failed[0].trim();
+        cancelCommands();
+        failureCleanup = stopAll(options.clock);
+      }
+    }
   };
   child.stdout.on("data", collect);
   child.stderr.on("data", (data) => collect(data, true));
@@ -217,12 +239,14 @@ export async function commandOutput(command, args = [], options = {}) {
       activeChildren.delete(child);
       done({ code: 1, output: `${output}\n${diagnostics}${error.message}`, skipped: false });
     });
-    child.once("close", (code) => {
+    child.once("close", async (code) => {
+      await failureCleanup;
       activeChildren.delete(child);
       done({
-        code: code ?? 1,
+        code: reportedFailure ? 1 : (code ?? 1),
         output: code !== 0 && options.stdoutOnly ? output + diagnostics : output,
         skipped,
+        ...(reportedFailure ? { reason: reportedFailure } : {}),
       });
     });
   });
@@ -303,7 +327,11 @@ export async function runStages(stages, operation, concurrency = 3, clock) {
         const current = next++;
         const result = await stageResult(stages[current], () => operation(stages[current]), clock);
         results[current - index] = result;
-        if (result.status !== "PASS") failed = true;
+        if (result.status !== "PASS") {
+          // 原实现只阻止后续调度，同组长任务仍继续；先封调度，再清理全部所属树。
+          failed = true;
+          await stopAll(clock);
+        }
       }
     };
     // 相邻同组阶段才并行；组间等待全部结束，构建及 live/cold 依赖不能越过屏障。

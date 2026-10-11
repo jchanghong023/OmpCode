@@ -134,6 +134,9 @@ const ompAgentToolResultSchema = z
 
 export const ompSessionEventFrameSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("agent_start") }),
+  // 修复依据：OMP 的两种无载荷通知是合法帧；会话静止不等同单轮结束，不能借此收口。
+  z.object({ type: z.literal("session_settled") }),
+  z.object({ type: z.literal("advisor_cost_changed") }),
   z.object({
     type: z.literal("agent_end"),
     // 修复依据：技能注入的 custom 历史消息以字符串 content 出现在 agent_end.messages；

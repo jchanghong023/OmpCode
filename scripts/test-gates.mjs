@@ -100,6 +100,7 @@ try {
           await finish("PLAN ONLY — NOT RUN", 0);
         } else {
           const context = {
+            clock: gate.clock,
             snapshot: source,
             omp: await installedOmp(),
             guiProcesses: new Map(),
@@ -114,6 +115,7 @@ try {
           const report = await gate.run(
             stages,
             (stage) => regularStage(stage, context),
+            { snapshot: source, tools },
             async (records) => {
               const current = await snapshot();
               if (!sameSnapshot(source, current))
@@ -122,7 +124,6 @@ try {
                   status: "UNVERIFIED_MISSING_ENV",
                   reason: "Source changed during validation; results belong to different snapshots",
                 });
-              return { snapshot: source, tools };
             },
           );
           process.exitCode = report.exitCode;

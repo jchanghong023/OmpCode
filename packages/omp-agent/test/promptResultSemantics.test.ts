@@ -129,6 +129,57 @@ function createEngine(
   return { engine, handlers };
 }
 
+test("核心辅助事件不提前收口轮次，也不覆盖错误、用量和等待输入", async () => {
+  const { engine, handlers } = createEngine();
+  const notify = () => {
+    const before = structuredClone(engine.projection.stateSnapshot);
+    for (const type of ["advisor_cost_changed", "session_settled"]) {
+      handlers.onEvent(ompSessionEventFrameSchema.parse({ type }));
+      assert.deepEqual(engine.projection.stateSnapshot.control, before.control);
+      assert.deepEqual(engine.projection.stateSnapshot.usage, before.usage);
+      assert.deepEqual(engine.projection.stateSnapshot.queue, before.queue);
+    }
+  };
+  try {
+    await engine.sendText("主轮", "running", "client");
+    handlers.onEvent({ type: "agent_start" });
+    await engine.sendText("等待输入", "queued", "client");
+    assert.equal(engine.projection.stateSnapshot.control.phase, "running");
+    assert.deepEqual(
+      engine.projection.stateSnapshot.queue.items.map((item) => item.sourceCommandId),
+      ["queued"],
+    );
+    notify();
+    handlers.onEvent({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        stopReason: "error",
+        errorMessage: "quota exceeded",
+        usage: { input: 20, output: 5 },
+      },
+    });
+    notify();
+    handlers.onEvent({ type: "agent_end" });
+    assert.equal(engine.projection.stateSnapshot.control.phase, "error");
+    assert.equal(engine.projection.stateSnapshot.control.lastError?.message, "quota exceeded");
+    notify();
+    handlers.onEvent({ type: "agent_start" });
+    assert.equal(engine.projection.stateSnapshot.control.phase, "running");
+    notify();
+    handlers.onEvent({ type: "message_end", message: { role: "assistant", content: "完成" } });
+    handlers.onEvent({ type: "agent_end" });
+    assert.equal(engine.projection.stateSnapshot.control.phase, "completedSuccess");
+    notify();
+    assert.equal(
+      ompSessionEventFrameSchema.safeParse({ type: "unknown_core_event" }).success,
+      false,
+    );
+  } finally {
+    await engine.dispose();
+  }
+});
+
 test("A1 顺序①：aborted 无 agent 事件 → 当前轮收口 interrupted", async () => {
   const { engine, handlers } = createEngine();
   try {

@@ -107,6 +107,7 @@ async function fixtureStage(stage, context) {
       throw new Error("Recovery must use a new Electron process in the same isolated root");
     fixture.pid = runtime.electronPid;
     const result = await commandOutput(stage.command, stage.args, {
+      clock: context.clock,
       env: {
         OMP_E2E_CDP_URL: runtime.endpoint,
         OMP_E2E_RENDERER_URL: runtime.rendererUrl,
@@ -130,6 +131,7 @@ function outcome(result) {
   return {
     status: result.code ? "FAIL" : result.skipped ? "UNVERIFIED_MISSING_ENV" : "PASS",
     exitCode: result.code,
+    ...(result.reason ? { reason: result.reason } : {}),
     ...(result.skipped ? { reason: "Existing test reported skipped/unverified coverage" } : {}),
   };
 }
@@ -161,7 +163,14 @@ export async function regularStage(stage, context) {
       OMP_AGENT_SKIP_REAL_E2E: "0",
     });
   try {
-    const result = outcome(await commandOutput(stage.command, args, { env }));
+    const result = outcome(
+      await commandOutput(stage.command, args, {
+        env,
+        clock: context.clock,
+        failFastTests: stage.kind === "test" && args.includes("--test"),
+        failFastCompiler: stage.kind === "compile",
+      }),
+    );
     return packagingOutput ? { ...result, packagingOutput } : result;
   } finally {
     if (stage.packaging) await restorePackagingState();

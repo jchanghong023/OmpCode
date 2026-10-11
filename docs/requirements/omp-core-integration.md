@@ -19,6 +19,8 @@
 - **子代理控制状态**：详情顶部的发送和停止入口只有在当前父会话 owner 能证明该子代理可控制时可用；纯冷历史或已结束记录保持只读并显示对应状态，不把可见「停止」按钮当成仍在执行的事实。控制命令仍由既有 `session/controlSubagent` 路径执行，失败不得伪报成功。
 - **连通性测试与 MCP 状态**：新核无 `test_model`/`list_mcp_servers`；`provider/testModelConnectivity` 显式拒绝（-32601），`mcp/list` 返回合法空状态表，不伪造服务状态。各自能力边界见 [FORK.md](FORK.md) 与 [原生集成](integrations.md)。
 
+- **核心辅助事件解码**：`advisor_cost_changed`（无载荷的顾问费用变更通知）与 `session_settled`（无载荷的会话静止通知）是合法核心帧，适配层必须按明确类型解码，不记作畸形帧。当前 ZCode 没有独立的顾问费用或会话静止展示字段；两帧不得代替 `agent_end`/`prompt_result` 收口用户轮次，也不得改写既有错误、用量或队列。未知类型及消费字段畸形的帧仍须保留解码失败诊断，不以宽泛接受或关闭日志处理协议演进。
+
 ## 状态所有者与接口
 
 ```text
@@ -111,6 +113,8 @@ web-remote-replayable: 同一 owner → 水位增量 / 缺口快照；冷启动�
 14. **协议与冷历史补充**：同 chunkId 的 count/byteLength 必须恒定，重复片拒绝整个序列，实收不得超过声明长度；过期命令失败不得关闭新的活跃轮。合法用户 content 字符串与 blocks 均恢复正文、标题和子代理 transcript，畸形块不打断其他记录。主 v4 与 legacy 压缩失败均不得报告 accepted。
 15. **Editor/Input 衔接**：无 prefill 的 editor 仍为空的临时多行编辑器，可取消；敏感输入不进入持久草稿，按 [composer.md](./composer.md) 验收 7 记录。
 16. **主/子执行页联合回归**：真实 GUI 并行创建 a、b、c 并广播 `hello`，逐一打开三个正确归属的详情；展开后每个工具 ID 与核心记录一一对应，文件写入、通信工具和最终回复均可见。切换详情、关闭重开、重复补读和冷恢复不丢记录、不串代理、不改变手动阅读位置；主会话与三项详情的终态及控制可用性一致。执行页不铺开 IRC/后台结果的模型提示包，普通正文与扩展输出不被误过滤；每项均截图核对，Agent 交互页另按其唯一需求验收。
+
+- **辅助事件边界**：在运行中、成功/失败终态及新轮开始后插入合法 `advisor_cost_changed`/`session_settled`，轮次、错误与用量保持原值；后续 `agent_end`/`prompt_result` 仍按既有规则完成。真实 GLM 两轮与同根冷恢复日志不再出现这两种帧的 `omp_core_frame_decode_failed`；未知事件继续报告解码失败。
 
 核心五项（普通消息、技能调用+补全、内置命令+补全、子代理过程、模型双入口）必须逐项真实 GUI 操作验收并记录证据；协议类型检查或页面可打开不替代操作验收。
 
@@ -210,3 +214,6 @@ sequenceDiagram
 
 - 2026-10-11 OMP 诊断日志补点：按既有日志需求补充适配器、Host 服务、桌面 IPC、远端部署与 UI 调用边界的安全阶段/结果摘要，保留业务所有权、返回值和异常传播，不新增日志基础设施。本次仅允许对实际修改文件执行非测试 Lint/格式检查；未运行测试、冒烟、E2E、全仓静态检查或三级门禁，跨文件链路、日志实际落盘与运行时行为未验证，不计为功能验收通过。
 - 同轮独立审查后的 8 项修复：恢复两处类型导入；补齐 Host 安全诊断字段白名单与固定覆盖问题码的受控数组；核心 ID 使用 `ompRequestId`，不覆盖 Host `requestId`；远端最终失败使用 ERROR、既有取消使用 WARN；profile 来源诊断遵循 `OMP_PROFILE` → `PI_PROFILE`；启动诊断保留工作区身份；交互读取完成日志移到真实查询和分页成功边界。修复只调整类型依赖和诊断，不改变业务请求、状态或控制流。实际修改文件的 Lint/格式检查通过；未执行编译、测试、冒烟或门禁，跨文件和运行时行为仍未验证。
+
+- 2026-10-11 实际 GUI 日志修复：合法的 `advisor_cost_changed` 与 `session_settled` 曾落入封闭事件 schema 的未知类型分支，产生三条 `omp_core_frame_decode_failed`；现按 OMP 当前无载荷契约补齐解码，不修改轮次所有者或收口规则，也不关闭未知帧诊断。新增辅助事件回归修复前因 discriminator 缺项失败，修复后 `promptResultSemantics.test.ts` 19/19 通过；真实 GUI 既有两轮/冷恢复入口增加适配器拒帧日志断言。
+- 修复后的 `pnpm slowtest --human-authorized` 退出 0，34 阶段全部 PASS：`total=418.4s compile_excluded=13.8s budgeted=404.6s limit=1500.0s`。绑定 HEAD `0820b8dd670bad025cba20613df9686beb806f6b`、未提交工作树及内容指纹 `2eef8aead6e2ce18adbe929b3ec0ab1a609234a31d8366b977407b4b8c4312fa`（追加本记录前）；Node 24.20.0 / pnpm 10.33.2。真实 GLM、两轮回复、同 UUID 冷恢复与窗口隔离通过，`ompcode-core-gui-XudLOs` 的完整 Electron stderr 不再出现核心拒帧诊断，冷恢复截图可见两轮回复。测试隔离层主动拒绝系统注册、全新根的会话目录 ENOENT 及 OMP 本地模型服务未启动的发现警告仍保留；构建警告未作修复，不宣称日志零警告。WSL 为 `SKIPPED_NOT_APPLICABLE`，未修改用户配置或 OMP 仓库。

@@ -10,16 +10,81 @@ export async function exerciseEntryMechanisms(root, { failure, tree, childPid })
   const processModule = pathToFileURL(resolve("scripts/test-gates-process.mjs")).href;
   const fixture = join(root, "entry-fixture.mjs");
   const cache = join(root, "build.tsbuildinfo");
+  const failingTests = join(root, "first-failure.test.mjs");
+  const laterTests = join(root, "later.test.mjs");
+  const blocked = join(root, "blocked-after-failure");
+  const streamFirstSeen = join(root, "stream-first-seen");
+  const streamNoiseSeen = join(root, "stream-noise-seen");
+  const sourceFile = join(root, "verification-source");
+  const verifyRan = join(root, "verification-ran");
+  const streamNoise = "INTERLEAVED_STDERR\n";
+  const streamFailures = {
+    "stream-tap-failure": { first: "not o", last: "k 1 - STREAM_TAP_FAILURE\n" },
+    "stream-compiler-failure": { first: "error T", last: "S9999: STREAM_COMPILER_FAILURE\n" },
+  };
+  const streamCode = Object.fromEntries(
+    Object.entries(streamFailures).map(([scenario, { first, last }]) => [
+      scenario,
+      `import{readFile}from'node:fs/promises';const seen=async p=>{while(!await readFile(p).then(()=>true,()=>false))await new Promise(setImmediate);};await seen(${JSON.stringify(childPid)});process.stdout.write(${JSON.stringify(first)});await seen(${JSON.stringify(streamFirstSeen)});process.stderr.write(${JSON.stringify(streamNoise)});await seen(${JSON.stringify(streamNoiseSeen)});process.stdout.write(${JSON.stringify(last)});setInterval(()=>{},1000);`,
+    ]),
+  );
+  const awaitPeer = `while(!await readFile(${JSON.stringify(childPid)}).then(()=>true,()=>false)) await new Promise(r=>setTimeout(r,10));`;
+  await writeFile(
+    failingTests,
+    `import test from 'node:test';import assert from 'node:assert/strict';import{readFile}from'node:fs/promises';test('first failure',async()=>{${awaitPeer}assert.fail('FIRST_TEST_FAILURE');});test('already scheduled work',async()=>{await new Promise(r=>setTimeout(r,10000));});`,
+  );
+  await writeFile(
+    laterTests,
+    `import{writeFile}from'node:fs/promises';await writeFile(${JSON.stringify(blocked)},'must not start');`,
+  );
   await writeFile(
     fixture,
     `
 import {createGateRun} from ${JSON.stringify(runner)};
 import {commandOutput} from ${JSON.stringify(processModule)};
 import {readFile,writeFile} from 'node:fs/promises';
+import {writeFileSync} from 'node:fs';
 const [level,scenario,root,limit]=process.argv.slice(2);
 const gate=createGateRun({level,limitSeconds:Number(limit),authorized:!['denied','unauthed-timeout'].includes(scenario),signals:['SIGTERM']});
 const waitCode=ms=>'setTimeout(()=>{},'+ms+')';
 const node=(id,kind,ms,extra={})=>({id,kind,command:'node',args:['--eval',waitCode(ms)],...extra});
+const cleanupObservations=[];
+if(scenario==='compiler-cleanup'){
+ const enter=gate.clock.enter.bind(gate.clock);
+ let compileActive=0;
+ let checkActive=0;
+ gate.clock.enter=kind=>{
+  const wasCompileOnly=gate.clock.compileOnly();
+  const end=enter(kind);
+  if(kind==='compile') compileActive++; else checkActive++;
+  const observation=kind!=='compile'&&compileActive>0
+   ? {compileActive,checkActive,wasCompileOnly,compileOnly:gate.clock.compileOnly(),before:gate.clock.read()}
+   : undefined;
+  return ()=>{
+   if(observation) cleanupObservations.push({...observation,after:gate.clock.read()});
+   end();
+   if(kind==='compile') compileActive--; else checkActive--;
+  };
+ };
+}
+const streamFailures=${JSON.stringify(streamFailures)};
+const streamCode=${JSON.stringify(streamCode)};
+const streamSeen=[];
+const originalWrite=process.stdout.write;
+if(streamFailures[scenario]){
+ process.stdout.write=function(chunk,...args){
+  const result=originalWrite.call(this,chunk,...args);
+  const text=String(chunk);
+  if(text===streamFailures[scenario].first){
+   streamSeen.push('stdout-head');
+   writeFileSync(${JSON.stringify(streamFirstSeen)},'seen');
+  }else if(text===${JSON.stringify(streamNoise)}){
+   streamSeen.push('stderr-between');
+   writeFileSync(${JSON.stringify(streamNoiseSeen)},'seen');
+  }
+  return result;
+ };
+}
 let stages;
 switch(scenario){
  case 'success': stages=[node('check','check',100)]; break;
@@ -36,14 +101,64 @@ switch(scenario){
  case 'mixed': stages=[node('compile-and-test','test',2600)]; break;
  case 'parallel': stages=[node('a','check',500,{parallelGroup:'parallel'}),node('b','check',500,{parallelGroup:'parallel'}),node('c','check',500,{parallelGroup:'parallel'})]; break;
  case 'cache': stages=[{id:'cached-compile',kind:'compile',command:'node',args:['--eval',"const fs=require('node:fs');const p="+JSON.stringify(${JSON.stringify(cache)})+";if(fs.existsSync(p)){console.log('CACHE_REUSED')}else{fs.writeFileSync(p,'reusable-build-artifact');console.log('CACHE_CREATED')}"]}]; break;
+ case 'verify-source': stages=[node('check','check',100)]; break;
+ case 'verify-failure': stages=[{id:'failure',kind:'check',command:'node',args:[${JSON.stringify(failure)}]}]; break;
+ case 'compiler-cleanup': {
+  stages=[
+   {id:'first-compiler-failure',kind:'compile',command:'node',args:['--input-type=module','--eval',${JSON.stringify(`import{readFile}from'node:fs/promises';${awaitPeer}console.log('error TS9999: PURE_COMPILER_FAILURE');setInterval(()=>{},1000);`)}],parallelGroup:'failure'},
+   {id:'owned-peer-tree',kind:'compile',command:'node',args:[${JSON.stringify(tree)}],parallelGroup:'failure'},
+   node('owned-compile','compile',10000,{parallelGroup:'failure'}),
+   {id:'must-not-start',kind:'compile',command:'node',args:[${JSON.stringify(laterTests)}],parallelGroup:'failure'},
+  ];
+  break;
+ }
+ case 'stream-tap-failure':
+ case 'stream-compiler-failure': {
+  const kind=scenario==='stream-tap-failure'?'test':'compile';
+  stages=[
+   {id:'first-stream-failure',kind,failFastTests:kind==='test',command:'node',args:['--input-type=module','--eval',streamCode[scenario]],parallelGroup:'failure'},
+   {id:'owned-peer-tree',kind,command:'node',args:[${JSON.stringify(tree)}],parallelGroup:'failure'},
+   node('owned-compile','compile',10000,{parallelGroup:'failure'}),
+   {id:'must-not-start',kind,command:'node',args:[${JSON.stringify(laterTests)}],parallelGroup:'failure'},
+  ];
+  break;
+ }
+ case 'parallel-failure':
+ case 'compiler-output-failure':
+ case 'nested-failure': {
+  const trigger=scenario==='nested-failure'
+   ? {id:'first-test-failure',kind:'test',command:'node',args:['--test','--test-reporter=tap','--test-concurrency=1',${JSON.stringify(failingTests)},${JSON.stringify(laterTests)}]}
+   : scenario==='compiler-output-failure'
+    ? {id:'first-compiler-failure',kind:'compile',command:'node',args:['--input-type=module','--eval',${JSON.stringify(`import{readFile}from'node:fs/promises';${awaitPeer}console.log('error TS9999: FIRST_COMPILER_FAILURE');setInterval(()=>{},1000);`)}]}
+    : {id:'first-stage-failure',kind:'check',command:'node',args:['--input-type=module','--eval',${JSON.stringify(`import{readFile}from'node:fs/promises';${awaitPeer}process.exit(7);`)}]};
+  stages=[{...trigger,parallelGroup:'failure'}, {id:'owned-peer-tree',kind:'check',command:'node',args:[${JSON.stringify(tree)}],parallelGroup:'failure'},node('owned-compile','compile',10000,{parallelGroup:'failure'}),{id:'must-not-start',kind:'check',command:'node',args:[${JSON.stringify(laterTests)}],parallelGroup:'failure'}];
+  break;
+ }
  default: throw new Error('Unknown fixture scenario');
 }
 if(scenario==='interruption') setTimeout(()=>process.emit('SIGTERM'),1000);
+const verification={calls:0};
+const sourceBefore=scenario.startsWith('verify-')?await readFile(${JSON.stringify(sourceFile)},'utf8'):undefined;
+const details={
+ scenario,cleanupObservations,streamSeen,
+ ...(sourceBefore===undefined?{}:{snapshot:{source:sourceBefore},tools:{node:process.version,nodePath:process.execPath},verification}),
+};
 const report=await gate.run(stages,async stage=>{
- const result=await commandOutput(stage.command,stage.args,{quiet:true});
+ const result=await commandOutput(stage.command,stage.args,{clock:gate.clock,quiet:!streamFailures[scenario],failFastTests:stage.failFastTests||stage.kind==='test'&&stage.args.includes('--test'),failFastCompiler:stage.kind==='compile'});
  if(result.output) console.log(result.output);
- return {status:result.code?'FAIL':'PASS',exitCode:result.code};
-},{scenario});
+ return {status:result.code?'FAIL':'PASS',exitCode:result.code,...(result.reason?{reason:result.reason}:{})};
+},details,scenario.startsWith('verify-')?async records=>{
+ verification.calls++;
+ await writeFile(${JSON.stringify(verifyRan)},'verify ran');
+ await writeFile(${JSON.stringify(sourceFile)},'SOURCE_AFTER');
+ const sourceAfter=await readFile(${JSON.stringify(sourceFile)},'utf8');
+ if(sourceBefore!==sourceAfter) records.push({
+  id:'source-snapshot',
+  status:'UNVERIFIED_MISSING_ENV',
+  reason:'Source changed during validation; results belong to different snapshots',
+ });
+}:undefined);
+process.stdout.write=originalWrite;
 process.exitCode=report.exitCode;
 `,
   );
@@ -118,6 +233,113 @@ process.exitCode=report.exitCode;
     const compilerFailure = await run(level, "compile-fail");
     assert.notEqual(compilerFailure.code, 0);
     assert.equal(compilerFailure.report.status, "FAIL");
+    for (const scenario of [
+      "parallel-failure",
+      "compiler-output-failure",
+      ...(level === "fastcheck" ? [] : ["nested-failure"]),
+    ]) {
+      await rm(childPid, { force: true });
+      await rm(blocked, { force: true });
+      const failedFast = await run(level, scenario, 10);
+      assert.notEqual(failedFast.code, 0);
+      assert.equal(failedFast.report.status, "FAIL");
+      assert.ok(failedFast.report.budgeted < failedFast.report.limitSeconds, failedFast.output);
+      const peerPid = Number(await readFile(childPid, "utf8"));
+      assert.throws(() => process.kill(peerPid, 0), `${level}/${scenario}: owned peer survived`);
+      await assert.rejects(() => readFile(blocked));
+      assert.equal(
+        failedFast.report.stages.some((stage) => stage.id === "must-not-start"),
+        false,
+      );
+      const trigger = failedFast.report.stages[0];
+      assert.equal(trigger.status, "FAIL");
+      if (scenario === "parallel-failure") assert.equal(trigger.exitCode, 7);
+      else if (scenario === "compiler-output-failure")
+        assert.match(trigger.reason, /error TS9999: FIRST_COMPILER_FAILURE/u);
+      else {
+        assert.match(trigger.reason, /not ok 1 - first failure/u);
+        assert.match(failedFast.output, /FIRST_TEST_FAILURE/u);
+      }
+    }
+    for (const scenario of ["compiler-cleanup", "stream-tap-failure", "stream-compiler-failure"]) {
+      for (const path of [childPid, blocked, streamFirstSeen, streamNoiseSeen])
+        await rm(path, { force: true });
+      const failed = await run(level, scenario, 10);
+      assert.equal(failed.report.status, "FAIL", `${level}/${scenario}: ${failed.output}`);
+      assert.notEqual(failed.code, 0);
+      assert.ok(failed.report.budgeted < failed.report.limitSeconds, failed.output);
+      assert.deepEqual(
+        failed.report.stages.map((stage) => stage.id),
+        [
+          scenario === "compiler-cleanup" ? "first-compiler-failure" : "first-stream-failure",
+          "owned-peer-tree",
+          "owned-compile",
+        ],
+        `${level}/${scenario} must stop the active group before admitting a later stage`,
+      );
+      const trigger = failed.report.stages[0];
+      assert.equal(trigger.status, "FAIL");
+      const pid = Number(await readFile(childPid, "utf8"));
+      assert.throws(() => process.kill(pid, 0), `${level}/${scenario}: owned grandchild survived`);
+      await assert.rejects(() => readFile(blocked));
+      if (scenario === "compiler-cleanup") {
+        assert.equal(trigger.reason, "error TS9999: PURE_COMPILER_FAILURE");
+        assert.ok(
+          failed.report.cleanupObservations.some(
+            ({ compileActive, checkActive, wasCompileOnly, compileOnly, before, after }) =>
+              compileActive === 3 &&
+              checkActive === 1 &&
+              wasCompileOnly &&
+              !compileOnly &&
+              after.budgeted > before.budgeted &&
+              after.compileExcluded === before.compileExcluded,
+          ),
+          `${level}: pure compiler tree cleanup must activate check time and charge its full interval: ${JSON.stringify(failed.report.cleanupObservations)}`,
+        );
+      } else {
+        assert.deepEqual(failed.report.streamSeen, ["stdout-head", "stderr-between"]);
+        assert.equal(
+          trigger.reason,
+          scenario === "stream-tap-failure"
+            ? "not ok 1 - STREAM_TAP_FAILURE"
+            : "error TS9999: STREAM_COMPILER_FAILURE",
+        );
+        assert.match(failed.output, /INTERLEAVED_STDERR/u);
+      }
+    }
+    for (const scenario of ["verify-source", "verify-failure"]) {
+      await writeFile(sourceFile, "SOURCE_BEFORE");
+      await rm(verifyRan, { force: true });
+      const verified = await run(level, scenario, 10);
+      assert.notEqual(verified.code, 0);
+      assert.deepEqual(verified.report.snapshot, { source: "SOURCE_BEFORE" });
+      assert.deepEqual(verified.report.tools, {
+        node: process.version,
+        nodePath: process.execPath,
+      });
+      if (scenario === "verify-source") {
+        assert.equal(verified.report.status, "UNVERIFIED — REQUIRED ENVIRONMENT UNAVAILABLE");
+        assert.equal(verified.report.stages[0].status, "PASS");
+        assert.equal(verified.report.verification.calls, 1);
+        assert.equal(await readFile(verifyRan, "utf8"), "verify ran");
+        assert.equal(await readFile(sourceFile, "utf8"), "SOURCE_AFTER");
+        assert.deepEqual(verified.report.stages[1], {
+          id: "source-snapshot",
+          status: "UNVERIFIED_MISSING_ENV",
+          reason: "Source changed during validation; results belong to different snapshots",
+        });
+      } else {
+        assert.equal(verified.report.status, "FAIL");
+        assert.equal(verified.report.stages[0].status, "FAIL");
+        assert.equal(verified.report.verification.calls, 0);
+        assert.equal(await readFile(sourceFile, "utf8"), "SOURCE_BEFORE");
+        await assert.rejects(() => readFile(verifyRan));
+        assert.equal(
+          verified.report.stages.some((stage) => stage.id === "source-snapshot"),
+          false,
+        );
+      }
+    }
   }
   const autonomousTimeout = await run("fastcheck", "unauthed-timeout", 6);
   assert.equal(

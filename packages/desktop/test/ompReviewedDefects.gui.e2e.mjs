@@ -118,6 +118,16 @@ try {
     [],
     "Real conversation transitions must have no renderer problems",
   );
+  if (process.env.OMP_E2E_RUNTIME_MANIFEST) {
+    const runtime = JSON.parse(await readFile(process.env.OMP_E2E_RUNTIME_MANIFEST, "utf8"));
+    // Renderer 正常不代表适配器接受了核心帧；真实两轮曾因 schema 缺项持续拒绝合法通知。
+    const stderr = await readFile(join(runtime.runRoot, "electron-stderr.log"), "utf8");
+    assert.doesNotMatch(
+      stderr,
+      /omp_core_frame_decode_failed/u,
+      "Real core frames must decode without adapter rejection",
+    );
+  }
   console.log(
     `omp GUI identity ${phase}: glm-5.3-flash replies visible; stable task ${taskTestId}`,
   );

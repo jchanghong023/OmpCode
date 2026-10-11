@@ -22,6 +22,7 @@ export function createGateRun({
   let finishing;
   let activeWork;
   let terminal;
+  let runDetails = {};
   const handlers = new Map();
   const force = (status, exitCode) => {
     if (terminal?.status !== "TIMEOUT") terminal = { status, exitCode };
@@ -36,7 +37,7 @@ export function createGateRun({
     cancelCommands();
     finishing = (async () => {
       try {
-        await stopAll();
+        await stopAll(clock);
         try {
           await activeWork;
         } catch (error) {
@@ -44,7 +45,7 @@ export function createGateRun({
           status = "FAIL";
           exitCode = 1;
         }
-        await stopAll();
+        await stopAll(clock);
         try {
           await cleanup?.();
         } catch (error) {
@@ -69,6 +70,7 @@ export function createGateRun({
               },
             }
           : {}),
+        ...runDetails,
         ...extra,
         ...timing,
         limitSeconds,
@@ -112,24 +114,27 @@ export function createGateRun({
   return {
     clock,
     finish,
-    async run(stages, operation, extra = {}) {
+    async run(stages, operation, details = {}, verify) {
       if (!authorized && ["fulltest", "slowtest"].includes(level))
         return finish("NOT RUN — HUMAN AUTHORIZATION REQUIRED", 2);
       if (finishing) return finishing;
+      runDetails = details;
       try {
         activeWork = runStages(stages, operation, 3, clock);
         const records = await activeWork;
         if (finishing) return finishing;
-        activeWork = Promise.resolve(typeof extra === "function" ? extra(records) : extra);
-        const details = await activeWork;
-        if (finishing) return finishing;
-        const passed =
+        const allPassed = () =>
           records.length === stages.length && records.every((record) => record.status === "PASS");
+        // 失败后只清理和报告，不再启动快照命令；元数据在运行前绑定，失败/取消也保留。
+        activeWork = Promise.resolve(allPassed() ? verify?.(records) : undefined);
+        await activeWork;
+        if (finishing) return finishing;
+        const passed = allPassed();
         const failed = records.some((record) => record.status === "FAIL");
         return finish(
           passed ? "PASS" : failed ? "FAIL" : "UNVERIFIED — REQUIRED ENVIRONMENT UNAVAILABLE",
           passed ? 0 : 1,
-          { ...details, stages: records },
+          { stages: records },
         );
       } catch (error) {
         // The caught promise has settled; cleanup must not rethrow it before reporting.
