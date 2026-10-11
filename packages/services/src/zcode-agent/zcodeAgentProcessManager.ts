@@ -35,7 +35,11 @@ import type { ZCodeAgentPresentationSurface } from "./zcodeAgentPresentationSurf
 import { shouldSpawnInDetachedProcessGroup } from "../process/processTreeTerminator.js";
 import type { RuntimeProcessLifecycleReporter } from "../process/runtimeProcessLifecycle.js";
 import { buildAgentWorkspaceIdentityEnv } from "../runtime-tools/agentProxyEnv.js";
-import { forwardOmpAgentDiagnostic, redactOmpDiagnosticText } from "./ompDiagnosticLog.js";
+import {
+  forwardOmpAgentDiagnostic,
+  redactOmpDiagnosticText,
+  writeOmpHostDiagnostic,
+} from "./ompDiagnosticLog.js";
 
 export interface ZCodeAgentCommand {
   /** 本地配套 CLI bundle 的存储专用 Worker 入口；远端/自定义命令不推断能力。 */
@@ -939,11 +943,28 @@ export class ZCodeAgentProcessManager {
     });
     const resolveCommandDurationMs = Date.now() - resolveCommandStartedAt;
     if (!command) {
+      // 各工作区的 generation 独立，启动前无 PID 时必须保留工作区身份。
+      writeOmpHostDiagnostic("error", "agent.start.failed", {
+        workspaceKey,
+        workspaceIdentity: params.workspaceIdentity,
+        stage: "command-resolve",
+        reason: "command-not-configured",
+        generation: startGeneration,
+        elapsedMs: Date.now() - startStartedAt,
+      });
       throw new Error(
         "ZCode agent server command is not configured. Set ZCODE_AGENT_SERVER_COMMAND before integration.",
       );
     }
     if (admissionSignal.aborted) {
+      writeOmpHostDiagnostic("warn", "agent.start.cancelled", {
+        workspaceKey,
+        workspaceIdentity: params.workspaceIdentity,
+        stage: "command-resolve",
+        reason: "admission-aborted",
+        generation: startGeneration,
+        elapsedMs: Date.now() - startStartedAt,
+      });
       throw admissionSignal.reason ?? new Error("ZCode agent process start was cancelled.");
     }
     const effectiveCommand = wrapZCodeAgentCommandWithStdioTapDevProxy(command, workspaceKey);
@@ -964,11 +985,28 @@ export class ZCodeAgentProcessManager {
     if (this.disposed) {
       // app 正在关闭时，启动中的 warmup 可能刚完成 command/env resolve。
       // 这时继续 spawn 会绕过 disposeAllAndWait 的快照，重新制造一个无人托管的 agent 进程。
+      writeOmpHostDiagnostic("warn", "agent.start.cancelled", {
+        workspaceKey,
+        workspaceIdentity: params.workspaceIdentity,
+        stage: "env-resolve",
+        reason: "manager-disposed",
+        generation: startGeneration,
+        elapsedMs: Date.now() - startStartedAt,
+      });
       throw new Error("ZCode agent process manager is disposed.");
     }
     if ((this.restartGenerationByWorkspaceKey.get(workspaceKey) ?? 0) !== startGeneration) {
       // 切模型会重启单个 workspace。旧启动请求如果在重启后才恢复，
       // 不能继续 spawn 并写回进程池，否则新配置会被旧 agent 覆盖。
+      writeOmpHostDiagnostic("warn", "agent.start.cancelled", {
+        workspaceKey,
+        workspaceIdentity: params.workspaceIdentity,
+        stage: "env-resolve",
+        reason: "generation-changed",
+        generation: startGeneration,
+        currentGeneration: this.restartGenerationByWorkspaceKey.get(workspaceKey) ?? 0,
+        elapsedMs: Date.now() - startStartedAt,
+      });
       throw new Error("ZCode agent process start was cancelled.");
     }
     // cwd 探测也让出事件循环，必须放在最终 admission 与销毁/代际检查之前。
@@ -982,9 +1020,26 @@ export class ZCodeAgentProcessManager {
     // 再等待并复查代际，不能只依赖第一次 admission。
     await this.waitForSpawnAdmission?.({ ...params, workspaceKey, signal: admissionSignal });
     if (this.disposed) {
+      writeOmpHostDiagnostic("warn", "agent.start.cancelled", {
+        workspaceKey,
+        workspaceIdentity: params.workspaceIdentity,
+        stage: "spawn-admission",
+        reason: "manager-disposed",
+        generation: startGeneration,
+        elapsedMs: Date.now() - startStartedAt,
+      });
       throw new Error("ZCode agent process manager is disposed.");
     }
     if ((this.restartGenerationByWorkspaceKey.get(workspaceKey) ?? 0) !== startGeneration) {
+      writeOmpHostDiagnostic("warn", "agent.start.cancelled", {
+        workspaceKey,
+        workspaceIdentity: params.workspaceIdentity,
+        stage: "spawn-admission",
+        reason: "generation-changed",
+        generation: startGeneration,
+        currentGeneration: this.restartGenerationByWorkspaceKey.get(workspaceKey) ?? 0,
+        elapsedMs: Date.now() - startStartedAt,
+      });
       throw new Error("ZCode agent process start was cancelled.");
     }
     // app 以本地开发方式启动时，让 agent 子进程也带上 ZCODE_RUNTIME_ENV=development；
@@ -1164,6 +1219,15 @@ export class ZCodeAgentProcessManager {
         command: effectiveCommand.command,
         cwd: spawnPreflight.cwd,
         pid: child.pid,
+        argumentCount: spawnPreflight.args.length,
+        mode: resolveZCodeRuntimeEnv({
+          [ZCODE_RUNTIME_ENV_KEY]:
+            effectiveCommand.env?.[ZCODE_RUNTIME_ENV_KEY] ??
+            spawnEnv[ZCODE_RUNTIME_ENV_KEY] ??
+            runtimeEnv,
+        }),
+        runtimeGeneration,
+        runtimeInstanceId,
         durationMs: Date.now() - startStartedAt,
       });
     });
@@ -1366,6 +1430,13 @@ export class ZCodeAgentProcessManager {
             reason: "ZCODE_AGENT_SERVER_COMMAND is not configured",
           };
     } catch (error) {
+      writeOmpHostDiagnostic("warn", "agent.start.availability.failed", {
+        workspaceKey,
+        workspaceIdentity: params.workspaceIdentity,
+        stage: "command-resolve",
+        errorType: error instanceof Error ? error.name : typeof error,
+        available: false,
+      });
       return {
         available: false,
         workspaceKey,

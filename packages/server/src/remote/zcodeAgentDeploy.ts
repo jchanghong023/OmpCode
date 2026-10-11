@@ -84,7 +84,7 @@ async function shouldSkipZCodeAgentDeploy(params: {
 
   if (!(await params.backend.exists(params.remoteBinaryPath))) {
     params.loggers.logWarn(
-      `[remote-assets] ${params.installer.mode === "remote-download" ? "download required" : "upload required"}: component=${params.componentId} reason=remote wrapper missing path=${params.remoteBinaryPath}`,
+      `[remote-assets] ${params.installer.mode === "remote-download" ? "download required" : "upload required"}: component=${params.componentId} reason=remote wrapper missing`,
     );
     return false;
   }
@@ -94,11 +94,14 @@ async function shouldSkipZCodeAgentDeploy(params: {
       const remoteWrapper = await params.backend.readFile(params.remoteBinaryPath);
       if (!isRemoteAgentBundleWrapperCurrent(remoteWrapper, params.runtimeResourceDir)) {
         params.loggers.logWarn(
-          `[remote-assets] ${params.installer.mode === "remote-download" ? "download required" : "upload required"}: component=${params.componentId} reason=wsl wrapper stale path=${params.remoteBinaryPath}`,
+          `[remote-assets] ${params.installer.mode === "remote-download" ? "download required" : "upload required"}: component=${params.componentId} reason=wsl wrapper stale`,
         );
         return false;
       }
     } catch {
+      params.loggers.logWarn(
+        `[remote-assets] ${params.installer.mode === "remote-download" ? "download required" : "upload required"}: component=${params.componentId} reason=wsl wrapper read failed; redeploy required`,
+      );
       return false;
     }
   }
@@ -106,19 +109,19 @@ async function shouldSkipZCodeAgentDeploy(params: {
   // wrapper 在、但 omp-agent.cjs 缺失（被清理 / 旧部署残留）时也要重新部署。
   if (!(await params.backend.exists(params.remoteBundlePath))) {
     params.loggers.logWarn(
-      `[remote-assets] ${params.installer.mode === "remote-download" ? "download required" : "upload required"}: component=${params.componentId} reason=remote bundle missing path=${params.remoteBundlePath}`,
+      `[remote-assets] ${params.installer.mode === "remote-download" ? "download required" : "upload required"}: component=${params.componentId} reason=remote bundle missing`,
     );
     return false;
   }
   if (!(await params.backend.exists(params.remoteOmpBinaryPath))) {
     params.loggers.logWarn(
-      `[remote-assets] ${params.installer.mode === "remote-download" ? "download required" : "upload required"}: component=${params.componentId} reason=omp binary missing path=${params.remoteOmpBinaryPath}`,
+      `[remote-assets] ${params.installer.mode === "remote-download" ? "download required" : "upload required"}: component=${params.componentId} reason=omp binary missing`,
     );
     return false;
   }
 
   params.loggers.log(
-    `[zcode-agent-deploy] ${ZCODE_AGENT_PROVIDER}: 制品 SHA ${params.expectedArtifactSha256} 已部署，跳过`,
+    `[zcode-agent-deploy] ${ZCODE_AGENT_PROVIDER}: reason=deployed artifact identity matches and remote assets are complete; skip`,
   );
   return true;
 }
@@ -179,10 +182,8 @@ export async function deployZCodeAgentRuntime(
   try {
     expectedArtifactSha256 =
       (await options.installer.resolveComponentSha256?.(componentId)) ?? null;
-  } catch (error) {
-    loggers.logWarn(
-      `[zcode-agent-deploy] ${provider}: 读取 manifest SHA 失败，将重新部署: ${String(error)}`,
-    );
+  } catch {
+    loggers.logWarn(`[zcode-agent-deploy] ${provider}: 读取 manifest SHA 失败，将重新部署`);
   }
 
   if (
@@ -203,6 +204,7 @@ export async function deployZCodeAgentRuntime(
     return;
   }
 
+  const deploymentStartedAt = Date.now();
   loggers.log(`[zcode-agent-deploy] ${provider}: 开始部署 v${runtime.version}...`);
   const forceRefreshRuntimeAsset = Boolean(options.force);
   // 二进制与适配器均就绪后才更新 wrapper 与 live marker，避免半成品被复用。
@@ -241,5 +243,7 @@ export async function deployZCodeAgentRuntime(
       platformArch: options.platformArch,
     });
   }
-  loggers.log(`[zcode-agent-deploy] ${provider}: 部署完成 v${runtime.version}`);
+  loggers.log(
+    `[zcode-agent-deploy] ${provider}: 部署完成 v${runtime.version} durationMs=${Date.now() - deploymentStartedAt}`,
+  );
 }

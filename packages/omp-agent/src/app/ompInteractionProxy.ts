@@ -60,6 +60,12 @@ export class OmpInteractionProxy {
       // 按 targetId 反查等待中的交互并立即按取消收口，不再等本地预算兜底；
       // 回执 cancelled 帧对已 settle 的 omp 侧无害（其 pendingRequests 已删除）。
       const targetId = (request.frame as { targetId?: string }).targetId;
+      if (!targetId)
+        diagnostics.debug("omp.interaction.cancel.unmatched", {
+          sessionId: this.deps.sessionId,
+          ompRequestId: request.frame.id,
+          reason: "target_missing",
+        });
       if (targetId) this.cancelByOmpRequestId(targetId);
       request.respond({ type: "extension_ui_response", id: request.frame.id, cancelled: true });
       return;
@@ -67,6 +73,12 @@ export class OmpInteractionProxy {
     if (method !== "select" && method !== "confirm" && method !== "input" && method !== "editor") {
       // omp 的状态类 UI 事件（notify/setStatus/setWidget/setTitle/set_editor_text）与
       // open_url 在适配层没有宿主呈现面，按取消回执，不让 omp 挂起。
+      diagnostics.debug("omp.interaction.ui.unpresented", {
+        sessionId: this.deps.sessionId,
+        ompRequestId: request.frame.id,
+        method,
+        result: "cancelled",
+      });
       request.respond({ type: "extension_ui_response", id: request.frame.id, cancelled: true });
       return;
     }
@@ -309,6 +321,11 @@ export class OmpInteractionProxy {
       this.settleFrom(interactionId, { action: "cancel" }, "core_cancel");
       return true;
     }
+    diagnostics.debug("omp.interaction.cancel.unmatched", {
+      sessionId: this.deps.sessionId,
+      ompRequestId,
+      reason: "not_waiting",
+    });
     return false;
   }
 

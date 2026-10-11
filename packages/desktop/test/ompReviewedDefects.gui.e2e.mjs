@@ -33,6 +33,13 @@ try {
     );
   assert.ok(page, "Expected an isolated OmpCode renderer page");
   page.setDefaultTimeout(30_000);
+  const rendererProblems = [];
+  page.on("console", (message) => {
+    if (message.type() === "warning" || message.type() === "error") {
+      rendererProblems.push(message.text());
+    }
+  });
+  page.on("pageerror", (error) => rendererProblems.push(error.message));
 
   const model = page.getByTestId("chat-model-select-trigger");
   await model.waitFor({ state: "visible" });
@@ -45,8 +52,18 @@ try {
 
   async function sendAndWait(marker) {
     const prompt = `请只回复 ${marker}，不要使用工具。`;
-    await page.getByTestId("v4-composer-input").fill(prompt);
-    await page.getByTestId("v4-composer-send").click();
+    const input = page.getByTestId("v4-composer-input");
+    const send = page.getByTestId("v4-composer-send");
+    await input.fill(prompt);
+    // 真实悬浮与两轮状态切换覆盖 Tooltip 生命周期，不按实现 key 或文案断言。
+    await send.hover();
+    await page.getByRole("tooltip").waitFor({ state: "visible" });
+    await send.click();
+    await page.getByTestId("v4-stop").hover();
+    await page.getByRole("tooltip").waitFor({ state: "visible" });
+    await captureIsolationScreenshot(join(evidenceDir, `composer-stop-${marker}.png`));
+    await input.hover();
+    await page.getByRole("tooltip").waitFor({ state: "hidden" });
     await page.getByText(marker, { exact: true }).waitFor({ state: "visible", timeout: 90_000 });
     await page.getByTestId("v4-composer-send").waitFor({ state: "visible", timeout: 30_000 });
     return marker;
@@ -96,6 +113,11 @@ try {
     await writeFile(identityReceipt, JSON.stringify({ runId, before, taskTestId }, null, 2));
   }
   await captureIsolationScreenshot(join(evidenceDir, `identity-${phase}-${runId}.png`));
+  assert.deepEqual(
+    rendererProblems,
+    [],
+    "Real conversation transitions must have no renderer problems",
+  );
   console.log(
     `omp GUI identity ${phase}: glm-5.3-flash replies visible; stable task ${taskTestId}`,
   );

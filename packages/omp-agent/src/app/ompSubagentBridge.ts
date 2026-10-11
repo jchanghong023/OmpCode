@@ -6,6 +6,7 @@ import {
 } from "../domain/ompFrames.js";
 import type { ConversationProjection } from "../domain/conversationProjection.js";
 import type { OmpSessionProcess } from "./ports.js";
+import { diagnostics } from "./diagnostics.js";
 import { transcriptFromOmpEntries } from "../domain/coldHistory.js";
 
 type Status = "running" | "success" | "failed" | "cancelled";
@@ -105,11 +106,36 @@ export class OmpSubagentBridge {
   }
 
   async refresh(process: OmpSessionProcess): Promise<void> {
+    const startedAt = Date.now();
     // 新核 get_subagents 快照仅含运行中子代理（终态即从注册表删除，
     // oh-my-pi rpc-subagents.ts），无需 status 过滤；终态目录由投影持久行承载。
-    const outcome = await process.send({ type: "get_subagents" }).catch(() => null);
-    if (this.currentProcess() !== process) return;
+    const outcome = await process.send({ type: "get_subagents" }).catch((error: unknown) => {
+      diagnostics.warn("omp.subagent.refresh.failed", {
+        sessionId: this.projection.sessionId,
+        stage: "get_subagents",
+        resultStatus: "rejected",
+        errorType: error instanceof Error ? error.name : typeof error,
+        elapsedMs: Date.now() - startedAt,
+      });
+      return null;
+    });
+    if (this.currentProcess() !== process) {
+      diagnostics.debug("omp.subagent.refresh.stale", {
+        sessionId: this.projection.sessionId,
+        stage: "process_fence",
+        elapsedMs: Date.now() - startedAt,
+      });
+      return;
+    }
     if (!outcome?.success) {
+      if (outcome)
+        diagnostics.warn("omp.subagent.refresh.failed", {
+          sessionId: this.projection.sessionId,
+          stage: "get_subagents",
+          resultStatus: "failed",
+          code: outcome.code,
+          elapsedMs: Date.now() - startedAt,
+        });
       this.refreshFailed = true;
       this.projection.setSubagentAvailability("unavailable");
       this.flush();
@@ -117,15 +143,46 @@ export class OmpSubagentBridge {
     }
     // 修复（S6-5）：复评成功把可用性翻回 ready——bootstrapProcess 只在进程启动时评一次
     // 可用性，此处仅在发生过 refresh 失败时介入，不覆盖启动时的订阅可用性判定。
-    if (this.refreshFailed) {
+    const recovered = this.refreshFailed;
+    if (recovered) {
       this.refreshFailed = false;
       this.projection.setSubagentAvailability("ready");
     }
     const data = outcome.data as { subagents?: unknown[] } | undefined;
+    let snapshotCount = 0;
+    let validSnapshotCount = 0;
+    let rejectedSnapshotCount = 0;
+    let issueCount = 0;
     for (const raw of data?.subagents ?? []) {
+      snapshotCount += 1;
       const parsed = ompSubagentSnapshotSchema.safeParse(raw);
-      if (parsed.success) this.applySnapshot(parsed.data);
+      if (parsed.success) {
+        validSnapshotCount += 1;
+        this.applySnapshot(parsed.data);
+      } else {
+        rejectedSnapshotCount += 1;
+        issueCount += parsed.error.issues.length;
+      }
     }
+    if (rejectedSnapshotCount > 0)
+      diagnostics.warn("omp.subagent.refresh.decode_failed", {
+        sessionId: this.projection.sessionId,
+        stage: "snapshot_decode",
+        snapshotCount,
+        validSnapshotCount,
+        rejectedSnapshotCount,
+        issueCount,
+        elapsedMs: Date.now() - startedAt,
+      });
+    if (recovered)
+      diagnostics.info("omp.subagent.refresh.recovered", {
+        sessionId: this.projection.sessionId,
+        stage: "get_subagents",
+        snapshotCount,
+        validSnapshotCount,
+        rejectedSnapshotCount,
+        elapsedMs: Date.now() - startedAt,
+      });
   }
 
   /**
@@ -138,8 +195,16 @@ export class OmpSubagentBridge {
     if (!this.refreshFailed) return;
     const process = this.currentProcess();
     if (!process || this.rechecking) return;
+    const startedAt = Date.now();
     this.rechecking = this.refresh(process)
-      .catch(() => {})
+      .catch((error: unknown) => {
+        diagnostics.warn("omp.subagent.refresh.failed", {
+          sessionId: this.projection.sessionId,
+          stage: "refresh_recheck",
+          errorType: error instanceof Error ? error.name : typeof error,
+          elapsedMs: Date.now() - startedAt,
+        });
+      })
       .finally(() => {
         this.rechecking = null;
       });
@@ -183,11 +248,42 @@ export class OmpSubagentBridge {
     const prior = this.records.get(id);
     if (!process || !prior || prior.transcriptText || this.transcriptReads.has(id)) return;
     this.transcriptReads.add(id);
+    const startedAt = Date.now();
     try {
       const outcome = await process
         .send({ type: "get_subagent_messages", subagentId: id })
-        .catch(() => null);
-      if (this.currentProcess() !== process || !outcome?.success) return;
+        .catch((error: unknown) => {
+          diagnostics.warn("omp.subagent.transcript.read.failed", {
+            sessionId: this.projection.sessionId,
+            subagentId: id,
+            stage: "get_subagent_messages",
+            resultStatus: "rejected",
+            errorType: error instanceof Error ? error.name : typeof error,
+            elapsedMs: Date.now() - startedAt,
+          });
+          return null;
+        });
+      if (this.currentProcess() !== process) {
+        diagnostics.debug("omp.subagent.transcript.read.stale", {
+          sessionId: this.projection.sessionId,
+          subagentId: id,
+          stage: "process_fence",
+          elapsedMs: Date.now() - startedAt,
+        });
+        return;
+      }
+      if (!outcome?.success) {
+        if (outcome)
+          diagnostics.warn("omp.subagent.transcript.read.failed", {
+            sessionId: this.projection.sessionId,
+            subagentId: id,
+            stage: "get_subagent_messages",
+            resultStatus: "failed",
+            code: outcome.code,
+            elapsedMs: Date.now() - startedAt,
+          });
+        return;
+      }
       const data = outcome.data as { messages?: unknown[] } | undefined;
       // 真实 IRC/custom 的 content 可以是字符串；按数组 filter 会在子代理结束时崩溃。
       // 复用冷历史文本转换，统一处理字符串/文本块与 custom.display，不执行原生 renderer。

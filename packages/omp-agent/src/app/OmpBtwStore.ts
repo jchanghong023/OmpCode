@@ -15,6 +15,7 @@ import {
   parseBtwViewId,
 } from "../domain/OmpBtwFrames.js";
 import type { OmpBtwFrame, OmpBtwRecord } from "../domain/OmpBtwFrames.js";
+import { btwProjectionStatePatch } from "../domain/OmpBtwProjectionState.js";
 import { createId } from "../domain/ids.js";
 import type { ConversationEngine } from "./conversationEngine.js";
 import { ompSessionIdOfFilePath } from "../domain/ids.js";
@@ -22,6 +23,7 @@ import type { SessionRegistry } from "./sessionRegistry.js";
 import type { HostGateway, OmpSessionProcess, OmpCommandOutcome } from "./ports.js";
 import { ConversationTopicPublisher, type SubscribeOptions } from "./topicPublisher.js";
 import { ProtocolError } from "./errors.js";
+import { diagnostics } from "./diagnostics.js";
 
 interface SideView {
   parent: string;
@@ -114,37 +116,14 @@ export class OmpBtwStore {
     view.record = record;
     view.projection.mergeRows(btwRows(record, view.sources));
     const latest = latestBtwTurn(record);
-    const running = latest.status === "running";
-    view.projection.patchSideViewState({
-      ...(config ? { config } : {}),
-      control: {
-        ...view.projection.stateSnapshot.control,
-        phase: running
-          ? "running"
-          : latest.status === "complete"
-            ? "completedSuccess"
-            : latest.status === "error"
-              ? "error"
-              : "completedInterrupted",
-        canStop: running,
-        stopState: running ? "stoppable" : "idle",
-        stopTargetKind: "assistant",
-        sessionEnded: !running,
-        lastError:
-          latest.status === "error" || latest.status === "interrupted"
-            ? {
-                code: `side_${latest.status}`,
-                message: latest.error ?? latest.status,
-                recoverable: true,
-                at: Date.now(),
-                source: "runtime",
-              }
-            : null,
-      },
-      inputRouting: running
-        ? { mode: "reject", reasonCode: "fault.command.sideSessionRunning" }
-        : { mode: "startNow" },
-    });
+    view.projection.patchSideViewState(
+      btwProjectionStatePatch(
+        view.projection.stateSnapshot.control,
+        latest,
+        latest.status === "error" || latest.status === "interrupted" ? Date.now() : 0,
+        config,
+      ),
+    );
     view.publisher.scheduleFlush(() => {});
   }
 
@@ -168,6 +147,7 @@ export class OmpBtwStore {
               ? { ...view.record, followUps: [...view.record.followUps.slice(0, -1), interrupted] }
               : { ...view.record, ...interrupted },
           );
+          diagnostics.warn("omp.btw.record.interrupted", { recordId: view.recordId });
         }
       return;
     }
@@ -176,6 +156,20 @@ export class OmpBtwStore {
       if (!this.views.has(id)) {
         const engine = this.parents.get(parent)!.engine;
         this.makeView(id, parent, frame.record.id, engine.projection.stateSnapshot.config);
+      }
+    }
+    if (frame.type === "notice")
+      diagnostics.warn("omp.btw.history.notice", { parentSessionId: parent });
+    else if (frame.type === "btw_delta")
+      diagnostics.debug("omp.btw.delta", { recordId: frame.recordId });
+    else {
+      const latest = latestBtwTurn(frame.record);
+      if (latest.status !== "running") {
+        if (latest.status === "complete")
+          diagnostics.info("omp.btw.record.complete", { recordId: frame.record.id });
+        else if (latest.status === "error")
+          diagnostics.error("omp.btw.record.error", { recordId: frame.record.id });
+        else diagnostics.warn("omp.btw.record.terminal", { status: latest.status });
       }
     }
     for (const view of this.views.values()) {
@@ -210,7 +204,8 @@ export class OmpBtwStore {
     }
   }
 
-  private failure(outcome: OmpCommandOutcome): never {
+  private failure(outcome: OmpCommandOutcome, method: string): never {
+    diagnostics.warn("omp.btw.rpc.failed", { method, code: outcome.code });
     const missing = /unknown command|unsupported|not supported/i.test(outcome.error ?? "");
     throw new ProtocolError(
       missing ? -32601 : -32000,
@@ -223,11 +218,14 @@ export class OmpBtwStore {
     const host = engine.subagentProcessHost();
     const process = host.currentProcess()!;
     const serial = this.parents.get(parentId)!.serial;
+    diagnostics.debug("omp.btw.history.started", { parentSessionId: parentId });
     const outcome = await process.send({ type: "get_btw_history" });
-    if (host.currentProcess() !== process)
-      throw new ProtocolError(-32000, "side session process changed");
-    if (!outcome.success) this.failure(outcome);
+    const processChanged = host.currentProcess() !== process;
+    if (processChanged) diagnostics.warn("omp.btw.history.fenced", { parentSessionId: parentId });
+    if (processChanged) throw new ProtocolError(-32000, "side session process changed");
+    if (!outcome.success) this.failure(outcome, "get_btw_history");
     const records = ompBtwHistorySchema.parse(outcome.data).records;
+    diagnostics.info("omp.btw.history.completed", { recordCount: records.length });
     return records.map((record) => {
       const id = btwViewId(parentId, record.id);
       const view =
@@ -303,18 +301,23 @@ export class OmpBtwStore {
     const host = engine.subagentProcessHost();
     const process: OmpSessionProcess = host.currentProcess()!;
     const serial = this.parents.get(view.parent)!.serial;
+    diagnostics.debug("omp.btw.send.started", { commandId: envelope.commandId });
     const outcome = await process.send({
       type: "btw",
       question: payload.text,
       ...(view.recordId ? { recordId: view.recordId } : {}),
     });
-    if (host.currentProcess() !== process)
+    const processChanged = host.currentProcess() !== process;
+    if (processChanged)
+      diagnostics.warn("omp.btw.send.response_fenced", { commandId: envelope.commandId });
+    if (processChanged)
       throw new ProtocolError(
         -32000,
         "side session process changed after admission; recover history",
       );
-    if (!outcome.success) this.failure(outcome);
+    if (!outcome.success) this.failure(outcome, "btw");
     const record = ompBtwResponseSchema.parse(outcome.data).record;
+    diagnostics.info("omp.btw.send.completed", { status: latestBtwTurn(record).status });
     const provisionalId = btwViewId(view.parent, record.id);
     const provisional =
       this.views.get(provisionalId) ?? this.makeView(provisionalId, view.parent, record.id, config);
@@ -335,7 +338,10 @@ export class OmpBtwStore {
     }
     // 首次 BTW 会确保父文件落盘；用真实 UUID 形成可跨进程恢复的地址。
     await process.refreshState();
-    if (host.currentProcess() !== process)
+    const processChangedAfterRefresh = host.currentProcess() !== process;
+    if (processChangedAfterRefresh)
+      diagnostics.warn("omp.btw.send.refresh_fenced", { commandId: envelope.commandId });
+    if (processChangedAfterRefresh)
       throw new ProtocolError(-32000, "side session process changed; recover history");
     const stableParent = ompSessionIdOfFilePath(process.ompSessionFile);
     if (!stableParent)
@@ -365,11 +371,16 @@ export class OmpBtwStore {
     const engine = await this.parent(view.parent);
     const host = engine.subagentProcessHost();
     const process = host.currentProcess()!;
+    diagnostics.debug("omp.btw.cancel.started", { recordId: view.recordId });
     const outcome = await process.send({ type: "btw_cancel", recordId: view.recordId });
-    if (host.currentProcess() !== process)
+    const processChanged = host.currentProcess() !== process;
+    if (processChanged) diagnostics.warn("omp.btw.cancel.fenced", { recordId: view.recordId });
+    if (processChanged)
       throw new ProtocolError(-32000, "side session process changed during cancellation");
-    if (!outcome.success) this.failure(outcome);
-    return ompBtwCancelSchema.parse(outcome.data).cancelled;
+    if (!outcome.success) this.failure(outcome, "btw_cancel");
+    const cancelled = ompBtwCancelSchema.parse(outcome.data).cancelled;
+    diagnostics.info("omp.btw.cancel.completed", { cancelled });
+    return cancelled;
   }
   setConnectionFlowState(connectionId: string, state: "saturated" | "drained" | "closed"): void {
     for (const view of this.views.values())

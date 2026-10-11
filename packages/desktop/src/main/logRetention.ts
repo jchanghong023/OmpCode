@@ -3,8 +3,8 @@ import { join } from "node:path";
 import { maybeThrowInjectedFsFault } from "@zcode/services/node";
 
 export const LOG_RETENTION_DAYS = 14;
-export const LOG_MAX_FILE_BYTES = 1_048_576;
-export const LOG_MAX_FILE_COUNT = 10;
+const LOG_MAX_FILE_BYTES = 1_048_576;
+const LOG_MAX_FILE_COUNT = 10;
 
 const ACTIVE_LOG_FILE_NAME_RE = /^(\d{4})-(\d{2})-(\d{2})\.log$/;
 const HISTORY_LOG_FILE_NAME_RE = /^(\d{4})-(\d{2})-(\d{2})\.([1-9]\d*)\.log$/;

@@ -25,7 +25,7 @@ export function hostRequestContext(
   return context;
 }
 
-export function safeResultSummary(value: unknown): Record<string, unknown> {
+function safeResultSummary(value: unknown): Record<string, unknown> {
   if (value === null || value === undefined) return { resultType: "empty" };
   if (Array.isArray(value)) return { resultType: "array", resultCount: value.length };
   if (typeof value !== "object") return { resultType: typeof value };

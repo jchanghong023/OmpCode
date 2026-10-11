@@ -1987,7 +1987,25 @@ app.whenReady().then(async () => {
     reconcileKeepAwakeBlocker();
   } catch {
     // 读取失败不影响启动，使用默认 homedir
+    logger.warn("omp.profile.bootstrap.unavailable", {
+      event: "omp.profile.bootstrap.unavailable",
+      failureStage: "bootstrap_settings_read",
+      fallback: "launch_or_inherited_profile",
+    });
   }
+  // 日志与实际配置解析一致：OMP_PROFILE 未定义时仍会回落到 PI_PROFILE。
+  logger.info("omp.profile.selected", {
+    event: "omp.profile.selected",
+    source:
+      launchProfile !== undefined
+        ? "launch_override"
+        : bootstrapSettings?.ompProfile !== undefined
+          ? "persisted_setting"
+          : process.env.OMP_PROFILE !== undefined || process.env.PI_PROFILE !== undefined
+            ? "inherited_environment"
+            : "default",
+    configured: Boolean((process.env.OMP_PROFILE ?? process.env.PI_PROFILE)?.trim()),
+  });
 
   // scheduler 也会打开 tasks-index；等 Host 完成统一准备，避免在启动页出现前抢先迁移。
   configureDatabaseStartupQuit(() => {

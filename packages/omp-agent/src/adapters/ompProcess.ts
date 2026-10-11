@@ -219,6 +219,7 @@ class OmpChildProcess implements OmpSessionProcess {
 
   readContextReport(): Promise<OmpContextReport | null> {
     if (this.contextRead) return this.contextRead;
+    const startedAt = Date.now();
     const output: string[] = [];
     this.contextOutput = output;
     const work = (async () => {
@@ -230,16 +231,25 @@ class OmpChildProcess implements OmpSessionProcess {
         });
         const response = this.request({ type: "prompt", message: "/context" }, 5_000);
         this.contextResult = { id: `omp-req-${this.commandCounter}`, resolve: resolveLocal };
+        const requestId = this.contextResult.id;
+        // 核心 ID 单独记录，不能覆盖上下文中的 Host requestId。
         timer = setTimeout(() => resolveLocal(false), 5_000);
         timer.unref?.();
         const outcome = await response;
-        if (!outcome.success || (outcome.data as { agentInvoked?: boolean } | undefined)?.agentInvoked === true) return null;
-        if ((outcome.data as { agentInvoked?: boolean } | undefined)?.agentInvoked !== false && !(await localResult)) return null;
+        if (!outcome.success || (outcome.data as { agentInvoked?: boolean } | undefined)?.agentInvoked === true) {
+          logger.warn("omp_core_context_read_unavailable", { ...this.coreFields(), event: "omp_core_context_read_unavailable", ompRequestId: requestId, stage: !outcome.success ? "rpc_rejected" : "nonlocal_agent_invoked", elapsedMs: Date.now() - startedAt });
+          return null;
+        }
+        if ((outcome.data as { agentInvoked?: boolean } | undefined)?.agentInvoked !== false && !(await localResult)) {
+          logger.warn("omp_core_context_read_unavailable", { ...this.coreFields(), event: "omp_core_context_read_unavailable", ompRequestId: requestId, stage: "report_wait_timeout", elapsedMs: Date.now() - startedAt });
+          return null;
+        }
         const report = parseOmpContextReport(output.join("\n"));
-        if (!report) logger.warn("omp_core_context_decode_failed", { ...this.coreFields(), event: "omp_core_context_decode_failed", stage: "context_decode", outputLineCount: output.length });
+        if (!report) logger.warn("omp_core_context_decode_failed", { ...this.coreFields(), event: "omp_core_context_decode_failed", stage: "context_decode", ompRequestId: requestId, outputLineCount: output.length, elapsedMs: Date.now() - startedAt });
+        else logger.debug("omp_core_context_read_completed", { ...this.coreFields(), event: "omp_core_context_read_completed", stage: "completed", ompRequestId: requestId, contextWindow: report.contextWindow, entryCount: report.entries.length, elapsedMs: Date.now() - startedAt });
         return report;
       } catch (error) {
-        logger.warn("omp_core_context_read_failed", { ...this.coreFields(), event: "omp_core_context_read_failed", stage: "context_read", error });
+        logger.warn("omp_core_context_read_failed", { ...this.coreFields(), event: "omp_core_context_read_failed", stage: "context_read", ompRequestId: this.contextResult?.id, errorType: error instanceof Error ? error.name : typeof error, elapsedMs: Date.now() - startedAt });
         return null;
       } finally {
         if (timer) clearTimeout(timer);
@@ -304,9 +314,13 @@ class OmpChildProcess implements OmpSessionProcess {
   }
   respondUi(response: OmpBypassFrame): void {
     const child = this.child;
-    if (!child || child.killed || !child.stdin.writable) return;
+    if (!child || child.killed || !child.stdin.writable) {
+      logger.warn("omp_core_ui_response_failed", { ...this.coreFields(), event: "omp_core_ui_response_failed", ompRequestId: response.id, stage: !child ? "child_unavailable" : child.killed ? "child_killed" : "stdin_unwritable" });
+      return;
+    }
     child.stdin.write(encodeJsonlLine(response), (error) => {
-      if (error) logger.warn("omp_core_ui_response_failed", { ...this.coreFields(), event: "omp_core_ui_response_failed", stage: "send", error });
+      if (error) logger.warn("omp_core_ui_response_failed", { ...this.coreFields(), event: "omp_core_ui_response_failed", ompRequestId: response.id, stage: "write_callback", errorType: error instanceof Error ? error.name : typeof error });
+      else logger.debug("omp_core_ui_response_completed", { ...this.coreFields(), event: "omp_core_ui_response_completed", ompRequestId: response.id, stage: "write_callback" });
     });
   }
   async refreshState(): Promise<OmpStateData | null> {

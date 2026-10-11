@@ -50,14 +50,6 @@ function applyState(next: OfflineGateState): void {
   for (const listener of listeners) listener();
 }
 
-/**
- * 渲染前的早期日志等同步消费口；状态到达前的窗口期按未锁定处理（缺省安全侧），
- * 真实锁定应答到达后立即收敛为 error-only（centos7-performance.md）。
- */
-export function isOfflineLocked(): boolean {
-  return currentState.localOnly;
-}
-
 let primedPlatform: IPlatformService | null = null;
 
 /**

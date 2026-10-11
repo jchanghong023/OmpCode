@@ -1,19 +1,16 @@
 import type {
-  ZCodeAgentInteractionAgent,
   ZCodeAgentInteractionCoverage,
   ZCodeSessionAgentInteractionsResult,
 } from "@zcode/shared";
 import {
   childrenFromInteractionRecords,
-  observationsFromInteractionRecords,
-  interactionChildId,
   type InteractionChild,
   type InteractionSource,
 } from "../domain/OmpAgentInteractionRecords.js";
-import { mergeInteractionObservations } from "../domain/OmpAgentInteractionMerge.js";
-import { buildOmpSubagentViewId } from "../domain/ompViewIds.js";
+import { buildInteractionSnapshot } from "../domain/OmpAgentInteractionSnapshot.js";
 import { ompSessionIdOfFilePath } from "../domain/ids.js";
 import { ProtocolError } from "./errors.js";
+import { diagnostics } from "./diagnostics.js";
 import { ompHistoryOutcome } from "../domain/OmpSubagentHistory.js";
 import type { ConversationEngine } from "./conversationEngine.js";
 import type { OmpStorePort, OmpSessionProcess } from "./ports.js";
@@ -73,18 +70,40 @@ export class OmpAgentInteractionStore {
       };
       this.states.set(engine, state);
     }
+    const startedAt = Date.now();
     let snapshot: Snapshot;
     let offset = 0;
     if (cursor) {
       const match = /^(\d+):(\d+)$/.exec(cursor);
-      if (!match) throw new ProtocolError(-32602, "invalid agent interaction cursor");
+      if (!match) {
+        diagnostics.warn("omp.agent_interactions.cursor.rejected", {
+          sessionId: engine.sessionId,
+          failureStage: "cursor_format",
+          protocolCode: -32602,
+        });
+        throw new ProtocolError(-32602, "invalid agent interaction cursor");
+      }
       const stored = state.snapshots.get(Number(match[1]));
-      if (!stored)
+      if (!stored) {
+        diagnostics.warn("omp.agent_interactions.cursor.expired", {
+          sessionId: engine.sessionId,
+          protocolCode: -32009,
+          currentRevision: state.revision,
+          snapshotCount: state.snapshots.size,
+        });
         throw new ProtocolError(-32009, "agent interaction snapshot expired; restart query");
+      }
       snapshot = stored;
       offset = Number(match[2]);
-      if (!Number.isSafeInteger(offset) || offset > snapshot.totalEvents)
+      if (!Number.isSafeInteger(offset) || offset > snapshot.totalEvents) {
+        diagnostics.warn("omp.agent_interactions.cursor.rejected", {
+          sessionId: engine.sessionId,
+          failureStage: "cursor_offset",
+          protocolCode: -32602,
+          totalEventCount: snapshot.totalEvents,
+        });
         throw new ProtocolError(-32602, "invalid agent interaction cursor");
+      }
     } else {
       const target = state;
       if (!target.loading)
@@ -93,14 +112,35 @@ export class OmpAgentInteractionStore {
         });
       snapshot = await target.loading;
     }
-    if (!isCurrent())
+    if (!isCurrent()) {
+      diagnostics.warn("omp.agent_interactions.query.stale", {
+        sessionId: engine.sessionId,
+        revision: snapshot.revision,
+        protocolCode: -32004,
+        failureStage: "process_fence",
+      });
       throw new ProtocolError(-32004, "agent interaction session changed during read");
+    }
     const end = Math.min(offset + limit, snapshot.totalEvents);
-    return {
+    const events = snapshot.events.slice(offset, end);
+    const hasNextPage = end < snapshot.totalEvents;
+    const result = {
       ...snapshot,
-      events: snapshot.events.slice(offset, end),
-      ...(end < snapshot.totalEvents ? { nextCursor: `${snapshot.revision}:${end}` } : {}),
+      events,
+      ...(hasNextPage ? { nextCursor: `${snapshot.revision}:${end}` } : {}),
     };
+    diagnostics.debug("omp.agent_interactions.query.page", {
+      sessionId: engine.sessionId,
+      revision: snapshot.revision,
+      offset,
+      limit,
+      pageEventCount: events.length,
+      totalEventCount: snapshot.totalEvents,
+      hasNextPage,
+      coverageStatus: snapshot.coverage.status,
+      elapsedMs: Date.now() - startedAt,
+    });
+    return result;
   }
 
   private async readFile(
@@ -110,6 +150,13 @@ export class OmpAgentInteractionStore {
   ): Promise<CachedFile> {
     const key = `${path}\0${ancestry.join("/")}`;
     const prior = state.files.get(key);
+    const readStartedAt = Date.now();
+    const readMode = this.store.readInteractionEntries ? "versioned" : "legacy";
+    diagnostics.debug("omp.agent_interactions.history_read.started", {
+      ancestryDepth: ancestry.length,
+      cacheHit: Boolean(prior),
+      readMode,
+    });
     if (this.store.readInteractionEntries) {
       const current = await this.store.readInteractionEntries(path, ancestry, prior?.version);
       const result: CachedFile = {
@@ -120,6 +167,18 @@ export class OmpAgentInteractionStore {
           current.truncated ??
           (current.entries === undefined ? (prior?.truncated ?? false) : false),
       };
+      const fields = {
+        ancestryDepth: ancestry.length,
+        cacheHit: Boolean(prior),
+        entryCount: result.entries.length,
+        available: result.available,
+        truncated: result.truncated,
+        versionChanged: prior ? current.version !== prior.version : undefined,
+        elapsedMs: Date.now() - readStartedAt,
+      };
+      if (result.available && !result.truncated)
+        diagnostics.debug("omp.agent_interactions.history_read.completed", fields);
+      else diagnostics.warn("omp.agent_interactions.history_read.completed", fields);
       state.files.set(key, result);
       return result;
     }
@@ -129,6 +188,14 @@ export class OmpAgentInteractionStore {
         : ancestry.length === 1
           ? await this.store.readSubagentEntries(path, ancestry[0]!)
           : [];
+    diagnostics.debug("omp.agent_interactions.history_read.completed", {
+      ancestryDepth: ancestry.length,
+      cacheHit: Boolean(prior),
+      readMode,
+      readAttempted: ancestry.length <= 1,
+      entryCount: entries.length,
+      elapsedMs: Date.now() - readStartedAt,
+    });
     // 兼容测试端口只承担已有直接子代理入口；生产端口提供逐级受控后代读取。
     return {
       version: JSON.stringify(entries),
@@ -139,14 +206,28 @@ export class OmpAgentInteractionStore {
   }
 
   private async refresh(engine: ConversationEngine, state: State): Promise<Snapshot> {
+    const refreshStartedAt = Date.now();
+    diagnostics.debug("omp.agent_interactions.refresh.started", {
+      sessionId: engine.sessionId,
+      revision: state.revision,
+      fileCacheCount: state.files.size,
+      snapshotCount: state.snapshots.size,
+    });
     const rootPath = engine.ompSessionFile;
     const rootSessionId = (rootPath ? ompSessionIdOfFilePath(rootPath) : null) ?? engine.sessionId;
     const directory = engine.projection?.subagentDirectory(0, 256);
     const processHost = engine.subagentProcessHost?.();
     const currentProcess = processHost?.currentProcess() ?? null;
     if (state.sourceProcess !== currentProcess) {
+      const previousProcessPresent = state.sourceProcess != null;
       state.sourceProcess = currentProcess;
       state.processRevision += 1;
+      diagnostics.debug("omp.agent_interactions.process_fence.changed", {
+        sessionId: engine.sessionId,
+        processRevision: state.processRevision,
+        previousProcessPresent,
+        processPresent: currentProcess !== null,
+      });
     }
     const issues = new Set<Issue>(["legacy_history_gaps"]);
     if (engine.agentInteractions.truncated) issues.add("read_budget_exceeded");
@@ -231,75 +312,42 @@ export class OmpAgentInteractionStore {
     }
     const signature = versions.join("\0");
     const previous = state.snapshots.get(state.revision);
-    if (previous && state.signature === signature) return previous;
-    const agents = new Map<string, ZCodeAgentInteractionAgent>([
-      ["main", { id: "main", label: "main", known: true }],
-    ]);
-    const aliases = new Map<string, string[]>();
-    for (const child of children.values()) {
-      const { rawId, ancestry, statusAt: _statusAt, ...agent } = child;
-      const observedStatus = observedStatuses.get(child.id);
-      agents.set(agent.id, {
-        ...agent,
-        // 冷订阅可能仅启动 Main；只有同一进程观察到此 child 才能证明当前运行态。
-        status:
-          observedStatus ?? (terminalStatuses.has(agent.status ?? "") ? agent.status : "unknown"),
-        ...(ancestry.length === 1
-          ? { detailSessionId: buildOmpSubagentViewId(rootSessionId, rawId) }
-          : {}),
+    if (previous && state.signature === signature) {
+      diagnostics.debug("omp.agent_interactions.refresh.reused", {
+        sessionId: engine.sessionId,
+        revision: previous.revision,
+        totalEventCount: previous.totalEvents,
+        coverageStatus: previous.coverage.status,
+        coverageIssues: previous.coverage.issues,
       });
-      aliases.set(rawId, [...(aliases.get(rawId) ?? []), agent.id]);
+      return previous;
     }
-    // 直接子代理状态复用既有会话投影 owner；不把旧 task.progress 快照当成当前运行态。
-    for (const item of [...(directory?.running ?? []), ...(directory?.ended.items ?? [])]) {
-      if (!item.agentId) continue;
-      const agent = agents.get(interactionChildId("main", item.agentId));
-      if (agent?.parentAgentId !== "main") continue;
-      if (
-        !terminalStatuses.has(agent.status ?? "") &&
-        agent.status === "unknown" &&
-        terminalStatuses.has(item.status)
-      ) {
-        agents.set(agent.id, { ...agent, status: item.status });
-      }
-    }
-    const resolveAgent = (rawId: string): string => {
-      if (rawId === "$root" || rawId === "Main") return "main";
-      if (rawId === "main" && !aliases.has(rawId)) return "main";
-      if (rawId.includes("/") && agents.has(rawId)) return rawId;
-      const candidates = aliases.get(rawId) ?? [];
-      if (candidates.length === 1) return candidates[0]!;
-      const id = candidates.length > 1 ? `unknown:${rawId}` : rawId;
-      if (candidates.length > 1) issues.add("ambiguous_identity");
-      if (!agents.has(id)) agents.set(id, { id, label: rawId, known: false });
-      return id;
-    };
-    const sources = [
-      ...history,
-      ...live.map((source) => ({ ...source, agentId: resolveAgent(source.agentId) })),
-    ];
-    const observations = sources.flatMap((source) =>
-      observationsFromInteractionRecords(source, {
-        resolveAgent,
-        knownChild: (parentId, rawId) => {
-          const id = interactionChildId(parentId, rawId);
-          return children.has(id) ? id : undefined;
-        },
-      }),
-    );
-    const events = mergeInteractionObservations(observations, issues);
-    const snapshot: Snapshot = {
+    const snapshot = buildInteractionSnapshot({
       rootSessionId,
       revision: state.revision + 1,
-      agents: [...agents.values()],
-      events,
-      coverage: { status: issues.size ? "partial" : "complete", issues: [...issues].sort() },
-      totalEvents: events.length,
-    };
+      children,
+      observedStatuses,
+      terminalStatuses,
+      directory,
+      history,
+      live,
+      issues,
+    });
     state.signature = signature;
     state.revision = snapshot.revision;
     state.snapshots.set(snapshot.revision, snapshot);
     while (state.snapshots.size > 2) state.snapshots.delete(state.snapshots.keys().next().value!);
+    diagnostics.debug("omp.agent_interactions.refresh.completed", {
+      sessionId: engine.sessionId,
+      revision: snapshot.revision,
+      agentCount: snapshot.agents.length,
+      historySourceCount: history.length,
+      liveSourceCount: live.length,
+      totalEventCount: snapshot.totalEvents,
+      coverageStatus: snapshot.coverage.status,
+      coverageIssues: snapshot.coverage.issues,
+      elapsedMs: Date.now() - refreshStartedAt,
+    });
     return snapshot;
   }
 }

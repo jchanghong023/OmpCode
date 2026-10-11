@@ -66,6 +66,14 @@ export async function diagnosticOperation<T>(
       elapsedMs: Date.now() - startedAt,
       success: !failed,
       failureStage: failed ? "operation_result" : undefined,
+      errorCode:
+        failed &&
+        typeof result === "object" &&
+        result !== null &&
+        "code" in result &&
+        (typeof result.code === "string" || typeof result.code === "number")
+          ? result.code
+          : undefined,
     };
     if (failed) diagnostics.error(`${event}.failed`, summary);
     else diagnostics.info(`${event}.completed`, summary);
@@ -172,7 +180,7 @@ export function observeProjectedEvent(
   diagnostics.debug("omp.turn.activity", { ...turnContext(projection), criterion: event.type });
 }
 
-export function logDiagnosticFailure(
+function logDiagnosticFailure(
   event: string,
   fields: Record<string, unknown>,
   error: unknown,

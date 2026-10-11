@@ -36,17 +36,44 @@ export function createWorkspaceConfigLoader(
       const [modelsOutcome, levelsOutcome, commandsOutcome, state] = await Promise.all([
         directory.send({ type: "get_available_models" }),
         directory.send({ type: "get_available_thinking_levels" }),
-        directory.send({ type: "get_available_commands" }).catch((error) => ({
+        directory.send({ type: "get_available_commands" }).catch((error: unknown) => ({
           success: false as const,
           error: String(error),
         })),
         // 目录进程 --no-session：get_state 仍返回进程级模型事实（探测探针已验证）。
         sendStateQuery(),
       ]);
+      if (!modelsOutcome.success) {
+        logger.warn("workspace config model catalog fallback", {
+          event: "omp.workspace_config.models.fallback",
+          stage: "models_rpc",
+          reason: "rpc_failure",
+          errorType: modelsOutcome.error === undefined ? "unknown" : typeof modelsOutcome.error,
+          fallbackStatus: "empty_list",
+          fallbackCount: 0,
+        });
+      }
+      if (!levelsOutcome.success) {
+        logger.warn("workspace config thinking levels fallback", {
+          event: "omp.workspace_config.thinking_levels.fallback",
+          stage: "thinking_levels_rpc",
+          reason: "rpc_failure",
+          errorType: levelsOutcome.error === undefined ? "unknown" : typeof levelsOutcome.error,
+          fallbackStatus: "empty_list",
+          fallbackCount: 0,
+        });
+      }
       const models = modelsOutcome.success ? parseModels(modelsOutcome.data) : [];
       const levels = levelsOutcome.success ? parseLevels(levelsOutcome.data) : [];
       if (!commandsOutcome.success) {
-        logger.warn("omp 命令目录加载失败", { error: commandsOutcome.error });
+        logger.warn("workspace config command catalog fallback", {
+          event: "omp.workspace_config.command_catalog.fallback",
+          stage: "command_catalog_rpc",
+          reason: "rpc_failure",
+          errorType: typeof commandsOutcome.error,
+          fallbackStatus: "empty_list",
+          fallbackCount: 0,
+        });
       }
       const slashCommands = commandsOutcome.success
         ? slashCommandsOfResponse(commandsOutcome.data)
@@ -58,17 +85,55 @@ export function createWorkspaceConfigLoader(
           : "";
       return buildConfigState(models, levels, currentValue, slashCommands, state?.thinkingLevel);
     } catch (error) {
-      logger.warn("workspace-config 目录加载失败", { error: String(error) });
+      logger.warn("workspace config fallback", {
+        event: "omp.workspace_config.load.fallback",
+        stage: "configuration_load",
+        reason: "operation_exception",
+        errorType: error instanceof Error ? error.name : typeof error,
+        fallbackStatus: "empty_config",
+        configOptionCount: 0,
+        slashCommandCount: 0,
+      });
       return { configOptions: [], slashCommands: [] };
     }
   }
 
   /** get_state 在目录进程（--no-session）上仍返回进程级模型事实（探测探针已验证）。 */
   async function sendStateQuery() {
-    const outcome = await directory.send({ type: "get_state" }).catch(() => null);
-    if (!outcome?.success) return null;
+    const outcome = await directory.send({ type: "get_state" }).catch((error: unknown) => {
+      logger.warn("workspace config state fallback", {
+        event: "omp.workspace_config.state.fallback",
+        stage: "state_rpc",
+        reason: "transport_failure",
+        errorType: error instanceof Error ? error.name : typeof error,
+        fallbackStatus: "default_selection",
+      });
+      return null;
+    });
+    if (!outcome) return null;
+    if (!outcome.success) {
+      logger.warn("workspace config state fallback", {
+        event: "omp.workspace_config.state.fallback",
+        stage: "state_rpc",
+        reason: "rpc_failure",
+        errorType: outcome.error === undefined ? "unknown" : typeof outcome.error,
+        fallbackStatus: "default_selection",
+      });
+      return null;
+    }
     const parsed = ompStateDataSchema.safeParse(outcome.data);
-    return parsed.success ? parsed.data : null;
+    if (!parsed.success) {
+      logger.warn("workspace config state rejected", {
+        event: "omp.workspace_config.state.rejected",
+        stage: "state_schema",
+        reason: "schema_rejected",
+        resultType: outcome.data === null ? "null" : typeof outcome.data,
+        issueCount: parsed.error.issues.length,
+        fallbackStatus: "default_selection",
+      });
+      return null;
+    }
+    return parsed.data;
   }
 
   async function loadSkillCommands(): Promise<unknown> {
@@ -94,7 +159,18 @@ function parseModels(data: unknown): {
   defaultThoughtLevel?: string;
 }[] {
   const record = typeof data === "object" && data !== null ? (data as { models?: unknown }) : {};
-  const models = Array.isArray(record.models) ? record.models : [];
+  if (!Array.isArray(record.models)) {
+    logger.warn("workspace config model catalog rejected", {
+      event: "omp.workspace_config.models.rejected",
+      stage: "catalog_schema",
+      reason: record.models === undefined ? "list_missing" : "list_not_array",
+      resultType: record.models === null ? "null" : typeof record.models,
+      containerType: data === null ? "null" : typeof data,
+      rejectedCount: 1,
+    });
+    return [];
+  }
+  const models = record.models;
   const output: {
     provider: string;
     id: string;
@@ -102,39 +178,81 @@ function parseModels(data: unknown): {
     thoughtLevels?: string[];
     defaultThoughtLevel?: string;
   }[] = [];
+  let schemaRejectedCount = 0;
+  let schemaIssueCount = 0;
+  let requiredFieldRejectedCount = 0;
   for (const entry of models) {
     const parsed = ompModelCatalogEntrySchema.safeParse(entry);
-    if (parsed.success && parsed.data.provider && parsed.data.id) {
-      // omp Model 使用 thinking.efforts；旧 reasoning.levels 不是 RPC 模型目录字段。
-      const thinking = (entry as { thinking?: { efforts?: unknown; defaultLevel?: unknown } })
-        .thinking;
-      const effortLevels = Array.isArray(thinking?.efforts)
-        ? thinking.efforts.filter((level): level is string => typeof level === "string")
-        : undefined;
-      const thoughtLevels = effortLevels?.length
-        ? ["off", ...effortLevels.filter((level) => level !== "off")]
-        : undefined;
-      const defaultThoughtLevel =
-        typeof thinking?.defaultLevel === "string" && effortLevels?.includes(thinking.defaultLevel)
-          ? thinking.defaultLevel
-          : effortLevels?.[0];
-      output.push({
-        provider: parsed.data.provider,
-        id: parsed.data.id,
-        name: parsed.data.name,
-        thoughtLevels,
-        defaultThoughtLevel,
-      });
+    if (!parsed.success) {
+      schemaRejectedCount += 1;
+      schemaIssueCount += parsed.error.issues.length;
+      continue;
     }
+    if (!parsed.data.provider || !parsed.data.id) {
+      requiredFieldRejectedCount += 1;
+      continue;
+    }
+    // omp Model 使用 thinking.efforts；旧 reasoning.levels 不是 RPC 模型目录字段。
+    const thinking = (entry as { thinking?: { efforts?: unknown; defaultLevel?: unknown } })
+      .thinking;
+    const effortLevels = Array.isArray(thinking?.efforts)
+      ? thinking.efforts.filter((level): level is string => typeof level === "string")
+      : undefined;
+    const thoughtLevels = effortLevels?.length
+      ? ["off", ...effortLevels.filter((level) => level !== "off")]
+      : undefined;
+    const defaultThoughtLevel =
+      typeof thinking?.defaultLevel === "string" && effortLevels?.includes(thinking.defaultLevel)
+        ? thinking.defaultLevel
+        : effortLevels?.[0];
+    output.push({
+      provider: parsed.data.provider,
+      id: parsed.data.id,
+      name: parsed.data.name,
+      thoughtLevels,
+      defaultThoughtLevel,
+    });
+  }
+  const rejectedCount = schemaRejectedCount + requiredFieldRejectedCount;
+  if (rejectedCount > 0) {
+    logger.warn("workspace config model entries rejected", {
+      event: "omp.workspace_config.models.rejected",
+      stage: "entry_schema",
+      reason: "invalid_entries",
+      entryCount: models.length,
+      rejectedCount,
+      schemaIssueCount,
+      requiredFieldRejectedCount,
+    });
   }
   return output;
 }
 
 function parseLevels(data: unknown): string[] {
   const record = typeof data === "object" && data !== null ? (data as { levels?: unknown }) : {};
-  return Array.isArray(record.levels)
-    ? record.levels.filter((level): level is string => typeof level === "string")
-    : [];
+  if (!Array.isArray(record.levels)) {
+    logger.warn("workspace config thinking levels rejected", {
+      event: "omp.workspace_config.thinking_levels.rejected",
+      stage: "list_schema",
+      reason: record.levels === undefined ? "list_missing" : "list_not_array",
+      resultType: record.levels === null ? "null" : typeof record.levels,
+      containerType: data === null ? "null" : typeof data,
+      rejectedCount: 1,
+    });
+    return [];
+  }
+  const levels = record.levels.filter((level): level is string => typeof level === "string");
+  const rejectedCount = record.levels.length - levels.length;
+  if (rejectedCount > 0) {
+    logger.warn("workspace config thinking levels rejected", {
+      event: "omp.workspace_config.thinking_levels.rejected",
+      stage: "entry_schema",
+      reason: "non_string_entries",
+      entryCount: record.levels.length,
+      rejectedCount,
+    });
+  }
+  return levels;
 }
 
 function buildConfigState(

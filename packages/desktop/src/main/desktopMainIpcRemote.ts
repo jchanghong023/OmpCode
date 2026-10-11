@@ -154,6 +154,7 @@ function shouldKeepCodingPlanOpenExternalInWebview(currentUrl: string, targetUrl
 
 export function registerRemoteIpcHandlers(options: {
   logger: {
+    debug?: (...args: unknown[]) => void;
     info: (...args: unknown[]) => void;
     warn: (...args: unknown[]) => void;
     error: (...args: unknown[]) => void;
@@ -321,7 +322,8 @@ export function registerRemoteIpcHandlers(options: {
 
   // omp 换核（FORK.md）：模型管理事实源在 omp 侧。用系统编辑器打开用户 omp 模型配置；
   // 文件不存在时显式报错，绝不代写用户 omp 配置。
-  ipcMain.handle(PlatformChannels.OpenOmpModelConfig, async () => {
+  ipcMain.handle(PlatformChannels.OpenOmpModelConfig, async (event) => {
+    const senderId = event.sender.id;
     const configPath = resolveOmpModelRolesConfigPath();
     if (
       !(await access(configPath).then(
@@ -329,45 +331,142 @@ export function registerRemoteIpcHandlers(options: {
         () => false,
       ))
     ) {
+      options.logger.warn("OMP 配置打开被拒绝", {
+        event: "omp.config.ipc.open",
+        operation: "open_config",
+        senderId,
+        success: false,
+        failureStage: "config_access",
+        errorType: "config_missing",
+      });
       return { success: false, error: "omp_config_missing" };
     }
     const message = await shell.openPath(configPath);
-    return message ? { success: false, error: message } : { success: true };
+    if (message) {
+      options.logger.warn("OMP 配置打开失败", {
+        event: "omp.config.ipc.open",
+        operation: "open_config",
+        senderId,
+        success: false,
+        failureStage: "shell_open",
+        errorType: "shell_open_failed",
+      });
+      return { success: false, error: message };
+    }
+    options.logger.info("OMP 配置已打开", {
+      event: "omp.config.ipc.open",
+      operation: "open_config",
+      senderId,
+      success: true,
+    });
+    return { success: true };
   });
   // omp modelRoles 读取：yaml Document 解析，只取 modelRoles 映射。
-  ipcMain.handle(PlatformChannels.ReadOmpModelRoles, async () => {
-    const configPath = resolveOmpModelRolesConfigPath();
-    return readOmpModelRolesConfig(configPath);
-  });
-  ipcMain.handle(PlatformChannels.ReadOmpNativeIntegrations, async (_event, payload: unknown) => {
-    const parsed = z.object({ workspacePath: z.string().min(1).optional() }).safeParse(payload);
-    if (!parsed.success) return { success: false, error: "invalid_workspace_path" };
-    try {
-      return {
+  ipcMain.handle(PlatformChannels.ReadOmpModelRoles, async (event) => {
+    const result = await readOmpModelRolesConfig(resolveOmpModelRolesConfigPath());
+    if (result.success) {
+      options.logger.debug?.("OMP modelRoles 配置读取完成", {
+        event: "omp.config.ipc.read_roles",
+        operation: "read_roles",
+        senderId: event.sender.id,
         success: true,
-        snapshot: await readOmpNativeIntegrations({
-          agentDir: dirname(resolveOmpModelRolesConfigPath()),
-          workspacePath: parsed.data.workspacePath,
-        }),
+        roleCount: result.roles.length,
+      });
+    } else {
+      options.logger.warn("OMP modelRoles 配置读取失败", {
+        event: "omp.config.ipc.read_roles",
+        operation: "read_roles",
+        senderId: event.sender.id,
+        success: false,
+        failureStage: "config_read",
+        errorType: "config_read_failed",
+      });
+    }
+    return result;
+  });
+  ipcMain.handle(PlatformChannels.ReadOmpNativeIntegrations, async (event, payload: unknown) => {
+    const parsed = z.object({ workspacePath: z.string().min(1).optional() }).safeParse(payload);
+    if (!parsed.success) {
+      options.logger.warn("OMP 原生集成读取被拒绝", {
+        event: "omp.config.ipc.read_native_integrations",
+        operation: "read_native_integrations",
+        senderId: event.sender.id,
+        success: false,
+        failureStage: "payload_validation",
+        errorType: "invalid_workspace_path",
+      });
+      return { success: false, error: "invalid_workspace_path" };
+    }
+    try {
+      const snapshot = await readOmpNativeIntegrations({
+        agentDir: dirname(resolveOmpModelRolesConfigPath()),
+        workspacePath: parsed.data.workspacePath,
+      });
+      const fields = {
+        event: "omp.config.ipc.read_native_integrations",
+        operation: "read_native_integrations",
+        senderId: event.sender.id,
+        success: true,
+        extensionCount: snapshot.extensions.length,
+        hookCount: snapshot.hooks.length,
+        mcpServerCount: snapshot.mcpServers.length,
+        hookErrorCount: snapshot.hookErrors.length,
+        configErrorCount: snapshot.configErrors.length,
       };
-    } catch {
+      if (snapshot.hookErrors.length > 0 || snapshot.configErrors.length > 0) {
+        options.logger.warn("OMP 原生集成配置存在读取错误", {
+          ...fields,
+          failureStage: "config_inspection",
+          errorType: "invalid_config_entries",
+        });
+      } else {
+        options.logger.debug?.("OMP 原生集成读取完成", fields);
+      }
+      return { success: true, snapshot };
+    } catch (error) {
+      options.logger.warn("OMP 原生集成读取失败", {
+        event: "omp.config.ipc.read_native_integrations",
+        operation: "read_native_integrations",
+        senderId: event.sender.id,
+        success: false,
+        failureStage: "read_snapshot",
+        errorType: error instanceof Error ? error.name : typeof error,
+      });
       return { success: false, error: "omp_integrations_load_failed" };
     }
   });
-  ipcMain.handle(PlatformChannels.ListOmpProfiles, async () => {
+  ipcMain.handle(PlatformChannels.ListOmpProfiles, async (event) => {
     try {
+      const profiles = await listOmpProfiles();
+      const activeProfile = resolveOmpProfileFromEnv(process.env);
+      options.logger.debug?.("OMP profile 列表读取完成", {
+        event: "omp.config.ipc.list_profiles",
+        operation: "list_profiles",
+        senderId: event.sender.id,
+        success: true,
+        profileCount: profiles.length,
+      });
       return {
         success: true,
-        profiles: await listOmpProfiles(),
-        activeProfile: resolveOmpProfileFromEnv(process.env),
+        profiles,
+        activeProfile,
       };
-    } catch {
+    } catch (error) {
+      options.logger.warn("OMP profile 列表读取失败", {
+        event: "omp.config.ipc.list_profiles",
+        operation: "list_profiles",
+        senderId: event.sender.id,
+        success: false,
+        failureStage: "list_profiles",
+        errorType: error instanceof Error ? error.name : typeof error,
+      });
       return { success: false, error: "omp_profiles_load_failed" };
     }
   });
   // omp modelRoles 写入：yaml Document 级替换（保留注释/键序/其余段落），
   // 写前落一份带时间戳的备份（用户可回滚），失败不落盘。
-  ipcMain.handle(PlatformChannels.WriteOmpModelRoles, async (_event, payload: unknown) => {
+  ipcMain.handle(PlatformChannels.WriteOmpModelRoles, async (event, payload: unknown) => {
+    const senderId = event.sender.id;
     const configPath = resolveOmpModelRolesConfigPath();
     const parsed = z
       .object({
@@ -375,9 +474,37 @@ export function registerRemoteIpcHandlers(options: {
       })
       .safeParse(payload);
     if (!parsed.success) {
+      options.logger.warn("OMP modelRoles 写入被拒绝", {
+        event: "omp.config.ipc.write_roles",
+        operation: "write_roles",
+        senderId,
+        success: false,
+        failureStage: "payload_validation",
+        errorType: "invalid_roles_payload",
+      });
       return { success: false, error: "invalid_roles_payload" };
     }
-    return writeOmpModelRolesConfig(configPath, parsed.data.roles);
+    const result = await writeOmpModelRolesConfig(configPath, parsed.data.roles);
+    if (result.success) {
+      options.logger.info("OMP modelRoles 配置已写入", {
+        event: "omp.config.ipc.write_roles",
+        operation: "write_roles",
+        senderId,
+        success: true,
+        roleCount: parsed.data.roles.length,
+      });
+    } else {
+      options.logger.warn("OMP modelRoles 配置写入失败", {
+        event: "omp.config.ipc.write_roles",
+        operation: "write_roles",
+        senderId,
+        success: false,
+        failureStage: "write_config",
+        errorType: "config_write_failed",
+        roleCount: parsed.data.roles.length,
+      });
+    }
+    return result;
   });
   ipcMain.handle(PlatformChannels.OpenExternalFile, async (_event, rawPath: string) =>
     openPathInDefaultApp(rawPath, options.logger),

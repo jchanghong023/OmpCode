@@ -910,12 +910,23 @@ export function useAppPanels(options: {
     (request: OpenOmpAgentInteractionsSideTabRequest) => {
       revealSidePaneForCurrentOwner();
       commitOpenedSidePaneState((current) => openOmpAgentInteractionsSidePane(current, request));
+      logger.info("[OMP] 请求打开智能体交互页", {
+        event: "omp.agent_interactions.open.requested",
+        rootSessionId: request.rootSessionId,
+        remoteSessionId: request.remoteSessionId,
+      });
     },
     [commitOpenedSidePaneState, revealSidePaneForCurrentOwner],
   );
   const handleBindOmpAgentInteractionsRoot = useCallback(
     (binding: OmpAgentInteractionsRootBinding) => {
       commitSidePaneState((current) => bindOmpAgentInteractionsRoot(current, binding));
+      logger.info("[OMP] 请求绑定智能体交互页根会话", {
+        event: "omp.agent_interactions.root_binding.requested",
+        rootSessionId: binding.rootSessionId,
+        canonicalRootSessionId: binding.canonicalRootSessionId,
+        remoteSessionId: binding.remoteSessionId,
+      });
     },
     [commitSidePaneState],
   );

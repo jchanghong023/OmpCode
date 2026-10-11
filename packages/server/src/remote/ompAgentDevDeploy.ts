@@ -93,13 +93,27 @@ async function uploadFile(
   localPath: string,
   remotePath: string,
   executable: boolean,
+  resource: "bundle" | "omp-binary",
+  loggers: DeployLoggers,
 ): Promise<void> {
+  const uploadStartedAt = Date.now();
+  loggers.log(`[zcode-agent-deploy] ${ZCODE_AGENT_PROVIDER}: stage=upload-${resource} start`);
   const tempPath = `${remotePath}.new-${randomUUID()}`;
   await backend.upload(localPath, tempPath);
+  const uploadDurationMs = Date.now() - uploadStartedAt;
+  loggers.log(
+    `[zcode-agent-deploy] ${ZCODE_AGENT_PROVIDER}: stage=upload-${resource} duration_ms=${uploadDurationMs}`,
+  );
   const command = executable
     ? buildRemoteExecutableReplaceCommand(tempPath, remotePath)
     : buildRemoteMoveCommand(tempPath, remotePath);
+  const replaceStartedAt = Date.now();
+  loggers.log(`[zcode-agent-deploy] ${ZCODE_AGENT_PROVIDER}: stage=replace-${resource} start`);
   await waitForClose(await backend.exec(command));
+  const replaceDurationMs = Date.now() - replaceStartedAt;
+  loggers.log(
+    `[zcode-agent-deploy] ${ZCODE_AGENT_PROVIDER}: stage=replace-${resource} duration_ms=${replaceDurationMs}`,
+  );
 }
 
 export async function deployDevelopmentZCodeAgentRuntime(
@@ -118,6 +132,7 @@ export async function deployDevelopmentZCodeAgentRuntime(
   const devVersion = hash.digest("hex");
 
   if (!params.force) {
+    let reuseFallbackReason = "remote-state-check-failed";
     try {
       const [runtimeVersion, remoteDevVersion, wrapper] = await Promise.all([
         backend.readFile(params.remoteVersionFile),
@@ -134,19 +149,36 @@ export async function deployDevelopmentZCodeAgentRuntime(
         loggers.log(`[zcode-agent-deploy] ${ZCODE_AGENT_PROVIDER}: 开发态 omp 资源未变化，跳过`);
         return true;
       }
+      reuseFallbackReason = "remote-state-mismatch";
     } catch {
       // 首次部署或旧资源缺失时继续上传。
     }
+    loggers.logWarn(
+      `[zcode-agent-deploy] ${ZCODE_AGENT_PROVIDER}: 开发态 omp 复用检查未通过，回退上传 reason=${reuseFallbackReason}`,
+    );
   }
 
   loggers.log(
     `[zcode-agent-deploy] ${ZCODE_AGENT_PROVIDER}: 上传开发态 omp 资源 ${devVersion.slice(0, 12)}`,
   );
+  const directoryStartedAt = Date.now();
+  loggers.log(`[zcode-agent-deploy] ${ZCODE_AGENT_PROVIDER}: stage=mkdir-omp start`);
   await waitForClose(
     await backend.exec(`mkdir -p ${quotePosixPathArg(params.remoteProviderDir + "/omp")}`),
   );
-  await uploadFile(backend, assets.bundlePath, remoteBundlePath, false);
-  await uploadFile(backend, assets.ompPath, params.remoteOmpBinaryPath, true);
+  const directoryDurationMs = Date.now() - directoryStartedAt;
+  loggers.log(
+    `[zcode-agent-deploy] ${ZCODE_AGENT_PROVIDER}: stage=mkdir-omp duration_ms=${directoryDurationMs}`,
+  );
+  await uploadFile(backend, assets.bundlePath, remoteBundlePath, false, "bundle", loggers);
+  await uploadFile(
+    backend,
+    assets.ompPath,
+    params.remoteOmpBinaryPath,
+    true,
+    "omp-binary",
+    loggers,
+  );
 
   const wrapperContent = buildRemoteAgentBundleWrapper(params.runtimeResourceDir);
   const markers = [
@@ -154,14 +186,30 @@ export async function deployDevelopmentZCodeAgentRuntime(
     buildWriteLiteralFileCommand(params.remoteVersionFile, params.runtimeVersion),
   ];
   if (isWslBackend(backend)) {
+    const wrapperStartedAt = Date.now();
+    loggers.log(`[zcode-agent-deploy] ${ZCODE_AGENT_PROVIDER}: stage=wrapper-deploy start`);
     await deployRemoteAgentWrapper({
       backend,
       content: wrapperContent,
       remoteWrapperPath: params.remoteBinaryPath,
     });
+    const wrapperDurationMs = Date.now() - wrapperStartedAt;
+    loggers.log(
+      `[zcode-agent-deploy] ${ZCODE_AGENT_PROVIDER}: stage=wrapper-deploy duration_ms=${wrapperDurationMs}`,
+    );
+    const markersStartedAt = Date.now();
+    loggers.log(`[zcode-agent-deploy] ${ZCODE_AGENT_PROVIDER}: stage=version-markers start`);
     await waitForClose(await backend.exec(markers.join(" && ")));
+    const markersDurationMs = Date.now() - markersStartedAt;
+    loggers.log(
+      `[zcode-agent-deploy] ${ZCODE_AGENT_PROVIDER}: stage=version-markers duration_ms=${markersDurationMs}`,
+    );
   } else {
     const wrapperTempPath = `${params.remoteBinaryPath}.new-${randomUUID()}`;
+    const replaceAndMarkersStartedAt = Date.now();
+    loggers.log(
+      `[zcode-agent-deploy] ${ZCODE_AGENT_PROVIDER}: stage=wrapper-replace-and-markers start`,
+    );
     await waitForClose(
       await backend.exec(
         [
@@ -170,6 +218,10 @@ export async function deployDevelopmentZCodeAgentRuntime(
           ...markers,
         ].join(" && "),
       ),
+    );
+    const replaceAndMarkersDurationMs = Date.now() - replaceAndMarkersStartedAt;
+    loggers.log(
+      `[zcode-agent-deploy] ${ZCODE_AGENT_PROVIDER}: stage=wrapper-replace-and-markers duration_ms=${replaceAndMarkersDurationMs}`,
     );
   }
   loggers.log(`[zcode-agent-deploy] ${ZCODE_AGENT_PROVIDER}: 开发态 omp 部署完成`);

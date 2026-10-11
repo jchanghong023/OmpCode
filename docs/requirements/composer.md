@@ -18,6 +18,7 @@
 - 提交时由同一 owner 冻结草稿版本与 scope，命令失败时只恢复仍属于该提交且未被较新编辑替换的来源草稿。用户切到其他 pane/scope 后，失败仍可恢复来源草稿，但不得调用新编辑器、清除新 pending 或覆盖较新草稿；同 scope 另一 pane 的新正文、富 JSON 与附件不被旧成功/失败回包清除，pending receipt 继续归属于原提交直到落定；重复完成/失败幂等。
 - 临时会话 ID 绑定持久 UUID 时，草稿只依据 Host 成功持久化后发布的权威迁移关系迁移。迁移使用同一 owner 和一次草稿记录更新，重复事件幂等。目标有较新正文/富结构或 pending 时整份目标草稿优先，冲突来源备份保留；Storage 写入失败不删除来源。目标仅配置意图且没有目标内容/pending 时，以来源草稿的正文、富 JSON 与 mention 为基底，只覆盖目标显式标记的手动模型/思考选择及 `ompModelBaseline`、`ompModelEdited` / `ompThoughtEdited`，不丢来源内容或初始化配置以外的其他字段。无权威映射的旧记录保留，不根据标题、正文或时间猜测归属。
 - 迁移监听跟随窗口的 workspace 与实际连接，不跟随当前 pane。冷恢复复用既有任务列表元信息：缓存接纳元信息后只发布带迁移关系的事实，绑定监听时读取一次已有缓存；普通任务状态更新不额外扫描全量缓存或拉取另一份任务列表。
+- 发送与停止是不同的交互控制，不复用同一个提示浮层生命周期。发送提示继续由 Composer 的 hover/修饰键状态控制，停止提示继续使用自身 hover 状态；空草稿运行态与空闲态切换时卸载旧控制的浮层，不把受控模式或可见状态迁入另一个控制。两者的提交、停止命令、快捷键与布局不变。
 
 ## 状态与时序
 
@@ -53,6 +54,20 @@ sequenceDiagram
   Note over O,S: 最后租约离开且无 receipt 才释放 owner
 ```
 
+```mermaid
+sequenceDiagram
+  participant H as Host 会话状态
+  participant C as Composer
+  participant S as 发送提示（Composer open）
+  participant T as 停止提示（自身 hover）
+  H->>C: 运行中且草稿为空
+  C->>S: 卸载发送控制
+  C->>T: 挂载停止控制
+  H->>C: 轮次完成
+  C->>T: 卸载停止控制
+  C->>S: 挂载发送控制
+```
+
 ## 验收场景
 
 1. 电脑窗口在原工具栏显示当前模型、思考等级、Git 项目当前分支及改动数；原上下文圆环可打开悬浮面板，展示 omp 总量及 `/context` 返回的实际分项、空闲空间和自动压缩预留区；分项读取失败时只保留总量，ZCode 额度不出现；手机布局不增加底栏。
@@ -70,6 +85,7 @@ sequenceDiagram
 13. 同 scope pane A 提交并处于 pending 时，pane B 编辑正文和富 JSON、加入附件；分别验证 A 成功与失败后保留 B 的新编辑和附件，receipt/pending 仍归属于 A 直到其回包落定。失败不得恢复 A 覆盖 B。
 14. A 提交后离开，A 的命令随后拒绝或抛错，再返回 A 能恢复未被新编辑替换的原草稿；B 的正文、富 JSON、pending、附件和错误不受影响。覆盖 A→B→A、重复回包以及 A 已有新编辑时旧失败不覆盖。
 15. 首次真实会话完成后发布临时 ID→UUID 迁移，继续编辑并切会话再返回、正常关闭后冷启动，以 UUID 恢复同一草稿。覆盖未挂载来源 pane、重复迁移、错误 workspace identity 与 Storage 写入失败/重试；目标仅有初始化模型/思考选择时来源正文、富 JSON、mention 与来源选择胜出。目标空正文但已标记手动模型或思考改选时，来源正文/富结构继续迁移，目标 `modelSelection`、OMP baseline 与 `ompModelEdited` / `ompThoughtEdited` 覆盖配置；目标较新内容或 pending 时整份目标草稿优先并保留来源备份。
+16. 在真实桌面连续发送两轮消息：发送和停止按钮均能悬浮显示自身提示，输入框移走悬浮后提示关闭；运行和空闲切换不保留前一控制的提示，也不出现 Tooltip 受控/非受控模式切换诊断；原消息、提交和停止行为保持不变。
 
 ## 实现与验证状态
 

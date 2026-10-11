@@ -6,6 +6,7 @@ import {
   type OmpAgentInteractionsReadState,
 } from "@/lib/OmpAgentInteractionsReader.js";
 import type { OpenOmpAgentInteractionsSideTabRequest } from "@/lib/workspaceSidePane.js";
+import { logger } from "@/logger.js";
 
 const REFRESH_INTERVAL_MS = 2_000;
 
@@ -39,7 +40,16 @@ export function useOmpAgentInteractions(
           limit: 500,
           ...(cursor ? { cursor } : {}),
         }),
-      publish: (next) => setState({ ...next, scopeKey }),
+      publish: (next) => {
+        setState({ ...next, scopeKey });
+        if (next.error !== null) {
+          logger.warn("[OMP] 读取智能体交互记录失败", {
+            event: "omp.agent_interactions.read.failed",
+            stage: "publish",
+            errorPresent: true,
+          });
+        }
+      },
     });
     readerRef.current = reader;
     const refreshVisible = () => {

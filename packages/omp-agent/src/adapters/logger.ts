@@ -38,10 +38,10 @@ const privateBody: Record<string, true> = {
   frames: true,
 };
 
-export function context(): Readonly<Record<string, unknown>> {
+function context(): Readonly<Record<string, unknown>> {
   return contexts.getStore() ?? emptyContext;
 }
-export function run<T>(fields: Record<string, unknown>, callback: () => T): T {
+function run<T>(fields: Record<string, unknown>, callback: () => T): T {
   let next: Readonly<Record<string, unknown>>;
   try {
     next = Object.freeze({ ...context(), ...fields });

@@ -13,6 +13,7 @@ import type { OmpStorePort } from "./ports.js";
 import { rowBaseFields } from "../domain/projectionTypes.js";
 import { mergeOmpCommandOutputHistory } from "../domain/OmpCommandOutputHistory.js";
 import { ompSessionIdOfFilePath } from "../domain/ids.js";
+import { diagnostics } from "./diagnostics.js";
 
 export interface ColdHydrationHost {
   store: OmpStorePort;
@@ -30,17 +31,25 @@ export async function hydrateEngineFromCold(
   createdAt?: number,
   updatedAt?: number,
 ): Promise<void> {
+  const readStartedAt = Date.now();
+  diagnostics.info("omp.session.cold_history.read.started", {
+    sessionId: engine.sessionId,
+    sessionPathPresent: Boolean(sessionPath),
+  });
   let rows: ConversationRow[] = [];
   let entries: unknown[] = [];
+  let childSubagentCount = 0;
   if (sessionPath) {
     entries = await host.store.readSessionEntries(sessionPath);
+    const subagentIds = coldSubagentIds(entries);
     const childRecords = new Map(
       await Promise.all(
-        coldSubagentIds(entries)
+        subagentIds
           .slice(0, 20)
           .map(async (id) => [id, await host.store.readSubagentEntries(sessionPath, id)] as const),
       ),
     );
+    childSubagentCount = childRecords.size;
     const transcripts = new Map(
       [...childRecords].map(([id, records]) => [id, transcriptFromOmpEntries(records)]),
     );
@@ -49,19 +58,38 @@ export async function hydrateEngineFromCold(
   const outputs =
     (await host.store.readCommandOutputs?.(engine.workspacePath, engine.sessionId, sessionPath)) ??
     [];
-  engine.hydrateRows(
-    outputs.length
-      ? mergeOmpCommandOutputHistory(
-          rows,
-          outputs,
-          entries,
-          ompSessionIdOfFilePath(sessionPath) ?? undefined,
-        )
-      : rows,
-  );
+  const hydratedRows = outputs.length
+    ? mergeOmpCommandOutputHistory(
+        rows,
+        outputs,
+        entries,
+        ompSessionIdOfFilePath(sessionPath) ?? undefined,
+      )
+    : rows;
+  diagnostics.info("omp.session.cold_history.read.completed", {
+    sessionId: engine.sessionId,
+    resultStatus: sessionPath ? "read" : "skipped",
+    entryCount: entries.length,
+    childSubagentCount,
+    commandOutputCount: outputs.length,
+    elapsedMs: Date.now() - readStartedAt,
+  });
+  const hydrateStartedAt = Date.now();
+  diagnostics.info("omp.session.cold_history.hydrate.started", {
+    sessionId: engine.sessionId,
+    rowCount: hydratedRows.length,
+    commandOutputCount: outputs.length,
+  });
+  engine.hydrateRows(hydratedRows);
   host.upsertEngineSummary(engine, {
     createdAt: createdAt ?? Date.now(),
     lastActivityAt: updatedAt ?? Date.now(),
+  });
+  diagnostics.info("omp.session.cold_history.hydrate.completed", {
+    sessionId: engine.sessionId,
+    rowCount: hydratedRows.length,
+    commandOutputCount: outputs.length,
+    elapsedMs: Date.now() - hydrateStartedAt,
   });
 }
 

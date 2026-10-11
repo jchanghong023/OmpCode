@@ -10,8 +10,10 @@ import {
   ompAvailableCommandsV3ResultSchema,
   type OmpDirectoryCommandDescriptor,
 } from "../domain/ompForkFrames.js";
-import type { OmpDirectoryGatewayPort } from "./ports.js";
+import { diagnostics } from "./diagnostics.js";
 import type { SlashCommandResolution, SlashCommandResolver } from "./ompPromptDispatch.js";
+// 目录端口仍用于参数类型，新增日志不能移除该依赖。
+import type { OmpDirectoryGatewayPort } from "./ports.js";
 
 /** 从输入文本取命令名段（首个空白前的 token，含 "skill:name" 形态）。 */
 function commandNameOf(text: string): string {
@@ -55,15 +57,60 @@ export function createSlashCommandResolver(directory: OmpDirectoryGatewayPort): 
   function refresh(): Promise<void> {
     if (refreshing?.generation === generation) return refreshing.promise;
     const requestedGeneration = generation;
+    const startedAt = Date.now();
+    diagnostics.debug("omp.slash_command.directory_query.started", {
+      generation: requestedGeneration,
+    });
     const promise = (async () => {
-      const outcome = await directory.send({ type: "get_available_commands" }).catch(() => null);
+      const outcome = await directory
+        .send({ type: "get_available_commands" })
+        .catch((error: unknown) => {
+          diagnostics.warn("omp.slash_command.directory_query.failed", {
+            elapsedMs: Date.now() - startedAt,
+            errorType: error instanceof Error ? error.name : typeof error,
+            failureStage: "transport_rejected",
+            generation: requestedGeneration,
+          });
+          return null;
+        });
       // 更新事件先于旧响应时，旧目录既不能回填，也不能授权一次 prompt。
-      if (requestedGeneration !== generation) return;
+      if (requestedGeneration !== generation) {
+        diagnostics.debug("omp.slash_command.directory_query.stale", {
+          currentGeneration: generation,
+          elapsedMs: Date.now() - startedAt,
+          generation: requestedGeneration,
+          reason: "generation_changed",
+        });
+        return;
+      }
       const parsed = outcome?.success
         ? ompAvailableCommandsV3ResultSchema.safeParse(outcome.data)
         : null;
       // 失败不能保留先前的可执行命令；本次解析明确按未知命令拒绝。
       descriptors = parsed?.success ? parsed.data.commands : [];
+      const resultFields = {
+        descriptorCount: descriptors.length,
+        elapsedMs: Date.now() - startedAt,
+        generation: requestedGeneration,
+        resultStatus: parsed?.success
+          ? "available"
+          : outcome?.success
+            ? "invalid_schema"
+            : outcome
+              ? "rejected"
+              : "unavailable",
+      };
+      if (parsed?.success)
+        diagnostics.debug("omp.slash_command.directory_query.completed", resultFields);
+      else
+        diagnostics.warn("omp.slash_command.directory_query.completed", {
+          ...resultFields,
+          failureStage: outcome?.success
+            ? "schema_validation"
+            : outcome
+              ? "core_rejection"
+              : "transport_rejection",
+        });
     })().finally(() => {
       if (refreshing?.promise === promise) refreshing = null;
     });
@@ -84,6 +131,11 @@ export function createSlashCommandResolver(directory: OmpDirectoryGatewayPort): 
           if (requestedGeneration !== generation) continue;
           resolution = resolveAgainst(descriptors ?? [], text);
         }
+        if (resolution.kind === "reject")
+          diagnostics.warn("omp.slash_command.rejected", {
+            generation,
+            reason: resolution.reason,
+          });
         return resolution;
       }
     },

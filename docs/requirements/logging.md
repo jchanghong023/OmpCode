@@ -32,6 +32,8 @@ flowchart LR
 3. 连续多字节记录在完整记录边界轮转；新写入文件均不超过字节上限，活动与拥有的历史总数不超过 10。跨日、重启与已有 14 天过期历史使用同一个保留机制；无关文件与链接保留。
 4. 普通目录失败可进入既有用户 fallback；fallback 也失败时仅向 stderr 报告，业务不抛出日志异常。隔离验证不写日常目录。
 5. 静态核对根 `AGENTS.md` 包含唯一提醒：`Key steps and exception branches in this project must have logs.`
+6. Host 原始 console 写入或 stdout/stderr 的异步输出失败时，`EBADF`/`EPIPE` 不终止 Host，原日志继续经既有 Main 中继；其他输出错误经同一结构化通道报告安全的类型与错误码，不静默吞掉、不递归写入故障终端、不改变业务结果。此场景细化 [Host 输出边界](centos7-release.md#product-behavior)，不新增日志 writer 或重试。
+7. Service Logger 模块可由无 Node `process` 的 Renderer/Web 安全导入并创建：复用浏览器 console/注入 sink 与共享级别、脱敏规则；PID 仅来自真实 Node 进程或显式注入，没有 PID 时按既有前缀规则省略。stderr 监听与最终故障出口只属于具备该流的 Node 环境；浏览器 sink 失效不得访问 Node API。Node 仍只报告一次 sink 故障，日志错误不改变业务结果。
 
 ## 实现与验证状态
 

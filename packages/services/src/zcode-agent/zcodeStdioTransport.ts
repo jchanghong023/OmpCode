@@ -31,6 +31,7 @@ const PROCESS_TREE_FORCE_AFTER_MS = 2_000;
 const PROCESS_TREE_WINDOWS_TASKKILL_TIMEOUT_MS = 1_000;
 const PROCESS_TREE_WINDOWS_EXIT_OBSERVATION_GRACE_MS = 250;
 const processTreeLogger = createServiceLogger("zcode-agent-process-tree");
+const stdioLogger = createServiceLogger("omp-host");
 
 export class ZCodeStdioTransport implements ZCodeProtocolTransport {
   readonly kind = "stdio" as const;
@@ -257,6 +258,14 @@ export class ZCodeStdioTransport implements ZCodeProtocolTransport {
       // 完整进程树查询严格留在 dispose cleanup 边界。
       this.messageEmitter.fire(parsed);
     } catch (error) {
+      stdioLogger.warn(undefined, {
+        event: "omp_host_stdio_protocol_parse_error",
+        stage: "decode_or_dispatch",
+        stream: "stdout",
+        agentPid: this.child.pid,
+        errorType: error instanceof Error ? error.name : typeof error,
+        frameLength: line.length,
+      });
       const reason = error instanceof Error ? error.message : String(error);
       this.fireClose({ reason: `protocol_parse_error: ${reason}` });
     }
@@ -267,6 +276,18 @@ export class ZCodeStdioTransport implements ZCodeProtocolTransport {
     // Node 的 stdin write 回调会 reject，但底层 Socket 还会额外触发 error 事件；若没有长期监听，
     // zcode-server 会因未处理的 EPIPE 直接崩溃，UI 只能看到远端连接断开而不是协议请求失败。
     // 这里把 stream error 视为 transport 已关闭，阻止后续继续向失效 agent 写入。
+    const errorCode = (error as NodeJS.ErrnoException).code;
+    stdioLogger.warn(undefined, {
+      event: "omp_host_stdio_stream_error",
+      stage: "stream_io",
+      stream,
+      agentPid: this.child.pid,
+      errorType: error.name,
+      errorCode:
+        typeof errorCode === "string" && /^E[A-Z0-9_]{1,40}$/.test(errorCode)
+          ? errorCode
+          : undefined,
+    });
     this.fireClose({ reason: `${stream}_error: ${error.message}` });
   }
 

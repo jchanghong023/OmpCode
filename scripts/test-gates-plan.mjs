@@ -106,6 +106,7 @@ const coreTests = {
     "importedClaudeRecovery",
     "nonCliAcpRetirement",
     "providerConfigMigration",
+    "serviceLoggerRuntime",
   ],
   shared: ["editorPrefill", "ompPaths", "taskIdMigration"],
   client: ["websocketDisconnect"],

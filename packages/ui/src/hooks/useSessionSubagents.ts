@@ -95,9 +95,19 @@ export function useSessionSubagents(options: {
     if (requestInFlightRef.current) return;
     requestInFlightRef.current = true;
     const requestVersion = ++requestVersionRef.current;
+    const startedAt = Date.now();
     setState((current) => ({ ...current, loading: current.revision === 0, error: null }));
     try {
       const requestedCount = Math.max(PAGE_SIZE, loadedEndedCountRef.current);
+      logger.debug("[subagent-directory] event=refresh_started", {
+        sessionId: options.sessionId,
+        requestedPageSize: Math.min(requestedCount, MAX_PAGE_SIZE),
+        loadedEndedCount: stateRef.current.ended.items.length,
+        totalEndedCount: stateRef.current.ended.total,
+        revision: stateRef.current.revision,
+        workspaceIdentityPresent: Boolean(options.workspaceIdentity),
+        remoteSessionPresent: Boolean(options.remoteSessionId),
+      });
       let response = await requestPage(Math.min(requestedCount, MAX_PAGE_SIZE));
       const previous = stateRef.current;
       // 新完成项会插入 ended 顶部。多取同样数量的旧项，避免刷新时把用户已经
@@ -110,8 +120,10 @@ export function useSessionSubagents(options: {
       });
       let items = response.ended.items;
       let cursor = response.ended.nextCursor;
+      let pageCount = 1;
       while (items.length < targetCount && cursor) {
         const page = await requestPage(Math.min(PAGE_SIZE, targetCount - items.length), cursor);
+        pageCount += 1;
         items = mergeEndedSubagentPages(items, page.ended.items);
         cursor = page.ended.nextCursor;
         response = page;
@@ -127,6 +139,15 @@ export function useSessionSubagents(options: {
         },
         error: null,
         loading: false,
+      });
+      logger.debug("[subagent-directory] event=refresh_result", {
+        sessionId: options.sessionId,
+        pageCount,
+        endedItemCount: items.length,
+        totalEndedCount: response.ended.total,
+        revision: response.revision,
+        hasNextPage: Boolean(cursor),
+        elapsedMs: Date.now() - startedAt,
       });
     } catch (error) {
       if (requestVersion !== requestVersionRef.current) return;
@@ -156,7 +177,16 @@ export function useSessionSubagents(options: {
     }
     requestInFlightRef.current = true;
     const requestVersion = ++requestVersionRef.current;
+    const startedAt = Date.now();
     setState((value) => ({ ...value, loading: true, error: null }));
+    logger.debug("[subagent-directory] event=load_more_started", {
+      sessionId: options.sessionId,
+      pageSize: PAGE_SIZE,
+      loadedEndedCount: current.ended.items.length,
+      totalEndedCount: current.ended.total,
+      revision: current.revision,
+      hasNextPage: true,
+    });
     try {
       const response = await requestPage(PAGE_SIZE, current.ended.nextCursor);
       if (requestVersion !== requestVersionRef.current) return;
@@ -172,8 +202,25 @@ export function useSessionSubagents(options: {
         error: null,
         loading: false,
       });
+      logger.debug("[subagent-directory] event=load_more_result", {
+        sessionId: options.sessionId,
+        pageSize: PAGE_SIZE,
+        returnedEndedCount: response.ended.items.length,
+        loadedEndedCount: items.length,
+        totalEndedCount: response.ended.total,
+        revision: response.revision,
+        hasNextPage: Boolean(response.ended.nextCursor),
+        elapsedMs: Date.now() - startedAt,
+      });
     } catch (error) {
       if (requestVersion !== requestVersionRef.current) return;
+      logger.warn("[subagent-directory] event=load_more_failed", {
+        sessionId: options.sessionId,
+        pageSize: PAGE_SIZE,
+        revision: current.revision,
+        errorType: error instanceof Error ? "Error" : "NonError",
+        elapsedMs: Date.now() - startedAt,
+      });
       setState((value) => ({
         ...value,
         error: error instanceof Error ? error.message : String(error),

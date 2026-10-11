@@ -67,21 +67,42 @@ export function OmpModelRolesFallbackFields({
 
   const loadRoles = useCallback(async () => {
     if (!platform.readOmpModelRoles) {
+      logger.warn("[omp-model-roles] 本地角色配置读取不可用", {
+        stage: "fallback_read",
+        failureStage: "platform_unsupported",
+      });
       setLoadError("platform-unsupported");
       return;
     }
     setLoadError(null);
+    const startedAt = Date.now();
     try {
       const result = await platform.readOmpModelRoles();
       if (result.success) {
+        logger.info("[omp-model-roles] 本地角色配置读取完成", {
+          stage: "fallback_read",
+          roleCount: result.roles.length,
+          elapsedMs: Date.now() - startedAt,
+        });
         const configured = new Map(result.roles.map((item) => [item.role, item.value]));
         setOriginalRoles(configured);
         const allRoles = [...new Set([...BUILTIN_OMP_ROLES, ...configured.keys()])];
         setRoles(allRoles.map((role) => ({ role, value: configured.get(role) ?? "" })));
       } else {
+        logger.error("[omp-model-roles] 本地角色配置读取失败", {
+          stage: "fallback_read",
+          resultStatus: "failed",
+          code: result.error,
+          elapsedMs: Date.now() - startedAt,
+        });
         setLoadError(result.error);
       }
     } catch (error) {
+      logger.error("[omp-model-roles] 本地角色配置读取失败", {
+        stage: "fallback_read",
+        errorType: error instanceof Error ? error.name : typeof error,
+        elapsedMs: Date.now() - startedAt,
+      });
       setLoadError(error instanceof Error ? error.message : String(error));
     }
   }, [platform]);
@@ -137,6 +158,10 @@ export function OmpModelRolesFallbackFields({
 
   const handleSave = useCallback(async () => {
     if (!platform.writeOmpModelRoles) {
+      logger.warn("[omp-model-roles] 本地角色配置保存不可用", {
+        stage: "fallback_write",
+        failureStage: "platform_unsupported",
+      });
       setSaveError("platform-unsupported");
       return;
     }
@@ -147,6 +172,11 @@ export function OmpModelRolesFallbackFields({
     if (changedRoles.length === 0) return;
     setSaving(true);
     setSaveError(null);
+    const startedAt = Date.now();
+    logger.info("[omp-model-roles] 本地角色配置保存开始", {
+      stage: "fallback_write",
+      changedRoleCount: changedRoles.length,
+    });
     try {
       const result = await platform.writeOmpModelRoles(changedRoles);
       if (result.success) {
@@ -155,14 +185,34 @@ export function OmpModelRolesFallbackFields({
         setOriginalRoles(
           new Map(roles.filter((item) => item.value).map((item) => [item.role, item.value])),
         );
+        logger.info("[omp-model-roles] 本地角色配置保存完成", {
+          stage: "fallback_write",
+          resultStatus: "saved",
+          roleCount: changedRoles.length,
+          backupCreated: Boolean(result.backupPath),
+          elapsedMs: Date.now() - startedAt,
+        });
         logger.info("[omp-model-roles] 已写入 omp modelRoles", {
           backupPath: result.backupPath ?? null,
           roles: changedRoles.length,
         });
       } else {
+        logger.error("[omp-model-roles] 本地角色配置保存失败", {
+          stage: "fallback_write",
+          resultStatus: "failed",
+          code: result.error,
+          changedRoleCount: changedRoles.length,
+          elapsedMs: Date.now() - startedAt,
+        });
         setSaveError(result.error ?? "unknown");
       }
     } catch (error) {
+      logger.error("[omp-model-roles] 本地角色配置保存失败", {
+        stage: "fallback_write",
+        errorType: error instanceof Error ? error.name : typeof error,
+        changedRoleCount: changedRoles.length,
+        elapsedMs: Date.now() - startedAt,
+      });
       setSaveError(error instanceof Error ? error.message : String(error));
     } finally {
       setSaving(false);

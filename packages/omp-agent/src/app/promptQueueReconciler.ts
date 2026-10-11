@@ -236,18 +236,38 @@ export class PromptQueueReconciler {
       });
       return;
     }
-    if (this.deps.isStreaming()) {
-      this.deps.projection.reconcileQueuedTurns(markQueueReconcileTexts(texts, "markOnly"));
+    const streaming = this.deps.isStreaming();
+    if (streaming) {
+      const changedCount = this.deps.projection.reconcileQueuedTurns(
+        markQueueReconcileTexts(texts, "markOnly"),
+      );
+      diagnostics.debug("omp.queue.reconcile.result", {
+        ...turnContext(this.deps.projection),
+        mode: "markOnly",
+        snapshotCount: texts.length,
+        changedCount,
+        streaming,
+        forceClose: false,
+      });
       return;
     }
     const payload = mode === "forceClose" ? markQueueReconcileTexts(texts, "forceClose") : texts;
     const beforeSeq = this.deps.projection.seq;
-    if (this.deps.projection.reconcileQueuedTurns(payload) > 0) this.deps.scheduleFlush();
+    const changedCount = this.deps.projection.reconcileQueuedTurns(payload);
+    if (changedCount > 0) this.deps.scheduleFlush();
     logTurnTransitions(
       this.deps.projection,
       beforeSeq,
       mode === "forceClose" ? "queue_force_close" : "queue_seen_then_absent",
     );
+    diagnostics.debug("omp.queue.reconcile.result", {
+      ...turnContext(this.deps.projection),
+      mode: mode ?? "default",
+      snapshotCount: texts.length,
+      changedCount,
+      streaming,
+      forceClose: mode === "forceClose",
+    });
   }
 
   /** S4-2 宽限复查：一次性定时器（已挂起不重复）；复查走 forceClose 模式对账。 */

@@ -11,6 +11,7 @@ import {
 import { usePlatform } from "@/hooks/usePlatform.js";
 import { useToolbarConfigOptions } from "@/hooks/useZCodeConfig.js";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
+import { logger } from "@/logger.js";
 import { OmpModelRolesDialog } from "@/v4/composer/OmpModelRolesDialog.js";
 import { readOmpModelCatalog } from "@/v4/composer/ompModelCatalog.js";
 
@@ -38,9 +39,15 @@ export function OmpModelRolesSection({
   useEffect(() => {
     let cancelled = false;
     if (!platform.listOmpProfiles) {
+      logger.warn("[omp-settings] Profile listing unavailable", {
+        event: "omp.settings.profiles.list.unsupported",
+      });
       setProfileError("unsupported");
       return;
     }
+    logger.debug("[omp-settings] Profile listing started", {
+      event: "omp.settings.profiles.list.started",
+    });
     void platform
       .listOmpProfiles()
       .then((result) => {
@@ -48,11 +55,24 @@ export function OmpModelRolesSection({
         if (result.success) {
           setProfileInfo(result);
           setProfileError(null);
+          logger.debug("[omp-settings] Profile listing completed", {
+            event: "omp.settings.profiles.list.completed",
+            profileCount: result.profiles.length,
+          });
         } else {
+          logger.warn("[omp-settings] Profile listing failed", {
+            event: "omp.settings.profiles.list.failed",
+            phase: "response",
+          });
           setProfileError(result.error);
         }
       })
       .catch(() => {
+        logger.warn("[omp-settings] Profile listing failed", {
+          event: "omp.settings.profiles.list.failed",
+          phase: "request",
+          cancelled,
+        });
         if (!cancelled) setProfileError("load_failed");
       });
     return () => {
@@ -68,9 +88,18 @@ export function OmpModelRolesSection({
   async function changeProfile(profile: string) {
     setSavingProfile(true);
     setProfileError(null);
+    logger.info("[omp-settings] Profile selection update started", {
+      event: "omp.settings.profile.update.started",
+    });
     try {
       await onProfileChange(profile);
+      logger.info("[omp-settings] Profile selection update completed", {
+        event: "omp.settings.profile.update.completed",
+      });
     } catch {
+      logger.error("[omp-settings] Profile selection update failed", {
+        event: "omp.settings.profile.update.failed",
+      });
       setProfileError("save_failed");
     } finally {
       setSavingProfile(false);

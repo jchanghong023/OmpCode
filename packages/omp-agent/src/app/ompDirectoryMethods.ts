@@ -10,6 +10,7 @@ import {
   zcodeOmpModelRolesParamsSchema,
   zcodeOmpSetModelRoleParamsSchema,
 } from "@zcode/shared";
+import { diagnostics } from "./diagnostics.js";
 import { ProtocolError } from "./errors.js";
 import type { OmpDirectoryGatewayPort } from "./ports.js";
 import type { SessionRegistry } from "./sessionRegistry.js";
@@ -28,6 +29,19 @@ function outcomeMessage(outcome: { error?: string; code?: string }, fallback: st
   return `${outcome.error ?? fallback}${outcome.code ? ` [${outcome.code}]` : ""}`;
 }
 
+function logRejectedDirectoryMethod(
+  method: string,
+  failureStage: "params_decode" | "workspace_mismatch",
+  issueCount?: number,
+): void {
+  diagnostics.warn("omp.directory.method.rejected", {
+    method,
+    failureStage,
+    protocolCode: -32602,
+    ...(issueCount !== undefined ? { issueCount } : {}),
+  });
+}
+
 export function createOmpDirectoryMethodHandlers(
   deps: OmpDirectoryMethodDeps,
 ): Record<string, (params: unknown) => Promise<unknown>> {
@@ -35,6 +49,11 @@ export function createOmpDirectoryMethodHandlers(
     "workspace/completeOmpCommand": async (params: unknown): Promise<unknown> => {
       const parsed = zcodeOmpCompleteCommandParamsSchema.safeParse(params);
       if (!parsed.success || parsed.data.workspace.workspaceKey !== deps.workspaceKey) {
+        logRejectedDirectoryMethod(
+          "workspace/completeOmpCommand",
+          parsed.success ? "workspace_mismatch" : "params_decode",
+          parsed.success ? undefined : parsed.error.issues.length,
+        );
         throw new ProtocolError(-32602, "invalid completion request target");
       }
       const outcome = await deps.directory.sendDirectory({
@@ -54,6 +73,11 @@ export function createOmpDirectoryMethodHandlers(
     "workspace/ompModelRoles": async (params: unknown): Promise<unknown> => {
       const parsed = zcodeOmpModelRolesParamsSchema.safeParse(params);
       if (!parsed.success || parsed.data.workspace.workspaceKey !== deps.workspaceKey) {
+        logRejectedDirectoryMethod(
+          "workspace/ompModelRoles",
+          parsed.success ? "workspace_mismatch" : "params_decode",
+          parsed.success ? undefined : parsed.error.issues.length,
+        );
         throw new ProtocolError(-32602, "invalid model roles request target");
       }
       const outcome = await deps.directory.sendDirectory({ type: "get_model_roles" });
@@ -72,6 +96,11 @@ export function createOmpDirectoryMethodHandlers(
     "workspace/ompSetModelRole": async (params: unknown): Promise<unknown> => {
       const parsed = zcodeOmpSetModelRoleParamsSchema.safeParse(params);
       if (!parsed.success || parsed.data.workspace.workspaceKey !== deps.workspaceKey) {
+        logRejectedDirectoryMethod(
+          "workspace/ompSetModelRole",
+          parsed.success ? "workspace_mismatch" : "params_decode",
+          parsed.success ? undefined : parsed.error.issues.length,
+        );
         throw new ProtocolError(-32602, "invalid model role save target");
       }
       const outcome = await deps.directory.sendDirectory({
@@ -91,6 +120,11 @@ export function createOmpDirectoryMethodHandlers(
     "session/controlSubagent": async (params: unknown): Promise<unknown> => {
       const parsed = zcodeControlSubagentParamsSchema.safeParse(params);
       if (!parsed.success || parsed.data.workspace.workspaceKey !== deps.workspaceKey) {
+        logRejectedDirectoryMethod(
+          "session/controlSubagent",
+          parsed.success ? "workspace_mismatch" : "params_decode",
+          parsed.success ? undefined : parsed.error.issues.length,
+        );
         throw new ProtocolError(-32602, "invalid subagent control target");
       }
       const outcome = await deps.registry.controlSubagent(

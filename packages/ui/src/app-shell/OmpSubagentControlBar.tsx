@@ -5,6 +5,7 @@ import { useWorkspaceServicesResolution } from "@/hooks/useWorkspaceServices.js"
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
 import { parseOmpSubagentViewIdOf } from "@/lib/ompSubagentViewId.js";
 import { useOmpSubagentControlState } from "@/hooks/useOmpSubagentControlState.js";
+import { logger } from "@/logger.js";
 
 /**
  * Fork（omp-project-mode.md）：子代理只读详情顶部的显式控制条（Z15）。
@@ -44,6 +45,12 @@ export const OmpSubagentControlBar = memo(function OmpSubagentControlBar({
       controlInFlight.current = true;
       setBusy(true);
       setStatus(null);
+      const startedAt = Date.now();
+      logger.info("[omp-subagent-control] event=control_started", {
+        action,
+        sessionId: target.parentSessionId,
+        subagentId: target.subagentId,
+      });
       try {
         const result = await resolution.services.zcodeAgentService.controlSubagent({
           workspacePath,
@@ -54,11 +61,25 @@ export const OmpSubagentControlBar = memo(function OmpSubagentControlBar({
           action,
           ...(action === "send_message" ? { message: message.trim() } : {}),
         });
+        logger.info("[omp-subagent-control] event=control_result", {
+          action,
+          sessionId: target.parentSessionId,
+          subagentId: target.subagentId,
+          status: result.status,
+          elapsedMs: Date.now() - startedAt,
+        });
         setStatus(
           `${intl.formatMessage({ id: "ompSubagentControl.status" })}: ${result.status}${result.detail ? ` — ${result.detail}` : ""}`,
         );
         if (action === "send_message") setMessage("");
       } catch (error) {
+        logger.warn("[omp-subagent-control] event=control_failed", {
+          action,
+          sessionId: target.parentSessionId,
+          subagentId: target.subagentId,
+          errorType: error instanceof Error ? "Error" : "NonError",
+          elapsedMs: Date.now() - startedAt,
+        });
         setStatus(
           `${intl.formatMessage({ id: "ompSubagentControl.failed" })}: ${error instanceof Error ? error.message : String(error)}`,
         );

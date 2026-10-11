@@ -1973,12 +1973,24 @@ export function createZCodeTaskServiceAdapter(
     },
 
     async enqueueTaskCommand(params): Promise<ZCodeEnqueueTaskCommandResult> {
+      const startedAt = Date.now();
       assertCurrentOwnerRun(params, params.ownerRunId);
       const key = taskKey(params);
       const existing = runtimeCommands
         .get(key)
         ?.find((item) => item.commandId === params.commandId);
-      if (existing) return { accepted: true, command: existing };
+      if (existing) {
+        writeOmpHostDiagnostic("debug", "omp_host_task_command_enqueue_duplicate", {
+          commandId: existing.commandId,
+          inputId: existing.traceId,
+          sessionId: params.taskId,
+          ownerRunId: params.ownerRunId ?? null,
+          status: existing.status,
+          queueLength: runtimeCommands.get(key)?.length ?? 0,
+          elapsedMs: Date.now() - startedAt,
+        });
+        return { accepted: true, command: existing };
+      }
       const workspaceKeyValue = workspaceKey(params);
       const command: ZCodeTaskRuntimeCommand = {
         commandId: params.commandId,
@@ -2001,6 +2013,15 @@ export function createZCodeTaskServiceAdapter(
         automationId: params.automationId,
       };
       runtimeCommands.set(key, [...(runtimeCommands.get(key) ?? []), command]);
+      writeOmpHostDiagnostic("info", "omp_host_task_command_enqueue_accepted", {
+        commandId: command.commandId,
+        inputId: command.traceId,
+        sessionId: params.taskId,
+        ownerRunId: params.ownerRunId ?? null,
+        status: command.status,
+        queueLength: runtimeCommands.get(key)?.length ?? 0,
+        elapsedMs: Date.now() - startedAt,
+      });
       // 手机 replayable host command 被 accepted 后，前端本地 drain 会主动跳过 hostCommand。
       // 因此 host 需要在当前 task 已空闲时自行触发消费；桌面 continuous 不调用该入口，不会受影响。
       scheduleRuntimeCommandDrain(params, "enqueue");
@@ -2008,16 +2029,34 @@ export function createZCodeTaskServiceAdapter(
     },
 
     async promoteTaskCommand(params): Promise<ZCodeEnqueueTaskCommandResult> {
+      const startedAt = Date.now();
       assertCurrentOwnerRun(params, params.ownerRunId);
       const key = taskKey(params);
       const commands = runtimeCommands.get(key) ?? [];
       const command = commands.find((candidate) => candidate.commandId === params.commandId);
       if (!command) {
+        writeOmpHostDiagnostic("error", "omp_host_task_command_promote_not_found", {
+          commandId: params.commandId,
+          sessionId: params.taskId,
+          ownerRunId: params.ownerRunId ?? null,
+          queueLength: commands.length,
+          errorCode: "OWNER_COMMAND_FAILED",
+          elapsedMs: Date.now() - startedAt,
+        });
         throw Object.assign(new Error("Task command not found."), {
           code: "OWNER_COMMAND_FAILED",
         });
       }
       if (command.status === "running") {
+        writeOmpHostDiagnostic("debug", "omp_host_task_command_promote_running", {
+          commandId: command.commandId,
+          inputId: command.traceId,
+          sessionId: params.taskId,
+          ownerRunId: params.ownerRunId ?? null,
+          status: command.status,
+          queueLength: commands.length,
+          elapsedMs: Date.now() - startedAt,
+        });
         return { accepted: true, command };
       }
       const nextCommand = {
@@ -2026,6 +2065,15 @@ export function createZCodeTaskServiceAdapter(
         updatedAt: Date.now(),
       };
       runtimeCommands.set(key, [nextCommand, ...commands.filter((item) => item !== command)]);
+      writeOmpHostDiagnostic("info", "omp_host_task_command_promote_accepted", {
+        commandId: nextCommand.commandId,
+        inputId: nextCommand.traceId,
+        sessionId: params.taskId,
+        ownerRunId: params.ownerRunId ?? null,
+        status: nextCommand.status,
+        queueLength: commands.length,
+        elapsedMs: Date.now() - startedAt,
+      });
       scheduleRuntimeCommandDrain(params, "promote");
       return { accepted: true, command: nextCommand };
     },
@@ -2233,6 +2281,7 @@ export function createZCodeTaskServiceAdapter(
     },
 
     async respondPermission(params): Promise<boolean> {
+      const startedAt = Date.now();
       const target = params.workspacePath
         ? {
             taskId: params.taskId,
@@ -2244,6 +2293,13 @@ export function createZCodeTaskServiceAdapter(
       // interactionId ≡ 业务 requestId（CLI interaction-broker 同源注册）；optionId 由
       // CLI 侧 buildProtocolPermissionOptions 精确回映 response（allow_project 的
       // permissionUpdates 持久化规则不丢，见 interaction-broker v4AnswerToPermissionResponse）。
+      writeOmpHostDiagnostic("info", "omp_host_permission_response_started", {
+        commandType: "resolveInteraction",
+        interactionId: params.requestId,
+        sessionId: params.taskId,
+        activeRunId: activePromptInputIds.get(taskKey(target)) ?? null,
+        stage: "send",
+      });
       const ack = await options.zcodeAgentService.sendConversationCommandV4({
         workspacePath: target.workspacePath,
         workspaceIdentity: target.workspaceIdentity,
@@ -2256,11 +2312,28 @@ export function createZCodeTaskServiceAdapter(
           sessionId: params.taskId,
         }),
       });
+      writeOmpHostDiagnostic(
+        ack.status === "accepted" || ack.status === "duplicate" || ack.status === "noop"
+          ? "info"
+          : "error",
+        "omp_host_permission_response_ack",
+        {
+          commandType: "resolveInteraction",
+          commandId: ack.commandId,
+          interactionId: params.requestId,
+          sessionId: params.taskId,
+          status: ack.status,
+          errorCode: ack.reasonCode ?? null,
+          elapsedMs: Date.now() - startedAt,
+          stage: "ack",
+        },
+      );
       assertV4CommandAckOk("resolveInteraction", ack, `permission ${params.requestId}`);
       return true;
     },
 
     async respondElicitation(params): Promise<boolean> {
+      const startedAt = Date.now();
       const target = params.workspacePath
         ? {
             taskId: params.taskId,
@@ -2271,6 +2344,13 @@ export function createZCodeTaskServiceAdapter(
       // AskUserQuestion/plan-approval 回执收敛 v4 resolveInteraction。
       // answer.action/content 是 additive 扩展（多题答案/注解无损承载，CLI 侧
       // interaction-broker 优先按 action 精确映射，缺省回落 optionId/freeText 兼容路径）。
+      writeOmpHostDiagnostic("info", "omp_host_elicitation_response_started", {
+        commandType: "resolveInteraction",
+        interactionId: params.requestId,
+        sessionId: params.taskId,
+        activeRunId: activePromptInputIds.get(taskKey(target)) ?? null,
+        stage: "send",
+      });
       const ack = await options.zcodeAgentService.sendConversationCommandV4({
         workspacePath: target.workspacePath,
         workspaceIdentity: target.workspaceIdentity,
@@ -2286,6 +2366,22 @@ export function createZCodeTaskServiceAdapter(
           sessionId: params.taskId,
         }),
       });
+      writeOmpHostDiagnostic(
+        ack.status === "accepted" || ack.status === "duplicate" || ack.status === "noop"
+          ? "info"
+          : "error",
+        "omp_host_elicitation_response_ack",
+        {
+          commandType: "resolveInteraction",
+          commandId: ack.commandId,
+          interactionId: params.requestId,
+          sessionId: params.taskId,
+          status: ack.status,
+          errorCode: ack.reasonCode ?? null,
+          elapsedMs: Date.now() - startedAt,
+          stage: "ack",
+        },
+      );
       assertV4CommandAckOk("resolveInteraction", ack, `elicitation ${params.requestId}`);
       if (params.clientMode === "web-remote-replayable") {
         // 语义保真（原 agentService.respondUserInput 的 web-remote-replayable 分支）：

@@ -124,9 +124,10 @@ export async function connectRemote(
     throw createRemoteConnectAbortError(signal);
   }
 
+  const diagnostics = { stage: "remote environment detection", startedAt: Date.now() };
   let removeAbortListener: () => void = () => undefined;
   try {
-    const connecting = connectRemoteUnchecked(backend, options);
+    const connecting = connectRemoteUnchecked(backend, options, diagnostics);
     if (!signal) {
       return await connecting;
     }
@@ -150,6 +151,20 @@ export async function connectRemote(
     });
     return await Promise.race([guardedConnecting, aborted]);
   } catch (error) {
+    // 最终失败不能用 INFO；只把既有取消结果记为可恢复终止。
+    const cancelled =
+      signal?.aborted === true &&
+      (error === signal.reason || (error instanceof Error && error.name === "AbortError"));
+    console[cancelled ? "warn" : "error"](
+      formatLogPrefix("connectRemote", process.pid),
+      cancelled ? "remote connection canceled" : "remote connection failed",
+      {
+        stage: diagnostics.stage,
+        elapsedMs: Date.now() - diagnostics.startedAt,
+        errorType: error instanceof Error ? error.constructor.name : typeof error,
+        cancelled,
+      },
+    );
     // detect/deploy/handshake 任一步失败时尚未返回 RemoteConnection，调用方无从 dispose backend。
     disposeBackendOnce();
     throw error;
@@ -160,20 +175,24 @@ export async function connectRemote(
 
 async function connectRemoteUnchecked(
   backend: IRemoteBackend,
-  options?: ConnectOptions,
+  options: ConnectOptions | undefined,
+  diagnostics: { stage: string; startedAt: number },
 ): Promise<RemoteConnection> {
   const clientId = options?.clientId ?? `desktop-${Date.now()}`;
 
   const log = (...args: unknown[]) =>
     console.log(formatLogPrefix("connectRemote", process.pid), ...args);
 
-  // 1. Detect remote environment
+  diagnostics.stage = "remote environment detection";
+  diagnostics.startedAt = Date.now();
   log("detecting remote env...");
   const env = await backend.detect();
   throwIfRemoteConnectAborted(options?.signal);
   log("detected:", env);
   assertSupportedRemoteEnvironment(env);
 
+  diagnostics.stage = "remote runtime configuration";
+  diagnostics.startedAt = Date.now();
   const remoteRuntimeNetwork = await resolveRemoteRuntimeNetwork(
     backend,
     options?.remoteRuntimeNetwork,
@@ -182,17 +201,21 @@ async function connectRemoteUnchecked(
 
   // 2. Deploy server if needed
   if (!options?.skipDeploy) {
+    diagnostics.stage = "remote deployment";
+    diagnostics.startedAt = Date.now();
     log("deploying server...");
     await deployServer(backend, env, options);
     throwIfRemoteConnectAborted(options?.signal);
-    log("deploy complete");
+    log("deploy complete", { elapsedMs: Date.now() - diagnostics.startedAt });
   }
 
   // 3. Launch server
+  diagnostics.stage = "remote server launch";
+  diagnostics.startedAt = Date.now();
   log("launching remote server...");
   const stream = await backend.exec(buildRemoteServerCommand(options, remoteRuntimeNetwork));
   throwIfRemoteConnectAborted(options?.signal);
-  log("remote server exec started");
+  log("remote server exec started", { elapsedMs: Date.now() - diagnostics.startedAt });
 
   // Forward stderr for debugging
   stream.stderr.on("data", (chunk: Buffer) => {
@@ -201,11 +224,16 @@ async function connectRemoteUnchecked(
     console.log(`[remote] ${chunk.toString().trimEnd()}`);
   });
 
-  // 4. Handshake
+  diagnostics.stage = "remote server handshake";
+  diagnostics.startedAt = Date.now();
   log("performing handshake...");
   const { hello, remaining } = await performHandshake(stream, clientId, options?.handshakeTimeout);
   throwIfRemoteConnectAborted(options?.signal);
-  log("handshake done, server version:", hello.version);
+  log("handshake done, server version:", hello.version, {
+    elapsedMs: Date.now() - diagnostics.startedAt,
+  });
+  diagnostics.stage = "connection setup";
+  diagnostics.startedAt = Date.now();
 
   // 5. Wrap into RPC channel
   // If there's remaining data from handshake, push it back to the stream

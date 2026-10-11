@@ -132,3 +132,17 @@ flowchart TD
 
 - 用户要求移除 Node 24.14.0 的精确准入限制；保留根 `engines.node` 支持范围、mise 可复现基线、pnpm 版本校验和全部门禁权限、预算及检查定义。
 - 系统 Node 24.20.0 的三个公开入口只读计划均成功并记录实际运行时；未授权 fulltest 仍退出 2，错误 pnpm 版本仍退出 1。入口语法检查通过；只读计划不执行测试，也不代表该 Node 下 fulltest/slowtest 已通过。
+
+### 2026-10-11 slowtest 失败修复
+
+- 用户明确授权运行并修复至完成。首轮 `pnpm slowtest --human-authorized` 在 HEAD `5791be9292c947dc346fa2c9e997b8a78ce89d2d` 与原有未提交日志改动上退出 1：`FAIL total=4.9s compile_excluded=1.2s budgeted=3.8s limit=1500.0s`；类型、Lint、格式通过，但架构阶段发现 `OmpAgentInteractionStore.ts`、`OmpBtwStore.ts`、`v4Commands.ts` 分别为 411、418、428 行，超过现有 400 行上限，后续阶段未运行。
+- 三个文件均属于 Fork 独占的 `packages/omp-agent`；已缓存 `upstream/main` 没有该包，当前未提交差异分别新增/净增日志代码。此失败归属本地变更，不归因于上游。修复仅将交互快照纯组装、BTW 状态 patch 计算、命令诊断格式拆到同模块 helper；保留日志、公开接口、状态 owner、进程 fence、幂等、事件顺序与门禁判据，不修改需求或提高策略上限。
+- 临时隔离冒烟已从三个实际公开 Store/Service 入口验证后代身份歧义、终态与实核观察优先级、分页/缓存/cursor fence，BTW delta 与最新追问的成功/取消/错误/中断及冷读取，命令在飞/已完成去重和诊断字段/级别；使用隔离 core/store 端口，不冒称真实模型或 GUI。既有 `v4InteractionAck.test.ts` 3/3 通过、0 跳过；临时脚本已清理。本段定向证据不替代修复后稳定快照的完整 slowtest 输出。
+- 第二轮 `slowtest` 的架构、类型、Lint、格式、OMP 核心 204/204 与入口自检通过，但 Knip 报告两个未使用文件和七个未使用导出，最终 `FAIL total=36.3s compile_excluded=0.0s budgeted=36.3s limit=1500.0s`。无引用的 Fork Host 输出 helper 与离线同步读取口已删除；仍被模块内部调用的六个日志 helper/常量只收回直接导出，实现与现有 logger 对象入口保留。
+- `schedulerProtocol.ts` 与已缓存上游版本一致，当前仍有四个实际消费者及调度构建入口，不能按 Knip 报告删除有效源码。根因是本地 source 目录中已被 `.gitignore` 标为旧 tsc 残留的 `.js` 优先于 `.ts` 被 Knip 解析；精确删除该文件的 `.js`、`.d.ts` 及两个 source map 后，保留源码、既有 out/dist/增量与 Vite 缓存。残留本次生成的具体命令未追溯，不归因于上游协议缺陷。修复后独立 `pnpm knip` 退出 0；29 条配置提示不属于未使用项失败，未改扫描配置或豁免。
+- Host 原有 catch-all/空输出错误 handler 隐藏非 `EBADF`/`EPIPE` 错误，与既有可见性要求不符。修复仅经 Main 既有结构化日志通道报告安全类型和错误码，仍不抛回业务或递归写坏终端。临时隔离脚本通过 AST 载入当前三个真实 Host 函数、模拟 Main 接收端；修复前同步/异步非管道错误 0/2 可见而失败，修复后通过，含关闭管道容错、敏感正文不复制和中继故障不递归。它不是完整 Host 进程或 CentOS 验收；临时脚本已清理。
+- 第三轮完整门禁的静态检查、现存 UT/协议测试、构建、Windows 未发布 unpacked 打包、真实 GLM 流式/审批/write 与工具组件通过，但两个产品 GUI 都在就绪前白屏，整体 `TIMEOUT total=1511.1s compile_excluded=15.6s budgeted=1495.5s limit=1500.0s`、退出 124；恢复阶段未运行。Renderer 明确报 `serviceLogger.ts` 无条件注册 `process.stderr` 导致 `ReferenceError: process is not defined`。该初始化代码为 Fork 新增，不是上游协议或模型故障。
+- 修复把 Service Logger 的 Node PID、stderr 监听及故障最终出口限定在实际 Node 环境；浏览器使用既有 sink、共享级别/脱敏与无 PID 前缀，不注入假的 process 或 PID。新增 `serviceLoggerRuntime.test.ts` 覆盖无 process 的真实模块加载/日志结果及 Node sink 故障；浏览器场景修复前失败，修复后与现有诊断回归合计 12/12、0 跳过，并加入 full/slow 原有 services 测试阶段，不改变其他检查或断言。
+- 修复后单独复用原隔离启动 GUI 阶段进行实际冒烟，24.1 秒通过，截图可见真实模型设置和候选；窗口隐藏、未聚焦且不可聚焦，系统注册写入被阻止。该单阶段结果显式标为 `targeted-gui-startup-smoke-only`，不是完整 slowtest，通过结论仍须来自随后稳定快照的完整运行；临时启动脚本已清理，截图和隔离证据保留。
+- 第四轮完整 `slowtest` 在内容指纹 `aaba8f15466d951e542d4a0ef962c7c0c00899d221864bc6a48d3acd9ce336a6` 上退出 0，33 个阶段通过：`PASS total=224.9s compile_excluded=13.2s budgeted=211.8s limit=1500.0s`。真实 GLM、模型启动 GUI、两轮回复及同根冷恢复均完成，恢复 UUID 与唯一侧栏项保持一致。但真实发送/空闲转换还输出三次 Tooltip 受控模式切换诊断。
+- Tooltip 根因在当前 Composer 与已缓存 `upstream/main` 都存在：同位置的发送/停止分支无独立身份，React 复用同一 `ControlHintTooltip` 实例，但发送传受控 open、停止不传 open。修复为两种控制建立独立生命周期，不改公共 props、消息状态、快捷键、服务、协议或持久化；不是压制诊断。既有两轮真实 GUI 增加发送/停止悬浮、移开关闭、停止提示截图及 Renderer 警告/异常检查；仍执行原回复、UUID 和冷恢复断言。修复后的完整门禁结论以随后本次命令的稳定快照 receipt 为准，不把第四轮指纹的通过跨快照沿用。

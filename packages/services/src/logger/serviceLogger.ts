@@ -26,7 +26,7 @@ export function createServiceLogger(
     sink?: ServiceLogSink;
   },
 ): ServiceLogger {
-  const pid = options?.pid ?? process.pid;
+  const pid = options?.pid ?? (typeof process === "undefined" ? undefined : process.pid);
   const sink = options?.sink ?? console;
   // 服务层日志保持独立于 ZCode Agent runtime；级别唯一由共享 JCH_LOG_LEVEL 判定。
   function write(
@@ -67,11 +67,12 @@ export function createServiceLogger(
 
 let serviceLoggerSinkFailureReported = false;
 
-// stderr 的异步 error 也属于日志出口故障，不得杀掉业务进程。
-process.stderr.on("error", () => {});
+// Renderer/Web 也会导入此模块；无条件访问 stderr 曾在模块初始化时令真实 GUI 白屏。
+// 异步流错误处理只属于 Node 出口，浏览器继续使用既有 console/注入 sink。
+if (typeof process !== "undefined" && process.stderr) process.stderr.on("error", () => {});
 
 function reportServiceLoggerSinkFailure(): void {
-  if (serviceLoggerSinkFailureReported) return;
+  if (serviceLoggerSinkFailureReported || typeof process === "undefined" || !process.stderr) return;
   serviceLoggerSinkFailureReported = true;
   try {
     process.stderr.write(

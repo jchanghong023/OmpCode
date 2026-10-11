@@ -292,13 +292,23 @@ const rawConsole = {
 function writeRawHostConsole(consoleFn: (...args: unknown[]) => void, ...args: unknown[]): void {
   try {
     consoleFn(...args);
-  } catch {
-    // 任何日志终端故障都不能杀掉 Host；结构化消息仍交给 Main。
+  } catch (error) {
+    // 终端故障不能杀掉 Host；非管道错误仍须通过 Main 可见，不能静默吞掉。
+    handleHostOutputError(error);
   }
 }
 
-function handleHostOutputError(): void {
-  // 输出流错误属于日志故障，不能抛回业务或递归写入失效终端。
+function handleHostOutputError(error: unknown): void {
+  const code = error instanceof Error ? (error as NodeJS.ErrnoException).code : undefined;
+  if (code === "EBADF" || code === "EPIPE") return;
+  // 原先空 handler 隐藏了其他输出故障；只走既有结构化中继，避免递归写坏终端。
+  reportHostLog("error", [
+    {
+      event: "host.output.failed",
+      errorType: error instanceof Error ? error.name : typeof error,
+      ...(typeof code === "string" ? { code } : {}),
+    },
+  ]);
 }
 
 process.stdout.on("error", handleHostOutputError);
@@ -897,13 +907,21 @@ async function dispatchCronRun(request: CronRunDispatchRequest): Promise<{
     fixedSelection: existingRun?.modelSelection,
     // omp 换核后 ZCode Provider Registry 没有候选。派发时读取目标工作区的 omp 目录，
     // 避免 GUI 可选模型在定时任务执行时被旧 Registry 错误拒绝。
-    readConfigOptions: async () =>
-      (
-        await agentService.readWorkspacePresentation({
-          workspacePath: request.workspacePath,
-          workspaceIdentity: request.workspaceIdentity,
-        })
-      ).configOptions ?? [],
+    readConfigOptions: async () => {
+      const startedAt = Date.now();
+      logger.info(
+        `event=omp_automation_model_directory_read_started source=omp_workspace_presentation automationId=${request.automationId} runId=${request.runId} workspaceIdentityPresent=${Boolean(request.workspaceIdentity)}`,
+      );
+      const presentation = await agentService.readWorkspacePresentation({
+        workspacePath: request.workspacePath,
+        workspaceIdentity: request.workspaceIdentity,
+      });
+      const configOptions = presentation.configOptions ?? [];
+      logger.info(
+        `event=omp_automation_model_directory_read_returned source=omp_workspace_presentation automationId=${request.automationId} runId=${request.runId} workspaceIdentityPresent=${Boolean(request.workspaceIdentity)} optionCount=${configOptions.length} elapsedMs=${Date.now() - startedAt}`,
+      );
+      return configOptions;
+    },
     readSelection: () =>
       cronAutomationRepo.getModelSelectionForDispatch(
         request.automationId,
@@ -2388,7 +2406,14 @@ parentPort.on("message", async (e: Electron.MessageEvent) => {
   }
 
   if (msg.type === HostMessageTypes.CronRun) {
+    const startedAt = Date.now();
+    logger.info(
+      `event=cron_run_ipc_received source=scheduled_cron_run_ipc automationId=${msg.automationId} runId=${msg.runId} workspaceIdentityPresent=${Boolean(msg.workspaceIdentity)} targetTaskIdPresent=${Boolean(msg.targetTaskId)}`,
+    );
     if (databaseStartup?.coordinator.snapshot.phase !== "ready") {
+      logger.warn(
+        `event=cron_run_ipc_refused source=scheduled_cron_run_ipc automationId=${msg.automationId} runId=${msg.runId} failureKind=database_not_ready elapsedMs=${Date.now() - startedAt}`,
+      );
       parentPort.postMessage({
         type: HostResponseTypes.CronRunResult,
         runId: msg.runId,
@@ -2410,6 +2435,9 @@ parentPort.on("message", async (e: Electron.MessageEvent) => {
           ok: true,
           ...dispatchResult,
         });
+        logger.info(
+          `event=cron_run_ipc_result source=scheduled_cron_run_ipc automationId=${msg.automationId} runId=${msg.runId} ok=true taskIdPresent=${Boolean(dispatchResult.taskId)} sessionIdPresent=${Boolean(dispatchResult.sessionId)} elapsedMs=${Date.now() - startedAt}`,
+        );
       } catch (error) {
         parentPort.postMessage({
           type: HostResponseTypes.CronRunResult,
@@ -2418,6 +2446,9 @@ parentPort.on("message", async (e: Electron.MessageEvent) => {
           error: error instanceof Error ? error.message : String(error),
           failureKind: "transient",
         });
+        logger.warn(
+          `event=cron_run_ipc_result source=scheduled_cron_run_ipc automationId=${msg.automationId} runId=${msg.runId} ok=false failureKind=transient elapsedMs=${Date.now() - startedAt}`,
+        );
       }
     })();
     return;

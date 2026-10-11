@@ -41,6 +41,7 @@ function reportDiagnosticSinkFailure(): void {
 }
 
 // 根因：任意 stderr JSON 不等于日志；正文或伪造 Host 身份不能借转发进入唯一文件 writer。
+// stderr 已包含这些安全摘要，原 Host 二次白名单会丢失；仅保留身份、计数和状态，不开放载荷。
 const safeFields: Record<string, true> = {
   requestId: true,
   hostRequestId: true,
@@ -195,6 +196,74 @@ const safeFields: Record<string, true> = {
   hasSessionFile: true,
   hasStore: true,
   eligibleFailure: true,
+  snapshotCount: true,
+  changedCount: true,
+  forceClose: true,
+  descriptorCount: true,
+  protocolCode: true,
+  directorySessionId: true,
+  requestSent: true,
+  ownerSessionId: true,
+  canonicalId: true,
+  winnerSessionId: true,
+  aliasId: true,
+  aliasKind: true,
+  reuseStage: true,
+  lookupMethod: true,
+  reusedOwner: true,
+  sessionPathPresent: true,
+  childSubagentCount: true,
+  commandOutputCount: true,
+  rowCount: true,
+  outcome: true,
+  identityCount: true,
+  recordId: true,
+  recordCount: true,
+  revision: true,
+  currentRevision: true,
+  offset: true,
+  limit: true,
+  pageEventCount: true,
+  totalEventCount: true,
+  hasNextPage: true,
+  coverageStatus: true,
+  coverageIssues: true,
+  validSnapshotCount: true,
+  rejectedSnapshotCount: true,
+  rejectedCount: true,
+  schemaIssueCount: true,
+  requiredFieldRejectedCount: true,
+  fallbackStatus: true,
+  fallbackCount: true,
+  configOptionCount: true,
+  slashCommandCount: true,
+  containerType: true,
+  terminalResponsePossible: true,
+  contextWindow: true,
+  issues: true,
+  cursorPresent: true,
+  engineReused: true,
+  cacheHit: true,
+  readMode: true,
+  versionChanged: true,
+  readAttempted: true,
+  fileCacheCount: true,
+  processRevision: true,
+  previousProcessPresent: true,
+  processPresent: true,
+  agentCount: true,
+  historySourceCount: true,
+  liveSourceCount: true,
+  result: true,
+};
+
+// 只接纳共享交互 coverage schema 的固定 code；任意字符串数组仍不能经 Host 转发。
+const safeCoverageIssues: Record<string, true> = {
+  legacy_history_gaps: true,
+  record_unavailable: true,
+  missing_timestamp: true,
+  ambiguous_identity: true,
+  read_budget_exceeded: true,
 };
 
 export function redactOmpDiagnosticText(value: string, maxChars = MAX_TEXT_CHARS): string {
@@ -223,6 +292,15 @@ export function sanitizeOmpDiagnosticFields(
       result[key] = value;
     } else if (key === "supportedProtocolVersions" && Array.isArray(value)) {
       if (value.every((version) => Number.isSafeInteger(version) && version >= 0)) {
+        result[key] = value.slice(0, 16);
+        if (value.length > 16) result.truncated = true;
+      }
+    } else if (key === "coverageIssues" && Array.isArray(value)) {
+      if (
+        value.every(
+          (issue) => typeof issue === "string" && Object.hasOwn(safeCoverageIssues, issue),
+        )
+      ) {
         result[key] = value.slice(0, 16);
         if (value.length > 16) result.truncated = true;
       }

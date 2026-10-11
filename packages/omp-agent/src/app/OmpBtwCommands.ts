@@ -6,6 +6,7 @@ import type {
 import { parseBtwViewId } from "../domain/OmpBtwFrames.js";
 import { ProtocolError } from "./errors.js";
 import type { OmpBtwStore } from "./OmpBtwStore.js";
+import { diagnostics } from "./diagnostics.js";
 
 export function isOmpBtwSessionCommand(envelope: CommandEnvelope): boolean {
   return Boolean(envelope.sessionId && parseBtwViewId(envelope.sessionId));
@@ -21,7 +22,22 @@ export async function dispatchOmpBtwCommand(
     requireSessionId(id: string | null): string;
   },
 ): Promise<CommandAck> {
-  if (!sideViews) return reply.unsupported("side sessions");
+  if (!sideViews) {
+    const ack = reply.unsupported("side sessions");
+    diagnostics.warn("omp.btw.command.unsupported", {
+      commandId: envelope.commandId,
+      sessionId: envelope.sessionId,
+      commandType: envelope.type,
+      status: "unsupported",
+      reason: "side_sessions_unavailable",
+    });
+    return ack;
+  }
+  diagnostics.debug("omp.btw.command.received", {
+    commandId: envelope.commandId,
+    sessionId: envelope.sessionId,
+    commandType: envelope.type,
+  });
   try {
     const id = reply.requireSessionId(envelope.sessionId);
     if (envelope.type === "createSelectionSideSession") {
@@ -30,26 +46,86 @@ export async function dispatchOmpBtwCommand(
         envelope.payload as CommandPayloadMap["createSelectionSideSession"],
         envelope,
       );
-      return reply.ack("accepted", { result });
+      const ack = reply.ack("accepted", { result });
+      diagnostics.info("omp.btw.command.ack", {
+        commandId: envelope.commandId,
+        sessionId: id,
+        commandType: envelope.type,
+        status: "accepted",
+      });
+      return ack;
     }
     if (envelope.type === "sendText") {
       const payload = envelope.payload as CommandPayloadMap["sendText"];
-      if (payload.planEnabled) return reply.unsupported("side session plan mode");
+      if (payload.planEnabled) {
+        const ack = reply.unsupported("side session plan mode");
+        diagnostics.warn("omp.btw.command.unsupported", {
+          commandId: envelope.commandId,
+          sessionId: id,
+          commandType: envelope.type,
+          status: "unsupported",
+          reason: "plan_mode",
+        });
+        return ack;
+      }
       const result = await sideViews.send(id, payload, envelope);
-      return reply.ack("accepted", { result });
+      const ack = reply.ack("accepted", { result });
+      diagnostics.info("omp.btw.command.ack", {
+        commandId: envelope.commandId,
+        sessionId: id,
+        commandType: envelope.type,
+        status: "accepted",
+      });
+      return ack;
     }
     if (envelope.type === "stop") {
       const cancelled = await sideViews.stop(id);
-      return reply.ack(cancelled ? "accepted" : "noop");
+      const status = cancelled ? "accepted" : "noop";
+      const ack = reply.ack(status);
+      diagnostics.info("omp.btw.command.ack", {
+        commandId: envelope.commandId,
+        sessionId: id,
+        commandType: envelope.type,
+        status,
+      });
+      return ack;
     }
-    return reply.unsupported("side session action");
+    const ack = reply.unsupported("side session action");
+    diagnostics.warn("omp.btw.command.unsupported", {
+      commandId: envelope.commandId,
+      sessionId: id,
+      commandType: envelope.type,
+      status: "unsupported",
+      reason: "unsupported_action",
+    });
+    return ack;
   } catch (error) {
-    return reply.ack("rejected", {
-      reasonCode:
-        error instanceof ProtocolError && error.code === -32601
-          ? "fault.command.sideSessionCapabilityMissing"
-          : "fault.command.sideSessionFailed",
+    const reasonCode =
+      error instanceof ProtocolError && error.code === -32601
+        ? "fault.command.sideSessionCapabilityMissing"
+        : "fault.command.sideSessionFailed";
+    const ack = reply.ack("rejected", {
+      reasonCode,
       message: error instanceof Error ? error.message : String(error),
     });
+    const schemaRejected = error instanceof Error && error.name === "ZodError";
+    diagnostics.warn(
+      schemaRejected ? "omp.btw.command.schema_rejected" : "omp.btw.command.rejected",
+      {
+        commandId: envelope.commandId,
+        sessionId: envelope.sessionId,
+        commandType: envelope.type,
+        status: "rejected",
+        reasonCode,
+        failureStage: schemaRejected
+          ? "schema_validation"
+          : error instanceof ProtocolError
+            ? "protocol_rejection"
+            : "command_failure",
+        errorType: error instanceof Error ? error.name : typeof error,
+        ...(error instanceof ProtocolError ? { protocolCode: error.code } : {}),
+      },
+    );
+    return ack;
   }
 }

@@ -1,4 +1,5 @@
 import type { ZCodeSessionAgentInteractionsResult } from "@zcode/shared";
+import { logger } from "@/logger.js";
 
 export interface OmpAgentInteractionsReadState {
   result: ZCodeSessionAgentInteractionsResult | null;
@@ -78,6 +79,15 @@ export function createOmpAgentInteractionsReader(options: {
           ? previous
           : { ...page, events };
       publish({ result, loading: false, loadingMore: false, error: null });
+      // 刷新开头会发布旧 result；完成日志只能在查询及分页成功后记录。
+      logger.debug("[OMP] 智能体交互记录读取完成", {
+        event: "omp.agent_interactions.read.completed",
+        agentCount: result.agents.length,
+        eventCount: result.events.length,
+        totalEventCount: result.totalEvents,
+        revision: result.revision,
+        hasNextPage: Boolean(result.nextCursor),
+      });
     } catch (error) {
       publish({
         ...state,

@@ -106,6 +106,11 @@ export function useOmpCommandCompletion(
     setState({ value: { items: [], loading: true }, requestKey, services });
     debounceRef.current = setTimeout(() => {
       debounceRef.current = null;
+      logger.debug("[useOmpCommandCompletion] 动态补全请求开始", {
+        requestSeq: seq,
+        hasSessionId: Boolean(options.sessionId),
+        hasRemoteSessionId: Boolean(remoteSessionId),
+      });
       services.zcodeAgentService
         .completeOmpCommand({
           workspacePath: options.workspacePath,
@@ -116,17 +121,36 @@ export function useOmpCommandCompletion(
           cursor,
         })
         .then((result) => {
-          if (seq !== seqRef.current) return;
+          const stale = seq !== seqRef.current;
+          logger.debug("[useOmpCommandCompletion] 动态补全请求完成", {
+            requestSeq: seq,
+            candidateCount: result.items?.length ?? 0,
+            stale,
+            capabilityAvailable: true,
+          });
+          if (stale) return;
           setState({ value: { items: result.items ?? [], loading: false }, requestKey, services });
         })
         .catch((error: unknown) => {
-          if (seq !== seqRef.current) return;
+          const stale = seq !== seqRef.current;
+          if (stale) {
+            logger.debug("[useOmpCommandCompletion] 忽略过期失败结果", {
+              requestSeq: seq,
+              stale,
+            });
+            return;
+          }
           // 能力缺失是合法回落（旧核 -32601）；记入 ref 跳过后续请求。其余仅记录，不打断输入。
           const message = error instanceof Error ? error.message : String(error);
-          if (isOmpCapabilityMissingError(error)) {
+          const capabilityMissing = isOmpCapabilityMissingError(error);
+          if (capabilityMissing) {
             capabilityMissingRef.current = true;
           }
-          logger.debug("[useOmpCommandCompletion] 动态补全不可用", { error: message });
+          logger.debug("[useOmpCommandCompletion] 动态补全不可用", {
+            error: message,
+            errorType: error instanceof Error ? error.name : typeof error,
+            capabilityMissing,
+          });
           setState({ value: EMPTY, requestKey, services });
         });
     }, 120);

@@ -2197,6 +2197,12 @@ export function createZCodeAgentService(
         if (request.method === zcodeProtocolMethods.interactionRequestPermission) {
           const parsed = zcodePermissionRequestParamsSchema.safeParse(request.params);
           if (!parsed.success) {
+            logger.warn(request.trace?.traceId, "ZCode permission 请求校验拒绝", {
+              event: "zcode_agent.permission.request_rejected",
+              module: "services.zcode_agent",
+              protocolRequestId: request.id,
+              code: -32602,
+            });
             void client.respondError(request.id, {
               code: -32602,
               message: "Invalid permission request params",
@@ -2214,6 +2220,19 @@ export function createZCodeAgentService(
             client,
             protocolRequestId: request.id,
           });
+          logger[wasPending ? "debug" : "info"](
+            request.trace?.traceId,
+            wasPending ? "ZCode permission 重复请求未再次派发" : "ZCode permission 请求派发",
+            {
+              event: wasPending
+                ? "zcode_agent.permission.request_duplicate"
+                : "zcode_agent.permission.request_dispatched",
+              module: "services.zcode_agent",
+              protocolRequestId: request.id,
+              requestId: parsed.data.requestId,
+              sessionId: parsed.data.sessionId,
+            },
+          );
           if (!wasPending) {
             emitSessionEvent(workspace, parsed.data.sessionId, {
               type: "permission.request",
@@ -2226,6 +2245,12 @@ export function createZCodeAgentService(
         if (request.method === zcodeProtocolMethods.interactionRequestUserInput) {
           const parsed = zcodeUserInputRequestParamsSchema.safeParse(request.params);
           if (!parsed.success) {
+            logger.warn(request.trace?.traceId, "ZCode userInput 请求校验拒绝", {
+              event: "zcode_agent.user_input.request_rejected",
+              module: "services.zcode_agent",
+              protocolRequestId: request.id,
+              code: -32602,
+            });
             void client.respondError(request.id, {
               code: -32602,
               message: "Invalid user input request params",
@@ -2240,6 +2265,19 @@ export function createZCodeAgentService(
           });
           const wasPending = pendingUserInputs.has(key);
           pendingUserInputs.set(key, { client, protocolRequestId: request.id });
+          logger[wasPending ? "debug" : "info"](
+            request.trace?.traceId,
+            wasPending ? "ZCode userInput 重复请求未再次派发" : "ZCode userInput 请求派发",
+            {
+              event: wasPending
+                ? "zcode_agent.user_input.request_duplicate"
+                : "zcode_agent.user_input.request_dispatched",
+              module: "services.zcode_agent",
+              protocolRequestId: request.id,
+              requestId: parsed.data.requestId,
+              sessionId: parsed.data.sessionId,
+            },
+          );
           if (!wasPending) {
             // agent 为恢复丢失的 protocol id 会重发同一业务 requestId。
             // host 需要刷新可响应的 protocolRequestId，但不能重复广播给 UI，
@@ -2293,6 +2331,14 @@ export function createZCodeAgentService(
             return;
           }
           // 没有账号凭据解析器的请求无人应答只会滞留到 CLI 侧 180s 超时，直接快速失败。
+          logger.warn(request.trace?.traceId, "ZCode provider runtime headers 无法解析凭据", {
+            event: "zcode_agent.runtime_headers.resolver_unavailable",
+            module: "services.zcode_agent",
+            protocolRequestId: request.id,
+            requestId: parsed.data.requestId,
+            sessionId: parsed.data.sessionId,
+            reason: accountRequestAuthService ? "account_access_missing" : "resolver_missing",
+          });
           pendingProviderRuntimeHeaders.delete(pendingKey);
           void pending.client.respond(pending.protocolRequestId, {
             headersApplied: false,
@@ -4617,6 +4663,12 @@ export function createZCodeAgentService(
         expectedPersistence?: "deferred" | "immediate";
       },
     ): Promise<boolean> {
+      const startedAt = Date.now();
+      logger.info(undefined, "开始请求 ZCode Protocol session/close", {
+        event: "zcode_agent.session.close_started",
+        module: "services.zcode_agent",
+        sessionId: params.sessionId,
+      });
       const client = await getClient(params);
       const result = await client.request(
         zcodeProtocolMethods.sessionClose,
@@ -4628,6 +4680,13 @@ export function createZCodeAgentService(
         },
         zcodeSessionCloseResultSchema,
       );
+      logger.info(undefined, "ZCode Protocol session/close 完成", {
+        event: "zcode_agent.session.close_completed",
+        module: "services.zcode_agent",
+        sessionId: params.sessionId,
+        closed: result.closed ?? true,
+        durationMs: Date.now() - startedAt,
+      });
       // 兼容尚未返回 closed 字段、但已成功执行普通 close 的 Agent。
       return result.closed ?? true;
     },

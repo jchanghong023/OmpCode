@@ -6,6 +6,7 @@ import { deleteColdSession } from "./deleteColdSession.js";
 import { deleteLoadedSession } from "./deleteLoadedSession.js";
 import { ProtocolError } from "./errors.js";
 import type { OmpDirectoryGatewayPort, OmpStorePort } from "./ports.js";
+import { diagnostics } from "./diagnostics.js";
 
 /** 登记门的注册表读写面（SessionRegistry 的窄视图）。 */
 interface RegistryGateIo {
@@ -73,6 +74,17 @@ export class SessionRegistryGates {
     existingOwner?: ConversationEngine,
   ): ConversationEngine {
     if (!this.canResume(sessionId, canonicalId)) {
+      const blockedByDeleted =
+        this.deletedSessionIds.has(sessionId) || this.deletedSessionIds.has(canonicalId);
+      diagnostics.warn("omp.session.cold_hydration.rejected", {
+        sessionId,
+        canonicalId,
+        stage: this.disposing
+          ? "dispose"
+          : blockedByDeleted
+            ? "delete_tombstone"
+            : "close_tombstone",
+      });
       void engine.dispose().catch(() => {});
       this.io.removeIndexSession(engine.workspaceId, sessionId);
       throw new ProtocolError(-32004, `session unavailable: ${sessionId}`);
@@ -80,6 +92,12 @@ export class SessionRegistryGates {
     const winner = existingOwner ?? this.io.getEngine(sessionId);
     if (winner && winner !== engine) {
       void engine.dispose().catch(() => {});
+      diagnostics.debug("omp.session.cold_hydration.winner_reused", {
+        sessionId,
+        canonicalId,
+        winnerSessionId: winner.sessionId,
+        stage: "registration",
+      });
       return winner;
     }
     this.io.engines.set(engine.sessionId, engine);
@@ -106,7 +124,9 @@ export async function deleteSessionWith(
 ): Promise<void> {
   // 修复（S7-4）：删除墓碑先行——同身份 resume 在途时，冷恢复完成不得把已删会话
   // 登记复活（幽灵引擎 + 索引行）。删除未生效时在 catch 回滚，会话身份仍有效。
+  const startedAt = Date.now();
   host.gates.markDeleted(sessionId);
+  diagnostics.info("omp.session.delete.started", { sessionId, stage: "tombstone" });
   const deletionIds = new Set([sessionId]);
   const markIdentity = (id: string) => {
     deletionIds.add(id);
@@ -157,6 +177,12 @@ export async function deleteSessionWith(
       if (coldSummary?.commandOutputOnly) {
         await deleteDerived();
         host.removeIndexSession(workspace.id, sessionId);
+        diagnostics.info("omp.session.delete.completed", {
+          sessionId,
+          stage: "cleanup",
+          outcome: "command_output_only",
+          elapsedMs: Date.now() - startedAt,
+        });
         return;
       }
     }
@@ -166,6 +192,21 @@ export async function deleteSessionWith(
       (engine && !persistedPath) || coldSummary?.commandOutputOnly
         ? { success: true, code: undefined, error: undefined }
         : await host.directory.sendDirectory({ type: "delete_session", sessionId: stableId });
+    diagnostics[
+      directoryOutcome.success
+        ? "info"
+        : directoryOutcome.code === "omp_capability_missing"
+          ? "warn"
+          : "error"
+    ]("omp.session.delete.directory.result", {
+      sessionId,
+      directorySessionId: stableId,
+      commandType: "delete_session",
+      requestSent: !((engine && !persistedPath) || coldSummary?.commandOutputOnly),
+      success: directoryOutcome.success,
+      code: directoryOutcome.code,
+      elapsedMs: Date.now() - startedAt,
+    });
     if (directoryOutcome.success || directoryOutcome.code !== "omp_capability_missing") {
       if (!directoryOutcome.success) {
         // omp 权威删除失败（修订冲突/租约冲突等）：如实上报，本地索引保留（可重试）。
@@ -186,9 +227,23 @@ export async function deleteSessionWith(
         }
       }
       if (engine) host.forgetRekeyed(engine.sessionId);
+      diagnostics.info("omp.session.delete.completed", {
+        sessionId,
+        directorySessionId: stableId,
+        stage: "cleanup",
+        outcome: "directory",
+        elapsedMs: Date.now() - startedAt,
+      });
       return;
     }
     // 旧核无 v3 会话目录：回落本地文件删除路径（仍须确认文件删除成功后才移除索引）。
+    diagnostics.warn("omp.session.delete.fallback", {
+      sessionId,
+      directorySessionId: stableId,
+      stage: "directory_delete",
+      fallback: engine ? "loaded_local_files" : "cold_local_files",
+      code: directoryOutcome.code,
+    });
     if (engine) {
       const stableId = await deleteLoadedSession(engine, host.store, sessionId);
       await deleteDerived();
@@ -199,6 +254,12 @@ export async function deleteSessionWith(
         host.removeIndexSession(engine.workspaceId, id);
       }
       host.forgetRekeyed(engine.sessionId);
+      diagnostics.info("omp.session.delete.completed", {
+        sessionId,
+        stage: "cleanup",
+        outcome: "loaded_local_files",
+        elapsedMs: Date.now() - startedAt,
+      });
       return;
     }
     // 冷会话文件与索引同步删除；没有找到时保持明确的 unavailable 错误。
@@ -212,12 +273,25 @@ export async function deleteSessionWith(
     ) {
       await deleteDerived();
       if (workspace) host.removeIndexSession(workspace.id, sessionId);
+      diagnostics.info("omp.session.delete.completed", {
+        sessionId,
+        stage: "cleanup",
+        outcome: "cold_local_files",
+        elapsedMs: Date.now() - startedAt,
+      });
       return;
     }
     throw new ProtocolError(-32004, `session unavailable: ${sessionId}`);
   } catch (error) {
     // 删除未生效（OMP 拒绝/存储失败/会话不存在）：回滚墓碑，会话身份仍可正常使用。
     for (const id of deletionIds) host.gates.rollbackDeleted(id);
+    diagnostics.warn("omp.session.delete.rollback", {
+      sessionId,
+      stage: "tombstone_rollback",
+      identityCount: deletionIds.size,
+      errorType: error instanceof Error ? error.name : typeof error,
+      elapsedMs: Date.now() - startedAt,
+    });
     throw error;
   }
 }
@@ -228,11 +302,17 @@ export async function closeSessionWith(
 ): Promise<void> {
   // 修复（S7-4）：关闭墓碑先行（close 结束即解除）——同身份 resume 在途时，冷恢复
   // 完成不得把正在关闭的会话登记复活；关闭完成后重新打开不受影响。
+  const startedAt = Date.now();
   host.gates.markClosing(sessionId);
+  diagnostics.info("omp.session.close.started", { sessionId, stage: "tombstone" });
+  let outcome: "failed" | "not_loaded" | "closed" = "failed";
   const closingIds = new Set([sessionId]);
   try {
     const engine = host.getEngine(sessionId);
-    if (!engine) return;
+    if (!engine) {
+      outcome = "not_loaded";
+      return;
+    }
     const persistedPath = engine.ompSessionFile;
     // 查找别名共享一个 owner，关闭窗口必须拦住 owner/canonical 的恢复，不能复用 disposed 引擎。
     for (const id of [engine.sessionId, ompSessionIdOfFilePath(persistedPath)])
@@ -252,7 +332,11 @@ export async function closeSessionWith(
     if (!persistedPath && !hasCommandHistory) {
       host.removeIndexSession(engine.workspaceId, engine.sessionId);
     }
+    outcome = "closed";
   } finally {
     for (const id of closingIds) host.gates.endClosing(id);
+    const fields = { sessionId, stage: "teardown", outcome, elapsedMs: Date.now() - startedAt };
+    if (outcome === "failed") diagnostics.warn("omp.session.close.failed", fields);
+    else diagnostics.info("omp.session.close.completed", fields);
   }
 }

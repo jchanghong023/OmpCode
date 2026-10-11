@@ -146,6 +146,7 @@ function OmpModelRolesEditor(
       setLoadFailure("");
       return resolveOmpRolesLoadOutcome({ rpcReady: false, error: undefined });
     }
+    const startedAt = Date.now();
     try {
       const result = await services.zcodeAgentService.getOmpModelRoles({
         workspacePath,
@@ -154,6 +155,10 @@ function OmpModelRolesEditor(
       if (requestGeneration !== generation.current || requestSequence !== loadSequence.current) {
         return "unavailable";
       }
+      logger.info("[omp-model-roles] RPC 角色目录读取完成", {
+        roleCount: result.roles.length,
+        elapsedMs: Date.now() - startedAt,
+      });
       setRpcRoles(result.roles);
       setSource("rpc");
       setLoadFailure(null);
@@ -167,6 +172,13 @@ function OmpModelRolesEditor(
       const outcome = resolution.isRemoteTarget
         ? "unavailable"
         : resolveOmpRolesLoadOutcome({ rpcReady: true, error });
+      logger[outcome === "fallback" ? "warn" : "error"]("[omp-model-roles] RPC 角色目录读取失败", {
+        stage: "rpc_load",
+        resultStatus: outcome,
+        fallbackAllowed: outcome === "fallback",
+        errorType: error instanceof Error ? error.name : typeof error,
+        elapsedMs: Date.now() - startedAt,
+      });
       logger.debug("[omp-model-roles] RPC 角色目录不可用", { error: message, outcome });
       if (outcome === "unavailable") setLoadFailure(message);
       return outcome;
@@ -222,10 +234,15 @@ function OmpModelRolesEditor(
         ...current,
         [roleId]: { saving: true, savedAt: null, error: null, effectiveNote: null },
       }));
+      const startedAt = Date.now();
       try {
         // 核心按逐角色修订执行 CAS；遗漏此值会使真实 GUI 保存报 invalid_params。
         // 复用目录/保存响应中的目标角色事实，不拿其他角色或整个目录的修订代替。
         const expectedRevision = rpcRoles.find((role) => role.roleId === roleId)?.revision;
+        logger.info("[omp-model-roles] RPC 保存开始", {
+          stage: "rpc_save",
+          expectedRevisionPresent: expectedRevision !== undefined,
+        });
         const result = await services.zcodeAgentService.setOmpModelRole({
           workspacePath,
           ...(workspaceIdentity ? { workspaceIdentity } : {}),
@@ -235,6 +252,12 @@ function OmpModelRolesEditor(
           ...(expectedRevision !== undefined ? { expectedRevision } : {}),
         });
         if (requestGeneration !== generation.current) return;
+        logger.info("[omp-model-roles] RPC 保存成功", {
+          stage: "rpc_save",
+          resultStatus: "saved",
+          effectiveNotePresent: Boolean(result.effectiveNote),
+          elapsedMs: Date.now() - startedAt,
+        });
         setRpcRoles((current) =>
           current.map((role) => (role.roleId === roleId ? result.role : role)),
         );
@@ -259,10 +282,16 @@ function OmpModelRolesEditor(
         // 保存失败同样按三态分流（S8-1）：只有旧核永久缺失（-32601）才允许转本地
         // 回落保存（切换到回落编辑器直写用户 config.yml）；-32000 等暂时不可用保留
         // 待保存选择显示失败供重试，绝不静默降级直写用户配置。
-        if (
-          !resolution.isRemoteTarget &&
-          classifyOmpRoleSaveFailure(error) === "capabilityMissing"
-        ) {
+        const capabilityMissing =
+          !resolution.isRemoteTarget && classifyOmpRoleSaveFailure(error) === "capabilityMissing";
+        logger[capabilityMissing ? "warn" : "error"]("[omp-model-roles] RPC 保存失败", {
+          stage: "rpc_save",
+          resultStatus: capabilityMissing ? "fallback" : "failed",
+          capabilityMissing,
+          errorType: error instanceof Error ? error.name : typeof error,
+          elapsedMs: Date.now() - startedAt,
+        });
+        if (capabilityMissing) {
           logger.info("[omp-model-roles] 保存遇旧核能力缺失，转本地回落编辑", {
             roleId,
             error: message,

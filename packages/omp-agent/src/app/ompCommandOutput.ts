@@ -2,6 +2,8 @@ import type { ConversationProjection } from "../domain/conversationProjection.js
 import { createId } from "../domain/ids.js";
 import { visibleOmpCustomDisplay } from "../domain/OmpCustomMessage.js";
 import type { OmpCommandOutputRecord } from "../domain/OmpCommandOutput.js";
+import { diagnostics } from "./diagnostics.js";
+// 日志依赖需追加，不能替换构造参数仍使用的类型导入。
 import type { EngineInit } from "./engineInit.js";
 
 /** 命令显示事实桥：投影仍是唯一行/seq owner，IO 只经注入存储端口。 */
@@ -38,7 +40,11 @@ export class OmpCommandOutputBridge {
 
   private publish(record: OmpCommandOutputRecord): void {
     this.host.projection().appendCommandOutput(record);
-    void this.host.save?.(record, this.host.sessionPath()).catch(() => {
+    void this.host.save?.(record, this.host.sessionPath()).catch((error: unknown) => {
+      diagnostics.warn("omp.command_output.persist.failed", {
+        failureStage: "history_save",
+        errorType: error instanceof Error ? error.name : typeof error,
+      });
       const projection = this.host.projection();
       projection.patchSideViewState({
         control: {

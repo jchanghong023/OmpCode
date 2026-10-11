@@ -28,7 +28,13 @@ export function dispatchOmpUiFrame(
     // 修复（B1）：未知 method/畸形字段不能静默吞帧——omp 侧对该请求的等待无超时，
     // 帧被丢弃会让对端永久挂起。best-effort 从原始 record 取 id 回 cancelled 终止响应；
     // id 缺失时无法回执，保持 warn（对端仅能靠自身超时兜底）。
-    logger.warn("invalid extension_ui_request", { issues: parsed.error.issues.length });
+    logger.warn("invalid extension_ui_request", {
+      event: "omp.ui_request.decode.rejected",
+      issues: parsed.error.issues.length,
+      failureStage: "schema_validation",
+      ompRequestId: typeof record.id === "string" ? record.id : undefined,
+      terminalResponsePossible: typeof record.id === "string" && record.id.length > 0,
+    });
     respondTerminal(record, handlers.respond);
     return true;
   }

@@ -93,7 +93,17 @@ export function createOmpCommandOutputStore(root: string, workspaceIdentity?: st
         // 否则一次冷扫描失败会污染后续成功扫描后的 dispose，误报旧的读取错误。
         if (kind === "read") return;
         writeFailure = error;
-        logger.warn("OMP 命令派生历史写入失败", { error: String(error) });
+        const errorCode = (error as NodeJS.ErrnoException | null)?.code;
+        logger.warn("OMP 命令派生历史写入失败", {
+          event: "omp.command_output.persistence.failed",
+          stage: "serial_write",
+          errorType: error instanceof Error ? error.name : typeof error,
+          errorCode:
+            typeof errorCode === "string" && /^[A-Z][A-Z0-9_]{0,63}$/.test(errorCode)
+              ? errorCode
+              : undefined,
+          error: String(error),
+        });
       },
     );
     return current;
@@ -312,6 +322,16 @@ export function createOmpCommandOutputStore(root: string, workspaceIdentity?: st
       if (writeFailure !== undefined) {
         const failure = writeFailure;
         writeFailure = undefined;
+        const errorCode = (failure as NodeJS.ErrnoException | null)?.code;
+        logger.error("OMP 命令派生历史排空失败", {
+          event: "omp.command_output.persistence.failed",
+          stage: "flush",
+          errorType: failure instanceof Error ? failure.name : typeof failure,
+          errorCode:
+            typeof errorCode === "string" && /^[A-Z][A-Z0-9_]{0,63}$/.test(errorCode)
+              ? errorCode
+              : undefined,
+        });
         throw failure;
       }
     },

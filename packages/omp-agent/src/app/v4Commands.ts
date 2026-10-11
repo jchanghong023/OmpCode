@@ -18,6 +18,7 @@ import { prepareOmpAttachmentInput } from "./ompAttachmentInput.js";
 import { engineModelSelectionOf } from "./ompEngineProcess.js";
 import type { OmpBtwStore } from "./OmpBtwStore.js";
 import { dispatchOmpBtwCommand, isOmpBtwSessionCommand } from "./OmpBtwCommands.js";
+import * as commandDiagnostics from "./ompCommandDiagnostics.js";
 
 const UNSUPPORTED = "fault.command.unsupportedByOmpCore";
 const CAP = PROTOCOL_V4_LIMITS.idempotencyTablePerSession;
@@ -45,6 +46,7 @@ export class V4CommandService {
   async handle(raw: unknown): Promise<CommandAck> {
     const parsed = parseCommandEnvelope(raw);
     if (!parsed.ok) {
+      commandDiagnostics.envelopeRejected(parsed.error.issues.length);
       throw new ProtocolError(
         -32602,
         `invalid v4 command envelope: ${parsed.error.issues[0]?.message ?? "schema mismatch"}`,
@@ -54,12 +56,15 @@ export class V4CommandService {
     const key = `${envelope.sessionId ?? "global"}:${envelope.commandId}`;
     const cached = this.idempotency.get(key);
     if (cached) {
+      commandDiagnostics.deduplicated(envelope, cached);
       return cached;
     }
     const pending = this.inFlight.get(key);
     if (pending) {
+      commandDiagnostics.deduplicated(envelope);
       return pending;
     }
+    commandDiagnostics.received(envelope);
     // 失败路径：finally 先清在飞项让后续投递可重试，错误沿 promise 原样抛给所有等待者，不改写 ack。
     const promise = this.dispatch(envelope)
       .then((ack) => {
@@ -88,7 +93,7 @@ export class V4CommandService {
     status: CommandAck["status"],
     extra: Partial<CommandAck> = {},
   ): CommandAck {
-    return {
+    const ack: CommandAck = {
       commandId: envelope.commandId,
       status,
       revisionAtDecision: envelope.sessionId
@@ -96,6 +101,8 @@ export class V4CommandService {
         : 0,
       ...extra,
     };
+    commandDiagnostics.acknowledged(envelope, status, ack);
+    return ack;
   }
 
   private staleAck(envelope: CommandEnvelope): CommandAck {

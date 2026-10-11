@@ -2146,8 +2146,9 @@ function ConversationComposerImpl({
             />
           )}
         </span>
+        {/* 发送受控、停止非受控；独立身份避免 React 复用同一浮层而切换状态所有者。 */}
         {showStopControl ? (
-          <ControlHintTooltip title={stopTooltipTitle} shortcut="Esc">
+          <ControlHintTooltip key="stop" title={stopTooltipTitle} shortcut="Esc">
             <Button
               type="button"
               variant="secondary"
@@ -2162,6 +2163,7 @@ function ConversationComposerImpl({
           </ControlHintTooltip>
         ) : (
           <ControlHintTooltip
+            key="send"
             title={resolvedSendTooltipTitle}
             shortcut={resolvedSendTooltipShortcut}
             open={Boolean(modifierTooltip) || sendTooltipOpen}

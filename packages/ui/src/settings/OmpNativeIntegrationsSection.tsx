@@ -3,6 +3,7 @@ import type { OmpNativeIntegrationSnapshot } from "@zcode/shared/omp-integration
 import { Button } from "@/components/ui/button.js";
 import { usePlatform } from "@/hooks/usePlatform.js";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
+import { logger } from "@/logger.js";
 
 type Kind = "extension" | "mcp" | "hook";
 
@@ -156,21 +157,51 @@ export function OmpNativeIntegrationsSection({
     setLoading(true);
     setSnapshot(null);
     if (!platform.readOmpNativeIntegrations) {
+      logger.warn("[omp-settings] Native integrations read unavailable", {
+        event: "omp.settings.native_integrations.read.unsupported",
+        requestId: currentRequest,
+      });
       setError("unsupported");
       setLoading(false);
       return;
     }
     try {
+      logger.debug("[omp-settings] Native integrations read started", {
+        event: "omp.settings.native_integrations.read.started",
+        requestId: currentRequest,
+        hasWorkspaceScope: Boolean(workspacePath),
+      });
       const result = await platform.readOmpNativeIntegrations(workspacePath);
       if (requestId.current !== currentRequest) return;
       if (result.success) {
         setSnapshot(result.snapshot);
         setError(null);
+        logger.debug("[omp-settings] Native integrations read completed", {
+          event: "omp.settings.native_integrations.read.completed",
+          requestId: currentRequest,
+          extensionCount: result.snapshot.extensions.length,
+          mcpServerCount: result.snapshot.mcpServers.length,
+          hookCount: result.snapshot.hooks.length,
+          hasProfileScope: Boolean(result.snapshot.profileDir),
+          hasProjectScope: Boolean(result.snapshot.projectDir),
+          configErrorCount: result.snapshot.configErrors.length,
+          hookErrorCount: result.snapshot.hookErrors.length,
+        });
       } else {
+        logger.warn("[omp-settings] Native integrations read failed", {
+          event: "omp.settings.native_integrations.read.failed",
+          requestId: currentRequest,
+          phase: "response",
+        });
         setError(result.error);
       }
     } catch {
       if (requestId.current !== currentRequest) return;
+      logger.warn("[omp-settings] Native integrations read failed", {
+        event: "omp.settings.native_integrations.read.failed",
+        requestId: currentRequest,
+        phase: "request",
+      });
       setError("load_failed");
     } finally {
       if (requestId.current === currentRequest) setLoading(false);
