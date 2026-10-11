@@ -29,6 +29,9 @@ import {
 import {
   botProviders,
   formatLogPrefix,
+  isApplicationLogLevelEnabled,
+  safeLogMessage,
+  serializeLogValue,
   formatZodError,
   remoteTargetSchema,
   SERVER_REMOTE_PROTOCOL_VERSION,
@@ -95,8 +98,17 @@ function wrapWebSocket(ws: WebSocket): ISocket {
   };
 }
 
-const log = (...args: unknown[]) =>
-  console.log(formatLogPrefix("zcode-server:http", process.pid), ...args);
+const log = (...args: unknown[]) => {
+  if (!isApplicationLogLevelEnabled("info")) return;
+  try {
+    console.log(
+      formatLogPrefix("zcode-server:http", process.pid),
+      safeLogMessage(args.map(serializeLogValue).join(" ")),
+    );
+  } catch {
+    // 日志失败不改变 RPC 的结果或异常。
+  }
+};
 
 function setupChannelServer(
   ws: WebSocket,

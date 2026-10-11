@@ -2,25 +2,26 @@
 // 与 apps/zcode-cli 的 ZCodeProtocolNdjsonConnection 语义对齐（response 先行，无 ready 握手帧）。
 
 import { createInterface } from "node:readline";
-import { appendFileSync } from "node:fs";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { encodeJsonlLine } from "../domain/jsonlFraming.js";
 import type { HostGateway, HostUserInputAnswer } from "../app/ports.js";
 import { logger } from "./logger.js";
+import {
+  hostDiagnostics,
+  hostRequestContext,
+  isInteractionControlRequest,
+  logHostInteraction,
+  logHostRequestFailure,
+  logHostRequestResult,
+  observeHostOutput,
+  requestQueueKey,
+  safeErrorSummary,
+  safeInteractionAction,
+  userInputAnswerOf,
+} from "./hostRequestDiagnostics.js";
 
-// OMP_AGENT_DEBUG_LOG：开发诊断用帧日志（dev 回环临时开启；生产不设置即零开销）。
-const DEBUG_LOG = process.env.OMP_AGENT_DEBUG_LOG ?? "";
-
-function debugLog(direction: string, line: string): void {
-  if (!DEBUG_LOG) {
-    return;
-  }
-  try {
-    appendFileSync(DEBUG_LOG, `${new Date().toISOString()} ${direction} ${line.slice(0, 400)}\n`);
-  } catch {
-    // 诊断日志失败不影响协议。
-  }
-}
+// 原开发帧文件会泄漏输入/答案；仅保留 stderr 安全摘要，Main 是唯一文件 writer。
+const DEBUG_LOG = Boolean(process.env.OMP_AGENT_DEBUG_LOG);
 
 export interface ProtocolServerOptions {
   input: NodeJS.ReadableStream;
@@ -34,36 +35,15 @@ interface PendingReverseRequest {
   resolve: (result: unknown) => void;
   reject: (error: Error) => void;
   timer: NodeJS.Timeout;
+  context: Record<string, unknown>;
+  startedAt: number;
+  diagnosticsFinished: boolean;
 }
 
 interface RequestOutbox {
   active: boolean;
   frames: unknown[];
   flushScheduled: boolean;
-}
-
-/** 同一会话保序，跨会话请求独立；无会话 ID 的工作区命令留在一个串行队列。 */
-function requestQueueKey(params: unknown): string {
-  if (typeof params !== "object" || params === null) return "workspace";
-  const record = params as Record<string, unknown>;
-  const envelope = record.envelope;
-  const nested =
-    typeof envelope === "object" && envelope !== null
-      ? (envelope as Record<string, unknown>)
-      : null;
-  const sessionId = nested?.sessionId ?? record.sessionId;
-  if (typeof sessionId === "string" && sessionId.length > 0) return `conversation/${sessionId}`;
-  const topic = record.topic;
-  if (typeof topic === "string" && topic.length > 0) return topic;
-  return "workspace";
-}
-
-/** 仅分类控制回路；完整 Envelope/会话/幂等验证仍由原 handleRequest 执行。 */
-function isInteractionControlRequest(method: string, params: unknown): boolean {
-  if (method !== "v4/command" || typeof params !== "object" || params === null) return false;
-  const record = params as Record<string, unknown>;
-  // parseCommandEnvelope 只解析 raw params 顶层；额外 envelope 字段不能改变传输调度。
-  return record.type === "resolveInteraction" || record.type === "stop";
 }
 
 // S5-3 依据：本服务端仅发出两类反向请求——interaction/requestUserInput 与
@@ -80,6 +60,8 @@ export class ProtocolServer implements HostGateway {
   private pending = new Map<string, PendingReverseRequest>();
   private closed = false;
   private outputBackpressured = false;
+  private startedAt = Date.now();
+  private backpressureStartedAt = 0;
   private readonly pendingEncodedLines: string[] = [];
   private pendingEncodedBytes = 0;
   // 请求处理期间产生的下行帧必须缓存在 response 行之后发出（post-response outbox）。
@@ -99,13 +81,15 @@ export class ProtocolServer implements HostGateway {
   }
 
   start(): void {
+    if (DEBUG_LOG) hostDiagnostics.debugFileDisabled();
+    this.startedAt = Date.now();
     const readline = createInterface({ input: this.options.input });
     readline.on("line", (line) => this.handleLine(line));
     readline.once("close", () => this.close());
   }
 
   private handleLine(line: string): void {
-    debugLog("h2a", line.slice(0, 400));
+    if (DEBUG_LOG) hostDiagnostics.frame("received", line);
     const trimmed = line.trim();
     if (trimmed.length === 0) {
       return;
@@ -114,7 +98,7 @@ export class ProtocolServer implements HostGateway {
     try {
       message = JSON.parse(trimmed);
     } catch {
-      logger.warn("host 帧不是 JSON", { preview: trimmed.slice(0, 200) });
+      hostDiagnostics.invalidJson(trimmed);
       return;
     }
     if (typeof message !== "object" || message === null) {
@@ -129,9 +113,22 @@ export class ProtocolServer implements HostGateway {
     };
     if (typeof record.method === "string") {
       if (record.id !== undefined && record.id !== null) {
-        this.handleHostRequest(record.id as string | number, record.method, record.params);
+        logger.run(
+          hostRequestContext(record.id as string | number, record.method, record.params),
+          () =>
+            this.handleHostRequest(
+              record.id as string | number,
+              record.method as string,
+              record.params,
+            ),
+        );
       } else {
-        this.options.handleNotification?.(record.method, record.params);
+        try {
+          this.options.handleNotification?.(record.method, record.params);
+        } catch (error) {
+          hostDiagnostics.notificationFailed(record.method, error);
+          throw error;
+        }
       }
       return;
     }
@@ -140,6 +137,21 @@ export class ProtocolServer implements HostGateway {
       if (pending) {
         this.pending.delete(String(record.id));
         clearTimeout(pending.timer);
+        if (!pending.diagnosticsFinished) {
+          if (record.error !== undefined) {
+            logHostInteraction(
+              "error",
+              pending.context,
+              pending.startedAt,
+              "response",
+              safeErrorSummary(record.error),
+            );
+          } else {
+            logHostInteraction("response", pending.context, pending.startedAt, "response", {
+              action: safeInteractionAction(record.result),
+            });
+          }
+        }
         if (record.error !== undefined) {
           pending.reject(
             new Error(
@@ -154,18 +166,20 @@ export class ProtocolServer implements HostGateway {
   }
 
   private handleHostRequest(id: string | number, method: string, params: unknown): void {
+    const receivedAt = Date.now();
+    hostDiagnostics.received(isInteractionControlRequest(method, params));
     if (isInteractionControlRequest(method, params)) {
       // 同步 prompt/confirm 尚未 ACK 时，回答/停止若等同一尾链会与等待用户形成死锁。
       // 同轮微任务保留先收到请求的启动顺序，但控制回路不等待普通请求完成。
       void Promise.resolve()
-        .then(() => this.processHostRequest(id, method, params))
+        .then(() => this.processHostRequest(id, method, params, receivedAt))
         .catch(() => {});
       return;
     }
     const key = requestQueueKey(params);
     const previous = this.dispatchTails.get(key) ?? Promise.resolve();
     const current = previous
-      .then(() => this.processHostRequest(id, method, params))
+      .then(() => this.processHostRequest(id, method, params, receivedAt))
       .catch(() => {});
     this.dispatchTails.set(key, current);
     void current.then(() => {
@@ -177,17 +191,28 @@ export class ProtocolServer implements HostGateway {
     id: string | number,
     method: string,
     params: unknown,
+    receivedAt: number,
   ): Promise<void> {
     const outbox: RequestOutbox = { active: true, frames: [], flushScheduled: false };
+    const startedAt = Date.now();
+    let stage = "handle";
+    hostDiagnostics.started(startedAt - receivedAt);
     try {
       const result = await this.requestOutboxes.run(outbox, () =>
         this.options.handleRequest(method, params),
       );
+      stage = "response";
       this.write({ id, result: result ?? {} });
+      logHostRequestResult(result, Date.now() - startedAt, this.closed);
     } catch (error) {
       const code = (error as { code?: number }).code;
       const message = error instanceof Error ? error.message : String(error);
-      logger.warn("host 请求处理失败", { method, message });
+      logHostRequestFailure(
+        error,
+        typeof code === "number" ? code : -32603,
+        stage,
+        Date.now() - startedAt,
+      );
       this.write({ id, error: { code: typeof code === "number" ? code : -32603, message } });
     } finally {
       outbox.active = false;
@@ -205,13 +230,17 @@ export class ProtocolServer implements HostGateway {
     if (this.closed) {
       return;
     }
-    const encoded = encodeJsonlLine(value);
-    if (DEBUG_LOG) debugLog("a2h", encoded.slice(0, 400));
+    const encoded = observeHostOutput("encode", () => encodeJsonlLine(value));
+    if (DEBUG_LOG) hostDiagnostics.frame("sent", encoded);
     if (this.outputBackpressured) {
       this.pendingEncodedBytes += Buffer.byteLength(encoded);
       if (this.pendingEncodedBytes > 16 * 1024 * 1024) {
         // Bug 根因：Host 暂停消费时 write(false) 被忽略，Agent 可无限堆积帧。
         // 明确关闭连接触发 Host 重连，不静默舍弃已接受的连续帧。
+        hostDiagnostics.backpressureFailed(
+          this.pendingEncodedBytes,
+          Date.now() - this.backpressureStartedAt,
+        );
         this.close(new Error("host transport buffer saturated"));
         this.options.output.end();
         return;
@@ -219,8 +248,10 @@ export class ProtocolServer implements HostGateway {
       this.pendingEncodedLines.push(encoded);
       return;
     }
-    if (!this.options.output.write(encoded)) {
+    if (!observeHostOutput("send", () => this.options.output.write(encoded))) {
       this.outputBackpressured = true;
+      this.backpressureStartedAt = Date.now();
+      hostDiagnostics.backpressureStarted();
       this.options.output.once("drain", () => this.flushPendingEncodedLines());
     }
   }
@@ -230,19 +261,23 @@ export class ProtocolServer implements HostGateway {
     while (this.pendingEncodedLines.length > 0) {
       const encoded = this.pendingEncodedLines.shift()!;
       this.pendingEncodedBytes -= Buffer.byteLength(encoded);
-      if (!this.options.output.write(encoded)) {
+      if (!observeHostOutput("drain", () => this.options.output.write(encoded))) {
         this.options.output.once("drain", () => this.flushPendingEncodedLines());
         return;
       }
     }
     this.outputBackpressured = false;
+    hostDiagnostics.backpressureDrained(Date.now() - this.backpressureStartedAt);
   }
 
   private close(error?: Error): void {
     if (this.closed) return;
     this.closed = true;
+    hostDiagnostics.closed(this.pending.size, error, Date.now() - this.startedAt);
     for (const pending of this.pending.values()) {
       clearTimeout(pending.timer);
+      if (!pending.diagnosticsFinished)
+        logHostInteraction("disconnect", pending.context, pending.startedAt, "disconnect");
       pending.reject(error ?? new Error("host transport closed"));
     }
     this.pending.clear();
@@ -281,63 +316,61 @@ export class ProtocolServer implements HostGateway {
     options?: { optionId: string; label: string }[];
     questions?: unknown[];
   }): Promise<HostUserInputAnswer> {
+    const startedAt = Date.now();
+    const context = {
+      ...logger.context(),
+      interactionRequestId: params.requestId,
+      sessionId: params.sessionId,
+    };
+    logHostInteraction("started", context, startedAt, "send", {
+      questionCount: params.questions?.length,
+      optionCount: params.options?.length,
+    });
     return new Promise<HostUserInputAnswer>((resolve, reject) => {
       if (this.closed) {
+        logHostInteraction("disconnect", context, startedAt, "send");
         reject(new Error("host transport closed"));
         return;
       }
       const timer = setTimeout(() => {
         this.pending.delete(params.requestId);
+        if (!pending.diagnosticsFinished)
+          logHostInteraction("timeout", context, startedAt, "timeout");
         reject(new Error("host interaction timeout"));
       }, INTERACTION_REVERSE_REQUEST_TIMEOUT_MS);
       timer.unref?.();
-      this.pending.set(params.requestId, {
+      const pending: PendingReverseRequest = {
         resolve: (result) => resolve(userInputAnswerOf(result)),
         reject,
         timer,
-      });
-      this.write({
-        id: params.requestId,
-        method: "interaction/requestUserInput",
-        params: {
-          requestId: params.requestId,
-          sessionId: params.sessionId,
-          prompt: params.prompt,
-          ...(params.options ? { input: { options: params.options } } : {}),
-          // 富问答（AskUserQuestion 形态）：完整问题集随反向请求下发。
-          ...(params.questions ? { questions: params.questions } : {}),
-        },
-      });
+        context,
+        startedAt,
+        diagnosticsFinished: false,
+      };
+      this.pending.set(params.requestId, pending);
+      try {
+        this.write({
+          id: params.requestId,
+          method: "interaction/requestUserInput",
+          params: {
+            requestId: params.requestId,
+            sessionId: params.sessionId,
+            prompt: params.prompt,
+            ...(params.options ? { input: { options: params.options } } : {}),
+            // 富问答（AskUserQuestion 形态）：完整问题集随反向请求下发。
+            ...(params.questions ? { questions: params.questions } : {}),
+          },
+        });
+      } catch (error) {
+        // 只收口诊断配对，不改变原 pending/timer 的业务清理时序。
+        pending.diagnosticsFinished = true;
+        logHostInteraction("error", context, startedAt, "send", safeErrorSummary(error));
+        throw error;
+      }
     });
   }
 
   dispose(): void {
     this.close();
   }
-}
-
-function userInputAnswerOf(result: unknown): HostUserInputAnswer {
-  if (typeof result !== "object" || result === null) {
-    return { action: "cancel" };
-  }
-  const record = result as { action?: unknown; content?: unknown };
-  if (record.action === "accept" || record.action === "decline" || record.action === "cancel") {
-    const content =
-      typeof record.content === "object" &&
-      record.content !== null &&
-      !Array.isArray(record.content)
-        ? (record.content as Record<string, unknown>)
-        : undefined;
-    const optionId = typeof content?.optionId === "string" ? content.optionId : undefined;
-    const freeText =
-      typeof content?.freeText === "string"
-        ? content.freeText
-        : typeof content?.value === "string"
-          ? content.value
-          : undefined;
-    return record.action === "accept"
-      ? { action: "accept", optionId, freeText, ...(content ? { content } : {}) }
-      : { action: record.action };
-  }
-  return { action: "cancel" };
 }

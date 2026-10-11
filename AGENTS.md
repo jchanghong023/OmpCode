@@ -137,9 +137,11 @@ UI UT 的 `@/` 路径别名使用 `pnpm exec tsx --tsconfig packages/ui/tsconfig
 
 ## 日志
 
+Key steps and exception branches in this project must have logs.
+
 - UI 使用 `packages/ui/src/logger.ts`，不直接使用 `console.log` 或 `window.zcode?.log`。
 - Agent/session/runtime 相关服务日志使用 `createServiceLogger(scope)`（`packages/services/src/logger/serviceLogger.ts`）。
-- `debug` 用于协议原始数据、流式 chunk 和逐条工具更新等高频诊断，生产环境不落盘。
+- `JCH_LOG_LEVEL` 是应用日志的唯一级别配置，规则见 [日志基础设施](docs/requirements/logging.md)；`debug` 用于高频诊断，仅在显式选择 DEBUG 时输出，生产构建与离线状态不得覆盖该选择。
 - `info` 用于进程和会话生命周期、权限结果、一次性初始化等生产可用事件。
 - `warn` 用于可恢复异常；`error` 用于崩溃、握手失败、鉴权丢失等不可恢复错误。
 - 不在日志、示例或提交中写入凭据、真实用户数据和内部服务地址。

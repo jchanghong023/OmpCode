@@ -1,9 +1,9 @@
-/** 仅用于用户反馈的排障材料；不得应用到模型请求或认证载荷。 */
+/** 反馈与运行时诊断材料共用的脱敏入口；不得应用到模型请求或认证载荷。 */
 const REDACTED = "[REDACTED]";
 const sensitiveKey =
   /(?:password|passwd|passphrase|secret|token|apikey|accesskey|privatekey|authorization|cookie|credential)/i;
 const diagnosticBodyKey =
-  /^(?:content|messages?|prompt|systemprompt|request|response|body|payload|input|output|toolinput|tooloutput|arguments|args|env|environment|headers|text|completion|result|stdout|stderr|data|params)$/i;
+  /^(?:content|messages?|prompt|systemprompt|request|response|body|payload|input|output|toolinput|tooloutput|arguments|args|env|environment|headers|text|originaltext|freetext|completion|result|stdout|stderr|data|params|questions?|answers?|options|selectedoptions|custominput|prefill|attachments?|images?|preview|rawframe|frames)$/i;
 
 function normalizeKey(key: string): string {
   return key.replace(/[^a-z0-9]/gi, "");
@@ -66,7 +66,9 @@ function redactValues(text: string, diagnostic: boolean): string {
       /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z0-9 ]*PRIVATE KEY-----|$)/g,
       REDACTED,
     )
-    .replace(/\bBearer\s+[^\s"'\\,;]+/gi, `Bearer ${REDACTED}`)
+    // 修复原因：运行期 stderr 也可能包含裸密钥或 Basic 凭据，不能只遮盖带字段名的值。
+    .replace(/\b(Bearer|Basic)\s+[^\s"'\\,;]+/gi, `$1 ${REDACTED}`)
+    .replace(/\b(?:sk|rk|pk)-[A-Za-z0-9_-]{12,}\b/gi, REDACTED)
     .replace(
       /([\w.-]+)(\s*[=:]\s*)(?:"(?:\\.|[^"\\])*"|'[^']*'|[^\s,;"'<>]+)/g,
       (match, key: string, separator: string) =>

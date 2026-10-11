@@ -777,7 +777,7 @@ export interface PlatformChannelMap {
     response: MigrateLegacyCommonMcpResult;
   };
   [PlatformChannels.Log]: {
-    request: { level: "info" | "warn" | "error"; args: unknown[] };
+    request: { level: "debug" | "info" | "warn" | "error"; args: unknown[] };
     response: void;
   };
   [PlatformChannels.SyncWindowUnreadCount]: {

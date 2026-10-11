@@ -6,7 +6,7 @@
 import { createReadStream, existsSync } from "node:fs";
 import { readdir, realpath, rm, stat } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
-import { isAbsolute, join, relative, resolve } from "node:path";
+import { basename, isAbsolute, join, relative, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { resolveOmpProfileFromEnv } from "@zcode/shared/omp-profile";
 import { resolveOmpAgentDir, resolveOmpCodeDataRootFromEnv } from "@zcode/shared/node";
@@ -15,6 +15,11 @@ import { titleFromOmpEntries } from "../domain/coldHistory.js";
 import { logger } from "./logger.js";
 import { createOmpCommandOutputStore } from "./OmpCommandOutputStore.js";
 import { safeInteractionAgentId } from "../domain/OmpInteractionIds.js";
+import {
+  logStoreFallback,
+  observeStoreOperation,
+  safeErrorSummary,
+} from "./hostRequestDiagnostics.js";
 
 /**
  * omp sessions 目录解析（S1-3，对齐 omp DirResolver XDG 规则，v18.4.8+fork.278
@@ -56,9 +61,16 @@ function sessionsRoot(env: NodeJS.ProcessEnv): string {
 }
 
 async function resolveEquivalentPath(value: string): Promise<string> {
+  const startedAt = Date.now();
   try {
     return await realpath(value);
-  } catch {
+  } catch (error) {
+    logger.debug("路径规范化失败，沿用原路径", {
+      event: "omp.store.realpath.fallback",
+      stage: "realpath",
+      elapsedMs: Date.now() - startedAt,
+      ...safeErrorSummary(error),
+    });
     return value;
   }
 }
@@ -107,6 +119,7 @@ export function createOmpStore(env: NodeJS.ProcessEnv = process.env): OmpStorePo
     const sessionId = sessionIdOfFileName(name);
     if (!sessionId) return null;
     const sessionPath = join(directory, name);
+    const startedAt = Date.now();
     try {
       const info = await stat(sessionPath);
       // Bug 根因：stat 毫秒时间含小数，Host 索引协议要求 safeint。
@@ -118,16 +131,19 @@ export function createOmpStore(env: NodeJS.ProcessEnv = process.env): OmpStorePo
         updatedAt: Math.trunc(info.mtimeMs),
         createdAt: Math.trunc(info.birthtimeMs || info.mtimeMs),
       };
-    } catch {
+    } catch (error) {
+      logStoreFallback("summary", "stat", startedAt, error, { sessionId });
       return null;
     }
   };
   const withTitle = async (summary: OmpStoreSessionSummary): Promise<void> => {
+    const startedAt = Date.now();
     try {
       summary.title = titleFromOmpEntries(await readEntries(summary.sessionPath, 120));
       summary.firstUserText = summary.title;
-    } catch {
-      // 文件竞争删除等场景：保持 null。
+    } catch (error) {
+      // 文件竞争删除等场景保持 null；不输出标题或首条输入。
+      logStoreFallback("title", "read", startedAt, error, { sessionId: summary.sessionId });
     }
   };
   return {
@@ -137,120 +153,176 @@ export function createOmpStore(env: NodeJS.ProcessEnv = process.env): OmpStorePo
     deleteCommandOutputs: commandOutputs.deleteCommandOutputs,
     flushCommandOutputs: commandOutputs.flushCommandOutputs,
     async listSessions(cwd: string): Promise<OmpStoreSessionSummary[]> {
-      const directory = await sessionDirectory(cwd);
-      let names: string[];
-      try {
-        names = await readdir(directory);
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-        names = [];
-      }
-      const files = names
-        .filter((name) => name.endsWith(".jsonl"))
-        .sort()
-        .reverse();
-      const summaries: OmpStoreSessionSummary[] = [];
-      // 所有仍存在的会话都必须可见；分批 stat 避免巨大目录一次性排队打开全部文件。
-      for (let start = 0; start < files.length; start += 32) {
-        const batch = await Promise.all(
-          files.slice(start, start + 32).map((name) => summaryOf(directory, name)),
-        );
-        for (const summary of batch) if (summary) summaries.push(summary);
-      }
-      // 标题/首条输入仍只对最近 20 个会话做头部解析；不读取整份长文件。
-      for (const summary of summaries.slice(0, 20)) {
-        await withTitle(summary);
-      }
-      // 本地命令可能不创建原生文件，仍沿同一列表返回可恢复的 GUI 派生历史。
-      const byId = new Map(summaries.map((summary) => [summary.sessionId, summary]));
-      for (const derived of await commandOutputs.listSessions(cwd)) {
-        const native = byId.get(derived.sessionId);
-        byId.set(
-          derived.sessionId,
-          native
-            ? {
-                ...native,
-                title: native.title ?? derived.title,
-                updatedAt: Math.max(native.updatedAt, derived.updatedAt),
-              }
-            : derived,
-        );
-      }
-      return [...byId.values()].sort((left, right) => right.updatedAt - left.updatedAt);
+      return observeStoreOperation("list", {}, async () => {
+        const directory = await sessionDirectory(cwd);
+        let names: string[];
+        try {
+          names = await readdir(directory);
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+          names = [];
+          logger.warn("会话目录不存在，合并派生历史", {
+            event: "omp.store.list.fallback",
+            stage: "readdir",
+            code: "ENOENT",
+          });
+        }
+        const files = names
+          .filter((name) => name.endsWith(".jsonl"))
+          .sort()
+          .reverse();
+        const summaries: OmpStoreSessionSummary[] = [];
+        // 所有仍存在的会话都必须可见；分批 stat 避免巨大目录一次性排队打开全部文件。
+        for (let start = 0; start < files.length; start += 32) {
+          const batch = await Promise.all(
+            files.slice(start, start + 32).map((name) => summaryOf(directory, name)),
+          );
+          for (const summary of batch) if (summary) summaries.push(summary);
+        }
+        // 标题/首条输入仍只对最近 20 个会话做头部解析；不读取整份长文件。
+        for (const summary of summaries.slice(0, 20)) {
+          await withTitle(summary);
+        }
+        // 本地命令可能不创建原生文件，仍沿同一列表返回可恢复的 GUI 派生历史。
+        const byId = new Map(summaries.map((summary) => [summary.sessionId, summary]));
+        for (const derived of await commandOutputs.listSessions(cwd)) {
+          const native = byId.get(derived.sessionId);
+          byId.set(
+            derived.sessionId,
+            native
+              ? {
+                  ...native,
+                  title: native.title ?? derived.title,
+                  updatedAt: Math.max(native.updatedAt, derived.updatedAt),
+                }
+              : derived,
+          );
+        }
+        return [...byId.values()].sort((left, right) => right.updatedAt - left.updatedAt);
+      });
     },
 
     async findSession(cwd: string, sessionId: string): Promise<OmpStoreSessionSummary | null> {
-      const directory = await sessionDirectory(cwd);
-      let names: string[];
-      try {
-        names = await readdir(directory);
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-        names = [];
-      }
-      // ID 是文件名后缀；不需要读取整个目录中其它会话的 stat 与标题。
-      const name = names
-        .filter((candidate) => sessionIdOfFileName(candidate) === sessionId)
-        .sort()
-        .at(-1);
-      if (!name) return commandOutputs.findSession(cwd, sessionId);
-      const summary = await summaryOf(directory, name);
-      if (summary) await withTitle(summary);
-      return summary;
+      return observeStoreOperation("find", { sessionId }, async () => {
+        const directory = await sessionDirectory(cwd);
+        let names: string[];
+        try {
+          names = await readdir(directory);
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+          names = [];
+          logger.warn("会话目录不存在，查询派生历史", {
+            event: "omp.store.find.fallback",
+            sessionId,
+            stage: "readdir",
+            code: "ENOENT",
+          });
+        }
+        // ID 是文件名后缀；不需要读取整个目录中其它会话的 stat 与标题。
+        const name = names
+          .filter((candidate) => sessionIdOfFileName(candidate) === sessionId)
+          .sort()
+          .at(-1);
+        if (!name) return commandOutputs.findSession(cwd, sessionId);
+        const summary = await summaryOf(directory, name);
+        if (summary) await withTitle(summary);
+        return summary;
+      });
     },
 
     async readSessionEntries(sessionPath: string): Promise<unknown[]> {
-      try {
-        // Bug 根因：固定取末尾 4000 行使更早历史永久无法经 rowsRange 访问。
-        // 流式解析不再为完整文件同时生成 content、split 行数组与 JSON 对象数组。
-        return await readEntries(sessionPath);
-      } catch (error) {
-        logger.warn("读取 omp 会话文件失败", { sessionPath, error: String(error) });
-        return [];
-      }
+      return observeStoreOperation(
+        "readSession",
+        { sessionId: sessionIdOfFileName(basename(sessionPath)) },
+        async () => {
+          const startedAt = Date.now();
+          try {
+            // Bug 根因：固定取末尾 4000 行使更早历史永久无法经 rowsRange 访问。
+            // 流式解析不再为完整文件同时生成 content、split 行数组与 JSON 对象数组。
+            return await readEntries(sessionPath);
+          } catch (error) {
+            logStoreFallback("readSession", "read", startedAt, error);
+            return [];
+          }
+        },
+      );
     },
 
     async readSubagentEntries(sessionPath: string, subagentId: string): Promise<unknown[]> {
-      // 子代理名来自父会话工具结果，不能让它逃出该会话的子目录。
-      if (!sessionPath.endsWith(".jsonl") || !/^[A-Za-z0-9_-]{1,100}$/.test(subagentId)) return [];
-      const childPath = join(sessionPath.slice(0, -6), `${subagentId}.jsonl`);
-      try {
-        return await readEntries(childPath);
-      } catch {
-        return [];
-      }
+      return observeStoreOperation(
+        "readSubagent",
+        {
+          sessionId: sessionIdOfFileName(basename(sessionPath)),
+          ...(/^[A-Za-z0-9_-]{1,100}$/.test(subagentId) ? { subagentId } : {}),
+        },
+        async () => {
+          const startedAt = Date.now();
+          // 子代理名来自父会话工具结果，不能让它逃出该会话的子目录。
+          if (!sessionPath.endsWith(".jsonl") || !/^[A-Za-z0-9_-]{1,100}$/.test(subagentId)) {
+            logStoreFallback("readSubagent", "validation", startedAt, undefined);
+            return [];
+          }
+          const childPath = join(sessionPath.slice(0, -6), `${subagentId}.jsonl`);
+          try {
+            return await readEntries(childPath);
+          } catch (error) {
+            logStoreFallback("readSubagent", "read", startedAt, error);
+            return [];
+          }
+        },
+      );
     },
 
     async readInteractionEntries(sessionPath, ancestry, version) {
-      if (!sessionPath.endsWith(".jsonl") || ancestry.some((id) => !safeInteractionAgentId(id))) {
-        return { version: "invalid", available: false };
-      }
-      let recordPath = sessionPath;
-      for (const id of ancestry) recordPath = join(recordPath.slice(0, -6), `${id}.jsonl`);
-      try {
-        const info = await stat(recordPath);
-        const currentVersion = `${info.size}:${info.mtimeMs}`;
-        if (currentVersion === version) return { version: currentVersion, available: true };
-        // 读取预算只约束观察页；普通会话历史仍保持完整读取。
-        const entries = await readEntries(recordPath, 50_001);
-        return {
-          version: currentVersion,
-          available: true,
-          entries: entries.slice(0, 50_000),
-          truncated: entries.length > 50_000,
-        };
-      } catch {
-        return { version: "missing", available: false, entries: [] };
-      }
+      return observeStoreOperation(
+        "readInteraction",
+        { ancestryDepth: ancestry.length },
+        async () => {
+          const startedAt = Date.now();
+          if (
+            !sessionPath.endsWith(".jsonl") ||
+            ancestry.some((id) => !safeInteractionAgentId(id))
+          ) {
+            logStoreFallback("readInteraction", "validation", startedAt, undefined);
+            return { version: "invalid", available: false };
+          }
+          let recordPath = sessionPath;
+          for (const id of ancestry) recordPath = join(recordPath.slice(0, -6), `${id}.jsonl`);
+          try {
+            const info = await stat(recordPath);
+            const currentVersion = `${info.size}:${info.mtimeMs}`;
+            if (currentVersion === version) return { version: currentVersion, available: true };
+            // 读取预算只约束观察页；普通会话历史仍保持完整读取。
+            const entries = await readEntries(recordPath, 50_001);
+            return {
+              version: currentVersion,
+              available: true,
+              entries: entries.slice(0, 50_000),
+              truncated: entries.length > 50_000,
+            };
+          } catch (error) {
+            logStoreFallback("readInteraction", "read", startedAt, error);
+            return { version: "missing", available: false, entries: [] };
+          }
+        },
+      );
     },
 
     async deleteSession(sessionPath: string): Promise<boolean> {
-      try {
-        await rm(sessionPath, { force: true });
-        return true;
-      } catch {
-        return false;
-      }
+      return observeStoreOperation(
+        "delete",
+        { sessionId: sessionIdOfFileName(basename(sessionPath)) },
+        async () => {
+          const startedAt = Date.now();
+          try {
+            await rm(sessionPath, { force: true });
+            return true;
+          } catch (error) {
+            logStoreFallback("delete", "remove", startedAt, error);
+            return false;
+          }
+        },
+      );
     },
   };
 }
@@ -276,18 +348,26 @@ async function readEntries(
   sessionPath: string,
   limit = Number.POSITIVE_INFINITY,
 ): Promise<unknown[]> {
+  const startedAt = Date.now();
   const stream = createReadStream(sessionPath, { encoding: "utf8" });
   const lines = createInterface({ input: stream, crlfDelay: Infinity });
   const entries: unknown[] = [];
+  let invalidLineCount = 0;
   try {
     for await (const line of lines) {
       try {
         entries.push(JSON.parse(line) as unknown);
       } catch {
         // 追加中的半行或无效行不进入历史投影。
+        invalidLineCount += 1;
       }
       if (entries.length >= limit) break;
     }
+    if (invalidLineCount > 0)
+      logStoreFallback("jsonl", "decode", startedAt, undefined, {
+        invalidLineCount,
+        entryCount: entries.length,
+      });
     return entries;
   } finally {
     lines.close();

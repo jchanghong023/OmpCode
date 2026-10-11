@@ -16,6 +16,9 @@ import {
 } from "@zcode/services/node";
 import {
   resolveWorkspaceKey,
+  isApplicationLogLevelEnabled,
+  formatLogPrefix,
+  safeLogMessage,
   type ZCodeAutomation,
   type ZCodeAutomationTrigger,
   type ZCodeAutomationRun,
@@ -65,13 +68,25 @@ let pollTimer: ReturnType<typeof setInterval> | null = null;
 /** 资源遥测：本进程唯一的自采定时器。 */
 let resourceTelemetry: SchedulerResourceTelemetry | null = null;
 
+// 最终 stderr 出口的异步错误也不能终止业务调度。
+process.stderr.on("error", () => {});
+
 function log(level: "info" | "warn" | "error", message: string): void {
-  const msg: SchedulerToMainMessage = { type: "scheduler-log", level, message };
-  parentPort?.postMessage(msg);
-  // 兜底：parentPort 不可用（非 utilityProcess 调试运行）时仍留痕。
-  if (!parentPort) {
-    // eslint-disable-next-line no-console -- scheduler 调试兜底
-    console[level === "error" ? "error" : "log"](`[scheduler] ${message}`);
+  if (!isApplicationLogLevelEnabled(level)) return;
+  const safe = safeLogMessage(message);
+  const msg: SchedulerToMainMessage = { type: "scheduler-log", level, message: safe };
+  try {
+    if (parentPort) {
+      parentPort.postMessage(msg);
+      return;
+    }
+  } catch {
+    // 日志中继故障不能影响派发；仅尝试 stderr，不递归记录。
+  }
+  try {
+    process.stderr.write(`${formatLogPrefix("scheduler", process.pid)} [${level}] ${safe}\n`);
+  } catch {
+    // 最终诊断出口失效也不改变业务结果。
   }
 }
 

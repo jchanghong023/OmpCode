@@ -1,16 +1,11 @@
-type RendererImportMetaEnv = {
-  readonly PROD?: boolean;
-};
+import { isApplicationLogLevelEnabled } from "@zcode/shared/log-level";
 
-export function isRendererProductionBuild(): boolean {
+export function isRendererDebugLoggingEnabled(): boolean {
   const rendererLoggingDisabled =
     (
       globalThis as typeof globalThis & {
         __ZCODE_RENDERER_DISABLE_LOGGING__?: boolean;
       }
     ).__ZCODE_RENDERER_DISABLE_LOGGING__ === true;
-  return (
-    rendererLoggingDisabled ||
-    ((import.meta as ImportMeta & { env?: RendererImportMetaEnv }).env ?? {}).PROD === true
-  );
+  return !rendererLoggingDisabled && isApplicationLogLevelEnabled("debug");
 }

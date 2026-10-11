@@ -44,6 +44,34 @@ OMP 身份 ←→ UI 地址投影：sessionId 即 omp 会话 ID；
   - `session/controlSubagent`：subagentId/action(send_message|stop)/message → 控制结果（映射 cancel_subagent/steer_subagent，状态如实呈现）。
 - omp-agent 与 OMP 的联调启动形态：`OMP_RPC_BINARY_PATH` 指向 bun 可执行、`OMP_RPC_ARGS_JSON` 携带 `["<oh-my-pi>/packages/coding-agent/src/cli.ts"]`（extraArgs 先于 `--mode rpc-ui`）；不修改 OMP 仓库。
 
+## OMP 对接诊断日志
+
+- 本项目 MUST 提供日志能力，主要用于运行时问题定位与 Agent 故障分析。本节维护 OMP 对接日志规则，不要求记录模型正文或恢复已取消的功能。
+- OMP 适配器与 Host 的异常路径 MUST 有可定位的日志；关键调用 MUST 记录开始、最终结果、耗时和安全的返回摘要。网络/RPC 与跨进程调用 MUST 在发出前记录开始，并记录成功或失败，区分启动、发送、等待超时、对端错误、解码、取消与进程退出阶段；已有重试、降级和退避必须可见，不新增业务重试。
+- 复用现有 stderr JSON、Service Logger、Host 日志转发和 Main 文件 writer。通用级别配置、字节轮转/保留、路径、失败回退与初始化规则唯一见 [日志基础设施](logging.md)；Main 是桌面文件 writer，适配器不得另开文件或向协议 stdout 输出日志。Web/远端复用同一 Service Logger，服务端控制台不冒充桌面文件落盘。
+- 每个记录 MUST 含毫秒时间戳、级别、进程与组件；Main 物理记录前缀统一使用带时区的 ISO 8601 毫秒时间，文件名仍按本地日期命名。新增诊断事件使用稳定 `event` 名称和单行 JSON/转义文本。关键开始/成功使用 `info`、可恢复异常/降级使用 `warn`、操作最终失败使用 `error`；高频细节只用 `debug`，不记录流式正文或原始载荷，是否输出由统一配置决定。
+- 正常运行中的 omp-agent JSON 四级诊断 MUST 按配置经 Host 进入 Main 文件日志，保留原时间、适配器 PID、事件和关联字段，并追加 Host 已知的 workspace/runtime 身份。Main 中继识别现有 Service Logger 的已知 OMP 前缀与合法诊断 JSON，不能把 Host/Main 自己的 PID 和转发时间误作来源。非结构化 stderr 仍只作有界、脱敏的退出诊断尾部；不得依靠 Agent 崩溃才保存运行期错误。
+- 启动日志包含实际文件位置、PID、运行模式与级别；正常退出保留停止与排空记录。初始化任务不因此新增业务日志点或主动输出样例。
+- 使用既有 Host request ID、commandId/inputId/traceId、sessionId 和核心 `omp-req-*`，跨进程不能改写外部协议。Host 请求接收与响应、核心 RPC 开始与结束通过请求上下文关联；并行核心用独立进程实例 ID/PID 区分重复的请求序号。会话绑定时记录 session 身份；owner/stale 拒绝记录现有 owner/run 事实，不新增状态所有者。
+- 覆盖会话与目录进程启动/ready/退出、RPC 失败/超时/无效响应、输入接纳/派发/队列消费/终态、ask/审批的呈现/取消/清场、子代理控制/读取回退与关键文件读取失败。核心启动记录实际可执行文件及参数数量，不打印完整参数。结果只记录状态、计数、长度、类型、能力版本等可诊断摘要，不复制返回对象。
+- 敏感数据 MUST NOT 直接进入日志：不记录用户输入、模型正文、问题/答案、预填内容、附件、网络请求/响应正文、完整环境或原始协议帧。日志出口对错误文本、URL 查询凭据、Authorization/Bearer、Cookie、密钥与敏感字段统一脱敏、限长；截断显式标识。日志添加不得改变返回值、异常传播、时序门控、owner/lease、超时或重试次数。
+
+```mermaid
+sequenceDiagram
+  participant Host as Host / Service Logger
+  participant Agent as omp-agent 诊断入口
+  participant Core as 会话 / 目录 OMP
+  participant Main as Main 唯一文件 writer
+  Host->>Agent: 既有 requestId / commandId
+  Agent->>Core: 记录 started；既有 omp-req-* RPC
+  Core-->>Agent: 响应 / 退出；记录 result 与 elapsedMs
+  Agent-->>Host: 单行 stderr JSON（原 PID / ts / 关联字段）
+  Host->>Main: 分级日志转发；追加 workspace / runtime 身份
+  Main->>Main: 异步排队、按日 .log、保留与退出排空
+```
+
+验收：在专用临时根运行公开 Host/适配器路径，实际生成 `.log`；只读该文件即可串起一个成功调用与一个失败调用，识别最后成功步骤、首次失败阶段、原/对端 PID、请求/会话身份、结果摘要及耗时。覆盖核心异常退出、超时或无效响应之一及本地网络失败；并发请求不串关联，敏感样本不出现在文件中，各级诊断遵循 `JCH_LOG_LEVEL`。验证现有队列/交互/owner 行为不变；文件初始化失败可回退、日志自身失败无递归；未运行真实模型、桌面 GUI、CentOS 的边界分别声明，不将模拟成功写成真实平台通过。
+
 ## 辅助对话（原生 BTW，唯一需求权威）
 
 - 现有「辅助对话」、划词提问、`/side` 与 `/btw` 共用 v4 `createSelectionSideSession` 与 `conversation/<sessionId>`。GUI 命令面板及富输入/普通文本提交均先消费这两个本地业务别名，再处理主会话配置/输入路由；原生目录的同名 `btw=tui-only` 元数据保持真实，但不得遮蔽 GUI 入口或令输入掉入主 `prompt`。无 `firstInput`（含 bare 别名）只建立空 pane，不调用模型；首次提交及带参数入口调用父进程 `btw {question}`，追问调用 `btw {question,recordId}`，不得创建普通 OMP 会话冒充辅助对话。别名输入带附件/结构化上下文明确拒绝并保留草稿，不退化为主会话发送；别名完整匹配，不拦截 `/btw-extra` 等原生命令或正文中的同名文本。

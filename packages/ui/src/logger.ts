@@ -1,35 +1,17 @@
-import { formatLogPrefix } from "@zcode/shared";
-import { isOfflineLocked } from "@/lib/offlineLockGate.js";
+import {
+  formatLogPrefix,
+  isApplicationLogLevelEnabled,
+  safeLogMessage,
+  serializeLogValue,
+} from "@zcode/shared";
 
 export type LogLevel = "debug" | "info" | "warn" | "error";
 
-type DesktopLogLevel = Exclude<LogLevel, "debug">;
-
 type DesktopLogBridgeWindow = Window & {
   zcode?: {
-    log?: (level: DesktopLogLevel, args: unknown[]) => void;
+    log?: (level: LogLevel, args: unknown[]) => void;
   };
 };
-
-function isRendererProductionBuild(): boolean {
-  const viteProduction =
-    ((import.meta as ImportMeta & { env?: { readonly PROD?: boolean } }).env ?? {}).PROD === true;
-  // Vitest 的 import.meta.env.PROD 在 transform 阶段固化，NODE_ENV fallback 让生产分支
-  // 可被单测验证；实际 renderer build 仍以 Vite 的 PROD 标记为准。
-  return (
-    viteProduction || (typeof process !== "undefined" && process.env.NODE_ENV === "production")
-  );
-}
-
-function isRendererLoggingDisabled(): boolean {
-  return (
-    (
-      globalThis as typeof globalThis & {
-        __ZCODE_RENDERER_DISABLE_LOGGING__?: boolean;
-      }
-    ).__ZCODE_RENDERER_DISABLE_LOGGING__ === true
-  );
-}
 
 const consoleFns: Record<LogLevel, (...args: unknown[]) => void> = {
   debug: console.debug,
@@ -39,47 +21,28 @@ const consoleFns: Record<LogLevel, (...args: unknown[]) => void> = {
 };
 
 function isLoggerLevelEnabled(level: LogLevel): boolean {
-  // 离线锁定（CentOS 7 --offline）下 renderer 只转发 error；原生产门控会吞掉 error，
-  // 导致现场无法排查失败。锁定是运行时状态（centos7-performance.md），不是构建标记。
-  if (isOfflineLocked()) return level === "error" && !isRendererLoggingDisabled();
-  // 生产构建下 renderer 所有日志级别都禁用；暴露 guard 让调用方在构造重 payload 前退出。
-  return !isRendererProductionBuild() && !isRendererLoggingDisabled();
+  // 用户环境是唯一级别来源；测试的显式禁用仍保留，生产/离线不再覆盖 DEBUG。
+  return (
+    (globalThis as typeof globalThis & { __ZCODE_RENDERER_DISABLE_LOGGING__?: boolean })
+      .__ZCODE_RENDERER_DISABLE_LOGGING__ !== true && isApplicationLogLevelEnabled(level)
+  );
 }
 
-function log(level: LogLevel, ...args: unknown[]) {
-  // 生产构建下 renderer 日志直接 no-op，避免 console 格式化、IPC 转发和落盘拖慢渲染主线程。
-  if (!isLoggerLevelEnabled(level)) {
-    return;
+function log(level: LogLevel, ...args: unknown[]): void {
+  if (!isLoggerLevelEnabled(level)) return;
+  const message = safeLogMessage(args.map(serializeLogValue).join(" "));
+  try {
+    consoleFns[level](formatLogPrefix("ui"), message);
+  } catch {
+    // 控制台自身失败不影响业务，也不能阻止既有桌面日志出口。
   }
-  consoleFns[level](formatLogPrefix("ui"), ...args);
-  // ui 包单独 typecheck 时拿不到 desktop renderer 注入的 window.zcode 声明，
-  // 而且 Electron bridge 只接收 info/warn/error；debug 原样透传会让类型和宿主协议都不一致。
-  // 这里显式收窄 bridge 形状，并只把主进程真正支持的级别转发过去。
-  if (level !== "debug" && typeof window !== "undefined") {
-    // tabStore 等纯前端状态模块现在也会在 Vitest 的 Node 环境里打 info 日志。
-    // 如果这里无条件访问 window，测试一触发日志就会直接抛 ReferenceError，
-    // 结果变成“为了排查问题而引入新的测试噪音”。先确认运行在浏览器环境，再走桌面端 bridge。
-    (window as DesktopLogBridgeWindow).zcode?.log?.(level, args);
-  }
-}
-
-function lifecycleLog(level: DesktopLogLevel, ...args: unknown[]) {
-  if (isOfflineLocked()) {
-    if (level === "error") log("error", ...args);
-    return;
-  }
-  // 生产包默认只保留经过筛选的生命周期诊断，避免把消息流日志重新打开。
-  // 测试和故障注入仍可通过显式全局开关关闭全部 renderer 日志。
-  if (isRendererLoggingDisabled()) {
-    return;
-  }
-  if (isRendererProductionBuild()) {
-    if (typeof window !== "undefined") {
-      (window as DesktopLogBridgeWindow).zcode?.log?.(level, args);
+  if (typeof window !== "undefined") {
+    try {
+      (window as DesktopLogBridgeWindow).zcode?.log?.(level, [message]);
+    } catch {
+      // IPC/窗口关闭等日志故障不能改变原操作结果。
     }
-    return;
   }
-  log(level, ...args);
 }
 
 export const logger = {
@@ -88,34 +51,29 @@ export const logger = {
   warn: (...args: unknown[]) => log("warn", ...args),
   error: (...args: unknown[]) => log("error", ...args),
   lifecycle: {
-    info: (...args: unknown[]) => lifecycleLog("info", ...args),
-    warn: (...args: unknown[]) => lifecycleLog("warn", ...args),
-    error: (...args: unknown[]) => lifecycleLog("error", ...args),
+    info: (...args: unknown[]) => log("info", ...args),
+    warn: (...args: unknown[]) => log("warn", ...args),
+    error: (...args: unknown[]) => log("error", ...args),
   },
-  /** 带 traceId 前缀的日志，用于全链路追踪 */
+  /** 保留既有关联 API，不增加新的跨文件关联机制。 */
   trace: (traceId: string, level: LogLevel, ...args: unknown[]) => {
     log(level, `[trace:${traceId}]`, ...args);
   },
 };
 
-/**
- * 进程内存本地诊断日志的唯一 renderer 出口。
- * 它是 renderer 生产日志策略里的“正式监控链路”例外：生产构建仍经桌面桥落盘（最多每 60s 一行、
- * 有变化才写），Web 端无桥时 no-op。业务模块不得借用它绕过生产门控。
- */
+/** 保留内存诊断的既有桌面出口；同样服从统一 INFO 阈值。 */
 export function logMemoryDiagnostics(line: string): void {
-  if (isOfflineLocked()) return;
-  if (isRendererLoggingDisabled()) {
-    return;
-  }
+  if (!isLoggerLevelEnabled("info")) return;
   if (typeof window !== "undefined") {
     const bridge = (window as DesktopLogBridgeWindow).zcode?.log;
     if (bridge) {
-      bridge("info", [line]);
+      try {
+        bridge("info", [safeLogMessage(line)]);
+      } catch {
+        // 诊断出口不替换业务结果。
+      }
       return;
     }
   }
-  if (!isRendererProductionBuild()) {
-    consoleFns.info(formatLogPrefix("ui"), line);
-  }
+  log("info", line);
 }

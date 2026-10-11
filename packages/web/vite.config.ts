@@ -87,6 +87,7 @@ export default defineConfig(({ mode }) => {
       __ZCODE_VERSION__: JSON.stringify(version),
       __ZCODE_COMMIT__: JSON.stringify(env.ZCODE_COMMIT || "unknown"),
       __ZCODE_ENV__: JSON.stringify(zcodeEnv),
+      "import.meta.env.JCH_LOG_LEVEL": JSON.stringify(env.JCH_LOG_LEVEL ?? ""),
       "import.meta.env.VITE_ZCODE_BASE_URL": JSON.stringify(zcodeEndpointOrigin),
       // 兼容旧 Web runtime 读取名；新代码统一读 VITE_ZCODE_BASE_URL。
       "import.meta.env.VITE_ZCODE_ENDPOINT_ORIGIN": JSON.stringify(zcodeEndpointOrigin),

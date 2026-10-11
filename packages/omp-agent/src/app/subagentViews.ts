@@ -6,7 +6,7 @@
 
 import { ConversationEngine } from "./conversationEngine.js";
 import { rowsFromOmpEntries } from "../domain/coldHistory.js";
-import { readPersistedSubagentEntries, recordUnavailableMarkerRow } from "./coldHydration.js";
+import { recordUnavailableMarkerRow } from "./coldHydration.js";
 import { TrailingThrottle } from "./trailingThrottle.js";
 import {
   buildOmpSubagentViewId,
@@ -15,7 +15,7 @@ import {
 } from "../domain/ompFrames.js";
 import type { OmpSubagentFrame } from "../domain/ompFrames.js";
 import type { HostGateway, OmpStorePort } from "./ports.js";
-import { readSubagentRecord } from "./subagentControl.js";
+import { subagentViewDiagnostics as viewDiagnostics } from "./subagentViewDiagnostics.js";
 
 /** subagent_event → 重读的尾随节流窗口：事件风暴合并为一次重读，末事件由尾沿保证必达。 */
 const REFRESH_THROTTLE_MS = 800;
@@ -43,13 +43,6 @@ interface ViewRefreshState {
   rerun: boolean;
   terminated: boolean;
 }
-
-/** app 层无 logger 依赖；与 conversationEngine.engineWarn 同格式写 stderr。 */
-const viewWarn = (message: string, details?: Record<string, unknown>): void => {
-  process.stderr
-    .write(`${JSON.stringify({ ts: new Date().toISOString(), level: "warn", scope: "omp-agent", message, ...details })}
-`);
-};
 
 export interface SubagentViewDeps {
   registry: SubagentViewRegistry;
@@ -110,7 +103,7 @@ export class SubagentViewStore {
         workspaceId: this.deps.workspaceId,
         workspacePath: this.deps.workspacePath,
       })
-      .catch(() => null);
+      .catch((error: unknown) => viewDiagnostics.parentFailed(parentSessionId, error));
   }
 
   /**
@@ -127,9 +120,10 @@ export class SubagentViewStore {
     state.unavailable = false;
     state.resetSeen = false;
     const engine = await this.parentEngine(parentSessionId);
-    if (!engine) return "unavailable";
+    if (!engine) return viewDiagnostics.unavailable(viewId, "parent_resume", state);
     for (let window = 0; window < SUBAGENT_WINDOW_READ_CAP; window += 1) {
-      const outcome = await readSubagentRecord(
+      const outcome = await viewDiagnostics.readRecord(
+        viewId,
         engine.subagentProcessHost(),
         subagentId,
         state.nextByte,
@@ -140,11 +134,13 @@ export class SubagentViewStore {
         throw new Error(`parent session process unavailable: ${parentSessionId}`);
       }
       if (!outcome.success) {
-        const entries = await readPersistedSubagentEntries(
+        const entries = await viewDiagnostics.fallback(
+          viewId,
           engine.ompSessionFile,
           this.deps.store,
           subagentId,
           outcome.error,
+          state.nextByte,
         );
         if (entries) {
           if (entries.length === 0) return "unavailable";
@@ -165,6 +161,7 @@ export class SubagentViewStore {
           : {};
       if (!Array.isArray(record.entries)) {
         // 形状异常按读尽处理：保持当前内容，不向订阅链路抛错（G7 同语义）。
+        viewDiagnostics.invalidRecord(viewId, state);
         return "complete";
       }
       if (typeof record.nextByte !== "number") {
@@ -180,28 +177,31 @@ export class SubagentViewStore {
         state.resetSeen = true;
       }
       const advanced = record.nextByte > state.nextByte;
+      viewDiagnostics.window(viewId, state, record);
       state.entries.push(...record.entries);
       state.nextByte = record.nextByte;
       // 上游游标单调推进（oh-my-pi rpc-subagents.ts nextByte 语义）：不再推进即读尽
       // （fromByte 之后无更多记录时返回空 entries 且 nextByte 原样）。
       if (!advanced) return "complete";
     }
-    return "capped";
+    return viewDiagnostics.capped(viewId, state, SUBAGENT_WINDOW_READ_CAP);
   }
 
   /** reset 使用同一视图投影的 row.removed 屏障；保留订阅身份，不冻结已打开详情。 */
   private rebuildRows(viewId: string, merge: boolean): void {
     const state = this.readStates.get(viewId);
     if (!state || this.disposed) return;
-    const rows = rowsFromOmpEntries(state.entries, new Map());
-    if (merge && state.resetSeen) {
-      state.resetSeen = false;
-      this.views.get(viewId)?.replaceHydratedRows(rows);
-      return;
-    }
-    const engine = this.views.get(viewId);
-    if (!engine) return;
-    engine.hydrateRows(rows, merge);
+    viewDiagnostics.project(viewId, state, () => {
+      const rows = rowsFromOmpEntries(state.entries, new Map());
+      if (merge && state.resetSeen) {
+        state.resetSeen = false;
+        this.views.get(viewId)?.replaceHydratedRows(rows);
+        return;
+      }
+      const engine = this.views.get(viewId);
+      if (!engine) return;
+      engine.hydrateRows(rows, merge);
+    });
   }
 
   /** 合成视图引擎（acquire 与 S6-4 reset 重建共用同一构造）。 */
@@ -257,8 +257,9 @@ export class SubagentViewStore {
           return;
         }
         this.rebuildRows(viewId, false);
-      } catch {
+      } catch (error) {
         // 传输层失败同语义：不向订阅链路抛错（G7）。
+        viewDiagnostics.failed(viewId, "hydrate", error);
       }
     })().finally(() => {
       this.hydrating.delete(viewId);
@@ -294,10 +295,7 @@ export class SubagentViewStore {
       )
         view.projector.handleEvent(event);
     } catch (error) {
-      viewWarn("omp view event projection failed", {
-        type: parsed.data.type,
-        error: error instanceof Error ? error.message : String(error),
-      });
+      viewDiagnostics.failed(viewId, "event_projection", error, { eventType: parsed.data.type });
     }
     view.scheduleFlush();
     const state = this.viewState(viewId);
@@ -366,8 +364,9 @@ export class SubagentViewStore {
           return;
         }
         this.rebuildRows(viewId, true);
-      } catch {
+      } catch (error) {
         // 传输层失败：保持当前内容；下一事件或 rerun 会再次尝试。
+        viewDiagnostics.failed(viewId, "refresh", error);
       }
     })().finally(() => {
       state.refreshing = null;

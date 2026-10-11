@@ -9,6 +9,8 @@ import { createId } from "../domain/ids.js";
 import { agentInvokedOf } from "../domain/titleText.js";
 import type { OmpSessionProcess } from "./ports.js";
 import { dispatchOmpText, type SlashCommandResolver } from "./ompPromptDispatch.js";
+import { diagnostics } from "./diagnostics.js";
+import { logTurnTransitions, turnContext } from "./turnDiagnostics.js";
 
 /** 引擎侧宿主：收口/分发流程对引擎状态的读写出口（全部惰性求值，避免构造顺序耦合）。 */
 export interface EnginePromptTurnHost {
@@ -61,6 +63,10 @@ export class EnginePromptTurnCloser {
   /** terminal agent_end：补收积压的本地命令完成（引擎在清流式判定后调用）。 */
   onTerminalAgentEnd(): void {
     while (this.pendingLocalOnlyCompletions > 0) {
+      diagnostics.debug("omp.turn.local_completion.replayed", {
+        ...turnContext(this.host.projection()),
+        pendingCount: this.pendingLocalOnlyCompletions,
+      });
       this.pendingLocalOnlyCompletions -= 1;
       this.finishLocalOnly();
     }
@@ -81,96 +87,173 @@ export class EnginePromptTurnCloser {
     originalText = text,
   ): Promise<"startNow" | "queue"> {
     const host = this.host;
-    host.ensureTitleFromText(text);
-    // 修复：首发已接受但 agent_start 尚未到达也属于 busy；后续输入不能再走 prompt。
-    const streaming =
-      host.isStreaming() || host.projection().stateSnapshot.control.phase === "running";
-    const slashCommand = originalText.trimStart().startsWith("/");
-    const guide = streaming && !slashCommand && host.followupMode() === "guide";
-    // 修复（A5）：terminal agent_end 可能落在 beginUserTurn(guide) 与 steer 响应之间；
-    // 在途标记让收口逻辑把无内容行的 guide 轮转回排队（由下一个 agent_start 激活），
-    // 而不是被连带收口导致后续 drain 输出无轮承接。
-    if (guide) host.markSteerInFlight(sourceCommandId);
-    host.projection().beginUserTurn({
-      text,
-      inputId: createId("input"),
-      sourceCommandId,
-      clientId,
-      routing: streaming ? (slashCommand ? "queue" : host.followupMode()) : "startNow",
-    });
-    // XR1 守卫：输入接受（本地入列）即递增对账序号，使在途的陈旧 get_state 回包跳过
-    // 对账（新排队轮不被误收口）；接受点早于 dispatch 成功点，覆盖 dispatch 在途窗口。
-    host.noteInputAccepted();
-    host.flush();
-    try {
+    const inputId = createId("input");
+    const context = { sessionId: host.projection().sessionId, commandId: sourceCommandId, inputId };
+    return diagnostics.run(context, async () => {
+      host.ensureTitleFromText(text);
+      // 修复：首发已接受但 agent_start 尚未到达也属于 busy；后续输入不能再走 prompt。
+      const streaming =
+        host.isStreaming() || host.projection().stateSnapshot.control.phase === "running";
+      const slashCommand = originalText.trimStart().startsWith("/");
+      const guide = streaming && !slashCommand && host.followupMode() === "guide";
+      // 修复（A5）：terminal agent_end 可能落在 beginUserTurn(guide) 与 steer 响应之间；
+      // 在途标记让收口逻辑把无内容行的 guide 轮转回排队（由下一个 agent_start 激活），
+      // 而不是被连带收口导致后续 drain 输出无轮承接。
+      if (guide) host.markSteerInFlight(sourceCommandId);
+      host.projection().beginUserTurn({
+        text,
+        inputId,
+        sourceCommandId,
+        clientId,
+        routing: streaming ? (slashCommand ? "queue" : host.followupMode()) : "startNow",
+      });
+      // XR1 守卫：输入接受（本地入列）即递增对账序号，使在途的陈旧 get_state 回包跳过
+      // 对账（新排队轮不被误收口）；接受点早于 dispatch 成功点，覆盖 dispatch 在途窗口。
+      host.noteInputAccepted();
+      host.flush();
+      diagnostics.info("omp.input.accepted", {
+        ...context,
+        routing: streaming ? (slashCommand ? "queue" : host.followupMode()) : "startNow",
+        dispatchType: streaming && !slashCommand ? (guide ? "steer" : "follow_up") : "prompt",
+        textLength: text.length,
+        originalTextLength: originalText.length,
+        imageCount: images.length,
+        modelSelectionPresent: Boolean(modelSelection),
+      });
       try {
-        await host.ensureStarted();
-      } catch (error) {
-        this.failTurn(sourceCommandId, "omp_start_failed", error);
-        return streaming ? "queue" : "startNow";
-      }
-      const process = host.currentProcess();
-      if (!process) {
-        this.failTurn(sourceCommandId, "omp_unavailable", new Error("omp core failed to start"));
-        return streaming ? "queue" : "startNow";
-      }
-      try {
-        const outcome = await dispatchOmpText({
-          process,
-          text,
-          originalText,
-          images,
-          streaming,
-          followupMode: host.followupMode(),
-          modelSelection,
-          currentConfig: host.projection().stateSnapshot.config,
-          ...(host.resolveSlashCommand ? { resolveSlashCommand: host.resolveSlashCommand } : {}),
-        });
-        if (!outcome.success) {
-          this.failTurn(
-            sourceCommandId,
-            outcome.code ?? "omp_prompt_failed",
-            new Error(outcome.error ?? "prompt rejected"),
-          );
+        try {
+          await host.ensureStarted();
+        } catch (error) {
+          this.failTurn(sourceCommandId, "omp_start_failed", error);
           return streaming ? "queue" : "startNow";
         }
-        // 重启/关闭后的旧 ACK 不得收口新进程的轮；输出本身也受进程实例 fence 保护。
-        if (host.currentProcess() !== process) return streaming ? "queue" : "startNow";
-        this.noteDispatchOutcome(outcome.data, sourceCommandId);
-        if (slashCommand && agentInvokedOf(outcome.data) === false) return "startNow";
-      } catch (error) {
-        // omp RPC 超时或进程退出会 reject，必须结束对应轮次。
-        this.failTurn(sourceCommandId, "omp_prompt_failed", error);
+        const process = host.currentProcess();
+        if (!process) {
+          this.failTurn(sourceCommandId, "omp_unavailable", new Error("omp core failed to start"));
+          return streaming ? "queue" : "startNow";
+        }
+        const startedAt = Date.now();
+        diagnostics.info("omp.input.dispatch.started", context);
+        try {
+          const outcome = await dispatchOmpText({
+            process,
+            text,
+            originalText,
+            images,
+            streaming,
+            followupMode: host.followupMode(),
+            modelSelection,
+            currentConfig: host.projection().stateSnapshot.config,
+            ...(host.resolveSlashCommand ? { resolveSlashCommand: host.resolveSlashCommand } : {}),
+          });
+          const dispatchFields = {
+            ...context,
+            elapsedMs: Date.now() - startedAt,
+            success: outcome.success,
+            code: outcome.code,
+            agentInvoked: agentInvokedOf(outcome.data),
+          };
+          if (outcome.success) diagnostics.info("omp.input.dispatch.ack", dispatchFields);
+          else
+            diagnostics.error("omp.input.dispatch.failed", {
+              ...dispatchFields,
+              failureStage: outcome.code?.startsWith("omp_command_")
+                ? "routing"
+                : outcome.code?.startsWith("omp_set_")
+                  ? "configuration"
+                  : "core_rejection",
+            });
+          if (!outcome.success) {
+            this.failTurn(
+              sourceCommandId,
+              outcome.code ?? "omp_prompt_failed",
+              new Error(outcome.error ?? "prompt rejected"),
+            );
+            return streaming ? "queue" : "startNow";
+          }
+          // 重启/关闭后的旧 ACK 不得收口新进程的轮；输出本身也受进程实例 fence 保护。
+          if (host.currentProcess() !== process) {
+            diagnostics.warn("omp.input.dispatch.stale_ack", {
+              ...context,
+              failureStage: "process_fence",
+            });
+            return streaming ? "queue" : "startNow";
+          }
+          this.noteDispatchOutcome(outcome.data, sourceCommandId);
+          if (slashCommand && agentInvokedOf(outcome.data) === false) return "startNow";
+        } catch (error) {
+          diagnostics.error("omp.input.dispatch.failed", {
+            ...context,
+            elapsedMs: Date.now() - startedAt,
+            failureStage: "dispatch_exception",
+            errorType: error instanceof Error ? error.name : typeof error,
+          });
+          // omp RPC 超时或进程退出会 reject，必须结束对应轮次。
+          this.failTurn(sourceCommandId, "omp_prompt_failed", error);
+        }
+        return streaming ? "queue" : "startNow";
+      } finally {
+        // steer 响应已返回（成功或失败）：清除在途标记；失败路径 failTurn 已收口 guide 轮。
+        if (guide) host.clearSteerInFlight();
       }
-      return streaming ? "queue" : "startNow";
-    } finally {
-      // steer 响应已返回（成功或失败）：清除在途标记；失败路径 failTurn 已收口 guide 轮。
-      if (guide) host.clearSteerInFlight();
-    }
+    });
   }
 
   failTurn(sourceCommandId: string, code: string, error: unknown): void {
     const message = error instanceof Error ? error.message : String(error);
+    const projection = this.host.projection();
+    const beforeSeq = projection.seq;
+    diagnostics.error("omp.input.failed", {
+      sessionId: projection.sessionId,
+      commandId: sourceCommandId,
+      code,
+      failureStage:
+        code === "omp_start_failed"
+          ? "startup"
+          : code === "omp_unavailable"
+            ? "process_unavailable"
+            : "dispatch",
+      errorType: error instanceof Error ? error.name : typeof error,
+    });
     this.host.projection().failCommandTurn(sourceCommandId, { code, message });
+    if (logTurnTransitions(projection, beforeSeq, code) === 0)
+      diagnostics.debug("omp.turn.failure.ignored", {
+        sessionId: projection.sessionId,
+        commandId: sourceCommandId,
+        reason: "no_matching_turn",
+      });
     this.host.flush();
   }
 
   /** 本地命令收口（prompt 响应 data.agentInvoked=false 或异步 prompt_result）。 */
   private finishLocalOnly(sourceCommandId?: string): void {
     const host = this.host;
+    const projection = host.projection();
+    const beforeSeq = projection.seq;
     if (sourceCommandId && host.projection().finishQueuedLocalOnlyTurn(sourceCommandId)) {
+      if (logTurnTransitions(projection, beforeSeq, "local_command_ack") === 0)
+        diagnostics.debug("omp.turn.local_ack.ignored", {
+          sessionId: projection.sessionId,
+          commandId: sourceCommandId,
+          reason: "no_matching_turn",
+        });
       host.flush();
       return;
     }
     if (host.isStreaming()) {
       this.pendingLocalOnlyCompletions += 1;
+      diagnostics.debug("omp.turn.local_completion.deferred", {
+        ...turnContext(projection),
+        commandId: sourceCommandId,
+        pendingCount: this.pendingLocalOnlyCompletions,
+      });
       return;
     }
-    const projection = host.projection();
     if (!projection.finishQueuedLocalOnlyTurn()) {
       projection.closeAssistantResponse();
       projection.finishTurn("success");
     }
+    logTurnTransitions(projection, beforeSeq, "local_command_completion");
     host.flush();
   }
 
@@ -188,6 +271,12 @@ export class EnginePromptTurnCloser {
       host.isStreaming() ||
       host.projection().stateSnapshot.control.phase !== "running"
     ) {
+      diagnostics.debug("omp.turn.prompt_result.ignored", {
+        ...turnContext(host.projection()),
+        status: frame.status,
+        streaming: host.isStreaming(),
+        reason: "no_terminal_transition",
+      });
       return;
     }
     const failure =
@@ -200,7 +289,9 @@ export class EnginePromptTurnCloser {
                 : (frame.error?.message ?? "prompt failed"),
           }
         : undefined;
+    const beforeSeq = host.projection().seq;
     host.projection().finishTurn(failure ? "failed" : "interrupted", failure);
+    logTurnTransitions(host.projection(), beforeSeq, "prompt_result");
     host.flush();
   }
 }

@@ -15,3 +15,4 @@
 - 消息 ID 是首选幂等键。缺 ID 的旧转发只有无歧义跨源观察才能归并，同源同正文消息保留。源中发送时间与落盘时间分别标 `sent`/`recorded`，缺失留未知；没有处理回执就不能生成已读/已处理状态。旧核全量审计缺口始终显式标 partial。
 - 直接子代理状态读取原会话子代理目录与 revision，不新设运行状态 owner；嵌套状态只从已证明 task 归属的 `wait.jobs(type:task)` 更新，优先使用 `agentUrlId`。同名 bash/eval、未知身份和主会话结束不能推出子代理终态。
 - 交互读面通过既有 SubagentBridge records 的进程归属读取现在状态；冷订阅虽可能启动 Main，但 roster 无该 child 的真实生命周期/快照证明时仍显示 `unknown`，不假定旧 pending/running 仍在执行。明确源终态不会被旧目录的 running 覆盖。进程实例变化参与缓存版本，旧进程的证明不跨实例复用；只读判断不启动进程、发新查询命令或执行模型。
+- 诊断只观察既有请求、会话、进程实例与轮次，不拥有业务状态。app 经诊断端口提交稳定事件；adapters 在入口安装 stderr JSON sink 和异步请求上下文。stdout 始终只承载协议。Host 负责采集并追加其 runtime/workspace 身份，Main 仍是文件日志唯一 writer；产品规则与验收唯一见 [OMP 对接诊断日志](../../../docs/requirements/omp-core-integration.md#omp-对接诊断日志)。

@@ -3,6 +3,10 @@ import {
   ZCODE_VERSION,
   SERVICE_AUTHORITY_MODE_ENV,
   formatLogPrefix,
+  isApplicationLogLevelEnabled,
+  safeLogMessage,
+  serializeLogValue,
+  type ApplicationLogLevel,
   formatZodError,
   helloAckMessageSchema,
 } from "@zcode/shared";
@@ -16,19 +20,26 @@ import {
   readBundledZCodeBuiltinProviderConfig,
 } from "./bundledZCodeBuiltinProviderConfig.js";
 
-// In stdio mode, all logging goes to stderr
-const log = (...args: unknown[]) =>
-  console.error(formatLogPrefix("zcode-server:stdio", process.pid), ...args);
-const stderrConsoleLog = (...args: unknown[]) => console.error(...args);
-
-// stdio 模式下 stdout 只能承载 RPC 帧。
-// 之前 services 里的 info/debug 日志仍会走 console.log / console.info，
-// 一旦把普通文本写进 stdout，就会直接污染协议流，表现成远程调用一直 pending / loading。
-// 这里在 entry 层统一把普通 console 输出重定向到 stderr，确保所有服务日志都不会再打坏 RPC。
-console.log = stderrConsoleLog;
-console.info = stderrConsoleLog;
-console.warn = stderrConsoleLog;
-console.debug = stderrConsoleLog;
+// stdio 的 stdout 只承载 RPC；保存真实 stderr 出口，避免 console 重定向递归。
+const rawConsoleError = console.error.bind(console);
+process.stderr.on("error", () => {});
+function writeStdioLog(level: ApplicationLogLevel, ...args: unknown[]): void {
+  if (!isApplicationLogLevelEnabled(level)) return;
+  try {
+    rawConsoleError(
+      formatLogPrefix("zcode-server:stdio", process.pid),
+      safeLogMessage(args.map(serializeLogValue).join(" ")),
+    );
+  } catch {
+    // 任何诊断故障都不能污染 stdout 或改变业务结果。
+  }
+}
+const log = (...args: unknown[]) => writeStdioLog("info", ...args);
+console.log = (...args: unknown[]) => writeStdioLog("info", ...args);
+console.info = (...args: unknown[]) => writeStdioLog("info", ...args);
+console.warn = (...args: unknown[]) => writeStdioLog("warn", ...args);
+console.debug = (...args: unknown[]) => writeStdioLog("debug", ...args);
+console.error = (...args: unknown[]) => writeStdioLog("error", ...args);
 
 // --version flag: print version and exit (used by deploy version check)
 if (process.argv.includes("--version")) {

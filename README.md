@@ -94,6 +94,8 @@ pnpm bundle:desktop -- --os win --arch x64
 
 See the root and package `package.json` files for additional commands.
 
+OMP runtime diagnostics and log locations follow the [logging requirements](docs/requirements/omp-core-integration.md#omp-对接诊断日志).
+
 AI testing is Windows-only. `pnpm fastcheck` runs static analysis, formatting and compilation only, with no tests; Agents select it only when needed after related edits are complete. `pnpm fulltest --human-authorized` adds all applicable Windows automated tests, and `pnpm slowtest --human-authorized` runs the same complete plan once because no WSL extension applies. Their non-compilation budgets are 60/900/1500 seconds respectively; genuine compilation is excluded, and every run reports total, compilation-excluded, budgeted time, limit and status. Full/slow require an explicit run instruction or an active invocation of `jch-fastcheck-fulltest-slowtest-gates`; the authorization flag only reflects that grant. Gates reuse build caches, parallelize safe work, and never invoke CI/release workflows, Computer Use or shared-mouse automation. See [test requirements](docs/requirements/test-gates.md) and [execution rules](AGENTS.md#三级测试门禁).
 
 ## Manual release packaging

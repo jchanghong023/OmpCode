@@ -11,6 +11,14 @@ import type {
 import type { V4Method } from "@zcode/shared/zcode-protocol-v4";
 import type { z } from "zod";
 import type { ZCodeProtocolTransport } from "./zcodeProtocolTransport.js";
+import type { OmpDiagnosticHostContext } from "./ompDiagnosticLog.js";
+import {
+  createOmpRequestDiagnosticFields,
+  logOmpRequestCompleted,
+  logOmpRequestFailure,
+  logOmpRequestStarted,
+  type OmpRequestDiagnosticContext,
+} from "./ompRequestDiagnostics.js";
 
 /** 客户端可发的方法名：旧 zcodeProtocolMethods + v4/*（并存，收敛为 v4）。 */
 type ZCodeProtocolClientMethod = ZCodeProtocolMethod | V4Method;
@@ -18,6 +26,7 @@ type ZCodeProtocolClientMethod = ZCodeProtocolMethod | V4Method;
 interface ZCodeProtocolClientOptions {
   requireStorageStartup?: boolean;
   requestTimeoutMs?: number;
+  diagnosticContext?: OmpDiagnosticHostContext;
 }
 
 interface ZCodeProtocolRequestTimeoutEvent {
@@ -26,9 +35,8 @@ interface ZCodeProtocolRequestTimeoutEvent {
   timeoutMs: number;
 }
 
-interface PendingRequest<T> {
+interface PendingRequest<T> extends OmpRequestDiagnosticContext {
   method: string;
-  observation: boolean;
   timeout: ReturnType<typeof setTimeout>;
   resumeTimeout: () => void;
   resolve: (value: T) => void;
@@ -82,6 +90,7 @@ export class ZCodeProtocolClient implements IDisposable {
   private nextRequestId = 1;
   private disposed = false;
   private readonly requestTimeoutMs: number;
+  private readonly diagnosticContext: OmpDiagnosticHostContext | undefined;
 
   /**
    * client 是否已 dispose（进程被回收/transport 关闭后为 true）。
@@ -116,12 +125,13 @@ export class ZCodeProtocolClient implements IDisposable {
   ) {
     this.storageStartup = new ZCodeStorageStartupGate(options?.requireStorageStartup ?? false);
     this.requestTimeoutMs = options?.requestTimeoutMs ?? DEFAULT_ZCODE_PROTOCOL_REQUEST_TIMEOUT_MS;
+    this.diagnosticContext = options?.diagnosticContext;
     this.disposables.push(
       transport.onMessage((message) => this.handleMessage(message)),
       transport.onClose((event) => {
         this.storageStartup.dispose();
         const suffix = event.reason ? `: ${event.reason}` : "";
-        this.rejectAll(new Error(`ZCode agent transport closed${suffix}`));
+        this.rejectAll(new Error(`ZCode agent transport closed${suffix}`), "disconnect");
         this.closeEmitter.fire();
       }),
     );
@@ -146,6 +156,14 @@ export class ZCodeProtocolClient implements IDisposable {
     const requestKey = String(id);
     const requestTimeoutMs = options?.timeoutMs ?? this.requestTimeoutMs;
     const observation = options?.lifecycle === "observation";
+    const startedAt = Date.now();
+    const diagnosticFields = createOmpRequestDiagnosticFields(this.diagnosticContext, params, {
+      requestId: id,
+      method,
+      traceId: options?.trace?.traceId,
+      timeoutMs: requestTimeoutMs,
+      lifecycle: observation ? "observation" : "operation",
+    });
 
     const resultPromise = new Promise<T>((resolve, reject) => {
       const expire = () => {
@@ -153,6 +171,7 @@ export class ZCodeProtocolClient implements IDisposable {
         pending?.cleanupAbort?.();
         this.deletePending(requestKey);
         const error = new ZCodeProtocolRequestTimeoutError(method, id, requestTimeoutMs);
+        if (pending) logOmpRequestFailure(pending, "timeout", error);
         // 子进程仍存活但协议 event loop 已无响应时，只让单次 request 超时是不够的：
         // process manager 仍复用这个 stale client，导致后续 plugins/list 等请求连续卡在超时窗口。
         // 超时事件把“连接已不可信”的事实上抛给 owner，由 owner 负责淘汰进程。
@@ -171,13 +190,16 @@ export class ZCodeProtocolClient implements IDisposable {
         pending.cleanupAbort?.();
         this.deletePending(requestKey);
         const reason = options?.signal?.reason;
-        reject(
-          reason instanceof Error ? reason : new DOMException("Request aborted", "AbortError"),
-        );
+        const error =
+          reason instanceof Error ? reason : new DOMException("Request aborted", "AbortError");
+        logOmpRequestFailure(pending, "cancel", error);
+        reject(error);
       };
       const pending: PendingRequest<T> = {
         method,
         observation,
+        startedAt,
+        diagnosticFields,
         timeout,
         resumeTimeout: () => {
           pending.timeout = setTimeout(expire, requestTimeoutMs);
@@ -207,6 +229,7 @@ export class ZCodeProtocolClient implements IDisposable {
     }
 
     try {
+      logOmpRequestStarted(diagnosticFields, observation);
       await this.transport.send({
         id,
         method,
@@ -219,6 +242,7 @@ export class ZCodeProtocolClient implements IDisposable {
         clearTimeout(pending.timeout);
         pending.cleanupAbort?.();
         this.deletePending(requestKey);
+        logOmpRequestFailure(pending, "send", error);
       }
       throw error;
     }
@@ -316,6 +340,7 @@ export class ZCodeProtocolClient implements IDisposable {
         if (this.storageStartup.snapshot?.phase === "failed") {
           this.rejectAll(
             new Error(`SQLite startup failed: ${this.storageStartup.snapshot.errorCode}`),
+            "startup",
           );
         }
       }
@@ -335,8 +360,10 @@ export class ZCodeProtocolClient implements IDisposable {
 
     try {
       const parsed = pending.resultSchema ? pending.resultSchema.parse(result) : result;
+      logOmpRequestCompleted(pending, parsed);
       pending.resolve(parsed);
     } catch (error) {
+      logOmpRequestFailure(pending, "decode", error);
       pending.reject(
         error instanceof Error
           ? error
@@ -354,14 +381,16 @@ export class ZCodeProtocolClient implements IDisposable {
     clearTimeout(pending.timeout);
     pending.cleanupAbort?.();
     this.deletePending(requestKey);
+    logOmpRequestFailure(pending, "remote", error);
     pending.reject(error);
   }
 
-  private rejectAll(error: Error): void {
+  private rejectAll(error: Error, stage: "disconnect" | "startup" | "dispose" = "dispose"): void {
     const hadPending = this.pendingOperationRequestCount > 0;
     for (const pending of this.pending.values()) {
       clearTimeout(pending.timeout);
       pending.cleanupAbort?.();
+      logOmpRequestFailure(pending, stage, error);
       pending.reject(error);
     }
     this.pending.clear();

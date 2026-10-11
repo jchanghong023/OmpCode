@@ -110,7 +110,7 @@ export const helloAckMessageSchema = z.object({
 });
 
 export const rendererLogPayloadSchema = z.object({
-  level: z.enum(["info", "warn", "error"]),
+  level: z.enum(["debug", "info", "warn", "error"]),
   args: z.array(z.unknown()),
 });
 
@@ -537,7 +537,7 @@ export const hostRemoteWorkspaceClosedResponseSchema = z
 
 export const hostLogResponseSchema = z.object({
   type: z.literal("log"),
-  level: z.enum(["info", "warn", "error"]),
+  level: z.enum(["debug", "info", "warn", "error"]),
   source: z.string(),
   message: z.string(),
 });

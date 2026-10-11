@@ -166,6 +166,7 @@ import {
 } from "./zcodeConfigOptions.js";
 import type { CuaProductMcpServerResolver } from "#src/cua-permission-broker/index.js";
 import { registerMemoryDiagnosticsProvider } from "#src/memoryDiagnostics.js";
+import { writeOmpHostDiagnostic } from "./ompDiagnosticLog.js";
 
 interface TaskOverlay {
   archived?: boolean;
@@ -361,14 +362,36 @@ export function createZCodeTaskServiceAdapter(
     }
     const key = taskKey(params);
     const activeRunId = activePromptInputIds.get(key);
+    // 拒绝发生在派发前，Agent 无法观察；只记录已有 owner/run/command 事实，不复制输入。
+    const commandParams = asRecord(params);
+    const rejectionContext = {
+      workspaceKey: workspaceKey(params),
+      workspacePath: params.workspacePath,
+      workspaceIdentity: params.workspaceIdentity ?? null,
+      taskId: params.taskId,
+      commandId: commandParams.commandId,
+      inputId: commandParams.traceId,
+      ownerRunId,
+      activeRunId: activeRunId ?? null,
+      stage: "owner_admission",
+      elapsedMs: 0,
+    };
     if (!activeRunId) {
       // 手机端 owner command 到达 host 时，task 可能已经终态收口。
       // 没有 active run 时不能再把旧 command 写入 host 队列，否则会在桌面 shared host 上误发旧输入。
+      writeOmpHostDiagnostic("warn", "omp_host_owner_command_rejected", {
+        ...rejectionContext,
+        errorCode: "NO_ACTIVE_TASK_OWNER",
+      });
       throw createTaskOwnerCommandError("No active task owner.", "NO_ACTIVE_TASK_OWNER");
     }
     if (activeRunId !== ownerRunId) {
       // ownerRunId 是远控请求的 stale 防护边界。
       // 旧 run 的 enqueue/promote 不能修改当前 task command queue。
+      writeOmpHostDiagnostic("warn", "omp_host_owner_command_rejected", {
+        ...rejectionContext,
+        errorCode: "STALE_TASK_OWNER_COMMAND",
+      });
       throw createTaskOwnerCommandError("Stale task owner command.", "STALE_TASK_OWNER_COMMAND");
     }
   }

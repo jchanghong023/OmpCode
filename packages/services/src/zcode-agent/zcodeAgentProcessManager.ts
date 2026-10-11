@@ -35,6 +35,7 @@ import type { ZCodeAgentPresentationSurface } from "./zcodeAgentPresentationSurf
 import { shouldSpawnInDetachedProcessGroup } from "../process/processTreeTerminator.js";
 import type { RuntimeProcessLifecycleReporter } from "../process/runtimeProcessLifecycle.js";
 import { buildAgentWorkspaceIdentityEnv } from "../runtime-tools/agentProxyEnv.js";
+import { forwardOmpAgentDiagnostic, redactOmpDiagnosticText } from "./ompDiagnosticLog.js";
 
 export interface ZCodeAgentCommand {
   /** 本地配套 CLI bundle 的存储专用 Worker 入口；远端/自定义命令不推断能力。 */
@@ -245,20 +246,6 @@ const errorLog = (...args: unknown[]) => serviceLog.error(undefined, ...args);
 
 const AGENT_STDERR_TAIL_MAX_LINES = 20;
 const AGENT_STDERR_LINE_MAX_CHARS = 1_000;
-const AGENT_STDERR_SENSITIVE_ASSIGNMENT_PATTERN =
-  /(["']?(?:api[-_]?key|authorization|cookie|credential|password|secret|token)["']?\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s,;}]+)/gi;
-const AGENT_STDERR_AUTH_SCHEME_PATTERN = /\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]+/gi;
-const AGENT_STDERR_API_KEY_PATTERN = /\b(sk-)[A-Za-z0-9_-]{16,}\b/gi;
-
-function redactAgentDiagnostic(value: string): string {
-  return (
-    value
-      .replace(AGENT_STDERR_SENSITIVE_ASSIGNMENT_PATTERN, "$1<redacted>")
-      .replace(AGENT_STDERR_AUTH_SCHEME_PATTERN, "$1 <redacted>")
-      // 裸 key 也必须在跨进程诊断和生产日志之前遮盖。
-      .replace(AGENT_STDERR_API_KEY_PATTERN, "$1<redacted>")
-  );
-}
 
 const debugLog = (...args: unknown[]) => {
   if (!isEffectiveDevelopmentNodeEnv()) {
@@ -277,7 +264,7 @@ function createAgentStderrTail(): {
   return {
     append(line) {
       lineCount += 1;
-      const redacted = redactAgentDiagnostic(line);
+      const redacted = redactOmpDiagnosticText(line);
       const bounded =
         redacted.length > AGENT_STDERR_LINE_MAX_CHARS
           ? `${redacted.slice(0, AGENT_STDERR_LINE_MAX_CHARS)}…[truncated]`
@@ -1026,6 +1013,17 @@ export class ZCodeAgentProcessManager {
       stdio: ["pipe", "pipe", "pipe"],
     });
     const startedAt = Date.now();
+    // 诊断上下文在 stderr/协议监听前捕获；不从可变 workspace 登记反查身份。
+    const runtimeGeneration = (this.runtimeGenerationByWorkspaceKey.get(workspaceKey) ?? 0) + 1;
+    const runtimeInstanceId = `agent-${randomUUID()}`;
+    const diagnosticContext = {
+      workspaceKey,
+      workspacePath: params.workspacePath,
+      workspaceIdentity: params.workspaceIdentity,
+      runtimeGeneration,
+      runtimeInstanceId,
+      agentPid: child.pid,
+    };
     const stderrTail = createAgentStderrTail();
     const transport = new ZCodeStdioTransport(child, {
       onStderrLine: (line) => {
@@ -1044,17 +1042,17 @@ export class ZCodeAgentProcessManager {
               diagnostic: {
                 ...diagnostic,
                 // 脱敏占位符可能比原文长，必须再次限长，避免 IPC schema 拒绝合法异常。
-                name: redactAgentDiagnostic(diagnostic.name).slice(
+                name: redactOmpDiagnosticText(diagnostic.name).slice(
                   0,
                   ZCODE_PROCESS_DIAGNOSTIC_NAME_MAX_CHARS,
                 ),
-                message: redactAgentDiagnostic(diagnostic.message).slice(
+                message: redactOmpDiagnosticText(diagnostic.message).slice(
                   0,
                   ZCODE_PROCESS_DIAGNOSTIC_MESSAGE_MAX_CHARS,
                 ),
                 ...(diagnostic.stack !== undefined
                   ? {
-                      stack: redactAgentDiagnostic(diagnostic.stack).slice(
+                      stack: redactOmpDiagnosticText(diagnostic.stack).slice(
                         0,
                         ZCODE_PROCESS_DIAGNOSTIC_STACK_MAX_CHARS,
                       ),
@@ -1065,8 +1063,9 @@ export class ZCodeAgentProcessManager {
           );
           return;
         }
+        if (forwardOmpAgentDiagnostic(line, diagnosticContext)) return;
         stderrTail.append(line);
-        debugLog(line);
+        // 非 JSON stderr 只留有界退出尾部；不能绕过脱敏直接进入开发日志。
       },
       ownedProcessStartedAtMs: spawnRequestedAt,
       // POSIX 下 child 由本 manager 以 detached=true 启动，pid 同时就是 Host
@@ -1076,13 +1075,11 @@ export class ZCodeAgentProcessManager {
     const client = new ZCodeProtocolClient(transport, {
       requireStorageStartup: effectiveCommand.supportsStorageStartup,
       requestTimeoutMs: this.requestTimeoutMs,
+      diagnosticContext,
     });
+    this.runtimeGenerationByWorkspaceKey.set(workspaceKey, runtimeGeneration);
     // Agent 进程重启后，Host 仍需要 runtime identity 区分新旧订阅和运行命令。
     // Provider Registry 由新 Worker 从所属 Environment 的 Config 重建，不再由 UI 重新下发。
-    const runtimeGeneration = (this.runtimeGenerationByWorkspaceKey.get(workspaceKey) ?? 0) + 1;
-    this.runtimeGenerationByWorkspaceKey.set(workspaceKey, runtimeGeneration);
-    // 生命周期事件关联只需要本次 runtime 的不透明身份，不能复用包含 workspaceKey 的协议 identity。
-    const runtimeInstanceId = `agent-${randomUUID()}`;
     const runtimeIdentity: ZCodeAgentRuntimeIdentity = {
       generation: runtimeGeneration,
       identity: this.lane
@@ -1274,6 +1271,10 @@ export class ZCodeAgentProcessManager {
         warnLog(
           "ZCode agent cancel notification timed out; keeping client (best-effort control plane)",
           {
+            event: "omp_host_request_timeout",
+            ts: Date.now(),
+            stage: "timeout",
+            ...diagnosticContext,
             workspaceKey,
             method: event.method,
             requestId: event.requestId,
@@ -1284,6 +1285,10 @@ export class ZCodeAgentProcessManager {
         return;
       }
       warnLog("ZCode agent request timed out; disposing stale protocol client", {
+        event: "omp_host_request_timeout",
+        ts: Date.now(),
+        stage: "timeout",
+        ...diagnosticContext,
         workspaceKey,
         method: event.method,
         requestId: event.requestId,

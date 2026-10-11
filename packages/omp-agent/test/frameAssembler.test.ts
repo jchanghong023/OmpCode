@@ -278,35 +278,13 @@ test("未齐片即超出声明字节数时立即丢弃序列", () => {
   assert.equal(assembler.abort(), null);
 });
 
-// ── ready 通告上限接线（B6）：ompProcess 在 ready 解析后用
-// maxReassembledFrameBytes 更新 assembler；用 `node -e` 内联 fake 核驱动真实进程。──
+// 实际子进程通告重组上限；消费端不得收到超限正文，随后合法帧仍须交付。
 
-/** 捕获本进程 stderr（适配器 logger 输出）以便断言 debug 级拒绝日志。 */
-function captureStderr(): { text(): string; restore(): void } {
-  const original = process.stderr.write;
-  const chunks: string[] = [];
-  process.stderr.write = ((writeChunk: unknown, ...rest: unknown[]) => {
-    chunks.push(typeof writeChunk === "string" ? writeChunk : String(writeChunk));
-    return (original as unknown as (c: unknown, ...r: unknown[]) => boolean).apply(process.stderr, [
-      writeChunk,
-      ...rest,
-    ]);
-  }) as typeof process.stderr.write;
-  return {
-    text: () => chunks.join(""),
-    restore: () => {
-      process.stderr.write = original;
-    },
-  };
-}
-
-// 通告上限取 128：既要让「声明 129 字节」的超限分片被拒，也要让 compact 的分片响应
-// （约 91 字节）在限内可重组。
+// 128 字节允许 compact 的分片响应（约 91 字节），拒绝更大的输出帧。
 const WIRED_LIMIT = 128;
 
-// 内联 fake 单会话核：ready 通告 128 字节重组上限；set_subagent_subscription 前先发一条
-// 声明 129 字节的超限分片（若接线生效必须被拒，否则会被当作 "{}" 重组）；compact 的
-// 响应拆成 2 片限内分片返回（若接线误伤则无法重组，命令超时失败）。
+// 内联 fake 核发送有效但超限的 command_output，再发普通输出作为顺序屏障。
+// 缺失 ready 上限会让超限输出错误进入消费端；限内 compact 响应仍需正常结算。
 // 当前会话启动会启用 ask；夹具须回握手 ACK，不能让分片验收无意义等待 10 秒超时。
 const FAKE_SESSION_CORE = `
 const { createInterface } = require("node:readline");
@@ -315,7 +293,9 @@ createInterface({ input: process.stdin }).on("line", (line) => {
   let cmd; try { cmd = JSON.parse(line); } catch { return; }
   if (cmd.type === "negotiate_protocol" || cmd.type === "set_subagent_subscription" || cmd.type === "set_ask_dialog") {
     if (cmd.type === "set_subagent_subscription") {
-      process.stdout.write(JSON.stringify({ type: "rpc_chunk", chunkId: "oversize", index: 0, count: 1, byteLength: ${WIRED_LIMIT + 1}, data: Buffer.from("{}").toString("base64") }) + "\\n");
+      const oversized = Buffer.from(JSON.stringify({ type: "command_output", text: "x".repeat(${WIRED_LIMIT}) }), "utf8");
+      process.stdout.write(JSON.stringify({ type: "rpc_chunk", chunkId: "oversize", index: 0, count: 1, byteLength: oversized.byteLength, data: oversized.toString("base64") }) + "\\n");
+      process.stdout.write(JSON.stringify({ type: "command_output", text: "after-rejection" }) + "\\n");
     }
     process.stdout.write(JSON.stringify({ id: cmd.id, type: "response", command: cmd.type, success: true, data: {} }) + "\\n");
     return;
@@ -337,27 +317,25 @@ process.on("exit", () => {
   rmSync(scratchRoot, { recursive: true, force: true });
 });
 
-test("ompProcess：ready 通告上限接线——超限分片拒绝、限内分片照常重组", async () => {
-  const captured = captureStderr();
+test("ompProcess：超限输出不交付消费端，后续合法帧和分片响应照常交付", async () => {
+  const outputs: string[] = [];
   const omp = createOmpProcessFactory(process.execPath, ["-e", FAKE_SESSION_CORE, "--"]).create({
     cwd: scratchRoot,
     onEvent() {},
     onUiRequest() {},
+    onCommandOutput(frame) {
+      outputs.push(frame.text);
+    },
     onExit() {},
   });
   try {
     await omp.start();
-    // 超限分片（129 > 128）必须被拒：若未接线（默认 64MiB）会被静默重组为 "{}"。
-    assert.match(
-      captured.text(),
-      /"message":"rpc_chunk sequence rejected".*"reason":"reassembled frame exceeds advertised limit"/,
-    );
+    assert.deepEqual(outputs, ["after-rejection"]);
     // 限内（实际字节数 ≤ 128）分片响应必须照常重组并结算命令。
     const outcome = await omp.send({ type: "compact" });
     assert.equal(outcome.success, true);
     assert.deepEqual(outcome.data, { ok: true });
   } finally {
-    captured.restore();
     await omp.dispose();
   }
 });

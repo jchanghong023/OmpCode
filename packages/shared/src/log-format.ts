@@ -1,3 +1,7 @@
+import { redactFeedbackText } from "./feedbackPrivacy.js";
+
+const LOG_MAX_MESSAGE_CHARS = 32 * 1024;
+
 /**
  * 日志格式化工具
  *
@@ -30,4 +34,46 @@ export function formatLogPrefix(source: string, pid?: number): string {
   const ts = formatTimestamp();
   const pidPart = pid != null ? ` [pid:${pid}]` : "";
   return `[${ts}]${pidPart} [${source}]`;
+}
+
+/** 安全异常上下文与结构化字段序列化；诊断失败不得触发业务异常。 */
+export function serializeLogValue(value: unknown): string {
+  if (typeof value === "string") return value;
+  try {
+    const seen = new WeakSet<object>();
+    return (
+      JSON.stringify(value, (_key, item: unknown) => {
+        if (typeof item === "bigint") return item.toString();
+        if (item && typeof item === "object") {
+          if (seen.has(item)) return "[Circular]";
+          seen.add(item);
+        }
+        if (item instanceof Error) {
+          return {
+            name: item.name,
+            message: item.message,
+            stack: item.stack,
+            code: "code" in item ? item.code : undefined,
+            cause: "cause" in item ? item.cause : undefined,
+          };
+        }
+        return item;
+      }) ?? String(value)
+    );
+  } catch {
+    return "[Unserializable log value]";
+  }
+}
+
+/** 先完整脱敏再限长/转义，保证每条日志只有一个物理行。 */
+export function safeLogMessage(text: string): string {
+  const redacted = redactFeedbackText(text);
+  const bounded =
+    redacted.length > LOG_MAX_MESSAGE_CHARS
+      ? `${redacted.slice(0, LOG_MAX_MESSAGE_CHARS)} [truncated]`
+      : redacted;
+  return bounded
+    .replace(/\r/g, "\\r")
+    .replace(/\n/g, "\\n")
+    .replace(/[\u2028\u2029]/g, "\\n");
 }

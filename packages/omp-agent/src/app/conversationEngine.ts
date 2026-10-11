@@ -7,7 +7,8 @@ import type { OmpSessionEventFrame, OmpStateData } from "../domain/ompFrames.js"
 import type { HostGateway, HostUserInputAnswer, OmpProcessFactory, OmpSessionProcess } from "./ports.js";
 import { ConversationTopicPublisher, type SubscribeOptions } from "./topicPublisher.js";
 import { OmpInteractionProxy } from "./ompInteractionProxy.js";
-import { applyEngineAutoCompaction, applyEngineCompaction, applyEngineSetModel, applyEngineThoughtLevel, projectEngineContextWindow, readOmpSkillCommands, startEngineProcess, createEngineEventHandler } from "./ompEngineProcess.js";
+import { projectEngineContextWindow, startEngineProcess, createEngineEventHandler } from "./ompEngineProcess.js";
+import { applyEngineAutoCompaction, applyEngineCompaction, applyEngineSetModel, applyEngineThoughtLevel, readEngineSkillCommands, runEngineOperation, stopEngineOperation, type EngineOperationHost } from "./engineOperationDiagnostics.js";
 import { PromptQueueReconciler } from "./promptQueueReconciler.js";
 import type { SlashCommandResolver } from "./ompPromptDispatch.js";
 import { EnginePromptTurnCloser } from "./promptTurnCloser.js";
@@ -18,6 +19,8 @@ import type { EngineInit } from "./engineInit.js";
 import { OmpBtwEventBridge } from "./OmpBtwEventBridge.js";
 import { OmpCommandOutputBridge } from "./ompCommandOutput.js";
 import { OmpAgentInteractionLog } from "../domain/OmpAgentInteractionLog.js";
+import { diagnostics } from "./diagnostics.js";
+import { diagnosticSessionCommand, logSessionExit, logTurnTransitions } from "./turnDiagnostics.js";
 export class ConversationEngine {
   readonly sessionId: string;
   readonly workspaceId: string;
@@ -36,6 +39,7 @@ export class ConversationEngine {
   private readonly interactionProxy: OmpInteractionProxy;
   private ompProcess: OmpSessionProcess | null = null;
   private ompStarting: Promise<void> | null = null;
+  private readonly operationHost: EngineOperationHost = { sessionId: () => this.sessionId, ensureStarted: () => this.ensureOmpStarted(), currentProcess: () => this.ompProcess, refreshState: () => this.queueReconciler.refreshAfterActivity(), applyState: (state) => this.applyOmpState(state) };
   private disposed = false;
   private readonly indexNotify = new TrailingThrottle(500, () => this.notifyIndexChange());
   private readonly btw = new OmpBtwEventBridge();
@@ -141,50 +145,51 @@ export class ConversationEngine {
     await this.ompStarting;
   }
   async loadSkillCommands(): Promise<unknown> {
-    await this.ensureOmpStarted();
-    return readOmpSkillCommands(this.ompProcess!);
+    return readEngineSkillCommands(this.operationHost);
   }
   private async startOmp(): Promise<void> {
-    await startEngineProcess({
-      workspacePath: this.workspacePath,
-      ompFactory: this.ompFactory,
-      resumeSessionPath: this.resumeSessionPath,
-      interaction: this.interactionProxy,
-      onEvent: (event) => this.handleOmpEvent(event),
-      onExit: (code, process) => this.handleOmpExit(code, process),
-      onCommandOutput: this.commandOutputs.emit,
-      // prompt 响应/异步 prompt_result 的收口语义（A1，含 agentInvoked 判定）内聚在 promptTurns。
-      onPromptResult: (frame) => this.promptTurns.onPromptResult(frame),
-      onSessionInfoUpdate: ({ title }) => this.applySessionTitle(title),
-      onConfigUpdate: ({ model, thinkingLevel }) => {
-        this.projection.setModelConfig({ ...(model?.provider !== undefined ? { provider: model.provider } : {}), ...(model?.id !== undefined ? { model: model.id } : {}), ...(thinkingLevel !== undefined ? { thought: thinkingLevel } : {}) });
-        this.notifyIndexChange();
-        this.scheduleFlush();
-      },
-      onCommandsUpdate: this.onCommandsUpdate,
-      onBtwFrame: this.btw.emit,
-      onSubagentFrame: (frame) => {
-        if (frame.type === "subagent_event") this.agentInteractions.ingest(frame.payload.id, frame.payload.event);
-        this.subagents.handle(frame);
-        this.forwardSubagentFrame?.(frame);
-      },
-      currentProcess: () => this.ompProcess,
-      setProcess: (process) => {
-        this.ompProcess = process;
-        // 进程绑定不登记 ACK 为队列事实；取消输入门的 success 也可能没有真正入队。
-      },
-      bootstrap: (process) => this.bootstrapProcess(process),
-    });
+    await diagnostics.run({ sessionId: this.sessionId }, () =>
+      startEngineProcess({
+        workspacePath: this.workspacePath,
+        ompFactory: this.ompFactory,
+        resumeSessionPath: this.resumeSessionPath,
+        interaction: this.interactionProxy,
+        onEvent: (event) => this.handleOmpEvent(event),
+        onExit: (code, process) => this.handleOmpExit(code, process),
+        onCommandOutput: this.commandOutputs.emit,
+        // prompt 响应/异步 prompt_result 的收口语义（A1，含 agentInvoked 判定）内聚在 promptTurns。
+        onPromptResult: (frame) => this.promptTurns.onPromptResult(frame),
+        onSessionInfoUpdate: ({ title }) => this.applySessionTitle(title),
+        onConfigUpdate: ({ model, thinkingLevel }) => {
+          this.projection.setModelConfig({ ...(model?.provider !== undefined ? { provider: model.provider } : {}), ...(model?.id !== undefined ? { model: model.id } : {}), ...(thinkingLevel !== undefined ? { thought: thinkingLevel } : {}) });
+          this.notifyIndexChange();
+          this.scheduleFlush();
+        },
+        onCommandsUpdate: this.onCommandsUpdate,
+        onBtwFrame: this.btw.emit,
+        onSubagentFrame: (frame) => {
+          if (frame.type === "subagent_event") this.agentInteractions.ingest(frame.payload.id, frame.payload.event);
+          this.subagents.handle(frame);
+          this.forwardSubagentFrame?.(frame);
+        },
+        currentProcess: () => this.ompProcess,
+        setProcess: (process) => {
+          this.ompProcess = process;
+          // 进程绑定不登记 ACK 为队列事实；取消输入门的 success 也可能没有真正入队。
+        },
+        bootstrap: (process) => this.bootstrapProcess(process),
+      }),
+    );
   }
 
   /** 进程启动后的首次状态水合（订阅可用性 + get_state + 子代理快照）。 */
   private async bootstrapProcess(process: OmpSessionProcess): Promise<void> {
-    await process.start();
+    await runEngineOperation(this.operationHost, "omp.session.ready", () => process.start());
     // 关闭可在 ready/水合期间到达；不得继续给已销毁引擎写状态或重拉进程。
     if (this.disposed || this.ompProcess !== process) throw new Error("session closed during startup");
     this.projection.setSubagentAvailability(process.subagentSubscriptionAvailable === false ? "unavailable" : "ready");
     this.scheduleFlush();
-    const state = await process.refreshState();
+    const state = await runEngineOperation(this.operationHost, "omp.session.hydrate", () => process.refreshState());
     if (this.disposed || this.ompProcess !== process) throw new Error("session closed during hydration");
     this.applyOmpState(state);
     await this.subagents.refresh(process);
@@ -234,7 +239,12 @@ export class ConversationEngine {
     return paused;
   }
   handleOmpExit(code: number | null, process: OmpSessionProcess): void {
-    if (this.ompProcess !== process) return;
+    if (this.ompProcess !== process) {
+      diagnostics.debug("omp.session.stale_exit", { sessionId: this.sessionId, exitCode: code, reason: "process_fence" });
+      return;
+    }
+    const beforeSeq = this.projection.seq;
+    logSessionExit(this.projection, code, Boolean(process.ompSessionFile ?? this.resumeSessionPath), this.projector.isStreaming);
     // 崩溃时先保存 omp 进程的会话文件，供下次 --resume 使用。
     const exitedSessionFile = process.ompSessionFile;
     if (exitedSessionFile) this.resumeSessionPath = exitedSessionFile;
@@ -243,9 +253,10 @@ export class ConversationEngine {
     this.promptTurns.reset();
     // A5/A3 状态随进程终结：在途 steer 标记与挂起的对账不再有意义（failAllTurns 已收口）。
     this.queueReconciler.dispose();
-    this.interactionProxy.dispose();
+    diagnostics.run({ interactionDisposalStage: "process_exit" }, () => this.interactionProxy.dispose());
     const error = { code: "omp_process_exit", message: `omp core exited unexpectedly (code ${code ?? "null"})` };
     this.projection.failAllTurns(error);
+    logTurnTransitions(this.projection, beforeSeq, "process_exit");
     // 崩溃无 agent_end；必须在 exit 时清流式状态，避免重启前的输入误走 follow_up。
     this.projector.resetForRestart();
     this.scheduleFlush();
@@ -259,42 +270,27 @@ export class ConversationEngine {
   async stop(): Promise<void> {
     this.projector.noteStopRequested();
     this.scheduleFlush();
-    try {
-      await this.ensureOmpStarted();
-      const reconcileAbort = this.queueReconciler.prepareAbortReconciliation();
-      const outcome = await this.ompProcess?.send({ type: "abort" });
-      if (outcome?.success) await reconcileAbort();
-    } catch {
-      this.scheduleFlush();
-    }
+    await stopEngineOperation(
+      this.operationHost,
+      this.projection,
+      () => this.queueReconciler.prepareAbortReconciliation(),
+      () => this.scheduleFlush(),
+    );
   }
   async compact(): Promise<void> {
     this.projection.addTimelineMarker({ type: "compact", origin: "manual", status: "running" });
     this.scheduleFlush();
-    const success = await applyEngineCompaction(
-      () => this.ensureOmpStarted(),
-      () => this.ompProcess,
-      () => this.queueReconciler.refreshAfterActivity(),
-    );
+    const success = await applyEngineCompaction(this.operationHost);
     this.projection.addTimelineMarker({ type: "compact", origin: "manual", status: success ? "success" : "failed" });
     this.scheduleFlush();
     // 失败标记可见后仍向调用方抛错，v4/legacy 都不能伪报压缩成功。
     if (!success) throw new Error("omp compaction failed");
   }
   async setAutoCompaction(enabled: boolean): Promise<{ error?: string }> {
-    return applyEngineAutoCompaction(
-      enabled,
-      () => this.ensureOmpStarted(),
-      () => this.ompProcess,
-      (state) => this.applyOmpState(state),
-    );
+    return applyEngineAutoCompaction(this.operationHost, enabled);
   }
   async setModel(provider: string, model: string, thought?: string): Promise<{ error?: string }> {
-    return applyEngineSetModel(
-      { provider, model, thought },
-      () => this.ensureOmpStarted(),
-      () => this.ompProcess,
-    );
+    return applyEngineSetModel(this.operationHost, { provider, model, thought });
   }
 
   /** guide/queue 均接受；实际路由在 sendText 流式分支（guide→steer、queue→follow_up）。 */
@@ -305,18 +301,15 @@ export class ConversationEngine {
   }
 
   async setThoughtLevel(level: string): Promise<{ error?: string }> {
-    return applyEngineThoughtLevel(
-      level,
-      () => this.ensureOmpStarted(),
-      () => this.ompProcess,
-    );
+    return applyEngineThoughtLevel(this.operationHost, level);
   }
 
   async rename(title: string): Promise<void> {
     // 原先先改投影再忽略核心失败，会把忙时拒绝与冷恢复改名伪报成功。
     if (this.ompProcess || this.resumeSessionPath) {
       await this.ensureOmpStarted();
-      const outcome = await this.ompProcess?.send({ type: "set_session_name", name: title });
+      const process = this.ompProcess;
+      const outcome = process ? await diagnostics.run({ sessionId: this.sessionId }, () => diagnosticSessionCommand(process, { type: "set_session_name", name: title })) : undefined;
       if (!outcome?.success) throw new Error(outcome?.error ?? "set_session_name failed");
     }
     this.applySessionTitle(title);
@@ -338,13 +331,13 @@ export class ConversationEngine {
     this.ompProcess = null;
     this.btw.dispose();
     await process?.dispose();
-    await this.ompStarting?.catch(() => {});
+    await this.ompStarting?.catch(() => diagnostics.warn("omp.session.dispose.start_failed", { sessionId: this.sessionId, failureStage: "pending_start" }));
     await this.commandOutputs.flush();
   }
 
   /** 删除前仅释放文件占用；磁盘删除失败时仍可用原投影和订阅重新启动。 */
   async preparePermanentDeletion(): Promise<string | null> {
-    await this.ompStarting?.catch(() => {});
+    await this.ompStarting?.catch(() => diagnostics.warn("omp.session.delete.start_failed", { sessionId: this.sessionId, failureStage: "pending_start" }));
     const process = this.ompProcess;
     this.resumeSessionPath = process?.ompSessionFile ?? this.resumeSessionPath;
     const persistedPath = this.resumeSessionPath ?? null;
@@ -359,7 +352,7 @@ export class ConversationEngine {
   subscribe(params: SubscribeOptions): { subscriptionId: string; mode: "snapshot" | "resume"; logEpoch: string } {
     const ack = this.publisher.subscribe(params);
     // 冷历史先到 UI；已保存会话再后台恢复 omp，get_state 会把真实上下文和自动压缩状态投影给同一订阅。
-    if (this.resumeSessionPath) void this.ensureOmpStarted().catch(() => {});
+    if (this.resumeSessionPath) void this.ensureOmpStarted().catch(() => diagnostics.warn("omp.session.restore.failed", { sessionId: this.sessionId, failureStage: "background_restore" }));
     return ack;
   }
 

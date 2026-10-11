@@ -3,6 +3,7 @@ import {
   databaseStartupStateSchema,
   databaseStartupPortPayloadSchema,
 } from "@zcode/shared";
+import { getApplicationLogLevel } from "@zcode/shared/log-level";
 /* eslint-disable max-lines -- preload bridge 集中暴露桌面平台 IPC，拆散会让 contextBridge 权限边界更难审计。 */
 import { contextBridge, ipcRenderer, webFrame, webUtils } from "electron";
 import {
@@ -26,6 +27,12 @@ function parseDeviceIdFromArgs(): string {
 
 // 在 contextBridge 建立之前就暴露同步值，让 renderer 在 React 渲染前就能读到
 contextBridge.exposeInMainWorld("__ZCODE_DEVICE_ID__", parseDeviceIdFromArgs());
+// 沙箱 Renderer 不读取 Node 环境；preload 只读投影继承值，先于任何页面日志。
+const rendererLogLevel = getApplicationLogLevel();
+contextBridge.exposeInMainWorld(
+  "__JCH_LOG_LEVEL__",
+  rendererLogLevel === "warn" ? "warning" : rendererLogLevel,
+);
 
 import type {
   AppSettings,
@@ -274,7 +281,7 @@ contextBridge.exposeInMainWorld("zcode", {
   migrateLegacyCommonMcp: (payload?: MigrateLegacyCommonMcpRequest) =>
     ipcRenderer.invoke(PlatformChannels.MigrateLegacyCommonMcp, payload ?? {}),
   /** renderer 日志通过 IPC 传到 main 进程统一存储 */
-  log: (level: "info" | "warn" | "error", args: unknown[]) =>
+  log: (level: "debug" | "info" | "warn" | "error", args: unknown[]) =>
     ipcRenderer.send(PlatformChannels.Log, { level, args }),
   /** 打开系统目录选择框，返回选中路径或 null */
   selectDirectory: (): Promise<string | null> =>

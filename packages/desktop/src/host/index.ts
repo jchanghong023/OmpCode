@@ -15,7 +15,6 @@
  */
 import { createHostDatabaseStartup } from "./hostDatabaseStartup.js";
 import { createHostLocalOnlyFetch } from "./offlineFetch.js";
-import { isClosedHostOutput } from "./closedOutputError.js";
 import { randomUUID } from "node:crypto";
 import {
   MessagePortProtocol,
@@ -74,6 +73,8 @@ import {
   HostResponseTypes,
   ZCODE_VERSION,
   formatLogPrefix,
+  isApplicationLogLevelEnabled,
+  safeLogMessage,
   formatZCodeHostProcessName,
   formatZodError,
   buildRemoteWorkspaceIdentity,
@@ -189,7 +190,7 @@ const { parentPort } = process;
 // 这里根据 main 传入的窗口 label 补一层稳定的 zcode-* title，方便系统进程列表过滤。
 process.title = formatZCodeHostProcessName(process.env["ZCODE_PROCESS_LABEL"]);
 
-type HostLogLevel = "info" | "warn" | "error";
+type HostLogLevel = "debug" | "info" | "warn" | "error";
 
 interface PendingFeedbackLogArchiveRequest {
   resolve: (archive: { path: string; size: number }) => void;
@@ -283,6 +284,7 @@ function reportHostLog(level: HostLogLevel, args: unknown[]): void {
 
 const rawConsole = {
   log: console.log.bind(console),
+  debug: console.debug.bind(console),
   warn: console.warn.bind(console),
   error: console.error.bind(console),
 };
@@ -290,19 +292,13 @@ const rawConsole = {
 function writeRawHostConsole(consoleFn: (...args: unknown[]) => void, ...args: unknown[]): void {
   try {
     consoleFn(...args);
-  } catch (error) {
-    // 失效的终端或管道不能让日志写入杀掉 Host；日志仍通过结构化消息发往 Main。
-    if (!isClosedHostOutput(error)) {
-      throw error;
-    }
+  } catch {
+    // 任何日志终端故障都不能杀掉 Host；结构化消息仍交给 Main。
   }
 }
 
-function handleHostOutputError(error: Error): void {
-  // Node 的流错误也可能异步发出，需要消费已关闭管道的错误事件。
-  if (!isClosedHostOutput(error)) {
-    throw error;
-  }
+function handleHostOutputError(): void {
+  // 输出流错误属于日志故障，不能抛回业务或递归写入失效终端。
 }
 
 process.stdout.on("error", handleHostOutputError);
@@ -327,13 +323,19 @@ const remoteConnectionProgressContext = createRemoteConnectionProgressContext({
 });
 
 function writeHostLog(level: HostLogLevel, ...args: unknown[]): void {
-  // CentOS 7 的 Host 仅输出错误；远程连接进度由独立事件通道交付。
-  if (process.env.OMPCODE_CENTOS7_LOCAL_ONLY === "1" && level !== "error") return;
+  if (!isApplicationLogLevelEnabled(level)) return;
   const prefix = formatLogPrefix("zcode-host", process.pid);
+  const message = args.map(stringifyHostLogArg).join(" ");
   const consoleFn =
-    level === "error" ? rawConsole.error : level === "warn" ? rawConsole.warn : rawConsole.log;
-  writeRawHostConsole(consoleFn, prefix, ...args);
-  reportHostLog(level, [prefix, ...args]);
+    level === "error"
+      ? rawConsole.error
+      : level === "warn"
+        ? rawConsole.warn
+        : level === "debug"
+          ? rawConsole.debug
+          : rawConsole.log;
+  writeRawHostConsole(consoleFn, prefix, message);
+  reportHostLog(level, [prefix, message]);
 }
 
 function createFullFeedbackLogArchiveViaMain(
@@ -368,6 +370,7 @@ function createFullFeedbackLogArchiveViaMain(
 }
 
 const logger = {
+  debug: (...args: unknown[]) => writeHostLog("debug", ...args),
   info: (...args: unknown[]) => writeHostLog("info", ...args),
   warn: (...args: unknown[]) => writeHostLog("warn", ...args),
   error: (...args: unknown[]) => writeHostLog("error", ...args),
@@ -1568,30 +1571,38 @@ function formatRemoteTargetForLog(target: RemoteTarget): string {
 }
 
 console.log = (...args: unknown[]) => {
-  if (process.env.OMPCODE_CENTOS7_LOCAL_ONLY !== "1") {
-    writeRawHostConsole(rawConsole.log, ...args);
+  if (isApplicationLogLevelEnabled("info")) {
+    writeRawHostConsole(rawConsole.log, safeLogMessage(args.map(stringifyHostLogArg).join(" ")));
     reportHostLog("info", args);
   }
   remoteConnectionProgressContext.report("info", args);
 };
 
 console.warn = (...args: unknown[]) => {
-  if (process.env.OMPCODE_CENTOS7_LOCAL_ONLY !== "1") {
-    writeRawHostConsole(rawConsole.warn, ...args);
+  if (isApplicationLogLevelEnabled("warn")) {
+    writeRawHostConsole(rawConsole.warn, safeLogMessage(args.map(stringifyHostLogArg).join(" ")));
     reportHostLog("warn", args);
   }
   remoteConnectionProgressContext.report("warn", args);
 };
 
 console.error = (...args: unknown[]) => {
-  writeRawHostConsole(rawConsole.error, ...args);
+  if (isApplicationLogLevelEnabled("error"))
+    writeRawHostConsole(rawConsole.error, safeLogMessage(args.map(stringifyHostLogArg).join(" ")));
   // Electron 会把 Node warning 先走 console.error，而 process warning listener 随后还会
   // 结构化记录 warn；若这里继续上报，就会为同一个 warning 留下一条 error 和一条 warn。
   if (!shouldReportHostConsoleError(args)) {
     return;
   }
-  reportHostLog("error", args);
+  if (isApplicationLogLevelEnabled("error")) reportHostLog("error", args);
   remoteConnectionProgressContext.report("error", args);
+};
+
+// 服务 DEBUG 原先经未接管的 console.debug 丢失中继；保留真实级别而非升级为 INFO。
+console.debug = (...args: unknown[]) => {
+  if (!isApplicationLogLevelEnabled("debug")) return;
+  writeRawHostConsole(rawConsole.debug, safeLogMessage(args.map(stringifyHostLogArg).join(" ")));
+  reportHostLog("debug", args);
 };
 
 /** 当前 host 已注册的服务集合，进程退出时用于统一回收本地资源 */
@@ -1735,9 +1746,7 @@ async function createWindowRemoteConnectionHandle(params: {
         createRemoteMediaPreviewProxy({
           fileService: services.get(IFileService),
           logger: {
-            debug: (message, metadata) => {
-              if (process.env.NODE_ENV !== "production") logger.info(message, metadata);
-            },
+            debug: (message, metadata) => logger.debug(message, metadata),
             warn: (message, metadata) => logger.warn(message, metadata),
           },
           scope,

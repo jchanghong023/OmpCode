@@ -1,157 +1,287 @@
-import { mkdirSync } from "node:fs";
-import { appendFile } from "node:fs/promises";
+import { appendFile, mkdir, rename } from "node:fs/promises";
+import { homedir } from "node:os";
 import { join } from "node:path";
-import { formatTimestamp } from "@zcode/shared";
-import { cleanupExpiredLogFiles, LOG_RETENTION_DAYS } from "./logRetention.js";
+import { getApplicationLogLevel, isApplicationLogLevelEnabled } from "@zcode/shared/log-level";
+import {
+  safeLogMessage as safeMessage,
+  serializeLogValue as serialize,
+} from "@zcode/shared/log-format";
+import { redactFeedbackText, ZCODE_VERSION } from "@zcode/shared";
+import {
+  appendLogRecords,
+  cleanupExpiredLogFiles,
+  LOG_RETENTION_DAYS,
+  LogRetentionError,
+  prepareLogFile,
+} from "./logRetention.js";
 import { getAppConfigDir, maybeThrowInjectedFsFault } from "@zcode/services/node";
+import { formatDate, mainLogContext } from "./mainLogFormatting.js";
 
-// 无 GPU 桌面的交互与日志共用 Main 事件循环；每条同步 mkdir/append 在慢盘上会阻塞 UI。
-// 文件日志走本模块内的唯一有界异步队列（不做平台分叉），仍按原路径和日期记录。
-//
-// 同一进程的排空窗口、队列容量和退出预算共用以下唯一常量。
-/** 同一轮日志的合批窗口：窗口内同文件行合并成一次 appendFile，持续写入不能被无限延期。 */
+// Main 是唯一文件 writer；初始化、写盘和保留期清理均异步，日志失败不得中断业务。
 const MAIN_LOG_FLUSH_WINDOW_MS = 25;
-/** 队列容量上限（不含正在写的一批）：超限行计数并在后续文件记录中报告，console 仍可见。 */
 const MAIN_LOG_MAX_QUEUED_BYTES = 4 * 1024 * 1024;
-/** 正常退出排空共享预算：Host 清理后与最终退出的全部 flush 共用，不逐次累加等待。 */
 const MAIN_LOG_EXIT_FLUSH_BUDGET_MS = 1000;
-/** 单文件单批最大行数，防止一次性超大 append 阻塞事件循环。 */
 const MAIN_LOG_MAX_BATCH_LINES = 256;
 
-let exitLogDeadline: number | undefined;
-export async function flushMainLogs(): Promise<void> {
-  // Host 收尾和最终退出可能都调用此处，共用总预算，不能逐次累加退出等待。
-  exitLogDeadline ??= Date.now() + MAIN_LOG_EXIT_FLUSH_BUDGET_MS;
-  cancelScheduledFlush();
-  // 超过共享预算即放行退出；强杀、磁盘失败或超时不保证日志落盘（需求明确允许）。
-  await Promise.race([
-    drainLogLines(),
-    new Promise<void>((resolve) => {
-      const remaining = Math.max(exitLogDeadline! - Date.now(), 0);
-      const timer = setTimeout(resolve, remaining);
-      timer.unref?.();
-    }),
-  ]);
-}
-
-function getLogDir() {
-  const e2eLogDir =
-    process.env.ZCODE_ENV === "test" ? process.env.ZCODE_E2E_RUNTIME_LOG_DIR?.trim() : undefined;
-  if (e2eLogDir) {
-    return e2eLogDir;
-  }
-  return join(getAppConfigDir(), "logs");
-}
-
-// 启动时确保日志目录存在
-const LOG_DIR = getLogDir();
-mkdirSync(LOG_DIR, { recursive: true });
-
-const logRetentionResult = cleanupExpiredLogFiles(LOG_DIR);
-if (logRetentionResult.failedFiles.length > 0) {
-  safeConsoleWrite(
-    "warn",
-    `[log-retention] failed to delete expired logs from ${LOG_DIR}:`,
-    logRetentionResult.failedFiles,
-    `retentionDays=${LOG_RETENTION_DAYS}`,
-  );
-}
-
 type LogLevel = "debug" | "info" | "warn" | "error";
-
-function isBrokenPipeError(error: unknown): boolean {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    "code" in error &&
-    (error as { code?: unknown }).code === "EPIPE"
-  );
-}
-
-function ignoreBrokenPipeStreamError(error: Error): void {
-  // WDIO / dev runner 结束后可能先关闭 stdout/stderr 管道，随后主进程日志还在刷新。
-  // stream error 是异步事件，try/catch 包 console.log 不一定兜得住；这里统一吞掉 EPIPE。
-  if (!isBrokenPipeError(error)) {
-    throw error;
-  }
-}
-
-process.stdout.on("error", ignoreBrokenPipeStreamError);
-process.stderr.on("error", ignoreBrokenPipeStreamError);
-
-function safeConsoleWrite(level: LogLevel, ...args: unknown[]): void {
-  if (process.env.OMPCODE_CENTOS7_LOCAL_ONLY === "1" && level !== "error") return;
-  const consoleFn =
-    level === "error" ? console.error : level === "warn" ? console.warn : console.log;
-  try {
-    consoleFn(...args);
-  } catch (error) {
-    // dev 脚本或父终端退出后，Electron main 的 stdout/stderr 管道可能已关闭。
-    // 这时 console.* 会抛 EPIPE，不能让日志输出反过来杀掉主进程；文件日志仍会继续写入。
-    if (!isBrokenPipeError(error)) {
-      throw error;
-    }
-  }
-}
-
-function formatDate(date: Date): string {
-  const y = date.getFullYear();
-  const m = String(date.getMonth() + 1).padStart(2, "0");
-  const d = String(date.getDate()).padStart(2, "0");
-  return `${y}-${m}-${d}`;
-}
-
 interface PendingLogLine {
-  filePath: string;
+  date: string;
   line: string;
   bytes: number;
 }
 
 const pendingLines: PendingLogLine[] = [];
+const reportedFailures = new Set<string>();
 let queuedBytes = 0;
 let flushTimer: ReturnType<typeof setTimeout> | undefined;
 let drainTask: Promise<void> | null = null;
 let droppedLines = 0;
+let activeLogDir: string | undefined;
+let fallbackAttempted = false;
+let lastSinkFailure: Record<string, unknown> = {};
+let lastRetentionDir: string | undefined;
+let lastRetentionDate: string | undefined;
+let exitLogDeadline: number | undefined;
+let exitDrainTask: Promise<void> | undefined;
+const isolatedLogDir =
+  process.env.ZCODE_ENV === "test" ? process.env.ZCODE_E2E_RUNTIME_LOG_DIR?.trim() : undefined;
+
+function ignoreBrokenPipeStreamError(error: Error): void {
+  // 输出管道失效也是日志自身故障，不让异步 stream error 杀掉业务；直接报告且不递归。
+  if (!("code" in error) || error.code !== "EPIPE")
+    reportSinkFailure("console_stream", undefined, error);
+}
+
+process.stdout.on("error", ignoreBrokenPipeStreamError);
+process.stderr.on("error", ignoreBrokenPipeStreamError);
+
+function safeConsoleWrite(level: LogLevel, line: string): void {
+  try {
+    if (level === "error") console.error(line);
+    else if (level === "warn") console.warn(line);
+    else console.log(line);
+  } catch {
+    // 控制台失效不能递归使用 logger，也不能阻止文件队列继续排空。
+  }
+}
+function reportSinkFailure(
+  stage: string,
+  logDir: string | undefined,
+  error: unknown,
+  elapsedMs: number = 0,
+): void {
+  const key = `${stage}:${logDir ?? ""}`;
+  if (reportedFailures.has(key)) return;
+  reportedFailures.add(key);
+  lastSinkFailure = {
+    failedStage: stage,
+    failedLogDir: logDir,
+    errorType: error instanceof Error ? error.name : typeof error,
+    errorCode: error && typeof error === "object" && "code" in error ? error.code : undefined,
+  };
+  const line = safeMessage(
+    serialize({
+      ts: new Date().toISOString(),
+      level: "error",
+      scope: "main-log",
+      pid: process.pid,
+      event: "main_log_sink_failed",
+      stage,
+      logDir,
+      error,
+      elapsedMs,
+    }),
+  );
+  try {
+    process.stderr.write(`${line}\n`);
+  } catch {
+    // 最终报告出口本身失败时停止，不调用 logger、不开另一文件、不重试。
+  }
+}
+
+function fallbackLogDir(): string {
+  if (process.platform === "win32") {
+    return join(
+      process.env.LOCALAPPDATA?.trim() || join(homedir(), "AppData", "Local"),
+      "OmpCode",
+      "logs",
+    );
+  }
+  if (process.platform === "darwin") return join(homedir(), "Library", "Logs", "OmpCode");
+  return join(
+    process.env.XDG_STATE_HOME?.trim() || join(homedir(), ".local", "state"),
+    "OmpCode",
+    "logs",
+  );
+}
+
+async function appendLogFile(filePath: string, text: string): Promise<void> {
+  maybeThrowInjectedFsFault({ operation: "appendFile", path: filePath });
+  await appendFile(filePath, text);
+}
+
+async function renameLogFile(source: string, destination: string): Promise<void> {
+  maybeThrowInjectedFsFault({ operation: "rename", path: source });
+  await rename(source, destination);
+}
+
+async function retainLogFiles(
+  logDir: string,
+  date: string,
+  reserveActiveFile: boolean,
+): Promise<void> {
+  if (!reserveActiveFile && lastRetentionDir === logDir && lastRetentionDate === date) return;
+  const result = await cleanupExpiredLogFiles(logDir, {
+    activeFileName: `${date}.log`,
+    reserveActiveFile,
+  });
+  if (result.failedFiles.length > 0) throw new LogRetentionError(result.failedFiles);
+  lastRetentionDir = logDir;
+  lastRetentionDate = date;
+}
+async function prepareLogDir(logDir: string, stage: string): Promise<boolean> {
+  const startedAt = Date.now();
+  let phase = "directory_create";
+  try {
+    maybeThrowInjectedFsFault({ operation: "mkdir", path: logDir });
+    await mkdir(logDir, { recursive: true });
+    phase = "file_open";
+    const date = formatDate(new Date());
+    await prepareLogFile(logDir, date, appendLogFile, renameLogFile, (reserveActiveFile) =>
+      retainLogFiles(logDir, date, reserveActiveFile),
+    );
+    activeLogDir = logDir;
+    return true;
+  } catch (error) {
+    const failureStage =
+      error instanceof LogRetentionError ? `${stage}_retention` : `${stage}_${phase}`;
+    reportSinkFailure(failureStage, logDir, error, Date.now() - startedAt);
+    return false;
+  }
+}
+
+async function activateFallback(): Promise<boolean> {
+  // 指定测试目录绝不逃逸至用户数据；正常路径只尝试一次回退，不无限重试。
+  if (isolatedLogDir || fallbackAttempted) return false;
+  fallbackAttempted = true;
+  try {
+    const directory = fallbackLogDir();
+    if (directory === activeLogDir) return false;
+    return await prepareLogDir(directory, "fallback_initialize");
+  } catch (error) {
+    reportSinkFailure("fallback_resolve", undefined, error);
+    return false;
+  }
+}
+
+async function initializeLogDirectory(): Promise<void> {
+  const startedAt = Date.now();
+  try {
+    const intended = isolatedLogDir || join(getAppConfigDir(), "logs");
+    if (!(await prepareLogDir(intended, "initialize")) && !(await activateFallback())) return;
+  } catch (error) {
+    reportSinkFailure("directory_resolve", undefined, error);
+    if (!(await activateFallback())) return;
+  }
+  if (fallbackAttempted)
+    sinkEvent("warn", "main_log_fallback", {
+      ...lastSinkFailure,
+      stage: "initialize",
+      elapsedMs: Date.now() - startedAt,
+    });
+  sinkEvent("info", "application_started", {
+    application: "OmpCode",
+    mode: process.env.ZCODE_ENV || process.env.NODE_ENV || "development",
+    level: getApplicationLogLevel(),
+    version: ZCODE_VERSION,
+    elapsedMs: Date.now() - startedAt,
+  });
+}
+
+async function appendBatch(date: string, batch: readonly PendingLogLine[]): Promise<boolean> {
+  if (!activeLogDir) return false;
+  const startedAt = Date.now();
+  const originalDir = activeLogDir;
+  const appendToDirectory = (logDir: string) =>
+    appendLogRecords(logDir, date, batch, appendLogFile, renameLogFile, (reserveActiveFile) =>
+      retainLogFiles(logDir, date, reserveActiveFile),
+    );
+  try {
+    await appendToDirectory(originalDir);
+    return true;
+  } catch (error) {
+    const stage = error instanceof LogRetentionError ? "retention" : "append";
+    const details =
+      error instanceof LogRetentionError
+        ? { failedFiles: error.failedFiles, retentionDays: LOG_RETENTION_DAYS }
+        : error;
+    reportSinkFailure(stage, originalDir, details, Date.now() - startedAt);
+    if (await activateFallback()) {
+      try {
+        await appendToDirectory(activeLogDir!);
+        sinkEvent("warn", "main_log_recovered", {
+          ...lastSinkFailure,
+          stage: "append",
+          fallback: true,
+          elapsedMs: Date.now() - startedAt,
+        });
+        return true;
+      } catch (fallbackError) {
+        reportSinkFailure(
+          fallbackError instanceof LogRetentionError ? "fallback_retention" : "fallback_append",
+          activeLogDir,
+          fallbackError instanceof LogRetentionError
+            ? { failedFiles: fallbackError.failedFiles, retentionDays: LOG_RETENTION_DAYS }
+            : fallbackError,
+          Date.now() - startedAt,
+        );
+      }
+    }
+    // 最终文件失败后仅保留控制台，不逐条重试、不重新初始化、不递归记录失败。
+    activeLogDir = undefined;
+    return false;
+  }
+}
 
 function scheduleFlush(): void {
   if (flushTimer || drainTask) return;
-  // 合批窗口：先攒一批再落盘；unref 不阻塞进程自然退出，退出路径走显式 flush。
   flushTimer = setTimeout(() => {
     flushTimer = undefined;
-    void drainLogLines();
+    void drainLogLines().catch((error) => reportSinkFailure("drain", activeLogDir, error));
   }, MAIN_LOG_FLUSH_WINDOW_MS);
   flushTimer.unref?.();
 }
 
 function cancelScheduledFlush(): void {
-  if (flushTimer) {
-    clearTimeout(flushTimer);
-    flushTimer = undefined;
-  }
+  if (!flushTimer) return;
+  clearTimeout(flushTimer);
+  flushTimer = undefined;
 }
 
 async function drainLogLines(): Promise<void> {
   if (drainTask) return drainTask;
   drainTask = (async () => {
-    while (pendingLines.length > 0) {
-      const first = pendingLines[0]!;
-      let batchSize = 0;
-      while (
-        batchSize < MAIN_LOG_MAX_BATCH_LINES &&
-        pendingLines[batchSize]?.filePath === first.filePath
-      )
-        batchSize += 1;
-      const batch = pendingLines.splice(0, batchSize);
-      const bytes = batch.reduce((total, entry) => total + entry.bytes, 0);
-      try {
-        maybeThrowInjectedFsFault({ operation: "appendFile", path: first.filePath });
-        await appendFile(first.filePath, batch.map((entry) => entry.line).join(""));
-      } catch (error) {
-        // 日志文件失败不影响应用；控制台仍可见错误，且不在 logger 内递归写日志。
-        safeConsoleWrite("warn", "[main-log] file append failed", error);
-      } finally {
-        queuedBytes -= bytes;
+    try {
+      await initialization;
+      while (pendingLines.length > 0) {
+        const first = pendingLines[0]!;
+        let batchSize = 0;
+        while (batchSize < MAIN_LOG_MAX_BATCH_LINES && pendingLines[batchSize]?.date === first.date)
+          batchSize += 1;
+        const batch = pendingLines.splice(0, batchSize);
+        const bytes = batch.reduce((total, entry) => total + entry.bytes, 0);
+        try {
+          await appendBatch(first.date, batch);
+        } catch (error) {
+          reportSinkFailure("drain", activeLogDir, error);
+        } finally {
+          queuedBytes -= bytes;
+        }
       }
+    } catch (error) {
+      reportSinkFailure("drain", activeLogDir, error);
+      queuedBytes -= pendingLines.reduce((total, entry) => total + entry.bytes, 0);
+      pendingLines.length = 0;
     }
   })().finally(() => {
     drainTask = null;
@@ -160,58 +290,121 @@ async function drainLogLines(): Promise<void> {
   return drainTask;
 }
 
-function write(level: LogLevel, source: string, ...args: unknown[]) {
-  // CentOS 7 只保留错误日志；在格式化、打印和文件入队之前退出，避免无 GPU 桌面的额外 IO。
-  if (process.env.OMPCODE_CENTOS7_LOCAL_ONLY === "1" && level !== "error") return;
-  const now = new Date();
-  const ts = formatTimestamp(now);
-  const pid = process.pid;
-  const message = args.map((a) => (typeof a === "string" ? a : JSON.stringify(a))).join(" ");
-  const line = `[${ts}] [${level}] [pid:${pid}] [${source}] ${message}\n`;
-  const filePath = join(LOG_DIR, `${formatDate(now)}.log`);
-
-  // 同时保留 console 输出，方便开发调试；console 也加时间戳和 PID，与文件格式对齐
-  safeConsoleWrite(level, `[${ts}] [pid:${pid}] [${source}]`, ...args);
-
+function enqueue(
+  level: LogLevel,
+  source: string,
+  message: string,
+  now: Date,
+  sourcePid: number | string = process.pid,
+  sourceTs?: string,
+): void {
+  const ts = sourceTs ?? now.toISOString();
+  const line = `[${ts}] [${level}] [pid:${sourcePid}] [${source}] ${message}\n`;
+  safeConsoleWrite(level, line.trimEnd());
   const bytes = Buffer.byteLength(line);
   if (queuedBytes + bytes > MAIN_LOG_MAX_QUEUED_BYTES) {
     droppedLines += 1;
     return;
   }
-  if (droppedLines > 0) {
-    const notice = `[${ts}] [warn] [pid:${pid}] [main] log buffer dropped ${droppedLines} lines\n`;
+  const date = formatDate(now);
+  if (!isApplicationLogLevelEnabled("warn")) {
+    droppedLines = 0;
+  } else if (droppedLines > 0) {
+    const notice = `[${now.toISOString()}] [warn] [pid:${process.pid}] [main] log buffer dropped ${droppedLines} lines\n`;
     const noticeBytes = Buffer.byteLength(notice);
     if (queuedBytes + bytes + noticeBytes <= MAIN_LOG_MAX_QUEUED_BYTES) {
-      pendingLines.push({ filePath, line: notice, bytes: noticeBytes });
+      pendingLines.push({ date, line: notice, bytes: noticeBytes });
       queuedBytes += noticeBytes;
       droppedLines = 0;
     }
   }
-  pendingLines.push({ filePath, line, bytes });
+  pendingLines.push({ date, line, bytes });
   queuedBytes += bytes;
   scheduleFlush();
 }
 
-/**
- * main 进程日志，默认写入 ~/.ompcode/v2/logs/YYYY-MM-DD.log；E2E 测试使用 worker 专属目录。
- * 同时保留 console 输出方便开发调试
- */
+function write(level: LogLevel, source: string, ...args: unknown[]): void {
+  if (!isApplicationLogLevelEnabled(level)) return;
+  const now = new Date();
+  const context = mainLogContext(args, source, now, process.pid);
+  enqueue(
+    level,
+    context.source,
+    safeMessage(args.map(serialize).join(" ")),
+    now,
+    context.pid,
+    context.timestamp,
+  );
+}
+
+function sinkEvent(level: LogLevel, event: string, fields: Record<string, unknown> = {}): void {
+  if (!isApplicationLogLevelEnabled(level)) return;
+  const now = new Date();
+  const record = JSON.parse(
+    redactFeedbackText(
+      serialize({
+        elapsedMs: 0,
+        ...fields,
+        ts: now.toISOString(),
+        level,
+        scope: "main",
+        pid: process.pid,
+        event,
+      }),
+    ),
+  ) as Record<string, unknown>;
+  // 实际路径是 writer 持有的可信元数据，不是正文；脱敏用户/错误文本后独立追加。
+  record.logFile = activeLogDir ? join(activeLogDir, `${formatDate(now)}.log`) : null;
+  enqueue(level, "main", JSON.stringify(record).replace(/[\u2028\u2029]/g, "\\n"), now);
+}
+
+export async function flushMainLogs(): Promise<void> {
+  // Host 收尾与最终退出共用总 1s 预算；普通 logger.flush 不产生退出事件。
+  if (!exitDrainTask) {
+    exitLogDeadline = Date.now() + MAIN_LOG_EXIT_FLUSH_BUDGET_MS;
+    cancelScheduledFlush();
+    exitDrainTask = (async () => {
+      await initialization;
+      sinkEvent("info", "application_stopping");
+      await drainLogLines();
+      sinkEvent("info", "application_stopped", {
+        elapsedMs: Date.now() - (exitLogDeadline! - MAIN_LOG_EXIT_FLUSH_BUDGET_MS),
+      });
+      cancelScheduledFlush();
+      await drainLogLines();
+    })().catch((error) => {
+      reportSinkFailure("exit_drain", activeLogDir, error);
+    });
+  }
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  await Promise.race([
+    (async () => {
+      await exitDrainTask;
+      cancelScheduledFlush();
+      await drainLogLines();
+    })(),
+    new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, Math.max(exitLogDeadline! - Date.now(), 0));
+      timer.unref?.();
+    }),
+  ]).finally(() => {
+    clearTimeout(timer);
+  });
+}
+
+/** 唯一桌面文件出口；正常路径不变，显式 E2E 目录隔离，初始化失败只回退一次。 */
 export const logger = {
-  // 高频 browser/CDP 等协议细节只在本地开发记录，避免生产日志量与命令流同数量级。
-  debug: (...args: unknown[]) => {
-    if (process.env.NODE_ENV !== "production") {
-      write("debug", "main", ...args);
-    }
-  },
+  debug: (...args: unknown[]) => write("debug", "main", ...args),
   info: (...args: unknown[]) => write("info", "main", ...args),
   warn: (...args: unknown[]) => write("warn", "main", ...args),
   error: (...args: unknown[]) => write("error", "main", ...args),
-
-  /** renderer 日志通过 IPC 传入后调用此方法写入同一文件 */
   fromRenderer: (level: LogLevel, args: unknown[]) => write(level, "renderer", ...args),
-  /** 显式立即排空（绕过合批窗口）；退出路径用 flushMainLogs 共享 1 秒预算。 */
   flush: () => {
     cancelScheduledFlush();
     return drainLogLines();
   },
 };
+
+const initialization = initializeLogDirectory().catch((error) => {
+  reportSinkFailure("initialize", activeLogDir, error);
+});

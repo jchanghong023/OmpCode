@@ -2,6 +2,7 @@
 //   `omp-agent app-server --stdio [--surface desktop] [--cwd <path>]`
 //   `omp-agent app-server --stdio --prepare-storage --cwd <path>`（worker_threads 内亦走此路径）
 
+import { logger } from "./logger.js";
 import { mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -16,7 +17,7 @@ import { createOmpProcessFactory } from "./ompProcess.js";
 import { createOmpStore } from "./ompStore.js";
 import { createWorkspaceConfigLoader } from "./workspaceConfig.js";
 import { createSlashCommandResolver } from "../app/slashCommandResolver.js";
-import { logger } from "./logger.js";
+import { safeErrorSummary } from "./hostRequestDiagnostics.js";
 
 function parseArgs(argv: string[]) {
   const flags = new Set<string>();
@@ -51,77 +52,142 @@ export async function runCliMain(
   argv: string[],
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<void> {
-  const { flags, cwd: cwdArg, positional } = parseArgs(argv);
-  const cwd = cwdArg ?? process.cwd();
-  if (flags.has("--prepare-storage")) {
-    const storagePath = prepareStoragePath(env);
-    await runPrepareStorageWorker({ input: process.stdin, output: process.stdout, storagePath });
-    return;
-  }
-  if (positional !== "app-server" && positional !== "agent-server") {
-    logger.error("unsupported invocation", { positional: positional ?? null });
-    process.exitCode = 1;
-    return;
-  }
-  const ompBinaryPath = resolveOmpBinary(env);
-  if (!ompBinaryPath) {
-    // omp 核缺失时仍满足 storage gate（ready），再以明确错误回应业务请求，便于 host 侧诊断。
+  const startedAt = Date.now();
+  logger.info("omp-agent 启动", {
+    event: "agent.cli.started",
+    stage: "startup",
+    argumentCount: argv.length,
+  });
+  try {
+    const { flags, cwd: cwdArg, positional } = parseArgs(argv);
+    const cwd = cwdArg ?? process.cwd();
+    if (flags.has("--prepare-storage")) {
+      const storagePath = prepareStoragePath(env);
+      await runPrepareStorageWorker({ input: process.stdin, output: process.stdout, storagePath });
+      logger.info("存储准备 worker 已停止", {
+        event: "agent.cli.stopped",
+        mode: "prepare-storage",
+        elapsedMs: Date.now() - startedAt,
+      });
+      return;
+    }
+    if (positional !== "app-server" && positional !== "agent-server") {
+      logger.error("unsupported invocation", {
+        event: "agent.cli.failed",
+        stage: "arguments",
+        code: "unsupported_invocation",
+        elapsedMs: Date.now() - startedAt,
+      });
+      process.exitCode = 1;
+      return;
+    }
+    const ompBinaryPath = resolveOmpBinary(env);
+    if (!ompBinaryPath) {
+      // omp 核缺失时仍满足 storage gate（ready），再以明确错误回应业务请求，便于 host 侧诊断。
+      emitStorageStartup(process.stdout);
+      logger.error("内嵌 omp 二进制未找到（OMP_RPC_BINARY_PATH 可覆盖）", {
+        event: "agent.cli.failed",
+        stage: "resolve_binary",
+        code: "omp_binary_missing",
+        elapsedMs: Date.now() - startedAt,
+      });
+      process.exitCode = 1;
+      return;
+    }
     emitStorageStartup(process.stdout);
-    logger.error("内嵌 omp 二进制未找到（OMP_RPC_BINARY_PATH 可覆盖）");
-    process.exitCode = 1;
-    return;
+    const workspacePath = cwd;
+    const workspaceKey = env.ZCODE_WORKSPACE_IDENTITY?.trim() || workspacePath;
+    const gatewayRef: { server: ProtocolServer | null } = { server: null };
+    const ompExtraArgs = buildOmpExtraArgs(env);
+    const ompFactory = createOmpProcessFactory(ompBinaryPath, ompExtraArgs, env);
+    // 目录进程的 available_commands_update → ServerApp 缓存 + workspace-config topic 推送，
+    // 同时失效斜杠严格分发的目录缓存。构造顺序上 loader/resolver 先于 app，用 ref 解引用。
+    const appRef: { app: ServerApp | null } = { app: null };
+    const directoryGateway = new OmpDirectoryGateway({
+      ompFactory,
+      cwd: workspacePath,
+      onCommandsUpdate: (commands) => {
+        slashResolver.invalidate();
+        appRef.app?.updateSlashCommands(commands);
+      },
+    });
+    const slashResolver = createSlashCommandResolver(directoryGateway);
+    const workspaceCatalog = createWorkspaceConfigLoader(workspacePath, {
+      directory: directoryGateway,
+      onCommandsUpdate: (commands) => appRef.app?.updateSlashCommands(commands),
+    });
+    const app = new ServerApp({
+      ompFactory,
+      store: createOmpStore(env),
+      gateway: {
+        emitFrame: (params) => gatewayRef.server?.emitFrame(params),
+        requestUserInput: (params) =>
+          gatewayRef.server?.requestUserInput(params) ??
+          Promise.resolve({ action: "cancel" as const }),
+      },
+      workspacePath,
+      workspaceKey,
+      loadWorkspaceConfig: workspaceCatalog.loadWorkspaceConfig,
+      loadWorkspaceSkillCommands: workspaceCatalog.loadSkillCommands,
+      directory: directoryGateway,
+      resolveSlashCommand: slashResolver.resolve,
+    });
+    appRef.app = app;
+    const protocolServer = new ProtocolServer({
+      input: process.stdin,
+      output: process.stdout,
+      handleRequest: (method, params) => app.handleRequest(method, params),
+      onClosed: (error) => {
+        const stoppingAt = Date.now();
+        logger.info("omp-agent 正在停止", {
+          event: "agent.cli.stopping",
+          stage: "disconnect",
+          transportFailed: Boolean(error),
+        });
+        if (error)
+          logger.error("Host 传输关闭", {
+            event: "agent.cli.transport.failed",
+            stage: "disconnect",
+            ...safeErrorSummary(error),
+          });
+        void app
+          .dispose()
+          .catch((disposeError) => {
+            logger.error("omp-agent 清理失败", {
+              event: "agent.cli.dispose.failed",
+              stage: "dispose",
+              elapsedMs: Date.now() - stoppingAt,
+              ...safeErrorSummary(disposeError),
+            });
+            throw disposeError;
+          })
+          .finally(() => {
+            logger.info("omp-agent 已停止", {
+              event: "agent.cli.stopped",
+              stage: "dispose",
+              elapsedMs: Date.now() - stoppingAt,
+            });
+            process.exit(error ? 1 : 0);
+          });
+      },
+    });
+    gatewayRef.server = protocolServer;
+    protocolServer.start();
+    logger.info("omp-agent app-server 就绪", {
+      event: "agent.cli.ready",
+      workspacePath,
+      ompBinaryPath,
+      elapsedMs: Date.now() - startedAt,
+    });
+  } catch (error) {
+    logger.error("omp-agent 启动失败", {
+      event: "agent.cli.failed",
+      stage: "startup",
+      elapsedMs: Date.now() - startedAt,
+      ...safeErrorSummary(error),
+    });
+    throw error;
   }
-  emitStorageStartup(process.stdout);
-  const workspacePath = cwd;
-  const workspaceKey = env.ZCODE_WORKSPACE_IDENTITY?.trim() || workspacePath;
-  const gatewayRef: { server: ProtocolServer | null } = { server: null };
-  const ompExtraArgs = buildOmpExtraArgs(env);
-  const ompFactory = createOmpProcessFactory(ompBinaryPath, ompExtraArgs, env);
-  // 目录进程的 available_commands_update → ServerApp 缓存 + workspace-config topic 推送，
-  // 同时失效斜杠严格分发的目录缓存。构造顺序上 loader/resolver 先于 app，用 ref 解引用。
-  const appRef: { app: ServerApp | null } = { app: null };
-  const directoryGateway = new OmpDirectoryGateway({
-    ompFactory,
-    cwd: workspacePath,
-    onCommandsUpdate: (commands) => {
-      slashResolver.invalidate();
-      appRef.app?.updateSlashCommands(commands);
-    },
-  });
-  const slashResolver = createSlashCommandResolver(directoryGateway);
-  const workspaceCatalog = createWorkspaceConfigLoader(workspacePath, {
-    directory: directoryGateway,
-    onCommandsUpdate: (commands) => appRef.app?.updateSlashCommands(commands),
-  });
-  const app = new ServerApp({
-    ompFactory,
-    store: createOmpStore(env),
-    gateway: {
-      emitFrame: (params) => gatewayRef.server?.emitFrame(params),
-      requestUserInput: (params) =>
-        gatewayRef.server?.requestUserInput(params) ??
-        Promise.resolve({ action: "cancel" as const }),
-    },
-    workspacePath,
-    workspaceKey,
-    loadWorkspaceConfig: workspaceCatalog.loadWorkspaceConfig,
-    loadWorkspaceSkillCommands: workspaceCatalog.loadSkillCommands,
-    directory: directoryGateway,
-    resolveSlashCommand: slashResolver.resolve,
-  });
-  appRef.app = app;
-  const protocolServer = new ProtocolServer({
-    input: process.stdin,
-    output: process.stdout,
-    handleRequest: (method, params) => app.handleRequest(method, params),
-    onClosed: (error) => {
-      if (error) logger.error("Host 传输关闭", { error: error.message });
-      void app.dispose().finally(() => process.exit(error ? 1 : 0));
-    },
-  });
-  gatewayRef.server = protocolServer;
-  protocolServer.start();
-  logger.info("omp-agent app-server 就绪", { workspacePath, ompBinaryPath });
 }
 
 /**
@@ -137,15 +203,38 @@ export function buildOmpExtraArgs(env: NodeJS.ProcessEnv): string[] {
 }
 
 function parseExtraArgs(raw: string | undefined): string[] {
+  const startedAt = Date.now();
   if (!raw || raw.trim().length === 0) {
     return [];
   }
   try {
     const parsed: unknown = JSON.parse(raw);
-    return Array.isArray(parsed)
-      ? parsed.filter((arg): arg is string => typeof arg === "string")
-      : [];
+    if (!Array.isArray(parsed)) {
+      logger.warn("OMP 启动参数不是数组，沿用空参数", {
+        event: "agent.cli.arguments.invalid",
+        stage: "decode",
+        valueType: typeof parsed,
+        elapsedMs: Date.now() - startedAt,
+      });
+      return [];
+    }
+    const args = parsed.filter((arg): arg is string => typeof arg === "string");
+    if (args.length !== parsed.length)
+      logger.warn("OMP 启动参数含非字符串，沿用过滤结果", {
+        event: "agent.cli.arguments.invalid",
+        stage: "decode",
+        argumentCount: parsed.length,
+        retainedCount: args.length,
+        elapsedMs: Date.now() - startedAt,
+      });
+    return args;
   } catch {
+    logger.warn("OMP 启动参数解码失败，沿用空参数", {
+      event: "agent.cli.arguments.invalid",
+      stage: "decode",
+      byteLength: Buffer.byteLength(raw),
+      elapsedMs: Date.now() - startedAt,
+    });
     return [];
   }
 }
@@ -159,8 +248,13 @@ function prepareStoragePath(env: NodeJS.ProcessEnv): string {
   const directory = join(root, "cli", "db");
   try {
     mkdirSync(directory, { recursive: true });
-  } catch {
+  } catch (error) {
     // 只读文件系统等场景：host 会 realpath 失败回退原路径，不阻塞。
+    logger.warn("存储目录准备失败，沿用路径", {
+      event: "agent.cli.storage.fallback",
+      stage: "mkdir",
+      ...safeErrorSummary(error),
+    });
   }
   return join(directory, "db.sqlite");
 }
@@ -175,10 +269,7 @@ const isDirectRun =
   process.argv.includes("agent-server") ||
   process.argv.includes("--prepare-storage");
 if (isDirectRun && !process.env.OMP_AGENT_NO_AUTO_START) {
-  void runCliMain(process.argv).catch((error) => {
-    logger.error("omp-agent 启动失败", {
-      error: error instanceof Error ? error.stack : String(error),
-    });
+  void runCliMain(process.argv).catch(() => {
     process.exit(1);
   });
 }

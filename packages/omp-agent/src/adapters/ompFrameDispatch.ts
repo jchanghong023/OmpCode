@@ -25,22 +25,13 @@ import { logger } from "./logger.js";
 import type { OmpBtwFrame } from "../domain/OmpBtwFrames.js";
 import { parseOmpContextReport } from "../domain/ompContextReport.js";
 
-/** safeParse 失败的 issue 摘要（首条 path+message，不含载荷，避免敏感内容入日志）。 */
-function issueSummary(error: {
-  issues: readonly { path: readonly PropertyKey[]; message: string }[];
-}): string {
-  const issue = error.issues[0];
-  if (!issue) {
-    return "<no issues>";
-  }
-  return `${issue.path.map(String).join(".") || "<root>"}: ${issue.message}`;
-}
-
 /** 分发所需的进程存活状态与回调面（OmpChildProcess 的窄视图；上下文槽位经 getter 实时读取）。 */
 export interface OmpFrameDispatchDeps {
   promptResults: PromptResultTracker;
   getContextResult(): { id: string; resolve: (local: boolean) => void } | null;
   getContextOutput(): string[] | null;
+  /** 仅观察畸形响应，不提前 settle；原等待/超时语义保持。 */
+  onResponseDecodeFailure(id: string | undefined, issueCount: number): void;
   settleCommand(
     id: string,
     success: boolean,
@@ -70,11 +61,11 @@ export function dispatchOmpFrame(frame: unknown, deps: OmpFrameDispatchDeps): vo
     case "response": {
       const parsed = ompResponseFrameSchema.safeParse(record);
       if (!parsed.success) {
-        // 修复（S3-3）：响应帧校验失败留痕，否则命令只能以超时收场却查不到协议面原因。
-        logger.debug("omp response frame rejected", {
-          issues: parsed.error.issues.length,
-          first: issueSummary(parsed.error),
-        });
+        // 解码失败仍由原 pending 等待收口；诊断回调关联发出时的请求上下文。
+        deps.onResponseDecodeFailure(
+          typeof record.id === "string" ? record.id : undefined,
+          parsed.error.issues.length,
+        );
         return;
       }
       if (parsed.data.id) {
@@ -86,11 +77,11 @@ export function dispatchOmpFrame(frame: unknown, deps: OmpFrameDispatchDeps): vo
     case "prompt_result": {
       const parsed = ompPromptResultFrameSchema.safeParse(record);
       if (!parsed.success) {
-        // 修复（S3-3）：prompt_result 校验失败留痕（含 issue 摘要，不含载荷），
-        // 否则轮次收口缺失只表现为「无终态」而无法归因协议面。
-        logger.debug("omp prompt_result frame rejected", {
-          issues: parsed.error.issues.length,
-          first: issueSummary(parsed.error),
+        logger.warn("omp_core_frame_decode_failed", {
+          event: "omp_core_frame_decode_failed",
+          stage: "frame_decode",
+          frameType: "prompt_result",
+          issueCount: parsed.error.issues.length,
         });
         return;
       }
@@ -109,17 +100,23 @@ export function dispatchOmpFrame(frame: unknown, deps: OmpFrameDispatchDeps): vo
       if (parsed.success) {
         deps.options.onCommandsUpdate?.(parsed.data.commands);
       } else {
-        logger.warn("invalid available_commands_update", { issues: parsed.error.issues.length });
+        logger.warn("omp_core_frame_decode_failed", {
+          event: "omp_core_frame_decode_failed",
+          stage: "frame_decode",
+          frameType: "available_commands_update",
+          issueCount: parsed.error.issues.length,
+        });
       }
       return;
     }
     case "command_output": {
       const parsed = ompCommandOutputFrameSchema.safeParse(record);
       if (!parsed.success) {
-        // 修复（S3-3）：command_output 校验失败留痕（B2 只覆盖了会话事件帧）。
-        logger.debug("omp command_output frame rejected", {
-          issues: parsed.error.issues.length,
-          first: issueSummary(parsed.error),
+        logger.warn("omp_core_frame_decode_failed", {
+          event: "omp_core_frame_decode_failed",
+          stage: "frame_decode",
+          frameType: "command_output",
+          issueCount: parsed.error.issues.length,
         });
         return;
       }
@@ -137,14 +134,26 @@ export function dispatchOmpFrame(frame: unknown, deps: OmpFrameDispatchDeps): vo
       const parsed = ompSessionInfoUpdateFrameSchema.safeParse(record);
       if (parsed.success) {
         deps.options.onSessionInfoUpdate?.(parsed.data);
-      }
+      } else
+        logger.warn("omp_core_frame_decode_failed", {
+          event: "omp_core_frame_decode_failed",
+          stage: "frame_decode",
+          frameType: "session_info_update",
+          issueCount: parsed.error.issues.length,
+        });
       return;
     }
     case "config_update": {
       const parsed = ompConfigUpdateFrameSchema.safeParse(record);
       if (parsed.success) {
         deps.options.onConfigUpdate?.(parsed.data);
-      }
+      } else
+        logger.warn("omp_core_frame_decode_failed", {
+          event: "omp_core_frame_decode_failed",
+          stage: "frame_decode",
+          frameType: "config_update",
+          issueCount: parsed.error.issues.length,
+        });
       return;
     }
     case "btw_record":
@@ -152,6 +161,13 @@ export function dispatchOmpFrame(frame: unknown, deps: OmpFrameDispatchDeps): vo
     case "notice": {
       const parsed = ompBtwFrameSchema.safeParse(record);
       if (parsed.success) deps.options.onBtwFrame?.(parsed.data);
+      else
+        logger.warn("omp_core_frame_decode_failed", {
+          event: "omp_core_frame_decode_failed",
+          stage: "frame_decode",
+          frameType: String(record.type),
+          issueCount: parsed.error.issues.length,
+        });
       return;
     }
     case "extension_error":
@@ -166,7 +182,13 @@ export function dispatchOmpFrame(frame: unknown, deps: OmpFrameDispatchDeps): vo
     case "subagent_event": {
       const parsed = ompSubagentFrameSchema.safeParse(record);
       if (parsed.success) deps.options.onSubagentFrame?.(parsed.data);
-      else logger.warn("invalid omp subagent frame", { issues: parsed.error.issues.length });
+      else
+        logger.warn("omp_core_frame_decode_failed", {
+          event: "omp_core_frame_decode_failed",
+          stage: "frame_decode",
+          frameType: String(record.type),
+          issueCount: parsed.error.issues.length,
+        });
       return;
     }
     case "extension_ui_request":
@@ -181,11 +203,11 @@ export function dispatchOmpFrame(frame: unknown, deps: OmpFrameDispatchDeps): vo
       if (parsed.success) {
         deps.options.onEvent(parsed.data);
       } else {
-        // 修复（B2）：未知/畸形会话事件帧不再静默吞掉，统一 debug（高频诊断不落盘语义），
-        // 便于排查「omp 下发了但适配器不消费」的协议面。
-        logger.debug("omp session frame rejected", {
-          type: String(record.type),
-          issues: parsed.error.issues.length,
+        logger.warn("omp_core_frame_decode_failed", {
+          event: "omp_core_frame_decode_failed",
+          stage: "frame_decode",
+          frameType: typeof record.type === "string" ? record.type : typeof record.type,
+          issueCount: parsed.error.issues.length,
         });
       }
       return;

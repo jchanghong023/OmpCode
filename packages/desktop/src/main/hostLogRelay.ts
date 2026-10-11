@@ -1,4 +1,7 @@
-type HostStructuredLogLevel = "info" | "warn" | "error";
+import { isApplicationLogLevelEnabled, redactFeedbackText } from "@zcode/shared";
+import { parseOmpDiagnosticMessage } from "./mainLogFormatting.js";
+
+type HostStructuredLogLevel = "debug" | "info" | "warn" | "error";
 
 interface HostStructuredLog {
   level: HostStructuredLogLevel;
@@ -7,6 +10,7 @@ interface HostStructuredLog {
 }
 
 interface HostLogger {
+  debug: (...args: unknown[]) => void;
   info: (...args: unknown[]) => void;
   warn: (...args: unknown[]) => void;
   error: (...args: unknown[]) => void;
@@ -34,6 +38,17 @@ export function createHostLogRelay(
 ) {
   let hasStructuredLog = false;
   const rawLogs: RawStreamLog[] = [];
+  let rawBytes = 0;
+  const maxRawBytes = 64 * 1024;
+
+  function bufferRawLog(kind: RawStreamLog["kind"], message: string): void {
+    const safe = redactFeedbackText(message);
+    const remaining = maxRawBytes - rawBytes;
+    if (remaining <= 0) return;
+    const bounded = safe.length > remaining ? `${safe.slice(0, remaining)} [truncated]` : safe;
+    rawLogs.push({ kind, message: bounded });
+    rawBytes += bounded.length;
+  }
 
   function emitRawLog(rawLog: RawStreamLog): void {
     if (rawLog.kind === "stderr") {
@@ -50,18 +65,15 @@ export function createHostLogRelay(
   }
 
   function emitStructuredLog(entry: EmitStructuredLogEntry): void {
+    if (!isApplicationLogLevelEnabled(entry.level)) return;
+    // omp-agent/Host 的诊断 JSON 是完整记录，保持原 ts/pid/关联字段而非字符串二次包装。
+    const record = parseOmpDiagnosticMessage(entry.message);
+    if (record) {
+      logger[entry.level]({ ...record, hostLabel: label, hostLogSource: entry.source });
+      return;
+    }
     const line = `[host-log] (${label}) [${entry.source}] ${entry.message}`;
-    if (entry.level === "error") {
-      logger.error(line);
-      return;
-    }
-
-    if (entry.level === "warn") {
-      logger.warn(line);
-      return;
-    }
-
-    logger.info(line);
+    logger[entry.level](line);
   }
 
   return {
@@ -70,7 +82,7 @@ export function createHostLogRelay(
         return;
       }
 
-      rawLogs.push({ kind: "stdout", message });
+      bufferRawLog("stdout", message);
     },
 
     onStderr(message: string): void {
@@ -78,20 +90,16 @@ export function createHostLogRelay(
         return;
       }
 
-      rawLogs.push({ kind: "stderr", message });
+      bufferRawLog("stderr", message);
     },
 
     onStructuredLog(entry: HostStructuredLog): void {
       hasStructuredLog = true;
       rawLogs.length = 0;
+      rawBytes = 0;
       const structuredEntry = {
         ...entry,
-        timestamp: new Date().toLocaleTimeString(undefined, {
-          hour12: false,
-          hour: "2-digit",
-          minute: "2-digit",
-          second: "2-digit",
-        }),
+        timestamp: new Date().toISOString(),
       } satisfies EmitStructuredLogEntry;
       emitStructuredLog(structuredEntry);
       emitStructuredLogToRenderer?.(structuredEntry);
@@ -100,6 +108,7 @@ export function createHostLogRelay(
     flushRawLogs(): void {
       if (hasStructuredLog) {
         rawLogs.length = 0;
+        rawBytes = 0;
         return;
       }
 
@@ -107,6 +116,7 @@ export function createHostLogRelay(
         emitRawLog(rawLog);
       }
       rawLogs.length = 0;
+      rawBytes = 0;
     },
   };
 }

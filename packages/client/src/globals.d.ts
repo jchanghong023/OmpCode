@@ -84,7 +84,7 @@ declare global {
       /** 列出当前机器 SSH config 里可用于快速填表的 alias */
       listSSHConfigAliases(): Promise<SSHConfigAliasOption[]>;
       /** renderer 日志通过 IPC 传到 main 进程统一存储 */
-      log(level: "info" | "warn" | "error", args: unknown[]): void;
+      log(level: "debug" | "info" | "warn" | "error", args: unknown[]): void;
       /** 打开系统目录选择框，返回选中路径或 null */
       selectDirectory(): Promise<string | null>;
       /** 打开系统文件选择框，返回选中文件路径或 null */

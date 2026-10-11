@@ -18,6 +18,8 @@ import type {
 } from "./ports.js";
 import { askDeadlineOf, askResponseOf } from "./ompInteractionMapping.js";
 import { toOmpUiResponse } from "./ompUiResponseOf.js";
+import { interactionDiagnostics } from "./ompInteractionDiagnostics.js";
+import { diagnostics } from "./diagnostics.js";
 
 interface InteractionDeps {
   sessionId: string;
@@ -30,6 +32,7 @@ interface InteractionDeps {
 interface WaitingInteraction {
   ompRequestId: string;
   kind: "ui" | "ask";
+  stage: string;
   resolve: (answer: HostUserInputAnswer) => void;
   timer: NodeJS.Timeout;
   /** ask：服务端到期自动收尾后的本地清场定时器。 */
@@ -78,6 +81,13 @@ export class OmpInteractionProxy {
           : ""
         : undefined;
     const interactionId = createInteractionId();
+    const startedAt = Date.now();
+    const fields = interactionDiagnostics.started(
+      this.deps.sessionId,
+      interactionId,
+      request.frame.id,
+      method,
+    );
     const prompt = request.frame.message ?? request.frame.prompt ?? request.frame.title ?? "";
     const options = request.frame.options?.map((option) => ({ optionId: option, label: option }));
     const useElicitation = method === "select" || method === "input" || method === "editor";
@@ -121,7 +131,8 @@ export class OmpInteractionProxy {
     };
     this.deps.addPendingInteraction(pending);
     this.deps.scheduleFlush();
-    const answer = await this.awaitAnswer(interactionId, request.frame.id, "ui", () =>
+    interactionDiagnostics.presentedUi(fields, startedAt, options?.length ?? 0, useElicitation);
+    const { answer, stage } = await this.awaitAnswer(interactionId, request.frame.id, "ui", () =>
       this.deps.gateway
         .requestUserInput({
           requestId: interactionId,
@@ -129,16 +140,29 @@ export class OmpInteractionProxy {
           prompt,
           ...(options ? { options } : {}),
         })
-        .then((hostAnswer) => this.settle(interactionId, hostAnswer))
-        .catch(() => this.settle(interactionId, { action: "cancel" })),
+        .then((hostAnswer) => this.settleFrom(interactionId, hostAnswer, "host_answer"))
+        .catch((error: unknown) => {
+          const settled = this.settleFrom(interactionId, { action: "cancel" }, "host_error");
+          if (settled) fields.errorType = error instanceof Error ? error.name : typeof error;
+          return settled;
+        }),
     );
-    request.respond(toOmpUiResponse(request, answer));
+    const response = toOmpUiResponse(request, answer);
+    interactionDiagnostics.uiResult(fields, startedAt, stage, answer, request, response);
+    request.respond(response);
   }
 
   /** 富 ask：完整问题集一次下发，投影为 ElicitationDialog 富问答。 */
   async handleAsk(request: OmpAskRequest): Promise<void> {
     const frame = request.frame;
     const interactionId = createInteractionId();
+    const startedAt = Date.now();
+    const fields = interactionDiagnostics.started(
+      this.deps.sessionId,
+      interactionId,
+      frame.id,
+      "ask",
+    );
     const questions: HostUserInputQuestion[] = frame.questions.map((question) => ({
       question: question.question,
       header: question.header?.trim() ? question.header : question.question,
@@ -182,8 +206,9 @@ export class OmpInteractionProxy {
     };
     this.deps.addPendingInteraction(pending);
     this.deps.scheduleFlush();
+    interactionDiagnostics.presentedAsk(fields, startedAt, questions);
     let expired = false;
-    const answer = await this.awaitAnswer(
+    const { answer, stage } = await this.awaitAnswer(
       interactionId,
       frame.id,
       "ask",
@@ -195,8 +220,12 @@ export class OmpInteractionProxy {
             prompt,
             questions,
           })
-          .then((hostAnswer) => this.settle(interactionId, hostAnswer))
-          .catch(() => this.settle(interactionId, { action: "cancel" })),
+          .then((hostAnswer) => this.settleFrom(interactionId, hostAnswer, "host_answer"))
+          .catch((error: unknown) => {
+            const settled = this.settleFrom(interactionId, { action: "cancel" }, "host_error");
+            if (settled) fields.errorType = error instanceof Error ? error.name : typeof error;
+            return settled;
+          }),
       {
         onExpire: () => {
           expired = true;
@@ -205,10 +234,13 @@ export class OmpInteractionProxy {
       },
     );
     if (expired) {
+      interactionDiagnostics.askResult(fields, startedAt, stage, answer);
       // omp 已按 recommended 自动收尾该 ask：不再发帧，pending 交互已在到期时清场。
       return;
     }
-    request.respond(askResponseOf(frame, answer));
+    const response = askResponseOf(frame, answer);
+    interactionDiagnostics.askResult(fields, startedAt, stage, answer, response);
+    request.respond(response);
   }
 
   /**
@@ -221,18 +253,21 @@ export class OmpInteractionProxy {
     kind: WaitingInteraction["kind"],
     reverseRequest: () => Promise<unknown>,
     ask?: { onExpire?: () => void; deadlineAt?: number },
-  ): Promise<HostUserInputAnswer> {
+  ): Promise<{ answer: HostUserInputAnswer; stage: string }> {
+    let entry: WaitingInteraction;
     return new Promise<HostUserInputAnswer>((resolve) => {
       const timer = this.startWaitBudgetTimer(interactionId, resolve);
-      const entry: WaitingInteraction = {
+      entry = {
         ompRequestId,
         kind,
         resolve,
+        stage: "ui_answer",
         timer,
       };
       if (ask?.deadlineAt && ask.deadlineAt > Date.now()) {
         const expireTimer = setTimeout(() => {
           // 服务端到期自动收尾：仅本地清场。
+          entry.stage = "server_deadline";
           this.interactions.delete(interactionId);
           clearTimeout(timer);
           this.deps.resolvePendingInteraction(interactionId);
@@ -248,7 +283,7 @@ export class OmpInteractionProxy {
     }).then((answer) => {
       this.deps.resolvePendingInteraction(interactionId);
       this.deps.scheduleFlush();
-      return answer;
+      return { answer, stage: entry.stage };
     });
   }
 
@@ -258,6 +293,8 @@ export class OmpInteractionProxy {
     resolve: (answer: HostUserInputAnswer) => void,
   ): NodeJS.Timeout {
     const timer = setTimeout(() => {
+      const entry = this.interactions.get(interactionId);
+      if (entry) entry.stage = "local_budget";
       this.interactions.delete(interactionId);
       resolve({ action: "cancel" });
     }, INTERACTION_WAIT_BUDGET_MS);
@@ -269,7 +306,7 @@ export class OmpInteractionProxy {
   private cancelByOmpRequestId(ompRequestId: string): boolean {
     for (const [interactionId, entry] of this.interactions) {
       if (entry.ompRequestId !== ompRequestId) continue;
-      this.settle(interactionId, { action: "cancel" });
+      this.settleFrom(interactionId, { action: "cancel" }, "core_cancel");
       return true;
     }
     return false;
@@ -277,10 +314,15 @@ export class OmpInteractionProxy {
 
   /** v4 resolveInteraction 命令入口：把 UI 应答汇入等待中的交互。 */
   settle(interactionId: string, answer: HostUserInputAnswer): boolean {
+    return this.settleFrom(interactionId, answer, "ui_answer");
+  }
+
+  private settleFrom(interactionId: string, answer: HostUserInputAnswer, stage: string): boolean {
     const entry = this.interactions.get(interactionId);
     if (!entry) {
       return false;
     }
+    entry.stage = stage;
     this.interactions.delete(interactionId);
     clearTimeout(entry.timer);
     if (entry.expireTimer) clearTimeout(entry.expireTimer);
@@ -309,7 +351,12 @@ export class OmpInteractionProxy {
 
   /** 引擎销毁：全部交互按取消收口，避免 omp 侧等待悬挂。 */
   dispose(): void {
+    const stage =
+      diagnostics.context().interactionDisposalStage === "process_exit"
+        ? "process_exit"
+        : "session_close";
     for (const entry of this.interactions.values()) {
+      entry.stage = stage;
       clearTimeout(entry.timer);
       if (entry.expireTimer) clearTimeout(entry.expireTimer);
       entry.resolve({ action: "cancel" });

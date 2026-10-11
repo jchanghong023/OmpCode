@@ -1,9 +1,11 @@
-import { createLocalServices, getAppConfigDir } from "@zcode/services/node";
+import { createLocalServices, createServiceLogger, getAppConfigDir } from "@zcode/services/node";
 import {
   materializeBundledZCodeBuiltinProviderConfig,
   readBundledZCodeBuiltinProviderConfig,
 } from "./bundledZCodeBuiltinProviderConfig.js";
 import { createHttpServer } from "./http.js";
+
+const logger = createServiceLogger("zcode-server:http");
 
 async function main(): Promise<void> {
   const zcodeBuiltinProviderConfigFilePath = await materializeBundledZCodeBuiltinProviderConfig({
@@ -27,6 +29,6 @@ async function main(): Promise<void> {
 }
 
 void main().catch((error: unknown) => {
-  console.error("[zcode-server:http] startup failed", error);
+  logger.error(undefined, "startup failed", error);
   process.exitCode = 1;
 });

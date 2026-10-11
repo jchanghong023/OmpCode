@@ -16,6 +16,18 @@ import type { OmpInteractionProxy } from "./ompInteractionProxy.js";
 import type { ConversationProjection } from "../domain/conversationProjection.js";
 import type { OmpBtwFrame } from "../domain/OmpBtwFrames.js";
 import type { OmpEventProjector } from "../domain/ompProjector.js";
+import { diagnostics } from "./diagnostics.js";
+import {
+  diagnosticFrameGuard,
+  diagnosticSessionStart,
+  diagnosticSessionCommand,
+  logEngineFailure,
+  logModelTransition,
+  logStateIgnored,
+  observeProjectedEvent,
+  readDiagnosticState,
+  turnContext,
+} from "./turnDiagnostics.js";
 
 /** 单次构造的窄事件桥：热路径不分配 context；引擎仍拥有队列与生命周期。 */
 export function createEngineEventHandler(hooks: {
@@ -41,7 +53,7 @@ export function createEngineEventHandler(hooks: {
         );
         return;
       }
-      hooks.projector().handleEvent(event);
+      observeProjectedEvent(hooks.projection(), event, hooks.projector());
       if (event.type === "agent_end" && event.isTerminal !== false) {
         // 清流式后补收积压的本地命令完成（收口语义在 promptTurnCloser）。
         // terminal 对账复用 get_state；仍排队且从未 seen 的轮进行 S4-2 宽限复查，
@@ -51,30 +63,9 @@ export function createEngineEventHandler(hooks: {
       }
       hooks.flush();
     } catch (error) {
-      engineWarn("omp event projection failed", {
-        type: event.type,
-        error: error instanceof Error ? error.message : String(error),
-      });
+      logEngineFailure("omp.event.projection.failed", error, "event_projection", event.type);
     }
   };
-}
-
-/** app 层无 logger 依赖；与 adapters/logger.ts 同格式写 stderr（stdout 是协议通道，不用 console）。 */
-const engineWarn = (message: string, details?: Record<string, unknown>): void => {
-  process.stderr.write(
-    `${JSON.stringify({ ts: new Date().toISOString(), level: "warn", scope: "omp-agent", message, ...details })}\n`,
-  );
-};
-
-/** 从会话自己的 omp 进程读取当前可执行命令，避免以工作区目录代替会话事实。 */
-export async function readOmpSkillCommands(process: OmpSessionProcess): Promise<unknown> {
-  const outcome = await process.send({ type: "get_available_commands" });
-  if (!outcome.success) throw new Error(outcome.error ?? "omp command catalog unavailable");
-  const record =
-    typeof outcome.data === "object" && outcome.data !== null
-      ? (outcome.data as { commands?: unknown })
-      : {};
-  return record.commands;
 }
 
 /** 活动后状态回读（agent_end 等）：回读失败不覆盖既有投影，同一进程才应用。 */
@@ -84,8 +75,10 @@ export async function refreshEngineStateAfterActivity(
   applyState: (state: OmpStateData | null) => void,
 ): Promise<void> {
   if (!process) return;
-  const state = await process.refreshState().catch(() => null);
+  const fields = { ...diagnostics.context() };
+  const state = await readDiagnosticState(process, fields, "omp.state.activity");
   if (isCurrent(process)) applyState(state);
+  else logStateIgnored("omp.state.stale_result", fields, Boolean(state));
 }
 
 /** 真实 omp 的 model_changed 无载荷：回读 get_state 落配置，模型变化补 modelChange 标记。 */
@@ -99,8 +92,10 @@ async function refreshEngineModelAfterChange(
   if (!process) {
     return;
   }
-  const state = await process.refreshState().catch(() => null);
+  const fields = turnContext(projection);
+  const state = await readDiagnosticState(process, fields, "omp.model.refresh");
   if (!state || !isCurrent(process)) {
+    logStateIgnored("omp.model.refresh.ignored", fields, Boolean(state));
     return;
   }
   const previous = projection.stateSnapshot.config;
@@ -108,6 +103,7 @@ async function refreshEngineModelAfterChange(
   const nextModel = state.model?.id ?? previous.model;
   applyState(state);
   if (previous.provider !== nextProvider || previous.model !== nextModel) {
+    logModelTransition(fields, previous.provider !== nextProvider, previous.model !== nextModel);
     projection.addTimelineMarker({
       type: "modelChange",
       fromProvider: previous.provider,
@@ -145,39 +141,48 @@ export interface EngineProcessStartHost {
  * （--mode rpc-ui [--resume]）；失败回收并允许下次重试。
  */
 export async function startEngineProcess(host: EngineProcessStartHost): Promise<void> {
-  if (!host.ompFactory) {
-    throw new Error("engine has no omp process source");
-  }
-  const process = createEngineOmpProcess(
-    host.ompFactory,
-    { cwd: host.workspacePath, resumeSessionPath: host.resumeSessionPath },
-    {
-      onEvent: host.onEvent,
-      interaction: host.interaction,
-      onExit: (code) => {
-        // 捕获真正退出的进程，不能把旧回调错误归到当前新进程。
-        if (host.currentProcess() === process) host.onExit(code, process);
+  return diagnosticSessionStart(Boolean(host.resumeSessionPath), async () => {
+    if (!host.ompFactory) {
+      throw new Error("engine has no omp process source");
+    }
+    const process = createEngineOmpProcess(
+      host.ompFactory,
+      { cwd: host.workspacePath, resumeSessionPath: host.resumeSessionPath },
+      {
+        onEvent: host.onEvent,
+        interaction: host.interaction,
+        onExit: (code) => {
+          // 捕获真正退出的进程，不能把旧回调错误归到当前新进程。
+          if (host.currentProcess() === process) host.onExit(code, process);
+          else
+            diagnostics.debug("omp.session.stale_exit", {
+              exitCode: code,
+              reason: "process_fence",
+            });
+        },
+        onCommandOutput: host.onCommandOutput,
+        onPromptResult: host.onPromptResult,
+        onSessionInfoUpdate: host.onSessionInfoUpdate,
+        onConfigUpdate: host.onConfigUpdate,
+        onCommandsUpdate: (commands) => host.onCommandsUpdate?.(commands),
+        onSubagentFrame: host.onSubagentFrame,
+        onBtwFrame: host.onBtwFrame,
       },
-      onCommandOutput: host.onCommandOutput,
-      onPromptResult: host.onPromptResult,
-      onSessionInfoUpdate: host.onSessionInfoUpdate,
-      onConfigUpdate: host.onConfigUpdate,
-      onCommandsUpdate: (commands) => host.onCommandsUpdate?.(commands),
-      onSubagentFrame: host.onSubagentFrame,
-      onBtwFrame: host.onBtwFrame,
-    },
-    // 旧进程退出/关闭后的缓冲帧不得写入重启后的会话或重新打开交互。
-    () => host.currentProcess() === process,
-  );
-  host.setProcess(process);
-  try {
-    await host.bootstrap(process);
-  } catch (error) {
-    // 后台读取失败不得留下伪“已启动”进程，下一次用户发送仍可重试。
-    if (host.currentProcess() === process) host.setProcess(null);
-    await process.dispose();
-    throw error;
-  }
+      // 旧进程退出/关闭后的缓冲帧不得写入重启后的会话或重新打开交互。
+      () => host.currentProcess() === process,
+    );
+    host.setProcess(process);
+    diagnostics.info("omp.session.bound", { resumePresent: Boolean(host.resumeSessionPath) });
+    try {
+      await host.bootstrap(process);
+    } catch (error) {
+      logEngineFailure("omp.session.bootstrap.failed", error, "bootstrap");
+      // 后台读取失败不得留下伪“已启动”进程，下一次用户发送仍可重试。
+      if (host.currentProcess() === process) host.setProcess(null);
+      await process.dispose();
+      throw error;
+    }
+  });
 }
 
 interface EngineProcessHooks {
@@ -207,40 +212,26 @@ function createEngineOmpProcess(
   hooks: EngineProcessHooks,
   isCurrent: () => boolean = () => true,
 ): OmpSessionProcess {
+  const sessionId = diagnostics.context().sessionId;
+  const guard = diagnosticFrameGuard(sessionId, isCurrent);
   return factory.create({
     cwd: options.cwd,
     resumeSessionPath: options.resumeSessionPath,
-    onEvent: (event) => {
-      if (isCurrent()) hooks.onEvent(event);
-    },
+    onEvent: guard("event", hooks.onEvent),
     onUiRequest: (request) => {
       if (isCurrent()) void hooks.interaction.handle(request);
     },
     onAskRequest: (request) => {
       if (isCurrent()) void hooks.interaction.handleAsk(request);
     },
-    onExit: hooks.onExit,
-    onCommandOutput: (frame) => {
-      if (isCurrent()) hooks.onCommandOutput(frame);
-    },
-    onPromptResult: (frame) => {
-      if (isCurrent()) hooks.onPromptResult(frame);
-    },
-    onSessionInfoUpdate: (frame) => {
-      if (isCurrent()) hooks.onSessionInfoUpdate(frame);
-    },
-    onConfigUpdate: (frame) => {
-      if (isCurrent()) hooks.onConfigUpdate(frame);
-    },
-    onCommandsUpdate: (commands) => {
-      if (isCurrent()) hooks.onCommandsUpdate(commands);
-    },
-    onSubagentFrame: (frame) => {
-      if (isCurrent()) hooks.onSubagentFrame(frame);
-    },
-    onBtwFrame: (frame) => {
-      if (isCurrent()) hooks.onBtwFrame?.(frame);
-    },
+    onExit: (code) => diagnostics.run({ sessionId }, () => hooks.onExit(code)),
+    onCommandOutput: guard("command_output", hooks.onCommandOutput),
+    onPromptResult: guard("prompt_result", hooks.onPromptResult),
+    onSessionInfoUpdate: guard("session_info_update", hooks.onSessionInfoUpdate),
+    onConfigUpdate: guard("config_update", hooks.onConfigUpdate),
+    onCommandsUpdate: guard("commands_update", hooks.onCommandsUpdate),
+    onSubagentFrame: guard("subagent", hooks.onSubagentFrame),
+    onBtwFrame: guard("btw", (frame: OmpBtwFrame) => hooks.onBtwFrame?.(frame)),
   });
 }
 
@@ -251,67 +242,6 @@ export interface EngineModelSelection {
 }
 
 export { projectEngineContextWindow } from "./ompEngineContextWindow.js";
-
-export async function applyEngineThoughtLevel(
-  level: string,
-  ensureStarted: () => Promise<void>,
-  currentProcess: () => OmpSessionProcess | null,
-): Promise<{ error?: string }> {
-  try {
-    await ensureStarted();
-  } catch (error) {
-    return { error: error instanceof Error ? error.message : String(error) };
-  }
-  const outcome = await currentProcess()?.send({ type: "set_thinking_level", level });
-  return outcome?.success ? {} : { error: outcome?.error ?? "set_thinking_level failed" };
-}
-
-/** 手动压缩以 omp 命令结果为准；状态回读失败不改变已经完成的压缩结果。 */
-export async function applyEngineCompaction(
-  ensureStarted: () => Promise<void>,
-  currentProcess: () => OmpSessionProcess | null,
-  refreshState: () => Promise<void>,
-): Promise<boolean> {
-  try {
-    await ensureStarted();
-    const outcome = await currentProcess()?.send({ type: "compact" });
-    if (outcome?.success !== true) return false;
-    try {
-      await refreshState();
-    } catch {
-      // 压缩已经成功；回读失败只影响最新上下文显示。
-    }
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-export async function applyEngineSetModel(
-  selection: EngineModelSelection,
-  ensureStarted: () => Promise<void>,
-  currentProcess: () => OmpSessionProcess | null,
-): Promise<{ error?: string }> {
-  try {
-    await ensureStarted();
-  } catch (error) {
-    return { error: error instanceof Error ? error.message : String(error) };
-  }
-  const process = currentProcess();
-  if (!process) return { error: "omp core failed to start" };
-  const outcome = await process.send({
-    type: "set_model",
-    provider: selection.provider,
-    modelId: selection.model,
-  });
-  if (!outcome.success) return { error: outcome.error ?? "set_model failed" };
-  if (selection.thought) {
-    // "off" 是合法档位（rpc.md：set_thinking_level 接受 off），显式关闭思考必须下发。
-    const thought = await process.send({ type: "set_thinking_level", level: selection.thought });
-    if (!thought.success) return { error: thought.error ?? "set_thinking_level failed" };
-  }
-  return {};
-}
 
 /**
  * 临时模型（FORK.md）：set_model 只改会话不落盘 omp 配置，与会话工具栏「仅下一次
@@ -324,7 +254,7 @@ export async function applyEngineModelSelection(
   current: { provider: string; model: string; thought: string },
 ): Promise<{ code: string; message: string } | null> {
   if (current.provider !== selection.provider || current.model !== selection.model) {
-    const outcome = await process.send({
+    const outcome = await diagnosticSessionCommand(process, {
       type: "set_model",
       provider: selection.provider,
       modelId: selection.model,
@@ -335,7 +265,10 @@ export async function applyEngineModelSelection(
   }
   if (selection.thought && selection.thought !== current.thought) {
     // "off" 也是合法档位（rpc.md：set_thinking_level 接受 off），显式关闭思考必须下发。
-    const thought = await process.send({ type: "set_thinking_level", level: selection.thought });
+    const thought = await diagnosticSessionCommand(process, {
+      type: "set_thinking_level",
+      level: selection.thought,
+    });
     if (!thought.success)
       return {
         code: "omp_set_thinking_level_failed",
@@ -364,29 +297,4 @@ export function engineModelSelectionOf(
   const reasoning = selection.options?.reasoningLevel;
   const thought = typeof reasoning === "string" && reasoning.length > 0 ? reasoning : undefined;
   return { provider: selection.providerId, model: selection.modelId, thought };
-}
-
-/** 自动压缩由 omp 持有；切换后回读状态，不能把请求值当作最终事实。 */
-export async function applyEngineAutoCompaction(
-  enabled: boolean,
-  ensureStarted: () => Promise<void>,
-  currentProcess: () => OmpSessionProcess | null,
-  applyState: (state: OmpStateData) => void,
-): Promise<{ error?: string }> {
-  try {
-    await ensureStarted();
-    const process = currentProcess();
-    const outcome = await process?.send({ type: "set_auto_compaction", enabled });
-    if (!outcome?.success) return { error: outcome?.error ?? "set_auto_compaction failed" };
-    const state = await process?.refreshState();
-    if (!state || state.autoCompactionEnabled === undefined) {
-      return { error: "omp did not return auto-compaction state" };
-    }
-    applyState(state);
-    return state.autoCompactionEnabled === enabled
-      ? {}
-      : { error: "omp auto-compaction state differs from requested value" };
-  } catch (error) {
-    return { error: error instanceof Error ? error.message : String(error) };
-  }
 }

@@ -8,6 +8,8 @@ import { markQueueReconcileTexts, type QueueReconcileMode } from "../domain/queu
 import type { ConversationProjection } from "../domain/conversationProjection.js";
 import type { OmpSessionProcess } from "./ports.js";
 import { refreshEngineStateAfterActivity } from "./ompEngineProcess.js";
+import { diagnostics } from "./diagnostics.js";
+import { logTurnTransitions, turnContext } from "./turnDiagnostics.js";
 
 /** A3：queue_update 触发对账的 debounce 窗口（短窗口合并多次触发）。 */
 const QUEUE_RECONCILE_DEBOUNCE_MS = 250;
@@ -87,8 +89,18 @@ export class PromptQueueReconciler {
    */
   noteQueueSnapshot(event: Extract<OmpSessionEventFrame, { type: "queue_update" }>): void {
     const texts = ompQueueTextsOf({ queuedMessages: event });
+    diagnostics.debug("omp.queue.snapshot", {
+      ...turnContext(this.deps.projection),
+      itemCount: texts?.length,
+      valid: texts !== null,
+    });
     if (texts !== null) {
       this.deps.projection.reconcileQueuedTurns(markQueueReconcileTexts(texts, "markOnly"));
+    } else {
+      diagnostics.warn("omp.queue.snapshot.invalid", {
+        sessionId: this.deps.projection.sessionId,
+        failureStage: "queue_snapshot_shape",
+      });
     }
   }
 
@@ -99,6 +111,13 @@ export class PromptQueueReconciler {
   prepareAbortReconciliation(): () => Promise<void> {
     const seqAtAbort = this.inputAcceptedSeq;
     return async () => {
+      if (this.disposed || this.inputAcceptedSeq !== seqAtAbort)
+        diagnostics.debug("omp.queue.abort.ignored", {
+          ...turnContext(this.deps.projection),
+          seqAtAbort,
+          inputAcceptedSeq: this.inputAcceptedSeq,
+          disposed: this.disposed,
+        });
       if (this.disposed || this.inputAcceptedSeq !== seqAtAbort) return;
       this.abortedInputSeq = seqAtAbort;
       await this.refreshAfterActivity();
@@ -144,17 +163,29 @@ export class PromptQueueReconciler {
   ): Promise<void> {
     const seqAtRequest = this.inputAcceptedSeq;
     const scheduleSeqAtRequest = this.queueReconcileScheduleSeq;
-    await refreshEngineStateAfterActivity(
-      this.deps.currentProcess(),
-      this.deps.isCurrentProcess,
-      (state) => {
-        this.deps.applyState(state);
-        if (seqAtRequest !== this.inputAcceptedSeq) return;
-        const mode =
-          options.queueReconcileMode ??
-          (this.abortedInputSeq === seqAtRequest ? "forceClose" : null);
-        this.reconcileQueuedTurnsWith(state, mode);
-      },
+    // ALS 是请求上下文而非常驻 owner；每次回读显式捕获当前会话/轮身份。
+    const context = turnContext(this.deps.projection);
+    await diagnostics.run(context, () =>
+      refreshEngineStateAfterActivity(
+        this.deps.currentProcess(),
+        this.deps.isCurrentProcess,
+        (state) => {
+          this.deps.applyState(state);
+          if (seqAtRequest !== this.inputAcceptedSeq) {
+            diagnostics.debug("omp.queue.stale_result", {
+              ...context,
+              seqAtRequest,
+              inputAcceptedSeq: this.inputAcceptedSeq,
+              reason: "input_generation",
+            });
+            return;
+          }
+          const mode =
+            options.queueReconcileMode ??
+            (this.abortedInputSeq === seqAtRequest ? "forceClose" : null);
+          this.reconcileQueuedTurnsWith(state, mode);
+        },
+      ),
     );
     // get_state 去重：本次回读完成后，若在途期间没有新的 queue_update 触发（调度序号
     // 未变），挂起的 debounce 定时器只会重复拉取同一份比本次更陈旧的快照，直接清掉，
@@ -189,24 +220,56 @@ export class PromptQueueReconciler {
     state: OmpStateData | null,
     mode: QueueReconcileMode | null,
   ): void {
-    if (!state) return;
+    if (!state) {
+      diagnostics.warn("omp.queue.reconcile.unavailable", {
+        ...turnContext(this.deps.projection),
+        failureStage: "state_missing",
+        queueCount: this.deps.projection.stateSnapshot.queue.items.length,
+      });
+      return;
+    }
     const texts = ompQueueTextsOf(state);
-    if (texts === null) return;
+    if (texts === null) {
+      diagnostics.warn("omp.queue.reconcile.unavailable", {
+        ...turnContext(this.deps.projection),
+        failureStage: "queue_snapshot_shape",
+      });
+      return;
+    }
     if (this.deps.isStreaming()) {
       this.deps.projection.reconcileQueuedTurns(markQueueReconcileTexts(texts, "markOnly"));
       return;
     }
     const payload = mode === "forceClose" ? markQueueReconcileTexts(texts, "forceClose") : texts;
+    const beforeSeq = this.deps.projection.seq;
     if (this.deps.projection.reconcileQueuedTurns(payload) > 0) this.deps.scheduleFlush();
+    logTurnTransitions(
+      this.deps.projection,
+      beforeSeq,
+      mode === "forceClose" ? "queue_force_close" : "queue_seen_then_absent",
+    );
   }
 
   /** S4-2 宽限复查：一次性定时器（已挂起不重复）；复查走 forceClose 模式对账。 */
   private scheduleGraceRecheck(): void {
     if (this.graceRecheckTimer || this.disposed) return;
+    const context = turnContext(this.deps.projection);
+    diagnostics.warn("omp.queue.grace.scheduled", {
+      ...context,
+      delayMs: QUEUE_GRACE_RECHECK_DELAY_MS,
+      queueCount: this.deps.projection.stateSnapshot.queue.items.length,
+      reason: "terminal_with_unseen_queued_input",
+    });
     this.graceRecheckTimer = setTimeout(() => {
       this.graceRecheckTimer = null;
       // 期间全部收口（合并/失败等）则无需复查；新 run 流式中亦只登记不收口（见对账判定）。
       if (!this.deps.projection.hasQueuedTurns()) return;
+      diagnostics.warn("omp.queue.grace.rechecking", {
+        sessionId: this.deps.projection.sessionId,
+        queueCount: this.deps.projection.stateSnapshot.queue.items.length,
+        delayMs: QUEUE_GRACE_RECHECK_DELAY_MS,
+        streaming: this.deps.isStreaming(),
+      });
       void this.refreshAfterActivity({ queueReconcileMode: "forceClose" });
     }, QUEUE_GRACE_RECHECK_DELAY_MS);
     this.graceRecheckTimer.unref?.();

@@ -1,14 +1,19 @@
 import { MessagePortProtocol, ChannelClient } from "@zcode/rpc";
 import type { IServiceAccessor } from "@zcode/services";
+import { formatLogPrefix, safeLogMessage } from "@zcode/shared/log-format";
 import { RemoteServiceAccess } from "./remoteServiceAccess.js";
-import { isRendererProductionBuild } from "./rendererLoggingEnv.js";
+import { isRendererDebugLoggingEnabled } from "./rendererLoggingEnv.js";
 
 function logMessagePortDebug(message: string): void {
-  // 生产构建下 renderer 连接日志不输出，避免窗口启动和重连路径产生同步 console 成本。
-  if (isRendererProductionBuild()) {
+  // 与应用共用 JCH_LOG_LEVEL；生产构建不再隐式关闭用户选择的 DEBUG。
+  if (!isRendererDebugLoggingEnabled()) {
     return;
   }
-  console.log(message);
+  try {
+    console.debug(formatLogPrefix("client:messageport"), safeLogMessage(message));
+  } catch {
+    // 日志失败不能阻止协议连接建立。
+  }
 }
 
 export interface MessagePortServiceConnection {

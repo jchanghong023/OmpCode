@@ -1,3 +1,5 @@
+import { safeLogMessage } from "@zcode/shared";
+
 const NODE_WARNING_LOG_PATTERN =
   /^\(node:\d+\)\s+(?:ExperimentalWarning|DeprecationWarning|Warning):/u;
 
@@ -11,21 +13,21 @@ export function shouldReportHostConsoleError(args: unknown[]): boolean {
 
 export function stringifyHostLogArg(arg: unknown): string {
   if (typeof arg === "string") {
-    return arg;
+    return safeLogMessage(arg);
   }
 
   if (arg instanceof Error) {
     try {
-      return JSON.stringify(serializeErrorForHostLog(arg));
+      return safeLogMessage(JSON.stringify(serializeErrorForHostLog(arg)));
     } catch {
-      return `${arg.name}: ${arg.message}${arg.stack ? `\n${arg.stack}` : ""}`;
+      return "[Unserializable log error]";
     }
   }
 
   try {
-    return JSON.stringify(arg);
+    return safeLogMessage(JSON.stringify(arg) ?? String(arg));
   } catch {
-    return String(arg);
+    return "[Unserializable log value]";
   }
 }
 

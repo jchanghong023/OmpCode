@@ -5,6 +5,8 @@
   "exports": {
     ".": "./src/index.ts",
     "./runtime-env": "./src/runtimeEnv.ts",
+    "./log-level": "./src/log-level.ts",
+    "./log-format": "./src/log-format.ts",
     "./mcp": "./src/mcp.ts",
     "./runtime-tool-runtime": "./src/runtime-tool-runtime.ts",
     "./node-repl-browser-broker": "./src/browser-use/nodeReplBroker.ts",

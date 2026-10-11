@@ -73,6 +73,7 @@ export {
   normalizeZCodeProductFlavor,
 } from "./env.js";
 export * from "./errors.js";
+export * from "./log-level.js";
 export type { SessionCreateSource } from "./sessionCreateSource.js";
 export { resolveSafeEndpointHostname } from "./endpointHostname.js";
 export * from "./rendererActionTrace.js";
@@ -239,7 +240,12 @@ export * from "./background-task-notifications.js";
 export * from "./background-bash-jobs.js";
 export * from "./zcode-agent-model-state.js";
 export * from "./task-realtime.js";
-export { formatTimestamp, formatLogPrefix } from "./log-format.js";
+export {
+  formatTimestamp,
+  formatLogPrefix,
+  serializeLogValue,
+  safeLogMessage,
+} from "./log-format.js";
 export * from "./model-provider-types.js";
 export * from "./model-provider-family.js";
 export * from "./provider-family-connection-selection.js";

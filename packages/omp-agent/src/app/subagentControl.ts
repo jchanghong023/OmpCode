@@ -5,6 +5,7 @@
 // 只读详情的记录续读（get_subagent_messages fromByte/nextByte）同经父会话进程。
 
 import type { OmpCommandOutcome, OmpSessionProcess } from "./ports.js";
+import { diagnostics } from "./diagnostics.js";
 
 /** 引擎侧控制/续读所需的最小面（ConversationEngine 的结构化窄视图，避免反向依赖成环）。 */
 export interface EngineSubagentHost {
@@ -28,24 +29,74 @@ export async function controlSubagent(
   action: "send_message" | "stop",
   message?: string,
 ): Promise<OmpCommandOutcome> {
-  const engine = deps.getEngine(sessionId);
-  if (!engine) {
-    return { success: false, error: `session unavailable: ${sessionId}` };
-  }
-  try {
-    await engine.ensureStarted();
-  } catch (error) {
-    return {
-      success: false,
-      error: error instanceof Error ? error.message : String(error),
-      code: "omp_start_failed",
-    };
-  }
-  const process = engine.currentProcess();
-  if (!process) {
-    return { success: false, error: "omp core failed to start", code: "omp_start_failed" };
-  }
-  return sendSubagentControl(process, subagentId, action, message);
+  return diagnostics.run(
+    { sessionId, parentSessionId: sessionId, subagentId, action },
+    async () => {
+      const startedAt = Date.now();
+      diagnostics.info("omp.subagent.control.started");
+      let stage = "locate_session";
+      const failed = (outcome: OmpCommandOutcome, cause?: unknown): OmpCommandOutcome => {
+        diagnostics.error("omp.subagent.control.failed", {
+          stage,
+          resultStatus: "failed",
+          code: outcome.code,
+          errorType:
+            cause === undefined ? undefined : cause instanceof Error ? cause.name : typeof cause,
+          elapsedMs: Date.now() - startedAt,
+        });
+        return outcome;
+      };
+      const engine = deps.getEngine(sessionId);
+      if (!engine) return failed({ success: false, error: `session unavailable: ${sessionId}` });
+      stage = "start";
+      try {
+        await engine.ensureStarted();
+      } catch (error) {
+        return failed(
+          {
+            success: false,
+            error: error instanceof Error ? error.message : String(error),
+            code: "omp_start_failed",
+          },
+          error,
+        );
+      }
+      stage = "locate_process";
+      const process = engine.currentProcess();
+      if (!process)
+        return failed({
+          success: false,
+          error: "omp core failed to start",
+          code: "omp_start_failed",
+        });
+      stage =
+        action === "send_message" && (message === undefined || message.length === 0)
+          ? "validate_message"
+          : "send";
+      try {
+        const outcome = await sendSubagentControl(process, subagentId, action, message);
+        if (!outcome.success) {
+          if (stage === "send") stage = "peer_failure";
+          return failed(outcome);
+        }
+        diagnostics.info("omp.subagent.control.result", {
+          stage: "response",
+          resultStatus: action === "stop" ? "stopping" : "sent",
+          elapsedMs: Date.now() - startedAt,
+        });
+        return outcome;
+      } catch (error) {
+        // 控制 reject 仍交给原调用者，日志不得把异常伪装成 success 或返回式 failure。
+        diagnostics.error("omp.subagent.control.failed", {
+          stage: "send_rejected",
+          resultStatus: "rejected",
+          errorType: error instanceof Error ? error.name : typeof error,
+          elapsedMs: Date.now() - startedAt,
+        });
+        throw error;
+      }
+    },
+  );
 }
 
 /**
@@ -84,18 +135,54 @@ export async function readSubagentRecord(
   subagentId: string,
   fromByte?: number,
 ): Promise<OmpCommandOutcome | null> {
+  const startedAt = Date.now();
+  const fields = { subagentId, fromByte: fromByte ?? 0 };
+  diagnostics.debug("omp.subagent.read.started", fields);
+  const failed = (stage: string, error?: unknown): null => {
+    diagnostics.warn("omp.subagent.read.failed", {
+      ...fields,
+      stage,
+      errorType: error instanceof Error ? error.name : typeof error,
+      elapsedMs: Date.now() - startedAt,
+    });
+    return null;
+  };
   try {
     await host.ensureStarted();
-  } catch {
-    return null;
+  } catch (error) {
+    return failed("start", error);
   }
   const process = host.currentProcess();
-  if (!process) return null;
+  if (!process) return failed("locate_process");
   return process
     .send({
       type: "get_subagent_messages",
       subagentId,
       ...(fromByte !== undefined ? { fromByte } : {}),
     })
-    .catch(() => null);
+    .then((outcome) => {
+      if (!outcome.success)
+        diagnostics.warn("omp.subagent.read.failed", {
+          ...fields,
+          stage: "peer_failure",
+          code: outcome.code,
+          elapsedMs: Date.now() - startedAt,
+        });
+      else {
+        const data =
+          typeof outcome.data === "object" && outcome.data !== null
+            ? (outcome.data as { entries?: unknown; nextByte?: unknown; reset?: unknown })
+            : {};
+        diagnostics.debug("omp.subagent.read.result", {
+          ...fields,
+          stage: "response",
+          entryCount: Array.isArray(data.entries) ? data.entries.length : 0,
+          nextByte: typeof data.nextByte === "number" ? data.nextByte : undefined,
+          reset: data.reset === true,
+          elapsedMs: Date.now() - startedAt,
+        });
+      }
+      return outcome;
+    })
+    .catch((error: unknown) => failed("send_rejected", error));
 }

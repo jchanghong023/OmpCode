@@ -1,6 +1,10 @@
-import { formatLogPrefix, type TraceId } from "@zcode/shared";
-import { isEffectiveDevelopmentNodeEnv } from "#src/runtime-tools/nodeEnv.js";
-
+import {
+  formatLogPrefix,
+  isApplicationLogLevelEnabled,
+  safeLogMessage,
+  serializeLogValue,
+  type TraceId,
+} from "@zcode/shared";
 interface ServiceLogSink {
   log: (...args: unknown[]) => void;
   warn: (...args: unknown[]) => void;
@@ -20,40 +24,37 @@ export function createServiceLogger(
   options?: {
     pid?: number;
     sink?: ServiceLogSink;
-    // debug 日志默认只在本地开发运行时打印；测试/正式安装包都使用 production 构建，避免高频日志落盘。
-    isDebugEnabled?: boolean | (() => boolean);
   },
 ): ServiceLogger {
   const pid = options?.pid ?? process.pid;
   const sink = options?.sink ?? console;
-  const debugOption = options?.isDebugEnabled;
-  const resolveDebugEnabled: () => boolean =
-    typeof debugOption === "function"
-      ? debugOption
-      : typeof debugOption === "boolean"
-        ? () => debugOption
-        : () => isEffectiveDevelopmentNodeEnv();
-
+  // 服务层日志保持独立于 ZCode Agent runtime；级别唯一由共享 JCH_LOG_LEVEL 判定。
   function write(
     level: "debug" | "info" | "warn" | "error",
     traceId: TraceId | undefined,
     ...args: unknown[]
   ): void {
-    // 服务层日志过去常被复用到 ZCode Agent 命名 logger，导致新 ZCode 路径继续依赖 ZCode Agent 目录。
-    // 这里把通用分级日志抽到独立模块，后续删除 ZCode Agent runtime 时不会牵连非 ZCode Agent 服务。
-    if (level === "debug" && !resolveDebugEnabled()) {
-      return;
-    }
+    if (!isApplicationLogLevelEnabled(level)) return;
     const source = traceId ? `${scope}][trace:${traceId}` : scope;
-    const consoleFn =
-      level === "error"
-        ? sink.error
-        : level === "warn"
-          ? sink.warn
-          : level === "debug"
-            ? (sink.debug ?? sink.log)
-            : sink.log;
-    consoleFn(formatLogPrefix(source, pid), ...args);
+    try {
+      const consoleFn =
+        level === "error"
+          ? sink.error
+          : level === "warn"
+            ? sink.warn
+            : level === "debug"
+              ? (sink.debug ?? sink.log)
+              : sink.log;
+      const prefix = formatLogPrefix(source, pid);
+      if (args.length === 0) {
+        consoleFn(prefix);
+        return;
+      }
+      const message = safeLogMessage(args.map(serializeLogValue).join(" "));
+      consoleFn(prefix, message);
+    } catch {
+      reportServiceLoggerSinkFailure();
+    }
   }
 
   return {
@@ -62,4 +63,29 @@ export function createServiceLogger(
     warn: (traceId, ...args) => write("warn", traceId, ...args),
     error: (traceId, ...args) => write("error", traceId, ...args),
   };
+}
+
+let serviceLoggerSinkFailureReported = false;
+
+// stderr 的异步 error 也属于日志出口故障，不得杀掉业务进程。
+process.stderr.on("error", () => {});
+
+function reportServiceLoggerSinkFailure(): void {
+  if (serviceLoggerSinkFailureReported) return;
+  serviceLoggerSinkFailureReported = true;
+  try {
+    process.stderr.write(
+      `${JSON.stringify({
+        ts: new Date().toISOString(),
+        level: "error",
+        scope: "service-log",
+        pid: process.pid,
+        event: "service_log_sink_failed",
+        message: "log sink failed",
+      })}\n`,
+      () => {},
+    );
+  } catch {
+    // 最终出口自身失效时停止，不递归记录，也不改变业务结果。
+  }
 }
