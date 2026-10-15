@@ -5,6 +5,7 @@
 ## 产品规则
 
 - **进程拓扑**：每个会话一个惰性 omp 进程（`--mode rpc-ui [--resume <file>]`，cwd = workspace 根），另维护一个常驻**目录进程**（`--mode rpc-ui --no-session`）承载工作区级查询：模型/思考档位/命令目录（v1 面，任何核可用）与 v3 能力（动态补全、模型角色、会话目录）。渲染器刷新不终止任何进程（进程归 Host 侧 omp-agent 所有）；omp-agent 退出时以 stdin EOF 有序关闭。工具、终端、MCP 等必要子进程不受此约束。
+- **共享目录环境边界**：本地 Host 继承的 `OMP_SKILLS_DIR` 与 `OMP_WIKI_DIR` 通过现有环境合并链原样进入同一工作区的目录进程和会话进程；两者使用相同 cwd、配置根与 profile，不依赖 `OMP_OFFLINE`。ZCode 不增加路径设置、别名、扫描器或同步服务；技能发现及只读目录展示唯一按 [skills.md](skills.md) 管理。`OMP_WIKI_DIR` 是目标 OMP 可写知识库目录覆盖，不是只读模式；其 `docs.db` 创建、读取、写入、导入与删除均由 OMP 在该目录处理，未设置或为空时沿用 OMP 默认路径。远端工作区使用远端 Host 自己继承的环境，不把桌面本机的共享目录路径注入远端；不承诺 NFS 上跨机器 SQLite 并发安全。
 - **v3 协商与能力门控**：目录进程与每个会话进程在 ready 后按 `supportedProtocolVersions` 自动协商（含 3 → v3）。v3 能力缺失（旧核）时对应功能显式报能力缺失（-32601 语义，不伪造）；目录进程启动失败/退避窗口属暂时不可用（-32000 可重试），两者必须区分。
 - **会话生命周期**：创建 = 惰性每会话进程（首次发送现场启动）；恢复 = `--resume <file>` + 冷历史先行入投影；关闭 = stdin EOF 卸载进程（保留历史，会话文件由 omp 持久化）；删除 = 先结束该会话进程，再经目录进程 `delete_session`（omp 权威删除；旧核无 v3 时回落本地文件删除，仍须确认文件删除成功后才发索引移除事件）；改名 = 已加载走会话进程 `set_session_name`，冷会话走目录进程 `rename_session`（按稳定 ID）。会话 ID 身份沿用既有「临时 ID → 文件 UUID」迁移规则（见 [session-recovery.md](session-recovery.md)）。
 - **斜杠输入严格分发**：以 `/` 起始的输入先按命令目录（目录进程 `get_available_commands`，v3 富目录含 `execution`/`availability` 判定）在适配层解析：目录内且 omp 可执行的命令以 `prompt` 原文发送；运行中附带原生 `streamingBehavior`，由 OMP 决定命令消费或剩余文本的排队/引导。未知命令或仅 TUI 可执行（`tui_only`/`unsupported`）明确报错，**绝不发给模型**。携带图片或文本附件的斜杠输入明确拒绝（`omp_command_attachments_unsupported`），不静默丢弃。普通运行中补充仍走 steer/follow_up；`/context` 等内部本地查询同经 prompt。本次核心命令、ACK 与迟到输出、历史投影及验收唯一见 [核心 rpc-ui 命令接入](omp-native-commands.md)。
@@ -113,6 +114,8 @@ web-remote-replayable: 同一 owner → 水位增量 / 缺口快照；冷启动�
 14. **协议与冷历史补充**：同 chunkId 的 count/byteLength 必须恒定，重复片拒绝整个序列，实收不得超过声明长度；过期命令失败不得关闭新的活跃轮。合法用户 content 字符串与 blocks 均恢复正文、标题和子代理 transcript，畸形块不打断其他记录。主 v4 与 legacy 压缩失败均不得报告 accepted。
 15. **Editor/Input 衔接**：无 prefill 的 editor 仍为空的临时多行编辑器，可取消；敏感输入不进入持久草稿，按 [composer.md](./composer.md) 验收 7 记录。
 16. **主/子执行页联合回归**：真实 GUI 并行创建 a、b、c 并广播 `hello`，逐一打开三个正确归属的详情；展开后每个工具 ID 与核心记录一一对应，文件写入、通信工具和最终回复均可见。切换详情、关闭重开、重复补读和冷恢复不丢记录、不串代理、不改变手动阅读位置；主会话与三项详情的终态及控制可用性一致。执行页不铺开 IRC/后台结果的模型提示包，普通正文与扩展输出不被误过滤；每项均截图核对，Agent 交互页另按其唯一需求验收。
+
+- **共享目录环境验收（无模型）**：在隔离配置根/profile 与工作区中用当前目标 OMP 源码启动适配器，分别查询工作区与已创建会话的 `skills/referenceCatalog`；附加共享技能及同名共享优先结果按 [skills.md](skills.md) 验收。核对目录进程带 `--no-session`、会话进程不带，两者实际收到完全相同的 `OMP_SKILLS_DIR`、`OMP_WIKI_DIR`、cwd、配置根及 profile，且未设置 `OMP_OFFLINE` 也生效。远端环境透传白名单不包含这两个本机路径变量；此静态边界不冒充真实远端/NFS 验收。
 
 - **辅助事件边界**：在运行中、成功/失败终态及新轮开始后插入合法 `advisor_cost_changed`/`session_settled`，轮次、错误与用量保持原值；后续 `agent_end`/`prompt_result` 仍按既有规则完成。真实 GLM 两轮与同根冷恢复日志不再出现这两种帧的 `omp_core_frame_decode_failed`；未知事件继续报告解码失败。
 
