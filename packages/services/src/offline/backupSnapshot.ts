@@ -104,7 +104,31 @@ export async function collectSnapshot(options: SnapshotOptions) {
   const entries: SnapshotEntry[] = [];
   const excluded: SnapshotManifest["excluded"] = [];
   const validators: Array<() => Promise<void>> = [];
-  const buffer = Buffer.allocUnsafe(1024 * 1024);
+  // 原先整轮串行共用 1MiB buffer；文件槽各自复用 buffer，分类只用遍历者独占的小缓冲。
+  const header = Buffer.allocUnsafe(SQLITE_HEADER.length);
+  const buffers: Buffer[] = [];
+  const active = new Set<Promise<void>>();
+  let failure: { error: unknown } | undefined;
+
+  function checkWork(): void {
+    if (failure) throw failure.error;
+    checkAbort(signal);
+  }
+
+  function admit(snapshot: (buffer: Buffer) => Promise<void>): void {
+    checkWork();
+    const buffer = buffers.pop() ?? Buffer.allocUnsafe(1024 * 1024);
+    // 只接纳文件任务，目录递归不占槽；否则父目录等待子目录时可能耗尽全部槽而死锁。
+    const task = snapshot(buffer)
+      .catch((error: unknown) => {
+        failure ??= { error };
+      })
+      .finally(() => {
+        buffers.push(buffer);
+        active.delete(task);
+      });
+    active.add(task);
+  }
   const logicalPaths = new Set<string>();
   for (const logical of options.logicalFiles) {
     if (
@@ -149,7 +173,7 @@ export async function collectSnapshot(options: SnapshotOptions) {
   }
 
   async function visit(relative: string): Promise<void> {
-    checkAbort(signal);
+    checkWork();
     const sourceDirectory = path.join(runtimeRoot, relative);
     await assertRealPath(sourceDirectory);
     const directoryStat = await fs.lstat(sourceDirectory, { bigint: true });
@@ -167,7 +191,7 @@ export async function collectSnapshot(options: SnapshotOptions) {
     const databases = new Set<string>();
     const inspected = new Map<string, BigIntStats>();
     for (const name of children) {
-      checkAbort(signal);
+      checkWork();
       if (exclusion(name, relative) || logicalPaths.has(relative ? `${relative}/${name}` : name))
         continue;
       const source = path.join(sourceDirectory, name);
@@ -179,7 +203,6 @@ export async function collectSnapshot(options: SnapshotOptions) {
         if (!sameIdentity(value, await handle.stat({ bigint: true }))) {
           throw new OfflineBackupError("SOURCE_CHANGED");
         }
-        const header = buffer.subarray(0, SQLITE_HEADER.length);
         const { bytesRead } = await handle.read(header, 0, header.length, 0);
         if (bytesRead === header.length && header.equals(SQLITE_HEADER)) databases.add(name);
       } finally {
@@ -197,12 +220,17 @@ export async function collectSnapshot(options: SnapshotOptions) {
         : undefined;
     };
     for (const name of children) {
-      checkAbort(signal);
+      checkWork();
       const child = relative ? `${relative}/${name}` : name;
       const reason = ignored(name);
       if (reason) {
         excluded.push({ path: child, reason });
         continue;
+      }
+      // 遍历是唯一生产者；在读取本文件的初始状态前等待槽，避免排队期间的正常保存被误判冲突。
+      if (active.size === 4) {
+        await Promise.race(active);
+        checkWork();
       }
       const source = path.join(runtimeRoot, child);
       const destination = path.join(dataRoot, child);
@@ -234,7 +262,6 @@ export async function collectSnapshot(options: SnapshotOptions) {
             if (!sameIdentity(before, await handle.stat({ bigint: true }))) {
               throw new OfflineBackupError("SOURCE_CHANGED");
             }
-            const header = buffer.subarray(0, SQLITE_HEADER.length);
             const { bytesRead } = await handle.read(header, 0, header.length, 0);
             if (bytesRead === header.length && header.equals(SQLITE_HEADER)) databases.add(name);
             else databases.delete(name);
@@ -242,58 +269,60 @@ export async function collectSnapshot(options: SnapshotOptions) {
             await handle.close();
           }
         }
-        await assertRealPath(source);
-        if (databases.has(name)) {
-          entry.kind = "sqlite";
-          await snapshotDatabase(source, destination, before);
+        admit(async (buffer) => {
           await assertRealPath(source);
-          if (!sameIdentity(before, await fs.lstat(source, { bigint: true }))) {
-            throw new OfflineBackupError("DATABASE_REPLACED");
-          }
-        } else {
-          entry.stamp = stamp(before);
-          const old = previousEntries.get(child);
-          if (
-            old?.kind === "file" &&
-            old.sha256 &&
-            equalStamp(old.stamp, entry.stamp) &&
-            options.previousDataRoot
-          ) {
-            const oldFile = path.join(options.previousDataRoot, child);
-            const oldMode = await fs.lstat(oldFile);
-            if (
-              (process.getuid && oldMode.uid !== process.getuid()) ||
-              (process.platform !== "win32" && (oldMode.mode & 0o077) !== 0)
-            ) {
-              throw new OfflineBackupError("UNSAFE_BACKUP_FILE");
+          if (databases.has(name)) {
+            entry.kind = "sqlite";
+            await snapshotDatabase(source, destination, before);
+            await assertRealPath(source);
+            if (!sameIdentity(before, await fs.lstat(source, { bigint: true }))) {
+              throw new OfflineBackupError("DATABASE_REPLACED");
             }
-            // Validate the immutable source too: a manually damaged generation
-            // must not silently become the basis of another completed backup.
-            if ((await hashFile(oldFile, buffer, signal)) !== old.sha256) {
-              throw new OfflineBackupError("PREVIOUS_BACKUP_CHANGED");
-            }
-            try {
-              await fs.link(oldFile, destination);
-            } catch (linkError) {
-              if (
-                !["EXDEV", "EPERM", "ENOTSUP", "EOPNOTSUPP", "EMLINK"].includes(
-                  errorCode(linkError) ?? "",
-                )
-              )
-                throw linkError;
-              await fs.copyFile(oldFile, destination, constants.COPYFILE_EXCL);
-              await fs.chmod(destination, (before.mode & 0o111n) !== 0n ? 0o700 : 0o600);
-              await syncFile(destination);
-            }
-            entry.sha256 = old.sha256;
-            entry.prefixBytes = old.prefixBytes;
           } else {
-            Object.assign(
-              entry,
-              await copyStable(source, destination, before, appendOnly, buffer, signal),
-            );
+            entry.stamp = stamp(before);
+            const old = previousEntries.get(child);
+            if (
+              old?.kind === "file" &&
+              old.sha256 &&
+              equalStamp(old.stamp, entry.stamp) &&
+              options.previousDataRoot
+            ) {
+              const oldFile = path.join(options.previousDataRoot, child);
+              const oldMode = await fs.lstat(oldFile);
+              if (
+                (process.getuid && oldMode.uid !== process.getuid()) ||
+                (process.platform !== "win32" && (oldMode.mode & 0o077) !== 0)
+              ) {
+                throw new OfflineBackupError("UNSAFE_BACKUP_FILE");
+              }
+              // Validate the immutable source too: a manually damaged generation
+              // must not silently become the basis of another completed backup.
+              if ((await hashFile(oldFile, buffer, signal)) !== old.sha256) {
+                throw new OfflineBackupError("PREVIOUS_BACKUP_CHANGED");
+              }
+              try {
+                await fs.link(oldFile, destination);
+              } catch (linkError) {
+                if (
+                  !["EXDEV", "EPERM", "ENOTSUP", "EOPNOTSUPP", "EMLINK"].includes(
+                    errorCode(linkError) ?? "",
+                  )
+                )
+                  throw linkError;
+                await fs.copyFile(oldFile, destination, constants.COPYFILE_EXCL);
+                await fs.chmod(destination, (before.mode & 0o111n) !== 0n ? 0o700 : 0o600);
+                await syncFile(destination);
+              }
+              entry.sha256 = old.sha256;
+              entry.prefixBytes = old.prefixBytes;
+            } else {
+              Object.assign(
+                entry,
+                await copyStable(source, destination, before, appendOnly, buffer, signal),
+              );
+            }
           }
-        }
+        });
       }
       entries.push(entry);
     }
@@ -303,10 +332,18 @@ export async function collectSnapshot(options: SnapshotOptions) {
         throw new OfflineBackupError("SOURCE_TREE_CHANGED");
       }
     });
-    await syncDirectory(path.join(dataRoot, relative));
   }
 
-  await visit("");
+  try {
+    await visit("");
+    await Promise.all(active);
+    checkWork();
+  } catch (error) {
+    failure ??= { error };
+    // 首错/取消后停止接纳，必须等已启动任务的 finally 关闭句柄，才允许外层删除临时版本。
+    await Promise.all(active);
+    throw failure.error;
+  }
   const byPath = new Map(entries.map((entry) => [entry.path, entry]));
   for (const logical of options.logicalFiles) {
     checkAbort(signal);
@@ -344,9 +381,16 @@ export async function collectSnapshot(options: SnapshotOptions) {
     checkAbort(signal);
     await validate();
   }
-  // Logical exports can add directories after the filesystem walk's fsync.
-  for (const entry of entries) {
-    if (entry.kind === "directory") await syncDirectory(path.join(dataRoot, entry.path));
+  // 遍历中同步会与这里重复，且遗漏后来逻辑导出的目录；所有写入和验证后统一子目录优先同步。
+  const directories = entries
+    .filter((entry) => entry.kind === "directory")
+    .sort(
+      (a, b) =>
+        b.path.split("/").length - a.path.split("/").length || a.path.localeCompare(b.path, "en"),
+    );
+  for (const directory of directories) {
+    checkAbort(signal);
+    await syncDirectory(path.join(dataRoot, directory.path));
   }
   await syncDirectory(dataRoot);
   entries.sort((a, b) => a.path.localeCompare(b.path, "en"));

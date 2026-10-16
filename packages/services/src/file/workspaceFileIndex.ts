@@ -2,6 +2,7 @@ import type { Dirent } from "node:fs";
 import { readdir, stat } from "node:fs/promises";
 import { join, relative, sep } from "node:path";
 import type { WorkspaceFileEntry } from "@zcode/shared";
+import { isOfflineShmEnabled, type OfflineDataRootOptions } from "@zcode/shared/node";
 import { packWorkspaceFileEntries } from "@zcode/shared/workspaceFileEntriesCodec";
 import type { ServiceLogger } from "../logger/serviceLogger.js";
 import type { WorkspaceFileSearchFilter } from "./workspaceFileMentionFilter.js";
@@ -52,39 +53,76 @@ async function scanWorkspace(
   rootPath: string,
   rules: IgnoreRules,
   filter: WorkspaceFileSearchFilter,
+  offlineConcurrent: boolean,
 ): Promise<string> {
   const entries: WorkspaceFileEntry[] = [];
   const directories = [rootPath];
-  const traverse = async () => {
-    for (;;) {
-      const directory = directories.pop();
-      if (!directory) return;
-      let children: Dirent[];
-      try {
-        children = await readdir(directory, { withFileTypes: true });
-      } catch (error) {
-        if (isSkippableError(error)) continue;
-        throw error;
-      }
-      for (const entry of children) {
-        const path = join(directory, entry.name);
-        const relativePath = relative(rootPath, path).split(sep).join("/");
-        if (relativePath === WORKSPACE_FILE_SEARCH_IGNORE_FILE_NAME) continue;
-        const symbolicLink = entry.isSymbolicLink();
-        const type: WorkspaceFileEntry["type"] = entry.isDirectory()
+  const processDirectory = async (directory: string) => {
+    let children: Dirent[];
+    try {
+      children = await readdir(directory, { withFileTypes: true });
+    } catch (error) {
+      if (isSkippableError(error)) return;
+      throw error;
+    }
+    for (const entry of children) {
+      const path = join(directory, entry.name);
+      const relativePath = relative(rootPath, path).split(sep).join("/");
+      if (relativePath === WORKSPACE_FILE_SEARCH_IGNORE_FILE_NAME) continue;
+      const symbolicLink = entry.isSymbolicLink();
+      const type: WorkspaceFileEntry["type"] = entry.isDirectory()
+        ? "directory"
+        : symbolicLink && (await stat(path).catch(() => null))?.isDirectory()
           ? "directory"
-          : symbolicLink && (await stat(path).catch(() => null))?.isDirectory()
-            ? "directory"
-            : "file";
-        if (isWorkspaceFileSearchPathIgnored(rules, relativePath, type)) continue;
-        const candidate = { name: entry.name, path, relativePath, type };
-        const decision = filter.evaluate(candidate, { ignoreRulesActive: true });
-        if (decision.include) entries.push(candidate);
-        if (type === "directory" && !symbolicLink && decision.traverse) directories.push(path);
-      }
+          : "file";
+      if (isWorkspaceFileSearchPathIgnored(rules, relativePath, type)) continue;
+      const candidate = { name: entry.name, path, relativePath, type };
+      const decision = filter.evaluate(candidate, { ignoreRulesActive: true });
+      if (decision.include) entries.push(candidate);
+      if (type === "directory" && !symbolicLink && decision.traverse) directories.push(path);
     }
   };
-  await Promise.all(Array.from({ length: SCAN_CONCURRENCY }, traverse));
+  if (offlineConcurrent) {
+    // 旧循环只预置根目录，其余槽会在首次 readdir 返回前退出，实际变成串行。
+    // 由唯一调度器移交目录，每项只弹出一次；完成后补槽，接住后续发现的子目录。
+    await new Promise<void>((resolve, reject) => {
+      let active = 0;
+      let failure: { error: unknown } | undefined;
+      const schedule = () => {
+        while (!failure && active < SCAN_CONCURRENCY && directories.length > 0) {
+          const directory = directories.pop()!;
+          active++;
+          void processDirectory(directory).then(
+            () => {
+              active--;
+              schedule();
+            },
+            (error: unknown) => {
+              failure ??= { error };
+              active--;
+              schedule();
+            },
+          );
+        }
+        // 首次失败后不再启动读取，等全部在途目录收口，避免拒绝后仍有后台写入。
+        if (active === 0) {
+          if (failure) reject(failure.error);
+          else resolve();
+        }
+      };
+      schedule();
+    });
+  } else {
+    // 非 Linux offline 保留原扫描调度，不将离线优化扩散到普通运行路径。
+    const traverse = async () => {
+      for (;;) {
+        const directory = directories.pop();
+        if (!directory) return;
+        await processDirectory(directory);
+      }
+    };
+    await Promise.all(Array.from({ length: SCAN_CONCURRENCY }, traverse));
+  }
   entries.sort((left, right) =>
     left.type !== right.type
       ? left.type === "directory"
@@ -99,7 +137,10 @@ async function scanWorkspace(
 export function createWorkspaceFileIndexCache(
   filter: WorkspaceFileSearchFilter,
   logger: ServiceLogger,
+  options: Pick<OfflineDataRootOptions, "env" | "platform"> = {},
 ) {
+  // 按服务实例固定平台/环境门禁；注入只复用共享判定，Windows 同名变量不能启用。
+  const offlineConcurrent = isOfflineShmEnabled(options.env, options.platform);
   const scopes = new Map<string, WorkspaceIndexScope>();
   const trimCache = () => {
     // 在途项只活到请求完成；已完成索引、规则和刷新记录共同受固定 LRU 容量约束。
@@ -155,7 +196,7 @@ export function createWorkspaceFileIndexCache(
             ? undefined
             : { fingerprint, value: rules };
       }
-      const packed = await scanWorkspace(rootPath, rules, filter);
+      const packed = await scanWorkspace(rootPath, rules, filter, offlineConcurrent);
       // stat 成功不代表正文读取成功；把降级 matcher/索引绑到该指纹会让暂时 EIO
       // 永久沿用 fallback。降级仅服务当前请求，后续查询必须再次读取真实规则。
       return {

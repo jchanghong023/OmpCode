@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
+import { createHash } from "node:crypto";
 import { once } from "node:events";
 import {
   appendFileSync,
@@ -239,6 +240,57 @@ test("complete generation contains private stable files and logical browser stat
   }
 });
 
+test("independent multi-buffer files and nested logical exports retain complete bytes across generations", async () => {
+  const { root, roots } = await fixture();
+  try {
+    const files = Array.from({ length: 8 }, (_, index) => {
+      const relative = index < 6 ? `file-${index}.bin` : `nested/deeper/file-${index}.bin`;
+      const content = Buffer.alloc(2 * 1024 * 1024 + 31 + index, 0x20 + index);
+      content.fill(0x60 + index, 1024 * 1024);
+      return { relative, content };
+    });
+    await mkdir(join(roots.runtimeRoot, "nested", "deeper"), { recursive: true });
+    for (const file of files) await writeFile(join(roots.runtimeRoot, file.relative), file.content);
+    const logical = {
+      relativePath: "electron/new-app/export/nested/first-party-browser-state.json",
+      content: '{"version":1,"origins":[]}',
+    };
+    const first = await completed(roots, [logical]);
+    const second = await completed(roots, [logical]);
+    for (const backup of [first, second]) {
+      for (const file of files) {
+        assert.deepEqual(await readFile(join(backup.path, "data", file.relative)), file.content);
+        assert.equal(
+          backup.manifest.entries.find((entry) => entry.path === file.relative)?.sha256,
+          createHash("sha256").update(file.content).digest("hex"),
+        );
+      }
+      assert.equal(
+        await readFile(join(backup.path, "data", logical.relativePath), "utf8"),
+        logical.content,
+      );
+      for (const parent of [
+        "electron",
+        "electron/new-app",
+        "electron/new-app/export",
+        "electron/new-app/export/nested",
+      ]) {
+        assert.equal(
+          backup.manifest.entries.find((entry) => entry.path === parent)?.kind,
+          "directory",
+        );
+      }
+      const paths = backup.manifest.entries.map((entry) => entry.path);
+      assert.deepEqual(
+        paths,
+        [...paths].sort((a, b) => a.localeCompare(b, "en")),
+      );
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("unchanged files reuse only immutable generations and retention keeps current and previous", async () => {
   const { root, roots } = await fixture();
   try {
@@ -328,7 +380,17 @@ test("SQLite Online Backup includes committed WAL and excludes an in-flight tran
     database.exec("INSERT INTO settings VALUES (1, 'committed-in-wal')");
     assert.ok((await lstat(`${source}-wal`)).size > 0);
     database.exec("BEGIN IMMEDIATE; INSERT INTO settings VALUES (2, 'not-committed')");
+    const ordinary = [
+      { relative: "a-ordinary.bin", content: Buffer.alloc(1024 * 1024 + 19, 0x31) },
+      { relative: "nested/ordinary.bin", content: Buffer.alloc(1024 * 1024 + 23, 0x72) },
+    ];
+    await mkdir(join(roots.runtimeRoot, "nested"));
+    for (const file of ordinary)
+      await writeFile(join(roots.runtimeRoot, file.relative), file.content);
     const backup = await completed(roots);
+    for (const file of ordinary) {
+      assert.deepEqual(await readFile(join(backup.path, "data", file.relative)), file.content);
+    }
     const snapshotPath = join(backup.path, "data", "extensionless-store");
     assert.equal(existsSync(`${snapshotPath}-wal`), false);
     assert.equal(existsSync(`${snapshotPath}-shm`), false);
@@ -634,17 +696,44 @@ test("cancellation before admission touches no persistent data; mid-copy abort p
     await writeFile(source, Buffer.alloc(3 * 1024 * 1024, 0x61));
     const good = await completed(roots);
     await writeFile(source, Buffer.alloc(3 * 1024 * 1024, 0x62));
+    const peers = Array.from({ length: 6 }, (_, index) => `peer-${index}.bin`);
+    for (const peer of peers) {
+      await writeFile(join(roots.runtimeRoot, peer), Buffer.alloc(3 * 1024 * 1024, 0x70));
+    }
+    let abortedDuringCopy = false;
     const checkpoint = withCheckpoint(() => {
-      const destination = stagedFile(roots, "large.bin");
-      if (destination && statSync(destination).size > 0) checkpoint.abort("private abort detail");
+      const copying = ["large.bin", ...peers].filter((relative) => {
+        const destination = stagedFile(roots, relative);
+        return destination && statSync(destination).size > 0;
+      });
+      if (copying.length >= 2) {
+        abortedDuringCopy = true;
+        checkpoint.abort("private abort detail");
+      }
     });
     await assert.rejects(runOfflineDataBackup(roots, { signal: checkpoint.signal }), /ABORTED/);
+    assert.equal(abortedDuringCopy, true);
     assert.equal((await current(roots)).current, basename(good.path));
     assert.equal(existsSync(join(roots.runtimeRoot, ".offline-shm-backup-round")), false);
     assert.deepEqual(
       await readFile(join(good.path, "data", "large.bin")),
       Buffer.alloc(3 * 1024 * 1024, 0x61),
     );
+    const domain = join(roots.persistentRoot, `.offline-shm-backups-${roots.domainId}`);
+    assert.equal(
+      (await readdir(domain)).some((name) => name.startsWith(".staging-")),
+      false,
+    );
+    assert.deepEqual(await readdir(join(roots.runtimeRoot, ".offline-shm-backup-work")), []);
+    // 返回后立即启动下一轮；旧任务不得继续写入已清理的目录或占用上一轮句柄。
+    const recovered = await completed(roots);
+    assert.equal((await current(roots)).previous, basename(good.path));
+    for (const peer of peers) {
+      assert.deepEqual(
+        await readFile(join(recovered.path, "data", peer)),
+        Buffer.alloc(3 * 1024 * 1024, 0x70),
+      );
+    }
   } finally {
     await rm(root, { recursive: true, force: true });
   }

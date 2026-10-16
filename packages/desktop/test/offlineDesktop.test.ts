@@ -182,6 +182,8 @@ test("missing live renderer rejects instead of publishing an empty browser backu
     [],
     [
       {
+        session: {},
+        getURL: () => assert.fail("destroyed renderer must not be queried"),
         isDestroyed: () => true,
         executeJavaScript: async () => assert.fail("destroyed renderer must not be queried"),
       },
@@ -192,6 +194,187 @@ test("missing live renderer rejects instead of publishing an empty browser backu
       /unavailable/,
     );
   }
+});
+
+test("browser capture reuses a shared origin without losing other origins", async () => {
+  const sharedSession = {};
+  const appOrigin = "http://127.0.0.1:47101";
+  const otherOrigin = "http://127.0.0.1:47102";
+  const source = (origin: string, session: object, value: string) => ({
+    session,
+    isDestroyed: () => false,
+    getURL: () => `${origin}/workspace`,
+    executeJavaScript: async () => ({
+      origin,
+      localStorage: [["draft", value]],
+    }),
+  });
+  const duplicate = source(appOrigin, sharedSession, "unreachable");
+  duplicate.executeJavaScript = async () =>
+    assert.fail("shared storage must only be exported once");
+  const files = await captureOfflineBrowserState(
+    [
+      source(appOrigin, sharedSession, "first draft"),
+      duplicate,
+      source(otherOrigin, sharedSession, "other draft"),
+    ],
+    new AbortController().signal,
+    { relativePath: "browser.json" },
+  );
+  assert.deepEqual(JSON.parse(files[0]!.content), {
+    version: 1,
+    origins: [
+      { origin: appOrigin, localStorage: [["draft", "first draft"]] },
+      { origin: otherOrigin, localStorage: [["draft", "other draft"]] },
+    ],
+    cookieSessions: [],
+  });
+});
+
+test("valid shared storage survives redundant window closure and same-origin routes", async () => {
+  const origin = "http://127.0.0.1:47101";
+  for (const [target, nextUrl] of [
+    ["duplicate", undefined],
+    ["duplicate", `${origin}/workspace#another-view`],
+    ["duplicate", `${origin}/other-route?view=history`],
+    ["representative", `${origin}/workspace#another-view`],
+    ["representative", `${origin}/other-route?view=history`],
+  ] as const) {
+    const session = {};
+    let representativeUrl = `${origin}/workspace`;
+    let duplicateUrl = representativeUrl;
+    let duplicateClosed = false;
+    const representative = {
+      session,
+      isDestroyed: () => false,
+      getURL: () => representativeUrl,
+      executeJavaScript: async () => {
+        if (target === "representative") representativeUrl = nextUrl!;
+        else if (nextUrl === undefined) duplicateClosed = true;
+        else duplicateUrl = nextUrl;
+        return { origin, localStorage: [["draft", "saved shared draft"]] };
+      },
+    };
+    const duplicate = {
+      get session() {
+        assert.equal(duplicateClosed, false, "destroyed webContents properties are unavailable");
+        return session;
+      },
+      isDestroyed: () => duplicateClosed,
+      getURL: () => duplicateUrl,
+      executeJavaScript: async () => assert.fail("shared storage was already selected"),
+    };
+    const files = await captureOfflineBrowserState(
+      [representative, duplicate],
+      new AbortController().signal,
+      { relativePath: "browser.json" },
+    );
+    assert.deepEqual(JSON.parse(files[0]!.content).origins, [
+      { origin, localStorage: [["draft", "saved shared draft"]] },
+    ]);
+  }
+});
+
+test("skipped windows cannot introduce uncovered origins and representatives cannot disappear", async () => {
+  const origin = "http://127.0.0.1:47101";
+  for (const action of ["duplicate-origin", "representative-close"] as const) {
+    const session = {};
+    let representativeClosed = false;
+    let duplicateUrl = `${origin}/workspace`;
+    await assert.rejects(
+      captureOfflineBrowserState(
+        [
+          {
+            session,
+            isDestroyed: () => representativeClosed,
+            getURL: () => `${origin}/workspace`,
+            executeJavaScript: async () => {
+              if (action === "duplicate-origin") duplicateUrl = "http://127.0.0.1:47102/new-origin";
+              else representativeClosed = true;
+              return { origin, localStorage: [["draft", "saved"]] };
+            },
+          },
+          {
+            session,
+            isDestroyed: () => false,
+            getURL: () => duplicateUrl,
+            executeJavaScript: async () => assert.fail("duplicate was already selected"),
+          },
+        ],
+        new AbortController().signal,
+        { relativePath: "browser.json" },
+      ),
+      /offline_browser_state_changed/,
+    );
+  }
+});
+
+test("opaque file capture permits fragments but rejects a different document", async () => {
+  for (const nextUrl of ["file:///isolated.html#history", "file:///different.html"]) {
+    let url = "file:///isolated.html";
+    const capture = captureOfflineBrowserState(
+      [
+        {
+          session: {},
+          isDestroyed: () => false,
+          getURL: () => url,
+          executeJavaScript: async () => {
+            url = nextUrl;
+            return { origin: "null", localStorage: [["draft", "file draft"]] };
+          },
+        },
+      ],
+      new AbortController().signal,
+      { relativePath: "browser.json" },
+    );
+    if (nextUrl.endsWith("#history")) {
+      const files = await capture;
+      assert.deepEqual(JSON.parse(files[0]!.content).origins, [
+        { origin: "null", localStorage: [["draft", "file draft"]] },
+      ]);
+    } else await assert.rejects(capture, /offline_browser_state_changed/);
+  }
+});
+
+test("other sessions and opaque origins are not skipped, and navigation invalidates capture", async () => {
+  const snapshotOptions = { relativePath: "browser.json" };
+  const origin = "http://127.0.0.1:47101";
+  const first = {
+    session: {},
+    isDestroyed: () => false,
+    getURL: () => `${origin}/workspace`,
+    executeJavaScript: async () => ({ origin, localStorage: [["draft", "saved"]] }),
+  };
+  for (const second of [
+    { ...first, session: {} },
+    { ...first, getURL: () => "file:///isolated.html" },
+  ]) {
+    second.executeJavaScript = async () => {
+      throw new Error("independent storage is unavailable");
+    };
+    await assert.rejects(
+      captureOfflineBrowserState([first, second], new AbortController().signal, snapshotOptions),
+      /independent storage is unavailable/,
+    );
+  }
+  let url = first.getURL();
+  await assert.rejects(
+    captureOfflineBrowserState(
+      [
+        {
+          ...first,
+          getURL: () => url,
+          executeJavaScript: async () => {
+            url = "http://127.0.0.1:47102/new-origin";
+            return { origin, localStorage: [["draft", "saved"]] };
+          },
+        },
+      ],
+      new AbortController().signal,
+      snapshotOptions,
+    ),
+    /offline_browser_state_changed/,
+  );
 });
 
 class FakeBackupWorker extends EventEmitter implements OfflineBackupWorkerHandle {

@@ -4,6 +4,8 @@ import { join } from "node:path";
 import type { Session } from "electron";
 
 export interface FirstPartyBrowserSnapshotSource {
+  readonly session: object;
+  getURL(): string;
   isDestroyed(): boolean;
   executeJavaScript(code: string): Promise<unknown>;
 }
@@ -21,6 +23,25 @@ export async function captureOfflineBrowserState(
   if (signal.aborted) throw new Error("offline_browser_state_aborted");
   const liveSources = sources.filter((source) => !source.isDestroyed());
   if (liveSources.length === 0) throw new Error("offline_browser_state_unavailable");
+  const identifiedSources = liveSources.map((source) => {
+    const url = source.getURL();
+    const origin = URL.canParse(url) ? new URL(url).origin : undefined;
+    return { source, session: source.session, url, origin: origin === "null" ? undefined : origin };
+  });
+  // 修复原因：同 session/origin 的窗口共享 localStorage，不能全量跨进程导出后才去重。
+  // 仅合并可确认的 origin；opaque/file 等来源仍逐窗读取，避免错误跳过独立存储。
+  const seen = new Map<object, Map<string, FirstPartyBrowserSnapshotSource>>();
+  const representatives = identifiedSources.filter(({ source, session, origin }) => {
+    if (!origin) return true;
+    let origins = seen.get(session);
+    if (!origins) {
+      origins = new Map();
+      seen.set(session, origins);
+    }
+    if (origins.has(origin)) return false;
+    origins.set(origin, source);
+    return true;
+  });
   let timer: NodeJS.Timeout | undefined;
   let onAbort: (() => void) | undefined;
   const interrupted = new Promise<never>((_, reject) => {
@@ -37,11 +58,20 @@ export async function captureOfflineBrowserState(
     const [snapshots, cookieSessions] = await Promise.race([
       Promise.all([
         Promise.all(
-          liveSources.map((source) =>
-            source.executeJavaScript(
+          representatives.map(async ({ source, origin }) => {
+            const snapshot: unknown = await source.executeJavaScript(
               "({ origin: location.origin, localStorage: Object.entries(localStorage) })",
-            ),
-          ),
+            );
+            if (
+              origin &&
+              (!snapshot ||
+                typeof snapshot !== "object" ||
+                !("origin" in snapshot) ||
+                snapshot.origin !== origin)
+            )
+              throw new Error("offline_browser_state_changed");
+            return snapshot;
+          }),
         ),
         Promise.all(
           (options.cookieSessions ?? []).map(async ({ partition, session }) => ({
@@ -52,6 +82,26 @@ export async function captureOfflineBrowserState(
       ]),
       interrupted,
     ]);
+    // 修复原因：被去重窗口关闭、同源路由/hash 变化不会使已导出的共享存储失效。
+    // 只拒绝代表窗口丢失存储身份，或存活的重复窗口进入未导出的域，不能按完整 URL 误拒绝。
+    if (
+      identifiedSources.some(({ source, session, url, origin }) => {
+        // session 必须使用采集前的身份；销毁后的原生 webContents 属性已不可读取。
+        const representative = !origin || seen.get(session)?.get(origin) === source;
+        if (source.isDestroyed()) return representative;
+        const currentUrl = source.getURL();
+        if (currentUrl === url) return false;
+        if (origin) {
+          const currentOrigin = URL.canParse(currentUrl) ? new URL(currentUrl).origin : undefined;
+          return representative
+            ? currentOrigin !== origin
+            : !currentOrigin || !seen.get(session)?.has(currentOrigin);
+        }
+        // file/opaque 来源不能按 origin 合并；只放行不改变文档的 fragment。
+        return currentUrl.split("#", 1)[0] !== url.split("#", 1)[0];
+      })
+    )
+      throw new Error("offline_browser_state_changed");
     const origins = new Map<string, { origin: string; localStorage: Array<[string, string]> }>();
     for (const snapshot of snapshots) {
       if (!snapshot || typeof snapshot !== "object")

@@ -34,6 +34,9 @@
 - Main 是应用备份生命周期唯一所有者；前台就绪满 10 分钟后首次调度，独立 Worker 执行文件及数据库操作，之后每 10 分钟触发。同一数据域跨进程只允许一轮备份，未完成时合并触发，不积压；OMP 数据由 OMP 自己备份，不被应用重复备份。退出停止所属 Worker，不等待 NFS、不进行同步最终备份，不新增常驻服务。
 - 前台就绪由 Root 的通用平台生命周期发出，不依赖已停用的 OAuth/账号开关。Main 仅接纳已注册 Local Host 的应用 renderer，按 `webContents.id` 查询 Host 注册表并记录可备份窗口；不能把 `BrowserWindow.id` 当作同一身份。重复就绪、多窗口及 renderer 重载仍只保留一个应用级周期。
 - 应用备份发布到原始应用持久根的私有版本目录，按主机、UID、原始根隔离；SQLite 复用统一 `backupDatabase` 在线一致快照，普通文件以完整版本发布，Electron 持久浏览器状态经逻辑导出保存，不能直接复制活动 LevelDB 冒充一致备份。可重建缓存可排除，socket、锁、PID、运行中临时文件不得备份。保存 manifest、当前及上一轮完整版本；失败不损坏前一版本，不清空旧持久数据，不无限保留失败临时文件。
+- 备份优化仅发生在上述 offline 生命周期内，不给非 offline 新增调度、扫描或浏览器导出。独立文件使用最多 4 个处理槽，每槽独立复用有界 buffer；单目录 SQLite 分类先完成，保持 sidecar 排除和在线快照语义。首个失败/取消停止接纳新文件，等待已启动任务关闭句柄后才清理临时版本，不能让并发写入越过发布或清理边界。
+- 备份的数据目录在所有普通文件、SQLite 快照和浏览器逻辑文件完成且验证通过后，自底向上各同步一次，再进入原有 manifest/版本/指针发布流程；不以删除必要 fsync 或完整性校验换取速度。
+- 浏览器逻辑导出在 Main 按 session 对象身份及非 opaque origin 选择代表窗口，同组只执行一次全量 localStorage 导出；不同 session 不跳过导出，无法可靠识别的 origin 不提前合并，持久 Cookie 与备份格式保持原契约。代表窗口销毁、跨存储域导航或导出失败，以及存活的被去重窗口进入尚未导出的存储域时，不发布不完整版本；被去重窗口关闭、已覆盖存储域内的路由变化或同文档 hash 变化不使有效快照失败。不增加重试或长期缓存。
 - 备份失败记录脱敏日志并有界提示用户，前台继续使用 shm，后续周期再尝试。重启、断电或外部清理可能丢失自最近成功备份以来的修改，失败持续时可能超过 10 分钟；退出前没有最终同步保证。tmpfs 可能使用 Swap，不声称绝不落盘。
 - Desktop continuous 与 Web replayable 会话交付、workspaceIdentity、owner/lease 和 stale run 规则不变。内嵌资产必须包含相同 shm 契约的 OMP 实现；本地未提交 OMP 源码不等于已更新 Release 或打包资产，缺少真实边界验收必须记录为未验证。
 
@@ -48,9 +51,12 @@ sequenceDiagram
   Renderer->>Main: Local Host 连接后发送 RendererReady（不依赖 OAuth）
   Main->>Main: 按 sender.id 验证 Host 并接纳 renderer
   Main->>Main: 界面就绪后启动唯一周期
-  Main->>Worker: 满 10 分钟，尝试单域备份
-  Worker->>Local: 一致数据库快照及必要文件
-  Worker->>NFS: 临时版本完整后原子发布
+  Main->>Renderer: 满十分钟，按 session/origin 选择代表窗口并逻辑导出
+  Main->>Worker: 携逻辑导出，尝试单域备份
+  Worker->>Local: 串行分类，最多四个独立文件槽快照
+  Worker->>Worker: 首错停止接纳，等待在途句柄收口
+  Worker->>NFS: 全部写入及验证后，数据目录自底向上各同步一次
+  Worker->>NFS: manifest 与临时版本完整后原子发布指针
   Worker-->>Main: 完成时间或失败提示
   Note over Main,NFS: 启动不访问 NFS；退出不等待备份；无自动恢复
 ```
@@ -61,6 +67,7 @@ sequenceDiagram
 - 空 shm 不读取旧设置、不显示旧任务、不检查 NFS；最早期设置、日志、崩溃和 Electron 路径均位于活动根，Main/Host/适配器共享环境，项目读写仍使用原 workspacePath。
 - 从真实应用公开入口验证设置保存与重启；应用备份真实执行后 SQLite 可独立打开、配置及浏览器逻辑导出可读，用户人工恢复后可使用。持续写入、备份重叠、普通文件变化、失败及退出不破坏前轮完整版本。
 - 就绪入口覆盖账号功能停用、窗口 ID 与 webContents ID 不相等、重复通知及无 Host 的非应用 renderer：真实 Root 通知能启动唯一的十分钟调度，未接纳的 renderer 不能触发调度或进入浏览器逻辑导出集合；不能只手动调用 `rendererReady()` 代替入口验收。
+- 备份覆盖多目录、多种普通文件与 SQLite 的并发隔离，验证完整内容、每槽独立 buffer、有界并发、失败/取消收口及旧版本不变；数据目录的必要同步只执行一次且子目录先于父目录，逻辑导出新增的祖先目录不遗漏。多窗口同 session/origin 只导出一次，不同 session/origin 和 opaque origin 不错误跳过；代表窗口跨域、销毁及导出失败不能发布。代表窗口仍有效时，关闭被去重窗口、同源路由/hash 变化及 file 同文档 hash 变化保留完整快照；被去重窗口转入未导出 origin 仍拒绝。
 - Windows 可执行可注入平台的局部回归与独立 Electron 场景；不得伪装成 CentOS/shm/NFS 实测。完整门禁和 CentOS 测试仍遵循根 AGENTS.md 授权边界，跳过及缺少匹配内嵌 OMP 均不算通过。
 
 ## 时序与失败语义
@@ -148,6 +155,13 @@ sequenceDiagram
 ## 实现与验证状态
 
 需求从原有权威 FORK 与对应 spec 迁入，未因当前实现降低要求。既有实现及历史验证不等于本次验收；统一证据边界见 [需求索引](README.md#实现与验证状态)。
+
+### 2026-10-17 离线热路径优化
+
+- 已实施四槽独立文件 buffer、失败收口及数据目录单次自底向上同步；Main 在既有 offline 生命周期内按 session/origin 去重浏览器全量导出，未新增普通模式入口或调度。
+- Windows 临时短冒烟通过：十二份跨 buffer 文件逐字节一致，峰值四个文件输出；逻辑导出的新增祖先目录均进入单次、子目录优先的同步屏障（仅 helper 追踪，Windows 不执行目录 fsync）。注入复制失败时四个已打开输出全部关闭，旧指针/旧内容不变，下一轮成功；取消前置拒绝、扫描失败收口、浏览器导航及独立 session/opaque 来源失败均保持拒绝。
+- 隔离 Electron 三个隐藏且不可聚焦窗口实际共享 localStorage，仅一次全量导出，持久 Cookie 保留、临时 Cookie 排除；当前源码打包的备份 Worker 发布成功，独立 SQLite 快照只含 WAL 已提交事务。证据在 `%TEMP%/ompcode-offline-optimization-VOd6zS/evidence.json`。未运行 fulltest/slowtest、Linux/CentOS、真实 shm/NFS 或完整产品 GUI，不将本机 helper/引擎场景宣称为内网性能或完整产品验收。
+- 审查后修正窗口失效判定：采集前固定 session 身份，不读取已销毁的原生 webContents 属性；只因代表窗口失去存储身份或存活窗口进入未覆盖存储域而拒绝。Windows 十一个定向短冒烟场景通过，独立 Electron 另确认真实被去重窗口关闭、同源 History/hash 及 file fragment 变化保留有效快照，未覆盖 origin 仍拒绝；全部窗口隐藏且不聚焦，证据在 `%TEMP%/ompcode-capture-fix-lMtZ4y/electron-evidence.json`。仅更新既有 offline helper，不改变非 offline 调度；本轮未执行完整门禁或 Linux/NFS 验收。
 
 ### 2026-10-16 离线存储实现
 
