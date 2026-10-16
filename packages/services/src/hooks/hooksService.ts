@@ -19,6 +19,8 @@ import {
   type WorkspaceHooksConfig,
 } from "@zcode/shared/workspace-hook-discovery";
 import { parseWorkspaceHookTrustStoreContent } from "@zcode/shared/workspace-hook-trust-store-file";
+import { isOfflineShmEnabled } from "@zcode/shared/node";
+import { getZCodeDataRootDir } from "../paths.js";
 import { createServiceLogger, type ServiceLogger } from "#src/logger/serviceLogger.js";
 import type { IHooksService } from "./hooks.js";
 import { atomicWriteWorkspaceHookConfig } from "./workspaceHookConfigMutation.js";
@@ -56,7 +58,7 @@ function resolveUserHomeDir(): string {
 function getRootDir(source: SettingsDirectorySource, workspacePath?: string): string {
   const baseDir = workspacePath ?? resolveUserHomeDir();
   if (source === "zcode") {
-    return workspacePath ? join(baseDir, ".ompcode") : join(baseDir, ".ompcode", "cli");
+    return workspacePath ? join(baseDir, ".ompcode") : join(getZCodeDataRootDir(), "cli");
   }
   return join(baseDir, source === "agents" ? ".agents" : ".claude");
 }
@@ -159,13 +161,15 @@ async function readPersistentWorkspaceHookTrustDigests(
   const storage = isRecord(userConfig.storage) ? userConfig.storage : {};
   const configured = typeof storage.dir === "string" ? storage.dir.trim() : "";
   const home = resolveUserHomeDir();
-  const storageRoot = configured
-    ? configured.startsWith("~/")
-      ? join(home, configured.slice(2))
-      : isAbsolute(configured)
-        ? resolve(configured)
-        : resolve(home, configured)
-    : join(home, ".ompcode");
+  const storageRoot = isOfflineShmEnabled()
+    ? getZCodeDataRootDir()
+    : configured
+      ? configured.startsWith("~/")
+        ? join(home, configured.slice(2))
+        : isAbsolute(configured)
+          ? resolve(configured)
+          : resolve(home, configured)
+      : getZCodeDataRootDir();
   const trustFilePath = join(storageRoot, "security", "workspace-hook-trust-v1.json");
 
   // 异步读取 + ENOENT 区分：不用 existsSync 预检——同步调用会阻塞服务

@@ -67,7 +67,7 @@ import { WorkspaceSidebarFooter } from "@/WorkspaceSidebarFooter.js";
 import { ControlHintTooltip } from "@/ControlHintTooltip.js";
 import { cn } from "@/components/lib/utils.js";
 import { ServiceProvider, useServices } from "@/hooks/useServices.js";
-import { useSettings } from "@/hooks/useSettingService.js";
+import { useDataDirectoryInfo, useSettings } from "@/hooks/useSettingService.js";
 import type { CreateTaskRequest } from "@/app-shell/types.js";
 import { useBaseWorkspaceServices } from "@/hooks/useWorkspaceServices.js";
 import {
@@ -278,7 +278,7 @@ export function SettingsPage({
   const askUserQuestionAutoResolutionEnabled =
     sharedSettings?.askUserQuestionAutoResolutionEnabled !== false;
   const modelIoFullRetentionEnabled = sharedSettings?.modelIoFullRetentionEnabled === true;
-  const [dataBaseDir, setDataBaseDir] = useState("");
+  const { directoryInfo } = useDataDirectoryInfo();
   const [terminalInheritSystemProfile, setTerminalInheritSystemProfile] = useState(true);
   const [terminalFontFamily, setTerminalFontFamily] = useState("");
   const [integratedTerminalShell, setIntegratedTerminalShell] =
@@ -333,7 +333,6 @@ export function SettingsPage({
     services.settingService
       .get()
       .then((settings: AppSettings) => {
-        setDataBaseDir(settings.dataStoragePath ?? "");
         setTerminalInheritSystemProfile(settings.terminalInheritSystemProfile ?? true);
         setTerminalFontFamily(settings.terminalFontFamily ?? "");
         setIntegratedTerminalShell(settings.integratedTerminalShell ?? { mode: "auto" });
@@ -1201,7 +1200,7 @@ export function SettingsPage({
                             }
                             receivePreviewUpdates={receivePreviewUpdates}
                             autoDownloadAndInstallUpdates={autoDownloadAndInstallUpdates}
-                            dataBaseDir={dataBaseDir}
+                            directoryInfo={directoryInfo}
                             terminalInheritSystemProfile={terminalInheritSystemProfile}
                             terminalFontFamily={terminalFontFamily}
                             integratedTerminalShell={integratedTerminalShell}

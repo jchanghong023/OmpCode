@@ -79,6 +79,8 @@ fulltest/slowtest 保留两个专用产品 GUI：`packages/desktop/test/ompStart
 
 工具详情组件验收：`node packages/desktop/test/toolContentPresentation.components.e2e.mjs` 创建临时端口、独立 Electron/userData，不调用模型，验证有效零/布尔、空参数、文本/JSON/Markdown、原始数据开合及错误。它不替代真实模型/冷恢复。
 
+离线存储 Windows 隔离冒烟：桌面 `tsup` 产物就绪后执行 `node packages/desktop/test/offlineDesktop.windows-smoke.mjs`；使用独立 Electron/userData、通过 helper 注入的本机临时根，验证逻辑 localStorage 导出、延迟调度、真实备份 Worker 与 SQLite WAL 快照，不调用模型、不连接日常实例、不抢焦点。它不启用生产平台绕过变量，不代表 Linux/shm/NFS 或完整产品 GUI 已验收；路径与失败边界的短回归为 `pnpm exec tsx --test packages/desktop/test/offlineDesktop.test.ts`。fulltest/slowtest 收录这些新增适用测试，但仍须本次明确授权。
+
 UI UT 的 `@/` 路径别名使用 `pnpm exec tsx --tsconfig packages/ui/tsconfig.json --test <真实测试文件>`。已删除的原生命令大全、Agent 多页/状态专项、技能/profile/mentions 和性能基准不再是可运行测试入口；历史报告仅作历史证据。
 
 ## 三级测试门禁

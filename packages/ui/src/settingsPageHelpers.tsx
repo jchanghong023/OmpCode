@@ -5,6 +5,7 @@ import type {
   LocalePreference,
   ZCodeInteractionBehavior,
 } from "@zcode/shared";
+import type { DataDirectoryInfo } from "@zcode/services";
 import {
   TID_SETTINGS_ASK_USER_QUESTION_AUTO_RESOLUTION_SWITCH,
   TID_SETTINGS_NATIVE_SEARCH_SWITCH,
@@ -54,7 +55,7 @@ export function GeneralSectionContent({
   desktopChromiumHardwareAccelerationEnabled = true,
   receivePreviewUpdates,
   autoDownloadAndInstallUpdates,
-  dataBaseDir,
+  directoryInfo,
   terminalInheritSystemProfile = true,
   terminalFontFamily = "",
   integratedTerminalShell = { mode: "auto" },
@@ -113,7 +114,7 @@ export function GeneralSectionContent({
   desktopChromiumHardwareAccelerationEnabled?: boolean;
   receivePreviewUpdates: boolean;
   autoDownloadAndInstallUpdates: boolean;
-  dataBaseDir: string;
+  directoryInfo: DataDirectoryInfo | null;
   terminalInheritSystemProfile: boolean;
   terminalFontFamily: string;
   integratedTerminalShell?: IntegratedTerminalShellSelection;
@@ -853,7 +854,7 @@ export function GeneralSectionContent({
             id: "settings.dataBaseDirDescription",
           })}
           control={
-            <DataBaseDirControl dataBaseDir={dataBaseDir} isWindowsDesktop={isWindowsDesktop} />
+            <DataBaseDirControl directoryInfo={directoryInfo} isWindowsDesktop={isWindowsDesktop} />
           }
         />
       </SettingsGroupCard>

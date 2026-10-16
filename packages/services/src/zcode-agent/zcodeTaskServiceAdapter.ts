@@ -3,6 +3,8 @@ import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { isOfflineShmEnabled } from "@zcode/shared/node";
+import { getZCodeDataRootDir } from "../paths.js";
 import {
   Emitter,
   Event,
@@ -245,7 +247,10 @@ function formatZCodeAgentLogDate(now: Date): string {
 
 function resolveZCodeAgentCurrentLogFilePath(now = new Date()): string {
   const configuredLogDir = process.env.ZCODE_LOG_DIR?.trim();
-  const logDir = configuredLogDir || join(homedir(), ".ompcode", "cli", "log");
+  // 离线诊断读取只能跟随当前应用活动根，不能误读 NFS 旧日志。
+  const logDir = isOfflineShmEnabled()
+    ? join(getZCodeDataRootDir(), "cli", "log")
+    : configuredLogDir || join(homedir(), ".ompcode", "cli", "log");
   return join(logDir, `zcode-${formatZCodeAgentLogDate(now)}.jsonl`);
 }
 

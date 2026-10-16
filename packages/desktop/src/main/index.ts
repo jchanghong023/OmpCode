@@ -1,3 +1,7 @@
+import { offlineDesktopPaths } from "./desktopEarlyOfflineDataBootstrap.js";
+import { createOfflineDataBackupLifecycle } from "./offlineDataBackupLifecycle.js";
+import { captureOfflineBrowserState, persistOfflineBrowserState } from "./offlineBrowserState.js";
+import { runOfflineDataBackupWorker } from "./offlineDataBackupWorkerClient.js";
 import { createLocalTtftExporter } from "./localTtftExporter.js";
 /* eslint-disable max-lines */
 import "./desktopEarlyChromiumHardwareAccelerationBootstrap.js";
@@ -620,6 +624,65 @@ const windowWorkspaceMap = new Map<number, Set<string>>();
 const windowTaskRealtimeHostIdMap = new Map<number, string>();
 const windowUnreadCountMap = new Map<number, number>();
 const windowHostProcessMap = new Map<number, ElectronUtilityProcess>();
+const offlineReadyRendererIds = new Set<number>();
+const offlineDataBackup = offlineDesktopPaths
+  ? createOfflineDataBackupLifecycle({
+      run: async (signal) => {
+        const sources = BrowserWindow.getAllWindows()
+          .filter((win) => !win.isDestroyed() && offlineReadyRendererIds.has(win.webContents.id))
+          .map((win) => win.webContents);
+        const logicalFiles = await captureOfflineBrowserState(sources, signal, {
+          relativePath: `electron/${runtimeApplicationName}/first-party-browser-state.json`,
+          cookieSessions: [
+            { partition: "default", session: session.defaultSession },
+            {
+              partition: EMBEDDED_BROWSER_PARTITION,
+              session: session.fromPartition(EMBEDDED_BROWSER_PARTITION),
+            },
+          ],
+        });
+        await persistOfflineBrowserState(offlineDesktopPaths.userData, logicalFiles[0]!.content);
+        if (signal.aborted) return "busy";
+        return runOfflineDataBackupWorker(
+          { roots: offlineDesktopPaths.roots, logicalFiles },
+          signal,
+        );
+      },
+      diagnostic: (event) => {
+        if (event.phase === "failed") {
+          logger.warn(
+            "[offline-backup] round failed; active data remains in volatile memory",
+            event,
+          );
+        } else {
+          logger.info(`[offline-backup] round ${event.phase}`, event);
+        }
+      },
+      warn: () => {
+        for (const win of BrowserWindow.getAllWindows()) {
+          if (!win.isDestroyed() && offlineReadyRendererIds.has(win.webContents.id)) {
+            win.webContents.send(PlatformChannels.OfflineDataBackupWarning, {
+              kind: "backup-failed",
+            });
+          }
+        }
+      },
+    })
+  : undefined;
+if (offlineDataBackup) {
+  ipcMain.on(PlatformChannels.RendererReady, (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    // Host 注册表按 webContents.id 建立；BrowserWindow.id 是独立计数，不能混用。
+    if (!win || !windowHostProcessMap.has(event.sender.id)) return;
+    if (!offlineReadyRendererIds.has(event.sender.id)) {
+      offlineReadyRendererIds.add(event.sender.id);
+      const rendererId = event.sender.id;
+      event.sender.once("destroyed", () => offlineReadyRendererIds.delete(rendererId));
+      logger.info("[offline-backup] application renderer admitted", { rendererId });
+    }
+    offlineDataBackup.rendererReady();
+  });
+}
 const cuaPipFocusRouter = createCuaPipFocusRouter({
   send: (windowId, event) => {
     windowHostProcessMap.get(windowId)?.postMessage({
@@ -2377,6 +2440,7 @@ app.on("before-quit", (event) => {
     explicitQuitRef.current = false;
     return;
   }
+  offlineDataBackup?.stop();
 
   if (!hasPreparedAppQuit) {
     localMediaPreviewPathRegistry.clear();

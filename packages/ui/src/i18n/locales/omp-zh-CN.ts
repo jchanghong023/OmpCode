@@ -99,6 +99,12 @@ const ompZhCNOverrides: Record<string, string> = {
     'Windows 示例：\nsetx OMP_CONFIG_ROOT "D:\\omp"\n随后从新终端启动应用。',
   "settings.dataBaseDirEnvironmentLinux":
     "Linux 示例：\nexport OMP_CONFIG_ROOT=/path/omp\ntcsh：setenv OMP_CONFIG_ROOT /path/omp\n从该终端重新启动应用。",
+  "settings.dataDirectory.runtimeRoot": "当前活动根目录",
+  "settings.dataDirectory.persistentRoot": "原始持久备份根目录",
+  "settings.dataDirectory.offlineWarning":
+    "离线数据当前位于临时共享内存中，每 10 分钟异步备份一次，不会自动恢复，退出时也不保证最终备份。重启、断电或外部清理可能丢失自最近一次成功备份以来的修改；若备份持续失败，丢失范围可能超过 10 分钟。活动根为空时会启动全新环境，需要时请手动恢复。",
+  "offlineData.backupFailed":
+    "离线备份失败，当前仍可在临时共享内存中继续工作，但可能丢失自最近一次成功备份以来的修改，范围可能超过 10 分钟。请检查设置中原始持久备份根目录的权限和剩余空间。",
   "occupationOnboarding.modeDescription": "你希望 OmpCode 如何呈现工作过程？",
   "settings.ompModelRoles.configMissing": "当前 omp profile 未找到模型配置",
   "settings.ompModelRoles.configInvalid": "omp 模型配置格式无效，请检查 config.yml 中的 modelRoles",

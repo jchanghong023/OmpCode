@@ -102,6 +102,8 @@ const coreTests = {
   ],
   services: [
     "ompConcurrentStartup",
+    "offlineDataBackup",
+    "settingDataDirectoryInfo",
     "ompTaskIdMigration",
     "zcodeProtocolClientRejectionTiming",
     "zcodeTaskIdMigrationEvent",
@@ -113,7 +115,7 @@ const coreTests = {
     "serviceLoggerRuntime",
     "ompDiagnosticLog",
   ],
-  shared: ["editorPrefill", "ompPaths", "taskIdMigration", "feedbackPrivacy"],
+  shared: ["editorPrefill", "ompPaths", "offlineDataRoots", "taskIdMigration", "feedbackPrivacy"],
   client: ["websocketDisconnect"],
   server: ["remoteConnectionStore"],
   ui: [
@@ -134,6 +136,11 @@ export async function fullPlan() {
   const stages = [
     ...staticPlan(true),
     node("gate-entry-selftest", ["scripts/test-gates.mjs", "--self-test"], { kind: "test" }),
+    pnpm(
+      "offline-desktop-core-tests",
+      ["exec", "tsx", "--test", "packages/desktop/test/offlineDesktop.test.ts"],
+      { kind: "test" },
+    ),
   ].map((stage) => ({ ...stage, parallelGroup: "offline-core" }));
   for (const [name, files] of Object.entries(coreTests))
     stages.push(
@@ -152,6 +159,7 @@ export async function fullPlan() {
                 "packages/ui/test/fallbackToolPresentation.test.tsx",
                 "packages/ui/test/rpcUiElicitation.test.tsx",
                 "packages/ui/test/toolContentPresentation.test.tsx",
+                "packages/ui/test/dataDirectoryInfo.test.tsx",
               ]
             : []),
         ],
@@ -242,6 +250,11 @@ export async function fullPlan() {
     node(
       "components-tool-content",
       ["packages/desktop/test/toolContentPresentation.components.e2e.mjs"],
+      { kind: "test", electron: true, parallelGroup: "isolated-runtime" },
+    ),
+    node(
+      "offline-desktop-windows-smoke",
+      ["packages/desktop/test/offlineDesktop.windows-smoke.mjs"],
       { kind: "test", electron: true, parallelGroup: "isolated-runtime" },
     ),
   );

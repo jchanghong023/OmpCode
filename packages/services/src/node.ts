@@ -10,6 +10,7 @@ import {
   PERSONAL_PROVIDER_CONFIG_FILE_NAME,
 } from "@zcode/provider-node";
 import { getAppConfigDir as resolveAppConfigDir } from "./paths.js";
+import { resolveOmpCodeDataRootFromEnv } from "@zcode/shared/node";
 import {
   buildLocalMediaPreviewUrl,
   isProviderProvisioningAccountCredentialKey,
@@ -22,6 +23,10 @@ export {
 } from "@zcode/provider-node";
 
 export { backupDatabase, createDatabaseSync } from "./session/tasksDatabase/sqlite.js";
+export {
+  runOfflineDataBackup,
+  releaseOfflineDataBackupLease,
+} from "./offline/offlineDataBackup.js";
 export type {
   SqliteDatabase,
   SqliteDatabaseOptions,
@@ -1051,7 +1056,11 @@ export { isOfficialCuaPluginEnabledForWorkspace };
 
 export function hasGlobalCliZCodeCuaServer(env: NodeJS.ProcessEnv = process.env): boolean {
   const home = env.HOME?.trim() || homedir();
-  const configPath = join(home, ".ompcode", "cli", "config.json");
+  const configPath = join(
+    resolveOmpCodeDataRootFromEnv(home, env) ?? join(home, ".ompcode"),
+    "cli",
+    "config.json",
+  );
   let parsed: unknown;
   try {
     parsed = JSON.parse(readFileSync(configPath, "utf8"));

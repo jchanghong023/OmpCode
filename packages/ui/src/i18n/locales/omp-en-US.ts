@@ -104,6 +104,12 @@ const ompEnUSOverrides: Record<string, string> = {
     'Windows example:\nsetx OMP_CONFIG_ROOT "D:\\omp"\nThen launch the app from a new terminal.',
   "settings.dataBaseDirEnvironmentLinux":
     "Linux example:\nexport OMP_CONFIG_ROOT=/path/omp\ntcsh: setenv OMP_CONFIG_ROOT /path/omp\nRestart the app from that terminal.",
+  "settings.dataDirectory.runtimeRoot": "Current activity root",
+  "settings.dataDirectory.persistentRoot": "Persistent backup root",
+  "settings.dataDirectory.offlineWarning":
+    "Offline data is active in temporary shared memory. Backups run asynchronously every 10 minutes, with no automatic recovery or final backup on exit. A restart, power loss, or external cleanup may lose changes since the last successful backup; this can exceed 10 minutes if backups fail. An empty activity root starts a fresh environment; restore manually when needed.",
+  "offlineData.backupFailed":
+    "Offline backup failed. Work continues in temporary shared memory, but changes since the last successful backup may be lost, possibly more than 10 minutes. Check permissions and available space at the persistent backup root shown in Settings.",
   "occupationOnboarding.modeDescription": "How would you like OmpCode to show its work?",
   "settings.ompModelRoles.configMissing": "No model config found for the current omp profile",
   "settings.ompModelRoles.configInvalid":

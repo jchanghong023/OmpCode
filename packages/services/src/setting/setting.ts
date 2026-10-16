@@ -2,8 +2,16 @@ import type { AppSettings } from "@zcode/shared";
 import { ServiceChannels } from "@zcode/shared";
 import { createServiceDescriptor } from "../descriptors.js";
 
+/** Host-derived paths; never persisted as mutable app settings. */
+export interface DataDirectoryInfo {
+  runtimeRoot: string;
+  persistentRoot: string;
+  offline: boolean;
+}
+
 export interface ISettingService {
   get(): Promise<AppSettings>;
+  getDataDirectoryInfo(): Promise<DataDirectoryInfo>;
   update(
     patch: Partial<AppSettings>,
     expectedAccountSettings?: Pick<

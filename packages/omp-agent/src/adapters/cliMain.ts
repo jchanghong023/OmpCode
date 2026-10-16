@@ -7,7 +7,12 @@ import { mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { resolveOmpProfileFromEnv } from "@zcode/shared/omp-profile";
-import { resolveOmpConfigRoot } from "@zcode/shared/node";
+import {
+  ensureOfflineDataRoot,
+  resolveOfflineDataRoots,
+  resolveOmpCodePersistentRoot,
+  resolveOmpConfigRoot,
+} from "@zcode/shared/node";
 import { resolveOmpBinary } from "../contract.js";
 import { ServerApp } from "../app/serverApp.js";
 import { OmpDirectoryGateway } from "./ompDirectoryGateway.js";
@@ -240,15 +245,22 @@ function parseExtraArgs(raw: string | undefined): string[] {
 }
 
 function prepareStoragePath(env: NodeJS.ProcessEnv): string {
-  // host 只用它做锁/复用记账；omp 核没有该库，路径保持与旧 CLI 一致以便复用判定。
-  const root = resolveOmpConfigRoot(homedir(), {
-    ...env,
-    PI_CONFIG_DIR: env.PI_CONFIG_DIR?.trim() || ".ompcode",
+  // 该路径仅供 Host 锁/复用记账，不属于 OMP 活动数据库；离线必须跟随应用 shm 根。
+  const offline = resolveOfflineDataRoots(resolveOmpCodePersistentRoot(homedir(), env), "ompcode", {
+    env,
   });
+  if (offline) ensureOfflineDataRoot(offline);
+  const root =
+    offline?.runtimeRoot ??
+    resolveOmpConfigRoot(homedir(), {
+      ...env,
+      PI_CONFIG_DIR: env.PI_CONFIG_DIR?.trim() || ".ompcode",
+    });
   const directory = join(root, "cli", "db");
   try {
     mkdirSync(directory, { recursive: true });
   } catch (error) {
+    if (offline) throw error;
     // 只读文件系统等场景：host 会 realpath 失败回退原路径，不阻塞。
     logger.warn("存储目录准备失败，沿用路径", {
       event: "agent.cli.storage.fallback",

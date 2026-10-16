@@ -6,9 +6,18 @@
 export { acquireFileLock } from "./node/atomicFileLock.js";
 export {
   resolveOmpConfigRoot,
+  resolveOmpRuntimeRoot,
+  resolveOmpCodePersistentRoot,
   resolveOmpAgentDir,
   resolveOmpCodeDataRootFromEnv,
 } from "./node/ompPaths.js";
+export {
+  isOfflineShmEnabled,
+  resolveOfflineDataRoots,
+  ensureOfflineDataRoot,
+  type OfflineDataRoots,
+  type OfflineDataRootOptions,
+} from "./node/offlineDataRoots.js";
 export { scanOfficialPluginCacheRoots } from "./node/officialPluginCache.js";
 export {
   migrateUserSubagentMarkdown,

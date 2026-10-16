@@ -3,7 +3,7 @@
  */
 import { useState, useEffect, useCallback } from "react";
 import { APP_RUNTIME_PREFERENCES_CHANGED_BROADCAST_CHANNEL, type AppSettings } from "@zcode/shared";
-import type { ISettingService } from "@zcode/services";
+import type { DataDirectoryInfo, ISettingService } from "@zcode/services";
 import { useServices } from "./useServices.js";
 import { usePlatform } from "./usePlatform.js";
 
@@ -170,6 +170,44 @@ export function useSettings() {
     error: snapshot.error,
     update,
     refresh,
+  };
+}
+
+/** Read the selected Host's actual roots without deriving paths in the renderer. */
+export function useDataDirectoryInfo() {
+  const { settingService } = useServices();
+  const [snapshot, setSnapshot] = useState<{
+    service: ISettingService;
+    directoryInfo: DataDirectoryInfo | null;
+    loading: boolean;
+    error: unknown | null;
+  } | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    setSnapshot({ service: settingService, directoryInfo: null, loading: true, error: null });
+    void settingService.getDataDirectoryInfo().then(
+      (directoryInfo) => {
+        if (active) {
+          setSnapshot({ service: settingService, directoryInfo, loading: false, error: null });
+        }
+      },
+      (error: unknown) => {
+        if (active) {
+          setSnapshot({ service: settingService, directoryInfo: null, loading: false, error });
+        }
+      },
+    );
+    return () => {
+      active = false;
+    };
+  }, [settingService]);
+
+  const current = snapshot?.service === settingService ? snapshot : null;
+  return {
+    directoryInfo: current?.directoryInfo ?? null,
+    loading: current?.loading ?? true,
+    error: current?.error ?? null,
   };
 }
 

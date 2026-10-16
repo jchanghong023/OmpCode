@@ -71,6 +71,23 @@ export function useRootPlatformEffects({
   const didBootstrapInitialWorkspaceRef = useRef(false);
 
   useEffect(() => {
+    // 根因：旧就绪通知受已停用的 OAuth 开关控制，导致 Main 永远无法启动离线备份。
+    // 就绪属于应用平台生命周期，与账号功能无关；Main 负责重复通知的幂等接纳。
+    platform.notifyRendererReady();
+  }, [platform]);
+
+  useEffect(() => {
+    return platform.onOfflineDataBackupWarning?.(() => {
+      toast(intl.formatMessage({ id: "offlineData.backupFailed" }), {
+        variant: "warning",
+        durationMs: 10000,
+        dismissible: true,
+        dedupeKey: "offline-data-backup-failed",
+      });
+    });
+  }, [platform, intl]);
+
+  useEffect(() => {
     // 启动时必须先判断 OAuth 本地会话，再恢复历史/初始 workspace。
     // 如果这里抢先 addTab，未登录用户会先看到主界面，之后才被登录页覆盖。
     if (!canBootstrapInitialWorkspace || didBootstrapInitialWorkspaceRef.current) {

@@ -57,6 +57,7 @@ import type {
   EmbeddedBrowserOpenUrlRequest,
   Locale,
   OAuthStateRegistration,
+  OfflineDataBackupWarningPayload,
   OpenInEditorOptions,
   RemoteTarget,
   TaskNotificationPayload,
@@ -742,6 +743,14 @@ contextBridge.exposeInMainWorld("zcode", {
     const handler = (_event: unknown, payload: UpdateCheckResultPayload) => callback(payload);
     ipcRenderer.on(PlatformChannels.UpdateCheckResult, handler);
     return () => ipcRenderer.removeListener(PlatformChannels.UpdateCheckResult, handler);
+  },
+  onOfflineDataBackupWarning: (
+    callback: (payload: OfflineDataBackupWarningPayload) => void,
+  ): (() => void) => {
+    const handler = (_event: unknown, payload: OfflineDataBackupWarningPayload) =>
+      callback(payload);
+    ipcRenderer.on(PlatformChannels.OfflineDataBackupWarning, handler);
+    return () => ipcRenderer.removeListener(PlatformChannels.OfflineDataBackupWarning, handler);
   },
   getUpdateState: (): Promise<UpdateStatePayload> =>
     ipcRenderer.invoke(PlatformChannels.GetUpdateState),

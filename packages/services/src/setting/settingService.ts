@@ -16,6 +16,7 @@ import type { ISettingService } from "./setting.js";
 import { normalizeSettingsPatch } from "#src/setting/normalizeSettingsPatch.js";
 import { getZCodeDataRootDir } from "../paths.js";
 import { resolveOmpCodeDataRootFromEnv } from "@zcode/shared/node";
+import { getDataDirectoryInfo } from "./settingDataDirectoryInfo.js";
 import { isEffectiveDevelopmentNodeEnv } from "../runtime-tools/nodeEnv.js";
 import { maybeThrowInjectedFsFault } from "../fs/fsFaultInjection.js";
 import { atomicWriteText } from "../fs/atomicFileUtils.js";
@@ -320,6 +321,8 @@ export function createSettingServiceWithMigrations(): {
 
       return { ...(await readSettings()), dataStoragePath: getZCodeDataRootDir() };
     },
+
+    getDataDirectoryInfo,
 
     async update(patch: Partial<AppSettings>, expectedAccountSettings): Promise<void> {
       const runUpdate = async (shouldCommit: () => boolean, enterCommitPhase: () => void) => {

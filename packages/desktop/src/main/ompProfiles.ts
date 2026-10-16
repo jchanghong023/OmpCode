@@ -2,7 +2,7 @@ import { readdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { normalizeOmpProfileName } from "@zcode/shared/omp-profile";
-import { resolveOmpConfigRoot } from "@zcode/shared/node";
+import { resolveOmpRuntimeRoot } from "@zcode/shared/node";
 
 export { resolveOmpAgentDir } from "@zcode/shared/node";
 
@@ -11,7 +11,7 @@ export async function listOmpProfiles(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<string[]> {
   try {
-    const entries = await readdir(join(resolveOmpConfigRoot(home, env), "profiles"), {
+    const entries = await readdir(join(resolveOmpRuntimeRoot(home, env), "profiles"), {
       withFileTypes: true,
     });
     const names = entries

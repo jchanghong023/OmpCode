@@ -1,13 +1,18 @@
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { resolveOmpCodeDataRootFromEnv } from "@zcode/shared/node";
 
 interface ChromiumHardwareAccelerationApp {
   disableHardwareAcceleration(): void;
 }
 
 function resolveChromiumHardwareAccelerationSettingsFile(homePath: string = homedir()): string {
-  return join(homePath, ".ompcode", "v2", "setting.json");
+  return join(
+    resolveOmpCodeDataRootFromEnv(homePath) ?? join(homePath, ".ompcode"),
+    "v2",
+    "setting.json",
+  );
 }
 
 function extractBootstrapChromiumHardwareAccelerationEnabled(rawValue: unknown): boolean {

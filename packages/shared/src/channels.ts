@@ -50,6 +50,7 @@ import type {
   SaveFileResult,
   PrintPageToPdfResult,
   OpenInEditorOptions,
+  OfflineDataBackupWarningPayload,
   PostUpdateReleaseNotesPayload,
   RemoteSessionClosedEvent,
   SSHConfigAliasOption,
@@ -382,6 +383,8 @@ export const PlatformChannels = {
   UpdateReady: "zcode:update-ready",
   /** Main → Renderer：用户手动点击"检查更新"后的结果反馈（toast 用） */
   UpdateCheckResult: "zcode:update-check-result",
+  /** Main → Renderer：有界离线备份失败提示，不携带路径或底层错误。 */
+  OfflineDataBackupWarning: "zcode:offline-data-backup-warning",
   /** Main → Renderer：自动更新持续状态变化（菜单 UI 用） */
   UpdateStateChanged: "zcode:update-state-changed",
   /** Renderer → Main：主动获取当前自动更新状态（菜单打开时补偿事件丢失） */
@@ -1097,6 +1100,10 @@ export interface PlatformChannelMap {
   };
   [PlatformChannels.UpdateCheckResult]: {
     request: UpdateCheckResultPayload;
+    response: void;
+  };
+  [PlatformChannels.OfflineDataBackupWarning]: {
+    request: OfflineDataBackupWarningPayload;
     response: void;
   };
   [PlatformChannels.UpdateStateChanged]: {

@@ -18,11 +18,50 @@
 - 角色选择器允许在模型支持的档位中选择思考等级。切换模型时保留新模型也支持的原等级；不支持时使用新模型的缺省等级，未设置缺省则不写档位后缀。
 - omp profile 选择由 App Settings 持久化；Desktop Main 启动时读取并通过 `OMP_PROFILE` 传给 Host/内嵌 omp。默认或已有命名 profile 来自 omp 配置根目录，角色配置与历史扫描使用同一 profile 路径。保存后只标记待重启，不能热切换现有会话；待重启时角色编辑器不写旧 profile。
 - 模型设置页的 profile、角色模型和思考档位选择器统一复用 ZCode 的 `Select` 组件及输入框/菜单主题，不使用系统原生下拉框；会话工具栏复用的角色编辑器及旧核回落分支采用相同样式。保持现有候选分组、键盘操作、禁用状态与保存语义。
-- 当前应用环境沿 Main → Host → 适配器 → omp 传递，OMP 自身拥有配置、缓存、运行状态和浏览器 storage-state 等派生目录；应用不另建迁移机制。有效的 `OMP_CONFIG_ROOT` 优先于 `PI_CONFIG_DIR`，只接受绝对路径，支持 `~`、`~/`、`~\\` 展开；空值和相对值被忽略，再按既有 `PI_CONFIG_DIR`（相对用户主目录）或 `~/.omp` 解析。Desktop Main 的 profile 枚举、角色配置回落、原生扩展/MCP/钩子目录与适配器冷历史扫描复用共享的根/profile 解析。项目级 `.omp/` 不随该变量改变；已有数据不自动移动、复制或删除。Linux 已迁移的 XDG sessions 仍按当前 OMP 的 XDG 优先规则解析。
-- 有效的 `OMP_CONFIG_ROOT=xx/bb` 同时决定 OmpCode 数据根为 `xx/bb_ompcode`，配置、日志与索引位于其 `v2` 子目录，Electron 数据位于其 `electron` 子目录，不额外嵌套 `.ompcode`。启动早期即生效并透传到 Host；旧界面数据目录设置不再生效。没有有效该变量时使用默认 `~/.ompcode`；`PI_CONFIG_DIR` 不改变 OmpCode 路径。界面只显示当前生效的数据根及环境变量修改方法，不能选择或保存目录；修改环境变量后完全退出并重新启动应用生效，不自动复制、移动或删除旧数据。
+- 当前应用环境沿 Main → Host → 适配器 → omp 传递，OMP 自身拥有配置、缓存、运行状态和浏览器 storage-state 等派生目录；应用不另建迁移机制。有效的 `OMP_CONFIG_ROOT` 优先于 `PI_CONFIG_DIR`，只接受绝对路径，支持 `~`、`~/`、`~\\` 展开；空值和相对值被忽略，再按既有 `PI_CONFIG_DIR`（相对用户主目录）或 `~/.omp` 解析原始持久根。Desktop Main 的 profile 枚举、角色配置回落、原生扩展/MCP/钩子目录与适配器冷历史扫描复用共享的活动根/profile 解析。项目级 `.omp/` 不随该变量改变；已有数据不自动移动、复制或删除。非 offline 的 Linux XDG 规则仍与当前 OMP 对齐；offline 活动根规则见下节。
+- 有效的 `OMP_CONFIG_ROOT=xx/bb` 同时决定 OmpCode 原始持久根为 `xx/bb_ompcode`，没有有效该变量时使用默认 `~/.ompcode`；`PI_CONFIG_DIR` 不改变 OmpCode 持久根。配置、日志与索引位于活动根的 `v2`，Electron 数据位于其 `electron` 子目录；非 offline 且未覆盖时保留原 Electron 默认路径。启动早期即生效并透传到 Host，旧界面数据目录设置不再生效。界面只读显示实际活动根，启用 shm 时同时显示原始备份根、无自动恢复与可能丢失未备份数据的提示。目录只能通过环境变量调整，完全退出重启后生效，不自动复制、移动或删除旧数据。
 - `OMP_OFFLINE` 原样传给目录进程、会话进程与 OMP 派生进程，不转换成已取消的 `--offline`。模型可见性与解析由 OMP 唯一裁决，应用使用 OMP 返回的可用模型目录，不维护 zcode-api/company 的第二套过滤。offline 进程始终不列出或解析 zcode-api，无公司配置时也不例外；其他已配置且凭据就绪的 lane 仍由 OMP 返回，普通启动保留正常目录。
 - 任务索引是 omp 会话的本地投影，必须按实际解析后的 OMP 根目录与已启动的 profile 分库；默认根目录保留现有数据库命名，自定义根目录使用独立数据库。相同有效根目录的不同环境变量写法使用同一索引；无效覆盖值遵循 OMP 的回落规则。切回原根目录/profile 时，原任务及分组、排序、置顶、归档、未读与自动化关联仍保留。Host 启动准备与所有索引 Repo 必须解析到同一路径；切换根目录不迁移或删除旧历史，不在 UI 混入其他根目录的任务。
 - 设置侧栏“模型设置”始终展示全部内建 omp role 的选择器，已有配置的自定义 role 追加展示；会话工具栏“管理模型”复用同一编辑器。当前 profile 没有配置文件时显示未配置的内建角色，首次保存仅创建所选角色的 `modelRoles`，不写入空角色；两处只允许选择 omp 目录已有模型，不提供供应商或模型新增操作。该编辑器的目录与保存走 OMP RPC（目录进程 `get_model_roles`/`set_model_role`，全部可配置 role 含未配置项、逐 role 自动保存与保存中/失败/被覆盖状态），本地 YAML 读写仅作 OMP 无 v3 能力时的回落；两条路径的入口与状态语义见 [omp-core-integration.md](omp-core-integration.md)。
+
+## Linux 离线活动根与备份
+
+- 仅 Linux 且 `OMP_OFFLINE` 去除首尾空白后为 `1`、`true`、`yes`、`on`（忽略大小写）时启用。Windows 和非 offline 的路径及运行行为不变，不创建 shm 目录、不启动或检查备份。
+- 原始持久根与 shm 活动根明确分离，`OMP_CONFIG_ROOT`、`PI_CONFIG_DIR` 保留原值传给内嵌 OMP，不能替换为 shm 路径。OMP 活动根严格对齐 OMP 的 `hostname + UID + 原始持久根` SHA-256 算法及 `/dev/shm/omp-<uid>-<domainId>/<原目录名>` 布局；OmpCode 使用相同身份算法和独立 `ompcode` 域，应用持久根沿用上节规则。目录名不写死 `.omp`，profile 保留原相对布局。
+- OMP 的会话、配置、profile 枚举与本机回落均读写 OMP 活动根；offline 不检查旧 XDG 锚点。OmpCode 配置、任务索引、会话快照、附件、日志、崩溃、内部默认工作区、Electron userData/sessionData、缓存及自有临时文件均从应用活动根派生；最早的设置、日志和崩溃初始化前必须生效。任务索引的 OMP 身份仍由原始 OMP 根及 profile 决定，不把临时路径误当持久身份。
+- 只允许 `/dev/shm` 活动数据与 NFS 持久备份；不使用 `/local`、`/tmp`、`/run/user` 或其他磁盘回退，不需要 sudo，不调整系统挂载或 Swap。私有目录须归当前用户并保持 0700，不跟随外部植入的符号链接；shm 不可用或空间不足时明确失败，不静默回写 NFS。
+- 启动只计算路径并初始化本机活动目录，不访问、遍历或检查 NFS 备份根，不迁移、不预热、不回源、不自动恢复。已有 shm 数据直接使用；空 shm 是全新环境，用户需自行人工恢复。安装文件、项目源码、项目级 `.omp/`、EDA 文件、共享技能与外部认证输入保持原位置，不承诺消除这些输入的 NFS I/O。
+- Main 是应用备份生命周期唯一所有者；前台就绪满 10 分钟后首次调度，独立 Worker 执行文件及数据库操作，之后每 10 分钟触发。同一数据域跨进程只允许一轮备份，未完成时合并触发，不积压；OMP 数据由 OMP 自己备份，不被应用重复备份。退出停止所属 Worker，不等待 NFS、不进行同步最终备份，不新增常驻服务。
+- 前台就绪由 Root 的通用平台生命周期发出，不依赖已停用的 OAuth/账号开关。Main 仅接纳已注册 Local Host 的应用 renderer，按 `webContents.id` 查询 Host 注册表并记录可备份窗口；不能把 `BrowserWindow.id` 当作同一身份。重复就绪、多窗口及 renderer 重载仍只保留一个应用级周期。
+- 应用备份发布到原始应用持久根的私有版本目录，按主机、UID、原始根隔离；SQLite 复用统一 `backupDatabase` 在线一致快照，普通文件以完整版本发布，Electron 持久浏览器状态经逻辑导出保存，不能直接复制活动 LevelDB 冒充一致备份。可重建缓存可排除，socket、锁、PID、运行中临时文件不得备份。保存 manifest、当前及上一轮完整版本；失败不损坏前一版本，不清空旧持久数据，不无限保留失败临时文件。
+- 备份失败记录脱敏日志并有界提示用户，前台继续使用 shm，后续周期再尝试。重启、断电或外部清理可能丢失自最近成功备份以来的修改，失败持续时可能超过 10 分钟；退出前没有最终同步保证。tmpfs 可能使用 Swap，不声称绝不落盘。
+- Desktop continuous 与 Web replayable 会话交付、workspaceIdentity、owner/lease 和 stale run 规则不变。内嵌资产必须包含相同 shm 契约的 OMP 实现；本地未提交 OMP 源码不等于已更新 Release 或打包资产，缺少真实边界验收必须记录为未验证。
+
+```mermaid
+sequenceDiagram
+  participant Main as Main（应用备份所有者）
+  participant Renderer as 应用 Root（平台生命周期）
+  participant Local as 私有 shm 活动根
+  participant Worker as 独立备份 Worker
+  participant NFS as 原始应用持久根
+  Main->>Local: 最早期初始化，设置/日志/Electron 使用同一根
+  Renderer->>Main: Local Host 连接后发送 RendererReady（不依赖 OAuth）
+  Main->>Main: 按 sender.id 验证 Host 并接纳 renderer
+  Main->>Main: 界面就绪后启动唯一周期
+  Main->>Worker: 满 10 分钟，尝试单域备份
+  Worker->>Local: 一致数据库快照及必要文件
+  Worker->>NFS: 临时版本完整后原子发布
+  Worker-->>Main: 完成时间或失败提示
+  Note over Main,NFS: 启动不访问 NFS；退出不等待备份；无自动恢复
+```
+
+### 离线存储验收
+
+- 根解析覆盖四种真值、关闭值、Windows、默认/绝对/无效根及命名 profile；同名不同原始根、不同用户和主机隔离，OMP 活动路径与其源码算法一致，非 offline 保留原规则。
+- 空 shm 不读取旧设置、不显示旧任务、不检查 NFS；最早期设置、日志、崩溃和 Electron 路径均位于活动根，Main/Host/适配器共享环境，项目读写仍使用原 workspacePath。
+- 从真实应用公开入口验证设置保存与重启；应用备份真实执行后 SQLite 可独立打开、配置及浏览器逻辑导出可读，用户人工恢复后可使用。持续写入、备份重叠、普通文件变化、失败及退出不破坏前轮完整版本。
+- 就绪入口覆盖账号功能停用、窗口 ID 与 webContents ID 不相等、重复通知及无 Host 的非应用 renderer：真实 Root 通知能启动唯一的十分钟调度，未接纳的 renderer 不能触发调度或进入浏览器逻辑导出集合；不能只手动调用 `rendererReady()` 代替入口验收。
+- Windows 可执行可注入平台的局部回归与独立 Electron 场景；不得伪装成 CentOS/shm/NFS 实测。完整门禁和 CentOS 测试仍遵循根 AGENTS.md 授权边界，跳过及缺少匹配内嵌 OMP 均不算通过。
 
 ## 时序与失败语义
 
@@ -109,6 +148,21 @@ sequenceDiagram
 ## 实现与验证状态
 
 需求从原有权威 FORK 与对应 spec 迁入，未因当前实现降低要求。既有实现及历史验证不等于本次验收；统一证据边界见 [需求索引](README.md#实现与验证状态)。
+
+### 2026-10-16 离线存储实现
+
+- 已实施共享活动根解析、OMP profile/冷历史对齐、最早期 Desktop/Host 数据根切换、独立备份 Worker、跨进程本地 SQLite lease、原子版本发布及只读目录界面。OMP 运行根算法按 `F:/code2026/oh-my-pi-dev` 当前未提交实现对齐；保留核心词法根语义（包括尾分隔符），不擅自改写传给核心的环境值。应用索引身份继续使用规范化的原始根。
+- 应用完整版本位于 `<应用原始持久根>/.offline-shm-backups-<domainId>/generations/`，`current.json` 记录当前与上一轮。该私有域直接位于原始根下，不创建公共可写备份容器、不修改原始目录权限；空新 shm 的 manifest 不把旧数据当作明确删除。
+- 真正 Electron 冒烟曾暴露 Chromium 活动 DIPS 等数据库的独占锁；已修正为浏览器逻辑导出，原始 Chromium profile 不作为一致快照复制。`electron/<应用名>/first-party-browser-state.json` 保存应用 origin 的 localStorage，以及默认会话／内置浏览器分区的持久 Cookie；临时 Cookie 排除。当前应用没有自有 IndexedDB 持久化入口，不把此导出宣传为第三方站点 IndexedDB、完整 Chromium profile 或全局事务备份。
+- 人工恢复先停止相关应用进程，按完整 manifest 选择版本，把 `data/` 中的应用文件复制到对应私有 shm 活动根并保留权限，不覆盖原始 NFS 数据。浏览器 sidecar 是逻辑数据，需通过 Chromium 的 origin/分区 API 人工导入 localStorage/Cookie；单纯复制 JSON 不会自动恢复浏览器状态，应用不提供自动导入或恢复命令。
+- Windows Node 24.20.0 / pnpm 10.33.2：最终功能代码 `fastcheck` 通过，`total=8.5s / compile_excluded=0.0s / budgeted=8.4s / limit=60.0s`，Lint 0 告警、架构 0 违例。验收 HEAD `2185bce2824064a5f609bc3b5adb878f10fa019b`，功能代码及当时文档快照指纹 `9365311d2c35e82116d2f0fce0860e8094d2418138aaad2aef1d9396e74c1696`；随后仅补充本段验收记录。
+- 8 个定向回归文件共 49 项已通过；按实际改动分批复验，未把早期失败计为通过。最终备份／Desktop 两文件 24 项通过，覆盖 WAL 已提交／未提交事务、持续日志追加、后续设置保存、重叠进程、死 owner、失败保留前轮、取消和安全路径。早期门禁曾因本次类型及文件行数失败、定向断言曾误假定 SQLite 行原型与尾分隔符规范化；修正后相关检查通过，未放宽业务判据。
+- 桌面 `tsup` 实际构建通过；Windows 独立 Electron 冒烟通过真实 localStorage、持久／临时 Cookie、十分钟调度参数及注入 tick、构建后的备份 Worker、独立可读 SQLite/WAL 快照，证据为 `%TEMP%/ompcode-offline-electron-ks70Ph/evidence.json`。浏览器真实组件另验证中英／浅深主题、只读活动及备份根、非 offline 单路径，以及备份失败 toast 去重、可关闭、无模态遮挡且前台可输入。临时 fixture 和诊断脚本已删除，测试不接日常实例、不调用模型；启动器仅通过 Windows Git Bash 语法检查。
+- 未运行 fulltest/slowtest、Linux/CentOS/WSL、真实 shm/NFS、完整产品设置保存重启与人工恢复、真实模型或匹配内嵌 OMP 的 CentOS 链路；未发布或更新安装包。Windows helper 注入的本机目录不是生产 Linux 开关，也不能代替目标环境验收；内嵌 OMP 资产须另行包含同一存储契约，当前未把本地源码存在视为资产验收通过。
+- 就绪链路审查修复：`RendererReady` 从已退役 OAuth effect 移至 Root 通用平台 effect，Main 按发送端 `webContents.id` 而非 `BrowserWindow.id` 验证 Host，并记录首次接纳日志。原先独立备份 helper 冒烟未覆盖此产品接线，不能作为该入口已经通过的证据。
+- 修复后 `fastcheck` 通过（`total=3.5s / compile_excluded=0.1s / budgeted=3.4s / limit=60.0s`，Lint 0 告警、架构 0 违例），绑定本轮功能代码与当时文档快照 `20b38fe186eb4eeabbe8ec3de42408a69caff0d251e192af5943d480aef7066e`；随后仅补充本记录。既有 `offlineDesktop.test.ts` 11 项通过，桌面 `tsup` 构建通过。Windows 隐藏产品进程实际挂载 Root、连接 Local Host，经真实 preload/IPC 接纳 ID 为 `1/2` 的窗口；账号仍停用，重复就绪只创建一个 `600000ms` 调度，启动未访问备份根，日志只接纳应用 renderer。推进捕获的生产计时器后，真实 Main 导出当前应用 origin，构建后的 Worker 发布含 31 个条目的完整版本；证据在 `%TEMP%/ompcode-readiness-fix-LiMdIf/readiness-evidence.json` 及同目录 `stdout.log`。探针只注入 Windows 私有本机目录与本机目录初始化器，没有修改生产平台判断、Root、Host、IPC、接纳或备份逻辑；这是 Windows 产品链路定向冒烟，不是 CentOS/shm/NFS 或真实十分钟墙钟等待验收。临时探针已删除，专用进程树已退出，未修改用户配置、暂存区或发布产物。
+
+### 历史验证记录
 
 - 2026-10-08：OmpCode 数据根改为由有效 `OMP_CONFIG_ROOT` 派生的 `_ompcode` 兄弟目录；移除旧设置路径启动覆盖和界面迁移动作，设置返回只读的实际路径。Electron userData/sessionData、配置、日志、索引、内部工作区、日志导出与存储管理使用该根。Node 24.19.0 原生 TypeScript 加载下，共享路径、设置读写、任务索引隔离、桌面 Electron 路径与存储根回归共 12 项通过，CentOS 启动器测试通过；lint、格式与架构检查通过。完整类型检查缺少 `@typescript/typescript-linux-x64`，未执行 Windows/CentOS 7 GUI 的完整启动、路径展示及恢复验收。
 - 2026-10-08：任务索引补充有效根目录隔离，默认根沿用旧数据库；自定义根以路径摘要选择独立数据库，Host 启动准备、任务、自动化与错峰索引共用同一解析入口。Node 24.19.0 的原生 TypeScript 加载下，`ompProfileTaskIndexPath.test.ts` 4 项回归通过（含真实 SQLite 的根切换、稳定 UUID 隔离及切回保留置顶/归档/未读），lint、变更格式与架构检查通过。完整 `pnpm typecheck` 因缺少 `@typescript/typescript-linux-x64` 无法运行；tsx 入口缺少 esbuild，采用原生加载执行上述测试。Windows/CentOS 7 GUI 的历史恢复与续聊未验证，不视为完整功能验收。

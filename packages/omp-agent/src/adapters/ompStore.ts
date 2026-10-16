@@ -3,115 +3,42 @@
 // OMP_CONFIG_ROOT / PI_CONFIG_DIR 重定位与 Main 共用解析；POSIX 上 $XDG_DATA_HOME/omp
 // 迁移目录存在时 sessions 根对齐 omp DirResolver XDG 规则（见 ompSessionsRoot）。
 
-import { createReadStream, existsSync } from "node:fs";
-import { readdir, realpath, rm, stat } from "node:fs/promises";
-import { homedir, tmpdir } from "node:os";
-import { basename, isAbsolute, join, relative, resolve } from "node:path";
+import { createReadStream } from "node:fs";
+import { readdir, rm, stat } from "node:fs/promises";
+import { homedir } from "node:os";
+import { basename, join } from "node:path";
 import { createInterface } from "node:readline";
 import { resolveOmpProfileFromEnv } from "@zcode/shared/omp-profile";
-import { resolveOmpAgentDir, resolveOmpCodeDataRootFromEnv } from "@zcode/shared/node";
+import {
+  ensureOfflineDataRoot,
+  resolveOfflineDataRoots,
+  resolveOmpConfigRoot,
+  resolveOmpCodePersistentRoot,
+  resolveOmpCodeDataRootFromEnv,
+} from "@zcode/shared/node";
 import type { OmpStorePort, OmpStoreSessionSummary } from "../app/ports.js";
 import { titleFromOmpEntries } from "../domain/coldHistory.js";
 import { logger } from "./logger.js";
 import { createOmpCommandOutputStore } from "./OmpCommandOutputStore.js";
 import { safeInteractionAgentId } from "../domain/OmpInteractionIds.js";
-import {
-  logStoreFallback,
-  observeStoreOperation,
-  safeErrorSummary,
-} from "./hostRequestDiagnostics.js";
-
-/**
- * omp sessions 目录解析（S1-3，对齐 omp DirResolver XDG 规则，v18.4.8+fork.278
- * packages/utils/src/dirs.ts）。platform/home/exists 注入仅供 UT；生产路径与本函数唯一。
- * omp 精确条件（已按 git show 核对）：
- * - 仅 linux/darwin 参与 XDG，win32 不受影响；
- * - 仅 $XDG_DATA_HOME（data 类别；sessions 归 data）非空时参与，无 trim；
- * - 默认 profile 锚定 $XDG_DATA_HOME/omp，命名 profile 锚定 $XDG_DATA_HOME/omp/profiles/<profile>，
- *   且锚点目录必须真实存在（omp config init-xdg 迁移完成后才生效），否则回退 ~/.omp 布局；
- * - XDG 生效时扁平化 agent/ 前缀：sessions 目录直接挂在锚点下（$XDG_DATA_HOME/omp/sessions）。
- * PI_CODING_AGENT_DIR 覆盖会关闭 omp 的 XDG 分支，但本适配层历来未消费该变量，维持现状不扩scope。
- */
-export function ompSessionsRoot(options: {
-  env: NodeJS.ProcessEnv;
-  platform: NodeJS.Platform;
-  home: string;
-  exists: (path: string) => boolean;
-}): string {
-  const { env, platform, home, exists } = options;
-  const profile = resolveOmpProfileFromEnv(env);
-  const xdgDataHome = env.XDG_DATA_HOME;
-  if ((platform === "linux" || platform === "darwin") && xdgDataHome) {
-    const appRoot = join(xdgDataHome, "omp");
-    const anchor = profile === "default" ? appRoot : join(appRoot, "profiles", profile);
-    if (exists(anchor)) {
-      return join(anchor, "sessions");
-    }
-  }
-  return join(resolveOmpAgentDir(home, env), "sessions");
-}
-
-function sessionsRoot(env: NodeJS.ProcessEnv): string {
-  return ompSessionsRoot({
-    env,
-    platform: process.platform,
-    home: homedir(),
-    exists: (path) => existsSync(path),
-  });
-}
-
-async function resolveEquivalentPath(value: string): Promise<string> {
-  const startedAt = Date.now();
-  try {
-    return await realpath(value);
-  } catch (error) {
-    logger.debug("路径规范化失败，沿用原路径", {
-      event: "omp.store.realpath.fallback",
-      stage: "realpath",
-      elapsedMs: Date.now() - startedAt,
-      ...safeErrorSummary(error),
-    });
-    return value;
-  }
-}
-
-async function encodeSessionDirName(cwd: string): Promise<string> {
-  const resolvedCwd = resolve(cwd);
-  const [canonicalCwd, canonicalHome, canonicalTemp] = await Promise.all([
-    resolveEquivalentPath(resolvedCwd),
-    resolveEquivalentPath(homedir()),
-    resolveEquivalentPath(tmpdir()),
-  ]);
-  const homeRelative = relative(canonicalHome, canonicalCwd);
-  const tempRelative = relative(canonicalTemp, canonicalCwd);
-  const withinHome =
-    homeRelative === "" || (!homeRelative.startsWith("..") && !isAbsolute(homeRelative));
-  const withinTemp =
-    tempRelative === "" || (!tempRelative.startsWith("..") && !isAbsolute(tempRelative));
-  // Bug 根因：Windows 的临时目录通常位于用户目录内；omp 优先使用临时目录编码，
-  // 此处原先优先匹配用户目录，导致重启后找不到真实会话文件及子代理记录。
-  if (withinTemp && (process.platform === "win32" || !withinHome)) {
-    return encodeRelative("-tmp", tempRelative);
-  }
-  if (withinHome) return encodeRelative("-", homeRelative);
-  return `--${canonicalCwd.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-")}--`;
-}
-
-function encodeRelative(prefix: string, relativePath: string): string {
-  const encoded = relativePath.replace(/[/\\:]/g, "-");
-  if (!encoded) {
-    return prefix;
-  }
-  return prefix.endsWith("-") ? `${prefix}${encoded}` : `${prefix}-${encoded}`;
-}
+import { encodeSessionDirName, sessionsRoot } from "./ompSessionPaths.js";
+import { logStoreFallback, observeStoreOperation } from "./hostRequestDiagnostics.js";
 
 export function createOmpStore(env: NodeJS.ProcessEnv = process.env): OmpStorePort {
+  // 独立适配器也要先验证两类私有根，不能跟随被植入的目录链接读取 NFS 旧数据。
+  for (const [persistentRoot, namespace] of [
+    [resolveOmpConfigRoot(homedir(), env), "omp"],
+    [resolveOmpCodePersistentRoot(homedir(), env), "ompcode"],
+  ] as const) {
+    const roots = resolveOfflineDataRoots(persistentRoot, namespace, { env });
+    if (roots) ensureOfflineDataRoot(roots);
+  }
   const commandOutputs = createOmpCommandOutputStore(
     ompCommandOutputsRoot(env),
     env.ZCODE_WORKSPACE_IDENTITY,
   );
   const sessionDirectory = async (cwd: string) =>
-    join(sessionsRoot(env), await encodeSessionDirName(cwd));
+    join(sessionsRoot(env), await encodeSessionDirName(cwd, env));
   const summaryOf = async (
     directory: string,
     name: string,

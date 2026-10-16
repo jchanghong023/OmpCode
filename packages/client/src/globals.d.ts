@@ -28,6 +28,7 @@ import type {
   ApplicationIconRequest,
   Locale,
   OAuthStateRegistration,
+  OfflineDataBackupWarningPayload,
   PostUpdateReleaseNotesPayload,
   RemoteConnectionRuntimeLog,
   RemoteSessionClosedEvent,
@@ -266,6 +267,10 @@ declare global {
       onUpdateReady(callback: (version: string) => void): () => void;
       /** 注册"手动检查更新"结果的回调，返回 disposer */
       onUpdateCheckResult(callback: (payload: UpdateCheckResultPayload) => void): () => void;
+      /** 注册 Main 的非模态离线备份失败提示，返回 disposer */
+      onOfflineDataBackupWarning(
+        callback: (payload: OfflineDataBackupWarningPayload) => void,
+      ): () => void;
       /** 注册自动更新持续状态变化，返回 disposer */
       onUpdateStateChanged?(callback: (payload: UpdateStatePayload) => void): () => void;
       /** 主动读取当前自动更新状态 */

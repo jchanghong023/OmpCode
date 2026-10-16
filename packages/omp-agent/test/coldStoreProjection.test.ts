@@ -11,7 +11,8 @@ import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join, relative, resolve, sep } from "node:path";
 import { test } from "node:test";
-import { createOmpStore, ompSessionsRoot } from "../src/adapters/ompStore.js";
+import { createOmpStore } from "../src/adapters/ompStore.js";
+import { ompSessionsRoot } from "../src/adapters/ompSessionPaths.js";
 import {
   rowsFromOmpEntries,
   titleFromOmpEntries,
@@ -200,14 +201,12 @@ test("ompSessionsRoot：linux/darwin 且 $XDG_DATA_HOME/omp 存在时扁平化 a
   const base = {
     env: {
       XDG_DATA_HOME: xdg,
-      OMP_CONFIG_ROOT: "/custom-root",
       PI_CONFIG_DIR: "/custom-omp",
     } as NodeJS.ProcessEnv,
     home: "/home/u",
     exists,
   };
-  // 默认 profile：锚 $XDG_DATA_HOME/omp，sessions 扁平挂在锚点下（无 agent/ 段），
-  // 且 OMP_CONFIG_ROOT / PI_CONFIG_DIR 不改变已迁移的 XDG data 根（当前 OMP 同源）。
+  // 默认 profile：已迁移的 data 根将 sessions 扁平化，不保留 agent/ 段。
   assert.equal(ompSessionsRoot({ ...base, platform: "linux" }), join(xdg, "omp", "sessions"));
   assert.equal(ompSessionsRoot({ ...base, platform: "darwin" }), join(xdg, "omp", "sessions"));
   // 命名 profile：锚 $XDG_DATA_HOME/omp/profiles/<p>。
@@ -262,5 +261,38 @@ test("ompSessionsRoot：锚点不存在回退 ~/.omp 布局；XDG_DATA_HOME 为�
       exists: onlyAppRoot,
     }),
     join(home, ".omp", "agent", "sessions"),
+  );
+});
+
+test("显式 OMP 根和 offline shm 不再探测旧 XDG 会话", () => {
+  const root = resolve("/custom-root");
+  const home = resolve("/home/u");
+  const exists = (): boolean => {
+    assert.fail("独立数据根不得检查旧 XDG/NFS 锚点");
+  };
+  assert.equal(
+    ompSessionsRoot({
+      env: { XDG_DATA_HOME: "/old-data", OMP_CONFIG_ROOT: root },
+      platform: "linux",
+      home,
+      exists,
+    }),
+    join(root, "agent", "sessions"),
+  );
+  assert.equal(
+    ompSessionsRoot({
+      env: {
+        OMP_OFFLINE: " YES ",
+        OMP_CONFIG_ROOT: "/nfs/user/omp-data",
+        OMP_PROFILE: "work",
+        XDG_DATA_HOME: "/old-data",
+      },
+      platform: "linux",
+      home: "/nfs/user",
+      hostname: "host-a",
+      uid: 1001,
+      exists,
+    }),
+    "/dev/shm/omp-1001-5b54d7dada7321625ea1f232ab0f3f3bfd6812abd77a57a7dab55278a0c4eadd/omp-data/profiles/work/agent/sessions",
   );
 });

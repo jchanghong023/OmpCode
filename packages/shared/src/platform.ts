@@ -47,6 +47,11 @@ export interface TaskNotificationPayload {
   body: string;
 }
 
+/** Path-free notification; Main owns failure-streak admission and backup scheduling. */
+export interface OfflineDataBackupWarningPayload {
+  kind: "backup-failed";
+}
+
 /** Main 将一次能够定位真实 tab 的 browser-use 操作投递给其 origin renderer。 */
 export interface BrowserViewOperationPayload {
   workspaceKey: string;
@@ -924,6 +929,11 @@ export interface IPlatformService {
 
   /** 注册"手动检查更新"结果的回调（用于 toast 反馈），返回 disposer */
   onUpdateCheckResult(callback: (payload: UpdateCheckResultPayload) => void): () => void;
+
+  /** Main 的离线备份失败提示；仅用于非模态通知，不阻塞活动数据读写。 */
+  onOfflineDataBackupWarning?(
+    callback: (payload: OfflineDataBackupWarningPayload) => void,
+  ): () => void;
 
   /** 注册自动更新持续状态变化的回调，返回 disposer */
   onUpdateStateChanged?(callback: (payload: UpdateStatePayload) => void): () => void;

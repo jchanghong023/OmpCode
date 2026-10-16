@@ -11,7 +11,7 @@ for arg in "$@"; do
   -h, --help         显示此帮助并退出
 
 环境变量：OMP_CONFIG_ROOT 指定 omp 数据根，应用使用该路径加 _ompcode 后缀；
-OMP_OFFLINE=1 启用离线锁定。
+OMP_OFFLINE=1 启用离线锁定，活动数据位于 /dev/shm；就绪后每十分钟异步备份到持久根。
 环境变量原样传给内嵌 omp。未启用离线锁定时桌面为全功能，与 Windows
 基准一致。其他参数会传递给桌面程序。
 X11 下自动连接当前用户的 IBus；该账号没有守护进程时尝试后台启动。
@@ -88,6 +88,18 @@ case "${offline_value,,}" in
     unset OMPCODE_CENTOS7_LOCAL_ONLY
     ;;
 esac
+
+offline_runtime_root=
+if [[ ${OMPCODE_CENTOS7_LOCAL_ONLY:-} == 1 ]]; then
+  # 先用 Electron 的 Node 模式运行共享路径算法，不加载 Chromium/GTK、设置或日志。
+  # helper 只校验本机 shm，不读取 NFS 持久根；成功以 NUL 结尾，失败不能继续回落到磁盘。
+  if ! IFS= read -r -d '' offline_runtime_root < <(
+    ELECTRON_RUN_AS_NODE=1 "$app/zcode" "$app/resources/app.asar/out/main/offlineDesktopLauncher.cjs"
+  ); then
+    echo 'OmpCode: cannot initialize private offline runtime storage.' >&2
+    exit 1
+  fi
+fi
 
 verified_ibus_session() {
   local pid entry daemon_display daemon_bus owner selected_bus= ambiguous=0
@@ -270,8 +282,16 @@ configure_ibus_session() {
 }
 configure_ibus_session
 
-export XDG_CONFIG_HOME="$HOME/.config/ompcode-centos7"
-export XDG_DATA_HOME="$HOME/.local/share/ompcode-centos7"
+if [[ -n $offline_runtime_root ]]; then
+  # 输入法会话发现/启动必须保留调用者的完整 HOME/XDG/TMP 环境；只在拉起应用前切换。
+  export ZCODE_HOME="$offline_runtime_root"
+  export TMPDIR="$offline_runtime_root/tmp" TMP="$offline_runtime_root/tmp" TEMP="$offline_runtime_root/tmp"
+  export XDG_CACHE_HOME="$offline_runtime_root/cache" XDG_STATE_HOME="$offline_runtime_root/state"
+  export XDG_CONFIG_HOME="$offline_runtime_root/config" XDG_DATA_HOME="$offline_runtime_root/data"
+else
+  export XDG_CONFIG_HOME="$HOME/.config/ompcode-centos7"
+  export XDG_DATA_HOME="$HOME/.local/share/ompcode-centos7"
+fi
 # 将真实输入法配置链接到隔离目录，保持 ibus/fcitx 地址文件等可见。
 # 这只是路径兼容，不是只读隔离，也不能替代上面的 IBus 会话总线对齐；
 # 目标位置已存在的同名条目不覆盖、不迁移。

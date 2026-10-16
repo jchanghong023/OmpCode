@@ -407,7 +407,6 @@ export function useRootOAuthEffects({
         logger.error("[Root] OAuth 回调处理失败:", err);
       }
     });
-    platform.notifyRendererReady();
     return () => {
       disposeOAuth();
     };

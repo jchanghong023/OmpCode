@@ -6,12 +6,31 @@ import { basename, join, resolve, win32 } from "node:path";
 import { homedir } from "node:os";
 import { DATA_BASE_DIR_FORBIDDEN_WINDOWS_INSTALL_DIR_ERROR_CODE } from "@zcode/shared";
 import { resolveOmpProfileFromEnv } from "@zcode/shared/omp-profile";
-import { resolveOmpConfigRoot, resolveOmpCodeDataRootFromEnv } from "@zcode/shared/node";
+import {
+  ensureOfflineDataRoot,
+  isOfflineShmEnabled,
+  resolveOfflineDataRoots,
+  resolveOmpConfigRoot,
+  resolveOmpCodeDataRootFromEnv,
+  resolveOmpCodePersistentRoot,
+} from "@zcode/shared/node";
 
 let _dataBaseDir: string | null = null;
 export const ZCODE_WINDOWS_APP_INSTALL_DIR_ENV = "ZCODE_WINDOWS_APP_INSTALL_DIR";
 const envDataBaseDir = process.env.ZCODE_DATA_BASE_DIR?.trim() || null;
 const defaultDataBaseDir = process.env.HOME?.trim() || homedir();
+const initializedOfflineRoots = new Set<string>();
+
+function resolveEnvironmentDataRoot(): string | undefined {
+  const root = resolveOmpCodeDataRootFromEnv();
+  if (root && isOfflineShmEnabled() && !initializedOfflineRoots.has(root)) {
+    // Host/独立服务入口也必须验证私有 shm 根，不能依赖 Desktop 已先完成初始化。
+    const offline = resolveOfflineDataRoots(resolveOmpCodePersistentRoot(), "ompcode")!;
+    ensureOfflineDataRoot(offline);
+    initializedOfflineRoots.add(root);
+  }
+  return root;
+}
 
 interface DataBaseDirTargetValidationOptions {
   platform?: NodeJS.Platform | string;
@@ -32,9 +51,9 @@ export function setDataBaseDir(dir: string | null): void {
   _dataBaseDir = dir?.trim() || null;
 }
 
-/** 有效 OMP_CONFIG_ROOT 派生目录优先；其余覆盖仅供内部开发与测试隔离。 */
+/** 活动根优先；原始持久身份只用于备份和索引域，不用于 offline 业务 IO。 */
 export function getDataBaseDir(): string {
-  const ompCodeRoot = resolveOmpCodeDataRootFromEnv();
+  const ompCodeRoot = resolveEnvironmentDataRoot();
   if (ompCodeRoot) return ompCodeRoot;
   if (_dataBaseDir) return _dataBaseDir;
   if (envDataBaseDir) return envDataBaseDir;
@@ -43,10 +62,10 @@ export function getDataBaseDir(): string {
   return defaultDataBaseDir;
 }
 
-/** OMP_CONFIG_ROOT 的兄弟目录，或默认 {home}/.ompcode。 */
+/** 原始应用根或 Linux offline 的 shm 活动根。 */
 export function getZCodeDataRootDir(): string {
-  // 环境变量派生目录本身就是应用根，不能再加 .ompcode。
-  return resolveOmpCodeDataRootFromEnv() ?? join(getDataBaseDir(), ".ompcode");
+  // 环境派生目录已经是应用根，不得再追加 .ompcode。
+  return resolveEnvironmentDataRoot() ?? join(getDataBaseDir(), ".ompcode");
 }
 
 /** 非项目对话共享的真实工作目录；默认 ~/.ompcode/workspace/default。 */

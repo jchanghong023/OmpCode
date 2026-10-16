@@ -149,6 +149,7 @@ export function createDesktopPlatform(options: {
       window.zcode.captureWindowScreenshot?.() ?? Promise.resolve(null),
     onUpdateReady: (callback) => window.zcode.onUpdateReady(callback),
     onUpdateCheckResult: (callback) => window.zcode.onUpdateCheckResult(callback),
+    onOfflineDataBackupWarning: (callback) => window.zcode.onOfflineDataBackupWarning(callback),
     onUpdateStateChanged: (callback) => window.zcode.onUpdateStateChanged?.(callback) ?? (() => {}),
     getUpdateState: () =>
       window.zcode.getUpdateState?.() ?? Promise.resolve({ kind: "idle", enabled: true }),

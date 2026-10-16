@@ -117,6 +117,7 @@ const desktopNodeRuntimeExternals = [
   "electron",
   "node-pty",
   "ssh2",
+  "better-sqlite3",
   "undici",
   "@larksuiteoapi/node-sdk",
   "yaml",
@@ -143,6 +144,7 @@ export default defineConfig([
       "main/zcodeDataSizeWorker": "src/main/zcodeDataSizeWorker.ts",
       // 资源管理器「存储」tab 的扫描 Worker：main 持有 StorageService，遍历放独立线程，供 new Worker(new URL()) 解析。
       "main/storageScanWorker": "src/main/storageScanWorker.ts",
+      "main/offlineDataBackupWorker": "src/main/offlineDataBackupWorker.ts",
     },
     outDir: "out",
     format: "esm",
@@ -178,6 +180,20 @@ export default defineConfig([
       options.chunkNames = "main/chunk-[hash]";
     },
     onSuccess: createDevReadyMarkerHook("main"),
+    ...desktopTsupBundleSecurityOptions,
+  },
+  {
+    name: "offline-launcher",
+    entry: { "main/offlineDesktopLauncher": "src/main/offlineDesktopLauncher.ts" },
+    outDir: "out",
+    format: "cjs",
+    outExtension: () => ({ js: ".cjs" }),
+    platform: "node",
+    target: "node18",
+    noExternal: ["@zcode/shared"],
+    splitting: false,
+    define: createSharedDefines(),
+    esbuildOptions: applyDesktopTsupEsbuildSecurityOptions,
     ...desktopTsupBundleSecurityOptions,
   },
   {
