@@ -25,6 +25,11 @@ export function applyOmpComposerModelSync(
     modelId,
     ...(reasoningLevel ? { options: { reasoningLevel } } : {}),
   };
+  // 冷历史可能先初始化 mode 而尚无模型选择；否则相同 baseline 会阻止补齐，
+  // 使工具栏错误回退到目录最高档。仅补缺失选择，不覆盖已有提交意图。
+  if (!draft.modelSelection) {
+    return { ...draft, modelSelection: selection, ompModelBaseline: selection };
+  }
   const baseline = draft.ompModelBaseline;
   if (sameModelSelection(baseline, selection)) return draft;
   // 第一次仅记游标：新任务最高档可能不同于 OMP 初始档，旧草稿也可能有手动选择。

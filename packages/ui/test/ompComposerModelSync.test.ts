@@ -42,6 +42,21 @@ test("原生模型事实优先于旧提交 intent，缺少模型事实时保持�
   assert.equal(applyOmpComposerModelSync(seeded, { provider: "", model: "" }), seeded);
 });
 
+test("冷历史缺少模型选择时用会话事实补齐，不回退到目录最高档", () => {
+  const config = { ...initial, thought: "high" };
+  for (const baseline of [undefined, selection("execution", "high")]) {
+    const cold: V4ComposerDraft = {
+      ...draft,
+      modelSelection: undefined,
+      ompModelBaseline: baseline,
+    };
+    const restored = applyOmpComposerModelSync(cold, config);
+    assert.deepEqual(restored.modelSelection, selection("execution", "high"));
+    assert.equal(restored.text, draft.text);
+    assert.equal(applyOmpComposerModelSync(restored, config), restored);
+  }
+});
+
 test("用户显式模型与思考档意图分别保留，快照更新不伪造另一次编辑", () => {
   const seeded = applyOmpComposerModelSync(draft, initial);
   const manuallySelected = {

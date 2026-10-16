@@ -1225,7 +1225,8 @@ export const WorkspaceSidebar = memo(function WorkspaceSidebarComponent({
       className="flex h-full flex-col overflow-hidden"
     >
       <div className="h-12 [app-region:drag]"></div>
-      <div className="relative flex-1 min-h-0 overflow-hidden">
+      {/* 滑出视图仍扩展横向范围；hidden 可被焦点/scrollIntoView 滚动，clip 才不会带偏整个侧栏。 */}
+      <div className="relative flex-1 min-h-0 overflow-clip">
         <div
           className={cn(
             "absolute inset-0 flex min-h-0 flex-col transition-transform duration-200 ease-out",

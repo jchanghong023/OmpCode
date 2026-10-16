@@ -37,6 +37,8 @@ sequenceDiagram
   participant B as Pane B
   participant S as Storage
   participant H as Host / 任务元信息
+  H->>O: 冷历史后回读同会话模型事实
+  Note over H,O: 缺少模型选择时补齐；已有选择沿用编辑优先级
   A->>O: 登记 reader 租约；正文/富节点 dirty
   Note over A,O: 普通编辑只更新版本，不读取完整 JSON
   B->>O: 新 pane 恢复 / materialize
@@ -86,6 +88,7 @@ sequenceDiagram
 14. A 提交后离开，A 的命令随后拒绝或抛错，再返回 A 能恢复未被新编辑替换的原草稿；B 的正文、富 JSON、pending、附件和错误不受影响。覆盖 A→B→A、重复回包以及 A 已有新编辑时旧失败不覆盖。
 15. 首次真实会话完成后发布临时 ID→UUID 迁移，继续编辑并切会话再返回、正常关闭后冷启动，以 UUID 恢复同一草稿。覆盖未挂载来源 pane、重复迁移、错误 workspace identity 与 Storage 写入失败/重试；目标仅有初始化模型/思考选择时来源正文、富 JSON、mention 与来源选择胜出。目标空正文但已标记手动模型或思考改选时，来源正文/富结构继续迁移，目标 `modelSelection`、OMP baseline 与 `ompModelEdited` / `ompThoughtEdited` 覆盖配置；目标较新内容或 pending 时整份目标草稿优先并保留来源备份。
 16. 在真实桌面连续发送两轮消息：发送和停止按钮均能悬浮显示自身提示，输入框移走悬浮后提示关闭；运行和空闲切换不保留前一控制的提示，也不出现 Tooltip 受控/非受控模式切换诊断；原消息、提交和停止行为保持不变。
+17. 冷历史先到而模型事实后到时，已初始化但缺少 `modelSelection` 的已有会话草稿必须用同一会话的真实模型与思考档补齐；baseline 缺失或已等于回读事实都不能使输入区退回目录最高档。已有有效模型/思考选择（包括与运行时不同的最高档意图）仍按既有 baseline/编辑优先级保留，不重写用户选择或角色配置。
 
 ## 实现与验证状态
 
