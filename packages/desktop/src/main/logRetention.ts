@@ -6,12 +6,16 @@ export const LOG_RETENTION_DAYS = 14;
 const LOG_MAX_FILE_BYTES = 1_048_576;
 const LOG_MAX_FILE_COUNT = 10;
 
-const ACTIVE_LOG_FILE_NAME_RE = /^(\d{4})-(\d{2})-(\d{2})\.log$/;
-const HISTORY_LOG_FILE_NAME_RE = /^(\d{4})-(\d{2})-(\d{2})\.([1-9]\d*)\.log$/;
+const LOG_RUN_ID_PATTERN =
+  "\\d{13}-[1-9]\\d*-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
+const OWNED_LOG_FILE_NAME_RE = new RegExp(
+  `^(\\d{4})-(\\d{2})-(\\d{2})(?:\\.(${LOG_RUN_ID_PATTERN}))?(?:\\.([1-9]\\d*))?\\.log$`,
+);
 
 interface OwnedLogFile {
   name: string;
   date: Date;
+  runId: string;
   historyIndex: number | null;
 }
 
@@ -54,18 +58,12 @@ function parseLogDate(yearText: string, monthText: string, dayText: string): Dat
 }
 
 function parseOwnedLogFileName(fileName: string): OwnedLogFile | null {
-  const activeMatch = ACTIVE_LOG_FILE_NAME_RE.exec(fileName);
-  if (activeMatch) {
-    const date = parseLogDate(activeMatch[1]!, activeMatch[2]!, activeMatch[3]!);
-    return date ? { name: fileName, date, historyIndex: null } : null;
-  }
-
-  const historyMatch = HISTORY_LOG_FILE_NAME_RE.exec(fileName);
-  if (!historyMatch) return null;
-  const date = parseLogDate(historyMatch[1]!, historyMatch[2]!, historyMatch[3]!);
-  const historyIndex = Number(historyMatch[4]);
-  if (!date || !Number.isSafeInteger(historyIndex)) return null;
-  return { name: fileName, date, historyIndex };
+  const match = OWNED_LOG_FILE_NAME_RE.exec(fileName);
+  if (!match) return null;
+  const date = parseLogDate(match[1]!, match[2]!, match[3]!);
+  const historyIndex = match[5] === undefined ? null : Number(match[5]);
+  if (!date || (historyIndex !== null && !Number.isSafeInteger(historyIndex))) return null;
+  return { name: fileName, date, runId: match[4] ?? "", historyIndex };
 }
 
 function getStartOfLocalDay(date: Date): Date {
@@ -81,6 +79,8 @@ function getLogRetentionCutoffDate(now: Date, retentionDays: number): Date {
 function compareOldestFirst(left: OwnedLogFile, right: OwnedLogFile): number {
   const dateDifference = left.date.getTime() - right.date.getTime();
   if (dateDifference !== 0) return dateDifference;
+  const runDifference = left.runId.localeCompare(right.runId);
+  if (runDifference !== 0) return runDifference;
   const leftIndex = left.historyIndex ?? Number.POSITIVE_INFINITY;
   const rightIndex = right.historyIndex ?? Number.POSITIVE_INFINITY;
   return leftIndex - rightIndex || left.name.localeCompare(right.name);
@@ -173,8 +173,8 @@ async function readLogFileInfo(filePath: string): Promise<LogFileInfo | null> {
   }
 }
 
-async function getNextHistoryPath(logDir: string, date: string): Promise<string> {
-  if (!parseOwnedLogFileName(`${date}.log`)) throw new Error("Invalid active log date");
+async function getNextHistoryPath(logDir: string, fileStem: string): Promise<string> {
+  if (!parseOwnedLogFileName(`${fileStem}.log`)) throw new Error("Invalid active log name");
   maybeThrowInjectedFsFault({ operation: "readdir", path: logDir });
   const entries = await readdir(logDir, { withFileTypes: true });
   const occupiedNames = new Set<string>();
@@ -182,58 +182,58 @@ async function getNextHistoryPath(logDir: string, date: string): Promise<string>
   for (const entry of entries) {
     occupiedNames.add(entry.name);
     const ownedFile = parseOwnedLogFileName(entry.name);
-    if (ownedFile?.name.startsWith(`${date}.`) && ownedFile.historyIndex !== null) {
+    if (ownedFile?.name.startsWith(`${fileStem}.`) && ownedFile.historyIndex !== null) {
       maxHistoryIndex = Math.max(maxHistoryIndex, ownedFile.historyIndex);
     }
   }
 
   let historyIndex = maxHistoryIndex + 1;
-  while (Number.isSafeInteger(historyIndex) && occupiedNames.has(`${date}.${historyIndex}.log`))
+  while (Number.isSafeInteger(historyIndex) && occupiedNames.has(`${fileStem}.${historyIndex}.log`))
     historyIndex += 1;
   if (!Number.isSafeInteger(historyIndex))
     throw new Error("No safe log history index is available");
-  return join(logDir, `${date}.${historyIndex}.log`);
+  return join(logDir, `${fileStem}.${historyIndex}.log`);
 }
 
 async function rotateActiveLogFile(
   logDir: string,
-  date: string,
+  fileStem: string,
   renameFile: (source: string, destination: string) => Promise<void>,
 ): Promise<void> {
-  const activePath = join(logDir, `${date}.log`);
+  const activePath = join(logDir, `${fileStem}.log`);
   const activeInfo = await readLogFileInfo(activePath);
   if (!activeInfo) return;
-  const historyPath = await getNextHistoryPath(logDir, date);
+  const historyPath = await getNextHistoryPath(logDir, fileStem);
   await renameFile(activePath, historyPath);
 }
 
 export async function prepareLogFile(
   logDir: string,
-  date: string,
+  fileStem: string,
   appendFile: (filePath: string, text: string) => Promise<void>,
   renameFile: (source: string, destination: string) => Promise<void>,
   retainFiles: (reserveActiveFile: boolean) => Promise<void>,
 ): Promise<void> {
-  if (!parseOwnedLogFileName(`${date}.log`)) throw new Error("Invalid active log date");
-  const activePath = join(logDir, `${date}.log`);
+  if (!parseOwnedLogFileName(`${fileStem}.log`)) throw new Error("Invalid active log name");
+  const activePath = join(logDir, `${fileStem}.log`);
   const activeInfo = await readLogFileInfo(activePath);
   const needsRotation = activeInfo !== null && activeInfo.size > LOG_MAX_FILE_BYTES;
   await retainFiles(activeInfo === null || needsRotation);
-  if (needsRotation) await rotateActiveLogFile(logDir, date, renameFile);
+  if (needsRotation) await rotateActiveLogFile(logDir, fileStem, renameFile);
   await appendFile(activePath, "");
 }
 
 export async function appendLogRecords(
   logDir: string,
-  date: string,
+  fileStem: string,
   records: readonly { line: string; bytes: number }[],
   appendFile: (filePath: string, text: string) => Promise<void>,
   renameFile: (source: string, destination: string) => Promise<void>,
   retainFiles: (reserveActiveFile: boolean) => Promise<void>,
 ): Promise<void> {
   if (records.length === 0) return;
-  if (!parseOwnedLogFileName(`${date}.log`)) throw new Error("Invalid active log date");
-  const activePath = join(logDir, `${date}.log`);
+  if (!parseOwnedLogFileName(`${fileStem}.log`)) throw new Error("Invalid active log name");
+  const activePath = join(logDir, `${fileStem}.log`);
   const activeInfo = await readLogFileInfo(activePath);
   await retainFiles(activeInfo === null || activeInfo.size > LOG_MAX_FILE_BYTES);
   let activeBytes = activeInfo?.size ?? 0;
@@ -259,7 +259,7 @@ export async function appendLogRecords(
       await flushChunk();
       if (activeBytes > 0) {
         await retainFiles(true);
-        await rotateActiveLogFile(logDir, date, renameFile);
+        await rotateActiveLogFile(logDir, fileStem, renameFile);
         activeBytes = 0;
       }
     }

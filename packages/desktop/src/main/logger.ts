@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { appendFile, mkdir, rename } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -22,6 +23,8 @@ const MAIN_LOG_FLUSH_WINDOW_MS = 25;
 const MAIN_LOG_MAX_QUEUED_BYTES = 4 * 1024 * 1024;
 const MAIN_LOG_EXIT_FLUSH_BUDGET_MS = 1000;
 const MAIN_LOG_MAX_BATCH_LINES = 256;
+// 日期文件会被重启后的进程继续追加；启动时固定唯一标识，PID 复用也不混写。
+const MAIN_LOG_RUN_ID = `${Date.now()}-${process.pid}-${randomUUID()}`;
 
 type LogLevel = "debug" | "info" | "warn" | "error";
 interface PendingLogLine {
@@ -125,6 +128,10 @@ async function renameLogFile(source: string, destination: string): Promise<void>
   await rename(source, destination);
 }
 
+function logFileStem(date: string): string {
+  return `${date}.${MAIN_LOG_RUN_ID}`;
+}
+
 async function retainLogFiles(
   logDir: string,
   date: string,
@@ -132,7 +139,7 @@ async function retainLogFiles(
 ): Promise<void> {
   if (!reserveActiveFile && lastRetentionDir === logDir && lastRetentionDate === date) return;
   const result = await cleanupExpiredLogFiles(logDir, {
-    activeFileName: `${date}.log`,
+    activeFileName: `${logFileStem(date)}.log`,
     reserveActiveFile,
   });
   if (result.failedFiles.length > 0) throw new LogRetentionError(result.failedFiles);
@@ -147,8 +154,12 @@ async function prepareLogDir(logDir: string, stage: string): Promise<boolean> {
     await mkdir(logDir, { recursive: true });
     phase = "file_open";
     const date = formatDate(new Date());
-    await prepareLogFile(logDir, date, appendLogFile, renameLogFile, (reserveActiveFile) =>
-      retainLogFiles(logDir, date, reserveActiveFile),
+    await prepareLogFile(
+      logDir,
+      logFileStem(date),
+      appendLogFile,
+      renameLogFile,
+      (reserveActiveFile) => retainLogFiles(logDir, date, reserveActiveFile),
     );
     activeLogDir = logDir;
     return true;
@@ -203,8 +214,13 @@ async function appendBatch(date: string, batch: readonly PendingLogLine[]): Prom
   const startedAt = Date.now();
   const originalDir = activeLogDir;
   const appendToDirectory = (logDir: string) =>
-    appendLogRecords(logDir, date, batch, appendLogFile, renameLogFile, (reserveActiveFile) =>
-      retainLogFiles(logDir, date, reserveActiveFile),
+    appendLogRecords(
+      logDir,
+      logFileStem(date),
+      batch,
+      appendLogFile,
+      renameLogFile,
+      (reserveActiveFile) => retainLogFiles(logDir, date, reserveActiveFile),
     );
   try {
     await appendToDirectory(originalDir);
@@ -354,7 +370,7 @@ function sinkEvent(level: LogLevel, event: string, fields: Record<string, unknow
     ),
   ) as Record<string, unknown>;
   // 实际路径是 writer 持有的可信元数据，不是正文；脱敏用户/错误文本后独立追加。
-  record.logFile = activeLogDir ? join(activeLogDir, `${formatDate(now)}.log`) : null;
+  record.logFile = activeLogDir ? join(activeLogDir, `${logFileStem(formatDate(now))}.log`) : null;
   enqueue(level, "main", JSON.stringify(record).replace(/[\u2028\u2029]/g, "\\n"), now);
 }
 
