@@ -1,3 +1,4 @@
+import { writeSync } from "node:fs";
 import {
   budgetExpired,
   cancelCommands,
@@ -23,93 +24,114 @@ export function createGateRun({
   let activeWork;
   let terminal;
   let runDetails = {};
+  let finishDetails = {};
+  let reported;
   const handlers = new Map();
   const force = (status, exitCode) => {
     if (terminal?.status !== "TIMEOUT") terminal = { status, exitCode };
     cancelCommands();
   };
+  const report = (status, exitCode, extra = {}) => {
+    if (reported) return reported;
+    const timing = clock.read();
+    const budgetMode = level === "fastcheck" ? "non-compilation" : "wall-clock";
+    if (
+      budgetExpired() ||
+      (timed &&
+        limitSeconds !== null &&
+        timing[budgetMode === "wall-clock" ? "total" : "budgeted"] >= limitSeconds)
+    )
+      terminal = { status: "TIMEOUT", exitCode: 124 };
+    reported = {
+      ...(level === "slowtest"
+        ? {
+            wsl: {
+              status: "SKIPPED_NOT_APPLICABLE",
+              reason:
+                "Windows gate policy excludes Linux/WSL validation; no applicable extension exists",
+            },
+          }
+        : {}),
+      ...runDetails,
+      ...extra,
+      ...timing,
+      budgetMode,
+      limitSeconds,
+      status: terminal?.status ?? status,
+      level,
+      exitCode: terminal?.exitCode ?? exitCode,
+    };
+    // 硬退出不能丢失管道中尚未 flush 的最终计时及原失败证据。
+    writeSync(
+      1,
+      `${level}: ${reported.status} total=${timing.total.toFixed(1)}s ` +
+        `compile_excluded=${timing.compileExcluded.toFixed(1)}s ` +
+        `budgeted=${timing.budgeted.toFixed(1)}s ` +
+        `limit=${limitSeconds === null ? "n/a" : limitSeconds.toFixed(1)}s\n` +
+        `${JSON.stringify(reported)}\n`,
+    );
+    return reported;
+  };
   const finish = (status, exitCode, extra = {}) => {
     if (status === "TIMEOUT" || status === "CANCELLED") force(status, exitCode);
     if (finishing) return finishing;
-    // Cleanup always counts, including stopping a still-active compile stage.
+    finishDetails = extra;
     const endCleanup = clock.enter("check");
-    timer?.cancel();
     cancelCommands();
     finishing = (async () => {
       try {
         await stopAll(clock);
-        try {
-          await activeWork;
-        } catch (error) {
-          extra = { ...extra, reason: error.message };
-          status = "FAIL";
-          exitCode = 1;
-        }
-        await stopAll(clock);
-        try {
-          await cleanup?.();
-        } catch (error) {
-          extra = { ...extra, cleanupError: error.message };
-          status = "FAIL";
-          exitCode = 1;
-        }
+        // 失败/取消不等待挂起的用例或 verify；只能等待真正拥有的进程树。
+        if (status === "PASS") await activeWork;
+        await cleanup?.();
+      } catch (error) {
+        finishDetails = { ...finishDetails, cleanupError: error.message };
+        status = "FAIL";
+        exitCode = 1;
       } finally {
         endCleanup();
-        for (const [signal, handler] of handlers) process.off(signal, handler);
+        for (const [event, handler] of handlers) process.off(event, handler);
       }
-      const timing = clock.read();
-      if (budgetExpired() || (timed && limitSeconds !== null && timing.budgeted >= limitSeconds))
-        terminal = { status: "TIMEOUT", exitCode: 124 };
-      const report = {
-        ...(level === "slowtest"
-          ? {
-              wsl: {
-                status: "SKIPPED_NOT_APPLICABLE",
-                reason:
-                  "Windows gate policy excludes Linux/WSL validation; no applicable extension exists",
-              },
-            }
-          : {}),
-        ...runDetails,
-        ...extra,
-        ...timing,
-        limitSeconds,
-        status: terminal?.status ?? status,
-        level,
-        exitCode: terminal?.exitCode ?? exitCode,
-      };
-      console.log(
-        `${level}: ${report.status} total=${report.total.toFixed(1)}s ` +
-          `compile_excluded=${report.compileExcluded.toFixed(1)}s ` +
-          `budgeted=${report.budgeted.toFixed(1)}s ` +
-          `limit=${limitSeconds === null ? "n/a" : limitSeconds.toFixed(1)}s`,
-      );
-      console.log(JSON.stringify(report));
-      return report;
+      const result = report(status, exitCode, finishDetails);
+      // 原先在 finish 开始就撤销定时器，清理 Promise 挂起后再无截止。
+      timer?.cancel();
+      return result;
     })();
     return finishing;
   };
+  const terminate = async (status, exitCode, extra) => {
+    force(status, exitCode);
+    const result = await finish(status, exitCode, extra);
+    process.exit(result.exitCode);
+  };
   for (const signal of signals) {
     const handler = () => {
-      force("CANCELLED", 130);
-      void finish("CANCELLED", 130).then((report) => {
-        process.exitCode = report.exitCode;
-      });
+      void terminate("CANCELLED", 130);
     };
     handlers.set(signal, handler);
     process.once(signal, handler);
   }
-  // fastcheck 无需授权；不能因没有 full/slow 的授权标志而遗漏其硬预算定时器。
+  for (const event of ["uncaughtException", "unhandledRejection"]) {
+    const handler = (error) => {
+      void terminate("FAIL", 1, { reason: error?.stack ?? String(error) });
+    };
+    handlers.set(event, handler);
+    process.once(event, handler);
+  }
   if (timed && (authorized || level === "fastcheck") && limitSeconds !== null)
     timer = startBudget(
       limitSeconds,
       clock,
-      async () => {
-        force("TIMEOUT", 124);
-        const report = await finish("TIMEOUT", 124);
-        process.exitCode = report.exitCode;
-      },
+      () => terminate("TIMEOUT", 124),
       level,
+      () => {
+        force("TIMEOUT", 124);
+        report("TIMEOUT", 124, {
+          ...finishDetails,
+          reason:
+            finishDetails.reason ?? "Hard deadline reached; pending work or cleanup was terminated",
+        });
+      },
     );
   return {
     clock,
@@ -125,7 +147,6 @@ export function createGateRun({
         if (finishing) return finishing;
         const allPassed = () =>
           records.length === stages.length && records.every((record) => record.status === "PASS");
-        // 失败后只清理和报告，不再启动快照命令；元数据在运行前绑定，失败/取消也保留。
         activeWork = Promise.resolve(allPassed() ? verify?.(records) : undefined);
         await activeWork;
         if (finishing) return finishing;
@@ -137,7 +158,6 @@ export function createGateRun({
           { stages: records },
         );
       } catch (error) {
-        // The caught promise has settled; cleanup must not rethrow it before reporting.
         activeWork = undefined;
         return finish("FAIL", 1, { reason: error.message });
       }

@@ -31,6 +31,7 @@ const gate = createGateRun({
 async function finish(status, code, extra = {}) {
   const report = await gate.finish(status, code, extra);
   process.exitCode = report.exitCode;
+  if (report.exitCode !== 0) process.exit(report.exitCode);
   return report;
 }
 
@@ -114,7 +115,7 @@ try {
           );
           const report = await gate.run(
             stages,
-            (stage) => regularStage(stage, context),
+            (stage, onFailure) => regularStage(stage, { ...context, onFailure }),
             { snapshot: source, tools },
             async (records) => {
               const current = await snapshot();
@@ -127,6 +128,7 @@ try {
             },
           );
           process.exitCode = report.exitCode;
+          if (report.exitCode !== 0) process.exit(report.exitCode);
         }
       }
     }

@@ -108,6 +108,8 @@ async function fixtureStage(stage, context) {
     fixture.pid = runtime.electronPid;
     const result = await commandOutput(stage.command, stage.args, {
       clock: context.clock,
+      failFast: true,
+      onFailure: context.onFailure,
       env: {
         OMP_E2E_CDP_URL: runtime.endpoint,
         OMP_E2E_RENDERER_URL: runtime.rendererUrl,
@@ -118,6 +120,7 @@ async function fixtureStage(stage, context) {
         OMP_E2E_PHASE: stage.phase,
       },
     });
+    if (result.code) return outcome(result);
     const isolation = await verifyIsolation(runtime, launcher);
     console.log(`Core GUI isolation: ${JSON.stringify(isolation)}`);
     return { ...outcome(result), isolation };
@@ -167,6 +170,8 @@ export async function regularStage(stage, context) {
       await commandOutput(stage.command, args, {
         env,
         clock: context.clock,
+        failFast: true,
+        onFailure: context.onFailure,
         failFastTests: stage.kind === "test" && args.includes("--test"),
         failFastCompiler: stage.kind === "compile",
       }),

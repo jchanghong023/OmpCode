@@ -22,24 +22,24 @@
 
 以下命令从仓库根目录执行：
 
-| 用途             | 命令                                                                       |
-| ---------------- | -------------------------------------------------------------------------- |
-| 类型检查         | `pnpm typecheck`                                                           |
-| 快速门禁         | `pnpm fastcheck`（仅静态/格式/编译，非编译预算 60 秒）                     |
-| Windows 完整验证 | `pnpm fulltest --human-authorized`（非编译预算 900 秒）                    |
-| Windows 慢速门禁 | `pnpm slowtest --human-authorized`（同 fulltest 覆盖，非编译预算 1500 秒） |
-| Lint             | `pnpm lint` / `pnpm lint:fix`                                              |
-| 格式检查         | `pnpm fmt:check`                                                           |
-| 桌面开发         | `pnpm dev:desktop`（production 数据环境）                                  |
-| 桌面测试环境     | `pnpm dev:desktop:test`（`ZCODE_ENV=test`，不保证数据隔离）                |
-| Web 开发         | `pnpm dev:web`                                                             |
-| 构建工作区       | `pnpm build`                                                               |
-| Windows x64 打包 | `pnpm bundle:desktop -- --os=win --arch=x64`                               |
-| 提交前检查       | `pnpm verify:pre-push`（Lint 与全量架构检查）                              |
-| 架构检查         | `pnpm architecture:check --changed`                                        |
-| 模块阅读包       | `pnpm architecture:context <module-id>`                                    |
-| 未使用依赖与导出 | `pnpm knip`                                                                |
-| 导出引用查询     | `pnpm dep:refs --list-exports <file>`                                      |
+| 用途             | 命令                                                                   |
+| ---------------- | ---------------------------------------------------------------------- |
+| 类型检查         | `pnpm typecheck`                                                       |
+| 快速门禁         | `pnpm fastcheck`（仅静态/格式/编译，非编译预算 60 秒）                 |
+| Windows 完整验证 | `pnpm fulltest --human-authorized`（总墙钟 900 秒，含编译与清理）      |
+| Windows 慢速门禁 | `pnpm slowtest --human-authorized`（同 fulltest 覆盖，总墙钟 1500 秒） |
+| Lint             | `pnpm lint` / `pnpm lint:fix`                                          |
+| 格式检查         | `pnpm fmt:check`                                                       |
+| 桌面开发         | `pnpm dev:desktop`（production 数据环境）                              |
+| 桌面测试环境     | `pnpm dev:desktop:test`（`ZCODE_ENV=test`，不保证数据隔离）            |
+| Web 开发         | `pnpm dev:web`                                                         |
+| 构建工作区       | `pnpm build`                                                           |
+| Windows x64 打包 | `pnpm bundle:desktop -- --os=win --arch=x64`                           |
+| 提交前检查       | `pnpm verify:pre-push`（Lint 与全量架构检查）                          |
+| 架构检查         | `pnpm architecture:check --changed`                                    |
+| 模块阅读包       | `pnpm architecture:context <module-id>`                                |
+| 未使用依赖与导出 | `pnpm knip`                                                            |
+| 导出引用查询     | `pnpm dep:refs --list-exports <file>`                                  |
 
 测试入口以目标包当前的 `package.json` 和实际测试文件为准，不假定存在统一的单测或 E2E 命令。
 
@@ -86,17 +86,17 @@ UI UT 的 `@/` 路径别名使用 `pnpm exec tsx --tsconfig packages/ui/tsconfig
 ## 三级测试门禁
 
 - `pnpm fastcheck`：仅 Windows 本机，只运行静态分析、格式和增量编译，不执行任何测试（包括快速 UT、冒烟和门禁自检）。AI 只在相关修改成批完成且确有验证需要时选择执行；非编译预算最多 60 秒，不给纯编译继承此墙钟限制。
-- 三级计划、计时与失败语义唯一维护于[三级测试需求](docs/requirements/test-gates.md)：fulltest 包含全部 fastcheck 原语和现存适用当前平台测试（包括隔离 GUI），非编译预算最多 900 秒；slowtest 包含 fulltest 一次，非编译预算最多 1500 秒。项目无适用 WSL 测试扩展，报告 `SKIPPED_NOT_APPLICABLE`，slowtest 与 fulltest 覆盖相同。不再按耗时区分层级，参数只能下调预算。
+- 三级计划、计时与失败语义唯一维护于[三级测试需求](docs/requirements/test-gates.md)：fulltest 包含全部 fastcheck 原语和现存适用当前平台测试（包括隔离 GUI），总墙钟最多 900 秒；slowtest 包含 fulltest 一次，总墙钟最多 1500 秒；编译、准备与清理均不暂停 full/slow 的截止时间。项目无适用 WSL 测试扩展，报告 `SKIPPED_NOT_APPLICABLE`，slowtest 与 fulltest 覆盖相同。不再按耗时区分层级，参数只能下调预算。
 - 复用原有检查定义、质量配置和测试断言。此前授权删除的 Fork 专项不恢复；上游原有测试保留。不为门禁速度缩减现存适用测试，超预算 Fork 按完整上游差异与依赖图确定受影响模块范围，逐项声明遗漏的整仓覆盖，不能跳过受影响失败项。
 - fulltest/slowtest 需要当前用户明确执行指令。历史授权、代理建议、提交/推送或“检查一下”不授权。`--human-authorized` 是软约束，只反映原始明确执行指令，不是 Agent 自行决定；不能绕过门禁执行内部长步骤。
 - 三个入口只在本机运行，不调用 CI、远端/发布流水线、Computer Use，不移动/点击全局鼠标、不抢前台焦点。不接受 `--publish-releases`，不推送、不创建 Tag、不发布；独立分发 workflow 保留不动。接管鼠标的测试保留单独入口，必须另外获得用户明确指令，状态为 `NOT_RUN_SEPARATE_USER_INSTRUCTION_REQUIRED`，不记为门禁失败或通过。
 - 每次结果绑定本次 HEAD、未提交差异摘要、内容指纹与工具版本；源码变化后旧结果不能沿用或跨快照合并。真实 OMP/GLM 与 GUI 必须使用专用隔离 fixture 和数据根，不连接日常实例、不修改用户配置；历史失败、跳过和未验证记录不得改写成通过。
 - 尚未授权时只执行 fastcheck 和临时短桩自检，不借专项入口执行完整门禁。保留既有质量检查及精简后有效的核心行为断言，不为通过放宽判据；删除的非核心/非 OMP/冗余/长耗时专项不能宣称已验收。
-- 首个失败立即停止后续调度并终止全部所属并行任务、嵌套 runner 及进程树；保留触发失败、非零退出和最终计时，不等待整组测试结束或预算耗尽。未启动/取消的工作不记为通过。
+- 任意阶段或用例首个失败立即停止后续调度并终止全部所属并行任务、嵌套 runner 及进程树；保留触发失败、非零退出和最终计时，不等待整组测试结束或预算耗尽。full/slow 的硬截止在失败、验证与清理期间仍有效，到时强制非零退出。未启动/取消的工作不记为通过。
 
 ### 构建与缓存纪律
 
-- 每个入口用单一单调时钟报告 `total / compile_excluded / budgeted / limit / status`，至少一位小数；只排除纯编译活跃且无非编译工作活跃的区间并集。准备、发现、静态检查、测试、等待、快照与清理计费，编译与这些工作重叠仍计费一次。任何成功、失败、缺环境、TIMEOUT 或已处理取消都输出完整计时，超时结束所属进程树并非零退出。
+- 每个入口用单一单调时钟报告 `total / compile_excluded / budgeted / limit / status`，至少一位小数；`compile_excluded` 只记录纯编译活跃且无非编译工作活跃的区间并集。fastcheck 按非编译时间限时，fulltest/slowtest 按总墙钟限时。准备、发现、静态检查、测试、等待、快照与清理计费，编译与这些工作重叠仍计费一次。任何成功、失败、缺环境、TIMEOUT 或已处理取消都输出完整计时，超时结束所属进程树并非零退出。
 - 使用现有 `tsc -b` composite/incremental、固定 dist/out 及稳定 Vite 缓存；连续 fastcheck 不调用 clean、删除产物或切换配置/缓存目录来强制重编译。不清缓存测冷性能；只有自然冷缓存样本才可称冷缓存。安全独立阶段必须并行，改写源文件、共享不兼容产物与 live/cold 顺序保留依赖屏障。
 - 技能迁移只修改编排、准备、计时及必要文档，不改产品行为或既有测试判据；临时短桩门禁自检独立于 fastcheck。没有适用 WSL 扩展不安装/启动 WSL；不可用扩展与适用扩展失败不得混为一谈。
 

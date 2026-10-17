@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { readFile, access } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { withPinnedNodePath } from "./mise-toolchain-env.mjs";
+import { immediateTestArguments } from "./test-gates-test-reporter.mjs";
 
 const activeChildren = new Set();
 const stoppingTrees = new WeakMap();
@@ -124,50 +125,52 @@ export function cancelCommands() {
   commandsCancelled = true;
 }
 
-export function startBudget(limitSeconds, clock, onTimeout, level = "fastcheck") {
+export function startBudget(limitSeconds, clock, onTimeout, level = "fastcheck", onHardTimeout) {
   gateBudget(level, limitSeconds);
   if (!clock?.read || !clock?.subscribe || !clock?.compileOnly)
     throw new Error("startBudget requires a gate clock");
-  // 修复依据：并行门禁下 taskkill 可能超过短预算的 10% 余量；预留有界清理区间。
-  // 大预算最多预留五秒，纯编译始终暂停计费，清理本身不排除。
-  const deadline = limitSeconds - Math.min(5, limitSeconds * 0.5);
-  let timer;
-  let stopped = false;
-  const expire = async () => {
-    if (stopped) return;
-    if (clock.compileOnly() || clock.read().budgeted < deadline) {
-      schedule();
-      return;
-    }
-    stopped = true;
-    unsubscribe();
+  const wallClock = level !== "fastcheck";
+  const used = () => clock.read()[wallClock ? "total" : "budgeted"];
+  const paused = () => !wallClock && clock.compileOnly();
+  // 原定时器在编译和 finish 时被取消，清理挂起可无限越过总时限。
+  // 提前清理与硬截止独立；full/slow 按总墙钟，硬截止一直保留到报告完成。
+  const cleanupAt = limitSeconds - Math.min(5, limitSeconds * 0.5);
+  let softTimer;
+  let hardTimer;
+  let expiring = false;
+  let cancelled = false;
+  const expire = () => {
+    if (cancelled || expiring) return;
+    if (paused() || used() < cleanupAt) return schedule();
+    expiring = true;
     budgetTimedOut = true;
     cancelCommands();
-    const endCleanup = clock.enter("check");
-    try {
-      await stopAll(clock);
-      await onTimeout({
-        ...clock.read(),
-        limitSeconds,
-        status: "TIMEOUT",
-        level,
-        exitCode: 124,
-      });
-    } finally {
-      endCleanup();
-    }
+    // 不先 await stopAll：所属进程关闭或 cleanup 挂起不能阻塞终态通知。
+    void onTimeout();
+  };
+  const forceExit = () => {
+    if (cancelled) return;
+    if (paused() || used() < limitSeconds) return schedule();
+    budgetTimedOut = true;
+    cancelCommands();
+    onHardTimeout?.();
+    process.exit(124);
   };
   const schedule = () => {
-    clearTimeout(timer);
-    if (stopped || clock.compileOnly()) return;
-    timer = setTimeout(expire, Math.max(0, (deadline - clock.read().budgeted) * 1000));
+    clearTimeout(softTimer);
+    clearTimeout(hardTimer);
+    if (cancelled || paused()) return;
+    const elapsed = used();
+    if (!expiring) softTimer = setTimeout(expire, Math.max(0, (cleanupAt - elapsed) * 1000));
+    hardTimer = setTimeout(forceExit, Math.max(0, (limitSeconds - elapsed) * 1000));
   };
   const unsubscribe = clock.subscribe(schedule);
   schedule();
   return {
     cancel() {
-      stopped = true;
-      clearTimeout(timer);
+      cancelled = true;
+      clearTimeout(softTimer);
+      clearTimeout(hardTimer);
       unsubscribe();
     },
   };
@@ -198,6 +201,8 @@ export function startCommand(command, args = [], options = {}) {
 }
 
 export async function commandOutput(command, args = [], options = {}) {
+  const immediateTests = options.failFastTests && args.includes("--test");
+  if (immediateTests) args = immediateTestArguments(args);
   const child = startCommand(command, args, options);
   // 管道分片可截断中文 UTF-8 字节；流解码必须保留半个字符，不能逐 Buffer.toString 生成替换符。
   child.stdout.setEncoding("utf8");
@@ -207,7 +212,17 @@ export async function commandOutput(command, args = [], options = {}) {
   let skipped = false;
   const tails = { stdout: "", stderr: "" };
   let reportedFailure;
-  let failureCleanup;
+  let failureFrames = "";
+  const stopFailure = (code = 1) => {
+    cancelCommands();
+    // 阶段 finally 或流关闭也可能挂起，首失败必须直接通知调度所有者。
+    options.onFailure?.({
+      status: "FAIL",
+      exitCode: code,
+      ...(reportedFailure ? { reason: reportedFailure } : {}),
+    });
+    void stopAll(options.clock);
+  };
   const collect = (data, fromStderr = false) => {
     const text = data;
     if (options.stdoutOnly && fromStderr) diagnostics += text;
@@ -217,30 +232,46 @@ export async function commandOutput(command, args = [], options = {}) {
     const stream = fromStderr ? "stderr" : "stdout";
     const tail = (tails[stream] = (tails[stream] + text).slice(-12000));
     skipped ||= /# SKIP|(?:#|ℹ) skipped [1-9]|\[UNVERIFIED|requires .*; skipped/u.test(tail);
-    // TAP 只解析 stdout，TypeScript 分别解析两条连续流，不等嵌套整组退出。
-    // 立即封住新进程并终止全部所属树，原诊断和最终计时仍保留。
+    let immediateFailure;
+    if (immediateTests && fromStderr) {
+      failureFrames += text;
+      let newline;
+      while ((newline = failureFrames.indexOf("\n")) !== -1) {
+        const line = failureFrames.slice(0, newline);
+        failureFrames = failureFrames.slice(newline + 1);
+        const prefix = "\u001eOMP_TEST_FAILURE ";
+        if (line.startsWith(prefix)) {
+          const failure = JSON.parse(line.slice(prefix.length));
+          immediateFailure = `${failure.fullName ?? failure.name}: ${failure.error}`;
+        }
+      }
+    }
+    // 独立 stderr 失败帧不受 TAP 排序影响，编译诊断仍逐流解析。
     if (!reportedFailure) {
       const failed =
-        (options.failFastTests && !fromStderr
+        (!immediateTests && options.failFastTests && !fromStderr
           ? tail.match(/^\s*not ok \d+ - [^\r\n]+/mu)
           : undefined) ??
         (options.failFastCompiler ? tail.match(/^[^\r\n]*\berror TS\d+: [^\r\n]+/mu) : undefined);
-      if (failed) {
-        reportedFailure = failed[0].trim();
-        cancelCommands();
-        failureCleanup = stopAll(options.clock);
+      if (immediateFailure || failed) {
+        reportedFailure = immediateFailure ?? failed[0].trim();
+        stopFailure();
       }
     }
   };
   child.stdout.on("data", collect);
   child.stderr.on("data", (data) => collect(data, true));
+  child.once("exit", (code) => {
+    if (options.failFast && code !== 0) stopFailure(code ?? 1);
+  });
   return await new Promise((done) => {
     child.once("error", (error) => {
       activeChildren.delete(child);
+      reportedFailure = error.message;
+      if (options.failFast) stopFailure();
       done({ code: 1, output: `${output}\n${diagnostics}${error.message}`, skipped: false });
     });
-    child.once("close", async (code) => {
-      await failureCleanup;
+    child.once("close", (code) => {
       activeChildren.delete(child);
       done({
         code: reportedFailure ? 1 : (code ?? 1),
@@ -320,22 +351,47 @@ export async function runStages(stages, operation, concurrency = 3, clock) {
     let end = index + 1;
     if (group) while (end < stages.length && stages[end].parallelGroup === group) end++;
     const results = [];
+    const started = new Set();
     let next = index;
     let failed = false;
+    let fail;
+    const firstFailure = new Promise((resolve) => {
+      fail = resolve;
+    });
     const worker = async () => {
       while (next < end && !failed && !commandsCancelled) {
         const current = next++;
-        const result = await stageResult(stages[current], () => operation(stages[current]), clock);
+        started.add(current);
+        const start = performance.now();
+        const onFailure = (result) => {
+          if (failed) return;
+          results[current - index] = {
+            id: stages[current].id,
+            seconds: Number(elapsed(start)),
+            ...result,
+          };
+          failed = true;
+          cancelCommands();
+          fail();
+        };
+        const result = await stageResult(
+          stages[current],
+          () => operation(stages[current], onFailure),
+          clock,
+        );
         results[current - index] = result;
         if (result.status !== "PASS") {
-          // 原实现只阻止后续调度，同组长任务仍继续；先封调度，再清理全部所属树。
-          failed = true;
-          await stopAll(clock);
+          onFailure(result);
         }
       }
     };
-    // 相邻同组阶段才并行；组间等待全部结束，构建及 live/cold 依赖不能越过屏障。
-    await Promise.all(Array.from({ length: Math.min(concurrency, end - index) }, worker));
+    const workers = Promise.all(Array.from({ length: Math.min(concurrency, end - index) }, worker));
+    await Promise.race([workers, firstFailure]);
+    if (failed) {
+      await stopAll(clock);
+      for (const current of started)
+        results[current - index] ??= { id: stages[current].id, status: "CANCELLED" };
+    }
     records.push(...results.filter(Boolean));
     if (failed || commandsCancelled) break;
     index = end;

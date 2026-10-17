@@ -177,6 +177,15 @@ await appendFile(join(root,'events.jsonl'),JSON.stringify({id,event:'end'})+'\\n
     peak = Math.max(peak, active);
   }
   assert.equal(peak, 2, "Independent children must run in parallel without exceeding the limit");
+  const obsoleteFlag = await commandOutput(
+    "node",
+    ["scripts/test-gates.mjs", "slowtest", "--plan", "--publish-releases"],
+    { quiet: true },
+  );
+  assert.equal(obsoleteFlag.code, 1);
+  assert.match(obsoleteFlag.output, /Unknown gate argument/u);
+  // 临时短桩复用真实生命周期，验证三种入口的全部退出路径和编译专用区间计费。
+  await exerciseEntryMechanisms(root, { failure, tree: stub, childPid });
   const afterFailure = join(root, "after-failure.mjs");
   await writeFile(
     afterFailure,
@@ -195,15 +204,6 @@ await appendFile(join(root,'events.jsonl'),JSON.stringify({id,event:'end'})+'\\n
     false,
     "Failed prerequisites must block subsequent stages",
   );
-  const obsoleteFlag = await commandOutput(
-    "node",
-    ["scripts/test-gates.mjs", "slowtest", "--plan", "--publish-releases"],
-    { quiet: true },
-  );
-  assert.equal(obsoleteFlag.code, 1);
-  assert.match(obsoleteFlag.output, /Unknown gate argument/u);
-  // 临时短桩复用真实生命周期，验证三种入口的全部退出路径和编译专用区间计费。
-  await exerciseEntryMechanisms(root, { failure, tree: stub, childPid });
   console.log(
     "Self-tests PASS: failure propagation, bounded parallel children, dependency barrier, hard budget rejection, permissions, source fingerprint, timeout and owned grandchild cleanup",
   );
