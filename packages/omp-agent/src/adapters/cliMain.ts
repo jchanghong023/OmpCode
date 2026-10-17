@@ -3,9 +3,10 @@
 //   `omp-agent app-server --stdio --prepare-storage --cwd <path>`（worker_threads 内亦走此路径）
 
 import { logger } from "./logger.js";
-import { mkdirSync } from "node:fs";
+import { constants, mkdirSync } from "node:fs";
+import { open } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import { resolveOmpProfileFromEnv } from "@zcode/shared/omp-profile";
 import {
   ensureOfflineDataRoot,
@@ -15,6 +16,7 @@ import {
 } from "@zcode/shared/node";
 import { resolveOmpBinary } from "../contract.js";
 import { ServerApp } from "../app/serverApp.js";
+import type { OmpAttachmentFileReader } from "../app/ompAttachmentInput.js";
 import { OmpDirectoryGateway } from "./ompDirectoryGateway.js";
 import { ProtocolServer } from "./protocolServer.js";
 import { emitStorageStartup, runPrepareStorageWorker } from "./storageStartupFrames.js";
@@ -51,6 +53,47 @@ function parseArgs(argv: string[]) {
     }
   }
   return { flags, cwd, positional };
+}
+
+/** 依据：本机选择与远端 staged 路径都属于 CLI 所在 Host，不能解析 GUI 机器路径。 */
+export function createOmpAttachmentFileReader(): OmpAttachmentFileReader {
+  const isAbsolutePath = (path: string): boolean => {
+    if (!isAbsolute(path)) return false;
+    if (process.platform !== "win32") return true;
+    // Windows 的 \\foo 仍依赖当前盘符；仅接受带盘符或完整 UNC share 的文件路径。
+    return (
+      /^(?:[a-z]:[\\/]|[\\/]{2}[^\\/?]+[\\/][^\\/]+(?:[\\/]|$))/i.test(path) &&
+      !/^[\\/]{2}[?.][\\/]/.test(path)
+    );
+  };
+  return {
+    isAbsolutePath,
+    async readFile(path, maxBytes) {
+      if (!isAbsolutePath(path) || !Number.isSafeInteger(maxBytes) || maxBytes < 0)
+        throw new Error("invalid attachment file read");
+      // 非阻塞打开避免 FIFO 在 regular-file 检查前等待；句柄始终在 finally 关闭。
+      const file = await open(path, constants.O_RDONLY | constants.O_NONBLOCK);
+      try {
+        const stat = await file.stat();
+        if (!stat.isFile()) throw new Error("attachment is not a regular file");
+        if (!Number.isSafeInteger(stat.size) || stat.size > maxBytes)
+          throw new Error("attachment file exceeds byte limit");
+        // 按已检验大小分配，额外一字节探测增长；不能用无界 readFile 绕过读取预算。
+        const bytes = Buffer.allocUnsafe(stat.size + 1);
+        let length = 0;
+        while (length < bytes.length) {
+          const result = await file.read(bytes, length, bytes.length - length, null);
+          if (result.bytesRead === 0) break;
+          length += result.bytesRead;
+        }
+        if (length > stat.size || (await file.stat()).size !== length)
+          throw new Error("attachment file changed during read");
+        return bytes.subarray(0, length);
+      } finally {
+        await file.close();
+      }
+    },
+  };
 }
 
 export async function runCliMain(
@@ -136,6 +179,7 @@ export async function runCliMain(
       loadWorkspaceSkillCommands: workspaceCatalog.loadSkillCommands,
       directory: directoryGateway,
       resolveSlashCommand: slashResolver.resolve,
+      attachmentFileReader: createOmpAttachmentFileReader(),
     });
     appRef.app = app;
     const protocolServer = new ProtocolServer({

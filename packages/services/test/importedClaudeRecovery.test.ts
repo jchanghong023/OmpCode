@@ -130,6 +130,9 @@ for (const clientMode of ["desktop-continuous", "web-remote-replayable"] as cons
       taskIndexSyncer: {
         onSessionTerminalEvent: disposable,
         onSessionReadyEvent: disposable,
+        syncSnapshotAndBroadcast() {
+          return taskIndexRepo.syncTaskMeta({ meta });
+        },
         disposeAll() {},
       } as unknown as Options["taskIndexSyncer"],
     });

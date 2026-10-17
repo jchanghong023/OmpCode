@@ -99,32 +99,46 @@ omp todo 成功结果 → ConversationEngine 的同一会话投影 owner
 - v4 `createSession.firstInput.attachments` 和 `sendText.attachments` 中已提交的图片附件，按输入顺序作为 omp `ImageContent`（base64 数据和 MIME 类型）随同一次输入转发。图片正文不进入 v4 command frame。
 - `AttachmentStore` 是已上传字节及 MIME 类型的唯一所有者；v4 命令只按附件 ref 读取，不保存第二份附件状态。`ConversationEngine` 继续负责选择 omp `prompt`、`steer` 或 `follow_up`，三种命令都携带同一组图片。
 - `AttachmentStore` 同时是 begin/chunk/commit staging 状态与完整性校验的唯一 owner；Host/服务只按公开附件接口转发，不能凭 UI 已计算 checksum 或 schema 合法省略服务端验真。begin 固定 `connectionId` / `sessionId` / `uploadId` 归属、`totalBytes`、`totalChunks`、`checksum`（`sha256:` 加 64 位小写十六进制）及 MIME/文件名，chunk 按 `chunkIndex` 接收解码后的原始字节；commit 只有在完整分片数、精确解码字节总数与原字节 SHA256 全部匹配声明后才发布 ref。字节数与摘要不按 base64 字符数、文本字符数或 MIME 内容推算；零字节上传须为零分片，并匹配空字节串的 SHA256。
+- Desktop 文件选择/HTML File/拖拽产生的绝对本机路径 ref，以及远端附件服务已物化在目标 Host 的绝对路径 ref，按目标适配器所在文件系统读取，不能误当成 `omp-attachment://` 上传事务引用。文件 IO 位于适配器边界，经端口注入输入准备流程；复用相同图片/UTF-8 文本类型、数量、单文件及总量限制。读取真实字节后仍按原顺序提交，不仅保留 GUI chip 或把路径文本冒充文件内容；不新增第二份持久附件库或 UI 重传兜底。
+- 路径引用只接受当前宿主的绝对文件路径；未知 URI、相对路径、目录、不可读/已删除文件和超限内容明确拒绝整次输入，不启动模型，不回退为空附件。上传事务引用仍只能读取已提交且未过期的真实内容，缺失 `omp-attachment://` 不得改成读本机路径。原生命令首发不消费的草稿附件，在会话提升后仍须可正常发送；引用所有权和上传/暂存/adopt 生命周期由既有 owner 持有。
 
 ### 时序与失败语义
 
 ```mermaid
 sequenceDiagram
-    participant UI as UI 上传事务
-    participant Host as Host / 附件服务转发
+    participant UI as UI 附件草稿
+    participant Host as Host / 附件服务
     participant Store as AttachmentStore
     participant V4 as V4CommandService / ConversationEngine
+    participant Reader as 注入的目标 Host 文件 IO
     participant OMP as omp
-    UI->>Host: begin（归属、totalBytes、totalChunks、SHA256）
-    Host->>Store: 创建 staging
-    loop 按 chunkIndex 上传
-        UI->>Host: chunk（原始字节的 base64）
-        Host->>Store: 校验归属与分片，累计解码字节
+    alt 上传事务
+        UI->>Host: begin（归属、字节数、分片数、SHA256）
+        Host->>Store: 创建 staging
+        loop 按 chunkIndex 上传
+            UI->>Host: chunk（原始字节的 base64）
+            Host->>Store: 校验归属与分片，累计解码字节
+        end
+        UI->>Host: commit
+        Host->>Store: 验证完整分片、精确字节数和 SHA256
+        Store-->>UI: 成功发布已提交 ref / 失败不发布
+    else 文件选择或目标 Host 已暂存
+        Host-->>UI: 真实绝对路径 ref（不重复上传）
     end
-    UI->>Host: commit
-    Host->>Store: 校验分片完整、精确字节数及 SHA256
-    alt 校验全部通过
-        Store-->>UI: 发布已提交 ref（经 Host）
-        UI->>V4: 输入携带 ref
-        V4->>Store: 读取已提交字节并校验消费能力
+    UI->>V4: 输入携带已就绪 refs
+    loop 按原始顺序准备每个 ref
+        alt omp-attachment 上传引用
+            V4->>Store: 只读已提交且未过期字节
+        else 当前宿主绝对路径
+            V4->>Reader: 异步打开、检查 regular file、有界读取
+            Reader-->>V4: 真实字节或明确错误，关闭句柄
+        end
+    end
+    alt 全部内容与类型/大小/编码校验通过
         V4->>OMP: prompt / steer / follow_up 携带 images / 文本
         V4-->>UI: 原有 ACK 与会话投影
-    else 校验失败
-        Store-->>UI: 明确错误（经 Host），不发布 ref
+    else 任一准备或校验失败
+        V4-->>UI: 拒绝整次输入，不调用模型
     end
 ```
 
@@ -138,6 +152,7 @@ sequenceDiagram
 3. 流式中的 `guide` 和 `queue` 输入继续分别使用 `steer` 与 `follow_up`，并携带所提交的图片。
 4. **F008 / 公开上传完整性**：通过真实 begin/chunk/commit 协议上传多分片图片与 UTF-8 文本，commit 后读回的字节、MIME 及 SHA256 与 begin 声明一致，模型消费收到原字节。声明 2 字节却仅上传 1 字节（分片数齐全）、超过声明长度、缺片，以及字节数相同但 SHA256 错误分别明确拒绝，不发布可读取 ref、不标记 committed、不启动模型轮次；不能以 UI 正常不会构造该输入免除校验。
 5. **F008 / 边界与幂等**：零字节/零分片配正确空串摘要可完成上传（消费类型限制不变），错误空串摘要拒绝；重复合法 chunk 不增加字节数，重复合法 commit 返回同一 ref，冲突分片/声明及跨 session/connection 提交不绕过验证。失败后 abort 清理 staging，既有已提交附件不受影响。
+6. **本机/目标 Host 路径消费**：经公开 v4 首发和续发入口提交真实临时 UTF-8 文件和图片路径，传给核心的内容与原文件一致；已上传引用与路径混排仍保序。相对/未知 URI、缺失文件、目录、非法 UTF-8、类型/数量/大小超限及过期上传 ref 明确失败，不调用模型。真实隔离桌面从原生工具首发提升会话后，未提交正文与附件仍可见，随后普通发送可由真实模型读取附件内容，而非仅证明 chip 保留。
 
 无附件的文本输入和 legacy 图片转发路径保持可用；不迁移历史会话或附件。已上传/可回读不等于 omp 能消费，不能据此跳过提交校验。
 
@@ -149,3 +164,5 @@ sequenceDiagram
 需求从原有权威 FORK 与对应 spec 迁入，未因当前实现降低要求。既有实现及历史验证不等于本次验收；统一证据边界见 [需求索引](README.md#实现与验证状态)。
 
 - 2026-10-09 核心体验续作：F004 的原生/兼容 MCP 配置发现与部分错误定向回归通过；F008 的声明长度、摘要、分片/幂等/归属拒绝与合法附件读回/转发通过公开 stdio 协议及 fake-omp 入口验证，纳入 OMP 全集 374/374、0 跳过。真实组件的附件引用与 pending 场景通过，不声称真实模型图片消费或产品上传 GUI 链路通过；具体证据及完整门禁边界见 [核心体验续作验收](../test-reports/performance-hot-paths-2026-10-09.md#核心体验续作验收)。未恢复商业账号或付费套餐。
+
+- 2026-10-17 原生面板首发的真实附件续发：已修复草稿附件 owner 提升及绝对路径 ref 消费，路径文件经 CLI 注入的异步 reader 与上传事务字节使用同一输入校验。`ompLocalAttachmentInput.test.ts` 5/5 通过；Windows 隔离产品实际执行 `/goal show` 后保留正文和 `mbist.md`，随后真实 `zhipu-coding-plan/glm-5.3-flash` 读出附件中的验收标记。证据：`%TEMP%/ompcode-four-deliverables-HopN5z/final-attachment-success.json` 与同名 PNG。未运行 CentOS/shm/NFS 或真实图片模型消费；不沿用前期 `attachment reference missing` 的失败轮次为通过。

@@ -213,6 +213,8 @@ export type {
   IPlatformService,
   OpenInEditorRemoteTarget,
   OpenInEditorOptions,
+  OfflineDataBackupPhase,
+  OfflineDataBackupSnapshot,
   OfflineDataBackupWarningPayload,
   PostUpdateReleaseNotesPayload,
   RemoteConnectionRuntimeLog,

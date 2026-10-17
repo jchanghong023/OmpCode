@@ -19,6 +19,7 @@ import type { SlashCommandResolver } from "./ompPromptDispatch.js";
 import { OmpBtwStore } from "./OmpBtwStore.js";
 import { OmpAgentInteractionStore } from "./OmpAgentInteractionStore.js";
 import { queryAgentInteractions } from "./OmpAgentInteractionQuery.js";
+import type { OmpAttachmentFileReader } from "./ompAttachmentInput.js";
 export interface ServerAppDeps {
   ompFactory: OmpProcessFactory;
   store: OmpStorePort;
@@ -33,6 +34,8 @@ export interface ServerAppDeps {
   directory: OmpDirectoryGatewayPort;
   /** 斜杠命令目录解析器（严格分发）。 */
   resolveSlashCommand?: SlashCommandResolver;
+  /** 文件读取位于目标 Host 适配器；纯模拟服务未注入时明确拒绝路径 ref。 */
+  attachmentFileReader?: OmpAttachmentFileReader;
 }
 export class ServerApp {
   readonly registry: SessionRegistry;
@@ -58,7 +61,14 @@ export class ServerApp {
       ...(deps.resolveSlashCommand ? { resolveSlashCommand: deps.resolveSlashCommand } : {}),
     });
     this.sideViews = new OmpBtwStore({ registry: this.registry, gateway: deps.gateway, workspaceId: deps.workspaceKey, workspacePath: deps.workspacePath });
-    this.commands = new V4CommandService({ registry: this.registry, workspaceId: deps.workspaceKey, workspacePath: deps.workspacePath, attachments: this.attachments, sideViews: this.sideViews });
+    this.commands = new V4CommandService({
+      registry: this.registry,
+      workspaceId: deps.workspaceKey,
+      workspacePath: deps.workspacePath,
+      attachments: this.attachments,
+      attachmentFileReader: deps.attachmentFileReader,
+      sideViews: this.sideViews,
+    });
     this.subagentViews = new SubagentViewStore({ registry: this.registry, gateway: deps.gateway, workspaceId: deps.workspaceKey, workspacePath: deps.workspacePath, store: deps.store });
     this.registry.setSubagentViews(this.subagentViews);
     this.directoryMethods = createOmpDirectoryMethodHandlers({ registry: this.registry, directory: deps.directory, workspaceKey: deps.workspaceKey });

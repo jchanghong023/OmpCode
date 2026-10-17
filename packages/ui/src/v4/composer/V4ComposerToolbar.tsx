@@ -16,6 +16,7 @@
  * 三件套不能全部门控在 config!==null 上——草稿态会整体不渲染。
  */
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { WrenchIcon } from "lucide-react";
 import {
   TID_V4_MODEL_CONFIG,
   TID_V4_COMPOSER_INPUT,
@@ -109,6 +110,8 @@ export interface V4ComposerToolbarProps {
     sourceModel: ModelSelectionSource | null,
   ) => Promise<void> | void;
   onSendCompressionCommand?: (command: string) => void;
+  /** 只打开工具窗口；admission 与目标 scope 由 SessionPane 持有。 */
+  onOpenNativeTools?: () => void;
 }
 
 /** 模型 / 思考深度 / context usage 簇（渲染在发送键左侧，与旧 UI 同位）。 */
@@ -128,6 +131,7 @@ function V4ComposerModelControlsImpl({
   onSelectModel,
   onSelectThought,
   onSendCompressionCommand,
+  onOpenNativeTools,
   onRecoverCustomModelSelection,
 }: V4ComposerToolbarProps) {
   const { intl, locale } = useZCodeIntl();
@@ -440,6 +444,22 @@ function V4ComposerModelControlsImpl({
         data-usage-max={usage?.contextWindow?.maxTokens ?? ""}
         className="hidden"
       />
+      {onOpenNativeTools ? (
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="h-7 shrink-0 gap-1 px-2 text-ui-sm"
+          onClick={onOpenNativeTools}
+          title={intl.formatMessage({ id: "ompNativeTools.open" })}
+          aria-label={intl.formatMessage({ id: "ompNativeTools.open" })}
+        >
+          <WrenchIcon className="size-3.5" />
+          <span className="hidden @lg/composer:inline">
+            {intl.formatMessage({ id: "ompNativeTools.open" })}
+          </span>
+        </Button>
+      ) : null}
       <ChatContextUsage
         allowZeroUsage
         taskUsage={taskUsage}

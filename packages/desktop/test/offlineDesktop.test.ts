@@ -13,6 +13,7 @@ import {
 import {
   createOfflineDataBackupLifecycle,
   OFFLINE_DATA_BACKUP_PERIOD_MS,
+  type OfflineDataBackupLifecycleState,
 } from "../src/main/offlineDataBackupLifecycle.js";
 import {
   captureOfflineBrowserState,
@@ -85,6 +86,193 @@ test("early initialization touches local directories only and preserves original
   for (const key of ["appData", "userData", "sessionData", "temp", "crashDumps", "logs"] as const)
     assert.equal(actual[key], paths[key]);
   assert.equal(actual["disk-cache-dir"], paths.cache);
+});
+
+test("backup state reads are immutable memory-only projections and readiness commits before notification", () => {
+  let clockReads = 0;
+  let schedules = 0;
+  const changes: OfflineDataBackupLifecycleState[] = [];
+  const order: string[] = [];
+  const lifecycle = createOfflineDataBackupLifecycle({
+    now: () => {
+      clockReads++;
+      return new Date("2026-10-16T00:00:00.000Z");
+    },
+    schedule: (_callback, period) => {
+      schedules++;
+      order.push("schedule");
+      assert.equal(period, OFFLINE_DATA_BACKUP_PERIOD_MS);
+      return () => {};
+    },
+    onStateChanged: (state) => {
+      assert.strictEqual(lifecycle.getState(), state, "state is committed before notification");
+      changes.push(state);
+      order.push(`state:${state.phase}`);
+    },
+    run: async () => assert.fail("reading or admitting a renderer must not run a backup"),
+    warn: () => assert.fail("reading state must not warn"),
+    diagnostic: () => assert.fail("reading state must not emit a round diagnostic"),
+  });
+  const initial = lifecycle.getState();
+  assert.deepEqual(initial, {
+    revision: 0,
+    phase: "waiting",
+    periodMs: OFFLINE_DATA_BACKUP_PERIOD_MS,
+    lastAttemptAt: null,
+    lastSuccessfulAt: null,
+    nextScheduledAt: null,
+    code: null,
+  });
+  for (let read = 0; read < 3; read++) assert.strictEqual(lifecycle.getState(), initial);
+  assert.equal(Object.isFrozen(initial), true);
+  assert.equal(Reflect.set(initial, "phase", "failed"), false);
+  assert.equal(clockReads, 0);
+  assert.equal(schedules, 0);
+  assert.deepEqual(changes, []);
+  lifecycle.rendererReady();
+  lifecycle.rendererReady();
+  assert.equal(schedules, 1);
+  assert.equal(clockReads, 1);
+  assert.deepEqual(order, ["state:waiting", "schedule"]);
+  assert.equal(lifecycle.getState().revision, 1);
+  assert.equal(lifecycle.getState().nextScheduledAt, "2026-10-16T00:10:00.000Z");
+  assert.equal(initial.nextScheduledAt, null, "old snapshots cannot change under a consumer");
+  const waiting = lifecycle.getState();
+  for (let read = 0; read < 3; read++) assert.strictEqual(lifecycle.getState(), waiting);
+  assert.equal(clockReads, 1, "getState does not consult the clock or reschedule");
+  lifecycle.stop();
+  assert.equal(lifecycle.getState().nextScheduledAt, null);
+  assert.equal(lifecycle.getState().revision, 2);
+  const stopped = lifecycle.getState();
+  lifecycle.stop();
+  lifecycle.rendererReady();
+  assert.strictEqual(lifecycle.getState(), stopped);
+  assert.equal(schedules, 1);
+});
+
+test("running state precedes work; overlapping and delayed ticks keep the fixed schedule", async () => {
+  let time = new Date("2026-10-16T00:00:00.000Z");
+  let tick!: () => void;
+  let finish!: (status: "completed") => void;
+  let runs = 0;
+  const changes: OfflineDataBackupLifecycleState[] = [];
+  const lifecycle = createOfflineDataBackupLifecycle({
+    now: () => time,
+    schedule: (callback) => {
+      tick = callback;
+      return () => {};
+    },
+    onStateChanged: (state) => {
+      assert.strictEqual(lifecycle.getState(), state);
+      changes.push(state);
+    },
+    run: async () => {
+      runs++;
+      assert.equal(lifecycle.getState().phase, "running");
+      assert.equal(changes.at(-1)?.phase, "running", "consumers are notified before work begins");
+      return new Promise<"completed">((resolve) => {
+        finish = resolve;
+      });
+    },
+    warn: () => assert.fail("successful and overlapping rounds do not warn"),
+  });
+  lifecycle.rendererReady();
+  time = new Date("2026-10-16T00:10:00.000Z");
+  tick();
+  assert.equal(runs, 0);
+  assert.equal(lifecycle.getState().phase, "running", "the running state is synchronous");
+  assert.equal(lifecycle.getState().lastAttemptAt, time.toISOString());
+  assert.equal(lifecycle.getState().nextScheduledAt, "2026-10-16T00:20:00.000Z");
+  await nextTurn();
+  const admittedAt = lifecycle.getState().lastAttemptAt;
+  time = new Date("2026-10-16T00:20:00.000Z");
+  tick();
+  assert.equal(lifecycle.getState().phase, "running");
+  assert.equal(lifecycle.getState().lastAttemptAt, admittedAt);
+  assert.equal(lifecycle.getState().nextScheduledAt, "2026-10-16T00:30:00.000Z");
+  time = new Date("2026-10-16T00:45:00.000Z");
+  tick();
+  assert.equal(lifecycle.getState().nextScheduledAt, "2026-10-16T00:50:00.000Z");
+  assert.equal(lifecycle.getState().lastSuccessfulAt, null);
+  assert.equal(lifecycle.getState().phase, "running", "overlap is not an external busy result");
+  assert.equal(runs, 1);
+  time = new Date("2026-10-16T00:47:00.000Z");
+  finish("completed");
+  await nextTurn();
+  assert.equal(lifecycle.getState().phase, "completed");
+  assert.equal(lifecycle.getState().lastSuccessfulAt, time.toISOString());
+  assert.equal(lifecycle.getState().nextScheduledAt, "2026-10-16T00:50:00.000Z");
+  assert.deepEqual(
+    changes.map((state) => state.revision),
+    [1, 2, 3, 4, 5],
+  );
+  assert.equal(changes[1]?.phase, "running", "completed state does not mutate older revisions");
+  lifecycle.stop();
+});
+
+test("stopping drops queued work and every late outcome", async () => {
+  for (const outcome of ["completed", "failed"] as const) {
+    let tick!: () => void;
+    let finish!: () => void;
+    let runs = 0;
+    let diagnostics = 0;
+    let notifications = 0;
+    const lifecycle = createOfflineDataBackupLifecycle({
+      now: () => new Date("2026-10-16T00:00:00.000Z"),
+      schedule: (callback) => {
+        tick = callback;
+        return () => {};
+      },
+      onStateChanged: () => {
+        notifications++;
+      },
+      diagnostic: () => {
+        diagnostics++;
+      },
+      run: async () => {
+        runs++;
+        return new Promise<"completed">((resolve, reject) => {
+          finish = () => {
+            if (outcome === "completed") resolve("completed");
+            else reject(new Error("late failure"));
+          };
+        });
+      },
+      warn: () => assert.fail("quit must ignore late failure warnings"),
+    });
+    lifecycle.rendererReady();
+    tick();
+    await nextTurn();
+    assert.equal(runs, 1);
+    lifecycle.stop();
+    const stopped = lifecycle.getState();
+    const notificationsAtStop = notifications;
+    assert.equal(stopped.nextScheduledAt, null);
+    finish();
+    await nextTurn();
+    tick();
+    lifecycle.rendererReady();
+    assert.strictEqual(lifecycle.getState(), stopped);
+    assert.equal(notifications, notificationsAtStop);
+    assert.equal(diagnostics, 1, "only the pre-stop started diagnostic survives");
+    assert.equal(runs, 1);
+  }
+  let tick!: () => void;
+  const lifecycle = createOfflineDataBackupLifecycle({
+    schedule: (callback) => {
+      tick = callback;
+      return () => {};
+    },
+    run: async () => assert.fail("a stopped queued round must never enter backup IO"),
+    warn: () => assert.fail("a stopped queued round must never warn"),
+    diagnostic: () => assert.fail("a stopped queued round must never emit diagnostics"),
+  });
+  lifecycle.rendererReady();
+  tick();
+  lifecycle.stop();
+  const stopped = lifecycle.getState();
+  await nextTurn();
+  assert.strictEqual(lifecycle.getState(), stopped);
 });
 
 test("readiness starts exactly one delayed ten-minute schedule, coalesces overlap, and aborts without waiting", async () => {
@@ -516,11 +704,20 @@ test("diagnostics keep last-success solely in the lifecycle and never expose fai
     { phase: "started", at: success, lastSuccessfulAt: undefined },
     { phase: "completed", at: success, lastSuccessfulAt: success },
   ]);
+  assert.equal(lifecycle.getState().phase, "completed");
+  assert.equal(lifecycle.getState().lastSuccessfulAt, success);
+  assert.equal(lifecycle.getState().lastAttemptAt, success);
+  assert.equal(lifecycle.getState().code, null);
   time = new Date("2026-10-16T00:10:00.000Z");
   result = "busy";
   tick();
   await nextTurn();
   assert.equal(events.at(-1)?.lastSuccessfulAt, success);
+  assert.equal(lifecycle.getState().phase, "busy");
+  assert.equal(lifecycle.getState().lastSuccessfulAt, success, "busy is not a successful backup");
+  assert.equal(lifecycle.getState().lastAttemptAt, time.toISOString());
+  assert.equal(lifecycle.getState().code, null);
+  time = new Date("2026-10-16T00:20:00.000Z");
   result = "failure";
   tick();
   await nextTurn();
@@ -530,10 +727,32 @@ test("diagnostics keep last-success solely in the lifecycle and never expose fai
     lastSuccessfulAt: success,
     code: "ENOSPC",
   });
+  assert.equal(lifecycle.getState().phase, "failed");
+  assert.equal(lifecycle.getState().lastSuccessfulAt, success, "failure preserves success history");
+  assert.equal(lifecycle.getState().lastAttemptAt, time.toISOString());
+  assert.equal(lifecycle.getState().code, "ENOSPC");
+  time = new Date("2026-10-16T00:30:00.000Z");
   failureCode = "/private/nfs/sensitive-code";
   tick();
   await nextTurn();
   assert.equal(events.at(-1)?.code, "BACKUP_FAILED");
+  assert.equal(lifecycle.getState().code, "BACKUP_FAILED");
+  assert.ok(!JSON.stringify(lifecycle.getState()).includes("private"));
+  result = "busy";
+  time = new Date("2026-10-16T00:40:00.000Z");
+  tick();
+  assert.equal(lifecycle.getState().phase, "running");
+  assert.equal(lifecycle.getState().code, null, "a new attempt clears the previous failure code");
+  await nextTurn();
+  assert.equal(lifecycle.getState().phase, "busy");
+  assert.equal(lifecycle.getState().lastSuccessfulAt, success);
+  result = "completed";
+  time = new Date("2026-10-16T00:50:00.000Z");
+  tick();
+  await nextTurn();
+  assert.equal(lifecycle.getState().phase, "completed");
+  assert.equal(lifecycle.getState().lastSuccessfulAt, time.toISOString());
+  assert.equal(lifecycle.getState().code, null);
   assert.ok(!JSON.stringify(events).includes("private"));
   lifecycle.stop();
 });

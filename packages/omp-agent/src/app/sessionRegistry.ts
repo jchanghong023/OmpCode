@@ -267,6 +267,9 @@ export class SessionRegistry {
     if (!owner.ompSessionFile && cold.sessionId !== owner.sessionId) {
       this.engineAliases.set(cold.sessionId, owner.sessionId);
       diagnostics.debug("omp.session.alias.bound", { event: "omp.session.alias.bound", aliasId: cold.sessionId, ownerSessionId: owner.sessionId, aliasKind: "cold_anchor" });
+    } else if (owner.projection.stateSnapshot.control.phase === "draft" && cold.sessionId === ompSessionIdOfFilePath(owner.ompSessionFile)) {
+      // 冷 alias 已由真实文件证明 UUID；后续普通输入不能重新把临时 ID 写回索引。
+      this.rekeyedEngineIds.add(owner.sessionId);
     }
     return owner;
   }
@@ -317,13 +320,14 @@ export class SessionRegistry {
     return { ok: true };
   }
 
-  upsertEngineSummary(engine: ConversationEngine, overrides?: { createdAt?: number; lastActivityAt?: number }): void {
-    this.indexTopics.upsertEngineSummary(engine, overrides);
+  upsertEngineSummary(engine: ConversationEngine, overrides?: { createdAt?: number; lastActivityAt?: number }): string {
+    const indexId = this.indexTopics.upsertEngineSummary(engine, overrides);
     // 原生文件可晚于本地命令生成；身份关联只更新派生文件元信息，不写 OMP journal。
     // 存储端记录并报告写入失败，flush 时仍会拒绝，不能把失败误报为持久化通过。
     void this.store
       .associateCommandOutputs?.({ cwd: engine.workspacePath, sessionId: engine.sessionId, sessionPath: engine.ompSessionFile, title: engine.projection.stateSnapshot.meta.title })
       .catch(() => {});
+    return indexId;
   }
   /** legacy session/list：冷会话 + 引擎会话合并（形状对齐 zcodeSessionInfoSchema）。 */
   async listLegacySessions(workspacePath: string, workspaceKey: string): Promise<Record<string, unknown>[]> {

@@ -1,4 +1,3 @@
-// v4/command 服务：信封校验、幂等、CAS 与命令分发。
 // omp 无法等价提供的命令以 fault.command.unsupportedByOmpCore 拒绝（差异记录在 FORK.md）。
 
 import {
@@ -15,6 +14,7 @@ import { ProtocolError } from "./errors.js";
 import type { SessionRegistry } from "./sessionRegistry.js";
 import type { ConversationEngine } from "./conversationEngine.js";
 import { prepareOmpAttachmentInput } from "./ompAttachmentInput.js";
+import type { OmpAttachmentFileReader } from "./ompAttachmentInput.js";
 import { engineModelSelectionOf } from "./ompEngineProcess.js";
 import type { OmpBtwStore } from "./OmpBtwStore.js";
 import { dispatchOmpBtwCommand, isOmpBtwSessionCommand } from "./OmpBtwCommands.js";
@@ -29,6 +29,7 @@ export interface V4CommandContext {
   workspaceId: string;
   workspacePath: string;
   attachments: AttachmentStore;
+  attachmentFileReader?: OmpAttachmentFileReader;
   sideViews?: OmpBtwStore;
 }
 
@@ -148,10 +149,11 @@ export class V4CommandService {
           });
         }
         const input = payload.firstInput
-          ? prepareOmpAttachmentInput(
+          ? await prepareOmpAttachmentInput(
               payload.firstInput.text,
               payload.firstInput.attachments,
               this.context.attachments,
+              this.context.attachmentFileReader,
             )
           : null;
         if (input && !input.ok)
@@ -179,7 +181,8 @@ export class V4CommandService {
           return this.ack(envelope, "accepted", {
             result: {
               type: "createSession",
-              sessionId: engine.sessionId,
+              // 原生命令可在 ACK 前终结并迁移索引；不能再返回已移除的临时 ID，否则宿主会重建幽灵任务。
+              sessionId: this.context.registry.upsertEngineSummary(engine),
               input: { delivery, inputId: createId("input") },
             },
           });
@@ -191,10 +194,11 @@ export class V4CommandService {
       case "sendText": {
         const payload =
           envelope.payload as import("@zcode/shared/zcode-protocol-v4").CommandPayloadMap["sendText"];
-        const input = prepareOmpAttachmentInput(
+        const input = await prepareOmpAttachmentInput(
           payload.text,
           payload.attachments,
           this.context.attachments,
+          this.context.attachmentFileReader,
         );
         if (!input.ok)
           return this.ack(envelope, "rejected", {

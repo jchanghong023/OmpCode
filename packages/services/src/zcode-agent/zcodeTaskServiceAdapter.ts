@@ -1405,10 +1405,12 @@ export function createZCodeTaskServiceAdapter(
   async function syncTaskIndexSnapshot(
     snapshot: ZCodeSessionStateSnapshot,
   ): Promise<ZCodeTaskMeta> {
-    const meta = snapshotToMeta(snapshot);
-    // 旧污染标签页的显式恢复不能把只读 child 再次写进主任务索引。
-    if (snapshot.session.sessionKind === "subagent_child") return meta;
-    return syncTaskIndexMeta(meta);
+    // 所有 session snapshot 共用 Host 身份 owner；直接写 repo 会绕过 temp→UUID 路由，
+    // 让历史详情读取或迟到的预热快照在迁移后重新建出临时任务行。
+    const meta = await taskIndexSyncer.syncSnapshotAndBroadcast(snapshot, {
+      broadcastReason: "task_status_changed",
+    });
+    return rememberIndexedTaskMeta(meta);
   }
 
   async function updateIndexedTaskState(
@@ -1917,13 +1919,16 @@ export function createZCodeTaskServiceAdapter(
           });
         }
       }
-      const baseMeta = snapshotToMeta(snapshot);
-      const meta = await syncTaskIndexMeta({
-        ...baseMeta,
-        ...(params.automationId ? { cronAutomationId: params.automationId } : {}),
-        // 闲时派发在创建时即盖章持久归属；月亮图标与后续系统分组归属都只看该标记。
-        ...(params.offPeakTaskId ? { offPeakTaskId: params.offPeakTaskId } : {}),
-      });
+      const baseMeta = await syncTaskIndexSnapshot(snapshot);
+      const meta =
+        params.automationId || params.offPeakTaskId
+          ? await syncTaskIndexMeta({
+              ...baseMeta,
+              ...(params.automationId ? { cronAutomationId: params.automationId } : {}),
+              // 闲时派发在创建时即盖章持久归属；月亮图标与后续系统分组归属都只看该标记。
+              ...(params.offPeakTaskId ? { offPeakTaskId: params.offPeakTaskId } : {}),
+            })
+          : baseMeta;
       await taskIndexRepo.initializeGroupedTaskAtTop({
         workspacePath: meta.workspacePath,
         workspaceIdentity: meta.workspaceIdentity,
@@ -2203,9 +2208,7 @@ export function createZCodeTaskServiceAdapter(
         if (result.compact?.state === "accepted") {
           return result;
         }
-        const meta = await syncTaskIndexSnapshot(result.snapshot);
-        // compact 收敛是状态同步，不涉及归属；缺省 task_meta_changed 会触发全局 membership 重拉。
-        emitWorkspaceTaskListChanged(target, meta, "task_status_changed");
+        await syncTaskIndexSnapshot(result.snapshot);
         activePromptInputIds.delete(taskKey(target));
         return result;
       } catch (error) {
@@ -2266,9 +2269,7 @@ export function createZCodeTaskServiceAdapter(
         workspacePath: target.workspacePath,
       });
       const syncStartedAt = Date.now();
-      const meta = await syncTaskIndexSnapshot(result.snapshot);
-      // goal 动作后的快照收敛同为状态同步，不涉及归属，避免全局 membership 重拉。
-      emitWorkspaceTaskListChanged(target, meta, "task_status_changed");
+      await syncTaskIndexSnapshot(result.snapshot);
       logger.info(params.inputId, "[zcode-task-service] goalSession task index 同步完成", {
         action: params.action,
         durationMs: Date.now() - startedAt,
@@ -2655,9 +2656,9 @@ export function createZCodeTaskServiceAdapter(
         params.messageLimit,
       );
       const projectionDurationMs = Date.now() - projectionStartedAt;
-      // session owner 的快照刷新索引投影；syncTaskMeta 继续保留用户手动标题。
+      // 与后台回源共用 canonical 写入边界，返回值同样使用当前 UUID 身份。
       const indexStartedAt = Date.now();
-      const indexedMeta = await syncTaskIndexMeta(zcodeSnapshot.meta);
+      const indexedMeta = await syncTaskIndexSnapshot(snapshot);
       const indexDurationMs = Date.now() - indexStartedAt;
       logger.info(undefined, "[zcode-task-service] 历史快照读取完成", {
         clientMode: params.clientMode ?? "unknown",

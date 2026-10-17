@@ -21,6 +21,15 @@ function resolveScope(workspaceKey: string, scopeId: string) {
   return scopeId;
 }
 
+/** 正文和附件共用已经接纳的身份关系；不创建 owner 或第二份 alias 表。 */
+export function resolveSharedComposerDraftScope(params: {
+  workspacePath: string;
+  workspaceIdentity?: string;
+  scopeId: string;
+}): string {
+  return resolveScope(params.workspaceIdentity?.trim() || params.workspacePath, params.scopeId);
+}
+
 /** 只在同一 renderer 共用 owner；身份隔离不依赖当前显示的物理路径。 */
 export function getSharedComposerDraftOwner(params: {
   workspacePath: string;

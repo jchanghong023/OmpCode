@@ -191,15 +191,15 @@ test("current session recovery preserves Desktop and replayable projections", as
       async getTaskMeta() {
         return meta;
       },
-      async syncTaskMeta(params: { meta: typeof meta }) {
-        indexed.push(params.meta);
-        return params.meta;
-      },
       close() {},
     } as unknown as TaskIndexRepo,
     taskIndexSyncer: {
       onSessionTerminalEvent: disposable,
       onSessionReadyEvent: disposable,
+      async syncSnapshotAndBroadcast() {
+        indexed.push(meta);
+        return meta;
+      },
       getWorkspaceEmitter() {
         return { fire() {} };
       },

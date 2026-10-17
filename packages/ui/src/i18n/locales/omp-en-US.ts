@@ -320,6 +320,170 @@ const ompEnUSOverrides: Record<string, string> = {
   "ompModelRoles.notConfigured": "Not configured",
   "ompModelRoles.overridden": "User config saved but currently overridden by another source",
   "ompModelRoles.autoOption": "Auto",
+  "ompNativeTools.open": "Native tools",
+  "ompNativeTools.title": "OMP native tools",
+  "ompNativeTools.description":
+    "Inspect the current workspace catalog. Actions are submitted to this conversation. Acceptance does not mean completion; output and follow-up questions appear in the conversation.",
+  "ompNativeTools.projectIndex": "Knowledge & code indexes",
+  "ompNativeTools.orchestration": "Orchestration shortcuts",
+  "ompNativeTools.workspace": "Workspace",
+  "ompNativeTools.session": "Conversation",
+  "ompNativeTools.draft": "New conversation (keeps your draft)",
+  "ompNativeTools.catalogScope":
+    "This catalog comes from the workspace runtime; the target conversation validates execution again.",
+  "ompNativeTools.blocked.running":
+    "This conversation is running. You can browse but cannot execute actions.",
+  "ompNativeTools.blocked.interaction":
+    "Complete the native question in the conversation before executing an action.",
+  "ompNativeTools.blocked.choice":
+    "Conversation input is waiting for a choice. You can browse but cannot execute actions.",
+  "ompNativeTools.blocked.unavailable":
+    "Submission is unavailable. Select a model or wait for the connection to recover.",
+  "ompNativeTools.blocked.submitting":
+    "An action is being submitted. Please do not submit it again.",
+  "offlineBackup.title": "Runtime & Backups",
+  "offlineBackup.description":
+    "Read-only runtime and backup state from this device’s application Main process. This does not restrict network access or use the current remote Host’s directories.",
+  "offlineBackup.refresh": "Refresh state",
+  "offlineBackup.refreshHint":
+    "Reads in-memory state only; does not back up, restore, or scan directories.",
+  "offlineBackup.loading": "Reading runtime state…",
+  "offlineBackup.unavailable":
+    "Runtime and backup state is unavailable on this platform. Web cannot read this device’s Main process state.",
+  "offlineBackup.error":
+    "Could not read or subscribe to runtime state. Refresh to retry; this does not mean a backup failed.",
+  "offlineBackup.localRuntime": "Local runtime",
+  "offlineBackup.backupState": "Backup state",
+  "offlineBackup.offline": "Offline runtime mode",
+  "offlineBackup.offlineEnabled": "Linux shared-memory runtime and persistent backups enabled",
+  "offlineBackup.offlineDisabled": "Shared-memory offline runtime not enabled",
+  "offlineBackup.activeProfile": "Active runtime profile",
+  "offlineBackup.runtimeRoot": "Runtime root",
+  "offlineBackup.persistentRoot": "Persistent root",
+  "offlineBackup.phase": "Current phase",
+  "offlineBackup.period": "Backup period",
+  "offlineBackup.periodValue": "{milliseconds} ms",
+  "offlineBackup.lastAttemptAt": "Last attempt",
+  "offlineBackup.lastSuccessfulAt": "Last successful backup",
+  "offlineBackup.nextScheduledAt": "Next scheduled trigger",
+  "offlineBackup.code": "Status code",
+  "offlineBackup.revision": "State revision",
+  "offlineBackup.noRecord": "No record in this run",
+  "offlineBackup.noNextScheduled": "No trigger currently scheduled",
+  "offlineBackup.noCode": "No status code",
+  "offlineBackup.nextHint":
+    "The next time is a scheduled trigger, not a guarantee of backup completion; a busy attempt may be skipped.",
+  "offlineBackup.risk":
+    "Runtime data in shared memory may be lost after exit, a crash, or a restart. Only completed successful backups count as persisted records. This page does not offer manual backup, restore, or path editing.",
+  "offlineBackup.phase.disabled": "Disabled",
+  "offlineBackup.phase.waiting": "Waiting",
+  "offlineBackup.phase.running": "Running",
+  "offlineBackup.phase.completed": "Completed",
+  "offlineBackup.phase.busy": "Busy — skipped",
+  "offlineBackup.phase.failed": "Failed",
+  "offlineBackup.phaseDescription.disabled":
+    "Shared-memory backups are disabled for this run; non-offline runtimes, including Windows, can normally report this state.",
+  "offlineBackup.phaseDescription.waiting":
+    "Waiting for a scheduled trigger; this does not imply a successful backup exists.",
+  "offlineBackup.phaseDescription.running":
+    "This process is backing up; the attempt has not completed.",
+  "offlineBackup.phaseDescription.completed": "The latest backup attempt completed.",
+  "offlineBackup.phaseDescription.busy":
+    "The latest trigger was skipped because backups were busy; the last successful time is unchanged.",
+  "offlineBackup.phaseDescription.failed": "The latest backup attempt failed; see the status code.",
+  "ompProjectIndex.title": "Project Knowledge & Code Indexes",
+  "ompProjectIndex.description":
+    "Open native index dashboards exposed by the current command catalog, or query the code index through the current session model.",
+  "ompProjectIndex.catalogNotice":
+    "Availability comes from the current workspace command catalog, not index existence, readiness, or session-process support. The target session is checked again on submission.",
+  "ompProjectIndex.wiki.title": "Knowledge Wiki",
+  "ompProjectIndex.wiki.description":
+    "List or create knowledge indexes, Search / Grep / paginate, or delete them in the native conversation. In-place updates and rebuilds are not supported.",
+  "ompProjectIndex.repo.title": "Code Index Repo",
+  "ompProjectIndex.repo.description":
+    "View status, build, update, rebuild, or delete code indexes in the native conversation. This dashboard provides no direct search RPC.",
+  "ompProjectIndex.dashboardNotice":
+    "These buttons only open bare-command dashboards. Further operations, progress, and destructive-action confirmations continue in the original conversation.",
+  "ompProjectIndex.available": "Command exposed by catalog",
+  "ompProjectIndex.unavailable":
+    "The catalog does not expose this command. Capability is missing or not ready; no ordinary-prompt fallback is used.",
+  "ompProjectIndex.openWiki": "Open /wiki dashboard",
+  "ompProjectIndex.openRepo": "Open /repo dashboard",
+  "ompProjectIndex.preview": "Full submission preview",
+  "ompProjectIndex.search.title": "Search Code Through Model",
+  "ompProjectIndex.search.description":
+    "Use the repo tool through the current session model for a read-only query. This invokes the model and incurs model usage; results return to the original conversation. This is not a model-free search RPC.",
+  "ompProjectIndex.search.query": "Code search query",
+  "ompProjectIndex.search.placeholder": "Enter a query for the existing code index",
+  "ompProjectIndex.search.readOnly":
+    "Requests only a query against an existing index, not creation, update, rebuild, or deletion. The original query is JSON-encoded, not executed as slash-command arguments.",
+  "ompProjectIndex.search.submit": "Use repo tool through current session model",
+  "ompProjectIndex.search.empty": "Enter a non-empty search query.",
+  "ompProjectIndex.search.previewEmpty": "Enter a query to preview the complete model request.",
+  "ompProjectIndex.executionUnavailable":
+    "Submission is unavailable in this session. Resolve running work, pending interactions, or input routing first.",
+  "ompProjectIndex.executionBlocked":
+    "The request was not submitted: the session is unavailable or target capabilities changed. Check the conversation notice.",
+  "ompProjectIndex.confirmationRequired":
+    "The request has not been submitted. Complete the confirmation in the original conversation first.",
+  "ompProjectIndex.executionFailed":
+    "Submission failed. Review the error in the conversation before retrying.",
+  "ompOrchestration.title": "Native orchestration",
+  "ompOrchestration.description":
+    "Parameters generate native commands; output, questions, and actual state remain in the conversation.",
+  "ompOrchestration.command": "Command",
+  "ompOrchestration.missing":
+    "Not provided by the current catalog: {commands}. No plain-prompt fallback.",
+  "ompOrchestration.noCapabilities": "No orchestration commands are available in this workspace.",
+  "ompOrchestration.goalHelp":
+    "Goal manages the current session’s persistent objective; this panel does not infer its state.",
+  "ompOrchestration.goalAction": "Goal action",
+  "ompOrchestration.goalSet": "Set objective",
+  "ompOrchestration.goalShow": "Show goal",
+  "ompOrchestration.goalPause": "Pause goal",
+  "ompOrchestration.goalResume": "Resume goal",
+  "ompOrchestration.goalDrop": "Drop goal",
+  "ompOrchestration.goalBudget": "Adjust budget",
+  "ompOrchestration.objective": "Objective",
+  "ompOrchestration.budget": "Token budget (positive integer or off)",
+  "ompOrchestration.loopAction": "Loop action",
+  "ompOrchestration.loopStart": "Start bounded loop",
+  "ompOrchestration.loopStop": "Bare /loop (disable or toggle)",
+  "ompOrchestration.loopKind": "Limit type",
+  "ompOrchestration.loopCount": "Count",
+  "ompOrchestration.loopDuration": "Duration",
+  "ompOrchestration.loopLimit": "Loop limit",
+  "ompOrchestration.loopInterval": "Interval (optional, e.g. 30s, 1m30s)",
+  "ompOrchestration.loopHelp":
+    "With an interval, count includes the initial turn; without one, the initial turn may be followed by at most N repeats. Duration limits are enforced by the native runtime. Conversation Stop can pause the loop; there are no /loop pause or resume subcommands.",
+  "ompOrchestration.teamHelp": "/team performs read-only planning, not implementation.",
+  "ompOrchestration.magicHelp":
+    "This command accepts task text only; no invented concurrency setting or workflow state.",
+  "ompOrchestration.task": "Task",
+  "ompOrchestration.preview": "Full command preview",
+  "ompOrchestration.previewEmpty": "Fill in the required parameters to generate a command.",
+  "ompOrchestration.confirmDrop":
+    "I confirm removing the current goal record; accumulated usage remains in the session log.",
+  "ompOrchestration.confirmLoop":
+    "I confirm sending bare /loop; the native session disables or toggles the loop according to its current state.",
+  "ompOrchestration.execute": "Execute in current conversation",
+  "ompOrchestration.submitting": "Submitting…",
+  "ompOrchestration.blocked":
+    "This conversation cannot accept the command now; check its blocking state.",
+  "ompOrchestration.confirmationRequired":
+    "Not sent: complete the required confirmation in the conversation.",
+  "ompOrchestration.failed": "Submission failed; see the error in the conversation.",
+  "ompOrchestration.sent":
+    "Submission accepted; see the original conversation for execution results.",
+  "ompOrchestration.invalid.required": "Enter the objective or task.",
+  "ompOrchestration.invalid.budget": "Budget must be a positive safe integer (digits only) or off.",
+  "ompOrchestration.invalid.count": "Count must be a positive safe integer (digits only).",
+  "ompOrchestration.invalid.duration":
+    "Use positive integer seconds, minutes, or hours, e.g. 30s, 10 minutes, or 1h30m; each segment must be positive.",
+  "ompOrchestration.invalid.interval":
+    "Interval must be a compact duration (e.g. 30s, 1m30s), at most 2147483647 milliseconds.",
+  "ompOrchestration.invalid.loopTask":
+    "The task prefix would be parsed as a limit, interval, or condition flag; start with ordinary text.",
 };
 
 export default ompEnUSOverrides;

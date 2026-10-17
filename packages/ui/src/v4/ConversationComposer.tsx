@@ -386,6 +386,8 @@ interface ConversationComposerProps {
   ) => ComposerSubmissionReceipt;
   flushComposerDraft: () => boolean;
   registerComposerContentReader: (reader: ComposerContentReader) => () => void;
+  /** 注册附件 owner 的 scope 冻结命令；父层只通知 accepted promotion，不接管附件数据。 */
+  registerAttachmentPromotion?: (promote: (sessionId: string) => void) => () => void;
   replaceComposerDraft: (draft: Omit<V4ComposerDraft, "updatedAt">) => void;
   /** 当前 Composer 是否能构造完整 Submission；空模型或空 Reasoning 时为 false。 */
   submissionReady?: boolean;
@@ -452,6 +454,7 @@ interface ConversationComposerProps {
   gitSummary?: GitRepositorySummary | null;
   gitDirtyFileCount?: number;
   onOpenGitReview?: () => void;
+  onOpenNativeTools?: () => void;
   onSetAutoCompaction?: (enabled: boolean) => Promise<{ success: boolean; error?: string }>;
   onSwitchMode: (mode: string) => void;
   /** 打开当前 session 的 Status panel，并直达 Running 明细。 */
@@ -519,6 +522,7 @@ function ConversationComposerImpl({
   captureComposerSubmission,
   flushComposerDraft,
   registerComposerContentReader,
+  registerAttachmentPromotion,
   replaceComposerDraft,
   submissionReady = true,
   createSubmissionFromComposer,
@@ -550,6 +554,7 @@ function ConversationComposerImpl({
   gitSummary,
   gitDirtyFileCount,
   onOpenGitReview,
+  onOpenNativeTools,
   onSwitchMode,
   onOpenRunningBackgroundWorks,
   backgroundWorkOpenTarget = "panel",
@@ -672,6 +677,31 @@ function ConversationComposerImpl({
     disabled,
     listenAddToChatEvents: listenAddToChatEvents && !disabled,
   });
+  useLayoutEffect(() => {
+    let active = true;
+    let promoted = false;
+    const unregister = registerAttachmentPromotion?.((createdSessionId) => {
+      // 注册时冻结 token；A→B→A、卸载或重复 ACK 都不能移动之后的新草稿。
+      if (
+        !active ||
+        promoted ||
+        activeScopeRef.current !== activeScopeToken ||
+        draftScopeId !== V4_DRAFT_SCOPE_ROOT
+      )
+        return;
+      promoted = true;
+      attachmentsApi.promoteUnsubmittedAttachments(createdSessionId);
+    });
+    return () => {
+      active = false;
+      unregister?.();
+    };
+  }, [
+    activeScopeToken,
+    attachmentsApi.promoteUnsubmittedAttachments,
+    draftScopeId,
+    registerAttachmentPromotion,
+  ]);
   // 对齐旧版 useChatComposer：窗口级 dragover 会在指针进入 ChatView 前预先点亮
   // 整个聊天区与桌面草稿标题栏；workspace payload 的文案优先于系统附件。
   const { externalFileDragging, workspaceFileDragging } = usePromptEditorDragState({
@@ -2143,6 +2173,7 @@ function ConversationComposerImpl({
               onSwitchMode={onSwitchMode}
               onRecoverCustomModelSelection={onRecoverCustomModelSelection}
               onSendCompressionCommand={onSendCompressionCommand}
+              onOpenNativeTools={onOpenNativeTools}
             />
           )}
         </span>
@@ -2207,6 +2238,7 @@ function ConversationComposerImpl({
       onSelectThought,
       onRecoverCustomModelSelection,
       onSendCompressionCommand,
+      onOpenNativeTools,
       onSwitchMode,
       pending,
       provider,

@@ -63,7 +63,8 @@
         "test/ompCore.launch.mjs",
         "test/offlineDesktop.windows-smoke.mjs",
         "test/offlineDesktop.windows-smoke.cjs",
-        "test/toolContentPresentation.fixture.jsx"
+        "test/toolContentPresentation.fixture.jsx",
+        "test/ompProductTools.fixture.tsx"
       ],
       "ignoreDependencies": [
         "@babel/runtime",
@@ -135,7 +136,10 @@
       ],
       "ignoreDependencies": ["@xyflow/react", "ansi-to-react", "use-stick-to-bottom"]
     },
-    "packages/web": { "ignoreDependencies": ["tailwindcss"] },
+    "packages/web": {
+      "entry": ["src/main.tsx", "**/*.test.{js,cjs,mjs,jsx,ts,cts,mts,tsx}"],
+      "ignoreDependencies": ["tailwindcss"]
+    },
     "packages/zcode-server-cli": {
       "entry": [
         "src/index.ts",

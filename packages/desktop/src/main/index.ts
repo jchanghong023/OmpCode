@@ -1,5 +1,9 @@
 import { offlineDesktopPaths } from "./desktopEarlyOfflineDataBootstrap.js";
-import { createOfflineDataBackupLifecycle } from "./offlineDataBackupLifecycle.js";
+import {
+  createOfflineDataBackupLifecycle,
+  OFFLINE_DATA_BACKUP_PERIOD_MS,
+  type OfflineDataBackupLifecycleState,
+} from "./offlineDataBackupLifecycle.js";
 import { captureOfflineBrowserState, persistOfflineBrowserState } from "./offlineBrowserState.js";
 import { runOfflineDataBackupWorker } from "./offlineDataBackupWorkerClient.js";
 import { createLocalTtftExporter } from "./localTtftExporter.js";
@@ -66,6 +70,7 @@ import {
   getZCodeDataRootDir,
   normalizeRuntimeProcessEnv,
 } from "@zcode/services/node";
+import { resolveOmpProfileFromEnv } from "@zcode/shared/omp-profile";
 import {
   desktopMenuMessageIds,
   type Locale,
@@ -87,6 +92,7 @@ import {
   isLoopbackUrl,
   resolveOfflineGateState,
   type OfflineGateState,
+  type OfflineDataBackupSnapshot,
 } from "@zcode/shared";
 import { flushMainLogs, logger } from "./logger.js";
 import { markMainLaunchAppReady } from "./desktopLaunchMarks.js";
@@ -625,6 +631,33 @@ const windowTaskRealtimeHostIdMap = new Map<number, string>();
 const windowUnreadCountMap = new Map<number, number>();
 const windowHostProcessMap = new Map<number, ElectronUtilityProcess>();
 const offlineReadyRendererIds = new Set<number>();
+// 仅持有静态本机路径；非 offline 不创建调度器，读取状态也不触发根目录初始化或扫描。
+const offlineBackupRoots =
+  offlineDesktopPaths?.roots ??
+  (() => {
+    const root = getZCodeDataRootDir();
+    return { runtimeRoot: root, persistentRoot: root };
+  })();
+function getOfflineDataBackupSnapshot(
+  state: OfflineDataBackupLifecycleState | undefined = offlineDataBackup?.getState(),
+): OfflineDataBackupSnapshot {
+  return {
+    ...(state ?? {
+      revision: 0,
+      phase: "disabled" as const,
+      periodMs: OFFLINE_DATA_BACKUP_PERIOD_MS,
+      lastAttemptAt: null,
+      lastSuccessfulAt: null,
+      nextScheduledAt: null,
+      code: null,
+    }),
+    offline: Boolean(offlineDesktopPaths),
+    // getter 在 launcher/AppSettings profile 应用后由应用 renderer 调用；不读待重启设置或枚举目录。
+    activeProfile: resolveOmpProfileFromEnv(process.env),
+    runtimeRoot: offlineBackupRoots.runtimeRoot,
+    persistentRoot: offlineBackupRoots.persistentRoot,
+  };
+}
 const offlineDataBackup = offlineDesktopPaths
   ? createOfflineDataBackupLifecycle({
       run: async (signal) => {
@@ -648,6 +681,19 @@ const offlineDataBackup = offlineDesktopPaths
           signal,
         );
       },
+      onStateChanged: (state) => {
+        const snapshot = getOfflineDataBackupSnapshot(state);
+        for (const win of BrowserWindow.getAllWindows()) {
+          // 与 Local Host 相同的 webContents.id 准入，不向 webview/未注册窗口暴露本机路径。
+          if (
+            !win.isDestroyed() &&
+            !win.webContents.isDestroyed() &&
+            windowHostProcessMap.has(win.webContents.id)
+          ) {
+            win.webContents.send(PlatformChannels.OfflineDataBackupStateChanged, snapshot);
+          }
+        }
+      },
       diagnostic: (event) => {
         if (event.phase === "failed") {
           logger.warn(
@@ -669,6 +715,22 @@ const offlineDataBackup = offlineDesktopPaths
       },
     })
   : undefined;
+ipcMain.handle(PlatformChannels.GetOfflineDataBackupState, (event) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  // 非 offline 也按 Local Host 注册表鉴权，不能依赖只在 offline 时填充的 ready 集合。
+  if (
+    !win ||
+    win.isDestroyed() ||
+    event.sender.isDestroyed() ||
+    !windowHostProcessMap.has(event.sender.id)
+  ) {
+    logger.warn("[offline-backup] state read rejected for unregistered renderer", {
+      rendererId: event.sender.id,
+    });
+    throw new Error("OFFLINE_BACKUP_STATE_UNAUTHORIZED");
+  }
+  return getOfflineDataBackupSnapshot();
+});
 if (offlineDataBackup) {
   ipcMain.on(PlatformChannels.RendererReady, (event) => {
     const win = BrowserWindow.fromWebContents(event.sender);

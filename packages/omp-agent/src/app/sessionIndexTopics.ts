@@ -1,5 +1,4 @@
 // SessionIndexTopics：sessions-index / workspace-config 两个 v4 topic 的权威状态与帧发布。
-// 从 SessionRegistry 拆出（架构 max-file-lines）；引擎生命周期仍在 SessionRegistry。
 
 import {
   encodeTopicWireFrames,
@@ -66,8 +65,8 @@ export class SessionIndexTopics {
   upsertEngineSummary(
     engine: ConversationEngine,
     overrides?: { createdAt?: number; lastActivityAt?: number },
-  ): void {
-    if (engine.projection.stateSnapshot.control.phase === "draft") return;
+  ): string {
+    if (engine.projection.stateSnapshot.control.phase === "draft") return engine.sessionId;
     const index = this.ensureIndex(engine.workspaceId);
     const state = engine.projection.stateSnapshot;
     const persistedId = ompSessionIdOfFilePath(engine.ompSessionFile) ?? engine.sessionId;
@@ -101,6 +100,7 @@ export class SessionIndexTopics {
       index.summaries.set(persistedId, stableSummary);
       this.emitIndexDelta(engine.workspaceId, { op: "session.upserted", session: stableSummary });
     }
+    return shouldRekey ? persistedId : indexId;
   }
 
   /** 删除索引行（返回是否存在，供调用方决定是否需要额外清理）。 */
@@ -191,7 +191,11 @@ export class SessionIndexTopics {
         cold,
         coldIds,
         summaries: index.summaries,
-        hasLoadedSession: (sessionId) => Boolean(this.host.getEngine(sessionId)),
+        hasLoadedSession: (sessionId) => {
+          const owner = this.host.getEngine(sessionId);
+          if (!owner) return false;
+          return index.summaries.has(sessionId) || index.summaries.has(owner.sessionId);
+        },
         upsert: (summary) => {
           index.summaries.set(summary.sessionId, summary);
           this.emitIndexDelta(workspaceId, { op: "session.upserted", session: summary });
@@ -219,8 +223,11 @@ export class SessionIndexTopics {
     connectionId: string;
   }): Promise<{ subscriptionId: string; mode: "snapshot" | "resume"; logEpoch: string }> {
     const index = this.ensureIndex(params.workspaceId);
+    // 冷 owner 水合历史仍可能处于 draft，未曾入索引；不能仅凭已加载就吞掉唯一冷摘要。
+    // 运行中 owner 已有临时索引行时仍跳过 UUID 冷行，保留既有终态迁移顺序。
     for (const cold of await this.host.store.listSessions(params.workspacePath)) {
-      if (index.summaries.has(cold.sessionId) || this.host.getEngine(cold.sessionId)) {
+      const owner = this.host.getEngine(cold.sessionId);
+      if (index.summaries.has(cold.sessionId) || (owner && index.summaries.has(owner.sessionId))) {
         continue;
       }
       index.summaries.set(cold.sessionId, {

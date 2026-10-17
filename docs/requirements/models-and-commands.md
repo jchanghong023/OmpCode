@@ -40,6 +40,30 @@
 - 备份失败记录脱敏日志并有界提示用户，前台继续使用 shm，后续周期再尝试。重启、断电或外部清理可能丢失自最近成功备份以来的修改，失败持续时可能超过 10 分钟；退出前没有最终同步保证。tmpfs 可能使用 Swap，不声称绝不落盘。
 - Desktop continuous 与 Web replayable 会话交付、workspaceIdentity、owner/lease 和 stale run 规则不变。内嵌资产必须包含相同 shm 契约的 OMP 实现；本地未提交 OMP 源码不等于已更新 Release 或打包资产，缺少真实边界验收必须记录为未验证。
 
+### 离线运行与备份状态页
+
+- 设置侧栏提供独立「运行与备份」分区；Windows 与 CentOS 7 使用同一界面。Web 不伪造本机备份能力；无法提供该能力的环境明确显示不可用。页面仅展示本机 Desktop Main 的事实，不混用当前远程工作区 Host 的目录或 profile。
+- 页面只读展示本次运行的实际 profile、应用活动根/原始持久根、离线 shm 是否启用、备份阶段、周期、最近尝试、最近成功、下次周期触发时间及脱敏错误码。非 offline 显示未启用，不创建目录、Worker、计时器或备份；运行 profile 在启动环境和 App Settings 决定后读取，不用待重启设置冒充当前值，不调用会枚举配置目录的 API。
+- 现有 Main 备份生命周期继续是唯一可变状态所有者。状态阶段为 disabled/waiting/running/completed/busy/failed；busy 仅表示跨进程备份 lease 占用，不表示成功，本进程重叠触发仍合并并保持 running。只有真实轮次完成更新最近成功；失败保留上次成功并沿用既有有界提示。错误只公开校验后的 code，不包含底层 message、stack、凭据或文件清单。
+- 状态通过平台只读 snapshot/event 提供，带本次 Main 生命周期内单调 revision。UI 先订阅再读取快照，只接纳更新版本，卸载/平台换代后忽略旧响应；重新打开立即取得最新事实，不补发 RendererReady 或备份操作。目录取 Main 已解析的本机路径，不为状态查看读取 NFS、manifest、文件大小或历史备份。
+- 最近尝试/成功只反映本次应用运行以来的记录，未知时明确说明。下次时间是固定周期的下一触发点，不保证备份一定执行，也不改成完成后再等十分钟。停止时清除计划并丢弃迟到完成，不把退出取消当作成功。
+- 页面不提供立即备份、自动恢复、恢复导入或路径修改；继续展示 shm 易失、可能丢失自最近成功备份以来的修改、无启动自动恢复及无退出最终同步保证。复用现有样式与国际化，长路径在窄窗口内可读，不横向撑开页面。
+
+```mermaid
+sequenceDiagram
+  participant Main as Main 既有备份生命周期
+  participant IPC as 平台只读桥接
+  participant UI as 运行与备份设置页
+  Main->>Main: ready/tick/真实轮次结果 → 提交 revision 快照
+  UI->>IPC: 先订阅事件
+  UI->>IPC: 读取当前快照（无文件 IO）
+  Main-->>IPC: 当前快照及后续变更
+  IPC-->>UI: 仅接纳较新 revision，卸载后忽略
+  Note over Main,UI: 本机事实；不扫描 NFS、不额外调度、不自动恢复
+```
+
+验收：受控时钟覆盖等待、运行、完成、busy、失败、重叠、重复 ready 和退出迟到结果；读取状态无执行副作用。Windows 隔离 Electron 验证真实 IPC/平台读面，UI 验证晚快照不覆盖新事件、重新打开、不可用/读取错误、中英/浅深及窄宽布局。非 offline 产品页面显示未启用且无备份调度；注入本机临时根的 offline 场景不冒称 CentOS/shm/NFS 验收。
+
 ```mermaid
 sequenceDiagram
   participant Main as Main（应用备份所有者）
@@ -175,6 +199,12 @@ sequenceDiagram
 - 未运行 fulltest/slowtest、Linux/CentOS/WSL、真实 shm/NFS、完整产品设置保存重启与人工恢复、真实模型或匹配内嵌 OMP 的 CentOS 链路；未发布或更新安装包。Windows helper 注入的本机目录不是生产 Linux 开关，也不能代替目标环境验收；内嵌 OMP 资产须另行包含同一存储契约，当前未把本地源码存在视为资产验收通过。
 - 就绪链路审查修复：`RendererReady` 从已退役 OAuth effect 移至 Root 通用平台 effect，Main 按发送端 `webContents.id` 而非 `BrowserWindow.id` 验证 Host，并记录首次接纳日志。原先独立备份 helper 冒烟未覆盖此产品接线，不能作为该入口已经通过的证据。
 - 修复后 `fastcheck` 通过（`total=3.5s / compile_excluded=0.1s / budgeted=3.4s / limit=60.0s`，Lint 0 告警、架构 0 违例），绑定本轮功能代码与当时文档快照 `20b38fe186eb4eeabbe8ec3de42408a69caff0d251e192af5943d480aef7066e`；随后仅补充本记录。既有 `offlineDesktop.test.ts` 11 项通过，桌面 `tsup` 构建通过。Windows 隐藏产品进程实际挂载 Root、连接 Local Host，经真实 preload/IPC 接纳 ID 为 `1/2` 的窗口；账号仍停用，重复就绪只创建一个 `600000ms` 调度，启动未访问备份根，日志只接纳应用 renderer。推进捕获的生产计时器后，真实 Main 导出当前应用 origin，构建后的 Worker 发布含 31 个条目的完整版本；证据在 `%TEMP%/ompcode-readiness-fix-LiMdIf/readiness-evidence.json` 及同目录 `stdout.log`。探针只注入 Windows 私有本机目录与本机目录初始化器，没有修改生产平台判断、Root、Host、IPC、接纳或备份逻辑；这是 Windows 产品链路定向冒烟，不是 CentOS/shm/NFS 或真实十分钟墙钟等待验收。临时探针已删除，专用进程树已退出，未修改用户配置、暂存区或发布产物。
+
+### 2026-10-17 运行与备份只读状态页
+
+- 独立「运行与备份」设置页已接入 Main 唯一生命周期快照与变更事件，经公开平台服务展示本次运行 profile、实际运行/持久根、六种阶段、周期、最近尝试/成功、下次计划及安全代码；刷新只重读内存，不扫描目录、不备份/恢复。Web 无平台能力时明确不可用。
+- Windows 隐藏隔离产品通过真实 preload/IPC 返回并展示 `default`、`disabled`、`600000ms`、空历史时间与空下次计划；页面根目录与 Main 快照一致，不冒充 Linux offline 运行。证据：`%TEMP%/ompcode-four-deliverables-HopN5z/final-runtime-backups.json` 与同名 PNG。
+- 生命周期定向回归与真实 Electron 组件覆盖六阶段、成功时间保留、重叠运行、取消/迟到事件、刷新、A→B→A 代际及读取/订阅错误；中英、浅深和 1100/360 CSS 宽度已验证。组件证据：`%TEMP%/omp-product-tools-V2s8Np/`。这些是 Windows 定向证据，不宣称 CentOS/shm/NFS 运行、十分钟真实墙钟等待或人工恢复已验证；完整门禁以本轮命令输出及其快照为准。
 
 ### 历史验证记录
 

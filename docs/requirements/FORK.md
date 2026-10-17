@@ -46,7 +46,8 @@
 
 - 取消上游会话分享/导入的全部专用实现，两平台一致：桌面分享按钮、轮次选择面板与确认/成功 Dock、导入提示与只读分享时间线、分享 store、SessionPane 内整套分享派生计算与预检缓存；发布/导入服务目录、HTTP 客户端、上传下载、预检、进度事件及服务注册与远程代理；Web `/share`、`/cn/share` 分享页、预览客户端与专属样式；`zcode://share/import` 深链接、Main/Preload 回调与待处理队列；分享服务通道、平台接口、共享类型、协议中 `sharedContextImport` 与 `context_refs` 等分享专属字段及派生计算；专属翻译键与 `.env` 示例项。不保留禁用入口、空实现或兼容别名。
 - 删除边界：普通复制、附件、会话历史、通用 Web 功能与 Web 登录不属于分享，保留。Web OAuth 回调 URL 路径 `/share/callback`、`/cn/share/callback` 是 provider 侧注册的重定向地址，登录流程继续使用该路径，仅删除分享页渲染与分享专属的跳转参数。旧会话/快照中已持久化的分享残留不阻断读取：`shared_context` 消息词表保留在既有解码 schema 中，快照解析沿用未知键剥离语义；本地已存在的 `.zcode-share/` 目录与导入记录不批量删除。已发布到外部服务的分享记录的撤销不在本仓库范围，不因代码删除视为已撤回。
-- 验收：产品内无可执行分享链路——入口、路由、深链接、通道与服务注册全部清理，旧分享链接或 `zcode://share/import` 不触发导入或网络请求；普通聊天、附件、会话历史恢复正常；离线门控面只保留账号；类型检查、Lint、架构检查及相关 UT/E2E 通过。
+- OAuth state 不再生成、解析或消费分享专属的 `app_return_to`；旧 state 中的该未知字段直接忽略，不据此导航。登录成功及失败重试统一回到 Web 根路径 `/`。开发环境 `return_to` 仍只允许既有受信回调地址，nonce/CSRF 校验、provider 选择与两个已注册 callback 路径保持原有规则。
+- 验收：产品内无可执行分享链路——入口、路由、深链接、通道与服务注册全部清理，旧分享链接或 `zcode://share/import` 不触发导入或网络请求；构造包含 `/share/<slug>`、`/cn/share/<slug>` 或外站 `app_return_to` 的旧 state，成功/失败重试均不跳转到该地址，合法 nonce 登录及开发回调转发仍可用。普通聊天、附件、会话历史恢复正常；离线门控面只保留账号；类型检查、Lint、架构检查及相关 UT/E2E 通过。
 
 ## 数据、端口与更新隔离
 
@@ -144,4 +145,4 @@
 需求从原有权威 FORK 与对应 spec 迁入，未因当前实现降低要求。既有实现及历史验证不等于本次验收；统一证据边界见 [需求索引](README.md#实现与验证状态)。
 
 - 会话分享取消已有源码清理及历史静态/UT 记录；无分享入口、旧链接不触发导入或网络请求以及普通聊天/附件/恢复的完整 GUI 删除验收尚未执行，不视为完成验收。手机远控取消曾在 Windows 隔离桌面验证入口、API、证书与监听边界，CentOS 7 真机及发布包仍未验收。原结果与既有失败保留于 [历史验证记录](../test-reports/fork-baseline-validation.md#需求索引旧状态记录2026-10-09-归档)，本次只核对文档，不重跑功能测试。
-- 文档核对发现会话分享取消仍有实现缺口：`packages/web/src/auth/oauthStateCodec.ts` 的 OAuth `app_return_to` 白名单仍接受 `/share/<slug>` 与 `/cn/share/<slug>`，Web 回调仍使用该解析结果跳转。仅允许保留 provider 注册的 callback 地址，不允许保留分享专属跳转参数的既有需求不变；此处只记录源码证据，未修改代码或执行登录/GUI 验收。
+- 2026-10-17 OAuth 残留清理：移除 `app_return_to` / `appReturnTo` 的生成、解析、返回值和分享跳转消费者；旧 state 的未知字段不影响正常 nonce/provider 校验，成功和重试均返回 Web 根路由。保留 provider 已注册的 `/share/callback`、`/cn/share/callback` 与受信开发回调 `return_to`。定向回归及真实 Web 页面成功/失败导航已验证；令牌交换使用隔离响应夹具，未连接真实 OAuth provider，不代表整项分享取消 GUI 已全量验收。

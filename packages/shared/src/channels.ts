@@ -50,6 +50,7 @@ import type {
   SaveFileResult,
   PrintPageToPdfResult,
   OpenInEditorOptions,
+  OfflineDataBackupSnapshot,
   OfflineDataBackupWarningPayload,
   PostUpdateReleaseNotesPayload,
   RemoteSessionClosedEvent,
@@ -168,6 +169,10 @@ export const PlatformChannels = {
   SelectFiles: "zcode:select-files",
   /** Renderer → Main：读取离线锁定门控状态（Main 唯一所有者，W4 禁用态消费） */
   OfflineGateState: "zcode:offline-gate-state",
+  /** Renderer → Main：只读查询 Main 本机运行与备份快照。 */
+  GetOfflineDataBackupState: "zcode:get-offline-data-backup-state",
+  /** Main → Renderer：唯一所有者提交后广播的运行与备份快照。 */
+  OfflineDataBackupStateChanged: "zcode:offline-data-backup-state-changed",
   /** Renderer → Main：写入宿主 ~/.ompcode 临时文本附件 */
   CreateTempTextAttachment: "zcode:create-temp-text-attachment",
   /** Renderer → Main：通过原生另存为对话框保存文件 */
@@ -682,6 +687,14 @@ export interface PlatformChannelMap {
   [PlatformChannels.OfflineGateState]: {
     request: void;
     response: OfflineGateState;
+  };
+  [PlatformChannels.GetOfflineDataBackupState]: {
+    request: void;
+    response: OfflineDataBackupSnapshot;
+  };
+  [PlatformChannels.OfflineDataBackupStateChanged]: {
+    request: OfflineDataBackupSnapshot;
+    response: void;
   };
   [PlatformChannels.SelectDirectory]: {
     request: void;

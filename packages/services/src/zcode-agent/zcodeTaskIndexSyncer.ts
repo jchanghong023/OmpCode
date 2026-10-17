@@ -321,13 +321,27 @@ export function createZCodeTaskIndexSyncer(
   const workspaceIngests = new Map<string, WorkspaceIngestState>();
   // 临时会话的旧读/订阅路由仍可用，但任务索引只有 UUID 一个写入身份。
   // 完成帧附近已有在途 readSession；必须在其写库前重定向，避免 rekey 后又造回旧行。
-  const taskIdAliases = new Map<string, string>();
+  const taskIdAliases = new Map<
+    string,
+    { fromTaskId: string; toTaskId: string; isCurrent: () => boolean }
+  >();
   // alias 可在事务前用于拦截旧 snapshot 写入；只有提交成功的关系才允许公开回放。
   const confirmedTaskIdMigrations = new Map<string, Map<string, ZCodeWorkspaceTaskListChanged>>();
   const aliasKey = (target: ZCodeAgentWorkspaceTarget, taskId: string): string =>
     `${resolveWorkspaceKey(target)}\u0000${taskId}`;
   const canonicalTaskId = (target: ZCodeAgentWorkspaceTarget, taskId: string): string =>
-    taskIdAliases.get(aliasKey(target, taskId)) ?? taskId;
+    taskIdAliases.get(aliasKey(target, taskId))?.toTaskId ?? taskId;
+  const captureWorkspaceOwnership = (target: ZCodeAgentWorkspaceTarget): (() => boolean) => {
+    const workspaceKey = resolveWorkspaceKey(target);
+    const state = workspaceIngests.get(workspaceKey);
+    const generation = state?.indexSubscriptionGeneration;
+    const runtimeGeneration = state?.runtimeGeneration;
+    return () =>
+      !disposed &&
+      workspaceIngests.get(workspaceKey) === state &&
+      state?.indexSubscriptionGeneration === generation &&
+      state?.runtimeGeneration === runtimeGeneration;
+  };
   // 之前 workspaceEmitters 私有在 adapter 里，syncer 写完 sqlite 没有广播渠道，
   // UI 永远收不到 workspace_task_list_changed。把 emitter 上提到 syncer，adapter 改为转发，
   // 让 adapter 路径和 desktop-continuous 路径共用同一份订阅，事件不再分裂。
@@ -420,6 +434,7 @@ export function createZCodeTaskIndexSyncer(
   const clearIndexPendingState = (state: WorkspaceIngestState): void => {
     discardPendingFrames(state.indexPending);
     state.indexPending = null;
+    state.pendingRekeyFrom = null;
     state.indexAssembler.clear();
   };
   const clearConfigPendingState = (state: WorkspaceIngestState): void => {
@@ -522,6 +537,86 @@ export function createZCodeTaskIndexSyncer(
     );
   }
 
+  async function rekeyTaskAndBroadcast(
+    target: ZCodeAgentWorkspaceTarget,
+    fromTaskId: string,
+    toTaskId: string,
+    isCurrent: () => boolean,
+  ): Promise<ZCodeTaskMeta | null> {
+    if (!isCurrent()) return null;
+    let meta = await taskIndexRepo.rekeyTaskId({ ...target, fromTaskId, toTaskId });
+    const alias = taskIdAliases.get(aliasKey(target, fromTaskId));
+    // 搬源行和确认无源别名是两种明确事务。只有当前 owned 索引的证明能提交后者，
+    // 普通 snapshot / routing alias 本身都不能制造已提交迁移。
+    if (
+      isCurrent() &&
+      meta &&
+      !meta.taskIdMigration &&
+      alias?.toTaskId === toTaskId &&
+      alias.isCurrent()
+    ) {
+      meta =
+        (await taskIndexRepo.commitOwnedTaskIdAlias({
+          ...target,
+          fromTaskId,
+          toTaskId,
+          isCurrent: () =>
+            isCurrent() &&
+            alias.isCurrent() &&
+            taskIdAliases.get(aliasKey(target, fromTaskId)) === alias,
+        })) ?? meta;
+    }
+    if (
+      !isCurrent() ||
+      meta?.taskIdMigration?.fromTaskId !== fromTaskId ||
+      meta.taskIdMigration.toTaskId !== toTaskId
+    )
+      return meta;
+    const workspaceKey = resolveWorkspaceKey(target);
+    let migrations = confirmedTaskIdMigrations.get(workspaceKey);
+    if (!migrations) {
+      migrations = new Map();
+      confirmedTaskIdMigrations.set(workspaceKey, migrations);
+    }
+    if (migrations.get(fromTaskId)?.taskIdMigration?.toTaskId === toTaskId) return meta;
+    const taskIdMigration = { fromTaskId, toTaskId };
+    // 迟订阅仅回放关联，不回放旧 meta，避免覆盖 UUID 会话的最新状态。
+    // 根因：target 可能是完整 task meta；只投影 wire 字段，避免迟订阅被严格 schema 拒绝。
+    migrations.set(fromTaskId, {
+      type: "workspace_task_list_changed",
+      workspacePath: target.workspacePath,
+      workspaceIdentity: target.workspaceIdentity,
+      taskId: toTaskId,
+      reason: "task_meta_changed",
+      taskIdMigration,
+    });
+    emitWorkspaceTaskListChanged({ ...target, taskId: toTaskId }, meta, "task_meta_changed", {
+      taskIdMigration,
+    });
+    return meta;
+  }
+
+  async function confirmOwnedAliasAfterCommit(
+    target: ZCodeAgentWorkspaceTarget,
+    meta: ZCodeTaskMeta,
+    isCurrent: () => boolean,
+  ): Promise<ZCodeTaskMeta> {
+    if (meta.taskIdMigration) return meta;
+    for (const [key, alias] of taskIdAliases) {
+      if (
+        key !== aliasKey(target, alias.fromTaskId) ||
+        alias.toTaskId !== meta.taskId ||
+        !alias.isCurrent()
+      )
+        continue;
+      // 目标先/后提交都在同一持久化边界兑现；不使用定时器或另起重试队列。
+      return (
+        (await rekeyTaskAndBroadcast(target, alias.fromTaskId, alias.toTaskId, isCurrent)) ?? meta
+      );
+    }
+    return meta;
+  }
+
   async function resyncTaskIndexRowFromAgent(
     target: ZCodeAgentSessionTarget,
     reason: string,
@@ -530,15 +625,17 @@ export function createZCodeTaskIndexSyncer(
       unreadSignal?: ZCodeWorkspaceTaskListChanged["unreadSignal"];
     },
   ): Promise<void> {
+    const isCurrent = captureWorkspaceOwnership(target);
     try {
       // task-index 是被动观察者，只能读取现有 runtime。调用 resumeSession
       // 会在用户下一轮 prompt 已被 Core 接受后重新 materialize/resume 同一 session，
       // 形成第二个生命周期 writer；readSession(existing-only) 保留完整 snapshot
       // 的索引能力，同时不会拉起或修改 runtime。
       const snapshot = await agentService.readSession({
-        ...target,
+        ...sessionTargetFrom(target, canonicalTaskId(target, target.sessionId)),
         runtimePolicy: "existing-only",
       });
+      if (!isCurrent()) return;
       // 回源收敛是状态/正文同步，不涉及 pin/archive/unread 归属（task_status_changed）。
       await syncSnapshotAndBroadcast(snapshot, {
         ...(options?.unreadSignal ? { unreadSignal: options.unreadSignal } : {}),
@@ -603,11 +700,12 @@ export function createZCodeTaskIndexSyncer(
       unreadSignal: unreadSignal ?? null,
     });
     const updatedAt = Date.now();
+    const isCurrent = captureWorkspaceOwnership(target);
     void taskIndexRepo
       .applyAgentPatch({
         workspacePath: target.workspacePath,
         workspaceIdentity: target.workspaceIdentity,
-        taskId: target.sessionId,
+        taskId: canonicalTaskId(target, target.sessionId),
         // error 的 lastError 详情不在 sessions-index 摘要里，留给随后的回源 snapshot
         // 写权威值（patch 不带 lastError 键 = 保留现值）；completed 沿旧语义清空。
         patch: failed
@@ -615,15 +713,18 @@ export function createZCodeTaskIndexSyncer(
           : { status: "completed", lastError: undefined, updatedAt },
       })
       .then((meta) => {
-        if (meta) {
+        if (!isCurrent()) return;
+        const currentTarget = sessionTargetFrom(target, canonicalTaskId(target, target.sessionId));
+        const currentMeta = meta?.taskId === currentTarget.sessionId ? meta : null;
+        if (currentMeta) {
           // 之前只更新 sqlite 不广播，UI 监听 workspace_task_list_changed 收不到通知，
           // 导致 spinner 不消失、updatedAt 排序不刷新。补一次广播让列表收敛。
           // 终态收敛是 status 变更，必须用 task_status_changed；
           // 之前落缺省 task_meta_changed，每次 turn 完成都会全局 bump membership
           // 版本号，所有列表实例重拉归属，表现为"任务结束左侧列表闪一下"。
           emitWorkspaceTaskListChanged(
-            broadcastTargetFrom(target),
-            meta,
+            broadcastTargetFrom(currentTarget),
+            currentMeta,
             "task_status_changed",
             unreadSignal ? { unreadSignal } : undefined,
           );
@@ -631,12 +732,16 @@ export function createZCodeTaskIndexSyncer(
         // 终态读取完整 snapshot：v4 命令路径（createSession/sendText 走 v4/command）
         // 不经过 zcodeSessionService 的 op 驱动 snapshot 同步，行缺失/正文搜索/lastError
         // 全靠这里收敛；readSession(existing-only) 只读现有 runtime，不重新恢复 session。
-        void resyncTaskIndexRowFromAgent(target, failed ? "phase.error" : "phase.completed", {
-          moveGroupedTaskToTop: options?.moveGroupedTaskToTop,
-          // patch 已广播时不能让随后的 snapshot 回源再次制造完成提醒；
-          // 行缺失时则把同一 signal 交给回源结果，保证提醒既不丢也不重复。
-          ...(meta || !unreadSignal ? {} : { unreadSignal }),
-        });
+        void resyncTaskIndexRowFromAgent(
+          currentTarget,
+          failed ? "phase.error" : "phase.completed",
+          {
+            moveGroupedTaskToTop: options?.moveGroupedTaskToTop,
+            // patch 已广播时不能让随后的 snapshot 回源再次制造完成提醒；
+            // 行缺失时则把同一 signal 交给回源结果，保证提醒既不丢也不重复。
+            ...(currentMeta || !unreadSignal ? {} : { unreadSignal }),
+          },
+        );
       })
       .catch((error) => {
         logger.warn(
@@ -650,25 +755,32 @@ export function createZCodeTaskIndexSyncer(
   /** 标题变化 → sqlite title patch；行缺失回源完整 snapshot（对齐旧 first_input 语义）。 */
   function applyTitleChange(target: ZCodeAgentSessionTarget, title: string): void {
     const updatedAt = Date.now();
+    const isCurrent = captureWorkspaceOwnership(target);
     void taskIndexRepo
       .applyAgentPatch({
         workspacePath: target.workspacePath,
         workspaceIdentity: target.workspaceIdentity,
-        taskId: target.sessionId,
+        taskId: canonicalTaskId(target, target.sessionId),
         patch: { title, updatedAt },
       })
       .then((meta) => {
-        if (meta) {
+        if (!isCurrent()) return;
+        const currentTarget = sessionTargetFrom(target, canonicalTaskId(target, target.sessionId));
+        if (meta && meta.taskId === currentTarget.sessionId) {
           // 标题变更（首条消息/自动标题生成）与归属无关且每个任务必发，
           // 用专属 reason，避免每次首发/收口标题落盘都触发全局 membership 重拉。
-          emitWorkspaceTaskListChanged(broadcastTargetFrom(target), meta, "task_title_changed");
+          emitWorkspaceTaskListChanged(
+            broadcastTargetFrom(currentTarget),
+            meta,
+            "task_title_changed",
+          );
         } else {
           // draft session 不预写占位行；首个标题（旧 first_input）先于任何
           // snapshot upsert 到达时按完整 snapshot 回源，避免依赖空 session 占位行。
           // v4 createSession 不经过 zcodeSessionService.createSession；首个标题到达且
           // task index 尚无行，说明这是新会话首次落库。回源时必须同时写 grouped 顶层最小
           // sort_order，否则缺序节点会被客户端补到列表末尾。
-          void resyncTaskIndexRowFromAgent(target, "meta.titleUpdated", {
+          void resyncTaskIndexRowFromAgent(currentTarget, "meta.titleUpdated", {
             moveGroupedTaskToTop: true,
           });
         }
@@ -728,7 +840,7 @@ export function createZCodeTaskIndexSyncer(
   ): Promise<void> {
     const candidates = [...summaries].filter((summary) => summary.phase !== "draft");
     if (candidates.length === 0) return;
-    const generation = state.indexSubscriptionGeneration;
+    const isCurrent = captureWorkspaceOwnership(state.target);
     // 纯 V4 UI 不经过 zcodeSessionService.initializeWorkspace；若把首帧
     // 当成“已有 sqlite 存量”的静默基线，远端新库就会永远是 0 行。这里只做原子
     // insert-if-missing，不回放历史终态，也不覆盖已有产品壳状态；后续打开/
@@ -738,11 +850,22 @@ export function createZCodeTaskIndexSyncer(
     let failedCount = 0;
     let firstError: unknown;
     for (let offset = 0; offset < candidates.length; offset += INITIAL_BASELINE_SEED_BATCH_SIZE) {
+      if (!isCurrent()) return;
       const batch = candidates.slice(offset, offset + INITIAL_BASELINE_SEED_BATCH_SIZE);
       const results = await Promise.allSettled(
-        batch.map((summary) =>
-          taskIndexRepo.seedTaskMetaIfMissing(buildBaselineMetaFromSummary(state.target, summary)),
-        ),
+        batch.map(async (summary) => {
+          if (!isCurrent()) return;
+          const meta = buildBaselineMetaFromSummary(state.target, summary);
+          meta.taskId = canonicalTaskId(state.target, meta.taskId);
+          const persisted = await taskIndexRepo.seedTaskMetaIfMissing(meta);
+          if (!isCurrent()) return;
+          const taskId = canonicalTaskId(state.target, persisted.taskId);
+          if (taskId !== persisted.taskId) {
+            await rekeyTaskAndBroadcast(state.target, persisted.taskId, taskId, isCurrent);
+          } else {
+            await confirmOwnedAliasAfterCommit(state.target, persisted, isCurrent);
+          }
+        }),
       );
       for (const result of results) {
         if (result.status === "rejected") {
@@ -760,11 +883,7 @@ export function createZCodeTaskIndexSyncer(
     }
     // Bug 根因：历史补齐晚于侧栏首次读取时，空列表缓存没有失效通知，要新建会话才刷新。
     // 写入结束后统一通知当前订阅的列表重读；部分成功也刷新，不回放历史终态或未读提醒。
-    if (
-      failedCount < candidates.length &&
-      isLiveState(state) &&
-      state.indexSubscriptionGeneration === generation
-    ) {
+    if (failedCount < candidates.length && isCurrent()) {
       emitWorkspaceTaskListChanged(state.target, undefined, "task_meta_changed");
     }
   }
@@ -1159,55 +1278,20 @@ export function createZCodeTaskIndexSyncer(
           // SessionRegistry 先发临时 ID 终态，再连续发 removed/upserted UUID。
           // SQLite 是唯一产品壳状态所有者；迁移后列表只广播同一个稳定任务。
           const toTaskId = delta.session.sessionId;
-          const workspaceKey = resolveWorkspaceKey(state.target);
-          const generation = state.indexSubscriptionGeneration;
-          const runtimeGeneration = state.runtimeGeneration;
-          const key = aliasKey(state.target, fromTaskId);
-          taskIdAliases.set(key, toTaskId);
-          void taskIndexRepo
-            .rekeyTaskId({ ...state.target, fromTaskId, toTaskId })
-            .then((meta) => {
-              // Bug 根因：私有 alias 没有公开迁移事实，UI 会把临时/持久 ID 当成两个草稿。
-              // 仅在 SQLite 提交成功且所属订阅/运行时仍有效时发布；旧代际不得冒充当前身份。
-              if (
-                meta?.taskIdMigration?.fromTaskId !== fromTaskId ||
-                meta.taskIdMigration.toTaskId !== toTaskId
-              ) {
-                if (taskIdAliases.get(key) === toTaskId) taskIdAliases.delete(key);
-                return;
-              }
-              if (
-                !isLiveState(state) ||
-                state.indexSubscriptionGeneration !== generation ||
-                state.runtimeGeneration !== runtimeGeneration
-              )
-                return;
-              const taskIdMigration = { fromTaskId, toTaskId };
-              let migrations = confirmedTaskIdMigrations.get(workspaceKey);
-              if (!migrations) {
-                migrations = new Map();
-                confirmedTaskIdMigrations.set(workspaceKey, migrations);
-              }
-              if (migrations.get(fromTaskId)?.taskIdMigration?.toTaskId === toTaskId) return;
-              // 迟订阅仅回放关联，不回放旧 meta，避免把最新任务状态冲回事务提交时的旧值。
-              migrations.set(fromTaskId, {
-                type: "workspace_task_list_changed",
-                ...state.target,
-                taskId: toTaskId,
-                reason: "task_meta_changed",
-                taskIdMigration,
-              });
-              emitWorkspaceTaskListChanged(
-                { ...state.target, taskId: toTaskId },
-                meta,
-                "task_meta_changed",
-                { taskIdMigration },
-              );
-            })
-            .catch((error) => {
-              if (taskIdAliases.get(key) === toTaskId) taskIdAliases.delete(key);
-              logger.warn(undefined, `omp 任务身份迁移失败 ${fromTaskId}`, error);
-            });
+          taskIdAliases.set(aliasKey(state.target, fromTaskId), {
+            fromTaskId,
+            toTaskId,
+            isCurrent: captureWorkspaceOwnership(state.target),
+          });
+          void rekeyTaskAndBroadcast(
+            state.target,
+            fromTaskId,
+            toTaskId,
+            captureWorkspaceOwnership(state.target),
+          ).catch((error) => {
+            // SQLite 失败只说明产品壳尚未搬迁，不否认 owned index 已确认的同一会话身份。
+            logger.warn(undefined, `omp 任务身份迁移失败 ${fromTaskId}`, error);
+          });
         }
         processSummary(
           state,
@@ -1825,21 +1909,41 @@ export function createZCodeTaskIndexSyncer(
     },
   ): Promise<ZCodeTaskMeta> {
     const sourceMeta = buildMetaFromSnapshot(snapshot, options);
+    const isCurrent = captureWorkspaceOwnership(sourceMeta);
     const taskId = canonicalTaskId(sourceMeta, sourceMeta.taskId);
     const meta = taskId === sourceMeta.taskId ? sourceMeta : { ...sourceMeta, taskId };
     // 旧 child 标签页的显式 resume 仍会同步快照；只读详情不能重新写成主任务。
     if (snapshot.session.sessionKind === "subagent_child") return meta;
+    if (!isCurrent()) throw new Error(`task index snapshot 已过期 ${sourceMeta.taskId}`);
     // 同时把 snapshot.messages 里可见的聊天正文索引下去，
     // 让 TaskSearchDialog 正文搜索能命中；旧 sqlite 行下次到这里时自然回填。
     const searchableText = buildSearchableTextFromSnapshot(snapshot);
     // desktop-continuous 首发若先提交 task row、再补 grouped sort_order，
     // sessions-index 会在两次写之间把缺序 task 暴露给 Renderer，产生先到底部再回顶部的跳动。
-    const { meta: persisted, initializedGroupedOrder } = options?.moveGroupedTaskToTop
+    const result = options.moveGroupedTaskToTop
       ? await taskIndexRepo.syncTaskMetaAtGroupedTop({ meta, searchableText })
       : {
           meta: await taskIndexRepo.syncTaskMeta({ meta, searchableText }),
           initializedGroupedOrder: false,
         };
+    let persisted = result.meta;
+    const { initializedGroupedOrder } = result;
+    if (!isCurrent()) throw new Error(`task index snapshot 已过期 ${sourceMeta.taskId}`);
+    // 根因：写库内部也会 await；写前解析一次 alias 不足以阻止 rekey 后的临时行复活。
+    // 这是同一次写的身份收口，不重放 snapshot、不另设队列；产品壳仍由 SQLite 原子迁移。
+    const committedTaskId = canonicalTaskId(sourceMeta, persisted.taskId);
+    if (committedTaskId !== persisted.taskId) {
+      const migrated = await rekeyTaskAndBroadcast(
+        sourceMeta,
+        persisted.taskId,
+        committedTaskId,
+        isCurrent,
+      );
+      if (!migrated) throw new Error(`task index 身份收口缺失 ${persisted.taskId}`);
+      persisted = migrated;
+    }
+    persisted = await confirmOwnedAliasAfterCommit(sourceMeta, persisted, isCurrent);
+    if (!isCurrent()) throw new Error(`task index snapshot 已过期 ${sourceMeta.taskId}`);
     // createSession 刚回来时 snapshot 既没有 title 也没有 user message，
     // 默认 title 会落成 "New session" 占位符。这种"还没有任何用户内容"的快照不应该广播给 UI，
     // 否则侧边栏会先闪一下 "New session"，等 sendPrompt 完成后才换成真正的 prompt 文本。
@@ -1886,13 +1990,17 @@ export function createZCodeTaskIndexSyncer(
     if (!normalizedModel) {
       return null;
     }
+    const isCurrent = captureWorkspaceOwnership(target);
     try {
-      return await taskIndexRepo.updateTaskState({
+      const meta = await taskIndexRepo.updateTaskState({
         workspacePath: target.workspacePath,
         workspaceIdentity: target.workspaceIdentity,
-        taskId: target.sessionId,
+        taskId: canonicalTaskId(target, target.sessionId),
         patch: { model: normalizedModel },
       });
+      if (!isCurrent()) return null;
+      const taskId = canonicalTaskId(target, meta.taskId);
+      return taskId === meta.taskId ? meta : taskIndexRepo.getTaskMeta({ ...target, taskId });
     } catch (error) {
       logger.warn(undefined, `同步 task 模型到 task index 失败 taskId=${target.sessionId}`, error);
       return null;

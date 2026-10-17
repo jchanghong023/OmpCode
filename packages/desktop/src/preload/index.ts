@@ -57,6 +57,7 @@ import type {
   EmbeddedBrowserOpenUrlRequest,
   Locale,
   OAuthStateRegistration,
+  OfflineDataBackupSnapshot,
   OfflineDataBackupWarningPayload,
   OpenInEditorOptions,
   RemoteTarget,
@@ -751,6 +752,18 @@ contextBridge.exposeInMainWorld("zcode", {
       callback(payload);
     ipcRenderer.on(PlatformChannels.OfflineDataBackupWarning, handler);
     return () => ipcRenderer.removeListener(PlatformChannels.OfflineDataBackupWarning, handler);
+  },
+  /** 读取 Main 持有的本机运行与备份状态，不在 preload 缓存第二份快照。 */
+  getOfflineDataBackupState: (): Promise<OfflineDataBackupSnapshot> =>
+    ipcRenderer.invoke(PlatformChannels.GetOfflineDataBackupState),
+  /** 订阅备份状态；只移除本次注册的 listener，不影响其他订阅者。 */
+  onOfflineDataBackupStateChanged: (
+    callback: (payload: OfflineDataBackupSnapshot) => void,
+  ): (() => void) => {
+    const handler = (_event: unknown, payload: OfflineDataBackupSnapshot) => callback(payload);
+    ipcRenderer.on(PlatformChannels.OfflineDataBackupStateChanged, handler);
+    return () =>
+      ipcRenderer.removeListener(PlatformChannels.OfflineDataBackupStateChanged, handler);
   },
   getUpdateState: (): Promise<UpdateStatePayload> =>
     ipcRenderer.invoke(PlatformChannels.GetUpdateState),

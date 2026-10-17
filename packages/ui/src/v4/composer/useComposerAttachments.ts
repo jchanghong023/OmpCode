@@ -36,12 +36,15 @@ import { useZCodeIntl } from "@/i18n/IntlProvider.js";
 import { logger } from "@/logger.js";
 import {
   exposeComposerAttachmentScopeKeyForE2E,
+  promoteComposerAttachmentScope,
   readComposerAttachmentScope,
+  resolveComposerAttachmentOperationScope,
   updateComposerAttachmentScope,
   useComposerAttachmentUploadStore,
   type ComposerAttachmentUploadItem,
 } from "@/store/composerAttachmentUploadStore.js";
 import { uploadComposerAttachment, type AttachmentPutFn } from "@/v4/composer/attachmentUpload.js";
+import { resolveSharedComposerDraftScope } from "@/v4/composer/composerDraftRegistry.js";
 
 const COMPOSER_ATTACHMENT_UPLOAD_CONCURRENCY = 2;
 const COMPOSER_ATTACHMENT_AUTO_RETRY_DELAY_MS = 500;
@@ -66,9 +69,10 @@ interface UploadTarget {
 interface UploadQueueEntry {
   scopeKey: string;
   attachmentId: string;
+  operationId: string;
 }
 
-interface ComposerAttachmentsApi {
+export interface ComposerAttachmentsApi {
   attachments: ComposerAttachmentUploadItem[];
   attachmentError: string | null;
   hasAttachments: boolean;
@@ -97,6 +101,8 @@ interface ComposerAttachmentsApi {
   /** sendText accepted 后才移交远端暂存内容，发送失败时仍由草稿持有。 */
   adoptSentAttachments: (attachmentIds: readonly string[]) => Promise<void>;
   setAttachmentError: (message: string | null) => void;
+  /** 仅由真实 accepted 的原生首发调用；保留未提交附件，不向命令传 ref、不 adopt。 */
+  promoteUnsubmittedAttachments: (sessionId: string) => void;
 }
 
 interface UseComposerAttachmentsOptions {
@@ -201,7 +207,12 @@ export function useComposerAttachments(
   const platform = usePlatform();
   const { promptAttachmentTransferService } = useServices();
   const { intl } = useZCodeIntl();
-  const scopeKey = buildScopeKey(workspacePath, workspaceIdentity, scopeId);
+  const canonicalScopeId = resolveSharedComposerDraftScope({
+    workspacePath,
+    workspaceIdentity,
+    scopeId,
+  });
+  const scopeKey = buildScopeKey(workspacePath, workspaceIdentity, canonicalScopeId);
   exposeComposerAttachmentScopeKeyForE2E(scopeKey);
 
   const targetsRef = useRef(new Map<string, UploadTarget>());
@@ -210,6 +221,10 @@ export function useComposerAttachments(
   const controllersRef = useRef(new Map<string, AbortController>());
   const completeTimersRef = useRef(new Map<string, number>());
   const retryTimersRef = useRef(new Map<string, number>());
+  // ID 是一次附件的身份；scope 只是显示归属。promotion 后旧闭包仍操作同一个附件，
+  // 但不能把整桶 scope 做别名，否则 A→B→A 的新草稿会被旧上传/ACK 写入。
+  const attachmentScopesRef = useRef(new Map<string, string>());
+  const attachmentOperationsRef = useRef(new Map<string, string>());
   const pumpQueueRef = useRef<() => void>(() => {});
   const attachments = useComposerAttachmentUploadStore(
     (state) => state.scopes[scopeKey] ?? EMPTY_COMPOSER_ATTACHMENTS,
@@ -226,7 +241,13 @@ export function useComposerAttachments(
   const dragFeedbackTimerRef = useRef<number | null>(null);
 
   targetsRef.current.set(scopeKey, {
-    sessionId: attachmentSessionId,
+    sessionId: attachmentSessionId
+      ? resolveSharedComposerDraftScope({
+          workspacePath,
+          workspaceIdentity,
+          scopeId: attachmentSessionId,
+        })
+      : null,
     workspacePath,
     workspaceIdentity,
     remoteSessionId,
@@ -249,43 +270,94 @@ export function useComposerAttachments(
       targetScopeKey: string,
       attachmentId: string,
       update: (item: ComposerAttachmentUploadItem) => ComposerAttachmentUploadItem,
+      operationId = attachmentOperationsRef.current.get(attachmentId),
     ) => {
-      commitScope(targetScopeKey, (current) =>
-        current.map((item) => (item.id === attachmentId ? update(item) : item)),
-      );
+      const originalScopeKey = attachmentScopesRef.current.get(attachmentId) ?? targetScopeKey;
+      const ownerScopeKey = operationId
+        ? resolveComposerAttachmentOperationScope(originalScopeKey, operationId)
+        : originalScopeKey;
+      commitScope(ownerScopeKey, (current) => {
+        if (
+          !current.some(
+            (item) =>
+              item.id === attachmentId && (!operationId || item.operationId === operationId),
+          )
+        )
+          return current;
+        return current.map((item) =>
+          item.id === attachmentId && (!operationId || item.operationId === operationId)
+            ? update(item)
+            : item,
+        );
+      });
     },
     [commitScope],
   );
 
-  const enqueueUpload = useCallback((targetScopeKey: string, attachmentId: string) => {
-    const exists = uploadQueueRef.current.some(
-      (entry) => entry.scopeKey === targetScopeKey && entry.attachmentId === attachmentId,
-    );
-    if (!exists) uploadQueueRef.current.push({ scopeKey: targetScopeKey, attachmentId });
-    queueMicrotask(() => pumpQueueRef.current());
-  }, []);
+  const enqueueUpload = useCallback(
+    (targetScopeKey: string, attachmentId: string, expectedOperationId?: string) => {
+      const originalScopeKey = attachmentScopesRef.current.get(attachmentId) ?? targetScopeKey;
+      const operationId = expectedOperationId ?? attachmentOperationsRef.current.get(attachmentId);
+      const ownerScopeKey = operationId
+        ? resolveComposerAttachmentOperationScope(originalScopeKey, operationId)
+        : originalScopeKey;
+      const item = readComposerAttachmentScope(ownerScopeKey).find(
+        (entry) =>
+          entry.id === attachmentId &&
+          (!expectedOperationId || entry.operationId === expectedOperationId),
+      );
+      if (!item) return;
+      attachmentOperationsRef.current.set(attachmentId, item.operationId);
+      attachmentScopesRef.current.set(attachmentId, ownerScopeKey);
+      const exists = uploadQueueRef.current.some((entry) => entry.operationId === item.operationId);
+      if (!exists)
+        uploadQueueRef.current.push({
+          scopeKey: ownerScopeKey,
+          attachmentId,
+          operationId: item.operationId,
+        });
+      queueMicrotask(() => pumpQueueRef.current());
+    },
+    [],
+  );
 
   const finishWithReady = useCallback(
-    (targetScopeKey: string, attachmentId: string, ref: AttachmentRef, staged: boolean) => {
-      updateItem(targetScopeKey, attachmentId, (item) => ({
-        ...item,
-        uploadStatus: "ready",
-        uploadProgress: 100,
-        uploadError: undefined,
-        uploadErrorKind: undefined,
-        attachmentRef: ref,
-        staged,
-        showComplete: !item.localZeroCopy,
-      }));
-      const timerKey = `${targetScopeKey}\u0000${attachmentId}`;
+    (
+      targetScopeKey: string,
+      attachmentId: string,
+      operationId: string,
+      ref: AttachmentRef,
+      staged: boolean,
+    ) => {
+      updateItem(
+        targetScopeKey,
+        attachmentId,
+        (item) => ({
+          ...item,
+          uploadStatus: "ready",
+          uploadProgress: 100,
+          uploadError: undefined,
+          uploadErrorKind: undefined,
+          attachmentRef: ref,
+          staged,
+          showComplete: !item.localZeroCopy,
+        }),
+        operationId,
+      );
+      const timerKey = attachmentId;
       const previousTimer = completeTimersRef.current.get(timerKey);
       if (previousTimer !== undefined) window.clearTimeout(previousTimer);
       const timer = window.setTimeout(() => {
         completeTimersRef.current.delete(timerKey);
-        updateItem(targetScopeKey, attachmentId, (item) => ({
-          ...item,
-          showComplete: false,
-        }));
+        updateItem(
+          targetScopeKey,
+          attachmentId,
+          (item) => ({
+            ...item,
+            showComplete: false,
+          }),
+          operationId,
+        );
       }, COMPOSER_ATTACHMENT_COMPLETE_VISIBLE_MS);
       completeTimersRef.current.set(timerKey, timer);
     },
@@ -293,42 +365,79 @@ export function useComposerAttachments(
   );
 
   const runUpload = useCallback(
-    async (targetScopeKey: string, attachmentId: string, target: UploadTarget) => {
-      const controllerKey = `${targetScopeKey}\u0000${attachmentId}`;
+    async (
+      targetScopeKey: string,
+      attachmentId: string,
+      operationId: string,
+      target: UploadTarget,
+    ) => {
+      const controllerKey = attachmentId;
       const controller = new AbortController();
       controllersRef.current.set(controllerKey, controller);
-      updateItem(targetScopeKey, attachmentId, (item) => ({
-        ...item,
-        uploadStatus: "uploading",
-        uploadProgress: Math.min(item.uploadProgress, 99),
-        uploadError: undefined,
-        uploadErrorKind: undefined,
-      }));
+      updateItem(
+        targetScopeKey,
+        attachmentId,
+        (item) => ({
+          ...item,
+          uploadStatus: "uploading",
+          uploadProgress: Math.min(item.uploadProgress, 99),
+          uploadError: undefined,
+          uploadErrorKind: undefined,
+        }),
+        operationId,
+      );
+      // operation 的 lease 随异步上传存活，不随 pane 卸载释放。全局迁移/目标冲突
+      // 只通过唯一 store 改所有权；仍被规范 scope 持有的同一 operation 不能 abort。
+      const releaseOperationLease = useComposerAttachmentUploadStore.subscribe(() => {
+        const ownerScope = resolveComposerAttachmentOperationScope(targetScopeKey, operationId);
+        if (
+          !readComposerAttachmentScope(ownerScope).some(
+            (item) => item.operationId === operationId,
+          ) &&
+          controllersRef.current.get(controllerKey) === controller
+        ) {
+          controllersRef.current.delete(controllerKey);
+          controller.abort();
+        }
+      });
       let progressSubscription: { dispose(): void } | null = null;
       try {
-        const item = readComposerAttachmentScope(targetScopeKey).find(
-          (candidate) => candidate.id === attachmentId,
+        const item = readComposerAttachmentScope(
+          resolveComposerAttachmentOperationScope(targetScopeKey, operationId),
+        ).find(
+          (candidate) => candidate.id === attachmentId && candidate.operationId === operationId,
         );
         if (!item || !target.sessionId) return;
         if (item.localPath && isRemoteAttachmentTarget(target)) {
           if (!target.remoteSessionId) {
-            updateItem(targetScopeKey, attachmentId, (current) => ({
-              ...current,
-              uploadStatus: "waitingSession",
-            }));
+            updateItem(
+              targetScopeKey,
+              attachmentId,
+              (current) => ({
+                ...current,
+                uploadStatus: "waitingSession",
+              }),
+              operationId,
+            );
             return;
           }
           progressSubscription = target.transferService.onDynamicProgress(item.operationId)(
             (progress) => {
               if (controllersRef.current.get(controllerKey) !== controller) return;
-              updateItem(targetScopeKey, attachmentId, (current) => ({
-                ...current,
-                uploadStatus: progress.phase === "committing" ? "committing" : current.uploadStatus,
-                uploadProgress: Math.max(
-                  current.uploadProgress,
-                  progressPercent(progress.uploadedBytes, progress.totalBytes),
-                ),
-              }));
+              updateItem(
+                targetScopeKey,
+                attachmentId,
+                (current) => ({
+                  ...current,
+                  uploadStatus:
+                    progress.phase === "committing" ? "committing" : current.uploadStatus,
+                  uploadProgress: Math.max(
+                    current.uploadProgress,
+                    progressPercent(progress.uploadedBytes, progress.totalBytes),
+                  ),
+                }),
+                operationId,
+              );
             },
           );
           const result = await target.transferService.stage({
@@ -355,6 +464,7 @@ export function useComposerAttachments(
           finishWithReady(
             targetScopeKey,
             attachmentId,
+            operationId,
             {
               ref: result.ref,
               fileName: item.filename,
@@ -380,26 +490,33 @@ export function useComposerAttachments(
             signal: controller.signal,
             onProgress(progress) {
               if (controllersRef.current.get(controllerKey) !== controller) return;
-              updateItem(targetScopeKey, attachmentId, (current) => ({
-                ...current,
-                uploadStatus: progress.phase === "committing" ? "committing" : "uploading",
-                uploadProgress: Math.max(
-                  current.uploadProgress,
-                  progressPercent(progress.uploadedBytes, progress.totalBytes),
-                ),
-              }));
+              updateItem(
+                targetScopeKey,
+                attachmentId,
+                (current) => ({
+                  ...current,
+                  uploadStatus: progress.phase === "committing" ? "committing" : "uploading",
+                  uploadProgress: Math.max(
+                    current.uploadProgress,
+                    progressPercent(progress.uploadedBytes, progress.totalBytes),
+                  ),
+                }),
+                operationId,
+              );
             },
           },
         );
         if (!ref) throw new Error("附件缺少可读取内容");
         if (controllersRef.current.get(controllerKey) !== controller) return;
-        finishWithReady(targetScopeKey, attachmentId, ref, false);
+        finishWithReady(targetScopeKey, attachmentId, operationId, ref, false);
       } catch (error) {
         if (controllersRef.current.get(controllerKey) !== controller || controller.signal.aborted) {
           return;
         }
-        const current = readComposerAttachmentScope(targetScopeKey).find(
-          (candidate) => candidate.id === attachmentId,
+        const current = readComposerAttachmentScope(
+          resolveComposerAttachmentOperationScope(targetScopeKey, operationId),
+        ).find(
+          (candidate) => candidate.id === attachmentId && candidate.operationId === operationId,
         );
         if (!current) return;
         // 结构化超限错误在 UI 层按 locale 格式化（与 chatAttachments 序列化边界约定一致）。
@@ -432,28 +549,38 @@ export function useComposerAttachments(
                   : String(error);
         const transient = isTransientAttachmentUploadError(error);
         if (transient && current.autoRetryCount < 1) {
-          updateItem(targetScopeKey, attachmentId, (item) => ({
-            ...item,
-            uploadStatus: "queued",
-            uploadProgress: 0,
-            uploadError: message,
-            uploadErrorKind: "transient",
-            autoRetryCount: item.autoRetryCount + 1,
-          }));
-          const timerKey = `${targetScopeKey}\u0000${attachmentId}`;
+          updateItem(
+            targetScopeKey,
+            attachmentId,
+            (item) => ({
+              ...item,
+              uploadStatus: "queued",
+              uploadProgress: 0,
+              uploadError: message,
+              uploadErrorKind: "transient",
+              autoRetryCount: item.autoRetryCount + 1,
+            }),
+            operationId,
+          );
+          const timerKey = attachmentId;
           const timer = window.setTimeout(() => {
             retryTimersRef.current.delete(timerKey);
-            enqueueUpload(targetScopeKey, attachmentId);
+            enqueueUpload(targetScopeKey, attachmentId, operationId);
           }, COMPOSER_ATTACHMENT_AUTO_RETRY_DELAY_MS);
           retryTimersRef.current.set(timerKey, timer);
         } else {
-          updateItem(targetScopeKey, attachmentId, (item) => ({
-            ...item,
-            uploadStatus: "failed",
-            uploadProgress: Math.min(item.uploadProgress, 99),
-            uploadError: message,
-            uploadErrorKind: transient ? "transient" : "permanent",
-          }));
+          updateItem(
+            targetScopeKey,
+            attachmentId,
+            (item) => ({
+              ...item,
+              uploadStatus: "failed",
+              uploadProgress: Math.min(item.uploadProgress, 99),
+              uploadError: message,
+              uploadErrorKind: transient ? "transient" : "permanent",
+            }),
+            operationId,
+          );
           logger.warn("[v4-composer-attachments] 附件上传失败", {
             attachmentId,
             error: message,
@@ -461,6 +588,7 @@ export function useComposerAttachments(
           });
         }
       } finally {
+        releaseOperationLease();
         progressSubscription?.dispose();
         if (controllersRef.current.get(controllerKey) === controller) {
           controllersRef.current.delete(controllerKey);
@@ -479,13 +607,26 @@ export function useComposerAttachments(
     ) {
       const entry = uploadQueueRef.current.shift();
       if (!entry) break;
+      const originalScopeKey = entry.scopeKey;
+      entry.scopeKey = resolveComposerAttachmentOperationScope(entry.scopeKey, entry.operationId);
       const item = readComposerAttachmentScope(entry.scopeKey).find(
-        (candidate) => candidate.id === entry.attachmentId,
+        (candidate) =>
+          candidate.id === entry.attachmentId && candidate.operationId === entry.operationId,
       );
       if (!item || (item.uploadStatus !== "queued" && item.uploadStatus !== "waitingSession")) {
         continue;
       }
-      const target = targetsRef.current.get(entry.scopeKey);
+      let target = targetsRef.current.get(entry.scopeKey);
+      if (!target && entry.scopeKey !== originalScopeKey) {
+        const previousTarget = targetsRef.current.get(originalScopeKey);
+        if (previousTarget) {
+          target = {
+            ...previousTarget,
+            sessionId: entry.scopeKey.slice(entry.scopeKey.lastIndexOf("\u0000") + 1),
+          };
+          targetsRef.current.set(entry.scopeKey, target);
+        }
+      }
       const waitingForRemoteSession = Boolean(
         target && item.localPath && isRemoteAttachmentTarget(target) && !target.remoteSessionId,
       );
@@ -497,7 +638,7 @@ export function useComposerAttachments(
         continue;
       }
       activeUploadsRef.current += 1;
-      void runUpload(entry.scopeKey, entry.attachmentId, target);
+      void runUpload(entry.scopeKey, entry.attachmentId, entry.operationId, target);
     }
   }, [runUpload, updateItem]);
   pumpQueueRef.current = pumpQueue;
@@ -508,17 +649,22 @@ export function useComposerAttachments(
       !isRemoteAttachmentTarget({ remoteSessionId, workspaceIdentity }) || Boolean(remoteSessionId);
     if (attachmentSessionId && remoteTargetReady) {
       for (const item of current) {
-        if (item.uploadStatus === "waitingSession") {
-          updateItem(scopeKey, item.id, (candidate) => ({
-            ...candidate,
-            uploadStatus: "queued",
-          }));
+        if (
+          item.uploadStatus === "waitingSession" ||
+          (item.uploadStatus === "queued" && !item.uploadError)
+        ) {
+          if (item.uploadStatus === "waitingSession")
+            updateItem(scopeKey, item.id, (candidate) => ({
+              ...candidate,
+              uploadStatus: "queued",
+            }));
           enqueueUpload(scopeKey, item.id);
         }
       }
     }
   }, [
     attachmentSessionId,
+    attachments.length,
     enqueueUpload,
     remoteSessionId,
     restartEpoch,
@@ -547,7 +693,7 @@ export function useComposerAttachments(
           ) {
             continue;
           }
-          const key = `${targetScopeKey}\u0000${item.id}`;
+          const key = item.id;
           controllersRef.current.get(key)?.abort();
           controllersRef.current.delete(key);
           if (item.staged) void target?.transferService.cleanup(item.operationId).catch(() => {});
@@ -674,6 +820,10 @@ export function useComposerAttachments(
           localZeroCopy,
         };
       });
+      for (const item of items) {
+        attachmentScopesRef.current.set(item.id, scopeKey);
+        attachmentOperationsRef.current.set(item.id, item.operationId);
+      }
       commitScope(scopeKey, (existing) => [...existing, ...items]);
       setAttachmentError(null);
       if (selectedAttachments.length > remainingSlots) showAttachmentLimitWarning();
@@ -915,7 +1065,7 @@ export function useComposerAttachments(
       const current = readComposerAttachmentScope(scopeKey);
       const item = current.find((candidate) => candidate.id === id);
       if (!item) return;
-      const key = `${scopeKey}\u0000${id}`;
+      const key = id;
       controllersRef.current.get(key)?.abort();
       controllersRef.current.delete(key);
       uploadQueueRef.current = uploadQueueRef.current.filter(
@@ -935,6 +1085,7 @@ export function useComposerAttachments(
         });
       }
       commitScope(scopeKey, (items) => items.filter((candidate) => candidate.id !== id));
+      attachmentScopesRef.current.delete(id);
       setAttachmentError(null);
     },
     [commitScope, scopeKey],
@@ -974,7 +1125,7 @@ export function useComposerAttachments(
       );
       const target = targetsRef.current.get(scopeKey);
       for (const item of current) {
-        const key = `${scopeKey}\u0000${item.id}`;
+        const key = item.id;
         controllersRef.current.get(key)?.abort();
         controllersRef.current.delete(key);
         const completeTimer = completeTimersRef.current.get(key);
@@ -984,6 +1135,7 @@ export function useComposerAttachments(
         completeTimersRef.current.delete(key);
         retryTimersRef.current.delete(key);
         revokeChatComposerAttachment(item);
+        attachmentScopesRef.current.delete(item.id);
         if (
           !item.adopted &&
           (item.staged || item.uploadStatus === "uploading" || item.uploadStatus === "committing")
@@ -1038,6 +1190,108 @@ export function useComposerAttachments(
     [commitScope, scopeKey],
   );
 
+  const promoteUnsubmittedAttachments = useCallback(
+    (sessionId: string) => {
+      const canonicalSessionId = resolveSharedComposerDraftScope({
+        workspacePath,
+        workspaceIdentity,
+        scopeId: sessionId,
+      });
+      const targetScopeKey = buildScopeKey(workspacePath, workspaceIdentity, canonicalSessionId);
+      const sourceTarget = targetsRef.current.get(scopeKey);
+      if (!sourceTarget) return;
+      const target = { ...sourceTarget, sessionId: canonicalSessionId };
+      targetsRef.current.set(targetScopeKey, target);
+      const { moved, displaced } = promoteComposerAttachmentScope(scopeKey, targetScopeKey);
+      const targetItems = readComposerAttachmentScope(targetScopeKey);
+      for (const item of displaced) {
+        // 目标较新内容不能被旧 controller 覆盖；同 operation 不可 cleanup/revoke，
+        // 否则会删除目标仍在使用的真实暂存文件或 object URL。
+        const retained = targetItems.find((candidate) => candidate.id === item.id);
+        if (retained?.operationId === item.operationId) {
+          attachmentScopesRef.current.set(item.id, targetScopeKey);
+          if (retained.uploadStatus === "queued" || retained.uploadStatus === "waitingSession")
+            enqueueUpload(targetScopeKey, retained.id);
+          continue;
+        }
+        controllersRef.current.get(item.id)?.abort();
+        controllersRef.current.delete(item.id);
+        const completeTimer = completeTimersRef.current.get(item.id);
+        if (completeTimer !== undefined) window.clearTimeout(completeTimer);
+        completeTimersRef.current.delete(item.id);
+        const retryTimer = retryTimersRef.current.get(item.id);
+        if (retryTimer !== undefined) window.clearTimeout(retryTimer);
+        retryTimersRef.current.delete(item.id);
+        uploadQueueRef.current = uploadQueueRef.current.filter(
+          (entry) => entry.attachmentId !== item.id,
+        );
+        if (!targetItems.some((candidate) => candidate.operationId === item.operationId)) {
+          if (
+            !item.objectUrl ||
+            !targetItems.some((candidate) => candidate.objectUrl === item.objectUrl)
+          )
+            revokeChatComposerAttachment(item);
+          if (item.referenceOwnership === "composer" && !item.adopted)
+            void sourceTarget.transferService.cleanup(item.operationId).catch((error) => {
+              logger.warn("[v4-composer-attachments] 清理 promotion 冲突附件失败", error);
+            });
+        }
+        if (retained) {
+          attachmentScopesRef.current.set(retained.id, targetScopeKey);
+          if (retained.uploadStatus === "queued" || retained.uploadStatus === "waitingSession")
+            enqueueUpload(targetScopeKey, retained.id);
+        }
+      }
+      for (const item of moved) {
+        attachmentScopesRef.current.set(item.id, targetScopeKey);
+        attachmentOperationsRef.current.set(item.id, item.operationId);
+        if (
+          resolveSharedComposerDraftScope({
+            workspacePath,
+            workspaceIdentity,
+            scopeId: sourceTarget.sessionId ?? "",
+          }) !== canonicalSessionId &&
+          item.referenceOwnership === "composer" &&
+          item.uploadStatus !== "failed" &&
+          !item.localZeroCopy
+        ) {
+          // 非预热复用时 ref 属于旧 session，绝不能只改显示 scope 后继续发送旧引用。
+          // 先撤销 controller 再换 operation，迟到 stage/progress 不得污染新 session。
+          controllersRef.current.get(item.id)?.abort();
+          controllersRef.current.delete(item.id);
+          const retryTimer = retryTimersRef.current.get(item.id);
+          if (retryTimer !== undefined) window.clearTimeout(retryTimer);
+          retryTimersRef.current.delete(item.id);
+          const completeTimer = completeTimersRef.current.get(item.id);
+          if (completeTimer !== undefined) window.clearTimeout(completeTimer);
+          completeTimersRef.current.delete(item.id);
+          if (!item.adopted)
+            void sourceTarget.transferService.cleanup(item.operationId).catch((error) => {
+              logger.warn("[v4-composer-attachments] 清理旧会话附件失败", error);
+            });
+          updateItem(targetScopeKey, item.id, (current) => ({
+            ...current,
+            operationId: `prompt-attachment-${nanoid()}`,
+            uploadStatus: "waitingSession",
+            uploadProgress: 0,
+            attachmentRef: undefined,
+            staged: false,
+            adopted: false,
+            showComplete: false,
+            uploadError: undefined,
+            uploadErrorKind: undefined,
+          }));
+        }
+        const current = readComposerAttachmentScope(targetScopeKey).find(
+          (candidate) => candidate.id === item.id,
+        );
+        if (current?.uploadStatus === "queued" || current?.uploadStatus === "waitingSession")
+          enqueueUpload(targetScopeKey, item.id);
+      }
+    },
+    [enqueueUpload, scopeKey, updateItem, workspaceIdentity, workspacePath],
+  );
+
   const prepareForSend = useCallback(async (): Promise<AttachmentRef[] | null> => {
     const current = readComposerAttachmentScope(scopeKey);
     if (current.some((item) => item.uploadStatus !== "ready" || !item.attachmentRef)) {
@@ -1060,10 +1314,15 @@ export function useComposerAttachments(
             // sendText 已成功，不能因 adopt 回执失败把同一条消息重新留在 composer。
             logger.warn("[v4-composer-attachments] 附件发送后 adopt 失败", error);
           }
-          updateItem(scopeKey, item.id, (candidate) => ({
-            ...candidate,
-            adopted: true,
-          }));
+          updateItem(
+            scopeKey,
+            item.id,
+            (candidate) => ({
+              ...candidate,
+              adopted: true,
+            }),
+            item.operationId,
+          );
         }
       }
     },
@@ -1093,6 +1352,7 @@ export function useComposerAttachments(
       prepareForSend,
       adoptSentAttachments,
       setAttachmentError,
+      promoteUnsubmittedAttachments,
     }),
     [
       attachmentError,
@@ -1110,6 +1370,7 @@ export function useComposerAttachments(
       isDraggingOverComposer,
       openAttachmentPicker,
       prepareForSend,
+      promoteUnsubmittedAttachments,
       removeAttachment,
       retryAttachment,
     ],

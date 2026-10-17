@@ -1342,7 +1342,7 @@ export class TaskIndexRepo {
           // 列表过滤和后续切模型把导入任务重新当成普通 ZCode 任务。
           migrationSource: params.meta.migrationSource ?? existingMeta?.migrationSource,
           // Bug 根因：只发 live 迁移事件会在 Host 重启/断连时丢失草稿关联。
-          // 关联只由 rekey 事务写入；Agent snapshot 既不能清除，也不能伪造替换。
+          // 关联只由身份事务写入；Agent snapshot 既不能清除，也不能伪造替换。
           taskIdMigration: existingMeta?.taskIdMigration,
           // 同步运行态快照时保留已有 cron automation 身份：运行态 protocol snapshot 的 meta 不带 cron 标记，
           // 不用已存值兜底会在后续 sync 时把 cron 身份冲掉，导致 icon / 分组 / 关联查询失效。
@@ -1477,7 +1477,7 @@ export class TaskIndexRepo {
         return rowToMeta(existing);
       }
       return this.writeRecord({
-        // 基线摘要不是迁移 authority；只有下方 rekey 事务能创建 from/to 关联。
+        // 基线摘要不是迁移 authority；只有显式身份事务能创建 from/to 关联。
         meta: { ...meta, taskIdMigration: undefined },
         pinned: false,
         archived: false,
@@ -1544,6 +1544,60 @@ export class TaskIndexRepo {
         const migrated = this.getTaskRow({ ...params, taskId: params.toTaskId });
         database.exec("COMMIT");
         return migrated ? rowToMeta(migrated) : null;
+      } catch (error) {
+        database.exec("ROLLBACK");
+        throw error;
+      }
+    });
+  }
+
+  /**
+   * 当前 owned 索引已证明临时 ID 与 UUID 同一身份，但源行尚未落库。
+   * 只给已提交的同 scope 规范行补既有迁移记录，不搬源行、不接受 snapshot 自报关联。
+   * ownership 必须在排队及事务内仍有效；换代不能把旧证明兑现到新 runtime。
+   */
+  async commitOwnedTaskIdAlias(params: {
+    workspacePath: string;
+    workspaceIdentity?: string;
+    fromTaskId: string;
+    toTaskId: string;
+    isCurrent: () => boolean;
+  }): Promise<ZCodeTaskMeta | null> {
+    await this.ensureReady();
+    if (
+      !params.isCurrent() ||
+      !params.fromTaskId.startsWith("omp-session-") ||
+      !/^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(params.toTaskId)
+    )
+      return null;
+    return this.enqueueWrite({ ...params, taskId: params.toTaskId }, () => {
+      if (!params.isCurrent()) return null;
+      const database = this.getDatabase();
+      database.exec("BEGIN IMMEDIATE");
+      try {
+        const target = this.getTaskRow({ ...params, taskId: params.toTaskId });
+        const source = this.getTaskRow({ ...params, taskId: params.fromTaskId });
+        if (!params.isCurrent() || !target || target.deleted === 1 || source) {
+          database.exec("COMMIT");
+          return null;
+        }
+        const meta = rowToMeta(target);
+        if (meta.taskIdMigration) {
+          database.exec("COMMIT");
+          return meta.taskIdMigration.fromTaskId === params.fromTaskId &&
+            meta.taskIdMigration.toTaskId === params.toTaskId
+            ? meta
+            : null;
+        }
+        const committed = {
+          ...meta,
+          taskIdMigration: { fromTaskId: params.fromTaskId, toTaskId: params.toTaskId },
+        };
+        database
+          .prepare("UPDATE tasks SET meta_json = ? WHERE workspace_key = ? AND task_id = ?")
+          .run(serializeMetaJson(committed), target.workspace_key, params.toTaskId);
+        database.exec("COMMIT");
+        return committed;
       } catch (error) {
         database.exec("ROLLBACK");
         throw error;

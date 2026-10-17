@@ -41,6 +41,7 @@ import type {
   V4ConversationFileChangesResult,
 } from "@zcode/shared/zcode-protocol-v4";
 import { logger } from "@/logger.js";
+import { Button } from "@/components/ui/button.js";
 import { toast } from "@/components/ui/toast.js";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
 import { DEFAULT_CODE_PREVIEW_SETTINGS } from "@/lib/codePreviewSettings.js";
@@ -90,10 +91,14 @@ import type { GroupedDraftTaskState } from "@/store/zcodeSessionStoreTypes.js";
 import {
   ConversationComposer,
   type ComposerRestoreRequest,
-  type ConversationComposerSendOptions,
   type ConversationComposerSendResult,
 } from "@/v4/ConversationComposer.js";
 import { useComposerCallback } from "@/v4/composer/useComposerCallback.js";
+import { OmpNativeToolsDialog } from "@/v4/native-tools/OmpNativeToolsDialog.js";
+import {
+  useOmpNativeTools,
+  type OmpNativeToolsSendOptions,
+} from "@/v4/native-tools/useOmpNativeTools.js";
 import { projectComposerSnapshot, type ComposerSnapshot } from "@/v4/composer/composerSnapshot.js";
 import type { ConversationDropTargetController } from "@/v4/composer/conversationDropTarget.js";
 import { shouldIgnoreEscapeForStopGeneration } from "@/v4/composer/escapeStop.js";
@@ -876,6 +881,13 @@ export function SessionPane({
     },
     [platform, workspacePath, workspaceIdentity, remoteSessionId, isDesktop],
   );
+  const attachmentPromotionRef = useRef<((sessionId: string) => void) | null>(null);
+  const registerAttachmentPromotion = useCallback((promote: (sessionId: string) => void) => {
+    attachmentPromotionRef.current = promote;
+    return () => {
+      if (attachmentPromotionRef.current === promote) attachmentPromotionRef.current = null;
+    };
+  }, []);
   const handleDraftSessionCreated = useCallback(
     (
       createdSessionId: string,
@@ -968,6 +980,7 @@ export function SessionPane({
       telemetrySeed?: ConversationPromptTelemetrySeed,
       onEnvelopeCreated?: (envelope: CommandEnvelope) => void,
       sessionCreateSource?: SessionCreateSource,
+      isAdmissionCurrent?: () => boolean,
     ): Promise<CommandAck> => {
       const submission = submissionConfigFromCommand(type, payload);
       const acceptRecent = submission
@@ -1061,7 +1074,7 @@ export function SessionPane({
         throw error;
       }
       pendingCommandRegistry.applyAck(envelope, ack);
-      if (ack.status === "accepted") {
+      if (ack.status === "accepted" && (!isAdmissionCurrent || isAdmissionCurrent())) {
         acceptSelection?.();
         acceptRecent?.();
       }
@@ -2129,14 +2142,41 @@ export function SessionPane({
   const dispatchSendTextAfterConfig = useCallback(
     async (
       text: string,
-      options: ConversationComposerSendOptions | undefined,
+      options: OmpNativeToolsSendOptions | undefined,
       createSourceAtSend: SessionCreateSource,
     ) => {
+      const admission = options?.nativeToolsAdmission;
+      if (admission && !admission.canSubmit()) return "blocked" as const;
+      // 原生工具不捕获/消费编辑器 Submission；只在真实 accepted 的 promotion 边界，
+      // 通知原附件 owner 迁移未提交内容。冻结注册命令，不能在旧 ACK 后回读新 scope owner。
+      const promoteUnsubmittedAttachments = admission ? attachmentPromotionRef.current : null;
+      const finishDraftSessionCreated: typeof handleDraftSessionCreated = (...args) => {
+        if (admission && !admission.isCurrent()) return;
+        promoteUnsubmittedAttachments?.(args[0]);
+        handleDraftSessionCreated(...args);
+      };
       let onAcceptedSelection: (() => void) | undefined;
       const dispatchSubmissionCommand = async (...args: Parameters<typeof dispatchCommand>) => {
-        const ack = await dispatchCommand(...args);
+        if (admission && !admission.canSubmit()) {
+          throw new Error("原生工具的提交目标或可用状态已变化");
+        }
+        const ack = await dispatchCommand(
+          args[0],
+          args[1],
+          args[2],
+          args[3],
+          args[4],
+          args[5],
+          args[6],
+          args[7],
+          admission?.isCurrent,
+        );
         // 在原 accepted 边界写回推荐选择，早于新 Session 的草稿转移；失败不改用户意图。
-        if (ack.status === "accepted" && submissionConfigFromCommand(args[0], args[1]))
+        if (
+          ack.status === "accepted" &&
+          submissionConfigFromCommand(args[0], args[1]) &&
+          (!admission || admission.isCurrent())
+        )
           onAcceptedSelection?.();
         return ack;
       };
@@ -2228,6 +2268,7 @@ export function SessionPane({
         const original = submission.modelSelection;
         const chosen = await recommendStartPlan(original);
         if (!chosen) return "blocked" as const;
+        if (admission && !admission.canSubmit()) return "blocked" as const;
         if (chosen !== original) {
           onAcceptedSelection = captureAcceptedModelSelection(chosen, original);
           submission = { ...submission, modelSelection: chosen };
@@ -2241,6 +2282,7 @@ export function SessionPane({
         // 草稿权威配置，禁止 UI 新值与 runtime 旧值分叉。
         await ensureDraftPrewarmConfigBeforeSendRef.current(prewarmTargetBeforeSend);
       }
+      if (admission && !admission.canSubmit()) return "blocked" as const;
       // slash 命令优先：已有 session 直接消费；draft 首发 /goal 先建空会话再发命令。
       // 携带附件或网页元素上下文时不消费为 v4 原生命令（compact/goal 等无附件语义），随 sendText 直发。
       if (sessionId && slashCommand) {
@@ -2296,7 +2338,7 @@ export function SessionPane({
             if (consumed) {
               onAcceptedSelection?.();
               prewarm.promote();
-              handleDraftSessionCreated(
+              finishDraftSessionCreated(
                 prewarm.sessionId,
                 groupedDraftTaskAtSend,
                 createSourceAtSend,
@@ -2333,7 +2375,7 @@ export function SessionPane({
           throw new Error("createSession 缺少 sessionId");
         }
         const newSessionId = createResult.sessionId;
-        handleDraftSessionCreated(newSessionId, groupedDraftTaskAtSend, createSourceAtSend);
+        finishDraftSessionCreated(newSessionId, groupedDraftTaskAtSend, createSourceAtSend);
         await dispatchSlashCommand(
           draftSlashCommand,
           newSessionId,
@@ -2365,7 +2407,7 @@ export function SessionPane({
             );
             if (ack.status === "accepted") {
               prewarm.promote();
-              handleDraftSessionCreated(
+              finishDraftSessionCreated(
                 prewarm.sessionId,
                 groupedDraftTaskAtSend,
                 createSourceAtSend,
@@ -2425,7 +2467,7 @@ export function SessionPane({
           if (!result || result.type !== "createSession") {
             throw new Error("createSession 缺少 sessionId");
           }
-          handleDraftSessionCreated(
+          finishDraftSessionCreated(
             result.sessionId,
             groupedDraftTaskAtSend,
             createSourceAtSend,
@@ -2464,7 +2506,7 @@ export function SessionPane({
         if (sendAck.status !== "accepted") {
           throw sessionSendRejectionError(sendAck, "sendText 被拒绝");
         }
-        handleDraftSessionCreated(
+        finishDraftSessionCreated(
           newSessionId,
           groupedDraftTaskAtSend,
           createSourceAtSend,
@@ -2530,7 +2572,10 @@ export function SessionPane({
   );
 
   const dispatchSendText = useCallback(
-    (text: string, options?: ConversationComposerSendOptions) => {
+    (text: string, options?: OmpNativeToolsSendOptions) => {
+      if (options?.nativeToolsAdmission && !options.nativeToolsAdmission.canSubmit()) {
+        return Promise.resolve("blocked" as const);
+      }
       // 先消费本地辅助别名，再冻结主会话 Submission/配置 barrier；两种编辑器提交共用此门。
       const sideSubmission = selectionSideChat
         ? null
@@ -2572,7 +2617,7 @@ export function SessionPane({
   const handleSendText = useCallback(
     async (
       text: string,
-      options?: ConversationComposerSendOptions,
+      options?: OmpNativeToolsSendOptions,
     ): Promise<ConversationComposerSendResult> => {
       // 发送前冻结本次 admission 预期：command ACK 回来时 projection 可能已经切到 running，
       // 不能用更新后的 enqueue mode 反推刚提交的 prompt 是否原本立即发送。
@@ -2586,12 +2631,16 @@ export function SessionPane({
         if (sendResult === "blocked" || sendResult === "confirmationRequired") {
           return sendResult;
         }
+        if (options?.nativeToolsAdmission && !options.nativeToolsAdmission.isCurrent()) {
+          return "blocked";
+        }
         setSendSubmissionError(null);
         if (shouldFocusLatest) {
           focusTimelineToLatest();
         }
         return "sent";
       } catch (error) {
+        if (options?.nativeToolsAdmission && !options.nativeToolsAdmission.isCurrent()) throw error;
         const detail = error instanceof Error ? error.message : String(error);
         const runtimeModelUnavailable = detail.includes("provider.notInRegistry");
         const attachmentRejection = ompAttachmentRejectionDetail(error);
@@ -3582,6 +3631,26 @@ export function SessionPane({
   const handleComposerCompression = useComposerCallback(handleSendCompressionCommand);
   const handleComposerRecoverModel = useComposerCallback(handleRecoverCustomModelSelection);
   const handleComposerAutoCompaction = useComposerCallback(handleSetAutoCompaction);
+  const nativeTools = useOmpNativeTools({
+    workspacePath,
+    workspaceIdentity,
+    remoteSessionId,
+    sessionId,
+    snapshot,
+    commands: slashCommands,
+    unavailable:
+      readOnly ||
+      selectionSideChat ||
+      connecting ||
+      errored ||
+      draftRuntimeRebuilding ||
+      queueEditActiveForCurrentComposer ||
+      quotaBanner.state.blocksSubmit ||
+      !composerSubmissionReady,
+    readComposerBusy: () => composerDraftStateRef.current.busy,
+    readSubmission: createSubmissionFromComposer,
+    sendText: handleSendText,
+  });
 
   // subagent 右侧 child tab 是观察视图；复用普通 SessionPane 时
   // 若仍创建 composer，会让用户误以为可以直接向 child session 继续输入。
@@ -3603,6 +3672,7 @@ export function SessionPane({
       captureComposerSubmission={captureComposerSubmission}
       flushComposerDraft={flushComposerDraft}
       registerComposerContentReader={registerComposerContentReader}
+      registerAttachmentPromotion={registerAttachmentPromotion}
       replaceComposerDraft={replaceComposerDraft}
       submissionReady={selectionSideChat ? true : composerSubmissionReady}
       parentModelOnly={selectionSideChat}
@@ -3645,6 +3715,7 @@ export function SessionPane({
       gitSummary={gitSummary}
       gitDirtyFileCount={gitDirtyFileCount}
       onOpenGitReview={onOpenGitReview ? handleComposerOpenGitReview : undefined}
+      onOpenNativeTools={selectionSideChat ? undefined : nativeTools.onOpen}
       onSetAutoCompaction={handleComposerAutoCompaction}
       onSwitchMode={handleSwitchMode}
       onOpenRunningBackgroundWorks={
@@ -3719,6 +3790,17 @@ export function SessionPane({
       ) : null}
       {/* v4 权限/问答等待态只是 runtime 的阻塞交互，必须和 composer
           共享 timeline bottom dock；渲染在 SessionPane 外层会脱离主列宽度并挤占下半屏。 */}
+      {blockingInteractionId && !selectionSideChat ? (
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="mb-2 self-end text-ui-sm"
+          onClick={nativeTools.onOpen}
+        >
+          {intl.formatMessage({ id: "ompNativeTools.open" })}
+        </Button>
+      ) : null}
       {sessionId && snapshot ? (
         <V4InteractionDialogs
           key="conversation-interactions"
@@ -3731,6 +3813,20 @@ export function SessionPane({
         />
       ) : null}
       {composerNode}
+      {nativeTools.open ? (
+        <OmpNativeToolsDialog
+          key={nativeTools.scopeGeneration}
+          open={nativeTools.open}
+          onOpenChange={nativeTools.onOpenChange}
+          workspacePath={workspacePath}
+          workspaceIdentity={workspaceIdentity}
+          sessionId={sessionId}
+          commands={slashCommands}
+          disabled={nativeTools.disabled}
+          disabledReason={nativeTools.disabledReason}
+          onExecute={nativeTools.onExecute}
+        />
+      ) : null}
       {/* 办公模式显示主动任务推荐；编程模式保留原有小型场景入口。 */}
       {isDraft && (!isOfficeMode || sharedSettings?.proactiveSuggestionsEnabled === true) ? (
         <ConversationDraftSuggestedPromptsContainer

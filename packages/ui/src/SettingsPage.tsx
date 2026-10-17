@@ -38,6 +38,7 @@ import {
   writeLastSettingsSectionPreference,
 } from "@/lib/settingsNavigation.js";
 import { OmpModelRolesSection } from "@/settings/OmpModelRolesSection.js";
+import { OmpOfflineDataBackupSection } from "@/settings/OmpOfflineDataBackupSection.js";
 import { OmpNativeIntegrationsSection } from "@/settings/OmpNativeIntegrationsSection.js";
 import { AppUsagePanel } from "@/settings/usage-stats/AppUsagePanel.js";
 import { SubagentsSection } from "@/settings/SubagentsSection.js";
@@ -1335,6 +1336,8 @@ export function SettingsPage({
                           />
                         ) : activeSection === "shortcuts" ? (
                           <ShortcutSettingsSection isDesktop={Boolean(isDesktop)} />
+                        ) : activeSection === "offlineBackup" ? (
+                          <OmpOfflineDataBackupSection />
                         ) : activeSection === "modelProvider" ? (
                           <OmpModelRolesSection
                             workspacePath={activeWorkspacePath ?? captionWorkspacePath ?? ""}

@@ -28,6 +28,7 @@ import type {
   ApplicationIconRequest,
   Locale,
   OAuthStateRegistration,
+  OfflineDataBackupSnapshot,
   OfflineDataBackupWarningPayload,
   PostUpdateReleaseNotesPayload,
   RemoteConnectionRuntimeLog,
@@ -270,6 +271,12 @@ declare global {
       /** 注册 Main 的非模态离线备份失败提示，返回 disposer */
       onOfflineDataBackupWarning(
         callback: (payload: OfflineDataBackupWarningPayload) => void,
+      ): () => void;
+      /** 读取 Main 持有的本机运行与备份状态 */
+      getOfflineDataBackupState(): Promise<OfflineDataBackupSnapshot>;
+      /** 订阅本机运行与备份状态，返回精确移除当前订阅的 disposer */
+      onOfflineDataBackupStateChanged(
+        callback: (payload: OfflineDataBackupSnapshot) => void,
       ): () => void;
       /** 注册自动更新持续状态变化，返回 disposer */
       onUpdateStateChanged?(callback: (payload: UpdateStatePayload) => void): () => void;

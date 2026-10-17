@@ -6,8 +6,8 @@
 | -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | [FORK.md](FORK.md)                                 | Fork 目的、上游同步策略与平台范围（单分支、界面统一、`OMP_OFFLINE` 环境门控）、上游基线、核心替换、双链路、产品身份、数据隔离、分发及尚不等价的能力边界 |
 | [omp-core-integration.md](omp-core-integration.md) | OMP 核心接入：每会话一进程 + 目录进程 v3 能力、斜杠严格分发、交互回路（ask/审批）、子代理详情与控制、模型双入口及 Z01—Z17 验收                          |
-| [omp-native-commands.md](omp-native-commands.md)   | 核心 rpc-ui 命令：wiki、repo、team、plan、loop、goal、advisor、ultrathink、orchestrate、workflowz、fullsend、skill 与 compact 的原生对接和验收          |
-| [models-and-commands.md](models-and-commands.md)   | 账号移除、Profile 隔离、角色配置、模型目录、原生命令，以及 Linux offline 的 shm 活动根与异步备份规则                                                    |
+| [omp-native-commands.md](omp-native-commands.md)   | 核心 rpc-ui 命令的原生对接、项目知识/代码索引操作面板、Goal/Loop/Team 等原生编排快捷操作及验收                                                          |
+| [models-and-commands.md](models-and-commands.md)   | 账号移除、Profile 隔离、角色配置、模型目录、原生命令、Linux offline shm 活动根与异步备份，以及只读运行与备份状态页                                      |
 | [composer.md](composer.md)                         | 桌面输入区、临时模型、计划命令入口、上下文、压缩与 Git 状态                                                                                             |
 | [skills.md](skills.md)                             | omp 可执行技能目录、候选、调用与只读设置                                                                                                                |
 | [integrations.md](integrations.md)                 | 子代理、工具交互、扩展/MCP、浏览器与钩子设置页、自动化、文件引用与附件                                                                                  |

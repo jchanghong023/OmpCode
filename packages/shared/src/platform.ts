@@ -52,6 +52,38 @@ export interface OfflineDataBackupWarningPayload {
   kind: "backup-failed";
 }
 
+/** Main 离线备份生命周期的只读阶段；不提供备份控制或恢复能力。 */
+export type OfflineDataBackupPhase =
+  | "disabled"
+  | "waiting"
+  | "running"
+  | "completed"
+  | "busy"
+  | "failed";
+
+/** Main 是运行事实与备份生命周期的唯一所有者，renderer 仅消费快照和变更事件。 */
+export interface OfflineDataBackupSnapshot {
+  /** 当前 Main 生命周期内单调递增，供订阅事件与初始快照去除乱序回包。 */
+  revision: number;
+  /** 是否启用 Linux shm 离线数据备份，不表示离线网络锁定。 */
+  offline: boolean;
+  /** 本次已经启动的运行 profile，不读取待重启设置或扫描 profile 目录。 */
+  activeProfile: string;
+  /** Main 本机运行根目录，不随当前远程 Host 切换。 */
+  runtimeRoot: string;
+  /** Main 本机持久化根目录，非离线运行时与 runtimeRoot 相同。 */
+  persistentRoot: string;
+  phase: OfflineDataBackupPhase;
+  periodMs: number;
+  /** ISO 时间；尚未尝试时为 null。 */
+  lastAttemptAt: string | null;
+  /** 仅 completed 更新最近成功时间，busy 不覆盖。 */
+  lastSuccessfulAt: string | null;
+  /** 固定周期的下一次计划时间；停止或禁用时为 null。 */
+  nextScheduledAt: string | null;
+  code: string | null;
+}
+
 /** Main 将一次能够定位真实 tab 的 browser-use 操作投递给其 origin renderer。 */
 export interface BrowserViewOperationPayload {
   workspaceKey: string;
@@ -579,6 +611,14 @@ export interface IPlatformService {
    * 与 Windows 全功能基准一致。
    */
   getOfflineGateState?(): Promise<OfflineGateState>;
+
+  /** 读取 Main 本机运行与备份状态；Web 无此能力时不实现，不能伪造 disabled 快照。 */
+  getOfflineDataBackupState?(): Promise<OfflineDataBackupSnapshot>;
+
+  /** 订阅 Main 提交后的只读快照；消费方应先订阅再读取，并按 revision 防止旧快照覆盖。 */
+  onOfflineDataBackupStateChanged?(
+    handler: (snapshot: OfflineDataBackupSnapshot) => void,
+  ): () => void;
 
   /** 订阅当前窗口内远程连接过程日志，返回 disposer */
   onRemoteConnectionLog(handler: (entry: RemoteConnectionRuntimeLog) => void): () => void;

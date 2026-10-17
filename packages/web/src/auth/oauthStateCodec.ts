@@ -1,24 +1,10 @@
-import { DEFAULT_ZCODE_ENDPOINT_ORIGIN } from "@zcode/shared";
-
-const PRODUCTION_WEB_ORIGIN = DEFAULT_ZCODE_ENDPOINT_ORIGIN;
 const WEB_CALLBACK_PATHS = new Set(["/cn/share/callback", "/share/callback"]);
-const SHARE_PATH_PATTERN = /^\/(?:cn\/share|share)\/[A-Za-z0-9._~-]{1,512}$/u;
 const PRIVATE_DEV_RETURN_TO_PATTERN =
   /^https?:\/\/(localhost|127\.0\.0\.1|10\.\d+\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+|192\.168\.\d+\.\d+)(:\d+)?(\/|$)/;
 
 interface OAuthStatePayload {
   nonce: string;
-  app_return_to?: string;
   return_to?: string;
-}
-
-interface ResolveSafeAppReturnToOptions {
-  currentOrigin?: string;
-}
-
-function getCurrentOrigin(): string {
-  const location = globalThis.window?.location ?? globalThis.location;
-  return location?.origin ?? PRODUCTION_WEB_ORIGIN;
 }
 
 function isNonEmptyString(value: unknown): value is string {
@@ -58,9 +44,9 @@ export function parseOAuthState(state: string): OAuthStatePayload | null {
       return null;
     }
 
+    // 仅提取仍受支持的字段；旧版 state 中的业务导航信息不再参与登录回调。
     return {
       nonce: parsed.nonce,
-      ...(isNonEmptyString(parsed.app_return_to) ? { app_return_to: parsed.app_return_to } : {}),
       ...(isNonEmptyString(parsed.return_to) ? { return_to: parsed.return_to } : {}),
     };
   } catch {
@@ -82,28 +68,6 @@ export function parseOptionalUrl(value?: string): URL | null {
 
 export function isTrustedDevReturnTo(url: URL): boolean {
   return PRIVATE_DEV_RETURN_TO_PATTERN.test(url.toString()) && WEB_CALLBACK_PATHS.has(url.pathname);
-}
-
-function resolveAllowedAppReturnOrigin(currentOrigin: string): string {
-  return currentOrigin === PRODUCTION_WEB_ORIGIN ? PRODUCTION_WEB_ORIGIN : currentOrigin;
-}
-
-export function resolveSafeAppReturnTo(
-  value?: string,
-  options: ResolveSafeAppReturnToOptions = {},
-): string | null {
-  const url = parseOptionalUrl(value);
-  if (!url || !SHARE_PATH_PATTERN.test(url.pathname)) {
-    return null;
-  }
-
-  const currentOrigin = options.currentOrigin ?? getCurrentOrigin();
-  const allowedOrigin = resolveAllowedAppReturnOrigin(currentOrigin);
-  if (url.origin !== allowedOrigin) {
-    return null;
-  }
-
-  return url.pathname;
 }
 
 export function buildReturnToCallbackUrl(

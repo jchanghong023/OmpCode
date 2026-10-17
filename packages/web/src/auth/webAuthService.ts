@@ -9,7 +9,6 @@ import {
   isTrustedDevReturnTo,
   parseOAuthState,
   parseOptionalUrl,
-  resolveSafeAppReturnTo,
 } from "./oauthStateCodec.js";
 import { WEB_ZAI_OAUTH_CONFIG, type WebZaiOAuthConfig } from "./webZaiOAuthConfig.js";
 import { ZaiWebOAuthProvider } from "./zaiWebOAuthProvider.js";
@@ -17,7 +16,6 @@ import { ZaiWebOAuthProvider } from "./zaiWebOAuthProvider.js";
 interface WebAuthServiceRuntime {
   assign(url: string): void;
   createNonce(): string;
-  getCurrentHref(): string;
   getCurrentOrigin(): string;
   replace(url: string): void;
 }
@@ -31,7 +29,6 @@ interface WebAuthServiceDependencies {
 
 interface WebAuthLoginOptions {
   devReturnTo?: string;
-  appReturnTo?: string;
   redirectUri?: string;
   /** 缺省 zai，保持 /remote 等既有入口行为不变。 */
   provider?: WebOAuthProviderId;
@@ -39,7 +36,6 @@ interface WebAuthLoginOptions {
 
 export interface WebAuthCallbackResult {
   userInfo: UserInfo;
-  appReturnTo: string | null;
 }
 
 function createBrowserNonce(): string {
@@ -62,7 +58,6 @@ function createDefaultRuntime(): WebAuthServiceRuntime {
       window.location.assign(url);
     },
     createNonce: createBrowserNonce,
-    getCurrentHref: () => window.location.href,
     getCurrentOrigin: () => window.location.origin,
     replace: (url) => {
       window.location.replace(url);
@@ -91,7 +86,6 @@ export class WebAuthService {
 
     const state = buildOAuthState({
       nonce,
-      app_return_to: options.appReturnTo ?? this.runtime.getCurrentHref(),
       ...(options.devReturnTo ? { return_to: options.devReturnTo } : {}),
     });
 
@@ -159,9 +153,6 @@ export class WebAuthService {
 
     return {
       userInfo: exchange.userInfo,
-      appReturnTo: resolveSafeAppReturnTo(statePayload.app_return_to, {
-        currentOrigin: this.runtime.getCurrentOrigin(),
-      }),
     };
   }
 

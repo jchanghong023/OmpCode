@@ -179,10 +179,15 @@ nodes:
       - 引导
       - 消息队列
     codeSeeds:
-      - file: apps/zcode-cli/packages/bootstrap/src/zcode-protocol-v4/v4-gateway.ts
-        symbol: ConversationV4Gateway
-      - file: apps/zcode-cli/packages/bootstrap/src/zcode-protocol-v4/commands/handlers/session-flow.ts
-        symbol: sendText
+      - file: packages/ui/src/v4/SessionPane.tsx
+        symbol: handleSendText
+      - file: packages/omp-agent/src/app/v4Commands.ts
+        symbol: V4CommandService
+      - file: packages/omp-agent/src/app/conversationEngine.ts
+        symbol: ConversationEngine
+    invariants:
+      - Current OMP execution enters through SessionPane and the omp-agent adapter; historical
+        apps/zcode-cli seeds elsewhere in this graph are not the current native-tools execution entry.
   - id: state.conversation-projection
     kind: state-owner
     label: Client conversation projection and pending optimistic overlay
@@ -355,6 +360,268 @@ nodes:
     codeSeeds:
       - file: apps/zcode-cli/packages/core/src/runtime/methods/turn-model.ts
         symbol: applySubmissionExecutionState
+  - id: capability.offline-runtime-backups
+    kind: capability
+    label: Local runtime and offline data backup status
+    aliases:
+      - offline backup
+      - Runtime & Backups
+      - offlineBackup
+      - 离线运行
+      - 离线备份
+      - 运行与备份
+    codeSeeds:
+      - file: packages/ui/src/settings/OmpOfflineDataBackupSection.tsx
+        symbol: OmpOfflineDataBackupSection
+      - file: packages/shared/src/platform.ts
+        symbol: OfflineDataBackupSnapshot
+    invariants:
+      - The offline field describes Linux shm backup mode, not the network-lock gate.
+      - This is a read-only status surface, not a backup, restore or path-edit command.
+  - id: surface.offline-runtime-backups-settings
+    kind: ui-surface
+    label: Runtime and Backups settings section
+    aliases:
+      - backup status page
+      - 备份状态设置页
+      - 本机运行状态
+    codeSeeds:
+      - file: packages/ui/src/settings/OmpOfflineDataBackupSection.tsx
+        symbol: OmpOfflineDataBackupSection
+    invariants:
+      - Display Main-local roots and the active runtime profile, never the selected remote Host's
+        settingService directoryInfo or a pending-restart profile.
+  - id: state.main-offline-backup-lifecycle
+    kind: state-owner
+    label: Main-owned backup schedule, admitted round and runtime facts
+    aliases:
+      - Main backup owner
+      - 离线备份生命周期
+      - 备份调度
+    codeSeeds:
+      - file: packages/desktop/src/main/offlineDataBackupLifecycle.ts
+        symbol: createOfflineDataBackupLifecycle
+      - file: packages/desktop/src/main/index.ts
+        symbol: getOfflineDataBackupSnapshot
+    invariants:
+      - Main is the only lifecycle owner; diagnostics and renderers do not maintain another scheduler.
+      - Commit state before broadcasting and starting work; only completed changes lastSuccessfulAt.
+      - The schedule advances on fixed periods; overlapping rounds remain running, and stop clears
+        the schedule and ignores late results without a synchronous backup.
+      - Snapshot reads use in-memory or lexical local facts and do not enumerate profile directories.
+  - id: boundary.offline-backup-platform-read
+    kind: delivery-boundary
+    label: Authorized Main snapshot and event read boundary
+    aliases:
+      - getOfflineDataBackupState
+      - onOfflineDataBackupStateChanged
+      - backup snapshot event
+      - 平台只读边界
+    codeSeeds:
+      - file: packages/shared/src/platform.ts
+        symbol: OfflineDataBackupSnapshot
+      - file: packages/shared/src/channels.ts
+        symbol: PlatformChannels
+      - file: packages/desktop/src/preload/index.ts
+        symbol: getOfflineDataBackupState
+      - file: packages/desktop/src/renderer/src/desktopPlatform.ts
+        symbol: createDesktopPlatform
+    invariants:
+      - Main authorizes both reads and broadcasts with registered application webContents IDs;
+        non-offline disabled snapshots use the same admission boundary.
+      - The optional platform methods expose snapshot and change events only, not lifecycle controls.
+  - id: state.renderer-offline-backup-projection
+    kind: state-owner
+    label: Renderer read-only backup snapshot projection
+    codeSeeds:
+      - file: packages/ui/src/hooks/useOfflineDataBackupState.ts
+        symbol: useOfflineDataBackupState
+    invariants:
+      - Subscribe before reading; revision and platform-generation fences reject stale replies.
+      - Missing Web capability is unavailable, not a fabricated disabled snapshot; read errors do not
+        change Main's backup phase to failed.
+      - Refresh rereads the snapshot without polling, scanning directories, sending RendererReady
+        or triggering backup work.
+  - id: capability.omp-native-tools
+    kind: capability
+    label: Current-session OMP native tools
+    aliases:
+      - native tools
+      - OMP tools dialog
+      - 原生工具
+      - 原生工具窗口
+    codeSeeds:
+      - file: packages/ui/src/v4/native-tools/OmpNativeToolsDialog.tsx
+        symbol: OmpNativeToolsDialog
+      - file: packages/ui/src/v4/native-tools/useOmpNativeTools.ts
+        symbol: useOmpNativeTools
+  - id: surface.omp-native-tools-dialog
+    kind: ui-surface
+    label: SessionPane-owned native tools Dialog
+    codeSeeds:
+      - file: packages/ui/src/v4/native-tools/OmpNativeToolsDialog.tsx
+        symbol: OmpNativeToolsDialog
+      - file: packages/ui/src/v4/SessionPane.tsx
+        symbol: nativeTools
+    invariants:
+      - Composer and toolbar only forward the open callback; SessionPane owns the window and submission.
+      - Close the modal before submission so native extension questions remain accessible in the
+        existing session interaction dialogs.
+  - id: state.omp-native-tools-admission
+    kind: state-owner
+    label: Scope-fenced native tools admission and frozen submission
+    codeSeeds:
+      - file: packages/ui/src/v4/native-tools/useOmpNativeTools.ts
+        symbol: useOmpNativeTools
+      - file: packages/ui/src/v4/native-tools/useOmpNativeTools.ts
+        symbol: OmpNativeToolsAdmission
+    invariants:
+      - A fresh scope token fences every workspace/session entry, including A-B-A; synchronous flight
+        admission blocks duplicate clicks and stale replies cannot mutate a newer window.
+      - Freeze command text and submission without consuming Composer text, rich nodes or attachments.
+      - Running, pending interaction, routing choice and unavailable submission states disable execution;
+        sent is admission only and confirmationRequired is not success.
+  - id: service.session-pane-text-submission
+    kind: service
+    label: Existing SessionPane text submission and draft promotion
+    aliases:
+      - native tools send
+      - handleSendText
+      - 会话提交链
+    codeSeeds:
+      - file: packages/ui/src/v4/SessionPane.tsx
+        symbol: handleSendText
+      - file: packages/ui/src/v4/SessionPane.tsx
+        symbol: dispatchSendText
+      - file: packages/ui/src/v4/SessionPane.tsx
+        symbol: dispatchSendTextAfterConfig
+    invariants:
+      - Reuse the existing createSession/sendText command chain, configuration barrier, draft promotion
+        and error banner; native tools do not submit or rewrite the Composer.
+      - Recheck native-tools admission after asynchronous barriers and before dispatching commands.
+  - id: service.workspace-native-command-catalog
+    kind: service
+    label: Selected workspace's advertised slash command catalog
+    aliases:
+      - native command availability
+      - slash command directory
+      - 原生命令目录
+    codeSeeds:
+      - file: packages/ui/src/hooks/useSlashCommands.ts
+        symbol: useSlashCommands
+    invariants:
+      - Catalog availability is not proof of a ready index, native business success or an identical
+        directory-process and target-session runtime; the execution target still validates commands.
+  - id: surface.omp-project-index-panel
+    kind: ui-surface
+    label: Wiki and Repo dashboards with explicit model-assisted code search
+    aliases:
+      - project index
+      - wiki dashboard
+      - repo dashboard
+      - /wiki
+      - /repo
+      - 项目索引
+      - 代码检索
+      - 知识库索引
+    codeSeeds:
+      - file: packages/ui/src/v4/native-tools/OmpProjectIndexPanel.tsx
+        symbol: OmpProjectIndexPanel
+    invariants:
+      - Wiki and Repo buttons submit bare interactive dashboard commands; maintenance, confirmations
+        and results remain in the native conversation rather than a client-owned index state.
+      - Code search explicitly invokes the current session model and repo tool; it is not a direct
+        search RPC, index rebuild or ordinary-prompt fallback for a missing command.
+  - id: service.omp-project-index-command-draft
+    kind: service
+    label: Index dashboard availability and literal repo-tool search request construction
+    codeSeeds:
+      - file: packages/ui/src/v4/native-tools/ompProjectIndexCommands.ts
+        symbol: getOmpProjectIndexDashboardCommand
+      - file: packages/ui/src/v4/native-tools/ompProjectIndexCommands.ts
+        symbol: buildOmpRepoSearchRequest
+    invariants:
+      - Nonempty search query text is preserved through JSON encoding; missing repo capability blocks
+        the explicit model-assisted search path.
+  - id: surface.omp-orchestration-panel
+    kind: ui-surface
+    label: OMP Goal, Loop, Team and magic command parameter drafts
+    aliases:
+      - orchestration shortcuts
+      - Goal
+      - Loop
+      - Team
+      - /goal
+      - /loop
+      - /team
+      - /orchestrate
+      - /workflowz
+      - /fullsend
+      - 编排快捷操作
+      - 编排页
+    codeSeeds:
+      - file: packages/ui/src/v4/native-tools/OmpOrchestrationPanel.tsx
+        symbol: OmpOrchestrationPanel
+    invariants:
+      - The panel owns parameter drafts and exact-command confirmation, not Goal, Loop or Team runtime.
+      - Goal drop and bare /loop require confirmation bound to the exact preview text.
+  - id: service.omp-orchestration-command-draft
+    kind: service
+    label: Catalog-intersected orchestration forms and native syntax preview
+    codeSeeds:
+      - file: packages/ui/src/v4/native-tools/ompOrchestrationCommands.ts
+        symbol: getOmpOrchestrationCapabilities
+      - file: packages/ui/src/v4/native-tools/ompOrchestrationCommands.ts
+        symbol: buildOmpOrchestrationCommand
+    invariants:
+      - Supported form candidates are intersected with the advertised catalog and missing capabilities
+        remain explicit; command construction does not execute or maintain native business state.
+      - Loop shutdown is bare /loop, not invented pause/resume subcommands; magic commands take task
+        text, not a client-invented concurrency argument.
+  - id: service.omp-v4-command-admission
+    kind: service
+    label: Current OMP adapter command validation, idempotency and dispatch
+    codeSeeds:
+      - file: packages/omp-agent/src/app/v4Commands.ts
+        symbol: V4CommandService
+    invariants:
+      - V4 ACKs describe adapter command admission, not successful completion of the native business task.
+  - id: boundary.omp-native-business-owner
+    kind: delivery-boundary
+    label: Session OMP process owns native command business execution
+    aliases:
+      - OMP business owner
+      - native execution owner
+      - OMP业务owner
+    codeSeeds:
+      - file: packages/omp-agent/src/app/conversationEngine.ts
+        symbol: ConversationEngine
+      - file: packages/omp-agent/src/app/ompPromptDispatch.ts
+        symbol: dispatchOmpText
+      - file: packages/omp-agent/src/adapters/ompProcess.ts
+        symbol: createOmpProcessFactory
+    invariants:
+      - The adapter validates slash commands for the execution target and sends prompt text to the
+        native OMP process; unknown or TUI-only commands must not become ordinary model prompts.
+      - Native OMP owns index and orchestration behavior; the Dialog, command catalog and adapter
+        projection are not replacement business owners.
+  - id: state.omp-conversation-event-projection
+    kind: state-owner
+    label: OMP adapter projection of native events, command output and interactions
+    codeSeeds:
+      - file: packages/omp-agent/src/app/conversationEngine.ts
+        symbol: ConversationEngine
+      - file: packages/omp-agent/src/domain/conversationProjection.ts
+        symbol: ConversationProjection
+    invariants:
+      - Native output and questions remain projected into the originating session, not synthetic panel
+        success state; the projection is distinct from OMP business execution.
+  - id: service.omp-conversation-topic-publication
+    kind: service
+    label: Current OMP adapter snapshot and delta publication
+    codeSeeds:
+      - file: packages/omp-agent/src/app/topicPublisher.ts
+        symbol: ConversationTopicPublisher
 edges:
   - from: capability.model-selection
     to: surface.conversation-model-control
@@ -468,11 +735,11 @@ edges:
       User/workspace definitions use Markdown; built-in/plugin overrides use the agent state
       file. Neither is a live conversation model switch.
   - from: capability.conversation-runtime
-    to: service.conversation-command-inbox
+    to: service.omp-v4-command-admission
     type: admits-commands-through
     rank: must-inspect
   - from: capability.conversation-runtime
-    to: state.conversation-product-projection
+    to: state.omp-conversation-event-projection
     type: projects-runtime-events-through
     rank: must-inspect
   - from: state.conversation-product-projection
@@ -598,3 +865,138 @@ edges:
     type: emits-model-selection-for
     rank: must-inspect
     condition: Applied runtime model selection is projected through ModelSelected events.
+  - from: capability.offline-runtime-backups
+    to: surface.offline-runtime-backups-settings
+    type: renders-in
+    rank: must-inspect
+  - from: capability.offline-runtime-backups
+    to: state.main-offline-backup-lifecycle
+    type: owned-by
+    rank: must-inspect
+  - from: state.main-offline-backup-lifecycle
+    to: boundary.offline-backup-platform-read
+    type: exposes-committed-snapshot-through
+    rank: must-inspect
+    condition: GetOfflineDataBackupState reads memory; OfflineDataBackupStateChanged broadcasts committed revisions.
+  - from: boundary.offline-backup-platform-read
+    to: state.renderer-offline-backup-projection
+    type: delivers-snapshot-and-events-to
+    rank: must-inspect
+  - from: surface.offline-runtime-backups-settings
+    to: state.renderer-offline-backup-projection
+    type: reads-through
+    rank: must-inspect
+  - from: state.renderer-offline-backup-projection
+    to: state.main-offline-backup-lifecycle
+    type: must-not-duplicate-owner
+    rank: invariant-only
+    condition: Reads and refreshes never schedule or run backups; unavailable/error UI is not a Main phase.
+  - from: capability.omp-native-tools
+    to: surface.omp-native-tools-dialog
+    type: renders-in
+    rank: must-inspect
+  - from: surface.omp-native-tools-dialog
+    to: state.omp-native-tools-admission
+    type: submits-through
+    rank: must-inspect
+  - from: surface.omp-native-tools-dialog
+    to: surface.omp-project-index-panel
+    type: renders-in
+    rank: must-inspect
+  - from: surface.omp-native-tools-dialog
+    to: surface.omp-orchestration-panel
+    type: renders-in
+    rank: must-inspect
+  - from: surface.omp-native-tools-dialog
+    to: service.workspace-native-command-catalog
+    type: options-from
+    rank: must-inspect
+  - from: service.workspace-native-command-catalog
+    to: boundary.workspace-key
+    type: isolated-by
+    rank: must-inspect
+  - from: state.omp-native-tools-admission
+    to: boundary.workspace-key
+    type: isolated-by
+    rank: must-inspect
+    condition: Also fence workspacePath, remoteSessionId, sessionId and each scope-entry generation.
+  - from: state.omp-native-tools-admission
+    to: service.workspace-native-command-catalog
+    type: checks-availability-from
+    rank: must-inspect
+  - from: state.omp-native-tools-admission
+    to: service.session-pane-text-submission
+    type: commits-through
+    rank: must-inspect
+    condition: Freeze text and submission, close the modal, then call existing handleSendText without draft attachments.
+  - from: service.session-pane-text-submission
+    to: capability.conversation-runtime
+    type: submits-createSession-or-sendText-to
+    rank: must-inspect
+    condition: Preserve existing configuration barriers, draft promotion, admission outcomes and error banners.
+  - from: surface.omp-project-index-panel
+    to: service.omp-project-index-command-draft
+    type: constructs-request-through
+    rank: must-inspect
+  - from: service.omp-project-index-command-draft
+    to: service.workspace-native-command-catalog
+    type: checks-availability-from
+    rank: must-inspect
+  - from: surface.omp-project-index-panel
+    to: state.omp-native-tools-admission
+    type: submits-through
+    rank: must-inspect
+    condition: Bare /wiki and /repo are dashboards; repo search is a separate explicit model/tool request.
+  - from: surface.omp-project-index-panel
+    to: boundary.omp-native-business-owner
+    type: delegates-business-state-to
+    rank: invariant-only
+    condition: Index existence, maintenance, confirmations and query results are native conversation facts.
+  - from: surface.omp-orchestration-panel
+    to: service.omp-orchestration-command-draft
+    type: validates-and-previews-through
+    rank: must-inspect
+  - from: service.omp-orchestration-command-draft
+    to: service.workspace-native-command-catalog
+    type: intersects-candidates-with
+    rank: must-inspect
+  - from: surface.omp-orchestration-panel
+    to: state.omp-native-tools-admission
+    type: submits-confirmed-text-through
+    rank: must-inspect
+  - from: surface.omp-orchestration-panel
+    to: boundary.omp-native-business-owner
+    type: delegates-business-state-to
+    rank: invariant-only
+    condition: Form drafts and confirmations do not own Goal, Loop, Team or magic-command runtime.
+  - from: service.omp-v4-command-admission
+    to: boundary.omp-native-business-owner
+    type: dispatches-to
+    rank: must-inspect
+  - from: boundary.omp-native-business-owner
+    to: state.omp-conversation-event-projection
+    type: projects-native-output-and-interactions-through
+    rank: must-inspect
+  - from: state.omp-conversation-event-projection
+    to: service.omp-conversation-topic-publication
+    type: publishes-through
+    rank: must-inspect
+  - from: service.omp-conversation-topic-publication
+    to: state.conversation-projection
+    type: delivers-snapshot-and-deltas-to
+    rank: must-inspect
+  - from: state.omp-native-tools-admission
+    to: state.conversation-projection
+    type: reads-routing-and-interactions-from
+    rank: must-inspect
+    condition: Availability comes from the selected session snapshot, not a second accepted command queue.
+  - from: service.omp-conversation-topic-publication
+    to: boundary.desktop-continuous
+    type: uses-delivery-policy
+    rank: conditional
+    condition: For Desktop continuous attachments; retain separation from Web replayable delivery.
+  - from: service.omp-conversation-topic-publication
+    to: boundary.web-remote-replayable
+    type: uses-delivery-policy
+    rank: conditional
+    condition: For replayable Web remote attachments; native tools do not add another recovery owner.

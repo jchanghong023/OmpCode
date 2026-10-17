@@ -13,7 +13,6 @@ import "@zcode/ui/styles.css";
 import { connectViaWebSocket } from "@zcode/client";
 import { WebCallbackPage } from "./auth/WebCallbackPage.js";
 import { createWebAuthService } from "./auth/webAuthService.js";
-import { parseOAuthState, resolveSafeAppReturnTo } from "./auth/oauthStateCodec.js";
 import { resolveWebCommunityUrl, resolveWebHelpConfig } from "./communityUrl.js";
 import type { IPlatformService, RemoteTarget, ServerRemoteInfo } from "@zcode/shared";
 import { WEB_DEFAULT_THEME, resolveWebInitialTheme } from "./webThemeSeed.js";
@@ -81,18 +80,14 @@ function isWebOAuthCallback(params: URLSearchParams): boolean {
 
 function renderWebAuthCallbackPage(): void {
   document.title = "OmpCode - Sign In";
-  const callbackState = parseOAuthState(
-    new URLSearchParams(window.location.search).get("state") ?? "",
-  );
-  const safeRetryTarget = resolveSafeAppReturnTo(callbackState?.app_return_to);
   root.render(
     <WebCallbackPage
       authService={webAuthService}
-      onSuccess={({ appReturnTo }) => {
-        window.location.replace(appReturnTo ?? "/");
+      onSuccess={() => {
+        window.location.replace("/");
       }}
       onRetry={() => {
-        window.location.replace(safeRetryTarget ?? "/");
+        window.location.replace("/");
       }}
     />,
   );

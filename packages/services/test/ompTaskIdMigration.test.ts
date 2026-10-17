@@ -183,3 +183,205 @@ test("committed identity survives cold list/grouped reads and cannot be forged b
     await rm(root, { recursive: true, force: true });
   }
 });
+
+for (const targetExists of [false, true]) {
+  test(`missing temp row cannot manufacture a committed migration (UUID exists: ${targetExists})`, async () => {
+    const root = await mkdtemp(join(tmpdir(), "omp-task-rekey-"));
+    const path = join(root, "tasks.sqlite");
+    let repo = new TaskIndexRepo(path);
+    const scope = { workspacePath: join(root, "workspace"), workspaceIdentity: "remote-a" };
+    const fromTaskId = "omp-session-native-first";
+    const toTaskId = "01a0d6d2-37bb-73c0-b13b-9f4fb3ea388c";
+    try {
+      if (targetExists) {
+        await repo.syncTaskMeta({
+          meta: {
+            ...scope,
+            taskId: toTaskId,
+            traceId: "uuid-trace",
+            title: "native first input",
+            createdAt: 1,
+            updatedAt: 2,
+            mode: "build",
+            provider: "glm",
+          },
+        });
+      }
+      const result = await repo.rekeyTaskId({ ...scope, fromTaskId, toTaskId });
+      assert.equal(result?.taskIdMigration, undefined, "no source row was transactionally moved");
+      assert.equal(result?.taskId ?? null, targetExists ? toTaskId : null);
+      assert.equal(await repo.getTaskMeta({ ...scope, taskId: fromTaskId }), null);
+      repo.close();
+      repo = new TaskIndexRepo(path);
+      const list = await repo.queryTaskList({
+        kind: "timeline",
+        workspaceScopes: [scope],
+        sortBy: "updated",
+      });
+      assert.deepEqual(
+        list.items.map((item) => item.taskId),
+        targetExists ? [toTaskId] : [],
+      );
+      assert.ok(list.items.every((item) => item.taskIdMigration === undefined));
+      const grouped = await repo.queryGroupedTaskView({ workspaceScopes: [scope] });
+      const tasks = grouped.nodes.flatMap((node) =>
+        node.type === "group" ? node.tasks : [node.task],
+      );
+      assert.deepEqual(
+        tasks.map((item) => item.taskId),
+        targetExists ? [toTaskId] : [],
+      );
+      assert.ok(tasks.every((item) => item.taskIdMigration === undefined));
+    } finally {
+      repo.close();
+      assert.equal(dirname(root), resolve(tmpdir()));
+      assert.ok(basename(root).startsWith("omp-task-rekey-"));
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+}
+
+for (const targetExists of [false, true]) {
+  test(`owned alias without source waits for the committed scoped UUID (exists: ${targetExists})`, async () => {
+    const root = await mkdtemp(join(tmpdir(), "omp-task-rekey-"));
+    const path = join(root, "tasks.sqlite");
+    let repo = new TaskIndexRepo(path);
+    const scope = { workspacePath: join(root, "workspace"), workspaceIdentity: "remote-a" };
+    const otherScope = { ...scope, workspaceIdentity: "remote-b" };
+    const fromTaskId = "omp-session-owned-native";
+    const toTaskId = "01a0d6d2-37bb-73c0-b13b-9f4fb3ea388c";
+    const migration = { fromTaskId, toTaskId };
+    const canonicalMeta = {
+      ...scope,
+      taskId: toTaskId,
+      traceId: "trace-uuid",
+      title: "native first input",
+      createdAt: 1,
+      updatedAt: 2,
+      mode: "build" as const,
+      provider: "glm" as const,
+    };
+    const params = { ...scope, ...migration, isCurrent: () => true };
+    try {
+      // A target in another remote workspace is not a committed target in this scope.
+      await repo.syncTaskMeta({ meta: { ...canonicalMeta, ...otherScope } });
+      assert.equal(await repo.commitOwnedTaskIdAlias(params), null);
+      if (targetExists) await repo.syncTaskMeta({ meta: canonicalMeta });
+      const first = await repo.commitOwnedTaskIdAlias(params);
+      if (targetExists) assert.deepEqual(first?.taskIdMigration, migration);
+      else {
+        assert.equal(first, null);
+        await repo.syncTaskMeta({ meta: canonicalMeta });
+      }
+      const committed = await repo.commitOwnedTaskIdAlias(params);
+      assert.deepEqual(committed?.taskIdMigration, migration);
+      assert.deepEqual((await repo.commitOwnedTaskIdAlias(params))?.taskIdMigration, migration);
+      assert.equal(
+        await repo.commitOwnedTaskIdAlias({ ...params, fromTaskId: "omp-session-unrelated" }),
+        null,
+        "a later alias must not replace the committed tuple",
+      );
+      assert.equal(await repo.getTaskMeta({ ...scope, taskId: fromTaskId }), null);
+      assert.equal(
+        (await repo.getTaskMeta({ ...otherScope, taskId: toTaskId }))?.taskIdMigration,
+        undefined,
+      );
+      assert.deepEqual(
+        (
+          await repo.syncTaskMeta({
+            meta: {
+              ...canonicalMeta,
+              taskIdMigration: { fromTaskId: "forged", toTaskId },
+            },
+          })
+        ).taskIdMigration,
+        migration,
+      );
+      repo.close();
+      repo = new TaskIndexRepo(path);
+      assert.deepEqual(
+        (await repo.getTaskMeta({ ...scope, taskId: toTaskId }))?.taskIdMigration,
+        migration,
+      );
+      const list = await repo.queryTaskList({
+        kind: "timeline",
+        workspaceScopes: [scope],
+        sortBy: "updated",
+      });
+      assert.deepEqual(
+        list.items.map((item) => [item.taskId, item.taskIdMigration]),
+        [[toTaskId, migration]],
+      );
+      const grouped = await repo.queryGroupedTaskView({ workspaceScopes: [scope] });
+      assert.deepEqual(
+        grouped.nodes.flatMap((node) =>
+          node.type === "group"
+            ? node.tasks.map((task) => [task.taskId, task.taskIdMigration])
+            : [[node.task.taskId, node.task.taskIdMigration]],
+        ),
+        [[toTaskId, migration]],
+      );
+    } finally {
+      repo.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+}
+
+test("owned alias rejects stale ownership and rolls back a failed migration write", async () => {
+  const root = await mkdtemp(join(tmpdir(), "omp-task-rekey-"));
+  const path = join(root, "tasks.sqlite");
+  const repo = new TaskIndexRepo(path);
+  const scope = { workspacePath: join(root, "workspace") };
+  const migration = {
+    fromTaskId: "omp-session-owned-native",
+    toTaskId: "01a0d6d2-37bb-73c0-b13b-9f4fb3ea388c",
+  };
+  try {
+    await repo.syncTaskMeta({
+      meta: {
+        ...scope,
+        taskId: migration.toTaskId,
+        traceId: "trace",
+        title: "canonical",
+        createdAt: 1,
+        updatedAt: 2,
+        mode: "build",
+        provider: "glm",
+      },
+    });
+    let checks = 0;
+    assert.equal(
+      await repo.commitOwnedTaskIdAlias({
+        ...scope,
+        ...migration,
+        isCurrent: () => ++checks < 3,
+      }),
+      null,
+      "ownership is checked again inside the transaction, not just before queueing",
+    );
+    const db = new DatabaseSync(path);
+    try {
+      db.exec(`
+        CREATE TRIGGER fail_owned_alias BEFORE UPDATE OF meta_json ON tasks
+        WHEN json_extract(NEW.meta_json, '$.taskIdMigration') IS NOT NULL
+        BEGIN SELECT RAISE(ABORT, 'owned alias commit rejected'); END;
+      `);
+      await assert.rejects(
+        repo.commitOwnedTaskIdAlias({ ...scope, ...migration, isCurrent: () => true }),
+        /owned alias commit rejected/,
+      );
+    } finally {
+      db.close();
+    }
+    repo.close();
+    assert.equal(
+      (await repo.getTaskMeta({ ...scope, taskId: migration.toTaskId }))?.taskIdMigration,
+      undefined,
+    );
+    assert.equal(await repo.getTaskMeta({ ...scope, taskId: migration.fromTaskId }), null);
+  } finally {
+    repo.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
