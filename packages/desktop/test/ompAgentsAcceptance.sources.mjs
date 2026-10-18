@@ -148,12 +148,30 @@ export function sourceEvents(records, parentId) {
   const main = records.parentAgentId;
   const events = [];
   for (const child of records.children) {
-    const result =
-      child.name === "a"
-        ? toolSource(records.entries, records.wait.toolCallId)
-        : records.automatic.find((entry) =>
-            textOf(entry.content).includes(`AGENTS_DONE_${child.name}`),
-          );
+    // 中文原因：wait 可能只消费 peer 回信；完成来源必须是实际携带完成结果的唯一记录。
+    // inspectRecords 已严格校验投递与子身份，此处仍精确选择一条，不接受候选 ID 集合。
+    const completions = records.entries.filter((entry) => {
+      if (entry.type === "custom_message" && entry.customType === "async-result")
+        return (
+          textOf(entry.content).includes(`AGENTS_DONE_${child.name}`) &&
+          entry.details?.jobs?.some(
+            (job) => job.jobId === child.rawId && job.agentId === child.rawId,
+          )
+        );
+      return (
+        entry.type === "message" &&
+        entry.message?.role === "toolResult" &&
+        entry.message.toolName === "wait" &&
+        textOf(entry.message.content).includes(`AGENTS_DONE_${child.name}`) &&
+        entry.message.details?.jobs?.some((job) => job.id === child.rawId)
+      );
+    });
+    assert.equal(
+      completions.length,
+      1,
+      "Each completion must resolve to one exact persisted source",
+    );
+    const result = completions[0];
     events.push(
       dispatchEvent(
         {

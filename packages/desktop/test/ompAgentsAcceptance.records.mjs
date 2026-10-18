@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { assertTaskArguments, dispatched, textOf } from "./ompAgentsAcceptance.protocol.mjs";
 import {
+  assertCompletionDeliveries,
   assertOriginalAssignment,
   callsOf,
   digest,
@@ -71,24 +72,40 @@ export async function inspectRecords(runtime, parentId, identities, extras = {})
     textOf(broadcast.result.content).length > 0,
     "Real broadcast receipt is required, not just an invocation",
   );
-  const waitResults = resultsOf(parent).filter(
-    (result) => result.toolName === "wait" && textOf(result.content).includes("AGENTS_DONE_a"),
-  );
-  assert.equal(
-    waitResults.length,
-    1,
-    "Exactly one explicit wait must retain child a's actual delivered result",
-  );
-  const wait = successful(parent, waitResults[0].toolCallId, "wait");
+  const a = identities.find((identity) => identity.name === "a");
+  assert.ok(a, "Child a must come from the independent real dispatch");
+  const waitResults = resultsOf(parent).filter((result) => result.toolName === "wait");
   const automatic = entries.filter(
     (entry) => entry.type === "custom_message" && entry.customType === "async-result",
   );
-  for (const name of ["b", "c"])
-    assert.equal(
-      automatic.filter((entry) => textOf(entry.content).includes(`AGENTS_DONE_${name}`)).length,
-      1,
-      `Require exactly one actual automatic ${name} delivery`,
+  assertCompletionDeliveries(parent, identities, waitResults, automatic);
+  // 中文原因：wait 可先交付 peer 回信，完成随后走 auto；不能把同批通知冒充 wait 正文。
+  const receivedByWait = waitResults.filter((result) => {
+    if (result.isError === true) return false;
+    if (textOf(result.content).includes("AGENTS_DONE_a")) return true;
+    if (result.details?.waited?.from === a.rawId && result.details.waited.body === "AGENTS_REPLY_a")
+      return true;
+    if (result.details?.interrupted !== true) return false;
+    const index = entries.findIndex(
+      (entry) => entry.type === "message" && entry.message === result,
     );
+    const nextAssistant = entries.findIndex(
+      (entry, offset) =>
+        offset > index && entry.type === "message" && entry.message?.role === "assistant",
+    );
+    return automatic.some(
+      (entry) =>
+        entries.indexOf(entry) > index &&
+        (nextAssistant < 0 || entries.indexOf(entry) < nextAssistant) &&
+        textOf(entry.content).includes("AGENTS_DONE_a") &&
+        entry.details?.jobs?.some((job) => job.jobId === a.rawId),
+    );
+  });
+  assert.ok(
+    receivedByWait.length > 0,
+    "A real successful wait must independently correlate with a",
+  );
+  successful(parent, receivedByWait.at(-1).toolCallId, "wait");
   const children = [];
   for (const identity of identities) {
     assert.equal(
@@ -127,6 +144,20 @@ export async function inspectRecords(runtime, parentId, identities, extras = {})
     assert.match(communication.call.arguments.path, /^agent:\/\/[A-Za-z0-9_-]+$/u);
     assert.notEqual(communication.call.arguments.path, "agent://all");
     assert.equal(communication.call.arguments.i, "Replying to actual parent");
+    if (name === "a")
+      for (const result of receivedByWait.filter((receipt) => receipt.details?.waited)) {
+        const sent = communication.result.details?.message;
+        assert.equal(sent?.from, a.rawId);
+        assert.ok(
+          sent.receipts?.some(
+            (receipt) =>
+              receipt.id === result.details.waited.id &&
+              receipt.to === result.details.waited.to &&
+              receipt.outcome === "injected",
+          ),
+          "The wait message must be the exact receipt sent by the independent child a",
+        );
+      }
     const yielded = successful(messages, `${prefix}-yield`, "yield");
     assert.equal(
       yielded.result.details?.status,
@@ -348,7 +379,6 @@ export async function inspectRecords(runtime, parentId, identities, extras = {})
     extras: extraRecords,
     dispatch: task.result,
     broadcast: broadcast.result,
-    wait: wait.result,
     automatic,
     peerIncoming: peerIncoming[0],
   };

@@ -282,11 +282,27 @@ export async function prepareSuite({ root, workspace, configRoot, phase }) {
     }
     const waits = [...issued.keys()].filter((id) => id.startsWith("agents-wait-"));
     const delivered = received.find((result) => result.tool_use_id.startsWith("agents-wait-"));
-    const waitedForA =
+    const completedA =
       textOf(delivered?.content).includes(marker("a")) ||
       (lastPrompt.includes(`<task-result id="${dispatched.get("agents-batch-task")?.a}"`) &&
         lastPrompt.includes(marker("a")));
-    if (delivered && waitedForA) {
+    // 中文原因：同批 async-result 不属于 wait 正文；只允许真实成功 wait 的结果，
+    // 或正常消息中断加同回合独立完成通知，跳过的错误回执不能证明消费成功。
+    const waitReceipt = blocksOf(context.messages, "user", "tool_result").find(
+      (result) =>
+        result.tool_use_id.startsWith("agents-wait-") &&
+        result.is_error !== true &&
+        (textOf(result.content).includes(reply("a")) ||
+          textOf(result.content).includes(marker("a")) ||
+          (result === delivered &&
+            textOf(result.content) === "Wait interrupted by message." &&
+            completedA)),
+    );
+    if (completedA) {
+      assert.ok(
+        waitReceipt,
+        "Completion requires a real successful wait receipt correlated with a",
+      );
       assert.ok(observed.children.a?.yielded, "Wait must follow actual a yield");
       observed.parent.push("wait-a");
       return output("AGENTS_WAIT_A_RECEIVED");

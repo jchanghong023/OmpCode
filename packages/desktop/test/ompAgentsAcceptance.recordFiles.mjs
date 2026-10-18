@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
-import { promptOf } from "./ompAgentsAcceptance.protocol.mjs";
+import { promptOf, textOf } from "./ompAgentsAcceptance.protocol.mjs";
 
 export async function jsonlFiles(directory) {
   const entries = await readdir(directory, { withFileTypes: true });
@@ -42,6 +42,31 @@ export function successful(messages, id, toolName) {
   assert.equal(results.length, 1, `${id} must have exactly one matching persisted tool result`);
   assert.notEqual(results[0].isError, true, `${id} may not hide an actual tool failure`);
   return { call: calls[0], result: results[0] };
+}
+
+export function assertCompletionDeliveries(parent, identities, waitResults, automatic) {
+  for (const name of ["a", "b", "c"]) {
+    const identity = identities.find((child) => child.name === name);
+    const fromWait = waitResults.filter((result) =>
+      textOf(result.content).includes(`AGENTS_DONE_${name}`),
+    );
+    const fromAuto = automatic.filter((entry) =>
+      textOf(entry.content).includes(`AGENTS_DONE_${name}`),
+    );
+    assert.equal(fromWait.length + fromAuto.length, 1, `Exactly one actual ${name} completion`);
+    if (name !== "a") assert.equal(fromAuto.length, 1, `Require actual automatic ${name} delivery`);
+    for (const result of fromWait) {
+      successful(parent, result.toolCallId, "wait");
+      assert.ok(result.details?.jobs?.some((job) => job.id === identity.rawId));
+    }
+    for (const entry of fromAuto)
+      assert.ok(
+        entry.details?.jobs?.some(
+          (job) => job.jobId === identity.rawId && job.agentId === identity.rawId,
+        ),
+        "Automatic completion must retain the independently dispatched child identity",
+      );
+  }
 }
 
 export function assertOriginalAssignment(entries, parentPath, assignment) {
