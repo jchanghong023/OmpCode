@@ -58,11 +58,7 @@ test("early initialization touches local directories only and preserves original
   const touched: string[] = [];
   initializeOfflineDesktopEnvironment(paths, env, (root) => touched.push(root.runtimeRoot));
   assert.ok(touched.length > 5);
-  assert.ok(
-    touched.every(
-      (path) => path === paths.roots.runtimeRoot || path.startsWith(`${paths.roots.runtimeRoot}/`),
-    ),
-  );
+  assert.ok(touched.every((path) => path.startsWith("/dev/shm/")));
   assert.ok(!touched.includes(paths.roots.persistentRoot));
   assert.equal(env.OMP_CONFIG_ROOT, "/unavailable-nfs/omp");
   assert.equal(env.PI_CONFIG_DIR, "legacy");

@@ -90,10 +90,14 @@ case "${offline_value,,}" in
 esac
 
 offline_runtime_root=
+offline_temp=
 if [[ ${OMPCODE_CENTOS7_LOCAL_ONLY:-} == 1 ]]; then
   # 先用 Electron 的 Node 模式运行共享路径算法，不加载 Chromium/GTK、设置或日志。
-  # helper 只校验本机 shm，不读取 NFS 持久根；成功以 NUL 结尾，失败不能继续回落到磁盘。
-  if ! IFS= read -r -d '' offline_runtime_root < <(
+  # helper 返回活动根及短临时目录，均已校验为私有 shm；失败不能继续回落到磁盘。
+  if ! {
+    IFS= read -r -d '' offline_runtime_root &&
+      IFS= read -r -d '' offline_temp
+  } < <(
     ELECTRON_RUN_AS_NODE=1 "$app/zcode" "$app/resources/app.asar/out/main/offlineDesktopLauncher.cjs"
   ); then
     echo 'OmpCode: cannot initialize private offline runtime storage.' >&2
@@ -285,7 +289,7 @@ configure_ibus_session
 if [[ -n $offline_runtime_root ]]; then
   # 输入法会话发现/启动必须保留调用者的完整 HOME/XDG/TMP 环境；只在拉起应用前切换。
   export ZCODE_HOME="$offline_runtime_root"
-  export TMPDIR="$offline_runtime_root/tmp" TMP="$offline_runtime_root/tmp" TEMP="$offline_runtime_root/tmp"
+  export TMPDIR="$offline_temp" TMP="$offline_temp" TEMP="$offline_temp"
   export XDG_CACHE_HOME="$offline_runtime_root/cache" XDG_STATE_HOME="$offline_runtime_root/state"
   export XDG_CONFIG_HOME="$offline_runtime_root/config" XDG_DATA_HOME="$offline_runtime_root/data"
 else

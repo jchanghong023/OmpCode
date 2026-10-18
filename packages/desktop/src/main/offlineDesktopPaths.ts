@@ -38,7 +38,11 @@ export function resolveOfflineDesktopPaths(
     userData,
     sessionData: join(userData, "session"),
     cache: join(roots.runtimeRoot, "cache"),
-    temp: join(roots.runtimeRoot, "tmp"),
+    // Chromium 单实例 socket 会追加子路径；用完整域哈希的紧凑编码避免超长，仍按原规则校验私有 shm。
+    temp: join(
+      "/dev/shm",
+      `ompcode-tmp-${Buffer.from(roots.domainId, "hex").toString("base64url")}`,
+    ),
     crashDumps: join(roots.runtimeRoot, "v2", "crash-dumps"),
     logs: join(roots.runtimeRoot, "v2", "logs"),
   };
