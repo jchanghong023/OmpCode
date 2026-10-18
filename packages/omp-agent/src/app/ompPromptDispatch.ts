@@ -17,18 +17,22 @@ export type SlashCommandResolution =
 
 export async function dispatchOmpText(input: {
   process: OmpSessionProcess;
+  sourceCommandId: string;
   text: string;
   /** 原始用户文本：合并附件正文不得绕过斜杠判定。 */
   originalText?: string;
   images: { type: "image"; data: string; mimeType: string }[];
   streaming: boolean;
-  followupMode: "queue" | "guide";
+  /** owner 租约在每个 await 后复核，Stop/失败/退出后的续体不得投递旧输入。 */
+  isCurrent: () => boolean;
   modelSelection?: { provider: string; model: string; thought?: string };
   currentConfig: { provider: string; model: string; thought: string };
   /** 斜杠命令目录解析器（引擎注入；缺省时不做严格分发，按普通文本发送）。 */
   resolveSlashCommand?: SlashCommandResolver;
 }): Promise<{ success: boolean; data?: unknown; code?: string; error?: string }> {
   const { text, images } = input;
+  if (!input.isCurrent())
+    return { success: false, code: "omp_input_cancelled", error: "input dispatch cancelled" };
   // 修复（G9）：被拒输入不得先改写会话模型——「斜杠命令 + 附件」守卫前置于
   // applyEngineModelSelection，模型选择只在输入被接受后执行。
   const originalText = input.originalText ?? text;
@@ -54,6 +58,8 @@ export async function dispatchOmpText(input: {
       // 收口）；未知或仅 TUI 可执行 → 明确报错，绝不发给模型（omp 会把未知 "/xxx" 当普通
       // 文本送入模型）。
       const resolution = await input.resolveSlashCommand(originalText.trimStart());
+      if (!input.isCurrent())
+        return { success: false, code: "omp_input_cancelled", error: "input dispatch cancelled" };
       if (resolution.kind === "reject") {
         return {
           success: false,
@@ -71,33 +77,18 @@ export async function dispatchOmpText(input: {
       input.process,
       input.modelSelection,
       input.currentConfig,
+      input.isCurrent,
     );
     if (failure) return { success: false, code: failure.code, error: failure.message };
   }
+  if (!input.isCurrent())
+    return { success: false, code: "omp_input_cancelled", error: "input dispatch cancelled" };
   const attachment = images.length > 0 ? { images } : {};
-  if (input.streaming && !slashCommand) {
-    // 普通补充仍走 steer/follow_up；斜杠必须进入 prompt 的原生命令派发器，否则 OMP
-    // 会把 /goal、/compact 等文本排入模型正文而不执行命令（rpc-mode.ts 输入分流依据）。
-    const command =
-      input.followupMode === "guide"
-        ? { type: "steer" as const, message: text, ...attachment }
-        : { type: "follow_up" as const, message: text, ...attachment };
-    const outcome = await input.process.send(command);
-    // F010：OMP 输入门取消 steer/follow_up 后仍返回无 data 的 success ACK。
-    // 它不是接纳/消费证据；队列事实只能来自 queue_update/get_state 或用户消费事件。
-    // 修复（G15）：code 只表达失败类别，成功结果不携带。
-    return outcome.success ? outcome : { ...outcome, code: "omp_prompt_failed" };
-  }
-  const outcome = await input.process.send({
-    type: "prompt",
-    message: text,
-    ...attachment,
-    ...(input.streaming
-      ? {
-          streamingBehavior:
-            input.followupMode === "guide" ? ("steer" as const) : ("followUp" as const),
-        }
-      : {}),
-  });
+  // 仅 native guide 会在运行中投递；queue 由 owner 在成功终态后一项一项发普通 prompt。
+  const outcome = await input.process.send(
+    input.streaming && !slashCommand
+      ? { id: input.sourceCommandId, type: "steer", message: text, ...attachment }
+      : { id: input.sourceCommandId, type: "prompt", message: text, ...attachment },
+  );
   return outcome.success ? outcome : { ...outcome, code: "omp_prompt_failed" };
 }

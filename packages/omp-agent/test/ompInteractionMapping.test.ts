@@ -123,63 +123,70 @@ test("askDeadlineOf：timeoutMs 换算 epoch，非法/缺失返回 undefined", (
   assert.equal(askDeadlineOf({ timeoutMs: -5 }), undefined);
 });
 
-test("工具审批 select：仅合法显式 Approve/Deny 才下发；当前 GUI 结构保真", () => {
+test("普通 select：GUI 结构化选择保真；缺失、未知、冲突或重复答案按取消收口", () => {
   const request = {
     frame: {
-      id: "permission",
+      id: "storage-choice",
       method: "select",
-      prompt: "Allow tool?",
-      options: ["Approve", "Deny"],
+      prompt: "Choose storage",
+      options: ["SQLite", "Postgres"],
     },
     respond() {},
   };
+  // optionId 直传与 decline 已由 ompInteractionProxy 的普通 select 用例覆盖。
+  // 此处补齐 GUI 结构字段与冲突校验，不再保留工具权限审批场景。
   for (const value of request.frame.options) {
-    for (const answer of [
-      { action: "accept" as const, optionId: value },
-      {
-        action: "accept" as const,
-        content: { answer: value, answer_0: [value], answers: { "Allow tool?": value } },
-      },
-    ]) {
-      assert.deepEqual(toOmpUiResponse(request, answer), {
-        type: "extension_ui_response",
-        id: "permission",
-        value,
-      });
-    }
+    assert.deepEqual(
+      toOmpUiResponse(request, {
+        action: "accept",
+        content: { answer: value, answer_0: [value], answers: { "Choose storage": value } },
+      }),
+      { type: "extension_ui_response", id: "storage-choice", value },
+    );
   }
   for (const answer of [
     { action: "accept" as const },
     { action: "accept" as const, optionId: "Unknown" },
-    { action: "accept" as const, optionId: "Approve", content: { answer_0: ["Deny"] } },
+    { action: "accept" as const, optionId: "SQLite", content: { answer_0: ["Postgres"] } },
     { action: "accept" as const, content: { answer_0: [] } },
-    { action: "accept" as const, optionId: "Approve", content: { answer_0: [] } },
-    { action: "accept" as const, content: { answer_0: ["Approve", "Approve"] } },
-    { action: "decline" as const, optionId: "Approve" },
+    { action: "accept" as const, optionId: "SQLite", content: { answer_0: [] } },
+    { action: "accept" as const, content: { answer_0: ["SQLite", "SQLite"] } },
   ]) {
     assert.deepEqual(toOmpUiResponse(request, answer), {
       type: "extension_ui_response",
-      id: "permission",
+      id: "storage-choice",
       cancelled: true,
     });
   }
 });
 
-test("input/editor 接受当前 GUI answer 字段，无文本仍按既定取消语义收口", () => {
+test("input/editor 显式空文本原样提交，缺失文本与明确取消仍取消", () => {
   for (const method of ["input", "editor"]) {
     const request = { frame: { id: "input", method }, respond() {} };
-    assert.deepEqual(
-      toOmpUiResponse(request, { action: "accept", content: { answer: "sensitive" } }),
-      {
+    for (const value of ["sensitive", "", " \n  "]) {
+      for (const answer of [
+        { action: "accept" as const, freeText: value },
+        { action: "accept" as const, content: { answer: value } },
+        { action: "accept" as const, content: { answer_0: value } },
+      ]) {
+        assert.deepEqual(toOmpUiResponse(request, answer), {
+          type: "extension_ui_response",
+          id: "input",
+          value,
+        });
+      }
+    }
+    for (const answer of [
+      { action: "accept" as const },
+      { action: "accept" as const, content: {} },
+      { action: "cancel" as const, freeText: "" },
+      { action: "decline" as const, content: { answer: "" } },
+    ]) {
+      assert.deepEqual(toOmpUiResponse(request, answer), {
         type: "extension_ui_response",
         id: "input",
-        value: "sensitive",
-      },
-    );
-    assert.deepEqual(toOmpUiResponse(request, { action: "accept", content: { answer: "" } }), {
-      type: "extension_ui_response",
-      id: "input",
-      cancelled: true,
-    });
+        cancelled: true,
+      });
+    }
   }
 });

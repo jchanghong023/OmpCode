@@ -676,12 +676,16 @@ export interface ZCodeElicitationQuestion {
   header: string;
   options: ZCodeElicitationOption[];
   multiSelect?: boolean;
+  /** 推荐选项的 0-based 索引；仅供展示，不作为用户答案。 */
+  recommended?: number;
 }
 /** ZCode Elicitation 选项 */
 export interface ZCodeElicitationOption {
   value: string;
   label: string;
   description?: string;
+  /** 选项预览，按文本展示，不执行 HTML。 */
+  preview?: string;
 }
 /** ZCode Elicitation 响应事件 */
 export interface ZCodeElicitationResponse {

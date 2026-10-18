@@ -61,6 +61,7 @@
         "**/*.test.{js,cjs,mjs,jsx,ts,cts,mts,tsx}",
         "test/*.e2e.mjs",
         "test/ompCore.launch.mjs",
+        "test/.gui-stage-runner.mjs",
         "test/offlineDesktop.windows-smoke.mjs",
         "test/offlineDesktop.windows-smoke.cjs",
         "test/toolContentPresentation.fixture.jsx",

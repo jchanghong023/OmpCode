@@ -127,6 +127,12 @@ export class OmpSubagentBridge {
       });
       return;
     }
+    // A fresh/failed native snapshot cannot inherit a prior process's controllable work.
+    this.projection.publishSubagentBackgroundWorks(
+      [...this.records.keys()].filter(
+        (id) => this.observedSubagentStatus(id, process) === "running",
+      ),
+    );
     if (!outcome?.success) {
       if (outcome)
         diagnostics.warn("omp.subagent.refresh.failed", {
@@ -239,7 +245,18 @@ export class OmpSubagentBridge {
       this.observedProcessEpoch += 1;
     }
     this.records.set(id, { ...record, observedProcessEpoch: this.observedProcessEpoch });
-    this.projection.upsertSubagent({ id, ...record });
+    this.projection.upsertSubagent(
+      { id, ...record },
+      process
+        ? [...this.records.entries()]
+            .filter(
+              ([, candidate]) =>
+                candidate.status === "running" &&
+                candidate.observedProcessEpoch === this.observedProcessEpoch,
+            )
+            .map(([rawId]) => rawId)
+        : [],
+    );
     this.flush();
   }
 

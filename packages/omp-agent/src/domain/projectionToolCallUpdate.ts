@@ -5,6 +5,7 @@ import {
   type ToolCallUpsert,
   type TurnContext,
 } from "./projectionRows.js";
+import { ompReadOutput } from "./ompReadOutput.js";
 
 /** 工具事实由当前轮持有；只有成功结果更新文件统计。 */
 export function applyProjectionToolCallUpdate(input: {
@@ -16,7 +17,12 @@ export function applyProjectionToolCallUpdate(input: {
   rowAt: (rowId: number) => ConversationRow | undefined;
   upsertRow: (row: ConversationRow) => void;
 }): void {
-  const { turn, update } = input;
+  const { turn } = input;
+  const readText =
+    input.update.toolName === "read" && input.update.status === "success"
+      ? ompReadOutput(input.update.resultDetails)
+      : undefined;
+  const update = readText === undefined ? input.update : { ...input.update, outputText: readText };
   const existing = input.existing;
   const merged = existing
     ? mergeToolCallRow(existing, update)

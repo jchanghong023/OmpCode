@@ -2,6 +2,7 @@
 // 旧链路（task 索引、恢复兜底）只需要结构合法的摘要；流式主链路在 v4。
 
 import type { ConversationEngine } from "./conversationEngine.js";
+import { engineSessionTimes } from "./engineSessionSummary.js";
 import { ZCODE_PROTOCOL_NAME, ZCODE_PROTOCOL_VERSION, type ZCodeToolState } from "@zcode/shared";
 
 interface LegacyMessage {
@@ -22,7 +23,7 @@ export function buildLegacySnapshot(params: {
   const state = engine.projection.stateSnapshot;
   const snapshot = engine.projection.buildSnapshot();
   const messages = legacyMessages(engine, params.messageLimit ?? 200);
-  const now = Date.now();
+  const times = engineSessionTimes(engine, snapshot.rows.window);
   return {
     protocol: { name: ZCODE_PROTOCOL_NAME, version: ZCODE_PROTOCOL_VERSION },
     session: {
@@ -42,8 +43,8 @@ export function buildLegacySnapshot(params: {
             : "first_input",
       mode: "build",
       status: statusOf(state.control.phase),
-      createdAt: now,
-      updatedAt: now,
+      createdAt: times.createdAt,
+      updatedAt: times.updatedAt,
     },
     settings: {
       model: {

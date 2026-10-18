@@ -104,7 +104,6 @@ export function createDesktopPlatform(options: {
     showTaskNotification: (payload) => window.zcode.showTaskNotification(payload),
     syncWindowTabs: (paths) => window.zcode.syncWindowTabs(paths),
     syncWindowUnreadCount: (count) => window.zcode.syncWindowUnreadCount(count),
-    syncActiveTaskSession: (sessionId) => window.zcode.syncActiveTaskSession(sessionId),
     syncAppSettings: (patch) => window.zcode.syncAppSettings?.(patch),
     setShortcutRecordingActive: (active) => window.zcode.setShortcutRecordingActive?.(active),
     onFocusTab: (handler) => window.zcode.onFocusTab(handler),

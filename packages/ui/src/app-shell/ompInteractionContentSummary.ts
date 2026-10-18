@@ -80,9 +80,11 @@ function taskOutput(body: string): { text: string; status?: string; duration?: s
       return "";
     },
   );
-  const output = /^\s*(?:<meta\b[^<>]*\/?>\s*)?<output\s*>([\s\S]*)<\/output>\s*$/u.exec(
-    wrapper[2]!,
-  );
+  // 中文原因：取消/失败模板在 output 前带原因；这是已知元数据，不应使整份结果退回原始 XML。
+  const output =
+    /^\s*(?:<meta\b[^<>]*\/?>\s*)?(?:<abort-reason>[\s\S]*?<\/abort-reason>\s*)?(?:<error>[\s\S]*?<\/error>\s*)?<output\s*>([\s\S]*)<\/output>\s*$/u.exec(
+      wrapper[2]!,
+    );
   if (!valid || remainder.trim() || !output) return null;
   const duration = attributes.duration;
   return {

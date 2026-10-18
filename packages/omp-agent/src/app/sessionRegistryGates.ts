@@ -12,7 +12,7 @@ import { diagnostics } from "./diagnostics.js";
 interface RegistryGateIo {
   engines: Map<string, ConversationEngine>;
   getEngine(sessionId: string): ConversationEngine | null;
-  removeIndexSession(workspaceId: string, sessionId: string): void;
+  pendingResumeClosures?(): Iterable<Set<string>>;
 }
 
 export class SessionRegistryGates {
@@ -46,10 +46,21 @@ export class SessionRegistryGates {
 
   markClosing(sessionId: string): void {
     this.closingSessionIds.add(sessionId);
+    // 关闭标记只活到 close 收尾；失效事实随 Registry 的在途恢复一起释放，不等待冷 IO。
+    // 先记原始地址，冷 alias 确认 canonical 后仍用同一登记门判断，不能复活旧代。
+    for (const closures of this.io.pendingResumeClosures?.() ?? []) closures.add(sessionId);
   }
 
   endClosing(sessionId: string): void {
     this.closingSessionIds.delete(sessionId);
+  }
+
+  captureResumeClosures(): Set<string> {
+    return new Set(this.closingSessionIds);
+  }
+
+  canResumeFrom(closedSessionIds: ReadonlySet<string>, ...sessionIds: string[]): boolean {
+    return this.canResume(...sessionIds) && sessionIds.every((id) => !closedSessionIds.has(id));
   }
 
   canResume(...sessionIds: string[]): boolean {
@@ -62,18 +73,19 @@ export class SessionRegistryGates {
   /**
    * 冷恢复登记门（修复 S2-2/S7-4）：hydrateEngineFromCold 不再自行登记，统一在
    * 墓碑检查 + winner 判定通过后才登记引擎。
-   * - 命中删除/关闭墓碑或已 dispose：丢弃本次冷恢复结果（冷引擎无子进程，dispose
-   *   无副作用）并清理索引行，按「会话不可用」拒绝；
+   * - 命中删除/关闭墓碑、旧恢复关闭边界或已 dispose：丢弃本次冷恢复结果，
+   *   按「会话不可用」拒绝；尚未登记的冷结果不发布索引，不清理其他 owner；
    * - 已有更早登记的并发实例（create 或先完成的加载）：返回已登记引擎，丢弃本次结果；
    * - 否则登记并返回本次引擎。
    */
   settleColdHydration(
     sessionId: string,
     engine: ConversationEngine,
+    closedSessionIds: ReadonlySet<string>,
     canonicalId = sessionId,
     existingOwner?: ConversationEngine,
   ): ConversationEngine {
-    if (!this.canResume(sessionId, canonicalId)) {
+    if (!this.canResumeFrom(closedSessionIds, sessionId, canonicalId)) {
       const blockedByDeleted =
         this.deletedSessionIds.has(sessionId) || this.deletedSessionIds.has(canonicalId);
       diagnostics.warn("omp.session.cold_hydration.rejected", {
@@ -85,8 +97,8 @@ export class SessionRegistryGates {
             ? "delete_tombstone"
             : "close_tombstone",
       });
-      void engine.dispose().catch(() => {});
-      this.io.removeIndexSession(engine.workspaceId, sessionId);
+      // lookup 完成时可能已找到关闭后的新 owner；拒绝的是旧请求，不能销毁那个活引擎。
+      if (this.io.engines.get(engine.sessionId) !== engine) void engine.dispose().catch(() => {});
       throw new ProtocolError(-32004, `session unavailable: ${sessionId}`);
     }
     const winner = existingOwner ?? this.io.getEngine(sessionId);
@@ -308,7 +320,35 @@ export async function closeSessionWith(
   let outcome: "failed" | "not_loaded" | "closed" = "failed";
   const closingIds = new Set([sessionId]);
   try {
-    const engine = host.getEngine(sessionId);
+    let engine = host.getEngine(sessionId);
+    if (!engine) {
+      const workspace = host.primaryWorkspace();
+      const cold = workspace
+        ? host.store.findSession
+          ? await host.store.findSession(workspace.path, sessionId)
+          : (await host.store.listSessions(workspace.path)).find(
+              (session) => session.sessionId === sessionId,
+            )
+        : null;
+      if (cold) {
+        // 原始 alias 与 UUID 走不同协议尾链；无 owner 时也要从既有存储事实补齐登记边界。
+        if (!closingIds.has(cold.sessionId)) {
+          closingIds.add(cold.sessionId);
+          host.gates.markClosing(cold.sessionId);
+        }
+        const racedOwner = host.getEngine(cold.sessionId);
+        // 复用既有 workspace/文件 epoch 校验；查找期间登记的同一 owner 也必须被关闭。
+        if (
+          racedOwner &&
+          workspace &&
+          (racedOwner.workspaceId.trim() || racedOwner.workspacePath) ===
+            (workspace.id.trim() || workspace.path) &&
+          racedOwner.workspacePath === workspace.path &&
+          racedOwner.ompSessionFile === (cold.sessionPath || null)
+        )
+          engine = racedOwner;
+      }
+    }
     if (!engine) {
       outcome = "not_loaded";
       return;

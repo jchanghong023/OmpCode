@@ -369,7 +369,6 @@ import { bindAccountProviderInvalidation } from "./model-provider/accountProvide
 import { AccountProviderApiClient } from "./model-provider/accountProviderApiClient.js";
 import { AccountProviderApiKeyResolver } from "./model-provider/accountProviderApiKeyResolver.js";
 import { createProviderConfigRuntime } from "./model-provider/providerConfigRuntime.js";
-import { fetchZCodeBuiltinRemoteRelease } from "./model-provider/zcodeBuiltinRemoteConfig.js";
 import {
   createProviderRuntimeFromConfigRuntime,
   type ProviderRuntime,
@@ -389,7 +388,6 @@ import {
 import { createProviderProvisioningTarget } from "./model-provider/providerProvisioningTarget.js";
 import { IProviderProvisioningTargetService } from "./model-provider/providerProvisioning.js";
 import { buildOffPeakModelSelectionView } from "./model-provider/offPeakModelSelectionView.js";
-import { resolveClientConfigPlatform } from "./runtime-tools/clientPlatform.js";
 import {
   createAccountRequestAuthService,
   type IAccountRequestAuthService,
@@ -1502,30 +1500,12 @@ export function createLocalServices(options: {
     }),
   );
   const providerConfigLog = createServiceLogger("provider-config");
-  const clientConfigPlatform = resolveClientConfigPlatform();
   const providerConfigRuntime = createProviderConfigRuntime({
+    // OMP 独占会话模型与凭据；这里只读宿主交付的内建 Provider 元数据，
+    // 不装配上游 client-config/CDN 下载，避免普通启动和手动刷新依赖旧控制面。
     zcodeBuiltinFilePath: options.zcodeBuiltinProviderConfigFilePath,
-    zcodeBuiltinEnvironment: {
-      environmentConfigRoot: resolveAppConfigDir(),
-      platform: clientConfigPlatform,
-      appVersion: ZCODE_VERSION,
-      resolveEndpointOrigin: resolveCurrentZCodeEndpointOrigin,
-      onRefreshResult: (event) => {
-        if (event.result === "updated")
-          providerConfigLog.info(undefined, "ZCode Built-in CDN 配置已更新", event);
-        else providerConfigLog.debug(undefined, "ZCode Built-in 刷新检查", event);
-      },
-      fetchRelease: (endpointOrigin, signal) =>
-        fetchZCodeBuiltinRemoteRelease({
-          apiClient,
-          endpointOrigin,
-          signal,
-          appVersion: ZCODE_VERSION,
-          platform: clientConfigPlatform,
-        }),
-    },
     onZCodeBuiltinRefreshError: (error) => {
-      providerConfigLog.warn(undefined, "ZCode Built-in Config 远端刷新失败", { error });
+      providerConfigLog.warn(undefined, "Provider Config 依赖恢复检查失败", { error });
     },
     onPersonalConfigRecovery: (event) => {
       providerConfigLog.warn(
@@ -1824,34 +1804,34 @@ export function createLocalServices(options: {
     return null;
   };
 
-  // enabled 与 onCuaPipSessionLifecycle 是否挂上，都由 serviceAuthorityMode 单点决定；
-  // 提出来命名，避免下面的启动期诊断与真实取值漂移。
+  // PiP 与旧 CUA Helper 共用启用边界；OMP 原生电脑工具不使用此投递链。
   const cuaPipSessionEnabled =
-    process.platform === "darwin" && options?.serviceAuthorityMode === "desktop-local";
-  const cuaPipSessionService = createCuaPipSessionService({
-    enabled: cuaPipSessionEnabled,
-    resolveCredentials: async () => {
-      const host = defaultCuaProductHelperLifecycle.peek()?.helper.macPermissionHost;
-      // PiP 客户端以 role=presentation 声明，资格由 Helper 按对端（ZCode 主进程）签名 identifier 裁决。
-      if (host?.running && host.socketPath) {
-        return {
-          socketPath: host.socketPath,
-        };
-      }
-      // 懒启动：无托管 host 时探测稳定 socket 上自启动的 Helper（probe-only，不拉起）。
-      const stable = await probeStableCuaHelperSocket();
-      return stable ? { socketPath: stable } : undefined;
-    },
-  });
-  // 启动期就把 PiP 投递链的接线状态写出来。dev 实测 PiP 事件一条都没投，而
-  // 「enabled=false」与「lifecycle 回调没挂（tracker 整体 undefined、accept 全程 no-op）」
-  // 这两种成因在运行期都不产生任何日志，只能靠这行在启动时分辨——重启即可判定，
-  // 不必先跑一轮 CUA。scope 沿用 cua-pip-session：已验证该 logger 的 info 会进宿主日志。
+    shouldEnableDefaultCuaProductHelper() &&
+    process.platform === "darwin" &&
+    options?.serviceAuthorityMode === "desktop-local";
+  const cuaPipSessionService = cuaPipSessionEnabled
+    ? createCuaPipSessionService({
+        enabled: true,
+        resolveCredentials: async () => {
+          const host = defaultCuaProductHelperLifecycle.peek()?.helper.macPermissionHost;
+          // PiP 客户端以 role=presentation 声明，资格由 Helper 按对端（ZCode 主进程）签名 identifier 裁决。
+          if (host?.running && host.socketPath) {
+            return {
+              socketPath: host.socketPath,
+            };
+          }
+          // 懒启动：无托管 host 时探测稳定 socket 上自启动的 Helper（probe-only，不拉起）。
+          const stable = await probeStableCuaHelperSocket();
+          return stable ? { socketPath: stable } : undefined;
+        },
+      })
+    : undefined;
+  // 启动时保留真实装配状态；禁用时不创建服务或注册事件生产者。
   createServiceLogger("cua-pip-session").info(undefined, "[cua-pip-session] wiring resolved", {
     enabled: cuaPipSessionEnabled,
     platform: process.platform,
     serviceAuthorityMode: options?.serviceAuthorityMode ?? null,
-    lifecycleWired: options?.serviceAuthorityMode === "desktop-local",
+    lifecycleWired: Boolean(cuaPipSessionService),
   });
   // Computer Use Helper macOS 权限状态服务：renderer 经 host RPC 查询当前 Helper 的运行态与权限，并在
   // 用户授权后从明确入口精确重启一次 Helper。重启**必须走 resolver.restart()**（不是裸 host.restart），
@@ -2115,7 +2095,7 @@ export function createLocalServices(options: {
       ? options?.cuaOperationStateReporter
       : undefined,
     // ZCode 只发布 turn/session 事实；面板 terminal policy 由 producer coordinator 决定。
-    ...(options?.serviceAuthorityMode === "desktop-local"
+    ...(cuaPipSessionService
       ? {
           onCuaPipSessionLifecycle: (_workspace, event) => {
             void cuaPipSessionService.publishLifecycle(event);
@@ -2404,7 +2384,6 @@ export function createLocalServices(options: {
     .register(IZCodeAgentService, zcodeAgentService)
     .register(IZCodeSessionService, zcodeSessionService)
     .register(ICuaPermissionService, cuaPermissionService)
-    .register(ICuaPipSessionService, cuaPipSessionService)
     .register(
       IBotsService,
       createBotsService({
@@ -2556,6 +2535,9 @@ export function createLocalServices(options: {
       }),
     )
     .register(IPromptAttachmentTransferService, createLocalPromptAttachmentTransferService());
+  if (cuaPipSessionService) {
+    services.register(ICuaPipSessionService, cuaPipSessionService);
+  }
 
   // 即使初始配置关闭也必须登记 lifecycle disposer：terminal fence 需要早于任意延迟 setting/acquire
   // 恢复，不能把"当前还没有 Helper"误当成"不需要生命周期所有者"。dispose 时串行 stop host。
@@ -2700,7 +2682,8 @@ export function disposeServiceResources(services: ServiceCollection): void {
   const disposableServices = [
     services.getOptional(ITerminalService),
     services.getOptional(IZCodeTaskService),
-    services.getOptional(IZCodeAgentService),
+    // task adapter 是其 AgentService 的唯一释放 owner，不能在异步 unsubscribe 后抢先关 transport。
+    ...(services.getOptional(IZCodeTaskService) ? [] : [services.getOptional(IZCodeAgentService)]),
     services.getOptional(IZCodeSessionService),
     services.getOptional(IBotsService),
     services.getOptional(IFileWatcherService),
@@ -2734,7 +2717,7 @@ export async function disposeServiceResourcesAndWait(services: ServiceCollection
   const disposableServices = [
     services.getOptional(ITerminalService),
     services.getOptional(IZCodeTaskService),
-    services.getOptional(IZCodeAgentService),
+    ...(services.getOptional(IZCodeTaskService) ? [] : [services.getOptional(IZCodeAgentService)]),
     services.getOptional(IZCodeSessionService),
     services.getOptional(IBotsService),
     services.getOptional(IFileWatcherService),

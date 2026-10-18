@@ -1,5 +1,14 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, realpath, rm, symlink, utimes, writeFile } from "node:fs/promises";
+import {
+  appendFile,
+  mkdtemp,
+  mkdir,
+  realpath,
+  rm,
+  symlink,
+  utimes,
+  writeFile,
+} from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join, relative, resolve, sep } from "node:path";
 import { test } from "node:test";
@@ -217,4 +226,112 @@ test("目录超过 100 个会话仍全部可见，旧 ID 可直接定位", async
   const sessions = await store.listSessions(homedir());
   assert.equal(sessions.length, 121);
   assert.equal((await store.findSession?.(homedir(), "session-0"))?.sessionId, "session-0");
+});
+
+test("冷列表按真实活动排序，正常退出和文件mtime不改变活动与创建时间", async (context) => {
+  const root = await mkdtemp(join(tmpdir(), "omp-store-activity-"));
+  context.after(() => rm(root, { recursive: true, force: true }));
+  const directory = join(root, "agent", "sessions", "-");
+  await mkdir(directory, { recursive: true });
+  const createdAt = Date.parse("2026-10-08T00:00:00.000Z");
+  const paths = new Map<string, string>();
+  for (const [id, activity] of [
+    ["older", 1000],
+    ["newer", 2000],
+  ] as const) {
+    const path = join(directory, `2026-10-08T00-00-00-000Z_${id}.jsonl`);
+    paths.set(id, path);
+    await writeFile(
+      path,
+      [
+        JSON.stringify({ type: "session", id, timestamp: new Date(createdAt).toISOString() }),
+        JSON.stringify({
+          type: "message",
+          timestamp: new Date(createdAt + activity).toISOString(),
+          message: {
+            role: "assistant",
+            content: "原始正文".repeat(20_000),
+            timestamp: createdAt + activity,
+          },
+        }),
+        // A trailing partial append must not hide the last complete message.
+        '{"type":"message"',
+      ].join("\n"),
+    );
+  }
+  const store = createOmpStore({ PI_CONFIG_DIR: root });
+  const before = await store.listSessions(homedir());
+  assert.deepEqual(
+    before.map(({ sessionId }) => sessionId),
+    ["newer", "older"],
+  );
+  assert.deepEqual(
+    before.map(({ createdAt: at }) => at),
+    [createdAt, createdAt],
+  );
+  assert.deepEqual(
+    before.map(({ updatedAt }) => updatedAt),
+    [createdAt + 2000, createdAt + 1000],
+  );
+  for (const [id, shutdownAt] of [
+    ["newer", 3000],
+    ["older", 4000],
+  ] as const) {
+    await appendFile(
+      paths.get(id)!,
+      `\n${JSON.stringify({
+        type: "custom",
+        customType: "session_exit",
+        timestamp: new Date(createdAt + shutdownAt).toISOString(),
+        data: { reason: "dispose", kind: "normal" },
+      })}\n`,
+    );
+    await utimes(paths.get(id)!, (createdAt + shutdownAt) / 1000, (createdAt + shutdownAt) / 1000);
+  }
+  const after = await store.listSessions(homedir());
+  assert.deepEqual(after, before, "Shutdown order and mtime must not reorder the sidebar");
+  assert.deepEqual(await store.findSession?.(homedir(), "older"), before[1]);
+  await appendFile(
+    paths.get("older")!,
+    `${JSON.stringify({
+      type: "message",
+      message: { role: "toolResult", timestamp: createdAt + 5000, content: "real tool result" },
+    })}\n`,
+  );
+  const advanced = await store.listSessions(homedir());
+  assert.deepEqual(
+    advanced.map(({ sessionId }) => sessionId),
+    ["older", "newer"],
+  );
+  assert.equal(advanced[0]?.updatedAt, createdAt + 5000);
+  assert.equal(advanced[0]?.createdAt, createdAt);
+});
+
+test("空冷会话沿用header创建时间，不把退出诊断当成活动", async (context) => {
+  const root = await mkdtemp(join(tmpdir(), "omp-store-empty-activity-"));
+  context.after(() => rm(root, { recursive: true, force: true }));
+  const directory = join(root, "agent", "sessions", "-");
+  await mkdir(directory, { recursive: true });
+  const createdAt = Date.parse("2026-10-08T00:00:00.000Z");
+  const path = join(directory, "2026-10-08T00-00-00-000Z_empty.jsonl");
+  await writeFile(
+    path,
+    [
+      JSON.stringify({
+        type: "session",
+        id: "empty",
+        timestamp: new Date(createdAt).toISOString(),
+      }),
+      JSON.stringify({
+        type: "custom",
+        customType: "session_exit",
+        timestamp: new Date(createdAt + 1000).toISOString(),
+      }),
+    ].join("\n"),
+  );
+  const store = createOmpStore({ PI_CONFIG_DIR: root });
+  const [session] = await store.listSessions(homedir());
+  assert.equal(session?.createdAt, createdAt);
+  assert.equal(session?.updatedAt, createdAt);
+  assert.deepEqual(await store.findSession?.(homedir(), "empty"), session);
 });

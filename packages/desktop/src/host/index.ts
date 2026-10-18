@@ -2032,6 +2032,9 @@ function createControllerRoutedTaskService(
   });
 }
 
+// Host 持有 attachment 清理屏障；port 的同步 dispose 不能抢跑关闭 services transport。
+const pendingServicePortDisposals = new Set<Promise<void>>();
+
 function exposeServicesOnMessagePort(
   port: Electron.MessagePortMain,
   services: ServiceCollection,
@@ -2122,9 +2125,17 @@ function exposeServicesOnMessagePort(
       });
       // close 排在所有已接收 SAT/DRN 之后；scope.dispose 自身会再次幂等确保 closed，
       // 但绝不让迟到 saturated 在 close 后复活 CLI pause state。
-      void forwardFlowState("closed")
+      const release = forwardFlowState("closed")
         .catch(() => {})
         .then(() => connectionScope?.dispose());
+      pendingServicePortDisposals.add(release);
+      void release.then(
+        () => pendingServicePortDisposals.delete(release),
+        (error: unknown) => {
+          pendingServicePortDisposals.delete(release);
+          logger.error("failed to dispose service connection scope", error);
+        },
+      );
       rawServer.dispose();
       protocol.disconnect();
     },
@@ -2215,7 +2226,14 @@ async function disposeHostResources(reason: string): Promise<HostShutdownResult>
       [
         {
           name: "remote-registry-dispose",
-          run: () => windowRemoteConnectionRegistry.dispose(),
+          run: async () => {
+            try {
+              // 根因：port dispose 只启动 flow/unsubscribe，Host 必须等它完成才释放 transport。
+              await Promise.all(pendingServicePortDisposals);
+            } finally {
+              await windowRemoteConnectionRegistry.dispose();
+            }
+          },
           timeoutMs: 6_000,
         },
         ...(servicesToDispose

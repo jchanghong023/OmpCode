@@ -1,372 +1,476 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, rm, truncate, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, truncate, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { test, type TestContext } from "node:test";
+import { z } from "zod";
 import {
   PROTOCOL_V4_LIMITS,
+  commandAckSchema,
+  v4AttachmentBeginResultSchema,
+  v4AttachmentChunkResultSchema,
+  v4AttachmentCommitResultSchema,
   type AttachmentRef,
   type CommandAck,
 } from "@zcode/shared/zcode-protocol-v4";
-import { createOmpAttachmentFileReader } from "../src/adapters/cliMain.js";
-import { AttachmentStore } from "../src/app/attachmentStore.js";
-import type { OmpAttachmentFileReader } from "../src/app/ompAttachmentInput.js";
-import type { OmpProcessFactory } from "../src/app/ports.js";
-import { SessionRegistry } from "../src/app/sessionRegistry.js";
-import { V4CommandService } from "../src/app/v4Commands.js";
-import type { OmpCommandFrame } from "../src/domain/ompFrames.js";
-import { createDirectoryStub } from "./fixtures/directoryStub.js";
+import {
+  realOmpSkip,
+  startRealOmpHarness,
+  type RealOmpHarness,
+} from "./fixtures/realOmpHarness.js";
+import { startRealOmpAttachmentClock } from "./fixtures/realOmpAttachmentClock.js";
+import { storedAttachmentUserInputs } from "./fixtures/attachmentAdmissionAssertions.js";
+import {
+  assertAttachmentReplies,
+  strictAttachmentRequests,
+  strictRequestContent,
+  type AttachmentRequest,
+} from "./fixtures/strictAttachmentRequests.js";
 
-// Exercise the real command -> registry -> engine -> core boundary, not an echo of
-// attachment metadata. Only the core process is fake; file IO uses the CLI reader.
+// Valid 200×200 images stay below the native core's image transformation threshold.
 const PNG_BYTES = Buffer.from(
-  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jZQAAAABJRU5ErkJggg==",
+  "iVBORw0KGgoAAAANSUhEUgAAAMgAAADIAQMAAACXljzdAAAABlBMVEX/AAAAAP9sof2OAAAAHElEQVR42u3BgQAAAADDoPlTX+EAVQEAAAAAfAYUUAABxFrmKwAAAABJRU5ErkJggg==",
   "base64",
 );
+const JPEG_BYTES = Buffer.from(
+  "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/wAALCADIAMgBAREA/8QAFQABAQ" +
+    "A".repeat(20) +
+    "f/xAAUEAE" +
+    "A".repeat(21) +
+    "/9oACAEBAAA/AJ+" +
+    "A".repeat(208) +
+    "//9k=",
+  "base64",
+);
+const callSchema = z.object({
+  context: z.object({ messages: z.array(z.object({ role: z.string(), content: z.unknown() })) }),
+});
+const blocksSchema = z.array(z.looseObject({ type: z.string(), text: z.string().optional() }));
 
-type CoreInput = Extract<OmpCommandFrame, { type: "prompt" | "steer" | "follow_up" }>;
+function textContent(content: unknown): string {
+  if (typeof content === "string") return content;
+  return blocksSchema
+    .parse(content)
+    .filter((block) => block.type === "text")
+    .map((block) => block.text ?? "")
+    .join("\n");
+}
 
-async function harness(context: TestContext) {
-  const root = await mkdtemp(join(tmpdir(), "omp-local-attachment-input-"));
-  const inputs: CoreInput[] = [];
-  const processCwds: string[] = [];
-  const reads: { path: string; maxBytes: number }[] = [];
-  const actualReader = createOmpAttachmentFileReader();
-  const reader: OmpAttachmentFileReader = {
-    isAbsolutePath: (path) => actualReader.isAbsolutePath(path),
-    async readFile(path, maxBytes) {
-      reads.push({ path, maxBytes });
-      return actualReader.readFile(path, maxBytes);
-    },
-  };
-  const ompFactory: OmpProcessFactory = {
-    create(options) {
-      processCwds.push(options.cwd);
-      return {
-        ompSessionFile: null,
-        async start() {},
-        async send(command) {
-          if (
-            command.type === "prompt" ||
-            command.type === "steer" ||
-            command.type === "follow_up"
-          ) {
-            inputs.push(command);
-            return { success: true, data: { agentInvoked: false } };
-          }
-          return { success: true, data: {} };
-        },
-        respondUi() {},
-        refreshState: async () => null,
-        readContextReport: async () => null,
-        async dispose() {},
-      };
-    },
-  };
-  const registry = new SessionRegistry({
-    ompFactory,
-    directory: createDirectoryStub(),
-    gateway: {
-      emitFrame() {},
-      requestUserInput: async () => ({ action: "cancel" }),
-    },
-    store: {
-      listSessions: async () => [],
-      readSessionEntries: async () => [],
-      readSubagentEntries: async () => [],
-      deleteSession: async () => true,
-    },
-  });
+function userInputs(h: RealOmpHarness, fromCall = 0) {
+  return h.mock.calls
+    .slice(fromCall)
+    .flatMap((call: unknown) =>
+      callSchema.parse(call).context.messages.filter((message) => message.role === "user"),
+    );
+}
+
+function requestContent(h: RealOmpHarness, prompt: string, fromCall = 0): unknown {
+  return strictRequestContent(h.mock.calls, prompt, fromCall);
+}
+
+function imageSources(content: unknown): unknown[] {
+  return typeof content === "string"
+    ? []
+    : blocksSchema
+        .parse(content)
+        .filter((block) => block.type === "image")
+        .map((block) => block.source);
+}
+
+async function harness(
+  context: TestContext,
+  steps: readonly AttachmentRequest[],
+  withAttachmentClock = false,
+) {
+  const script = strictAttachmentRequests(steps);
+  const clock = withAttachmentClock ? await startRealOmpAttachmentClock(script.handler) : undefined;
+  const h = clock?.h ?? (await startRealOmpHarness({ handler: script.handler }));
   context.after(async () => {
     try {
-      await registry.dispose();
+      script.assertFinished(h.mock.calls);
+      h.mock.assertHealthy();
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await h.close();
     }
   });
-  const store = new AttachmentStore();
-  const commands = new V4CommandService({
-    registry,
-    workspaceId: "local-attachment-workspace",
-    workspacePath: root,
-    attachments: store,
-    attachmentFileReader: reader,
-  });
   let serial = 0;
+  function envelope(
+    type: "createSession" | "sendText",
+    sessionId: string | null,
+    text: string,
+    attachments?: AttachmentRef[],
+  ) {
+    return {
+      commandId: `local-attachment-${++serial}`,
+      clientId: "local-attachment-client",
+      sessionId,
+      type,
+      issuedAt: clock?.now() ?? Date.now(),
+      payload:
+        type === "createSession"
+          ? { workspaceId: "real-e2e-workspace", firstInput: { text, attachments } }
+          : { text, attachments },
+    };
+  }
   async function submit(
     type: "createSession" | "sendText",
     sessionId: string | null,
     text: string,
     attachments?: AttachmentRef[],
   ) {
-    serial += 1;
-    return commands.handle({
-      commandId: `local-attachment-${serial}`,
-      clientId: "local-attachment-client",
-      sessionId,
-      type,
-      issuedAt: 1,
-      payload:
-        type === "createSession"
-          ? {
-              workspaceId: "local-attachment-workspace",
-              firstInput: { text, attachments },
-            }
-          : { text, attachments },
-    });
+    return commandAckSchema.parse(
+      await h.request("v4/command", envelope(type, sessionId, text, attachments)),
+    );
   }
-  async function file(name: string, content: string | Buffer, mime = "text/plain") {
+  async function file(
+    name: string,
+    content: string | Buffer,
+    mime = "text/plain",
+  ): Promise<AttachmentRef> {
     const bytes = typeof content === "string" ? Buffer.from(content, "utf8") : content;
-    const path = join(root, name);
+    const path = join(h.workspace, name);
     await writeFile(path, bytes);
     return { ref: path, fileName: basename(path), mime, bytes: bytes.length };
   }
-  function upload(name: string, bytes: Buffer, mime: string): AttachmentRef {
-    serial += 1;
+  async function upload(name: string, bytes: Buffer, mime: string): Promise<AttachmentRef> {
     const owner = {
       connectionId: "local-attachment-connection",
       sessionId: "local-attachment-draft",
-      uploadId: `local-upload-${serial}`,
+      uploadId: `local-upload-${++serial}`,
     };
     const chunkBytes = PROTOCOL_V4_LIMITS.attachmentChunkMaxBytes;
-    store.begin({
-      ...owner,
-      fileName: name,
-      mime,
-      totalBytes: bytes.length,
-      totalChunks: Math.ceil(bytes.length / chunkBytes),
-      checksum: `sha256:${createHash("sha256").update(bytes).digest("hex")}`,
-    });
-    for (let offset = 0; offset < bytes.length; offset += chunkBytes) {
-      store.chunk({
+    v4AttachmentBeginResultSchema.parse(
+      await h.request("v4/attachment/begin", {
         ...owner,
-        chunkIndex: offset / chunkBytes,
-        dataBase64: bytes.subarray(offset, offset + chunkBytes).toString("base64"),
-      });
+        fileName: name,
+        mime,
+        totalBytes: bytes.length,
+        totalChunks: Math.ceil(bytes.length / chunkBytes),
+        checksum: `sha256:${createHash("sha256").update(bytes).digest("hex")}`,
+      }),
+    );
+    for (let offset = 0; offset < bytes.length; offset += chunkBytes) {
+      v4AttachmentChunkResultSchema.parse(
+        await h.request("v4/attachment/chunk", {
+          ...owner,
+          chunkIndex: offset / chunkBytes,
+          dataBase64: bytes.subarray(offset, offset + chunkBytes).toString("base64"),
+        }),
+      );
     }
-    return { ...store.commit(owner), fileName: name, mime, bytes: bytes.length };
+    const committed = v4AttachmentCommitResultSchema.parse(
+      await h.request("v4/attachment/commit", owner),
+    );
+    return { ref: committed.ref, fileName: name, mime, bytes: bytes.length };
   }
-  return { root, inputs, processCwds, reads, store, registry, submit, file, upload };
+  return {
+    h,
+    submit,
+    envelope,
+    file,
+    upload,
+    async advanceAttachmentClock(milliseconds: number) {
+      assert.ok(clock, "expiry scenarios require the real adapter's controlled clock");
+      await clock.advanceBy(milliseconds);
+    },
+    assertReplies: (sessionId: string) =>
+      assertAttachmentReplies(h.rows(sessionId).values(), script.replies),
+  };
 }
 
 function createdSessionId(ack: CommandAck): string {
   assert.equal(ack.status, "accepted", ack.message ?? "createSession must accept real files");
   assert.equal(ack.result?.type, "createSession");
-  assert.ok(ack.result && "sessionId" in ack.result);
-  return ack.result.sessionId;
+  return z.object({ sessionId: z.string().min(1) }).parse(ack.result).sessionId;
 }
 
-test("local UTF-8 and image files reach the core on createSession and sendText", async (context) => {
-  const h = await harness(context);
-  const firstText = await h.file(
-    "mbist.md",
-    "# MBIST\n真实首发内容 Ω\n",
-    "text/markdown; charset=utf-8",
-  );
-  const firstImage = await h.file("first.png", PNG_BYTES, "IMAGE/PNG; charset=binary");
-  const sessionId = createdSessionId(
-    await h.submit("createSession", null, "read first files", [firstText, firstImage]),
-  );
-  assert.equal(h.inputs.length, 1);
-  assert.equal(h.inputs[0]!.type, "prompt");
-  assert.equal(
-    h.inputs[0]!.message,
-    '<attached_file name="mbist.md" mime="text/markdown">\n# MBIST\n真实首发内容 Ω\n\n</attached_file>\n\nread first files',
-  );
-  assert.deepEqual(h.inputs[0]!.images, [
-    { type: "image", data: PNG_BYTES.toString("base64"), mimeType: "image/png" },
-  ]);
-
-  // Update the same path: the next send must consume current host bytes, not a
-  // previous prepared-input cache or the ref string masquerading as content.
-  await writeFile(firstText.ref, "续发的新内容 — changed on disk\n", "utf8");
-  const nextImageBytes = Buffer.from(
-    "R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7",
-    "base64",
-  );
-  const nextImage = await h.file("next.gif", nextImageBytes, "image/gif");
-  const sent = await h.submit("sendText", sessionId, "read updated files", [firstText, nextImage]);
-  assert.equal(sent.status, "accepted", sent.message ?? "sendText must accept real files");
-  assert.equal(h.inputs.length, 2);
-  assert.equal(h.inputs[1]!.type, "prompt");
-  assert.equal(
-    h.inputs[1]!.message,
-    '<attached_file name="mbist.md" mime="text/markdown">\n续发的新内容 — changed on disk\n\n</attached_file>\n\nread updated files',
-  );
-  assert.deepEqual(h.inputs[1]!.images, [
-    { type: "image", data: nextImageBytes.toString("base64"), mimeType: "image/gif" },
-  ]);
-  assert.deepEqual(h.processCwds, [h.root], "file paths and execution cwd belong to this host");
-  assert.deepEqual(
-    h.reads.map(({ path }) => path),
-    [firstText.ref, firstImage.ref, firstText.ref, nextImage.ref],
-  );
-});
-
-test("uploaded references and real paths preserve text and image input order", async (context) => {
-  const h = await harness(context);
-  const uploadedText = h.upload("uploaded.txt", Buffer.from("UPLOADED_FIRST\n"), "text/plain");
-  const localText = await h.file("local.txt", "LOCAL_SECOND\n");
-  const uploadedLast = h.upload("last.txt", Buffer.from("UPLOADED_LAST\n"), "text/plain");
-  const uploadedImage = h.upload("uploaded.png", PNG_BYTES, "image/png");
-  const localImageBytes = Buffer.from([0xff, 0xd8, 0xff, 0xd9]);
-  const localImage = await h.file("local.jpg", localImageBytes, "image/jpeg");
-  const attachments = [uploadedText, uploadedImage, localText, localImage, uploadedLast];
-  const sessionId = createdSessionId(
-    await h.submit("createSession", null, "mixed first", attachments),
-  );
-  const sent = await h.submit("sendText", sessionId, "mixed next", [...attachments].reverse());
-  assert.equal(sent.status, "accepted", sent.message ?? "sendText must accept mixed sources");
-  assert.equal(h.inputs.length, 2);
-  for (const [index, order] of [
-    ["UPLOADED_FIRST", "LOCAL_SECOND", "UPLOADED_LAST"],
-    ["UPLOADED_LAST", "LOCAL_SECOND", "UPLOADED_FIRST"],
-  ].entries()) {
-    const message = h.inputs[index]!.message;
-    const positions = order.map((marker) => message.indexOf(marker));
-    assert.ok(positions.every((position) => position >= 0));
-    assert.ok(positions[0]! < positions[1]! && positions[1]! < positions[2]!, message);
-    assert.ok(message.endsWith(index === 0 ? "mixed first" : "mixed next"));
-  }
-  const images = [
-    { type: "image", data: PNG_BYTES.toString("base64"), mimeType: "image/png" },
-    { type: "image", data: localImageBytes.toString("base64"), mimeType: "image/jpeg" },
-  ];
-  assert.deepEqual(h.inputs[0]!.images, images);
-  assert.deepEqual(h.inputs[1]!.images, [...images].reverse());
-  assert.deepEqual(
-    h.reads.map(({ path }) => path),
-    [localText.ref, localImage.ref, localImage.ref, localText.ref],
-    "uploaded references never fall through to filesystem IO",
-  );
-});
-
-test("zero-byte UTF-8 paths are valid on first and subsequent input", async (context) => {
-  const h = await harness(context);
-  const empty = await h.file("empty.txt", "");
-  const sessionId = createdSessionId(await h.submit("createSession", null, "first empty", [empty]));
-  const sent = await h.submit("sendText", sessionId, "next empty", [empty]);
-  assert.equal(sent.status, "accepted", sent.message ?? "sendText must accept empty UTF-8 files");
-  assert.equal(h.inputs.length, 2);
-  assert.equal(
-    h.inputs[0]!.message,
-    '<attached_file name="empty.txt" mime="text/plain">\n\n</attached_file>\n\nfirst empty',
-  );
-  assert.equal(
-    h.inputs[1]!.message,
-    '<attached_file name="empty.txt" mime="text/plain">\n\n</attached_file>\n\nnext empty',
-  );
-  assert.equal(Object.hasOwn(h.inputs[0]!, "images"), false);
-  assert.equal(Object.hasOwn(h.inputs[1]!, "images"), false);
-});
-
-test("invalid references, unsupported types and count limits reject before file reads", async (context) => {
-  const h = await harness(context);
-  const valid = await h.file("valid.txt", "must not read");
-  const draft = await h.registry.createSession({
-    workspaceId: "local-attachment-workspace",
-    workspacePath: h.root,
+async function completed(h: RealOmpHarness, sessionId: string, count: number) {
+  await h.waitUntil(() => {
+    const rows = [...h.rows(sessionId).values()];
+    const turns = rows.filter((row) => row.kind === "turnHeader");
+    const assistants = rows.filter((row) => row.kind === "assistantText");
+    return (
+      turns.length === count &&
+      turns.every((row) => row.state === "completedSuccess") &&
+      assistants.length === count &&
+      assistants.every(
+        (row) => row.state === "complete" && typeof row.text === "string" && row.text.length > 0,
+      )
+    );
   });
-  const expired = h.upload("expired.txt", Buffer.from("expired bytes"), "text/plain");
-  h.store.sweep(Date.now() + PROTOCOL_V4_LIMITS.attachmentUnreferencedTtlMs + 1);
-  const invalidInputs: [string, AttachmentRef[]][] = [
-    ["relative path", [{ ...valid, ref: "relative/valid.txt" }]],
-    ["unknown URI", [{ ...valid, ref: "https://example.invalid/valid.txt" }]],
-    ["file URI is not an absolute host path", [{ ...valid, ref: `file://${valid.ref}` }]],
-    ["missing upload ref", [{ ...valid, ref: "omp-attachment://missing-upload" }]],
-    ["expired upload ref", [expired]],
-    ["unsupported MIME", [{ ...valid, mime: "application/pdf" }]],
-    ["attachment count", Array.from({ length: 9 }, () => valid)],
-  ];
-  if (process.platform === "win32") {
-    invalidInputs.push(["drive-relative path", [{ ...valid, ref: "C:valid.txt" }]]);
-    invalidInputs.push(["root-relative path", [{ ...valid, ref: "\\valid.txt" }]]);
-  } else {
-    invalidInputs.push(["foreign Windows path", [{ ...valid, ref: "C:\\valid.txt" }]]);
-  }
-  for (const [label, attachments] of invalidInputs) {
-    for (const type of ["createSession", "sendText"] as const) {
-      const ack = await h.submit(
-        type,
-        type === "sendText" ? draft.sessionId : null,
-        label,
-        attachments,
-      );
-      assert.equal(ack.status, "rejected", `${type}: ${label}`);
-      assert.equal(ack.reasonCode, "fault.command.attachmentUnsupportedByOmpCore");
-      assert.ok(ack.message, `${type}: ${label} must explain its rejection`);
-      assert.deepEqual(h.reads, [], `${type}: ${label} must not read a file`);
-      assert.deepEqual(h.inputs, [], `${type}: ${label} must not dispatch to the core`);
-      assert.deepEqual(h.processCwds, [], `${type}: ${label} must not start the core`);
-    }
-  }
-});
+}
 
-test("unreadable or invalid real file content rejects the entire first and subsequent input", async (context) => {
-  const h = await harness(context);
-  const draft = await h.registry.createSession({
-    workspaceId: "local-attachment-workspace",
-    workspacePath: h.root,
-  });
-  const good = await h.file("good.txt", "valid prefix must not partially dispatch");
-  const missing = { ...good, ref: join(h.root, "missing.txt"), fileName: "missing.txt" };
-  const directoryPath = join(h.root, "directory.txt");
-  await mkdir(directoryPath);
-  const directory = { ...good, ref: directoryPath, fileName: "directory.txt" };
-  const invalidUtf8 = await h.file("invalid.txt", Buffer.from([0xc3, 0x28]));
-  const oversized = await h.file("oversized.txt", Buffer.alloc(256 * 1024 + 1, 0x61));
-  const totalA = await h.file("total-a.txt", Buffer.alloc(180 * 1024, 0x61));
-  const totalB = await h.file("total-b.txt", Buffer.alloc(180 * 1024, 0x62));
-  const totalC = await h.file("total-c.txt", Buffer.alloc(180 * 1024, 0x63));
-  const oversizedImage = await h.file("oversized.png", PNG_BYTES, "image/png");
-  await truncate(oversizedImage.ref, PROTOCOL_V4_LIMITS.attachmentMaxBytes + 1);
-  const invalidInputs: [string, AttachmentRef[]][] = [
-    ["missing regular file", [good, missing]],
-    ["directory is not a regular file", [good, directory]],
-    ["invalid UTF-8", [good, invalidUtf8]],
-    ["text actual bytes exceed 256 KiB despite understated metadata", [{ ...oversized, bytes: 1 }]],
-    ["text total exceeds 512 KiB", [totalA, totalB, totalC]],
-    [
-      "image actual bytes exceed upload limit despite understated metadata",
-      [{ ...oversizedImage, bytes: 1 }],
-    ],
-    [
-      "mixed valid image and unsupported PDF",
-      [
-        await h.file("valid.png", PNG_BYTES, "image/png"),
-        await h.file("unsupported.pdf", "%PDF-1.7\n", "application/pdf"),
-      ],
-    ],
-  ];
-  for (const [label, attachments] of invalidInputs) {
-    for (const type of ["createSession", "sendText"] as const) {
-      const ack = await h.submit(
-        type,
-        type === "sendText" ? draft.sessionId : null,
-        label,
-        attachments,
-      );
-      assert.equal(ack.status, "rejected", `${type}: ${label}`);
-      assert.equal(ack.reasonCode, "fault.command.attachmentUnsupportedByOmpCore");
-      assert.ok(ack.message, `${type}: ${label} must explain its rejection`);
-      assert.deepEqual(h.inputs, [], `${type}: ${label} must not partially dispatch valid files`);
-      assert.deepEqual(h.processCwds, [], `${type}: ${label} must not start the core`);
-    }
-  }
-  assert.ok(h.reads.some(({ path }) => path === missing.ref));
-  assert.ok(h.reads.some(({ path }) => path === directory.ref));
-  assert.ok(h.reads.some(({ path }) => path === invalidUtf8.ref));
-  assert.ok(h.reads.some(({ path, maxBytes }) => path === oversized.ref && maxBytes <= 256 * 1024));
+function assertTextOrder(content: unknown, markers: string[]) {
+  const text = textContent(content);
+  const positions = markers.map((marker) => text.indexOf(marker));
   assert.ok(
-    h.reads.some(
-      ({ path, maxBytes }) =>
-        path === oversizedImage.ref && maxBytes <= PROTOCOL_V4_LIMITS.attachmentMaxBytes,
-    ),
+    positions.every((position) => position >= 0),
+    text,
   );
-  const sent = await h.submit("sendText", draft.sessionId, "plain input after rejections");
-  assert.equal(sent.status, "accepted", sent.message ?? "plain input must remain available");
-  assert.equal(h.inputs.length, 1, "rejected inputs leave no deferred core prompt");
-  assert.equal(h.inputs[0]!.message, "plain input after rejections");
-  assert.equal(Object.hasOwn(h.inputs[0]!, "images"), false);
+  assert.ok(
+    positions.every((position, index) => index === 0 || positions[index - 1]! < position),
+    text,
+  );
+}
+
+test(
+  "真实 CLI 读取绝对路径 UTF-8/图片，与上传引用混排且续发重新读取文件",
+  { skip: realOmpSkip },
+  async (context) => {
+    const { h, submit, file, upload, assertReplies } = await harness(context, [
+      {
+        prompt: "LOCAL_PATH_MIXED_FIRST: inspect these files.",
+        files: [
+          { name: "uploaded.txt", mime: "text/plain", text: "UPLOADED_FIRST\n" },
+          { name: "mbist.md", mime: "text/markdown", text: "# MBIST\n真实首发内容 Ω\n" },
+          { name: "last.txt", mime: "text/plain", text: "UPLOADED_LAST\n" },
+        ],
+        images: [
+          { type: "base64", media_type: "image/jpeg", data: JPEG_BYTES.toString("base64") },
+          { type: "base64", media_type: "image/png", data: PNG_BYTES.toString("base64") },
+        ],
+        reply: "LOCAL_MIXED_FIRST_DONE",
+      },
+      {
+        prompt: "LOCAL_PATH_MIXED_NEXT: inspect the changed files.",
+        files: [
+          { name: "last.txt", mime: "text/plain", text: "UPLOADED_LAST\n" },
+          { name: "mbist.md", mime: "text/markdown", text: "续发的新内容 — changed on disk\n" },
+          { name: "uploaded.txt", mime: "text/plain", text: "UPLOADED_FIRST\n" },
+        ],
+        images: [
+          { type: "base64", media_type: "image/png", data: PNG_BYTES.toString("base64") },
+          { type: "base64", media_type: "image/jpeg", data: JPEG_BYTES.toString("base64") },
+        ],
+        reply: "LOCAL_MIXED_NEXT_DONE",
+      },
+    ]);
+    const localText = await file(
+      "mbist.md",
+      "# MBIST\n真实首发内容 Ω\n",
+      "text/markdown; charset=utf-8",
+    );
+    const localImage = await file("local.png", PNG_BYTES, "IMAGE/PNG; charset=binary");
+    const uploadedText = await upload(
+      "uploaded.txt",
+      Buffer.from("UPLOADED_FIRST\n"),
+      "text/plain",
+    );
+    const uploadedImage = await upload("uploaded.jpg", JPEG_BYTES, "image/jpeg");
+    const uploadedLast = await upload("last.txt", Buffer.from("UPLOADED_LAST\n"), "text/plain");
+    const attachments = [uploadedText, uploadedImage, localText, localImage, uploadedLast];
+    const firstPrompt = "LOCAL_PATH_MIXED_FIRST: inspect these files.";
+    const sessionId = createdSessionId(
+      await submit("createSession", null, firstPrompt, attachments),
+    );
+    await h.subscribe(sessionId);
+    await completed(h, sessionId, 1);
+    const first = requestContent(h, firstPrompt);
+    assertTextOrder(first, ["UPLOADED_FIRST", "真实首发内容 Ω", "UPLOADED_LAST"]);
+    assert.match(textContent(first), /mbist\.md/u);
+    assert.deepEqual(imageSources(first), [
+      { type: "base64", media_type: "image/jpeg", data: JPEG_BYTES.toString("base64") },
+      { type: "base64", media_type: "image/png", data: PNG_BYTES.toString("base64") },
+    ]);
+
+    await writeFile(localText.ref, "续发的新内容 — changed on disk\n", "utf8");
+    const nextPrompt = "LOCAL_PATH_MIXED_NEXT: inspect the changed files.";
+    const fromCall = h.mock.calls.length;
+    assert.equal(
+      (await submit("sendText", sessionId, nextPrompt, [...attachments].reverse())).status,
+      "accepted",
+    );
+    await completed(h, sessionId, 2);
+    const next = requestContent(h, nextPrompt, fromCall);
+    assertTextOrder(next, ["UPLOADED_LAST", "续发的新内容 — changed on disk", "UPLOADED_FIRST"]);
+    assert.doesNotMatch(textContent(next), /真实首发内容 Ω/u);
+    assert.deepEqual(imageSources(next), [
+      { type: "base64", media_type: "image/png", data: PNG_BYTES.toString("base64") },
+      { type: "base64", media_type: "image/jpeg", data: JPEG_BYTES.toString("base64") },
+    ]);
+    assertReplies(sessionId);
+  },
+);
+
+test("真实 CLI 接受首发和续发的零字节 UTF-8 路径", { skip: realOmpSkip }, async (context) => {
+  const { h, submit, file, assertReplies } = await harness(context, [
+    {
+      prompt: "LOCAL_EMPTY_FIRST: inspect empty text.",
+      files: [{ name: "empty.txt", mime: "text/plain", text: "" }],
+      reply: "LOCAL_EMPTY_FIRST_DONE",
+    },
+    {
+      prompt: "LOCAL_EMPTY_NEXT: inspect empty text again.",
+      files: [{ name: "empty.txt", mime: "text/plain", text: "" }],
+      reply: "LOCAL_EMPTY_NEXT_DONE",
+    },
+  ]);
+  const empty = await file("empty.txt", "");
+  const firstPrompt = "LOCAL_EMPTY_FIRST: inspect empty text.";
+  const sessionId = createdSessionId(await submit("createSession", null, firstPrompt, [empty]));
+  await h.subscribe(sessionId);
+  await completed(h, sessionId, 1);
+  const first = requestContent(h, firstPrompt);
+  assert.match(
+    textContent(first),
+    /<attached_file name="empty\.txt" mime="text\/plain">\n\n<\/attached_file>/u,
+  );
+  assert.deepEqual(imageSources(first), []);
+  const nextPrompt = "LOCAL_EMPTY_NEXT: inspect empty text again.";
+  const fromCall = h.mock.calls.length;
+  assert.equal((await submit("sendText", sessionId, nextPrompt, [empty])).status, "accepted");
+  await completed(h, sessionId, 2);
+  const next = requestContent(h, nextPrompt, fromCall);
+  assert.match(
+    textContent(next),
+    /<attached_file name="empty\.txt" mime="text\/plain">\n\n<\/attached_file>/u,
+  );
+  assert.deepEqual(imageSources(next), []);
+  assertReplies(sessionId);
 });
+
+test(
+  "真实 CLI 拒绝非法路径、类型、UTF-8、目录、缺失、过期及超限内容，不留下部分输入",
+  { skip: realOmpSkip },
+  async (context) => {
+    const { h, submit, envelope, file, upload, advanceAttachmentClock, assertReplies } =
+      await harness(
+        context,
+        [
+          {
+            prompt: "LOCAL_REJECTION_SEED: initialize a normal session.",
+            reply: "LOCAL_REJECTION_SEED_DONE",
+          },
+          {
+            prompt: "LOCAL_AFTER_REJECTIONS: plain input remains available.",
+            reply: "LOCAL_AFTER_REJECTIONS_DONE",
+          },
+        ],
+        true,
+      );
+    const sessionId = await h.create(
+      "local-attachment-rejections",
+      "LOCAL_REJECTION_SEED: initialize a normal session.",
+    );
+    await completed(h, sessionId, 1);
+    const good = await file("good.txt", "VALID_PREFIX_MUST_NOT_PARTIALLY_DISPATCH");
+    const directoryPath = join(h.workspace, "directory.txt");
+    await mkdir(directoryPath);
+    const invalidUtf8 = await file("invalid.txt", Buffer.from([0xc3, 0x28]));
+    const oversized = await file("oversized.txt", Buffer.alloc(256 * 1024 + 1, 0x61));
+    const totals = await Promise.all(
+      ["a", "b", "c"].map((part) => file(`total-${part}.txt`, Buffer.alloc(180 * 1024, 0x61))),
+    );
+    const oversizedImage = await file("oversized.png", PNG_BYTES, "image/png");
+    await truncate(oversizedImage.ref, PROTOCOL_V4_LIMITS.attachmentMaxBytes + 1);
+    // 缺失引用不等于已提交后过期：先经真实 owner 完成公开上传，再只推进其时钟。
+    const expired = await upload("expired.txt", Buffer.from("EXPIRED_UPLOAD_BYTES"), "text/plain");
+    assert.match(expired.ref, /^omp-attachment:\/\//u);
+    await advanceAttachmentClock(PROTOCOL_V4_LIMITS.attachmentUnreferencedTtlMs + 1);
+    const invalidInputs: [string, AttachmentRef[]][] = [
+      ["relative path", [{ ...good, ref: "relative/valid.txt" }]],
+      ["unknown URI", [{ ...good, ref: "https://example.invalid/valid.txt" }]],
+      ["file URI", [{ ...good, ref: `file://${good.ref}` }]],
+      ["missing upload", [{ ...good, ref: "omp-attachment://missing-upload" }]],
+      ["expired committed upload", [good, expired]],
+      ["unsupported MIME", [{ ...good, mime: "application/pdf" }]],
+      ["attachment count", Array.from({ length: 9 }, () => good)],
+      [
+        "missing regular file",
+        [good, { ...good, ref: join(h.workspace, "missing.txt"), fileName: "missing.txt" }],
+      ],
+      ["directory", [good, { ...good, ref: directoryPath, fileName: "directory.txt" }]],
+      ["invalid UTF-8", [good, invalidUtf8]],
+      ["actual text bytes exceed understated metadata", [{ ...oversized, bytes: 1 }]],
+      ["total text bytes exceed 512 KiB", totals],
+      ["actual image bytes exceed understated metadata", [{ ...oversizedImage, bytes: 1 }]],
+      [
+        "valid image followed by unsupported type",
+        [
+          await file("valid.png", PNG_BYTES, "image/png"),
+          await file("unsupported.pdf", "%PDF-1.7\n", "application/pdf"),
+        ],
+      ],
+    ];
+    if (process.platform === "win32") {
+      invalidInputs.push(["drive-relative path", [{ ...good, ref: "C:valid.txt" }]]);
+      invalidInputs.push(["root-relative path", [{ ...good, ref: "\\valid.txt" }]]);
+    } else {
+      invalidInputs.push(["foreign Windows path", [{ ...good, ref: "C:\\valid.txt" }]]);
+    }
+    const callsBefore = h.mock.calls.length;
+    const userRowsBefore = [...h.rows(sessionId).values()].filter(
+      (row) => row.kind === "userInput",
+    ).length;
+    const inputRowsBefore = [...h.rows(sessionId).values()].filter(
+      (row) => row.kind === "userInput" || row.kind === "turnHeader",
+    );
+    const storedInputsBefore = await storedAttachmentUserInputs(h);
+    assert.equal(storedInputsBefore.length, 1, "the seed must have one real persisted session");
+    assert.equal(
+      storedInputsBefore[0]!.users.length,
+      1,
+      "the seed must have one real user message",
+    );
+    const rejectedPrompts: string[] = [];
+    for (const [label, attachments] of invalidInputs) {
+      for (const type of ["createSession", "sendText"] as const) {
+        const prompt = `LOCAL_REJECT_${rejectedPrompts.length}: ${label}`;
+        rejectedPrompts.push(prompt);
+        const response = await h.rawRequest(
+          "v4/command",
+          envelope(type, type === "sendText" ? sessionId : null, prompt, attachments),
+        );
+        if (label === "expired committed upload") {
+          assert.equal(
+            response.error,
+            undefined,
+            `${type}: a valid committed ref must reach command admission`,
+          );
+        }
+        if (response.error !== undefined) {
+          assert.equal(
+            z.object({ code: z.number() }).parse(response.error).code,
+            -32602,
+            `${type}: ${label}`,
+          );
+        } else {
+          const ack = commandAckSchema.parse(response.result);
+          assert.equal(ack.status, "rejected", `${type}: ${label}`);
+          assert.equal(ack.reasonCode, "fault.command.attachmentUnsupportedByOmpCore");
+          assert.ok(ack.message, `${type}: ${label} must explain its rejection`);
+        }
+        assert.equal(h.mock.calls.length, callsBefore, `${type}: ${label} must not invoke a model`);
+        assert.deepEqual(
+          [...h.rows(sessionId).values()].filter(
+            (row) => row.kind === "userInput" || row.kind === "turnHeader",
+          ),
+          inputRowsBefore,
+          `${type}: ${label} must not append user input or an empty turn`,
+        );
+        if (label === "expired committed upload") {
+          assert.deepEqual(
+            await storedAttachmentUserInputs(h),
+            storedInputsBefore,
+            `${type}: expired upload must leave all persisted user inputs and session identities unchanged`,
+          );
+        }
+      }
+    }
+    assert.equal(h.mock.calls.length, callsBefore, "rejected files must not invoke a model");
+    const finalPrompt = "LOCAL_AFTER_REJECTIONS: plain input remains available.";
+    assert.equal((await submit("sendText", sessionId, finalPrompt)).status, "accepted");
+    await completed(h, sessionId, 2);
+    assert.deepEqual(imageSources(requestContent(h, finalPrompt, callsBefore)), []);
+    for (const input of userInputs(h, callsBefore)) {
+      const text = textContent(input.content);
+      for (const prompt of rejectedPrompts) assert.ok(!text.includes(prompt), prompt);
+      assert.ok(!text.includes("VALID_PREFIX_MUST_NOT_PARTIALLY_DISPATCH"));
+    }
+    assert.equal(
+      [...h.rows(sessionId).values()].filter((row) => row.kind === "userInput").length,
+      userRowsBefore + 1,
+    );
+    assertReplies(sessionId);
+  },
+);

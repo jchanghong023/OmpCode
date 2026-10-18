@@ -157,10 +157,11 @@ export class AttachmentStore {
     return this.committed.get(ref) ?? null;
   }
 
-  /** 附件字节（已提交）。 */
+  /** 附件字节（已提交且未过期）。 */
   bytesOf(ref: string): Buffer | null {
     const attachment = this.committed.get(ref);
-    if (!attachment) {
+    // 根因：周期回收尚未执行不代表上传仍可消费；所有正文出口在读取时沿用同一 TTL 判据。
+    if (!attachment || this.isCommittedExpired(attachment, Date.now())) {
       return null;
     }
     return Buffer.concat(
@@ -198,14 +199,17 @@ export class AttachmentStore {
     return `omp-attachment://${uploadId}`;
   }
 
+  private isCommittedExpired(attachment: StagedAttachment, now: number): boolean {
+    return now - attachment.committedAt > PROTOCOL_V4_LIMITS.attachmentUnreferencedTtlMs;
+  }
+
   /**
    * 过期清理：committed 按 unreferenced TTL，staging 按上传 TTL（否则半途而废的
    * 上传会永久占内存）；now 注入便于测试。
    */
   sweep(now: number): void {
-    const unreferencedTtl = PROTOCOL_V4_LIMITS.attachmentUnreferencedTtlMs;
     for (const [ref, attachment] of this.committed) {
-      if (now - attachment.committedAt > unreferencedTtl) {
+      if (this.isCommittedExpired(attachment, now)) {
         this.committed.delete(ref);
       }
     }

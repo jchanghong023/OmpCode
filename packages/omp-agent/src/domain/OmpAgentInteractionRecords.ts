@@ -1,4 +1,8 @@
-import type { ZCodeAgentInteractionAgent, ZCodeAgentInteractionEvent } from "@zcode/shared";
+import type {
+  ZCodeAgentInteractionAgent,
+  ZCodeAgentInteractionCoverage,
+  ZCodeAgentInteractionEvent,
+} from "@zcode/shared";
 import { safeInteractionAgentId } from "./OmpInteractionIds.js";
 import { ompAsyncResultEvents } from "./OmpAgentAsyncResult.js";
 
@@ -88,20 +92,23 @@ export interface InteractionObservation {
 export interface InteractionParseContext {
   resolveAgent: (rawId: string) => string;
   knownChild: (parentId: string, rawId: string) => string | undefined;
+  isKnownChild: boolean;
+  issues: Set<ZCodeAgentInteractionCoverage["issues"][number]>;
 }
 
-/** 原始结构字段才是通信依据；不解析 prompt 包装，也不把 user/steer 消息当代理发送。 */
+/** 只读 OMP 显式来源字段；子记录的 user attribution 不等同于父 agent 发信。 */
 export function observationsFromInteractionRecords(
   source: InteractionSource,
   context: InteractionParseContext,
 ): InteractionObservation[] {
   const observations: InteractionObservation[] = [];
   const calls = new Map<string, { args: Record<string, unknown>; timestamp?: number }>();
+  let sourceId: string | undefined;
   const add = (
     event: ZCodeAgentInteractionEvent,
     origin: InteractionObservation["origin"],
     span?: { startTimestamp?: number; endTimestamp?: number },
-  ) => observations.push({ event, origin, ...span });
+  ) => observations.push({ event: sourceId ? { ...event, sourceId } : event, origin, ...span });
   const incoming = (value: unknown, key: string, owner = source.agentId) => {
     const message = interactionObject(value);
     if (!message || message.display === false) return;
@@ -141,6 +148,7 @@ export function observationsFromInteractionRecords(
     const record = interactionObject(source.entries[index]);
     if (!record) continue;
     const message = interactionObject(record.message);
+    sourceId = string(record.id);
     const entryKey = string(record.id) ?? `entry-${index}`;
     incoming(record.type === "custom_message" ? record : message, entryKey);
     const custom = record.type === "custom_message" ? record : message;
@@ -153,6 +161,69 @@ export function observationsFromInteractionRecords(
       add(event, "task");
     if (!message) continue;
     const timestamp = interactionTimestamp(message.timestamp ?? record.timestamp);
+    if (context.isKnownChild && message.role === "user") {
+      const contentText =
+        typeof message.content === "string"
+          ? message.content
+          : Array.isArray(message.content)
+            ? message.content
+                .filter(
+                  (part) =>
+                    interactionObject(part)?.type === "text" &&
+                    typeof interactionObject(part)?.text === "string",
+                )
+                .map((part) => String(interactionObject(part)?.text))
+                .join("\n")
+            : "";
+      const envelope =
+        message.attribution === "agent" &&
+        message.steering === true &&
+        contentText.includes("[Wait interrupted by message]")
+          ? /<irc\b([^>]*)>([\s\S]*?)<\/irc>/u.exec(contentText)
+          : undefined;
+      const sender = /\bfrom="parent"/u.test(envelope?.[1] ?? "")
+        ? /\bagent="([A-Za-z0-9_-]+)"/u.exec(envelope?.[1] ?? "")?.[1]
+        : undefined;
+      const steeringBody = envelope?.[2]?.trim();
+      if (sender && steeringBody) {
+        add(
+          {
+            eventId: `steering:${source.agentId}:${sourceId}`,
+            kind: "message",
+            fromAgentId: context.resolveAgent(sender),
+            toAgentId: source.agentId,
+            body: steeringBody,
+            ...(timestamp !== undefined ? { timestamp } : {}),
+            timeBasis: timestamp === undefined ? "unknown" : "recorded",
+            delivery: "observed",
+            source: source.source,
+          },
+          "incoming",
+        );
+        continue;
+      }
+      if (message.synthetic === true || message.attribution === "agent") continue;
+      // 需求 agent-interactions.md 要求显式用户归因；旧 role=user/steering 不能证明操作者身份。
+      if (message.attribution !== "user") {
+        context.issues.add("legacy_history_gaps");
+        continue;
+      }
+      const body = contentText;
+      add(
+        {
+          eventId: `intervention:${source.agentId}:${sourceId}`,
+          kind: "user_intervention",
+          fromAgentId: "user:operator",
+          toAgentId: source.agentId,
+          body,
+          ...(timestamp !== undefined ? { timestamp } : {}),
+          timeBasis: timestamp === undefined ? "unknown" : "recorded",
+          source: source.source,
+        },
+        "incoming",
+      );
+      continue;
+    }
     if (message.role === "assistant") {
       for (const value of Array.isArray(message.content) ? message.content : []) {
         const part = interactionObject(value);
@@ -322,76 +393,4 @@ export function observationsFromInteractionRecords(
     }
   }
   return observations;
-}
-
-/** live 只保留与交互相关的原始结构，不复制普通对话、thinking 或用户输入。 */
-export function interactionEntryFromEvent(value: unknown): unknown | null {
-  const event = interactionObject(value);
-  if (!event) return null;
-  if (event.type === "irc_message" || event.type === "message_end") {
-    const message = interactionObject(event.message);
-    if (
-      message?.role === "custom" &&
-      (String(message.customType).startsWith("irc:") || message.customType === "async-result")
-    )
-      return { type: "message", message };
-    if (message?.role === "assistant") {
-      const content = (Array.isArray(message.content) ? message.content : []).filter((value) => {
-        const block = interactionObject(value);
-        const args = interactionObject(block?.arguments);
-        return (
-          block?.type === "toolCall" &&
-          (["irc", "task", "wait"].includes(String(block.name)) ||
-            (block.name === "write" &&
-              typeof args?.path === "string" &&
-              args.path.startsWith("agent://")))
-        );
-      });
-      return content.length
-        ? { type: "message", message: { role: "assistant", timestamp: message.timestamp, content } }
-        : null;
-    }
-    const details = interactionObject(message?.details);
-    if (
-      message?.role === "toolResult" &&
-      (["irc", "task", "wait"].includes(String(message.toolName)) ||
-        (message.toolName === "write" && interactionObject(details?.message)?.op === "send"))
-    )
-      return { type: "message", message };
-  }
-  if (!["irc", "task", "wait", "write"].includes(String(event.toolName))) return null;
-  if (event.toolName === "write" && event.type === "tool_execution_start") {
-    const args = interactionObject(event.args);
-    if (typeof args?.path !== "string" || !args.path.startsWith("agent://")) return null;
-  }
-  if (event.type === "tool_execution_start")
-    return {
-      type: "message",
-      message: {
-        role: "assistant",
-        content: [
-          { type: "toolCall", id: event.toolCallId, name: event.toolName, arguments: event.args },
-        ],
-      },
-    };
-  if (event.type === "tool_execution_update" || event.type === "tool_execution_end") {
-    const result = interactionObject(
-      event.type === "tool_execution_end" ? event.result : event.partialResult,
-    );
-    const details = interactionObject(result?.details);
-    if (event.toolName === "write" && interactionObject(details?.message)?.op !== "send")
-      return null;
-    return result
-      ? {
-          type: "message",
-          message: {
-            role: "toolResult",
-            toolName: event.toolName,
-            toolCallId: event.toolCallId,
-            ...result,
-          },
-        }
-      : null;
-  }
-  return null;
 }

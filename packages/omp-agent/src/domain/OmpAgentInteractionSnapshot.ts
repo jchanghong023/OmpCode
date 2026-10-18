@@ -87,6 +87,8 @@ export function buildInteractionSnapshot({
   const observations = sources.flatMap((source) =>
     observationsFromInteractionRecords(source, {
       resolveAgent,
+      isKnownChild: children.has(source.agentId),
+      issues,
       knownChild: (parentId, rawId) => {
         const id = interactionChildId(parentId, rawId);
         return children.has(id) ? id : undefined;
@@ -94,6 +96,10 @@ export function buildInteractionSnapshot({
     }),
   );
   const events = mergeInteractionObservations(observations, issues);
+  for (const event of events) {
+    if (event.kind === "user_intervention")
+      agents.set(event.fromAgentId, { id: event.fromAgentId, label: "user", known: true });
+  }
   return {
     rootSessionId,
     revision,

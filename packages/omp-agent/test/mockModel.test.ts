@@ -76,6 +76,139 @@ test("mock engine emits ordered text/thinking/tool events with signatures, objec
   assert.ok(message.duration >= 0);
 });
 
+test(
+  "same-block deltas keep one indexed lifecycle, exact content and only expose received prefixes",
+  { timeout: 5000 },
+  async () => {
+    const thinkingRelease = Promise.withResolvers<void>();
+    const thinkingBlocked = Promise.withResolvers<void>();
+    const thinkingSeen = Promise.withResolvers<void>();
+    const toolRelease = Promise.withResolvers<void>();
+    const toolBlocked = Promise.withResolvers<void>();
+    const toolSeen = Promise.withResolvers<void>();
+    const textDeltas = ["## 中文\n\n", "- **逐片", "输出**\n"];
+    const thinkingDeltas = ["先比较", "，再选择。"];
+    const toolDeltas = ['{"path":"目录\\', '\\文件.md","note":"第一行\\', 'n引用 \\"片段\\""}'];
+    const model = createMockModel({
+      handler: {
+        content: [
+          { type: "text", deltas: textDeltas },
+          {
+            type: "thinking",
+            thinkingSignature: "signed-fragments",
+            deltas: (async function* () {
+              yield thinkingDeltas[0];
+              thinkingBlocked.resolve();
+              await thinkingRelease.promise;
+              yield thinkingDeltas[1];
+            })(),
+          },
+          {
+            type: "toolCall",
+            id: "fragment-tool",
+            name: "write",
+            deltas: (async function* () {
+              yield toolDeltas[0];
+              toolBlocked.resolve();
+              await toolRelease.promise;
+              yield* toolDeltas.slice(1);
+            })(),
+          },
+        ],
+      },
+    });
+    const stream = model.stream(model, context);
+    const events = [];
+    let settled = false;
+    const completion = stream.result();
+    void completion.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
+    const reading = (async () => {
+      for await (const event of stream) {
+        events.push(structuredClone(event));
+        if (event.type === "thinking_delta") thinkingSeen.resolve();
+        if (event.type === "toolcall_delta") toolSeen.resolve();
+      }
+    })();
+    try {
+      await Promise.all([thinkingBlocked.promise, thinkingSeen.promise]);
+      const thinkingPrefix = structuredClone(
+        events.findLast((event) => event.type === "thinking_delta").partial,
+      );
+      assert.equal(thinkingPrefix.content.length, 2);
+      assert.deepEqual(thinkingPrefix.content[0], { type: "text", text: textDeltas.join("") });
+      assert.equal(thinkingPrefix.content[1].thinking, thinkingDeltas[0]);
+      assert.equal(
+        events.some((event) => event.type === "thinking_end"),
+        false,
+      );
+      assert.equal(settled, false);
+      thinkingRelease.resolve();
+      await Promise.all([toolBlocked.promise, toolSeen.promise]);
+      const toolPrefix = structuredClone(
+        events.findLast((event) => event.type === "toolcall_delta").partial,
+      );
+      assert.deepEqual(toolPrefix.content[2], {
+        type: "toolCall",
+        id: "fragment-tool",
+        name: "write",
+        arguments: toolDeltas[0],
+      });
+      assert.equal(
+        events.some((event) => event.type === "toolcall_end" || event.type === "done"),
+        false,
+      );
+      assert.equal(settled, false, "a partial JSON prefix must not settle the response");
+    } finally {
+      thinkingRelease.resolve();
+      toolRelease.resolve();
+    }
+    await reading;
+    const message = await completion;
+    for (const [index, kind, deltas] of [
+      [0, "text", textDeltas],
+      [1, "thinking", thinkingDeltas],
+      [2, "toolcall", toolDeltas],
+    ] as const) {
+      const blockEvents = events.filter((event) => event.type.startsWith(`${kind}_`));
+      assert.deepEqual(
+        blockEvents.map((event) => event.type),
+        [`${kind}_start`, ...deltas.map(() => `${kind}_delta`), `${kind}_end`],
+      );
+      assert.deepEqual(
+        blockEvents.map((event) => event.contentIndex),
+        blockEvents.map(() => index),
+      );
+      assert.deepEqual(
+        blockEvents.filter((event) => event.type.endsWith("_delta")).map((event) => event.delta),
+        deltas,
+      );
+    }
+    assert.deepEqual(message.content, [
+      { type: "text", text: "## 中文\n\n- **逐片输出**\n" },
+      { type: "thinking", thinking: "先比较，再选择。", thinkingSignature: "signed-fragments" },
+      {
+        type: "toolCall",
+        id: "fragment-tool",
+        name: "write",
+        arguments: { path: "目录\\文件.md", note: '第一行\n引用 "片段"' },
+      },
+    ]);
+    assert.equal(message.stopReason, "toolUse");
+    assert.equal(
+      events.find((event) => event.type === "thinking_end").partial.content[1].thinkingSignature,
+      "signed-fragments",
+    );
+    assert.equal(events.filter((event) => event.type === "done").length, 1);
+  },
+);
+
 test("mock scripts consume arrays and synchronous/async iterables before pushed entries and fallback", async () => {
   function* script() {
     yield { content: ["sync-1"] };
@@ -355,6 +488,378 @@ test("delay waits before first event and cancellation before/during delay termin
     assert.equal(message.stopReason, "aborted");
     assert.match(message.errorMessage, /aborted during delay/);
     assert.deepEqual(message.content, []);
+  }
+});
+
+test(
+  "content streams sync/async iterables incrementally before the producer finishes",
+  { timeout: 5000 },
+  async () => {
+    const release = Promise.withResolvers<void>();
+    const reached = Promise.withResolvers<void>();
+    const prefixSeen = Promise.withResolvers<void>();
+    const response = {
+      content: (async function* () {
+        yield "prefix";
+        reached.resolve();
+        await release.promise;
+        yield { type: "thinking", thinking: "middle" };
+        yield { type: "toolCall", id: "stream_tool", name: "read", arguments: { path: "x" } };
+        yield "suffix";
+      })(),
+    };
+    const streaming = createMockModel({ handler: response });
+    const stream = streaming.stream(streaming, context);
+    const events: { type: string; delta?: string }[] = [];
+    let settled = false;
+    void stream.result().then(() => {
+      settled = true;
+    });
+    const reading = (async () => {
+      for await (const event of stream) {
+        events.push(event);
+        if (event.type === "text_delta" && event.delta === "prefix") prefixSeen.resolve();
+      }
+    })();
+    try {
+      await Promise.all([reached.promise, prefixSeen.promise]);
+      assert.equal(settled, false, "prefix must arrive before a terminal response");
+      assert.deepEqual(
+        events.filter((event) => event.type === "text_delta").map((event) => event.delta),
+        ["prefix"],
+      );
+    } finally {
+      release.resolve();
+    }
+    await reading;
+    const message = await stream.result();
+    assert.equal(message.stopReason, "toolUse");
+    assert.deepEqual(
+      message.content.map((block: { type: string }) => block.type),
+      ["text", "thinking", "toolCall", "text"],
+    );
+    assert.deepEqual(
+      events.filter((event) => event.type === "text_delta").map((event) => event.delta),
+      ["prefix", "suffix"],
+    );
+    assert.equal(events.filter((event) => event.type === "done").length, 1);
+    assert.equal(
+      await text(createMockModel({ handler: { content: new Set(["sync-a", "sync-b"]) } })),
+      "sync-async-b",
+    );
+  },
+);
+
+test(
+  "async content iterator failure rejects iteration and result after preserving visible prefix",
+  { timeout: 5000 },
+  async () => {
+    const failure = new Error("content iterator failed");
+    const model = createMockModel({
+      handler: {
+        content: (async function* () {
+          yield "before-failure";
+          throw failure;
+        })(),
+      },
+    });
+    const stream = model.stream(model, context);
+    const events: { type: string; delta?: string }[] = [];
+    await assert.rejects(
+      async () => {
+        for await (const event of stream) events.push(event);
+      },
+      (error) => error === failure,
+    );
+    await assert.rejects(stream.result(), (error) => error === failure);
+    assert.deepEqual(
+      events.filter((event) => event.type === "text_delta").map((event) => event.delta),
+      ["before-failure"],
+    );
+    assert.equal(
+      events.some((event) => event.type === "done"),
+      false,
+    );
+  },
+);
+
+test(
+  "abort interrupts a blocked content next, closes the iterator, and ignores late content",
+  { timeout: 5000 },
+  async () => {
+    for (const preaborted of [false, true]) {
+      const controller = new AbortController();
+      const blocked = Promise.withResolvers<IteratorResult<string>>();
+      const waiting = Promise.withResolvers<void>();
+      let nextCalls = 0;
+      let returns = 0;
+      const content = {
+        [Symbol.asyncIterator]() {
+          return {
+            next() {
+              nextCalls++;
+              if (nextCalls === 1) return Promise.resolve({ value: "visible-prefix", done: false });
+              waiting.resolve();
+              return blocked.promise;
+            },
+            async return() {
+              returns++;
+              return { value: undefined, done: true };
+            },
+          };
+        },
+      };
+      if (preaborted) controller.abort();
+      const model = createMockModel({ responses: [{ content }, { content: ["next-turn"] }] });
+      const stream = model.stream(model, context, { signal: controller.signal });
+      const events: { type: string; delta?: string }[] = [];
+      const reading = (async () => {
+        for await (const event of stream) events.push(event);
+      })();
+      if (!preaborted) {
+        await waiting.promise;
+        controller.abort();
+      }
+      // 超时是失败保护，不释放生产者屏障来伪造取消成功。
+      const message = await Promise.race([
+        stream.result(),
+        delay(1000).then(() => {
+          throw new Error("abort waited for blocked content producer");
+        }),
+      ]);
+      await reading;
+      assert.equal(message.stopReason, "aborted");
+      assert.deepEqual(
+        message.content.map((block: { text?: string }) => block.text),
+        preaborted ? [] : ["visible-prefix"],
+      );
+      assert.equal(nextCalls, preaborted ? 0 : 2);
+      assert.equal(returns, 1);
+      const terminalCount = events.length;
+      blocked.resolve({ value: "LATE_MUST_NOT_REVIVE", done: false });
+      await delay(0);
+      assert.equal(events.length, terminalCount);
+      assert.equal(events.at(-1)?.type, "error");
+      assert.equal(events.filter((event) => event.type === "done").length, 0);
+      assert.equal(await text(model), "next-turn");
+    }
+  },
+);
+
+test(
+  "abort never waits for an async generator's blocked return or replays its late yield",
+  { timeout: 5000 },
+  async () => {
+    const controller = new AbortController();
+    const release = Promise.withResolvers<void>();
+    const blocked = Promise.withResolvers<void>();
+    const closed = Promise.withResolvers<void>();
+    const content = (async function* () {
+      try {
+        yield "generator-prefix";
+        blocked.resolve();
+        await release.promise;
+        yield "GENERATOR_LATE_FORBIDDEN";
+      } finally {
+        closed.resolve();
+      }
+    })();
+    const model = createMockModel({ handler: { content } });
+    const stream = model.stream(model, context, { signal: controller.signal });
+    const events: { type: string; delta?: string }[] = [];
+    const reading = (async () => {
+      for await (const event of stream) events.push(event);
+    })();
+    await blocked.promise;
+    controller.abort();
+    try {
+      const message = await Promise.race([
+        stream.result(),
+        delay(1000).then(() => {
+          throw new Error("cancel waited for async generator return");
+        }),
+      ]);
+      assert.equal(message.stopReason, "aborted");
+      await reading;
+      assert.deepEqual(
+        events.filter((event) => event.type === "text_delta").map((event) => event.delta),
+        ["generator-prefix"],
+      );
+      assert.equal(events.at(-1)?.type, "error");
+    } finally {
+      release.resolve();
+    }
+    await closed.promise;
+    assert.equal(
+      events.some((event) => event.delta === "GENERATOR_LATE_FORBIDDEN"),
+      false,
+    );
+    assert.equal(events.filter((event) => event.type === "error").length, 1);
+    assert.equal(events.filter((event) => event.type === "done").length, 0);
+  },
+);
+
+test(
+  "abort ends blocked block deltas without waiting, parsing a prefix or reviving late content",
+  { timeout: 5000 },
+  async () => {
+    const controller = new AbortController();
+    const release = Promise.withResolvers<void>();
+    const blocked = Promise.withResolvers<void>();
+    const closed = Promise.withResolvers<void>();
+    const prefix = '{"path":"已收到';
+    const deltas = (async function* () {
+      try {
+        yield prefix;
+        blocked.resolve();
+        await release.promise;
+        yield '晚到.md"}';
+      } finally {
+        closed.resolve();
+      }
+    })();
+    const model = createMockModel({
+      responses: [
+        {
+          content: [
+            { type: "toolCall", id: "cancelled-tool", name: "write", deltas },
+            "FORBIDDEN_FOLLOWING_BLOCK",
+          ],
+        },
+        { content: ["next-response"] },
+      ],
+    });
+    const stream = model.stream(model, context, { signal: controller.signal });
+    const completion = stream.result();
+    const events = [];
+    const reading = (async () => {
+      for await (const event of stream) events.push(structuredClone(event));
+    })();
+    let terminalContent: unknown;
+    await blocked.promise;
+    controller.abort();
+    try {
+      const message = await Promise.race([
+        completion,
+        delay(1000).then(() => {
+          throw new Error("abort waited for blocked block deltas");
+        }),
+      ]);
+      await reading;
+      assert.equal(message.stopReason, "aborted");
+      assert.deepEqual(message.content, [
+        { type: "toolCall", id: "cancelled-tool", name: "write", arguments: prefix },
+      ]);
+      terminalContent = structuredClone(message.content);
+      assert.deepEqual(
+        events.map((event) => event.type),
+        ["start", "toolcall_start", "toolcall_delta", "error"],
+      );
+      assert.equal(events[1].contentIndex, 0);
+      assert.equal(events[2].contentIndex, 0);
+      assert.equal(events[2].delta, prefix);
+      assert.equal(await text(model), "next-response");
+    } finally {
+      release.resolve();
+    }
+    await closed.promise;
+    await delay(0);
+    assert.deepEqual((await completion).content, terminalContent);
+    assert.deepEqual(
+      events.map((event) => event.type),
+      ["start", "toolcall_start", "toolcall_delta", "error"],
+    );
+  },
+);
+
+test(
+  "block delta producer failures reject iteration and result without closing the visible prefix",
+  { timeout: 5000 },
+  async () => {
+    const failure = new Error("block delta producer failed");
+    for (const block of [
+      {
+        type: "text",
+        deltas: (function* () {
+          yield "同步前缀";
+          throw failure;
+        })(),
+      },
+      {
+        type: "thinking",
+        deltas: (async function* () {
+          yield "异步前缀";
+          throw failure;
+        })(),
+      },
+    ]) {
+      const model = createMockModel({ handler: { content: [block] } });
+      const stream = model.stream(model, context);
+      const events = [];
+      await assert.rejects(
+        async () => {
+          for await (const event of stream) events.push(structuredClone(event));
+        },
+        (error) => error === failure,
+      );
+      await assert.rejects(stream.result(), (error) => error === failure);
+      assert.deepEqual(
+        events.map((event) => event.type),
+        ["start", `${block.type}_start`, `${block.type}_delta`],
+      );
+      assert.equal(events[2].contentIndex, 0);
+      assert.equal(events[2].delta, block.type === "text" ? "同步前缀" : "异步前缀");
+    }
+  },
+);
+
+test("fragmented tools reject incomplete JSON and every block rejects competing complete content", async () => {
+  const invalid = createMockModel({
+    handler: {
+      content: [{ type: "toolCall", name: "write", deltas: ['{"path":', '"unfinished"'] }],
+    },
+  });
+  const stream = invalid.stream(invalid, context);
+  const events = [];
+  await assert.rejects(async () => {
+    for await (const event of stream) events.push(structuredClone(event));
+  }, SyntaxError);
+  await assert.rejects(stream.result(), SyntaxError);
+  assert.deepEqual(
+    events.map((event) => event.type),
+    ["start", "toolcall_start", "toolcall_delta", "toolcall_delta"],
+  );
+  assert.equal(events.at(-1).partial.content[0].arguments, '{"path":"unfinished"');
+  for (const [field, block] of [
+    ["text", { type: "text", text: "complete", deltas: ["fragment"] }],
+    ["thinking", { type: "thinking", thinking: "complete", deltas: ["fragment"] }],
+    ["arguments", { type: "toolCall", name: "write", arguments: {}, deltas: ["{}"] }],
+  ] as const) {
+    const model = createMockModel({ handler: { content: [block] } });
+    const conflicting = model.stream(model, context);
+    const conflictEvents = [];
+    await assert.rejects(
+      async () => {
+        for await (const event of conflicting) conflictEvents.push(event.type);
+      },
+      (error: unknown) =>
+        error instanceof TypeError &&
+        error.message.includes("deltas") &&
+        error.message.includes(field),
+    );
+    await assert.rejects(
+      conflicting.result(),
+      (error: unknown) =>
+        error instanceof TypeError &&
+        error.message.includes("deltas") &&
+        error.message.includes(field),
+    );
+    assert.equal(
+      conflictEvents.some(
+        (type) => type.endsWith("_delta") || type.endsWith("_end") || type === "done",
+      ),
+      false,
+    );
   }
 });
 

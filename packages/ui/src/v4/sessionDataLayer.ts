@@ -1,10 +1,11 @@
 // SessionDataLayer（纯数据层）。
 // Map<topic, SessionStore>，不知道「显示」这回事；生命周期 = 引用计数：
-// 有 pane 引用 → 订阅；归零 → 延迟退订（keep-warm，防拖拽/切 pane 抖动）。
+// 有 pane 引用 → 订阅；归零 → 普通会话延迟退订，OMP 子代理详情立即退订以保证重开重读。
 // 一个实例对应一条 host 连接；跨 workspace 分屏在 shell 层做
 // Map<workspaceKey, SessionDataLayer>，本层不感知 workspace。
 import { ConversationProjectionStore } from "@/v4/conversationProjectionStore.js";
 import { shouldExposeE2EStoreBridge } from "@/lib/e2eStoreBridge.js";
+import { parseOmpSubagentViewIdOf } from "@/lib/ompSubagentViewId.js";
 import type { SessionOpenKind } from "@/lib/sessionOpenArmsTelemetry.js";
 import { conversationTopic, type ConversationTransport } from "@/v4/transport.js";
 import { logger } from "@/logger.js";
@@ -112,7 +113,7 @@ export class SessionDataLayer {
       release: () => {
         if (released) return;
         released = true;
-        this.releaseEntry(topic);
+        this.releaseEntry(topic, sessionId);
       },
     };
   }
@@ -127,7 +128,7 @@ export class SessionDataLayer {
     return this.transport.queryCommands(params);
   }
 
-  private releaseEntry(topic: string): void {
+  private releaseEntry(topic: string, sessionId: string): void {
     const entry = this.entries.get(topic);
     if (!entry) return;
     entry.refCount--;
@@ -142,6 +143,20 @@ export class SessionDataLayer {
       return;
     }
     // 关 pane ≠ 停 session：这里只是退订视图，session 在 CLI 里照跑。
+    // 中文原因：详情重开必须重新进入 Host acquire 观察权威源，不能复用 keep-warm 的旧成功记录。
+    // 这里只结束 UI 订阅；Host 保留同一引擎，普通传输失败仍由既有水合路径保留内容。
+    if (parseOmpSubagentViewIdOf(sessionId)) {
+      this.entries.delete(topic);
+      void entry.store.close();
+      logger.lifecycle.info("v4 session data lease released", {
+        event: "v4.session_data.release",
+        module: "ui.v4.session_data_layer",
+        refCount: 0,
+        status: "completed",
+        topic,
+      });
+      return;
+    }
     entry.keepWarmTimer = setTimeout(() => {
       this.entries.delete(topic);
       logger.lifecycle.info("v4 session data keep-warm expired", {

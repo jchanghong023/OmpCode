@@ -12,7 +12,7 @@
 - 桌面“打开方式”的编辑器探测不能在主线程同步等待外部命令；已知静态安装路径优先，命令兜底异步执行，同一次探测结果复用。
 - Agent stdio 适配器按会话串行处理有状态命令；一个会话的慢历史读取不得阻塞其他会话的命令、停止请求或实时帧。同一订阅的 ACK 必须先于该请求产生的首帧，独立会话的帧无需等待此 ACK。请求处理期间定时器产生的后续帧不得延迟到请求结束：同一 topic 的帧必须按生成顺序上线，否则客户端按断档进入恢复。
 - 冷会话目录读取应有界并按 ID 直接定位；标题只读取需要的文件头部，长会话恢复避免一次性拆分整个文件产生额外内存峰值。时间线的运行计时和单轮流式变化不得重新计算未变化的全部历史轮次。
-- 原生 `custom` 输出的持久化去重由输出 store 持有派生索引，omp JSONL 仍为历史事实源；连续输出不能逐条从头重扫整个 JSONL。重复判定必须匹配同一原生会话、`customType`、正文和原生时间戳，同类型/正文但时间不同的消息仍保留。已有文件追加后去重视图及时更新，不能把首次读取后的旧结果当永久事实；文件替换或截短时旧视图失效。
+- 原生 `custom` 的正文事实与 GUI 显示身份遵循[冷历史与身份连续性](session-recovery.md#冷历史与身份连续性)的唯一契约。输出 store 使用既有串行写链保存显示身份，append 不为判断正文是否已持久化而扫描 journal，不建立派生去重索引；连续输出不得产生逐条全量重扫 JSONL 的 I/O。唯一显示匹配由既有冷读取路径的 domain merge 负责，不能以性能优化丢弃已发布身份或吞掉同文独立事件。
 - `@` 文件引用的本地补扫与元数据访问按 workspace 复用：同一索引版本内不重复扫描同一目录，同 workspace 在途扫描只合并等待而不另起并发扫描，ignore 规则解析结果缓存至规则文件变化；规则修改或新增文件在下一次补扫仍能被发现。
 - 文件索引与 ignore 规则缓存由 Host 的 file service 实例唯一持有，按 `workspaceIdentity?.trim() || workspacePath` 隔离，同时校验实际 rootPath。不同无命中前缀复用同一轮补扫；显式刷新及规则变化仍能发起新一轮扫描，旧扫描的延迟结果不得覆盖新索引，缓存和刷新记录均有容量边界。
 - 仅 Linux 且 `isOfflineShmEnabled` 接纳 `OMP_OFFLINE` 时，文件索引使用真正有界的动态目录扫描，最多 8 路目录读取；根目录尚未枚举完成时，其他扫描槽不得因暂时无任务永久退出。扫描失败后停止接纳新目录，等待已启动读取收口再拒绝，不能留下后台写入索引的任务。非 offline（包括 Windows 设置同名变量）保留原扫描路径；排序、ignore、符号链接、workspace identity、TTL 和在途请求合并语义不变。
@@ -45,28 +45,28 @@ omp 事件 → ConversationProjection（seq、rows、pending）→ topic frame
 ```mermaid
 sequenceDiagram
   participant OMP as OMP / 原生历史所有者
-  participant Store as custom 输出 store / 派生去重索引
-  participant Derived as UI 派生 transcript
-  OMP->>OMP: 保存原生 custom_message 到 JSONL
-  OMP-->>Store: message_end（会话、类型、正文、原生时间戳）
-  Store->>OMP: 首次读历史 / 后续只读取追加范围
-  Store->>Store: 更新去重视图；替换或截短时失效重建
-  alt 同一原生记录已持久化
-    Store-->>Derived: 不另存重复显示副本
-  else 不同时间戳或原生记录尚不存在
-    Store->>Derived: 保存该输出的派生记录
-  end
-  Note over OMP,Store: 新追加记录参与下一次判定，不逐输出重扫全文件
+  participant Store as command_output store / GUI 显示身份 owner
+  participant Merge as 既有冷读取 / domain merge
+  participant UI as UI 历史投影
+  OMP->>OMP: 在事件前或事件后保存原生 custom_message 到 JSONL
+  OMP-->>Store: live 输出（原始 ID、全文、显示时间及 epoch 关联）
+  Store->>Store: 既有串行链保存显示身份；同 ID 幂等；flush 保留写入错误
+  Note over OMP,Store: append 不读取 journal 正文，不建立去重索引
+  OMP-->>Merge: 既有冷读取路径提供原生历史
+  Store-->>Merge: 新 store 读取已保存显示记录
+  Merge->>UI: 一对一消除原生重复显示，保留 GUI ID、全文及顺序
 ```
 
 ## 验收场景
+
+自动化验收使用真实 OMP 与本地模拟模型，范围及证据分层遵循[本地模拟模型契约](test-gates.md#本地模拟模型契约)；其他调用规程仅见 [E2E](e2e.md)。
 
 1. 重复的 streaming 状态不触发 workspace store 订阅者；状态、错误或 provider 变化仍通知。
 2. 同一帧多条 row.delta 的结果与逐条不可变应用一致，原快照保持不变；追加、更新、移除和状态 patch 均一致。
 3. 长文本多 chunk 后，在线 delta、运行中 snapshot、rowsRange 与完成态文本一致。
 4. 分片临界帧不越限，重组结果与原逻辑帧一致；无须分片的帧保持原格式。
 5. 缓存达到容量后淘汰旧条目，重新访问可再次生成相同结果。
-6. 桌面 GUI 用现有 omp 配置中的 `zhipu-coding-plan/glm-5.3-flash` 完成新建会话、发送消息、查看流式及完成态，并检查基本导航。
+6. 桌面 GUI 通过真实 OMP 与本地模拟模型完成新建会话、发送消息、查看流式及完成态，并检查基本导航。
 7. 打开设置页与返回工作区不丢失当前会话；打开终端仍可显示面板。
 8. GUI 打开查找框连续输入关键词，只以最终关键词显示命中和高亮；关闭后高亮清除，重新打开不沿用旧搜索。
 9. GUI 打开“选择打开方式”后能列出可用编辑器，命令探测不阻塞主窗口其它交互。
@@ -82,7 +82,7 @@ sequenceDiagram
 19. `.zcodeignore` 指纹可读、正文读取暂时失败时，当前请求可降级；恢复读取后普通查询/显式刷新或 TTL 重扫重新应用排除规则。覆盖 fallback-gitignore 与 fallback-builtin，不把降级 matcher 或索引当作有效规则版本长期保存。
 20. 首次无命中补扫后创建新文件，保留 `@` 清空并在空查询 RPC 返回前重新输入，仍开启新轮次并找到文件；旧空查询失活及 deferred query 跳过空串均不吞掉该轮补扫。
 21. 真实 GUI 的流式代码验收比较完整预期代码行及顺序，冷恢复比较同一完整结果；主题/高亮验收在产品 worker provider 下检查实际 token 和主题颜色，不能仅以修改 props、首尾文字或容器身份作为通过依据。
-22. 使用同一长 JSONL 连续保存多条原生 custom 输出，计量读取次数与字节数：首次建立去重视图后，仅追加范围被读取，不出现输出数乘全文件大小的重复 I/O。覆盖已持久化的精确重复、同类型/正文但不同时间戳、不同会话，以及首次读取后新追加的原生记录；live 与冷恢复各显示一次且不丢新消息，文件替换/截短后旧索引不能误判。与原生扩展文本输出既有语义一起验收，不以缩短历史规避测量。
+22. 使用同一长 JSONL 连续保存多条原生 custom 输出，append 不扫描 journal 正文，不出现输出数乘全文件大小的重复 I/O。经 append → flush → 新 store read → 既有 domain merge 消费，覆盖事件前后落盘、重复相同 ID、同文独立事件及不同 session epoch；live 与冷恢复保持原始 GUI ID、完整正文、时间和顺序且各显示一次。删除不复活、持久错误不被“原生正文已存在”掩盖；不以索引游标、内部命中计数自证替代消费者可见结果，不以缩短历史规避测量。身份与失败语义仅以[会话恢复](session-recovery.md#冷历史与身份连续性)为权威。
 23. Windows 本机通过注入平台与环境，对同一多层目录树验证 Linux offline 扫描能够并行且不超过 8 路、结果与原路径完整一致；关闭值及 Windows 保留原扫描路径。某目录失败时请求拒绝且没有遗留扫描；忽略目录及符号链接仍不被递归展开。使用同一受控读取延迟场景记录前后并发与耗时，不将其作为 NFS 实测。
 
 ## 边界
@@ -95,6 +95,8 @@ sequenceDiagram
 
 需求从原有权威 FORK 与对应 spec 迁入，未因当前实现降低要求。既有实现及历史验证不等于本次验收；统一证据边界见 [需求索引](README.md#实现与验证状态)。
 
+- 2026-10-18 时间线测高修复：原生 Wiki GUI 扫描展开历史时，记录到虚拟行连续测高与两次 ResizeObserver 未递送通知错误。复用 TanStack Virtual 的动画帧测高选项，将 observer 内的尺寸应用移至下一帧，避免同轮测高再改变被观察布局；不改变投影、历史内容、分页或跟随所有权。同场景真实 native GUI 诊断前后分别为 2/0 次错误，证据根为 `%TEMP%/ompcode-native-ro-OgcZoK` 与 `%TEMP%/ompcode-native-ro-n1MqW2` 的 `ro-results.json`；后轮因 Wiki 状态换行匹配失败退出，不能记为整套通过。完整验收仍以当前快照 fulltest 为准。
+
 - 2026-10-17：Windows 对同一目录树进行实际索引短冒烟，受控目录读取延迟下 offline 峰值为 8 路，Linux 关闭值及 Windows 同名变量仍为原单路；三种场景读取相同的 33 个目录，索引逐字节一致。另以八个在途目录验证首错不再接纳新目录，等待其余七个读取收口后才拒绝。仅证明调度与隔离，不是 NFS 实测。
 
-- 历史阶段的 279/279（合入原生命令前）与合并定向 48/48 保留于性能报告，不与续作结果合并。2026-10-09 核心体验续作：OMP 全集 374/374、0 跳过通过；真实双 pane 组件与重建后的真实 GLM live/stable、正常关闭后 R7 cold、项目内 mentions 均通过，完整代码比较 80 行及顺序。目标 CentOS 7 网络盘、原生失焦/IME、真实 Web GUI 与附件上传仍未由上述结果覆盖。完整门禁与两平台发布单独验证，不以定向通过代替；详见 [核心体验续作验收](../test-reports/performance-hot-paths-2026-10-09.md#核心体验续作验收)。
+- 历史阶段的 279/279（合入原生命令前）与合并定向 48/48 保留于性能报告，不与续作结果合并。2026-10-09 核心体验续作：OMP 全集 374/374、0 跳过通过；真实双 pane 组件与重建后的历史会话 live/stable、正常关闭后 R7 cold、项目内 mentions 均通过，完整代码比较 80 行及顺序。目标 CentOS 7 网络盘、原生失焦/IME、真实 Web GUI 与附件上传仍未由上述结果覆盖。完整门禁与两平台发布单独验证，不以定向通过代替；详见 [核心体验续作验收](../test-reports/performance-hot-paths-2026-10-09.md#核心体验续作验收)。

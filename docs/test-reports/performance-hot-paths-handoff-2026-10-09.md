@@ -61,7 +61,7 @@
 | 来源失败恢复                        | receipt 接线已落盘；A 提交→离开 A→失败→返回 A，以及 A→B→A 后新编辑保护，尚未完成真实 hook GUI 复验。                                                                                                                           |
 | 首次临时 ID→UUID 恢复               | Host/shared/SQLite 单测已通过，窗口级 live 与冷元信息入口已经接线；首次真实创建、UUID 切回和冷启动仍未通过本轮产品 GUI 复验。不能仅靠稳定 UUID 场景替代。                                                                      |
 | 窗口级迁移入口                      | 根代理新增 `useComposerDraftMigrationEvents.tsx`，正确订阅 `zcodeTaskService.onDynamicWorkspaceEvent`；query cache 在接纳后只发布有 migration 的元信息，绑定时读一次已有缓存，无额外 RPC。尚缺入口级自动化验证和独立最终复核。 |
-| 完整代码验收                        | 80 行逐行比较及冷恢复同数组断言已加入脚本，尚未执行本轮真实模型 GUI；此前首尾/完成标记不能当全文通过。                                                                                                                         |
+| 完整代码验收                        | 80 行逐行比较及冷恢复同数组断言已加入脚本，尚未执行本轮完整会话 GUI；此前首尾/完成标记不能当全文通过。                                                                                                                         |
 | 合并后整体验证                      | 合并后静态检查与 48 项定向核心测试通过，但尚未重跑合并后的全部核心/性能 GUI，desktop 与 adapter 构建产物仍是合并前的版本，须重建后再启动验收。                                                                                 |
 
 owner 复核期间已修正的最小反例包括：迁移时未完成 receipt 保活、目标胜出时来源备份、pending 期间来源新编辑保护、跨 owner 配置 revision 通知、lease cleanup/setup 重登记、Storage 失败保留来源。复核代理运行的 6 项隔离反例通过，但这些不能替代持久 UT 和真实 hook 验收。
@@ -106,7 +106,7 @@ GUI 测试已包含真实 hook fixture 与断言：`packages/desktop/test/ompPer
 
 完整 `prepare:agent-bundle` 曾因其他进程占用 bundled omp.exe 返回 EBUSY，不能关闭用户进程来覆盖。可以重建 desktop tsup、执行 `packages/omp-agent/scripts/bundle.mjs`，再调用现有 `stageAgentBundle` 仅暂存 JS bundle。合并后尚未重建。
 
-隔离 GUI 使用新数据根与专用端口，不连接日常实例；启动前避免外部 `OMP_CONFIG_ROOT` 将测试导向用户数据。模型使用既有 `zhipu-coding-plan/glm-5.3-flash`，不改用户模型角色、凭据或配置。真实原生命令五项 E2E 为显式 opt-in：`OMP_NATIVE_E2E=1`；未启用的跳过不能算通过。
+隔离 GUI 使用新数据根与专用端口，不连接日常实例；启动前避免外部 `OMP_CONFIG_ROOT` 将测试导向用户数据。当前自动化使用真实 OMP 与本地模拟模型，外部调用规程仅见 [e2e.md](../requirements/e2e.md)。下列历史结果不改写为当前模拟模型的通过结果；当时未启用的原生命令场景不能算通过。
 
 证据与报告：
 
@@ -129,7 +129,7 @@ GUI 测试已包含真实 hook fixture 与断言：`packages/desktop/test/ompPer
 
 原分支已完整合入，不再重复合并。共享最新 reader 富 JSON、目标显式配置合并、Lexical 非当前 pane 选区保护以及 legacy Zod 导入修复已落地；真实双 hook/组件通过，覆盖原交接中的 pending、附件引用、来源失败、A→B→A、配置-only、窗口事件和已有缓存晚绑定场景。
 
-OMP 全集最新复验为 374/374、0 失败/跳过。desktop 与 adapter 已重建；最终真实模型 live/stable、R7 正常退出后 cold、项目内 mentions 均通过，完整 80 行比较不再只看首尾或完成标记。mentions 的首个失败已确认为测试误建无项目任务，现走沙箱项目侧栏入口并通过原断言。
+OMP 全集最新历史复验为 374/374、0 失败/跳过。desktop 与 adapter 已重建；最终历史会话 live/stable、R7 正常退出后 cold、项目内 mentions 均通过，完整 80 行比较不再只看首尾或完成标记。mentions 的首个失败已确认为测试误建无项目任务，现走沙箱项目侧栏入口并通过原断言。
 
 最终证据与适用边界见 [核心体验续作验收](performance-hot-paths-2026-10-09.md#核心体验续作验收)。用户已明确授权当前全部改动提交/推送、完整 slowtest 与 Windows/CentOS 7 正式发布；正式门禁及发布不由上述定向结果推断，实际结果记录于仓库外 `authorized-slowtest-*.log`。
 

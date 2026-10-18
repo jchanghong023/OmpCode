@@ -169,8 +169,8 @@ export interface ZCodeTaskIndexSyncer {
    * 手机 host command queue 只能以这个事件作为继续发送下一条的边界。
    */
   onSessionReadyEvent: Event<ZCodeTaskIndexReadyEvent>;
-  /** 释放所有 v4 订阅和 workspace emitter；不关闭注入的 taskIndexRepo。 */
-  disposeAll(): void;
+  /** 释放所有 v4 订阅和 workspace emitter；等待 unsubscribe，不关闭注入的 taskIndexRepo。 */
+  disposeAll(): Promise<void>;
 }
 
 interface CreateZCodeTaskIndexSyncerOptions {
@@ -349,6 +349,7 @@ export function createZCodeTaskIndexSyncer(
   const terminalEventEmitter = new Emitter<ZCodeTaskIndexTerminalEvent>();
   const readyEventEmitter = new Emitter<ZCodeTaskIndexReadyEvent>();
   let disposed = false;
+  let disposePromise: Promise<void> | undefined;
 
   const indexTopicFor = (state: WorkspaceIngestState) =>
     sessionsIndexTopic(resolveWorkspaceKey(state.target));
@@ -484,13 +485,15 @@ export function createZCodeTaskIndexSyncer(
       );
     }
   };
-  const clearActiveSubscriptions = (state: WorkspaceIngestState): void => {
+  const clearActiveSubscriptions = (state: WorkspaceIngestState): Promise<void> => {
     const indexSubscriptionId = state.indexSubscriptionId;
     const configSubscriptionId = state.configSubscriptionId;
     state.indexSubscriptionId = null;
     state.configSubscriptionId = null;
-    if (indexSubscriptionId) void unsubscribeIndex(state, indexSubscriptionId);
-    if (configSubscriptionId) void unsubscribeConfig(state, configSubscriptionId);
+    return Promise.all([
+      ...(indexSubscriptionId ? [unsubscribeIndex(state, indexSubscriptionId)] : []),
+      ...(configSubscriptionId ? [unsubscribeConfig(state, configSubscriptionId)] : []),
+    ]).then(() => {});
   };
 
   function getWorkspaceEmitter(workspace: WorkspaceEventInput): Emitter<ZCodeWorkspaceEvent> {
@@ -2058,8 +2061,10 @@ export function createZCodeTaskIndexSyncer(
 
     onSessionReadyEvent: readyEventEmitter.event,
 
-    disposeAll(): void {
+    disposeAll(): Promise<void> {
+      if (disposePromise) return disposePromise;
       disposed = true;
+      const subscriptionReleases: Promise<void>[] = [];
       for (const state of workspaceIngests.values()) {
         state.indexSubscriptionGeneration += 1;
         state.configSubscriptionGeneration += 1;
@@ -2072,7 +2077,7 @@ export function createZCodeTaskIndexSyncer(
         discardIndexRecovery(state);
         discardConfigRecovery(state);
         clearPendingState(state);
-        clearActiveSubscriptions(state);
+        subscriptionReleases.push(clearActiveSubscriptions(state));
         for (const disposable of state.disposables) {
           try {
             disposable.dispose();
@@ -2093,6 +2098,9 @@ export function createZCodeTaskIndexSyncer(
       availableRuntimeGenerationByWorkspaceKey.clear();
       taskIdAliases.clear();
       confirmedTaskIdMigrations.clear();
+      // 根因：只发起 unsubscribe 就关闭客户端，会把正常清理变成 disposed 失败。
+      disposePromise = Promise.all(subscriptionReleases).then(() => {});
+      return disposePromise;
     },
   };
 }

@@ -1,440 +1,280 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { test, type TestContext } from "node:test";
+import { test } from "node:test";
+import { z } from "zod";
 import {
-  V4_METHODS,
   commandAckSchema,
-  conversationSnapshotSchema,
+  conversationTopicFrameSchema,
   conversationTopicWireFrameSchema,
+  sessionsIndexTopicFrameSchema,
   sessionsIndexTopicWireFrameSchema,
-  subscribeAckSchema,
+  TopicWireFrameAssembler,
+  v4ConversationSubscribeResultSchema,
   type ConversationRow,
-  type SessionSummary,
+  v4ConversationRowsRangeResultSchema,
 } from "@zcode/shared/zcode-protocol-v4";
 import { createOmpStore } from "../src/adapters/ompStore.js";
-import { encodeSessionDirName, sessionsRoot } from "../src/adapters/ompSessionPaths.js";
-import { ServerApp } from "../src/app/serverApp.js";
-import type { OmpProcessFactory } from "../src/app/ports.js";
-import { createDirectoryStub } from "./fixtures/directoryStub.js";
+import {
+  realOmpSkip,
+  startRealOmpHarness,
+  type RealOmpHarness,
+} from "./fixtures/realOmpHarness.js";
 
-const stableId = "01a0d66e-1891-7035-ab59-f8e5f0a33703";
-const nativeText = "No active goal.";
-const normalText = "Read the saved objective and answer normally";
-const modelText = "The saved objective is available in this session.";
+const workspaceId = "real-e2e-workspace";
+const normalText = "NATIVE_FIRST_NORMAL_INPUT";
+const modelText = "NATIVE_FIRST_MODEL_HISTORY";
+const continuedText = "NATIVE_FIRST_COLD_CONTINUATION";
+const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
 
-function deferred() {
-  let resolve!: () => void;
-  const promise = new Promise<void>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
-}
-
-async function fixture(context: TestContext, allocatedAtStart: boolean) {
-  const root = await mkdtemp(join(tmpdir(), "omp-native-first-identity-"));
-  const workspacePath = join(root, "workspace");
-  const env = { OMP_CONFIG_ROOT: join(root, "omp") };
-  await mkdir(workspacePath);
-  const journalDirectory = join(sessionsRoot(env), await encodeSessionDirName(workspacePath, env));
-  await mkdir(journalDirectory, { recursive: true });
-  const journalPath = join(journalDirectory, `2026-10-08T00-00-00-000Z_${stableId}.jsonl`);
-  const workspaceKey = `local:${root}`;
-  const frames: unknown[] = [];
-  const prompts: string[] = [];
-  const processes: Array<{ resumed: string | undefined; disposed: boolean }> = [];
-  const firstFinished = deferred();
-  const releaseFirstAck = deferred();
-  const facts = { journalWritten: false };
-  const apps: ServerApp[] = [];
-  context.mock.timers.enable({ apis: ["setTimeout", "Date"], now: 1_800_000_000_000 });
-  context.after(async () => {
-    releaseFirstAck.resolve();
-    await Promise.all(apps.map((app) => app.dispose()));
-    await rm(root, { recursive: true, force: true });
-  });
-
-  function createApp() {
-    const store = createOmpStore(env);
-    const ompFactory: OmpProcessFactory = {
-      create(options) {
-        const process = { resumed: options.resumeSessionPath, disposed: false };
-        processes.push(process);
-        let sessionFile = options.resumeSessionPath ?? (allocatedAtStart ? journalPath : null);
-        return {
-          get ompSessionFile() {
-            return sessionFile;
-          },
-          async start() {},
-          async refreshState() {
-            return null;
-          },
-          async readContextReport() {
-            return null;
-          },
-          respondUi() {},
-          async dispose() {
-            process.disposed = true;
-          },
-          async send(command) {
-            if (command.type !== "prompt") return { success: true, data: {} };
-            prompts.push(command.message);
-            const first = prompts.length === 1;
-            const native = command.message === "/goal show";
-            if (native) {
-              // Native commands emit output without creating a model journal or invoking an agent.
-              options.onCommandOutput?.({ text: nativeText });
-              options.onPromptResult?.({
-                type: "prompt_result",
-                agentInvoked: false,
-                status: "completed",
-              });
-            } else {
-              sessionFile = journalPath;
-              const entries = [
-                { type: "session", id: stableId, cwd: workspacePath },
-                {
-                  type: "message",
-                  id: "saved-user",
-                  message: { role: "user", content: command.message, timestamp: 1_800_000_000_100 },
-                },
-                {
-                  type: "message",
-                  id: "saved-assistant",
-                  message: {
-                    role: "assistant",
-                    content: [{ type: "text", text: modelText }],
-                    timestamp: 1_800_000_000_200,
-                  },
-                },
-              ];
-              await writeFile(
-                journalPath,
-                entries.map((entry) => JSON.stringify(entry)).join("\n") + "\n",
-              );
-              facts.journalWritten = true;
-              // Mirror the core event sequence, not an echo of the submitted text.
-              options.onEvent({ type: "agent_start" });
-              options.onEvent({
-                type: "message_start",
-                message: { role: "assistant", content: [] },
-              });
-              options.onEvent({
-                type: "message_update",
-                message: { role: "assistant", content: [] },
-                assistantMessageEvent: {
-                  type: "text_delta",
-                  contentIndex: 0,
-                  delta: modelText,
-                  partial: { role: "assistant", content: [] },
-                },
-              });
-              options.onEvent({
-                type: "message_end",
-                message: { role: "assistant", content: [{ type: "text", text: modelText }] },
-              });
-              options.onEvent({ type: "agent_end", messages: [], isTerminal: true });
-            }
-            if (first) {
-              firstFinished.resolve();
-              // Hold the command ACK while the completed turn reaches the real index publisher.
-              await releaseFirstAck.promise;
-            }
-            return { success: true, data: { agentInvoked: !native } };
-          },
-        };
-      },
-    };
-    const app = new ServerApp({
-      workspacePath,
-      workspaceKey,
-      workspaceIdentity: workspaceKey,
-      store,
-      ompFactory,
-      directory: createDirectoryStub(),
-      loadWorkspaceConfig: async () => ({ configOptions: [], slashCommands: [] }),
-      loadWorkspaceSkillCommands: async () => [],
-      gateway: {
-        emitFrame: (frame) => frames.push(frame),
-        requestUserInput: async () => ({ action: "cancel" }),
-      },
-    });
-    apps.push(app);
-    return { app, store };
-  }
-
-  return {
-    createApp,
-    frames,
-    processes,
-    prompts,
-    workspaceKey,
-    journalPath,
-    firstFinished: firstFinished.promise,
-    releaseFirstAck: releaseFirstAck.resolve,
-    facts,
-    flush: () => {
-      // Advance both production batching windows without sleeps or private-state mutation.
-      context.mock.timers.tick(30);
-      context.mock.timers.tick(500);
-    },
-  };
-}
-
-function indexState(frames: unknown[], topic: string) {
-  const sessions = new Map<string, SessionSummary>();
-  for (const raw of frames) {
-    const parsed = sessionsIndexTopicWireFrameSchema.safeParse(raw);
-    if (!parsed.success || parsed.data.topic !== topic) continue;
-    const wire = parsed.data;
-    assert.equal(wire.kind, "complete", "small fixture index frames must be complete");
-    if (wire.kind !== "complete") throw new Error("expected complete index frame");
-    const payload = wire.frame.payload;
-    if (payload.kind === "snapshot") {
-      sessions.clear();
-      for (const session of payload.snapshot.sessions) sessions.set(session.sessionId, session);
-    } else {
-      for (const delta of payload.deltas) {
-        if (delta.op === "session.upserted") sessions.set(delta.session.sessionId, delta.session);
-        if (delta.op === "session.removed") sessions.delete(delta.sessionId);
+function indexSessionIds(harness: RealOmpHarness) {
+  const assembler = new TopicWireFrameAssembler(sessionsIndexTopicFrameSchema);
+  const ids = new Set<string>();
+  for (const frame of harness.frames) {
+    if (frame.method !== "v4/conversation/frame") continue;
+    const wire = sessionsIndexTopicWireFrameSchema.safeParse(frame.params);
+    if (!wire.success || wire.data.topic !== `sessions-index/${workspaceId}`) continue;
+    for (const event of assembler.accept(wire.data)) {
+      if (event.kind === "fault") assert.fail(JSON.stringify(event.fault));
+      const payload = event.frame.payload;
+      if (payload.kind === "snapshot") {
+        ids.clear();
+        for (const session of payload.snapshot.sessions) ids.add(session.sessionId);
+      } else {
+        for (const delta of payload.deltas) {
+          if (delta.op === "session.upserted") ids.add(delta.session.sessionId);
+          if (delta.op === "session.removed") ids.delete(delta.sessionId);
+        }
       }
     }
   }
-  return sessions;
+  return [...ids];
 }
 
-async function subscribe(
-  app: ServerApp,
-  frames: unknown[],
+function envelope(sessionId: string | null, commandId: string, type: string, payload: unknown) {
+  return {
+    sessionId,
+    commandId,
+    clientId: "native-first-identity",
+    issuedAt: Date.now(),
+    type,
+    payload,
+  };
+}
+
+async function snapshot(
+  harness: RealOmpHarness,
   sessionId: string,
-  mode: "desktop-continuous" | "web-remote-replayable",
+  clientMode: "desktop-continuous" | "web-remote-replayable",
 ) {
-  const start = frames.length;
-  const result = (await app.handleRequest(V4_METHODS.conversationSubscribe, {
-    topic: `conversation/${sessionId}`,
-    connectionId: `${mode}:${sessionId}`,
-    clientMode: mode,
-  })) as { ack: unknown };
-  const ack = subscribeAckSchema.parse(result.ack);
-  const wire = frames
-    .slice(start)
-    .map((frame) => conversationTopicWireFrameSchema.safeParse(frame))
-    .find((parsed) => parsed.success && parsed.data.subscriptionId === ack.subscriptionId);
-  assert.ok(wire?.success, "ACK subscription must actually deliver a conversation frame");
-  if (!wire?.success || wire.data.kind !== "complete")
-    throw new Error("expected complete conversation snapshot");
-  assert.equal(wire.data.topic, `conversation/${sessionId}`);
-  assert.equal(wire.data.frame.payload.kind, "snapshot");
-  if (wire.data.frame.payload.kind !== "snapshot") throw new Error("expected snapshot payload");
-  const snapshot = conversationSnapshotSchema.parse(wire.data.frame.payload.snapshot);
-  assert.equal(snapshot.sessionId, sessionId);
-  return { ack, snapshot };
+  const result = v4ConversationSubscribeResultSchema.parse(
+    await harness.request("v4/conversation/subscribe", {
+      topic: `conversation/${sessionId}`,
+      connectionId: `identity-${clientMode}-${sessionId}`,
+      clientMode,
+    }),
+  );
+  return harness.waitUntil(() => {
+    const assembler = new TopicWireFrameAssembler(conversationTopicFrameSchema);
+    for (const frame of harness.frames) {
+      if (frame.method !== "v4/conversation/frame") continue;
+      const parsed = conversationTopicWireFrameSchema.safeParse(frame.params);
+      if (!parsed.success || parsed.data.subscriptionId !== result.ack.subscriptionId) continue;
+      assert.equal(parsed.data.topic, `conversation/${sessionId}`);
+      for (const event of assembler.accept(parsed.data)) {
+        if (event.kind === "fault") assert.fail(JSON.stringify(event.fault));
+        if (event.frame.payload.kind === "snapshot") {
+          assert.equal(event.frame.payload.snapshot.sessionId, sessionId);
+          return event.frame.payload.snapshot;
+        }
+      }
+    }
+    return undefined;
+  });
 }
 
-function assertHistory(rows: ConversationRow[], nativeFirst: boolean) {
+async function terminal(harness: RealOmpHarness, sessionId: string, commandId: string) {
+  const row = await harness.waitUntil(() =>
+    [...harness.rows(sessionId).values()].find(
+      (row) =>
+        row.kind === "turnHeader" &&
+        row.sourceCommandId === commandId &&
+        ["completedSuccess", "completedInterrupted", "failed"].includes(String(row.state)),
+    ),
+  );
+  assert.equal(row.state, "completedSuccess", JSON.stringify(row));
+}
+
+function assertHistory(rows: ConversationRow[], nativeText: string) {
   const texts = rows.filter((row) => row.kind === "assistantText").map((row) => row.text);
   assert.equal(
-    texts.filter((text) => text === modelText).length,
+    texts.filter((text) => text === nativeText).length,
     1,
-    "model history survives exactly once",
+    "native output survives once",
   );
-  assert.equal(texts.filter((text) => text === nativeText).length, nativeFirst ? 1 : 0);
+  assert.equal(texts.filter((text) => text === modelText).length, 1, "model history survives once");
+  assert.equal(rows.filter((row) => row.kind === "userInput" && row.text === normalText).length, 1);
 }
 
-for (const scenario of [
-  "native-allocated-path",
-  "native-late-path",
-  "draft-native-first",
-  "ordinary-first",
-] as const) {
-  test(`native-first identity: ${scenario} converges ACK, live and cold consumers`, async (context) => {
-    const nativeFirst = scenario !== "ordinary-first";
-    const draftFirst = scenario === "draft-native-first";
-    const f = await fixture(context, scenario !== "native-late-path");
-    const { app, store } = f.createApp();
-    const indexTopic = `sessions-index/${f.workspaceKey}`;
-    await app.handleRequest(V4_METHODS.conversationSubscribe, {
-      topic: indexTopic,
-      connectionId: "index-before-create",
-    });
-    const request = {
-      type: "createSession",
-      sessionId: null,
-      commandId: "create-first-input",
-      clientId: "identity-client",
-      issuedAt: 1,
-      payload: {
-        workspaceId: f.workspaceKey,
-        ...(draftFirst ? {} : { firstInput: { text: nativeFirst ? "/goal show" : normalText } }),
-      },
-    };
-    let draftId: string | undefined;
-    let draftAck: unknown;
-    const nativeRequest = {
-      type: "sendText",
-      sessionId: "",
-      commandId: "native-after-prewarm",
-      clientId: "identity-client",
-      issuedAt: 2,
-      payload: { text: "/goal show" },
-    };
-    if (draftFirst) {
-      draftAck = await app.handleRequest(V4_METHODS.command, request);
-      const created = commandAckSchema.parse(draftAck);
-      assert.equal(created.status, "accepted");
-      if (created.result?.type !== "createSession") throw new Error("expected draft create result");
-      draftId = created.result.sessionId;
-      nativeRequest.sessionId = draftId;
-      const draft = await subscribe(app, f.frames, draftId, "desktop-continuous");
-      assert.equal(draft.snapshot.control.phase, "draft");
-      assert.equal(f.processes.length, 0, "prewarm remains lazy");
-      assert.equal(indexState(f.frames, indexTopic).size, 0, "draft is not a sidebar item");
-    }
-    let firstAckReceived = false;
-    const pendingFirst = app
-      .handleRequest(V4_METHODS.command, draftFirst ? nativeRequest : request)
-      .then((ack) => {
-        firstAckReceived = true;
-        return ack;
-      });
-    await f.firstFinished;
-    f.flush();
-    assert.equal(firstAckReceived, false, "terminal index delivery precedes the first input ACK");
-    assert.equal(
-      f.facts.journalWritten,
-      !nativeFirst,
-      "native completion must not invent a model journal",
-    );
-    const beforeAck = indexState(f.frames, indexTopic);
-    assert.equal(beforeAck.size, 1, "completed first input is indexed before its command ACK");
-    assert.equal([...beforeAck.values()][0]?.phase, "completedSuccess");
-    const indexedBeforeAck = [...beforeAck.keys()][0]!;
-    if (scenario !== "native-late-path") assert.equal(indexedBeforeAck, stableId);
-    else assert.match(indexedBeforeAck, /^omp-session-/);
+for (const draftFirst of [false, true]) {
+  test(
+    `real native-first identity: ${draftFirst ? "draft first send" : "create firstInput"} survives same-root restart`,
+    { skip: realOmpSkip },
+    async () => {
+      const root = await mkdtemp(join(tmpdir(), "omp-native-first-identity-"));
+      let harness: RealOmpHarness | undefined;
+      try {
+        harness = await startRealOmpHarness({ root, responses: [{ content: [modelText] }] });
+        await harness.request("v4/conversation/subscribe", {
+          topic: `sessions-index/${workspaceId}`,
+          connectionId: "native-first-index",
+          clientMode: "desktop-continuous",
+        });
+        const createRequest = envelope(null, "create-first-input", "createSession", {
+          workspaceId,
+          ...(draftFirst ? {} : { firstInput: { text: "/goal show" } }),
+        });
+        const createAck = commandAckSchema.parse(
+          await harness.request("v4/command", createRequest),
+        );
+        assert.equal(createAck.status, "accepted");
+        assert.equal(createAck.result?.type, "createSession");
+        const firstId = z
+          .object({ sessionId: z.string().min(1) })
+          .parse(createAck.result).sessionId;
+        let nativeCommandId = "create-first-input";
+        if (draftFirst) {
+          const draft = await snapshot(harness, firstId, "desktop-continuous");
+          assert.equal(draft.control.phase, "draft");
+          const listed = z
+            .object({ sessions: z.array(z.unknown()) })
+            .parse(await harness.request("session/list", {}));
+          assert.equal(listed.sessions.length, 0, "prewarmed draft is not a persisted task");
+          nativeCommandId = "native-after-prewarm";
+          const ack = commandAckSchema.parse(
+            await harness.request(
+              "v4/command",
+              envelope(firstId, nativeCommandId, "sendText", { text: "/goal show" }),
+            ),
+          );
+          assert.equal(ack.status, "accepted");
+        }
+        await harness.subscribe(firstId);
+        await terminal(harness, firstId, nativeCommandId);
+        const nativeRows = [...harness.rows(firstId).values()];
+        const nativeTexts = nativeRows.filter((row) => row.kind === "assistantText");
+        assert.equal(nativeTexts.length, 1, "the native command has one visible output");
+        const nativeText = String(nativeTexts[0]!.text ?? "");
+        assert.ok(nativeText.trim(), "the real native command must produce visible output");
+        assert.equal(harness.mock.calls.length, 0, "native first input does not invoke a model");
+        assert.deepEqual(await harness.request("v4/command", createRequest), createAck);
 
-    f.releaseFirstAck();
-    const firstAck = commandAckSchema.parse(await pendingFirst);
-    assert.equal(firstAck.status, "accepted");
-    let ackId: string;
-    if (draftFirst) {
-      assert.equal(firstAck.result?.type, "inputAccepted");
-      ackId = draftId!;
-      assert.deepEqual(await app.handleRequest(V4_METHODS.command, request), draftAck);
-      assert.deepEqual(await app.handleRequest(V4_METHODS.command, nativeRequest), firstAck);
-    } else {
-      if (firstAck.result?.type !== "createSession")
-        throw new Error("expected createSession result");
-      ackId = firstAck.result.sessionId;
-      // A host inserts its newly created task by this ID: returning a removed temporary ID
-      // resurrects a duplicate sidebar row even though the index itself has only one row.
-      assert.equal(
-        ackId,
-        indexedBeforeAck,
-        "create ACK must name the settled, visible index identity",
-      );
-      assert.deepEqual(
-        await app.handleRequest(V4_METHODS.command, request),
-        firstAck,
-        "retry reuses the same ACK",
-      );
-    }
-    const owner = app.registry.requireEngine(ackId);
-    const initial = await subscribe(app, f.frames, ackId, "desktop-continuous");
-    assert.equal(initial.snapshot.control.phase, "completedSuccess");
-    if (nativeFirst) {
-      assert.ok(
-        initial.snapshot.rows.window.some(
-          (row) => row.kind === "assistantText" && row.text === nativeText,
-        ),
-      );
-      const sent = commandAckSchema.parse(
-        await app.handleRequest(V4_METHODS.command, {
-          type: "sendText",
-          sessionId: ackId,
-          commandId: "ordinary-after-native",
-          clientId: "identity-client",
-          issuedAt: 2,
-          payload: { text: normalText },
-        }),
-      );
-      assert.equal(sent.status, "accepted");
-      assert.equal(sent.result?.type, "inputAccepted");
-    }
-    f.flush();
-    await store.flushCommandOutputs!();
-    await app.registry.onProjectSessionsChanged();
-    f.flush();
-    assert.deepEqual([...indexState(f.frames, indexTopic).keys()], [stableId]);
-    assert.deepEqual(
-      (await store.listSessions(owner.workspacePath)).map((session) => session.sessionId),
-      [stableId],
-    );
-    assert.deepEqual(
-      (await app.registry.listLegacySessions(owner.workspacePath, f.workspaceKey)).map(
-        (session) => session.sessionId,
-      ),
-      [stableId],
-    );
-    assert.equal(app.registry.requireEngine(stableId), owner);
-    assert.equal(app.registry.requireEngine(ackId), owner);
-    const stable = await subscribe(app, f.frames, stableId, "web-remote-replayable");
-    assertHistory(stable.snapshot.rows.window, nativeFirst);
-    await app.handleRequest(V4_METHODS.conversationResync, {
-      topic: `conversation/${ackId}`,
-      subscriptionId: initial.ack.subscriptionId,
-      forceSnapshot: true,
-    });
-    const recovered = conversationTopicWireFrameSchema.parse(f.frames.at(-1));
-    assert.equal(
-      recovered.topic,
-      `conversation/${ackId}`,
-      "original Desktop subscription remains usable after migration",
-    );
-    assert.equal(recovered.deliveryKind, "recovery");
-    if (recovered.kind !== "complete" || recovered.frame.payload.kind !== "snapshot")
-      throw new Error("expected recovery snapshot");
-    assertHistory(recovered.frame.payload.snapshot.rows.window, nativeFirst);
-    const page = (await app.handleRequest(V4_METHODS.conversationRowsRange, {
-      sessionId: ackId,
-      limit: 100,
-    })) as { rows: ConversationRow[] };
-    assertHistory(page.rows, nativeFirst);
-    assert.equal(
-      f.processes.length,
-      1,
-      "ACK, stable ID and both delivery modes share one process owner",
-    );
-    assert.deepEqual(f.prompts, nativeFirst ? ["/goal show", normalText] : [normalText]);
+        // prompt_result/terminal is not the asynchronous session_info identity barrier.
+        // Observe the public index's canonical UUID before comparing legacy consumers.
+        const active = harness;
+        const stableId = await active.waitUntil(() => {
+          const ids = indexSessionIds(active);
+          return ids.length === 1 && uuidPattern.test(ids[0]!) ? ids[0] : undefined;
+        });
+        const listed = z
+          .object({ sessions: z.array(z.object({ sessionId: z.string() })) })
+          .parse(await harness.request("session/list", {}));
+        assert.equal(listed.sessions.length, 1, "native completion has one visible identity");
+        assert.equal(listed.sessions[0]!.sessionId, stableId);
+        if (!draftFirst) assert.equal(firstId, stableId, "firstInput ACK names the settled UUID");
 
-    await app.dispose();
-    assert.equal(f.processes[0]?.disposed, true);
-    const cold = f.createApp();
-    const restored = await Promise.all([
-      subscribe(cold.app, f.frames, ackId, "desktop-continuous"),
-      subscribe(cold.app, f.frames, stableId, "web-remote-replayable"),
-    ]);
-    for (const result of restored) assertHistory(result.snapshot.rows.window, nativeFirst);
-    const coldOwner = cold.app.registry.requireEngine(stableId);
-    assert.equal(cold.app.registry.requireEngine(ackId), coldOwner);
-    await coldOwner.ensureOmpStarted();
-    assert.equal(
-      f.processes.length,
-      2,
-      "cold alias and canonical subscriptions create only one new process",
-    );
-    assert.equal(f.processes[1]?.resumed, f.journalPath);
-    assert.equal(f.processes.filter((process) => !process.disposed).length, 1);
-    await cold.app.handleRequest(V4_METHODS.conversationSubscribe, {
-      topic: indexTopic,
-      connectionId: "cold-index",
-    });
-    await cold.app.registry.onProjectSessionsChanged();
-    assert.deepEqual([...indexState(f.frames, indexTopic).keys()], [stableId]);
-    assert.deepEqual(
-      f.prompts,
-      nativeFirst ? ["/goal show", normalText] : [normalText],
-      "cold recovery never replays inputs",
-    );
-  });
+        const sent = commandAckSchema.parse(
+          await harness.request(
+            "v4/command",
+            envelope(firstId, "ordinary-after-native", "sendText", { text: normalText }),
+          ),
+        );
+        assert.equal(
+          sent.status,
+          "accepted",
+          "ordinary input accepts the original creation identity",
+        );
+        await terminal(harness, firstId, "ordinary-after-native");
+        for (const mode of ["desktop-continuous", "web-remote-replayable"] as const) {
+          const live = await snapshot(harness, stableId, mode);
+          assertHistory(live.rows.window, nativeText);
+        }
+        const page = v4ConversationRowsRangeResultSchema.parse(
+          await harness.request("v4/conversation/rowsRange", { sessionId: firstId, limit: 100 }),
+        );
+        assertHistory(page.rows, nativeText);
+        assert.equal(harness.mock.calls.length, 1);
+        const workspace = harness.workspace;
+        await harness.close();
+        harness = undefined;
+
+        // Inspect records written by the real core, never manufacture a session ID or journal.
+        const stored = await createOmpStore({ OMP_CONFIG_ROOT: join(root, "omp") }).listSessions(
+          workspace,
+        );
+        assert.deepEqual(
+          stored.map((session) => session.sessionId),
+          [stableId],
+        );
+        const journal = (await readFile(stored[0]!.sessionPath, "utf8"))
+          .trim()
+          .split("\n")
+          .map((line) =>
+            z.looseObject({ type: z.string(), id: z.string().optional() }).parse(JSON.parse(line)),
+          );
+        assert.ok(journal.some((entry) => entry.type === "session" && entry.id === stableId));
+
+        harness = await startRealOmpHarness({ root, responses: [{ content: [continuedText] }] });
+        const recovered = await Promise.all([
+          snapshot(harness, stableId, "desktop-continuous"),
+          snapshot(harness, stableId, "web-remote-replayable"),
+        ]);
+        for (const restored of recovered) assertHistory(restored.rows.window, nativeText);
+        const coldList = z
+          .object({ sessions: z.array(z.object({ sessionId: z.string() })) })
+          .parse(await harness.request("session/list", {}));
+        assert.deepEqual(
+          coldList.sessions.map((session) => session.sessionId),
+          [stableId],
+        );
+        assert.equal(harness.mock.calls.length, 0, "cold recovery never replays the first inputs");
+        const resumed = commandAckSchema.parse(
+          await harness.request(
+            "v4/command",
+            envelope(stableId, "cold-continue", "sendText", {
+              text: "Continue the saved conversation.",
+            }),
+          ),
+        );
+        assert.equal(resumed.status, "accepted");
+        await terminal(harness, stableId, "cold-continue");
+        assert.ok(
+          [...harness.rows(stableId).values()].some(
+            (row) => row.kind === "assistantText" && row.text === continuedText,
+          ),
+        );
+        assert.equal(harness.mock.calls.length, 1);
+        const context = JSON.stringify(harness.mock.calls[0].context.messages);
+        assert.ok(context.includes(normalText), "resumed core receives the persisted user history");
+        assert.ok(
+          context.includes(modelText),
+          "resumed core receives its persisted assistant history",
+        );
+        const finalList = z
+          .object({ sessions: z.array(z.object({ sessionId: z.string() })) })
+          .parse(await harness.request("session/list", {}));
+        assert.deepEqual(
+          finalList.sessions.map((session) => session.sessionId),
+          [stableId],
+        );
+      } finally {
+        try {
+          await harness?.close();
+        } finally {
+          await rm(root, { recursive: true, force: true });
+        }
+      }
+    },
+  );
 }

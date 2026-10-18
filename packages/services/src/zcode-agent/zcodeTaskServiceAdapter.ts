@@ -1704,6 +1704,7 @@ export function createZCodeTaskServiceAdapter(
   }
 
   let disposed = false;
+  let disposePromise: Promise<void> | undefined;
 
   function handleTaskIndexTerminalEvent(event: ZCodeTaskIndexTerminalEvent): void {
     const params: TaskTarget = {
@@ -3248,29 +3249,25 @@ export function createZCodeTaskServiceAdapter(
     onError: errorEmitter.event,
 
     disposeAll(): void {
-      if (disposed) {
-        return;
-      }
-      disposed = true;
-      memoryDiagnostics.dispose();
-      // syncer 持有 agentService 的 v4 帧订阅（sessions-index/workspace-config），
-      // 必须在 agentService.disposeAll 前释放，否则 emitter dispose 时仍会回调到已失效的 syncer。
-      // workspaceEmitters 已下沉到 syncer，由 syncer.disposeAll 统一回收。
-      taskIndexSyncer.disposeAll();
-      options.zcodeAgentService.disposeAll();
-      disposeLocalTaskState();
+      void service.disposeAllAndWait().catch((error: unknown) => {
+        logger.error(undefined, "释放 ZCode task service 失败", error);
+      });
     },
 
-    async disposeAllAndWait(): Promise<void> {
-      if (disposed) {
-        return;
-      }
+    disposeAllAndWait(): Promise<void> {
+      if (disposePromise) return disposePromise;
       disposed = true;
-      // app 退出必须先断开 task index syncer 的订阅，再等待 agent 进程树完成清理；
-      // 否则 host 退出时会把 zcode-cli 的 SIGKILL 兜底 timer 一起带走。
-      taskIndexSyncer.disposeAll();
-      await disposeZCodeAgentServiceAndWait();
-      disposeLocalTaskState();
+      memoryDiagnostics.dispose();
+      // 根因：同步触发 unsubscribe 后立即销毁 transport，会拒绝正常关闭的清理 RPC。
+      disposePromise = (async () => {
+        await taskIndexSyncer.disposeAll();
+        try {
+          await disposeZCodeAgentServiceAndWait();
+        } finally {
+          disposeLocalTaskState();
+        }
+      })();
+      return disposePromise;
     },
   };
 
@@ -5063,8 +5060,10 @@ function userInputRequestToElicitationStreamEvent(
         value: option.value,
         label: option.label,
         description: option.description,
+        preview: option.preview,
       })),
       ...(question.multiSelect ? { multiSelect: true } : {}),
+      ...(question.recommended !== undefined ? { recommended: question.recommended } : {}),
     })) ?? [];
   const firstQuestion = questions[0];
   const requestSchema = asRecord(request.schema);
@@ -5111,8 +5110,9 @@ function userInputResponseToElicitationStreamEvent(
 type PendingElicitationQuestion = {
   question: string;
   header: string;
-  options: Array<{ value: string; label: string; description?: string }>;
+  options: Array<{ value: string; label: string; description?: string; preview?: string }>;
   multiSelect?: boolean;
+  recommended?: number;
 };
 
 function pendingUserInputBackedPermissionToElicitationEvent(
@@ -5245,6 +5245,7 @@ function askUserQuestionInputToElicitationQuestions(input: unknown): PendingElic
             value: label,
             label,
             ...(description ? { description } : {}),
+            ...(typeof optionRecord.preview === "string" ? { preview: optionRecord.preview } : {}),
           };
           return parsedOption;
         })
@@ -5257,6 +5258,7 @@ function askUserQuestionInputToElicitationQuestions(input: unknown): PendingElic
         header,
         options,
         ...(record.multiSelect === true ? { multiSelect: true } : {}),
+        ...(typeof record.recommended === "number" ? { recommended: record.recommended } : {}),
       };
       return parsedQuestion;
     })

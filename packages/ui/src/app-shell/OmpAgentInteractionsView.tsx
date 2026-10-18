@@ -53,11 +53,13 @@ export const OmpAgentInteractionsView = memo(function OmpAgentInteractionsView({
   const labels = useMemo(
     () =>
       new Map(
-        model.nodes.map(({ agent }) => [
+        model.nodes.map(({ agent, isUser }) => [
           agent.id,
-          agent.id === "main"
-            ? intl.formatMessage({ id: "ompInteractions.mainAgent" })
-            : agent.label,
+          isUser
+            ? intl.formatMessage({ id: "ompInteractions.user" })
+            : agent.id === "main"
+              ? intl.formatMessage({ id: "ompInteractions.mainAgent" })
+              : agent.label,
         ]),
       ),
     [model, intl],
@@ -125,6 +127,7 @@ export const OmpAgentInteractionsView = memo(function OmpAgentInteractionsView({
             data-time-basis={selected.timeBasis}
             data-kind={selected.kind}
             data-source={selected.source}
+            data-source-id={selected.sourceId}
             aria-label={intl.formatMessage({ id: "ompInteractions.selectedMessage" })}
             className="relative z-10 mx-4 rounded-xl border border-card-border bg-card/95 p-4 shadow-sm"
           >
@@ -137,12 +140,30 @@ export const OmpAgentInteractionsView = memo(function OmpAgentInteractionsView({
             </div>
             <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-ui-xs text-foreground-subtle">
               <span>{intl.formatMessage({ id: `ompInteractions.kind.${selected.kind}` })}</span>
-              {selected.delivery === "failed" ? (
-                <span className="text-destructive">
-                  {intl.formatMessage({ id: `ompInteractions.delivery.${selected.delivery}` })}
+              {selected.kind === "user_intervention" || selected.delivery === "failed" ? (
+                <span className={selected.delivery === "failed" ? "text-destructive" : undefined}>
+                  {intl.formatMessage({
+                    id: `ompInteractions.delivery.${selected.delivery ?? "unknown"}`,
+                  })}
                 </span>
               ) : null}
             </div>
+            <dl className="mt-2 space-y-1 text-ui-xs text-foreground-subtle">
+              <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+                <dt>{intl.formatMessage({ id: "ompInteractions.source" })}</dt>
+                <dd>{intl.formatMessage({ id: `ompInteractions.source.${selected.source}` })}</dd>
+              </div>
+              <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+                <dt>{intl.formatMessage({ id: "ompInteractions.sourceId" })}</dt>
+                <dd
+                  data-testid="omp-agent-interaction-source-id"
+                  className="min-w-0 break-all font-mono"
+                >
+                  {selected.sourceId ??
+                    intl.formatMessage({ id: "ompInteractions.unknownSourceId" })}
+                </dd>
+              </div>
+            </dl>
             <InteractionMessageContent event={selected} />
           </section>
         ) : null}

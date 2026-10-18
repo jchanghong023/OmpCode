@@ -1,69 +1,39 @@
 import { spawn } from "node:child_process";
 import { readFile, access } from "node:fs/promises";
 import { createHash } from "node:crypto";
+import { writeSync } from "node:fs";
 import { withPinnedNodePath } from "./mise-toolchain-env.mjs";
 import { immediateTestArguments } from "./test-gates-test-reporter.mjs";
+import { gateBudget } from "./test-gates-clock.mjs";
 
 const activeChildren = new Set();
 const stoppingTrees = new WeakMap();
+const activeStages = new Set();
+const commandLabels = new WeakMap();
+const label = (value) =>
+  String(value ?? "unlabelled")
+    .replace(/[^a-zA-Z0-9_.:/-]/gu, "_")
+    .slice(0, 160);
+const diagnostic = (text) => writeSync(1, `[gate] ${text}\n`);
+
+export function logGateProgress(clock, event, phase = "stages") {
+  const timing = clock.read();
+  const stages = [...activeStages].map(({ id, group }) => `${id}@${group}`).join(",") || "none";
+  const children =
+    [...activeChildren]
+      .map((child) => `${commandLabels.get(child) ?? "unlabelled"}:${child.pid ?? "pending"}`)
+      .join(",") || "none";
+  diagnostic(
+    `${label(event)} phase=${label(phase)} active=${stages} pid=${children} ` +
+      `total=${timing.total.toFixed(1)}s budgeted=${timing.budgeted.toFixed(1)}s`,
+  );
+}
 let commandsCancelled = false;
 let budgetTimedOut = false;
-const budgets = { fastcheck: 60, fulltest: 900, slowtest: 1500 };
 
 export const budgetExpired = () => budgetTimedOut;
 
-export function gateBudget(level, requested = budgets[level]) {
-  const maximum = budgets[level];
-  if (!maximum || !Number.isFinite(requested) || requested <= 0 || requested > maximum)
-    throw new Error(
-      `${level} budget must be positive and at most ${maximum} seconds; it may only be lowered`,
-    );
-  return requested;
-}
 const elapsed = (start) => ((performance.now() - start) / 1000).toFixed(1);
-
-export function createGateClock(started = performance.now()) {
-  let updated = started;
-  let excluded = 0;
-  let compile = 0;
-  let charged = 0;
-  const listeners = new Set();
-  const update = () => {
-    const now = performance.now();
-    if (compile > 0 && charged === 0) excluded += now - updated;
-    updated = now;
-    return now;
-  };
-  return {
-    read() {
-      const total = (update() - started) / 1000;
-      const compileExcluded = excluded / 1000;
-      return { total, compileExcluded, budgeted: total - compileExcluded };
-    },
-    enter(kind = "check") {
-      if (!["compile", "check", "test"].includes(kind))
-        throw new Error(`Unknown gate stage kind: ${kind}`);
-      update();
-      if (kind === "compile") compile++;
-      else charged++;
-      for (const notify of listeners) notify();
-      let ended = false;
-      return () => {
-        if (ended) return;
-        ended = true;
-        update();
-        if (kind === "compile") compile--;
-        else charged--;
-        for (const notify of listeners) notify();
-      };
-    },
-    compileOnly: () => compile > 0 && charged === 0,
-    subscribe(listener) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
-  };
-}
 
 function stopTrees(children) {
   const pending = children.filter(
@@ -77,32 +47,50 @@ function stopTrees(children) {
 }
 
 async function stopOwnedTrees(children) {
-  const closed = children.map((child) => new Promise((done) => child.once("close", done)));
-  const running = children.filter(
-    (child) => child.pid && child.exitCode === null && child.signalCode === null,
-  );
-  if (running.length && process.platform === "win32") {
-    // Windows 每次 /T 都枚举进程；并发 taskkill 争用会拖慢清理，批量终止本门禁所属根。
-    // 不能提前杀掉清理器再等待未终止的子进程；保留完整清理耗时和真实预算结果。
-    await new Promise((done, reject) => {
-      const killer = spawn(
-        "taskkill",
-        [...running.flatMap((child) => ["/PID", String(child.pid)]), "/T", "/F"],
-        { windowsHide: true, stdio: "ignore" },
-      );
-      killer.once("error", reject);
-      killer.once("exit", done);
-    });
-  } else {
-    for (const child of running) {
-      try {
-        process.kill(-child.pid, "SIGKILL");
-      } catch {
-        /* Owned tree already exited. */
+  const started = performance.now();
+  const pids = children.map((child) => child.pid ?? "pending").join(",");
+  diagnostic(`tree-cleanup-start pid=${pids}`);
+  try {
+    const closed = children.map((child) => new Promise((done) => child.once("close", done)));
+    const running = children.filter(
+      (child) => child.pid && child.exitCode === null && child.signalCode === null,
+    );
+    if (running.length && process.platform === "win32") {
+      // Windows 每次 /T 都枚举进程；并发 taskkill 争用会拖慢清理，批量终止本门禁所属根。
+      // 不能提前杀掉清理器再等待未终止的子进程；保留完整清理耗时和真实预算结果。
+      await new Promise((done, reject) => {
+        const killer = spawn(
+          "taskkill",
+          [...running.flatMap((child) => ["/PID", String(child.pid)]), "/T", "/F"],
+          { windowsHide: true, stdio: "ignore" },
+        );
+        killer.once("error", reject);
+        killer.once("exit", (code, signal) => {
+          // 批量 taskkill 与自然退出竞争时可能返回 128；清理成功只以全部 close 为准。
+          if (code !== 0)
+            diagnostic(
+              `tree-cleanup-taskkill-exit pid=${pids} exit=${code} signal=${signal ?? "none"} waiting=owned-close`,
+            );
+          done();
+        });
+      });
+    } else {
+      for (const child of running) {
+        try {
+          process.kill(-child.pid, "SIGKILL");
+        } catch (error) {
+          if (error.code !== "ESRCH") throw error;
+        }
       }
     }
+    await Promise.all(closed);
+    diagnostic(`tree-cleanup-complete pid=${pids} seconds=${elapsed(started)}`);
+  } catch (error) {
+    diagnostic(
+      `tree-cleanup-failed method=${process.platform === "win32" ? "taskkill" : "kill"} pid=${pids} code=${label(error.code ?? "unknown")} exit=${error.exitCode ?? "n/a"} seconds=${elapsed(started)}`,
+    );
+    throw error;
   }
-  await Promise.all(closed);
 }
 
 export async function stopAll(clock) {
@@ -145,6 +133,7 @@ export function startBudget(limitSeconds, clock, onTimeout, level = "fastcheck",
     expiring = true;
     budgetTimedOut = true;
     cancelCommands();
+    logGateProgress(clock, "budget-expiring");
     // 不先 await stopAll：所属进程关闭或 cleanup 挂起不能阻塞终态通知。
     void onTimeout();
   };
@@ -153,6 +142,7 @@ export function startBudget(limitSeconds, clock, onTimeout, level = "fastcheck",
     if (paused() || used() < limitSeconds) return schedule();
     budgetTimedOut = true;
     cancelCommands();
+    logGateProgress(clock, "hard-deadline");
     onHardTimeout?.();
     process.exit(124);
   };
@@ -196,7 +186,22 @@ export function startCommand(command, args = [], options = {}) {
     stdio: ["ignore", "pipe", "pipe"],
   });
   activeChildren.add(child);
-  child.once("close", () => activeChildren.delete(child));
+  const stageId = label(options.stageId ?? command);
+  commandLabels.set(child, stageId);
+  if (!options.quiet) diagnostic(`process-start stage=${stageId} pid=${child.pid ?? "pending"}`);
+  child.once("error", (error) => {
+    if (!options.quiet)
+      diagnostic(
+        `process-error stage=${stageId} pid=${child.pid ?? "pending"} code=${label(error.code)}`,
+      );
+  });
+  child.once("close", (code, signal) => {
+    activeChildren.delete(child);
+    if (!options.quiet)
+      diagnostic(
+        `process-close stage=${stageId} pid=${child.pid ?? "pending"} exit=${code} signal=${signal ?? "none"}`,
+      );
+  });
   return child;
 }
 
@@ -213,7 +218,10 @@ export async function commandOutput(command, args = [], options = {}) {
   const tails = { stdout: "", stderr: "" };
   let reportedFailure;
   let failureFrames = "";
+  let failureNotified = false;
   const stopFailure = (code = 1) => {
+    if (failureNotified) return;
+    failureNotified = true;
     cancelCommands();
     // 阶段 finally 或流关闭也可能挂起，首失败必须直接通知调度所有者。
     options.onFailure?.({
@@ -221,7 +229,8 @@ export async function commandOutput(command, args = [], options = {}) {
       exitCode: code,
       ...(reportedFailure ? { reason: reportedFailure } : {}),
     });
-    void stopAll(options.clock);
+    // stopOwnedTrees logs failures; the owning run still awaits the same cleanup promise.
+    void stopAll(options.clock).catch(() => {});
   };
   const collect = (data, fromStderr = false) => {
     const text = data;
@@ -325,6 +334,11 @@ export async function exists(path) {
 
 async function stageResult(stage, operation, clock) {
   const start = performance.now();
+  const context = { id: label(stage.id), group: label(stage.parallelGroup ?? "serial") };
+  activeStages.add(context);
+  diagnostic(
+    `stage-start stage=${context.id} group=${context.group} kind=${label(stage.kind ?? "check")}`,
+  );
   let end;
   let result;
   try {
@@ -334,6 +348,7 @@ async function stageResult(stage, operation, clock) {
     result = { status: "FAIL", reason: error.message };
   } finally {
     end?.();
+    activeStages.delete(context);
   }
   const record = { id: stage.id, seconds: Number(elapsed(start)), ...result };
   console.log(
@@ -350,6 +365,7 @@ export async function runStages(stages, operation, concurrency = 3, clock) {
     const group = stages[index].parallelGroup;
     let end = index + 1;
     if (group) while (end < stages.length && stages[end].parallelGroup === group) end++;
+    diagnostic(`group-start group=${label(group ?? "serial")} stages=${end - index}`);
     const results = [];
     const started = new Set();
     let next = index;
@@ -371,15 +387,27 @@ export async function runStages(stages, operation, concurrency = 3, clock) {
             ...result,
           };
           failed = true;
+          // Emit the original evidence before resolving the first-failure race:
+          // neither the stage's finally nor process-tree cleanup may delay it.
+          writeSync(
+            1,
+            `[gate] first-failure stage=${label(stages[current].id)} ` +
+              `status=${label(result.status)} seconds=${elapsed(start)} ` +
+              `exit=${result.exitCode ?? "n/a"}${result.reason ? `: ${result.reason}` : ""}\n`,
+          );
           cancelCommands();
           fail();
         };
         const result = await stageResult(
           stages[current],
-          () => operation(stages[current], onFailure),
+          async () => {
+            const result = await operation(stages[current], onFailure);
+            return results[current - index] ?? result;
+          },
           clock,
         );
-        results[current - index] = result;
+        // A late success cannot replace an already accepted first-failure record.
+        results[current - index] ??= result;
         if (result.status !== "PASS") {
           onFailure(result);
         }
@@ -393,6 +421,9 @@ export async function runStages(stages, operation, concurrency = 3, clock) {
         results[current - index] ??= { id: stages[current].id, status: "CANCELLED" };
     }
     records.push(...results.filter(Boolean));
+    diagnostic(
+      `group-close group=${label(group ?? "serial")} status=${failed ? "FAIL" : commandsCancelled ? "CANCELLED" : "PASS"}`,
+    );
     if (failed || commandsCancelled) break;
     index = end;
   }

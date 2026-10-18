@@ -1,4 +1,4 @@
-// command_output 缺少原生 journal 记录时，GUI 冷恢复保存收到的文本派生记录。
+// command_output 的 GUI 显示身份独立于原生正文，冷恢复保存收到的完整派生记录。
 // 单一异步写入链覆盖追加、身份关联与删除，防止关闭/删除后迟到写入复活历史。
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
@@ -7,7 +7,6 @@ import type { OmpCommandOutputRecord } from "../domain/OmpCommandOutput.js";
 import { ompSessionIdOfFilePath } from "../domain/ids.js";
 import type { OmpCommandOutputSession, OmpStoreSessionSummary } from "../app/ports.js";
 import { logger } from "./logger.js";
-import { NativeCustomOutputIndex } from "./nativeCustomOutputIndex.js";
 
 interface CommandHistory {
   version: 1;
@@ -82,8 +81,6 @@ export function createOmpCommandOutputStore(root: string, workspaceIdentity?: st
   const directoryOf = (cwd: string) => join(root, digest(workspaceIdentity?.trim() || cwd));
   let tail = Promise.resolve();
   let writeFailure: unknown;
-  // 单一串行链持有原生派生索引；读取游标及 fd 生命周期由专用 adapter 管理。
-  const nativeIndex = new NativeCustomOutputIndex();
   const serial = <T>(operation: () => Promise<T>, kind: "read" | "write" = "write"): Promise<T> => {
     const current = tail.then(operation);
     tail = current.then(
@@ -243,8 +240,7 @@ export function createOmpCommandOutputStore(root: string, workspaceIdentity?: st
       record: OmpCommandOutputRecord,
     ): Promise<void> {
       return serial(async () => {
-        // core 在 message_end 前已 flush；journal 有该 custom 时不保存第二份显示副本。
-        if (await nativeIndex.hasPersisted(session.sessionPath, record)) return;
+        // 原生正文已落盘不代表 GUI 身份已保存；只在 domain 合并时消除重复显示。
         const nativeSessionId =
           record.nativeSessionId ??
           (record.customType !== undefined ? ompSessionIdOfFilePath(session.sessionPath) : null);
@@ -310,10 +306,8 @@ export function createOmpCommandOutputStore(root: string, workspaceIdentity?: st
       return serial(async () => {
         for (const { path, history } of await histories(cwd)) {
           if (!matches(history, sessionId, sessionPath)) continue;
-          if (history.sessionPath) nativeIndex.invalidate(history.sessionPath);
           await rm(path, { force: true });
         }
-        if (sessionPath) nativeIndex.invalidate(sessionPath);
         return true;
       });
     },

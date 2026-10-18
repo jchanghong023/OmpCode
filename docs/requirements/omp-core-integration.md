@@ -2,6 +2,8 @@
 
 本域规定 ZCode 接入 OMP RPC 核心（`omp --mode rpc-ui`）的拓扑、能力面、输入分流与降级语义。基线为 omp `v18.8.0+fork.298` 起的协议面：上游单会话 RPC + v3 fork 最小面（`commandCompletion` / `modelRoleConfig` / `sessionDirectory`）；旧「项目宿主/多会话宿主」（`--rpc-project`）已被 OMP 侧删除，本仓库不再保留对应接入层。OMP 协议需求唯一权威为其仓库 `docs-zh-CN/requirements/rpc-ui-protocol.md`，英文 `docs/rpc.md` 仅作参考；本文件只维护 ZCode 侧的接入差异。与本域相关的既有规则仍以各所属文档为准：模型与命令见 [models-and-commands.md](models-and-commands.md)，技能见 [skills.md](skills.md)，恢复见 [session-recovery.md](session-recovery.md)，子代理与集成见 [integrations.md](integrations.md)。
 
+产品目的、日常核心功能优先级与新增界面边界统一遵循 [FORK 总纲](FORK.md#本-fork-的目的)：本域先解决 ZCode 与 OMP 的协议适配，复用现有正常 UI。OMP 公开协议缺少的能力或数据须在所属域明确记录，留待 OMP Fork 协同完善；不能以新增 GUI、复制核心逻辑或假成功掩盖缺口。
+
 ## 产品规则
 
 - **进程拓扑**：每个会话一个惰性 omp 进程（`--mode rpc-ui [--resume <file>]`，cwd = workspace 根），另维护一个常驻**目录进程**（`--mode rpc-ui --no-session`）承载工作区级查询：模型/思考档位/命令目录（v1 面，任何核可用）与 v3 能力（动态补全、模型角色、会话目录）。渲染器刷新不终止任何进程（进程归 Host 侧 omp-agent 所有）；omp-agent 退出时以 stdin EOF 有序关闭。工具、终端、MCP 等必要子进程不受此约束。
@@ -9,10 +11,11 @@
 - **v3 协商与能力门控**：目录进程与每个会话进程在 ready 后按 `supportedProtocolVersions` 自动协商（含 3 → v3）。v3 能力缺失（旧核）时对应功能显式报能力缺失（-32601 语义，不伪造）；目录进程启动失败/退避窗口属暂时不可用（-32000 可重试），两者必须区分。
 - **会话生命周期**：创建 = 惰性每会话进程（首次发送现场启动）；恢复 = `--resume <file>` + 冷历史先行入投影；关闭 = stdin EOF 卸载进程（保留历史，会话文件由 omp 持久化）；删除 = 先结束该会话进程，再经目录进程 `delete_session`（omp 权威删除；旧核无 v3 时回落本地文件删除，仍须确认文件删除成功后才发索引移除事件）；改名 = 已加载走会话进程 `set_session_name`，冷会话走目录进程 `rename_session`（按稳定 ID）。会话 ID 身份沿用既有「临时 ID → 文件 UUID」迁移规则（见 [session-recovery.md](session-recovery.md)）。
 - **斜杠输入严格分发**：以 `/` 起始的输入先按命令目录（目录进程 `get_available_commands`，v3 富目录含 `execution`/`availability` 判定）在适配层解析：目录内且 omp 可执行的命令以 `prompt` 原文发送；运行中附带原生 `streamingBehavior`，由 OMP 决定命令消费或剩余文本的排队/引导。未知命令或仅 TUI 可执行（`tui_only`/`unsupported`）明确报错，**绝不发给模型**。携带图片或文本附件的斜杠输入明确拒绝（`omp_command_attachments_unsupported`），不静默丢弃。普通运行中补充仍走 steer/follow_up；`/context` 等内部本地查询同经 prompt。本次核心命令、ACK 与迟到输出、历史投影及验收唯一见 [核心 rpc-ui 命令接入](omp-native-commands.md)。
-- **交互回路**：会话进程 ready 后发送 `set_ask_dialog {enabled:true}`；此后 omp `ask` 以 `extension_ui_request{method:"ask"}` 单帧携带完整问题集（多题/多选/选项说明/preview/`recommended`），投影为 ZCode `ElicitationDialog` 富问答，「其他」自定义回答映射 `customInput`，应答经 `extension_ui_response{answers:[{id,selectedOptions,customInput}]}` 按题回传，取消整体收口；服务端超时自动按 recommended 收尾，适配器投影倒计时展示。未启用 ask 对话框（旧核）时 ask 沿用 `select`（选项）+ `editor`（自由文本，`promptStyle:true`）逐题降级路径。
+- **交互回路**：会话进程 ready 后发送 `set_ask_dialog {enabled:true}`；此后 omp `ask` 以 `extension_ui_request{method:"ask"}` 单帧携带完整问题集（多题/多选/选项说明/preview/`recommended`），投影为 ZCode `ElicitationDialog` 富问答。「其他」自定义回答映射 `customInput`，应答经 `extension_ui_response{answers:[{id,selectedOptions,customInput}]}` 按题回传，取消整体收口。`question.recommended` 是可选的、从 0 开始的选项索引，须完整保留至 GUI，按现有设计显示对应选项的推荐提示；不据此自动选择、提交或伪造用户答案。`option.preview` 同样跨适配器、Host、共享协议与 UI 无损保留，并按现有 UI 设计可见呈现，不能仅保留在原始数据中。超时 deadline 与超时后按 recommended 收尾仍由 OMP 唯一拥有，适配器仅投影倒计时，UI 不创建另一套自动提交或超时决策。未启用 ask 对话框（旧核）时 ask 沿用 `select`（选项）+ `editor`（自由文本，`promptStyle:true`）逐题降级路径。
 - **ask 已完成结果**：OMP 的结构化 `details` 是已提交答案的事实源。适配层将单题或多题的选项及自定义回答投影为 v4 工具结果 `output.answers`（题目 → 回答字符串数组），保留原 `output.text`；实时结果与冷历史使用同一映射，GUI 从该结果显示实际答案。不解析自然语言结果正文、不从已关闭的交互草稿重建答案，失败或取消不能伪造已作答。
-- **审批形态**：工具审批由 omp extension runner 发 `extension_ui_request{method:"select"}`（选项 `Approve`/`Deny`，提示携带工具名、原因与 `formatApprovalDetails` 行），沿通用询问回路呈现与应答；六档结构化审批卡（旧 v3 `permission_request`）已随 OMP 侧删除不再提供，会话级/始终允许等持久决策由 omp 自身 approvalMode 与 `tools.approval` 配置持有。omp 审批仅在用户 omp 审批配置生效时出现；默认 yolo 无确认。超时、销毁与断连一律 fail-closed 拒绝，无静默放行。
-- **extension_ui 其余方法**：`select/confirm/input/editor` 沿用通用询问回路（`sensitive` 投影密码输入，`editor` 携带 `prefill` 透传）；`notify/setStatus/setWidget/setTitle/set_editor_text/open_url` 无宿主呈现面，按取消回执不让 omp 挂起；`cancel+targetId` 立即收口等待中交互。
+- **审批形态（产品能力，非本轮自动化验收）**：工具审批由 omp extension runner 发 `extension_ui_request{method:"select"}`（提示携带工具名、原因与 `formatApprovalDetails` 行），沿通用询问回路完整呈现原生 `options` 并回传用户选择；保留 `Approve`、`Deny` 及核心提供的额外选项，不固定为两档，也不由 UI 添加许可项。六档结构化审批卡（旧 v3 `permission_request`）已随 OMP 侧删除不再提供，不恢复旧 ZCode 权限卡；会话许可与持久审批决策仍由 OMP 唯一拥有，按其原生配置与运行时语义处理。omp 审批仅在用户 omp 审批配置生效时出现；默认 yolo 无确认。超时、销毁与断连一律 fail-closed 拒绝，无静默放行。本轮自动化不测工具权限审批，真实核及 GUI 固定原生 yolo；此排除不删除以上产品能力，也不排除 ask 和原生命令 select/confirm/input/editor，唯一范围见[本轮五项契约](test-gates.md#本轮五项必验与排除范围)。
+- **extension_ui 其余方法**：`select` 沿用通用询问回路投影为选项问答卡；`input/editor` 是显式自由文本请求，走既有用户输入对话框（`editor` 携带 `prefill` 透传为多行初值，`input` 为单行文本），不得进入富问答的 trim/空串即取消路径。input/editor 的显式文本提交须原样回传 `value`：空字符串是合法已提交值，返回 `value: ""`，不得因 falsy 判断混同取消；换行和首尾空白不裁剪。缺失文本或显式取消仍走取消回执，不伪造空字符串提交；提交与取消按原请求 ID 关联。`notify/setStatus/setWidget/setTitle/set_editor_text` 无宿主呈现面，作为原生通知消费、不虚构回应；`open_url` 无宿主呈现面时按取消回执收口；`cancel+targetId` 立即收口等待中交互、不回应 cancel 帧自身的新 ID。**密码框标记能力缺口**：当前 rpc-ui 基线的 `extension_ui_request{method:"input"|"editor"}` 只发 `{title,placeholder,prefill}`——OMP 的 `ExtensionUIDialogOptions` 无 `sensitive` 字段、`rpc-mode` 也不转发扩展传入的该字段（`requestRpcDialog` 载荷显式构造），故敏感输入无线上信号、宿主只保留前向兼容的 `sensitive` 投影；密码框渲染须待 OMP Fork 侧补该字段后才能验收，ZCode 不伪造。
+- **交互结算与通知边界**：`notify/setStatus/setWidget/setTitle/set_editor_text` 是 OMP fire-and-forget 通知，无待应答请求；`cancel+targetId` 是核心已结算原交互后的清场通知，不为 cancel 帧的新 ID 建立应答。目录进程无交互呈现面，真实等待回答的请求仍立即 fail-closed 取消，但以上通知不得制造 `extension_ui_response`。特别是 stdin EOF 后原生 `session_shutdown` 仍可发 `setWidget` 清场，不能向已释放的 child 虚构取消回执；真实请求的发送失败仍保留原诊断，不以关闭日志修复。v4 应答、核心 cancel/ask deadline 或 session dispose 赢得交互结算时，ProtocolServer 的同一反向请求 owner 必须同步释放 pending/timer，以原生取消语义结束 transport 等待，不伪造 Host result 或二次答复；迟到/重复回执无害。正常退出时已完成交互不应产生 disconnect error，真实未决断连仍 fail-closed。
 - **原生扩展文本输出**：`pi.sendMessage` 的 `role:"custom"`、`display:true` 消息支持标准字符串/文本块内容，经 `message_end` 显示一次，冷恢复读取对应 `custom_message`（或合法 message 包装）内容；`display:false` 不显示、也不进入供 UI 使用的派生 transcript。仅投影普通文本，不运行 TUI 自定义 renderer、不承诺其布局/图片呈现；此消息不是 assistant 模型响应，不改变模型用量、当前错误、流式锚点或主轮结算，扩展未请求 triggerTurn 时不得制造模型调用。技能注入的 `skill-prompt` 不是普通扩展正文，其 chip、原始输入及冷恢复呈现唯一按 [技能需求](skills.md) 管理，不以此通用规则展开技能全文。
 - **命令与技能目录/补全**：命令目录事实源为目录进程 `get_available_commands`（v3 富目录：`inputHint` 顶层、`subcommands`、`source`、`execution`、`availability`、`revision`；v1 形状 `input:{hint}` 兼容解析），技能目录继续按其中 `source=skill` 命令投影（`skills/referenceCatalog` 语义不变）。动态补全经目录进程 `complete_command`（UTF-16 光标、替换区间、参数提示、零执行副作用）；静态名称过滤仍可在 UI 本地完成，二者合并呈现且过期结果丢弃。`available_commands_update` 事件使目录与补全缓存失效并即时推送。
 - **模型两种入口分离**：会话临时切换走会话级 `set_model`，用户级角色持久配置走目录进程 `get_model_roles`/`set_model_role`；不得共用同一按钮语义。角色清单、保存状态、修订冲突、profile 与旧核回落边界唯一按 [模型与命令](models-and-commands.md) 管理，提交时的临时选择按 [输入区](composer.md) 管理。
@@ -21,7 +24,7 @@
 - **子代理控制状态**：详情顶部的发送和停止入口只有在当前父会话 owner 能证明该子代理可控制时可用；纯冷历史或已结束记录保持只读并显示对应状态，不把可见「停止」按钮当成仍在执行的事实。控制命令仍由既有 `session/controlSubagent` 路径执行，失败不得伪报成功。
 - **连通性测试与 MCP 状态**：新核无 `test_model`/`list_mcp_servers`；`provider/testModelConnectivity` 显式拒绝（-32601），`mcp/list` 返回合法空状态表，不伪造服务状态。各自能力边界见 [FORK.md](FORK.md) 与 [原生集成](integrations.md)。
 
-- **核心辅助事件解码**：`advisor_cost_changed`（无载荷的顾问费用变更通知）与 `session_settled`（无载荷的会话静止通知）是合法核心帧，适配层必须按明确类型解码，不记作畸形帧。当前 ZCode 没有独立的顾问费用或会话静止展示字段；两帧不得代替 `agent_end`/`prompt_result` 收口用户轮次，也不得改写既有错误、用量或队列。未知类型及消费字段畸形的帧仍须保留解码失败诊断，不以宽泛接受或关闭日志处理协议演进。
+- **核心辅助事件解码**：`advisor_cost_changed`（顾问费用变更）、`session_settled`（会话静止）与 `goal_updated`（原生 Goal 状态变更）是合法核心通知，适配层必须按明确类型解码，不记作畸形帧。当前 ZCode 没有这些通知对应的独立状态字段，Goal 继续由 OMP 与原生命令输出持有；适配层不消费通知载荷，也不建立第二套 Goal 状态。这些通知不得代替 `agent_end`/`prompt_result` 收口用户轮次，不得改写既有错误、用量或队列。未知类型及消费字段畸形的帧仍须保留解码失败诊断，不以宽泛接受或关闭日志处理协议演进。
 
 ## 状态所有者与接口
 
@@ -74,7 +77,7 @@ sequenceDiagram
   Main->>Main: 异步排队、按日 .log、保留与退出排空
 ```
 
-验收：在专用临时根运行公开 Host/适配器路径，实际生成 `.log`；只读该文件即可串起一个成功调用与一个失败调用，识别最后成功步骤、首次失败阶段、原/对端 PID、请求/会话身份、结果摘要及耗时。覆盖核心异常退出、超时或无效响应之一及本地网络失败；并发请求不串关联，敏感样本不出现在文件中，各级诊断遵循 `JCH_LOG_LEVEL`。验证现有队列/交互/owner 行为不变；文件初始化失败可回退、日志自身失败无递归；未运行真实模型、桌面 GUI、CentOS 的边界分别声明，不将模拟成功写成真实平台通过。
+验收：在专用临时根运行公开 Host/适配器路径，实际生成 `.log`；只读该文件即可串起一个成功调用与一个失败调用，识别最后成功步骤、首次失败阶段、原/对端 PID、请求/会话身份、结果摘要及耗时。覆盖核心异常退出、超时或无效响应之一及本地网络失败；并发请求不串关联，敏感样本不出现在文件中，各级诊断遵循 `JCH_LOG_LEVEL`。验证现有队列/交互/owner 行为不变；文件初始化失败可回退、日志自身失败无递归；桌面 GUI、CentOS 等未覆盖边界分别声明，不将模拟成功写成真实平台通过。
 
 ## 辅助对话（原生 BTW，唯一需求权威）
 
@@ -99,6 +102,8 @@ web-remote-replayable: 同一 owner → 水位增量 / 缺口快照；冷启动�
 
 ## 验收场景
 
+本域自动化验收统一使用真实 OMP + 本地模拟模型，遵循[测试契约](test-gates.md#本地模拟模型契约)，不以 OMP 打桩替代核心；本轮固定原生 yolo、排除工具权限审批，ask、连续工具调用、子代理界面与 Todo 界面为必验，独立持久结果和同根恢复证据唯一见[本轮五项契约](test-gates.md#本轮五项必验与排除范围)。其他调用规程仅见 [e2e.md](e2e.md)。下列历史结果保留当时状态，不作为当前自动化验收通过的证据。
+
 1. **Z01** 同一项目 5 个会话 = 5 个会话进程 + 1 个目录进程（进程数核对）；切换选中会话不改变 OMP 会话对象；不同项目各自独立进程组。
 2. **Z08** 现有输入框发送普通消息：流式回答、工具过程、停止与失败提示正确；刷新后内容可恢复且消息不重复发送。
 3. **Z03** 输入 `/` 可见命令与技能的说明及补全（含 `complete_command` 动态候选与参数提示），选中后正确执行（omp 本地执行 + `command_output` 收口）；未知命令与仅 TUI 可执行命令报错、不触发模型。扩展命令标准 `pi.sendMessage` 的 display:true 字符串/文本块在 live 与冷恢复显示，display:false 隐藏；主回合 streaming 时扩展文本不关闭 assistant 响应或清除其错误/用量，不要求 TUI custom renderer。
@@ -108,10 +113,10 @@ web-remote-replayable: 同一 owner → 水位增量 / 缺口快照；冷启动�
 7. **Z14** GUI 能发现并使用 ZCode 原先没有的 OMP 业务命令；详细子代理视图可展开每次工具调用及代理间通信，截断或缺失内容有明确提示。
 8. **Z15/Z05** 已开放的控制操作（停止/发送消息）经 `session/controlSubagent` 业务入口执行并呈现返回状态；只读详情保持观察无副作用；渲染器刷新后宿主重建视图、进程存活；OMP 重启后读取历史，不伪造执行完成或重发副作用。
 9. **Z02** 技能目录、候选、补全与实际调用准确作用于目标 OMP；设置页保持只读，现有 RPC 不提供的安装、删除与开关不能伪装可用。完整业务规则及验收唯一见 [skills.md](skills.md)。
-10. **Z04** 并行会话执行、审批、问题、队列各归其会话；长操作接受不显示为已完成（沿用 session-recovery.md）。
-11. **Z16** 审批以 Approve/Deny 双档询问呈现并正确应答（omp 审批配置生效时）；`ask` 富问答（多题/多选/自定义/推荐项）单帧呈现、按题应答、取消与超时收口正确。
+10. **Z04** 并行会话执行、问题、队列各归其会话；长操作接受不显示为已完成（沿用 session-recovery.md）。产品在用户启用工具审批配置时仍保持审批归属隔离，但该审批专项不属于本轮自动化验收。
+11. **Z16** `ask` 富问答（多题/多选/自定义/推荐项）单帧呈现、按题应答、取消与超时收口正确，完成答案投影与同根恢复一致。用户审批配置生效时完整呈现原生 `options`、会话许可仍由 OMP 唯一处理等产品规则继续有效，但工具权限审批不在本轮自动化范围，不以 Approve/Deny 驱动测试。
 12. **Z17** 冷会话改名（未加载）经 `rename_session` 真实生效；删除（已加载/冷）经 `delete_session` 后会话文件确已删除、索引移除；旧核回落本地文件删除路径不受影响。
-13. **审查补充边界（无模型回归）**：目录首次查询必须等待协议协商结束；延迟 v3 ACK 不得永久误判为旧核。会话在 ready/状态水合中关闭后不得残留进程或复活投影，旧进程的 exit/模型回读不得影响新进程。未知/TUI-only/带附件斜杠输入被拒时，不先改变会话模型；思考档位被核心拒绝时不得报告成功。select 只回传用户实际选择的合法选项，缺失、未知及相互冲突的选择均取消，不默认 Approve；input/editor 的 GUI 结构化单题答案须无损回传。永久删除覆盖临时 ID、稳定 UUID 和尚未落盘的草稿；核心删除失败保留索引。已结束子代理在父进程重启后从受限的持久文件读到完整详情，终态最后一批记录与重写 reset 对已打开详情订阅可见，关闭详情/Host 后不留后台重读。
+13. **审查补充边界（无模型回归）**：目录首次查询必须等待协议协商结束；延迟 v3 ACK 不得永久误判为旧核。会话在 ready/状态水合中关闭后不得残留进程或复活投影，旧进程的 exit/模型回读不得影响新进程。未知/TUI-only/带附件斜杠输入被拒时，不先改变会话模型；思考档位被核心拒绝时不得报告成功。原生命令 select 只回传用户实际选择的合法选项，缺失、未知及相互冲突的选择均取消，不默认选中任何项；input/editor 的 GUI 结构化单题答案须无损回传。永久删除覆盖临时 ID、稳定 UUID 和尚未落盘的草稿；核心删除失败保留索引。已结束子代理在父进程重启后从受限的持久文件读到完整详情，终态最后一批记录与重写 reset 对已打开详情订阅可见，关闭详情/Host 后不留后台重读。
 14. **协议与冷历史补充**：同 chunkId 的 count/byteLength 必须恒定，重复片拒绝整个序列，实收不得超过声明长度；过期命令失败不得关闭新的活跃轮。合法用户 content 字符串与 blocks 均恢复正文、标题和子代理 transcript，畸形块不打断其他记录。主 v4 与 legacy 压缩失败均不得报告 accepted。
 15. **Editor/Input 衔接**：无 prefill 的 editor 仍为空的临时多行编辑器，可取消；敏感输入不进入持久草稿，按 [composer.md](./composer.md) 验收 7 记录。
 16. **主/子执行页联合回归**：真实 GUI 并行创建 a、b、c 并广播 `hello`，逐一打开三个正确归属的详情；展开后每个工具 ID 与核心记录一一对应，文件写入、通信工具和最终回复均可见。切换详情、关闭重开、重复补读和冷恢复不丢记录、不串代理、不改变手动阅读位置；主会话与三项详情的终态及控制可用性一致。执行页不铺开 IRC/后台结果的模型提示包，普通正文与扩展输出不被误过滤；每项均截图核对，Agent 交互页另按其唯一需求验收。
@@ -119,6 +124,7 @@ web-remote-replayable: 同一 owner → 水位增量 / 缺口快照；冷启动�
 - **共享目录环境验收（无模型）**：在隔离配置根/profile 与工作区中用当前目标 OMP 源码启动适配器，分别查询工作区与已创建会话的 `skills/referenceCatalog`；附加共享技能及同名共享优先结果按 [skills.md](skills.md) 验收。核对目录进程带 `--no-session`、会话进程不带，两者实际收到完全相同的 `OMP_SKILLS_DIR`、`OMP_WIKI_DIR`、cwd、配置根及 profile，且未设置 `OMP_OFFLINE` 也生效。远端环境透传白名单不包含这两个本机路径变量；此静态边界不冒充真实远端/NFS 验收。
 
 - **辅助事件边界**：在运行中、成功/失败终态及新轮开始后插入合法 `advisor_cost_changed`/`session_settled`，轮次、错误与用量保持原值；后续 `agent_end`/`prompt_result` 仍按既有规则完成。真实 OMP + 本地模拟模型两轮与同根冷恢复日志不再出现这两种帧的 `omp_core_frame_decode_failed`；未知事件继续报告解码失败。
+- **EOF 通知与真实请求边界**：真实 OMP 目录查询后以 stdin EOF 关闭，覆盖原生 `session_shutdown` 的 `setWidget` 清场通知；该帧不产生取消回执或 `omp_core_ui_response_failed`，核心正常退出且独占 native 目录释放。目录收到真正的 input/editor/select/confirm 请求仍取消，不吞掉真实发送失败。会话核心 cancel/ask deadline、用户应答与销毁竞争时只结算一次，反向 pending/timer 同步释放；已完成交互正常断连无错误，真实未决断连保留 fail-closed 事实。
 
 核心五项（普通消息、技能调用+补全、内置命令+补全、子代理过程、模型双入口）必须逐项真实 GUI 操作验收并记录证据；协议类型检查或页面可打开不替代操作验收。
 
@@ -208,16 +214,16 @@ sequenceDiagram
 
 ## 实现与验证状态
 
-- 辅助对话是本 Fork 的 GUI 接入需求，OMP 自身 rpc-ui 需求文档不承诺独立 BTW GUI，不将其当上游等价产品声明。2026-10-08 的 Windows 打包版提交 `ca04952` 已验证 bare `/btw` 空 pane、首问/追问、关闭重开与进程冷恢复，包含 live parent ID 与稳定 task UUID 分离场景；具体版本及边界见 [修复后验收](../test-reports/acceptance-2026-10-08.md)。该历史结果不代表当前工作树或全部 BTW 场景通过；完整交互、Web replayable 重连与 CentOS 7 真实模型 GUI 仍未验收。
-- 2026-10-07 需求重写与实施完成（适配 omp v18.8.0+fork.298 RPC 大改，实测核对安装二进制）：OMP 侧删除项目宿主（`--rpc-project` unknown flag）、旧 v3 fork 面（`permission_request`/`ask_request`/`ask_pause`/`test_model`/`list_mcp_servers`/`execute_command`/项目级子代理目录），收敛为 v3 三组能力（`commandCompletion`/`modelRoleConfig`/`sessionDirectory`）。ZCode 侧对应重写：删除项目模式层（ompProjectProcess/ompProjectReadyGate/ompProjectChannel/ompProjectGateway/projectSessionLifecycle 项目分支），新增目录进程网关（`adapters/ompDirectoryGateway.ts`，`--mode rpc-ui --no-session` 常驻 + v3 三态：available/unsupported/unavailable）；斜杠严格分发改适配层本地判定（`app/slashCommandResolver.ts` 目录缓存 + unknown 复核，未知命令 `omp_command_unknown`、tui_only `omp_command_tui_only`，绝不发给模型——实测证实新核会把未知 `/xxx` 当普通文本送入模型）；会话进程 ready 后 `set_ask_dialog` 启用富 ask（`extension_ui_request{method:"ask"}` 单帧问题集 → `answers` 按题回传）；审批降级为 extension runner 的 select(Approve/Deny) 通用询问；子代理控制改 `cancel_subagent`/`steer_subagent`、详情续读改父会话进程 `get_subagent_messages`（fromByte/nextByte，无 hasMore/recordTooLarge——上游游标单调推进即读尽）；冷会话改名/删除走目录进程 `rename_session`/`delete_session`（先结束承载进程再删，旧核回落本地文件路径）；`provider/testModelConnectivity` 与 `mcp/list` 按能力缺失/空状态表收口。
-- 自动化验证（2026-10-07 实际执行，均通过）：`pnpm --filter @zcode/omp-agent test` 217 项 0 失败 0 跳过（含 fake-omp 协议级 E2E 30 项：严格分发/审批两档/富 ask answers/snooze 无协议帧/能力缺失语义；真实内嵌核 E2E 3 项实际执行——流式→write 工具→审批→文件落盘→完成、本地命令收口+临时模型切换（`zhipu-coding-plan/glm-5.3-flash`）、v3 目录能力（complete_command 补全候选/get_model_roles role 目录/能力缺失语义），内嵌二进制取本地安装的 `omp/18.8.0+fork.298`（`OMP_RELEASE_BINARY_PATH` 注入，与 oh-my-pi 源码 HEAD 同日构建）；`pnpm typecheck`、`pnpm lint`（0w0e）、`pnpm fmt:check`、`pnpm architecture:check --changed`（0 违例）。连带面：`packages/ui/test/ompModelRolesFallback.test.ts` 7 项、`packages/services/test/workspaceConfigEvents.test.ts` 1 项通过。
+- 辅助对话是本 Fork 的 GUI 接入需求，OMP 自身 rpc-ui 需求文档不承诺独立 BTW GUI，不将其当上游等价产品声明。2026-10-08 的 Windows 打包版提交 `ca04952` 已验证 bare `/btw` 空 pane、历史会话链路、关闭重开与进程冷恢复，包含 live parent ID 与稳定 task UUID 分离场景；具体版本及边界见 [修复后验收](../test-reports/acceptance-2026-10-08.md)。该历史结果不代表当前工作树或全部 BTW 场景通过；完整交互、Web replayable 重连与 CentOS 7 GUI 仍未验收。
+- 2026-10-07 需求重写与实施完成（适配 omp v18.8.0+fork.298 RPC 大改，实测核对安装二进制）：OMP 侧删除项目宿主（`--rpc-project` unknown flag）、旧 v3 fork 面（`permission_request`/`ask_request`/`ask_pause`/`test_model`/`list_mcp_servers`/`execute_command`/项目级子代理目录），收敛为 v3 三组能力（`commandCompletion`/`modelRoleConfig`/`sessionDirectory`）。ZCode 侧对应重写：删除项目模式层（ompProjectProcess/ompProjectReadyGate/ompProjectChannel/ompProjectGateway/projectSessionLifecycle 项目分支），新增目录进程网关（`adapters/ompDirectoryGateway.ts`，`--mode rpc-ui --no-session` 常驻 + v3 三态：available/unsupported/unavailable）；斜杠严格分发改适配层本地判定（`app/slashCommandResolver.ts` 目录缓存 + unknown 复核，未知命令 `omp_command_unknown`、tui_only `omp_command_tui_only`，绝不发给模型）；会话进程 ready 后 `set_ask_dialog` 启用富 ask（`extension_ui_request{method:"ask"}` 单帧问题集 → `answers` 按题回传）；审批降级为 extension runner 的 select(Approve/Deny) 通用询问；子代理控制改 `cancel_subagent`/`steer_subagent`、详情续读改父会话进程 `get_subagent_messages`（fromByte/nextByte，无 hasMore/recordTooLarge——上游游标单调推进即读尽）；冷会话改名/删除走目录进程 `rename_session`/`delete_session`（先结束承载进程再删，旧核回落本地文件路径）；`provider/testModelConnectivity` 与 `mcp/list` 按能力缺失/空状态表收口。
+- 历史自动化验证（2026-10-07 实际执行，均通过）：`pnpm --filter @zcode/omp-agent test` 217 项 0 失败 0 跳过（含当时的 OMP 打桩协议用例 30 项，现已取消，不作为当前验收依据；真实内嵌核 E2E 3 项覆盖历史会话链路、本地命令收口、临时模型选择与 v3 目录能力，内嵌二进制取本地安装的 `omp/18.8.0+fork.298`，由 `OMP_RELEASE_BINARY_PATH` 注入，与 oh-my-pi 源码 HEAD 同日构建）；`pnpm typecheck`、`pnpm lint`（0w0e）、`pnpm fmt:check`、`pnpm architecture:check --changed`（0 违例）。连带面：`packages/ui/test/ompModelRolesFallback.test.ts` 7 项、`packages/services/test/workspaceConfigEvents.test.ts` 1 项通过。
 - 未验证范围（如实记录）：GUI 真实操作验收（Z01—Z17 的桌面链路）未执行——本轮为协议适配与自动化验证闭环，GUI 走查待后续按本文件验收场景补足；CentOS 7 侧（WSL）链路未跑。测试基建已知限制：adapter e2e 的行池按 rowId 合并多会话行，双会话断言需独立 harness（取消路径用例已拆分）。
 - 历史实现与验证记录（项目模式时期，协议面已失效，仅作沿革备查）：2026-09-29 需求定稿与 Z1/Z2 实施；2026-09-30 GUI 真实验收（Z01/Z02/Z03/Z05/Z08/Z09/Z10/Z11/Z12/Z13/Z14/Z15 逐项通过，截图 `%TEMP%/omp-accept/`）；2026-10-01 低危备查两项缺陷修复；2026-10-04 协议对比审查 24 项修复；2026-10-05 第二轮交叉评审闭环（261 测试全绿）。
 
-- 2026-10-09 核心体验续作：目录进程退出缓存、命令失效代次、原生 custom 输出增量历史，以及会话创建/输入/恢复相关回归已纳入 OMP 全集；固定 Node 24.14.0 下 374/374 通过、0 跳过，包含本机安装核的真实 E2E。具体缺陷边界以各自协议/文件 I/O 用例为准，不把真实核的其他成功路径当作真实崩溃注入或全部 GUI 验收。最终 GLM live/stable、R7 正常退出后 cold 与草稿/mentions 场景通过，证据及完整门禁边界见 [核心体验续作验收](../test-reports/performance-hot-paths-2026-10-09.md#核心体验续作验收)。
+- 2026-10-09 核心体验续作：目录进程退出缓存、命令失效代次、原生 custom 输出增量历史，以及会话创建/输入/恢复相关回归已纳入 OMP 全集；固定 Node 24.14.0 下 374/374 通过、0 跳过，包含本机安装核的真实 E2E。具体缺陷边界以各自协议/文件 I/O 用例为准，不把真实核的其他成功路径当作真实崩溃注入或全部 GUI 验收。历史会话 live/stable、R7 正常退出后 cold 与草稿/mentions 场景通过，证据及完整门禁边界见 [核心体验续作验收](../test-reports/performance-hot-paths-2026-10-09.md#核心体验续作验收)。
 
 - 2026-10-11 OMP 诊断日志补点：按既有日志需求补充适配器、Host 服务、桌面 IPC、远端部署与 UI 调用边界的安全阶段/结果摘要，保留业务所有权、返回值和异常传播，不新增日志基础设施。本次仅允许对实际修改文件执行非测试 Lint/格式检查；未运行测试、冒烟、E2E、全仓静态检查或三级门禁，跨文件链路、日志实际落盘与运行时行为未验证，不计为功能验收通过。
 - 同轮独立审查后的 8 项修复：恢复两处类型导入；补齐 Host 安全诊断字段白名单与固定覆盖问题码的受控数组；核心 ID 使用 `ompRequestId`，不覆盖 Host `requestId`；远端最终失败使用 ERROR、既有取消使用 WARN；profile 来源诊断遵循 `OMP_PROFILE` → `PI_PROFILE`；启动诊断保留工作区身份；交互读取完成日志移到真实查询和分页成功边界。修复只调整类型依赖和诊断，不改变业务请求、状态或控制流。实际修改文件的 Lint/格式检查通过；未执行编译、测试、冒烟或门禁，跨文件和运行时行为仍未验证。
 
 - 2026-10-11 实际 GUI 日志修复：合法的 `advisor_cost_changed` 与 `session_settled` 曾落入封闭事件 schema 的未知类型分支，产生三条 `omp_core_frame_decode_failed`；现按 OMP 当前无载荷契约补齐解码，不修改轮次所有者或收口规则，也不关闭未知帧诊断。新增辅助事件回归修复前因 discriminator 缺项失败，修复后 `promptResultSemantics.test.ts` 19/19 通过；真实 GUI 既有两轮/冷恢复入口增加适配器拒帧日志断言。
-- 修复后的 `pnpm slowtest --human-authorized` 退出 0，34 阶段全部 PASS：`total=418.4s compile_excluded=13.8s budgeted=404.6s limit=1500.0s`。绑定 HEAD `0820b8dd670bad025cba20613df9686beb806f6b`、未提交工作树及内容指纹 `2eef8aead6e2ce18adbe929b3ec0ab1a609234a31d8366b977407b4b8c4312fa`（追加本记录前）；Node 24.20.0 / pnpm 10.33.2。真实 GLM、两轮回复、同 UUID 冷恢复与窗口隔离通过，`ompcode-core-gui-XudLOs` 的完整 Electron stderr 不再出现核心拒帧诊断，冷恢复截图可见两轮回复。测试隔离层主动拒绝系统注册、全新根的会话目录 ENOENT 及 OMP 本地模型服务未启动的发现警告仍保留；构建警告未作修复，不宣称日志零警告。WSL 为 `SKIPPED_NOT_APPLICABLE`，未修改用户配置或 OMP 仓库。
+- 修复后的 `pnpm slowtest --human-authorized` 退出 0，34 阶段全部 PASS：`total=418.4s compile_excluded=13.8s budgeted=404.6s limit=1500.0s`。绑定 HEAD `0820b8dd670bad025cba20613df9686beb806f6b`、未提交工作树及内容指纹 `2eef8aead6e2ce18adbe929b3ec0ab1a609234a31d8366b977407b4b8c4312fa`（追加本记录前）；Node 24.20.0 / pnpm 10.33.2。历史会话链路、同 UUID 冷恢复与窗口隔离通过，`ompcode-core-gui-XudLOs` 的完整 Electron stderr 不再出现核心拒帧诊断，冷恢复截图保留。测试隔离层主动拒绝系统注册、全新根的会话目录 ENOENT 及 OMP 本地模型服务未启动的发现警告仍保留；构建警告未作修复，不宣称日志零警告。WSL 为 `SKIPPED_NOT_APPLICABLE`，未修改用户配置或 OMP 仓库。

@@ -5,9 +5,12 @@
 ## 所有者与协议
 
 - `OmpChildProcess` 拥有持续 stdout 读取、ready 等待、v3 优先/v2 回落协商、命令关联与 EOF 销毁；start 在协商完成后才返回。每会话一进程，`OmpDirectoryGateway` 唯一持有工作区 `--no-session` 目录进程。
+- 目录进程没有会话交互呈现面；已知单向 UI 状态通知 `notify/setStatus/setWidget/setTitle/set_editor_text` 以及不要求答复的 `cancel` 不生成 `extension_ui_response`。真实交互请求与未知方法仍按取消 fail-closed；原生 EOF 关闭时 `session_shutdown` 清理 dashboard 发出的 `setWidget` 不得触发对已退出 child 的回写，不以吞掉真实交互错误规避该边界。
 - v3 只增加 commandCompletion/modelRoleConfig/sessionDirectory；审批仍是 `extension_ui_request {method:"select",options:["Approve","Deny"]}`，富 ask 通过 `set_ask_dialog` 启用同一载体的 `method:"ask"`。
 - `OmpInteractionProxy` 汇合 v4 与宿主反向应答，按请求 ID 只接受一次。select 缺失/未知/冲突选项取消；input/editor 传递 sensitive/prefill 与实际文本；销毁、取消或断连 fail-closed。
+- 交互结算的唯一 owner 仍为 `OmpInteractionProxy`；每次反向等待借用可取消 lease，`ProtocolServer` 仍唯一持有 transport pending/timer。v4 应答、核心 cancel/ask deadline、本地预算或会话销毁获胜后，同步取消 lease 并清除 pending/timer，以原生 `AbortError` 结束反向等待，不伪造宿主 result、不再次发送答案；宿主正常应答/真实错误沿原路径收口，迟到/重复回执无害。验收以真实 ProtocolServer 流配合 proxy 检查一次性 consumer 响应、timer 释放、正常退出已完成交互无 disconnect，且真实未决断连继续 fail-closed。
 - ask 服务端持有真实超时与 recommended 收尾；适配器不发送不存在的 `ask_pause`，本地 snooze 不声称暂停核心倒计时。
+- ask 的 `question.recommended?: number` 是 0-based 选项索引，经既有 Host 反向请求、legacy 与 v4 问题 schema 原样保留；`option.preview` 复用既有字段。GUI 只显示推荐与预览，不据此预选或提交答案，不新增超时 owner；题目顺序、答案 ID 映射以及取消/到期回路不变。
 - 当前核心无 `test_model`/`list_mcp_servers`：连通性测试显式 -32601；MCP 查询仅合法空状态，不伪造连接事实。
 - 原生 `custom` 消息由现有 `OmpEventProjector` 在 `message_end` 投影为独立完成文本行；`message_start` 不重复落行。`ConversationProjection` 仍唯一拥有行 ID/seq，纯 domain helper 只提取显式可见文本、组装行，不调用模型或修改主 turn/usage/error/stream anchor。冷 `custom_message`/message 包装复用同一可见性与文本提取；两链路继续使用同一 publisher，进程 callback gate 不变。
 - 核心命令需求见 [omp-native-commands.md](../../../docs/requirements/omp-native-commands.md)。所有斜杠输入先按实际目录校验，空闲和运行中都经 `prompt.message`；运行中附带对应 `streamingBehavior`，由 OMP 先执行内置命令，再为技能/魔法命令的模型输入应用队列策略。普通补充文本保留 `steer` / `follow_up` 路径。未知、TUI-only 与带附件命令先拒绝，不切模型。

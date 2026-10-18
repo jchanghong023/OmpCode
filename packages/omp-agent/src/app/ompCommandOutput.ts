@@ -28,11 +28,11 @@ export class OmpCommandOutputBridge {
   custom = (message: unknown): void => {
     const visible = visibleOmpCustomDisplay(message);
     if (!visible) return;
-    // OMP custom-only 父会话可能未跨 assistant 落盘门；只保存实际缺失的可见显示事实。
+    // 原生事件可早于已发布的完成提示；显示用接纳时间，原生时间只供 journal 因果匹配。
     this.publish({
       id: createId("omp-custom-output"),
       text: visible.text,
-      createdAt: Math.trunc(visible.timestamp ?? Date.now()),
+      createdAt: Date.now(),
       customType: visible.customType,
       ...(visible.timestamp !== undefined ? { nativeTimestamp: visible.timestamp } : {}),
     });

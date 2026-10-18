@@ -80,11 +80,10 @@ export class SessionIndexTopics {
     const indexId = this.host.rekeyedEngineIds.has(engine.sessionId)
       ? persistedId
       : engine.sessionId;
-    const createdAt = overrides?.createdAt ?? index.summaries.get(indexId)?.createdAt ?? Date.now();
     const summary = buildEngineSessionSummary({
       engine,
       sessionId: indexId,
-      createdAt,
+      createdAt: overrides?.createdAt ?? index.summaries.get(indexId)?.createdAt,
       lastActivityAt: overrides?.lastActivityAt,
     });
     index.summaries.set(indexId, summary);

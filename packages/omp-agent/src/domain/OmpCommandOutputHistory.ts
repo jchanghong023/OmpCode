@@ -19,6 +19,8 @@ export function mergeOmpCommandOutputHistory(
       .map((row) => [row.entityId, row]),
   );
   const nativeCustom = nativeOmpCustomDisplays(nativeEntries);
+  // 每次合并重建匹配池：即使 rows 已含 live 身份，也须消费其对应原生事实，
+  // 避免后续同文独立事件错配；幂等性属于纯合并，不依赖投影重复初始化。
   const seenOutputIds = new Set<string>();
   for (const output of outputs) {
     // 修复：旧 GUI 曾把技能全文和协调提示存成显示记录；冷恢复也必须排除这些上下文。
@@ -45,9 +47,17 @@ export function mergeOmpCommandOutputHistory(
             )
           : -1;
       if (matching >= 0) {
-        nativeCustom.splice(matching, 1);
-        byEntity.delete(entityId);
-        continue;
+        const [native] = nativeCustom.splice(matching, 1);
+        // 真实 team-result 已在 journal 落盘，但 live 发布的是 command_output 身份；
+        // 删除派生行会让冷恢复丢失该 ID。只移除这一次原生显示，沿用已发布的完整记录。
+        const nativeRowIndex = nativeRows.findIndex(
+          (row) =>
+            row.kind === "assistantText" &&
+            row.entityId?.startsWith("omp-native-custom") &&
+            row.text === native!.text &&
+            row.createdAt === native!.timestamp,
+        );
+        if (nativeRowIndex >= 0) nativeRows.splice(nativeRowIndex, 1);
       }
     }
     if (byEntity.has(entityId)) continue;

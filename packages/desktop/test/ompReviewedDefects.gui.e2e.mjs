@@ -16,6 +16,7 @@ import {
   readMockRequests,
   reveal,
 } from "./ompMockInteractions.assertions.mjs";
+import { poll } from "./ompConversationAcceptance.assertions.mjs";
 
 const endpoint = process.env.OMP_E2E_CDP_URL;
 assert.ok(endpoint, "Set OMP_E2E_CDP_URL to an isolated OmpCode Electron CDP endpoint");
@@ -65,7 +66,13 @@ try {
     }
   }
   await assertIsolation();
-  await readMockRequests(runtime);
+  const startupRequests = await readMockRequests(runtime);
+  if (phase === "recovery")
+    assert.deepEqual(
+      startupRequests.calls,
+      [],
+      "Cold startup must not replay historical model inputs",
+    );
 
   const model = page.getByTestId("chat-model-select-trigger");
   await model.waitFor({ state: "visible" });
@@ -80,6 +87,7 @@ try {
 
   async function sendAndWait(marker) {
     const prompt = `ZCODE_MOCK_TEXT ${marker}`;
+    const beforeCalls = (await readMockRequests(runtime)).calls.length;
     const input = page.getByTestId("v4-composer-input");
     const send = page.getByTestId("v4-composer-send");
     await input.fill(prompt);
@@ -87,13 +95,58 @@ try {
     await send.hover();
     await page.getByRole("tooltip").waitFor({ state: "visible" });
     await send.click();
+    const held = await poll(
+      async () => {
+        const observed = await readMockRequests(runtime);
+        return {
+          barrier: observed.acceptance.barriers[marker],
+          calls: observed.calls.map(({ requestId, completed, aborted }) => ({
+            requestId,
+            completed,
+            aborted,
+          })),
+        };
+      },
+      (observed) => observed.barrier === "waiting",
+      `Identity response barrier ${marker}`,
+    );
+    assert.equal(
+      held.calls.length,
+      beforeCalls + 1,
+      "One send must start exactly one HTTP request",
+    );
+    const heldRequest = held.calls.at(-1);
+    assert.equal(heldRequest.completed, false);
+    assert.equal(heldRequest.aborted, false);
     await page.getByTestId("v4-stop").hover();
     await page.getByRole("tooltip").waitFor({ state: "visible" });
     await captureIsolationScreenshot(join(evidenceDir, `composer-stop-${marker}.png`));
-    await input.hover();
+    // 可悬浮提示有指针过渡区与焦点语义；真实返回编辑器，而非仅瞬移鼠标。
+    await input.click();
+    await poll(
+      () => input.evaluate((element) => element.contains(element.ownerDocument.activeElement)),
+      (focused) => focused,
+      "Returning to the composer must transfer keyboard focus to the editor",
+    );
     await page.getByRole("tooltip").waitFor({ state: "hidden" });
+    // 悬浮截图和移开关闭必须发生在同一真实请求未终结时，不能接受已空闲的替代状态。
+    const beforeRelease = (await readMockRequests(runtime)).calls.at(-1);
+    assert.equal(beforeRelease.requestId, heldRequest.requestId);
+    assert.equal(beforeRelease.completed, false);
+    assert.equal(beforeRelease.aborted, false);
+    const releaseResponse = await fetch(runtime.mock.controlUrl, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ type: "release", name: marker }),
+      signal: AbortSignal.timeout(5000),
+    });
+    assert.equal(releaseResponse.status, 200, await releaseResponse.text());
     await page.getByText(marker, { exact: true }).waitFor({ state: "visible", timeout: 90_000 });
     await page.getByTestId("v4-composer-send").waitFor({ state: "visible", timeout: 30_000 });
+    const completed = (await readMockRequests(runtime)).calls.at(-1);
+    assert.equal(completed.requestId, heldRequest.requestId);
+    assert.equal(completed.completed, true);
+    assert.equal(completed.aborted, false);
     return marker;
   }
 
@@ -147,6 +200,52 @@ try {
     await assertRecoveredInteractions(page, interactions, taskTestId.slice("task-item-".length));
   const records = await assertStoredInteractions(runtime, taskTestId, interactions, saved?.records);
   const requests = await readMockRequests(runtime);
+  if (phase === "recovery") {
+    // 读取历史不能重发模型；原来只保存 requests，重复提交仍会被当作成功。
+    assert.deepEqual(
+      requests.calls,
+      [],
+      "Opening recovered parent/child records must call no model",
+    );
+    const third = `GUI_IDENTITY_THIRD_${runId}`;
+    await sendAndWait(third);
+    const resumed = await readMockRequests(runtime);
+    assert.equal(
+      resumed.calls.length,
+      1,
+      "One explicit resumed input must produce one model request",
+    );
+    assert.equal(resumed.calls[0].completed, true);
+    const context = resumed.calls[0].messages;
+    const content = (message) =>
+      typeof message.content === "string"
+        ? message.content
+        : (message.content ?? [])
+            .filter((part) => part.type === "text")
+            .map((part) => part.text)
+            .join("\n");
+    assert.ok(content(context.at(-1)).endsWith(`ZCODE_MOCK_TEXT ${third}`));
+    for (const marker of [`GUI_IDENTITY_FIRST_${runId}`, `GUI_IDENTITY_SECOND_${runId}`])
+      assert.equal(
+        context.filter(
+          (message) => message.role === "assistant" && content(message).includes(marker),
+        ).length,
+        1,
+        `Resumed request must retain exactly one original assistant response: ${marker}`,
+      );
+    const afterResume = await assertStoredInteractions(runtime, taskTestId, interactions);
+    assert.equal(afterResume.parentId, records.parentId);
+    assert.equal(afterResume.childContentHash, records.childContentHash);
+    assert.equal(
+      afterResume.parentMessageCount,
+      records.parentMessageCount + 2,
+      "Resuming must append only its real user/assistant pair",
+    );
+    await writeFile(
+      join(evidenceDir, `mock-resume-${runId}.json`),
+      JSON.stringify(resumed, null, 2),
+    );
+  }
   await writeFile(
     join(evidenceDir, `mock-requests-${phase}-${runId}.json`),
     JSON.stringify(requests, null, 2),

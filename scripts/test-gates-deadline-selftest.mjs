@@ -13,6 +13,16 @@ export async function exerciseHardDeadline(run, level, compile, childPid) {
   assert.equal(stuckFailure.code, 1, stuckFailure.output);
   assert.equal(stuckFailure.report.status, "FAIL");
   assert.equal(stuckFailure.report.stages[0].exitCode, 7);
+  assert.deepEqual(
+    stuckFailure.report.failureEvents,
+    ["failure-notified", "finally-entered"],
+    "The owning lifecycle must receive the original failure before the stage enters its hung finally",
+  );
+  assert.deepEqual(
+    stuckFailure.report.stages.map((stage) => stage.id),
+    ["failure"],
+    "The hung failing stage must not admit the next serial stage",
+  );
   assert.ok(stuckFailure.report.total < 3, "Command failure must bypass a stuck stage finally");
   assert.equal(compile.code, 124, `${level} must time out even during pure compilation`);
   assert.equal(compile.report.status, "TIMEOUT");

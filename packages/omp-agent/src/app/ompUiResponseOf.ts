@@ -67,13 +67,12 @@ export function toOmpUiResponse(request: OmpUiRequest, answer: HostUserInputAnsw
     }
     return { type: "extension_ui_response" as const, id: request.frame.id, value: selected };
   }
-  // S5-4 依据：此处为 input/editor 无选项形态。omp requestRpcEditor 对响应的
-  // pendingRequests resolve 把 "value" 直通采纳为编辑结果；accept 而无文本时回
-  // value:"" 会用空串覆盖原值（原文事实性丢失），必须按取消终止本次编辑。
+  // input/editor 的显式空串表示用户清空后提交，OMP 按 value 属性是否存在采纳结果；
+  // 不能按长度误判取消。仅文本字段缺失时取消，避免把缺失答案伪造为空串覆盖原文。
   // GUI 富单题文本通过 content.answer/answer_0 返回，不一定携带 freeText。
   const contentText = answer.content?.answer ?? answer.content?.answer_0;
-  const freeText = answer.freeText ?? (typeof contentText === "string" ? contentText : "");
-  if (freeText.length === 0) {
+  const freeText = answer.freeText ?? (typeof contentText === "string" ? contentText : undefined);
+  if (freeText === undefined) {
     return {
       type: "extension_ui_response" as const,
       id: request.frame.id,

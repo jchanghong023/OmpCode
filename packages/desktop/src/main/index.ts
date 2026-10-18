@@ -87,7 +87,6 @@ import {
   shouldEnableE2ETestBridge,
   type UpdateStatePayload,
   type TelemetryEventPayload,
-  HostMessageTypes,
   isPrivateNetworkEndpoint,
   isLoopbackUrl,
   resolveOfflineGateState,
@@ -96,7 +95,6 @@ import {
 } from "@zcode/shared";
 import { flushMainLogs, logger } from "./logger.js";
 import { markMainLaunchAppReady } from "./desktopLaunchMarks.js";
-import { createCuaPipFocusRouter, resolveCuaPipWindowKey } from "./cuaPipFocusRouter.js";
 import { createDesktopTelemetryFetch } from "./desktopTelemetryFetch.js";
 import {
   acknowledgePostUpdateReleaseNotes,
@@ -744,14 +742,6 @@ if (offlineDataBackup) {
     offlineDataBackup.rendererReady();
   });
 }
-const cuaPipFocusRouter = createCuaPipFocusRouter({
-  send: (windowId, event) => {
-    windowHostProcessMap.get(windowId)?.postMessage({
-      type: HostMessageTypes.CuaPipFocusChanged,
-      event,
-    });
-  },
-});
 const hostRunningTaskCountMap = new Map<ElectronUtilityProcess, number>();
 const windowsCuaOperationIndicator = createWindowsCuaOperationIndicator({
   platform: process.platform,
@@ -891,20 +881,12 @@ function syncAppTelemetryInteractiveState(): void {
   void armsUserIdentitySync.refresh();
 }
 
-app.on("browser-window-focus", (_event, win) => {
+app.on("browser-window-focus", () => {
   syncAppTelemetryInteractiveState();
   rebuildMenu();
-  // 设置/更新等无 Host 的 ZCode 窗口也算前台：router 会先把旧 workspace Host 清成 null，
-  // 再把无 Host 的新窗口事实静默丢弃，避免旧会话 PiP 继续显示。
-  cuaPipFocusRouter.focusWindow(resolveCuaPipWindowKey(win));
 });
-app.on("browser-window-blur", (_event, win) => {
+app.on("browser-window-blur", () => {
   syncAppTelemetryInteractiveState();
-  cuaPipFocusRouter.blurWindow(resolveCuaPipWindowKey(win));
-});
-app.on("browser-window-created", (_event, win) => {
-  const windowKey = resolveCuaPipWindowKey(win);
-  win.once("closed", () => cuaPipFocusRouter.removeWindow(windowKey));
 });
 
 const remoteSessionManager = createRemoteWorkspaceSessionManager({
@@ -1822,7 +1804,6 @@ function createWindowInstance(startupBootstrap: StartupWindowBootstrap = {}) {
         hideWindow: () => win.hide(),
       }),
     windowHostProcessMap,
-    onHostProcessReady: (windowKey) => cuaPipFocusRouter.refreshWindow(windowKey),
     awaitFirstHostSpawnDecision,
     spawnHostProcess: (win, label, initMessage) =>
       spawnHostProcess(
@@ -2320,8 +2301,6 @@ app.whenReady().then(async () => {
     executeDesktopCommand: executeDesktopCommandForApp,
     acknowledgePostUpdateReleaseNotes: (version) =>
       acknowledgePostUpdateReleaseNotes(version, mainSettingService),
-    syncActiveTaskSession: (windowId, sessionId) =>
-      cuaPipFocusRouter.updateActiveSession(windowId, sessionId),
     syncTaskRealtimeWorkspaceKeys: (windowId, workspaceKeys) => {
       const hostId = windowTaskRealtimeHostIdMap.get(windowId);
       if (hostId) {

@@ -273,6 +273,7 @@ export const userInputQuestionPayloadSchema = z.object({
   header: z.string(),
   options: z.array(userInputOptionPayloadSchema),
   multiSelect: z.boolean().optional(),
+  recommended: z.number().optional(),
 });
 export type UserInputQuestionPayload = z.infer<typeof userInputQuestionPayloadSchema>;
 

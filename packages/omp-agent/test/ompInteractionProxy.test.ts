@@ -1,7 +1,159 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { PassThrough } from "node:stream";
+import { getEventListeners } from "node:events";
+import type { HostGateway, HostUserInputAnswer } from "../src/app/ports.js";
+import { ProtocolServer } from "../src/adapters/protocolServer.js";
+import { logger } from "../src/adapters/logger.js";
 import { OmpInteractionProxy } from "../src/app/ompInteractionProxy.js";
 import { dispatchOmpUiFrame } from "../src/adapters/ompUiFrames.js";
+
+for (const winner of ["v4", "core_cancel", "deadline", "dispose"] as const) {
+  test(
+    `反向请求 lease：${winner} 获胜释放资源，迟到应答不二次结算`,
+    { timeout: 2_000 },
+    async (t) => {
+      t.mock.timers.enable({ apis: ["setTimeout"] });
+      const input = new PassThrough();
+      const output = new PassThrough();
+      const frames: unknown[] = [];
+      output.on("data", (chunk: Buffer) => frames.push(JSON.parse(chunk.toString())));
+      const errors: Record<string, unknown>[] = [];
+      t.mock.method(logger, "error", (_message, fields) => {
+        if (fields) errors.push(fields);
+      });
+      const cleared = t.mock.method(globalThis, "clearTimeout");
+      const server = new ProtocolServer({ input, output, handleRequest: async () => ({}) });
+      server.start();
+      t.after(() => {
+        server.dispose();
+        input.destroy();
+        output.destroy();
+      });
+      let reverse!: Promise<HostUserInputAnswer>;
+      let signal!: AbortSignal;
+      let interactionId = "";
+      const responses: unknown[] = [];
+      const resolved: string[] = [];
+      const gateway: HostGateway = {
+        emitFrame: (frame) => server.emitFrame(frame),
+        requestUserInput(params, lease) {
+          signal = lease!;
+          reverse = server.requestUserInput(params, lease);
+          void reverse.catch(() => {});
+          return reverse;
+        },
+      };
+      const proxy = new OmpInteractionProxy({
+        sessionId: "session-lease",
+        gateway,
+        addPendingInteraction: (pending) => {
+          interactionId = pending.interactionId;
+        },
+        resolvePendingInteraction: (id) => resolved.push(id),
+        scheduleFlush() {},
+      });
+      t.after(() => proxy.dispose());
+      const handled =
+        winner === "deadline"
+          ? proxy.handleAsk({
+              frame: {
+                id: "omp-lease",
+                questions: [{ id: "q1", question: "Pick", options: [{ label: "A" }] }],
+                timeoutMs: 40,
+              },
+              respond: (response) => responses.push(response),
+            })
+          : proxy.handle({
+              frame: { id: "omp-lease", method: "input", title: "Text" },
+              respond: (response) => responses.push(response),
+            });
+      assert.equal(frames.length, 1, "只发一个反向请求");
+      assert.equal(getEventListeners(signal, "abort").length, 1);
+      if (winner === "v4") {
+        assert.equal(proxy.settle(interactionId, { action: "accept", freeText: "kept" }), true);
+      } else if (winner === "core_cancel") {
+        await proxy.handle({
+          frame: { id: "cancel-lease", method: "cancel", targetId: "omp-lease" },
+          respond() {},
+        });
+      } else if (winner === "dispose") {
+        proxy.dispose();
+      } else {
+        t.mock.timers.tick(40);
+      }
+      await handled;
+      await assert.rejects(reverse, { name: "AbortError" });
+      assert.equal(signal.aborted, true);
+      assert.equal(getEventListeners(signal, "abort").length, 0, "撤销监听不得保留 proxy 引用");
+      assert.ok(cleared.mock.callCount() >= 2, "代理与 transport timer 都被清除");
+      t.mock.timers.tick(30 * 60_000);
+      assert.deepEqual(resolved, [interactionId]);
+      const expected =
+        winner === "deadline"
+          ? []
+          : [
+              winner === "v4"
+                ? { type: "extension_ui_response", id: "omp-lease", value: "kept" }
+                : { type: "extension_ui_response", id: "omp-lease", cancelled: true },
+            ];
+      assert.deepEqual(responses, expected);
+      input.write(
+        `${JSON.stringify({ id: interactionId, result: { action: "accept", freeText: "late" } })}\n`,
+      );
+      input.write(`${JSON.stringify({ id: interactionId, error: "late duplicate" })}\n`);
+      assert.equal(proxy.settle(interactionId, { action: "cancel" }), false);
+      await Promise.resolve();
+      server.dispose();
+      assert.deepEqual(responses, expected);
+      assert.equal(frames.length, 1, "释放 lease 不得伪造 host result 或发送额外答案");
+      assert.deepEqual(errors, [], "已完成交互退出不得产生 disconnect/迟到 error");
+    },
+  );
+}
+
+test("反向请求 lease：真实未决断连仍拒绝等待并取消核心交互", async (t) => {
+  const input = new PassThrough();
+  const output = new PassThrough();
+  output.resume();
+  const errors: Record<string, unknown>[] = [];
+  t.mock.method(logger, "error", (_message, fields) => {
+    if (fields) errors.push(fields);
+  });
+  const server = new ProtocolServer({ input, output, handleRequest: async () => ({}) });
+  server.start();
+  t.after(() => {
+    server.dispose();
+    input.destroy();
+    output.destroy();
+  });
+  const responses: unknown[] = [];
+  let reverse!: Promise<HostUserInputAnswer>;
+  const proxy = new OmpInteractionProxy({
+    sessionId: "session-disconnect",
+    gateway: {
+      emitFrame() {},
+      requestUserInput(params, signal) {
+        reverse = server.requestUserInput(params, signal);
+        return reverse;
+      },
+    },
+    addPendingInteraction() {},
+    resolvePendingInteraction() {},
+    scheduleFlush() {},
+  });
+  const handled = proxy.handle({
+    frame: { id: "omp-disconnect", method: "input", title: "Text" },
+    respond: (response) => responses.push(response),
+  });
+  server.dispose();
+  await assert.rejects(reverse, /host transport closed/);
+  await handled;
+  assert.deepEqual(responses, [
+    { type: "extension_ui_response", id: "omp-disconnect", cancelled: true },
+  ]);
+  assert.equal(errors.filter((entry) => entry.event === "host.interaction.disconnect").length, 1);
+});
 
 test("rpc-ui editor 多行与空白正文经交互路径原样返回同一请求", async () => {
   const pending: { interactionId: string; payload: unknown }[] = [];
@@ -248,9 +400,6 @@ test("S5-4: editor prefill 携带进 pendingInteraction payload 供宿主作初�
     prompt: "补充说明",
     freeText: true,
     prefill: "草稿内容",
-    answerMode: "text",
-    allowCustomInput: true,
-    questions: [{ question: "补充说明", header: "补充说明", options: [] }],
   });
   assert.deepEqual(responses, [
     { type: "extension_ui_response", id: "omp-ui-4", value: "改好的文本" },
@@ -277,7 +426,7 @@ test("editor 缺省 prefill 仍显式投影空串，普通 input 不声明 edito
   proxy.dispose();
 });
 
-test("S5-4: editor accept 而无文本回 cancelled（空串会被 omp 直通采纳为编辑结果、丢失原文）", async () => {
+test("S5-4: editor 显式空串提交原样回 value，不误当取消", async () => {
   const responses: unknown[] = [];
   const proxy = new OmpInteractionProxy({
     sessionId: "session-1",
@@ -297,7 +446,32 @@ test("S5-4: editor accept 而无文本回 cancelled（空串会被 omp 直通采
     respond: (response) => responses.push(response),
   });
 
-  assert.deepEqual(responses, [{ type: "extension_ui_response", id: "omp-ui-5", cancelled: true }]);
+  assert.deepEqual(responses, [{ type: "extension_ui_response", id: "omp-ui-5", value: "" }]);
+});
+
+test("S5-4: editor accept 缺失文本仍取消，不伪造空串覆盖原文", async () => {
+  const responses: unknown[] = [];
+  const proxy = new OmpInteractionProxy({
+    sessionId: "session-1",
+    gateway: {
+      emitFrame() {},
+      async requestUserInput() {
+        return { action: "accept" };
+      },
+    },
+    addPendingInteraction() {},
+    resolvePendingInteraction() {},
+    scheduleFlush() {},
+  });
+
+  await proxy.handle({
+    frame: { id: "omp-ui-missing", method: "editor", title: "补充说明", prefill: "草稿" },
+    respond: (response) => responses.push(response),
+  });
+
+  assert.deepEqual(responses, [
+    { type: "extension_ui_response", id: "omp-ui-missing", cancelled: true },
+  ]);
 });
 
 // ── 富 ask（extension_ui_request method:"ask"，set_ask_dialog 启用后）──

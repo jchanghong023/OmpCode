@@ -75,21 +75,17 @@ export async function fastPlan() {
 
 const coreTests = {
   "omp-agent": [
-    "adapter.e2e",
+    "agentInterventionProjection",
     "coldStoreProjection",
-    "conversationEngineStatus",
     "conversationRecovery",
     "frameAssembler",
     "mockModel",
     "mockServer",
-    "nativeCommandFirstIdentity",
     "ompAskAnswers",
-    "ompCommandOutputHistory",
     "ompCustomMessages",
     "ompExecutionHistory",
     "ompInteractionMapping",
     "ompInteractionProxy",
-    "ompLocalAttachmentInput",
     "ompProjectorInterruptedToolRow",
     "ompStore",
     "projectionToolCallIndex",
@@ -97,16 +93,11 @@ const coreTests = {
     "promptResultSemantics",
     "protocolServerConcurrency",
     "queueReconciliation",
-    "sessionLifecycleGates",
-    "sessionRegistry.identity",
-    "sessionRegistryAliases",
-    "sessionRegistryConcurrency",
     "topicFlowControl",
     "topicWireBudget",
     "v4InteractionAck",
   ],
   services: [
-    "ompConcurrentStartup",
     "offlineDataBackup",
     "settingDataDirectoryInfo",
     "ompTaskIdMigration",
@@ -119,16 +110,19 @@ const coreTests = {
     "providerConfigMigration",
     "serviceLoggerRuntime",
     "ompDiagnosticLog",
+    "workspaceFileIndex",
   ],
   shared: ["editorPrefill", "ompPaths", "offlineDataRoots", "taskIdMigration", "feedbackPrivacy"],
   client: ["websocketDisconnect"],
   server: ["remoteConnectionStore"],
   web: ["oauthRedirect"],
   ui: [
+    "composerProfileStorage",
     "conversationRecoveryBudget",
     "ompAskPresentation",
     "ompAttachmentRejection",
     "ompComposerModelSync",
+    "ompInteractionContentSummary",
     "ompModelCatalog",
     "ompNativeCommandRouting",
     "ompNativeDraftAttachments",
@@ -143,16 +137,23 @@ const coreTests = {
 };
 
 export async function fullPlan() {
+  // 无失败率统计时按风险层次排序；静态错误先阻止昂贵的真实核、GUI 和分发准备。
   const stages = [
-    ...staticPlan(true),
-    node("gate-entry-selftest", ["scripts/test-gates.mjs", "--self-test"], { kind: "test" }),
-    node("license-graph-tests", ["--test", "scripts/third-party-npm.test.mjs"], { kind: "test" }),
+    ...staticPlan(true).map((stage) => ({ ...stage, parallelGroup: "static" })),
+    node("gate-entry-selftest", ["scripts/test-gates.mjs", "--self-test"], {
+      kind: "test",
+      parallelGroup: "offline-core",
+    }),
+    node("license-graph-tests", ["--test", "scripts/third-party-npm.test.mjs"], {
+      kind: "test",
+      parallelGroup: "offline-core",
+    }),
     pnpm(
       "offline-desktop-core-tests",
       ["exec", "tsx", "--test", "packages/desktop/test/offlineDesktop.test.ts"],
-      { kind: "test" },
+      { kind: "test", parallelGroup: "offline-core" },
     ),
-  ].map((stage) => ({ ...stage, parallelGroup: "offline-core" }));
+  ];
   for (const [name, files] of Object.entries(coreTests))
     stages.push(
       pnpm(
@@ -178,29 +179,10 @@ export async function fullPlan() {
       ),
     );
   stages.push(
-    node("desktop-build-metadata", ["packages/desktop/scripts/build-metadata.mjs"]),
     node("adapter-build", ["packages/omp-agent/scripts/bundle.mjs"], {
       kind: "compile",
       // 修复依据：bundle 只调用 esbuild，不运行 OMP；安装门控仅属于真实核心/GUI。
-      parallelGroup: "local-compiles",
-    }),
-    ...[
-      ["desktop-main-host-preload-build", "@zcode/desktop", ["tsup"]],
-      ["desktop-renderer-build", "@zcode/desktop", ["vite", "build", "--no-emptyOutDir"]],
-      ["web-renderer-build", "@zcode/web", ["vite", "build", "--no-emptyOutDir"]],
-      ["formal-proof-build", "@zcode/formal-proof", ["vite", "build", "--no-emptyOutDir"]],
-      ["model-option-map-build", "@zcode/model-option-map", ["tsc"]],
-      ["server-http-build", "@zcode/server", ["tsup"]],
-      ["server-cli-build", "@zcode/server-cli", ["tsup"]],
-    ].map(([id, name, args]) =>
-      pnpm(id, ["--filter", name, "exec", ...args], {
-        kind: "compile",
-        parallelGroup: "local-compiles",
-        env: { NODE_ENV: "production", ZCODE_TARGET_OS: "win32", ZCODE_TARGET_ARCH: "x64" },
-      }),
-    ),
-    pnpm("server-remote-build-validation", ["--filter", "@zcode/server", "build:remote"], {
-      parallelGroup: "local-assets",
+      parallelGroup: "adapter-compile",
     }),
     node(
       "adapter-stage",
@@ -209,8 +191,145 @@ export async function fullPlan() {
         "--eval",
         "import { stageAgentBundle } from './packages/desktop/scripts/stage-omp-agent-bundle.mjs'; stageAgentBundle({ repoRoot: process.cwd(), platformKey: `${process.platform}-${process.arch}` });",
       ],
-      { parallelGroup: "local-assets" },
+      { parallelGroup: "adapter-staging" },
     ),
+    // 真实核优先暴露协议/会话错误，只等待 adapter 构建和 staging，不等待 GUI 或打包。
+    pnpm(
+      "adapter.e2e.test.ts",
+      [
+        "exec",
+        "tsx",
+        "--test",
+        "--test-reporter=tap",
+        "--test-concurrency=2",
+        "packages/omp-agent/test/adapter.e2e.test.ts",
+        "packages/omp-agent/test/adapterRuntime.e2e.test.ts",
+        "packages/omp-agent/test/nativeControl.e2e.test.ts",
+      ],
+      { kind: "test", realOmp: true, parallelGroup: "real-omp" },
+    ),
+    pnpm(
+      "real-omp.e2e.test.ts",
+      [
+        "exec",
+        "tsx",
+        "--test",
+        "--test-reporter=tap",
+        "--test-concurrency=2",
+        "packages/omp-agent/test/real-omp.e2e.test.ts",
+        "packages/omp-agent/test/realOmpNativeCache.test.ts",
+        "packages/omp-agent/test/conversationEngineStatus.test.ts",
+        "packages/omp-agent/test/ompCommandOutputHistory.test.ts",
+        "packages/omp-agent/test/ompLocalAttachmentInput.test.ts",
+        "packages/services/test/ompConcurrentStartup.test.ts",
+      ],
+      { kind: "test", realOmp: true, parallelGroup: "real-omp" },
+    ),
+    pnpm(
+      "real-omp-registry-tests",
+      [
+        "exec",
+        "tsx",
+        "--test",
+        "--test-reporter=tap",
+        "--test-concurrency=2",
+        "packages/omp-agent/test/nativeCommandFirstIdentity.test.ts",
+        "packages/omp-agent/test/sessionLifecycleGates.test.ts",
+        "packages/omp-agent/test/sessionRegistry.identity.test.ts",
+        "packages/omp-agent/test/sessionRegistryAliases.test.ts",
+        "packages/omp-agent/test/sessionRegistryConcurrency.test.ts",
+      ],
+      { kind: "test", realOmp: true, parallelGroup: "real-omp" },
+    ),
+    node("desktop-build-metadata", ["packages/desktop/scripts/build-metadata.mjs"]),
+    ...[
+      ["desktop-main-host-preload-build", "@zcode/desktop", ["tsup"]],
+      ["desktop-renderer-build", "@zcode/desktop", ["vite", "build", "--no-emptyOutDir"]],
+    ].map(([id, name, args]) =>
+      pnpm(id, ["--filter", name, "exec", ...args], {
+        kind: "compile",
+        parallelGroup: "local-compiles",
+        env: { NODE_ENV: "production", ZCODE_TARGET_OS: "win32", ZCODE_TARGET_ARCH: "x64" },
+      }),
+    ),
+    // 根因：Electron 缺失时 require 会下载并解压；并发 GUI 可覆盖正在启动的 exe，触发 EBUSY。
+    // 由门禁先完成共享运行时准备，再并行启动消费者；下载计费，已有安装和缓存保持复用。
+    node("electron-runtime-prepare", [
+      "--input-type=module",
+      "--eval",
+      "import { createRequire } from 'node:module'; import { resolve } from 'node:path'; const require = createRequire(resolve('packages/desktop/package.json')); console.log(`Electron runtime prepared: ${require('electron')}`);",
+    ]),
+    node(
+      "components-tool-content",
+      ["packages/desktop/test/toolContentPresentation.components.e2e.mjs"],
+      { kind: "test", electron: true, parallelGroup: "isolated-runtime" },
+    ),
+    node(
+      "components-omp-product-tools",
+      ["packages/desktop/test/ompProductTools.components.e2e.mjs"],
+      { kind: "test", electron: true, parallelGroup: "isolated-runtime" },
+    ),
+    node(
+      "offline-desktop-windows-smoke",
+      ["packages/desktop/test/offlineDesktop.windows-smoke.mjs"],
+      { kind: "test", electron: true, parallelGroup: "isolated-runtime" },
+    ),
+  );
+  const guiSuites = [
+    { file: "ompStartup.gui.e2e.mjs", suite: "startup", phases: ["live"] },
+    { file: "ompReviewedDefects.gui.e2e.mjs", suite: "identity", phases: ["live", "recovery"] },
+    {
+      file: "ompConversationAcceptance.gui.e2e.mjs",
+      suite: "conversation",
+      phases: ["live", "recovery"],
+    },
+    {
+      file: "ompModelsAcceptance.gui.e2e.mjs",
+      suite: "models",
+      phases: ["live", "profile", "default"],
+    },
+    { file: "ompAgentsAcceptance.gui.e2e.mjs", suite: "agents", phases: ["live", "recovery"] },
+    { file: "ompNativeAcceptance.gui.e2e.mjs", suite: "native", phases: ["live", "recovery"] },
+    {
+      file: "ompInteractionsAcceptance.gui.e2e.mjs",
+      suite: "interactions",
+      phases: ["live", "recovery"],
+    },
+  ];
+  // 同一 suite 的后续阶段跨过进程退出屏障；不同根的 live/恢复仍有界并行。
+  for (let phaseIndex = 0; phaseIndex < 3; phaseIndex++)
+    for (const { file, suite, phases } of guiSuites) {
+      const phase = phases[phaseIndex];
+      if (!phase) continue;
+      stages.push(
+        node(`gui:${file}:${phase}`, [`packages/desktop/test/${file}`], {
+          kind: "test",
+          parallelGroup: phaseIndex === 0 ? "isolated-runtime" : `gui-recovery-${phaseIndex}`,
+          fixture: true,
+          file,
+          suite,
+          phase,
+          realOmp: true,
+        }),
+      );
+    }
+  stages.push(
+    ...[
+      ["web-renderer-build", "@zcode/web", ["vite", "build", "--no-emptyOutDir"]],
+      ["formal-proof-build", "@zcode/formal-proof", ["vite", "build", "--no-emptyOutDir"]],
+      ["model-option-map-build", "@zcode/model-option-map", ["tsc"]],
+      ["server-http-build", "@zcode/server", ["tsup"]],
+      ["server-cli-build", "@zcode/server-cli", ["tsup"]],
+    ].map(([id, name, args]) =>
+      pnpm(id, ["--filter", name, "exec", ...args], {
+        kind: "compile",
+        parallelGroup: "distribution-compiles",
+        env: { NODE_ENV: "production", ZCODE_TARGET_OS: "win32", ZCODE_TARGET_ARCH: "x64" },
+      }),
+    ),
+    pnpm("server-remote-build-validation", ["--filter", "@zcode/server", "build:remote"], {
+      parallelGroup: "local-assets",
+    }),
     node("embedded-omp-assets", ["packages/desktop/scripts/fetch-omp-release.mjs"], {
       parallelGroup: "local-assets",
       env: { OMP_RELEASE_SKIP: "0", ZCODE_TARGET_OS: "win32", ZCODE_TARGET_ARCH: "x64" },
@@ -237,70 +356,6 @@ export async function fullPlan() {
       {
         packaging: true,
         env: { NODE_ENV: "production", ZCODE_TARGET_OS: "win32", ZCODE_TARGET_ARCH: "x64" },
-      },
-    ),
-    // 根因：Electron 缺失时 require 会下载并解压；并发 GUI 可覆盖正在启动的 exe，触发 EBUSY。
-    // 由门禁先完成共享运行时准备，再并行启动消费者；下载计费，已有安装和缓存保持复用。
-    node("electron-runtime-prepare", [
-      "--input-type=module",
-      "--eval",
-      "import { createRequire } from 'node:module'; import { resolve } from 'node:path'; const require = createRequire(resolve('packages/desktop/package.json')); console.log(`Electron runtime prepared: ${require('electron')}`);",
-    ]),
-    // realOmp 要求已安装的真实二进制；模型响应仅来自测试/GUI 自有的本地 mock fixture。
-    // 构建和 staging 共享产物，先完成；之后真实 OMP、组件和 GUI 各自使用独立沙箱。
-    pnpm(
-      "real-omp.e2e.test.ts",
-      [
-        "exec",
-        "tsx",
-        "--test",
-        "--test-reporter=tap",
-        "packages/omp-agent/test/real-omp.e2e.test.ts",
-      ],
-      { kind: "test", realOmp: true, parallelGroup: "isolated-runtime" },
-    ),
-    node(
-      "components-tool-content",
-      ["packages/desktop/test/toolContentPresentation.components.e2e.mjs"],
-      { kind: "test", electron: true, parallelGroup: "isolated-runtime" },
-    ),
-    node(
-      "components-omp-product-tools",
-      ["packages/desktop/test/ompProductTools.components.e2e.mjs"],
-      { kind: "test", electron: true, parallelGroup: "isolated-runtime" },
-    ),
-    node(
-      "offline-desktop-windows-smoke",
-      ["packages/desktop/test/offlineDesktop.windows-smoke.mjs"],
-      { kind: "test", electron: true, parallelGroup: "isolated-runtime" },
-    ),
-  );
-  for (const [file, phases] of [
-    ["ompStartup.gui.e2e.mjs", ["live"]],
-    ["ompReviewedDefects.gui.e2e.mjs", ["live"]],
-  ])
-    for (const phase of phases)
-      stages.push(
-        node(`gui:${file}:${phase}`, [`packages/desktop/test/${file}`], {
-          kind: "test",
-          parallelGroup: "isolated-runtime",
-          fixture: true,
-          file,
-          phase,
-          realOmp: true,
-        }),
-      );
-  // recovery 复用 identity live 的持久化根目录，必须跨过 live 和进程清理屏障。
-  stages.push(
-    node(
-      "gui:ompReviewedDefects.gui.e2e.mjs:recovery",
-      ["packages/desktop/test/ompReviewedDefects.gui.e2e.mjs"],
-      {
-        kind: "test",
-        fixture: true,
-        file: "ompReviewedDefects.gui.e2e.mjs",
-        phase: "recovery",
-        realOmp: true,
       },
     ),
   );

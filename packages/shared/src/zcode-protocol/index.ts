@@ -2353,6 +2353,7 @@ export const zcodeUserInputQuestionSchema = z
     header: nonEmptyString,
     options: z.array(zcodeUserInputOptionSchema).min(1),
     multiSelect: z.boolean().optional(),
+    recommended: z.number().optional(),
   })
   .strict();
 export type ZCodeUserInputQuestion = z.infer<typeof zcodeUserInputQuestionSchema>;

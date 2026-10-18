@@ -2,7 +2,7 @@
 
 - 模块拥有每个会话的 omp 进程、命令收口、投影序列和订阅发布；Host 只拥有窗口级进程生命周期与路由。
 - 桌面与通用 Web 订阅共享一份会话投影。桌面按原序连续交付；Web 按相同水位续传，超出保留范围后使用快照恢复；不恢复已取消的手机远控。
-- 运行中的后续输入由 OMP 接受与消费；适配器从既有等待轮派生 queue 读面，以用户消息消费事件关联输出，不在 Renderer 维护已接受队列。队列等待项与执行中的时间线互斥展示。
+- `ConversationEngine` 的既有 `TurnContext`/队列是应用 queue 输入的唯一接纳与派发 owner；每项只持一份完整 text/originalText/images/modelSelection/sourceCommandId/clientId 与实例代次 payload。运行中 queue 只在该 owner 接纳，不预写 OMP `follow_up`；真实成功终态后通过同一串行屏障派发一条普通 `prompt`，仅真实用户消费事件激活该项并关联输出。失败、停止、退出先作废未派发 payload 与等待投影，保留原失败；旧代次续体不得启动新轮。native `prompt`/`steer` 的 request ID 使用同一 `sourceCommandId`，pending、ACK 与 `prompt_result` 按真实 ID 回到同一 owner；无 ID、旧 ID 或过时代次不能终结后来输入。native guide 仍发送 `steer`，消费前复用既有 pending-guide 落位，消费时才切换输出归属，失败不隐式重派发。Renderer 只读派生 queue，不另设 Map、已接受队列或持久日志；等待项与执行中时间线互斥，原能力禁用矩阵不变。
 - Todo 的成功结果同时产出工具行清单和 v4 plan 状态，冷恢复从最后有效结果重建；子代理行、运行目录与已结束目录复用带父归属的详情地址。两者均由同一会话投影发布，UI 不另建事实状态。
 - 会话身份由 Registry 绑定；临时 ID 迁移至稳定 UUID 后，旧订阅保持可用。
 - 永久删除必须先确认 omp 会话文件删除成功，再发索引移除事件。关闭只释放进程。
@@ -16,3 +16,21 @@
 - 直接子代理状态读取原会话子代理目录与 revision，不新设运行状态 owner；嵌套状态只从已证明 task 归属的 `wait.jobs(type:task)` 更新，优先使用 `agentUrlId`。同名 bash/eval、未知身份和主会话结束不能推出子代理终态。
 - 交互读面通过既有 SubagentBridge records 的进程归属读取现在状态；冷订阅虽可能启动 Main，但 roster 无该 child 的真实生命周期/快照证明时仍显示 `unknown`，不假定旧 pending/running 仍在执行。明确源终态不会被旧目录的 running 覆盖。进程实例变化参与缓存版本，旧进程的证明不跨实例复用；只读判断不启动进程、发新查询命令或执行模型。
 - 诊断只观察既有请求、会话、进程实例与轮次，不拥有业务状态。app 经诊断端口提交稳定事件；adapters 在入口安装 stderr JSON sink 和异步请求上下文。stdout 始终只承载协议。Host 负责采集并追加其 runtime/workspace 身份，Main 仍是文件日志唯一 writer；产品规则与验收唯一见 [OMP 对接诊断日志](../../../docs/requirements/omp-core-integration.md#omp-对接诊断日志)。
+
+```mermaid
+sequenceDiagram
+  participant UI as Renderer
+  participant Engine as ConversationEngine / TurnContext
+  participant Core as OMP 执行与持久化
+  UI->>Engine: 运行中 queue 输入（独立命令与完整 payload）
+  Engine-->>UI: 唯一队列派生等待态
+  alt 上轮真实成功终态
+    Core->>Engine: terminal agent_end / 本地完成事实
+    Engine->>Core: 同代次串行派发队首普通 prompt
+    Core->>Engine: user message_start 消费事实
+    Engine-->>UI: 仅队首移出，关联真实输出
+  else provider 失败 / stop / exit
+    Engine->>Engine: 先作废未派发项与旧代次续体
+    Engine-->>UI: 清空等待态，保留原终态与错误
+  end
+```

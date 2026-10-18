@@ -1,5 +1,5 @@
-// 排队轮对账与轮生命周期（A3/A4/A5）：开启/激活/收口、失败与 steer 转回排队的纯逻辑。
-// 投影持有状态，经 QueuedTurnReconcileHost 委托；输入登记与排队数组仍由同一 owner 写入。
+// TurnContext 是应用已接纳输入的唯一队列；这里只做派发租约、消费与终态纯状态迁移。
+// queue 不再发送 native follow_up，不依据核心文本快照猜测接纳/消费，也不设宽限定时器。
 
 import type { ConversationRow, StatePatch } from "@zcode/shared/zcode-protocol-v4";
 import {
@@ -7,15 +7,15 @@ import {
   finalizeLocalCommandTurn,
   finalizeTurnContexts,
 } from "./projectionTurnFinalizer.js";
-import { createTurnHeaderRow, createUserInputRow, type TurnContext } from "./projectionRows.js";
+import {
+  createTurnHeaderRow,
+  createUserInputRow,
+  type TurnContext,
+  type TurnSubmission,
+} from "./projectionRows.js";
 import { TurnFileFacts } from "./fileFacts.js";
 import type { ProjectionAState, TurnOutcome } from "./projectionTypes.js";
 import { runningControlPatch, terminalControlPatch } from "./projectionStatePatches.js";
-import {
-  matchQueueSnapshotOf,
-  queueDrainedTurns,
-  queueSeenTurns,
-} from "./queuedSnapshotOccurrences.js";
 
 export interface BeginTurnInput {
   text: string;
@@ -23,6 +23,7 @@ export interface BeginTurnInput {
   sourceCommandId: string;
   clientId: string;
   routing?: "startNow" | "guide" | "queue";
+  submission?: TurnSubmission;
 }
 
 /** 投影侧委托宿主：排队轮/挂起轮/行与状态的读写出口（数组与 Map 以引用共享，直接生效）。 */
@@ -50,9 +51,10 @@ export interface QueuedTurnReconcileHost {
   ) => void;
 }
 
-/** 开启用户输入轮：登记 turnHeader/userInput 行与新 TurnContext；有活跃轮时按 routing 排队或挂起旧轮。 */
+/** 开启用户输入轮；queue/guide 先登记同一 owner，只有真实消费才切换活跃输出归属。 */
 export function beginUserTurnOf(host: QueuedTurnReconcileHost, input: BeginTurnInput): void {
-  host.setLastError(null);
+  if (!host.activeTurn() && input.routing !== "queue" && input.routing !== "guide")
+    host.setLastError(null);
   const turnNumber = host.rowIds.filter((id) => host.rowAt(id)?.kind === "turnHeader").length + 1;
   const turnId = `turn-${turnNumber}-${input.inputId}`;
   const init = { turnId, productTurnId: turnId, createdAtSeq: host.seq() + 1 };
@@ -84,48 +86,32 @@ export function beginUserTurnOf(host: QueuedTurnReconcileHost, input: BeginTurnI
     responseCounter: 0,
     streamingTextRow: null,
     streamingReasoningRow: null,
+    ...(input.submission ? { submission: input.submission } : {}),
   };
-  // 全轮登记输入文本（A5 转回排队的 guide 轮也要参与 A3 队列对账匹配）。
+  // 文本索引只服务原生派生行；已接纳输入的完整 payload 仅随 TurnContext 保存一次。
   host.inputTextByTurnId.set(turnId, input.text);
   // 冷启动双投递都可能标成 startNow；有活跃轮时须排队，避免覆盖旧 TurnContext。
   const active = host.activeTurn();
-  if (active && input.routing !== "guide") {
-    // omp follow_up 只在当前 agent_end 之后启动；现有输出仍归原轮。
+  if (input.routing === "queue" || input.routing === "guide" || active) {
+    // guide 也先保留在同一 owner；真实 steer 消费时才切换输出归属，UI 复用既有 pending-guide 落位。
     host.queuedTurns.push(nextTurn);
   } else {
-    if (input.routing === "guide" && active) {
-      // steer 在当前 agent 内生效；保留旧轮供同一 agent_end 收口。
-      host.closeStreamingRows("complete", active);
-      host.suspendedTurns().push(active);
-    }
     host.setActiveTurn(nextTurn);
     host.patchState(runningControlPatch());
   }
 }
 
-/** 队首排队轮激活为活跃轮（omp 新 run 的 agent_start / 本地命令完成事实触发）。 */
-export function activateQueuedTurnOf(host: QueuedTurnReconcileHost): void {
-  if (host.activeTurn() || host.queuedTurns.length === 0) return;
-  host.setActiveTurn(host.queuedTurns.shift() ?? null);
-  if (host.activeTurn()) host.patchState(runningControlPatch());
-}
-
-/** 本地命令没有 agent_start；上一轮结束后由完成事实激活并收口队首。 */
+/** 只有同命令的真实本地完成可收口，绝不能借无内容完成抢先激活下一条等待输入。 */
 export function finishQueuedLocalOnlyTurnOf(
   host: QueuedTurnReconcileHost,
-  closeAssistant: () => void,
-  finishTurn: (outcome: "success") => void,
   sourceCommandId?: string,
 ): boolean {
   const target = sourceCommandId ?? host.activeTurn()?.sourceCommandId;
-  if (target && finalizeLocalCommandTurn(host, target)) return true;
-  if (host.activeTurn()) return false;
-  activateQueuedTurnOf(host);
-  if (!host.activeTurn()) return false;
-  finalizeLocalCommandTurn(host, host.activeTurn()!.sourceCommandId);
-  closeAssistant();
-  finishTurn("success");
-  return true;
+  if (!target) return false;
+  const completed = finalizeLocalCommandTurn(host, target);
+  if (completed && !host.activeTurn())
+    host.patchState(terminalControlPatch(host.state(), "success"));
+  return completed;
 }
 
 /** 按输入命令失败收口：命中排队轮直接失败收口该轮，否则按活跃轮失败收口（failActive 回调）。 */
@@ -135,8 +121,7 @@ export function failCommandTurnOf(
   error: { code: string; message: string },
   failActive: (error: { code: string; message: string }) => void,
 ): void {
-  // finalizeFailedQueuedTurn 内部按 sourceCommandId 定位并 splice；这里预先找到同一条
-  // 轮以同步清理输入文本登记（A3 对账表不得残留已收口轮）。
+  // 失败通过命令身份定位；payload 租约必须与终态一起撤销。
   const queued = host.queuedTurns.find((turn) => turn.sourceCommandId === sourceCommandId);
   const finalized =
     queued &&
@@ -148,6 +133,14 @@ export function failCommandTurnOf(
       upsertRow: host.upsertRow,
     });
   if (finalized) {
+    if (queued.submission) {
+      const dispatched = queued.submission.state !== "pending";
+      queued.submission.state = "cancelled";
+      if (dispatched && !host.activeTurn()) {
+        host.setLastError(error);
+        host.patchState(terminalControlPatch(host.state(), "failed", error));
+      }
+    }
     host.inputTextByTurnId.delete(queued.turnId);
     return;
   }
@@ -182,6 +175,11 @@ export function finishTurnOf(
   const suspended = host.suspendedTurns();
   if (!turn && suspended.length === 0) return;
   const finalized = [...suspended, ...(turn ? [turn] : [])];
+  for (const candidate of finalized) {
+    if (candidate.submission && candidate.submission.state !== "consumed") {
+      candidate.submission.state = "cancelled";
+    }
+  }
   finalizeTurnContexts({
     turns: finalized,
     outcome,
@@ -203,141 +201,50 @@ export function finishTurnOf(
   suspended.length = 0;
 }
 
-/**
- * steer 在途竞态（A5）：terminal agent_end 抢在 steer 响应之前到达。无内容行的 guide
- * 轮不能被连带收口——其 steer 已入 omp steering 队列（成功响应后由下一个独立 agent
- * 回合承接：agent_start 激活排队轮）；把该轮转回 queuedTurns，仅收口被挂起的旧轮。
- * 返回 false（无活跃轮或已有内容行，steer 已被本 run 承接）时调用方按常规 agent_end 收口。
- */
-export function requeueActiveTurnAsQueuedOf(
+/** 成功终态后的串行派发租约。native guide 未消费时不能抢先启动应用队首。 */
+export function claimQueuedSubmissionOf(
   host: QueuedTurnReconcileHost,
-  outcome: TurnOutcome,
+  generation: number,
+): TurnSubmission | null {
+  if (host.activeTurn()) return null;
+  if (host.queuedTurns.some((turn) => turn.submission?.delivery === "steer")) return null;
+  const submission = host.queuedTurns[0]?.submission;
+  if (!submission || submission.generation !== generation || submission.state !== "pending")
+    return null;
+  submission.state = "dispatching";
+  // 配置与派发已真实开始，可停止；等待项仍保留到 user message_start，不伪造正在输出的行。
+  host.patchState(runningControlPatch());
+  return submission;
+}
+
+/** 先撤销租约再发布空队列，旧 async 配置/派发续体只能观察 cancelled，不能投递。 */
+export function cancelQueuedSubmissionsOf(
+  host: QueuedTurnReconcileHost,
+  outcome: "interrupted" | "failed",
   error?: { code: string; message: string },
-): boolean {
-  const turn = host.activeTurn();
-  if (!turn || turnHasContentOf(host, turn)) return false;
-  const suspended = host.suspendedTurns().splice(0);
-  host.setActiveTurn(null);
-  if (suspended.length > 0) {
-    for (const old of suspended) host.inputTextByTurnId.delete(old.turnId);
-    finalizeTurnContexts({
-      turns: suspended,
-      outcome,
-      rowAt: host.rowAt,
-      upsertRow: host.upsertRow,
-      closeStreamingRows: () => {},
-      turnFacts: host.turnFacts,
-    });
-  }
-  host.queuedTurns.push(turn);
-  host.patchState(terminalControlPatch(host.state(), outcome, error));
-  return true;
-}
-
-/** 轮内是否已有内容行（turnHeader/userInput 之外）；A5 判定 guide 轮是否已被承接。 */
-function turnHasContentOf(host: QueuedTurnReconcileHost, turn: TurnContext): boolean {
-  return host.rowIds.some((rowId) => {
-    const row = host.rowAt(rowId);
-    return (
-      row !== undefined &&
-      row.turnId === turn.turnId &&
-      row.kind !== "turnHeader" &&
-      row.kind !== "userInput"
-    );
-  });
-}
-
-/**
- * 对账模式通道：projection.reconcileQueuedTurns 签名固定为 (queueTexts: string[] | null)，
- * 模式以 unique symbol 属性附着在快照文本数组上随调用传入（ompQueueTextsOf 每次返回
- * 新数组，原地附着无跨调用副作用）：
- * - "markOnly"：流式中的快照——只登记 seen，不判定收口（既有不变式：流式中不判定）；
- * - "forceClose"：S4-2 宽限复查——复查快照仍缺席的从未 seen 轮按 interrupted 收口；
- * - 缺省：terminal agent_end / 空闲 debounce 对账——登记 seen；seen 且缺席按合并终态
- *   收口；从未 seen 且缺席保持排队（等待宽限复查）。
- */
-export type QueueReconcileMode = "markOnly" | "forceClose";
-const QUEUE_RECONCILE_MODE: unique symbol = Symbol("omp-agent.queueReconcileMode");
-type QueueReconcileTexts = string[] & { [QUEUE_RECONCILE_MODE]?: QueueReconcileMode };
-
-/** 给快照文本数组附着对账模式（由 promptQueueReconciler 在调用对账前标记）。 */
-export function markQueueReconcileTexts(texts: string[], mode: QueueReconcileMode): string[] {
-  (texts as QueueReconcileTexts)[QUEUE_RECONCILE_MODE] = mode;
-  return texts;
-}
-
-/**
- * 队列对账（A3/S4-1/S4-2/S4-4）：以 omp 队列快照（steering+followUp 文本）对账本地排队轮。
- * omp 停止边界会把排队 follow_up 合并进同一 run 消费并回答（主流路径，见 queueSeenTurns
- * 注释），快照缺席不再一刀切 interrupted：
- * - 文本 occurrence 按队列顺序一对一匹配 → 登记 seen（含流式 markOnly）并保持排队；
- * - seen 且现已缺席 → 已被停止边界 drain 消费，按合并终态收口（success，与 A4
- *   mergeQueuedTurnsIntoActiveOf 同语义）；
- * - 从未 seen 且缺席 → 可能在入队路上（S4-2：omp #queueUserMessage 对图片附件有秒级
- *   视觉描述延迟后才入队（agent-session.ts:8053-8170），新核输入门串行同理），保持排队，
- *   由 promptQueueReconciler 的宽限复查决定收口（复查仍缺席 forceClose → interrupted，
- *   需求 A1；复查前出现过再消失 → 按合并终态）。
- * 既有不变式保持：queueTexts 为 null（快照缺失/形状不明）不动（不确定→不动，绝不误关）；
- * 流式中只登记不收口；空文本轮（纯图片输入）无法匹配，不动。返回收口数。
- */
-export function reconcileQueuedTurnsOf(
-  host: QueuedTurnReconcileHost,
-  queueTexts: string[] | null,
-): number {
-  if (queueTexts === null) return 0;
-  const present = matchQueueSnapshotOf(host, queueTexts);
-  if (present === null) return 0;
-  const mode = (queueTexts as QueueReconcileTexts)[QUEUE_RECONCILE_MODE];
-  let closed = 0;
-  for (let index = host.queuedTurns.length - 1; index >= 0; index -= 1) {
-    const turn = host.queuedTurns[index]!;
-    const text = (host.inputTextByTurnId.get(turn.turnId) ?? "").trim();
-    if (text.length === 0) continue;
-    if (present.has(turn)) {
-      queueSeenTurns.add(turn);
-      continue;
-    }
-    const consumed = queueSeenTurns.has(turn);
-    if (consumed) queueDrainedTurns.add(turn);
-    if (mode === "markOnly") continue;
-    if (!consumed && mode !== "forceClose") continue;
-    host.queuedTurns.splice(index, 1);
+): void {
+  const cancelled = host.queuedTurns.splice(0);
+  const dispatched = cancelled.some(
+    (turn) =>
+      turn.submission &&
+      turn.submission.state !== "pending" &&
+      turn.submission.state !== "cancelled",
+  );
+  for (const turn of cancelled) {
+    if (turn.submission) turn.submission.state = "cancelled";
     host.inputTextByTurnId.delete(turn.turnId);
-    queueSeenTurns.delete(turn);
-    queueDrainedTurns.delete(turn);
-    finalizeTurnContexts({
-      turns: [turn],
-      // seen 且缺席 = 停止边界 drain 已合并消费（success，同 A4 合并收口）；从未 seen 且
-      // 宽限复查仍缺席 = omp 丢弃或未入队（interrupted，需求 A1「取消/失败按 interrupted
-      // /failed 收口」）。
-      outcome: consumed ? "success" : "interrupted",
-      rowAt: host.rowAt,
-      upsertRow: host.upsertRow,
-      closeStreamingRows: () => {},
-      turnFacts: host.turnFacts,
-    });
-    closed += 1;
   }
-  return closed;
-}
-
-/**
- * agent_start 合并收口（A4）：当前轮已占位（startNow 输入直接成为当前轮，或队首刚被
- * 激活）而仍有排队轮。已核对 omp 核心：新 prompt 的 run 在停止边界把 followUp 队列
- * 合并进同一 run（agent-loop.ts 停止边界 dequeue；agent-session.ts 用户 prompt 同时
- * 解除中断冻结），这些排队轮不会再获得独立 agent_start；收口为与当前轮合并的终态
- * （completedSuccess），输出统一归当前轮，避免永久 running。
- * 合并轮终态跟随当前 run 结果：omp 对被合并的 waiting prompt 会按 run 结果上报
- * prompt_result，若 run 失败本侧合并轮仍标 success，属已接受的显示失真（XR1 备注 3），
- * 未来可在 agent_end 失败时回写。
- */
-export function mergeQueuedTurnsIntoActiveOf(host: QueuedTurnReconcileHost): void {
-  if (host.queuedTurns.length === 0) return;
-  const merged = host.queuedTurns.splice(0, host.queuedTurns.length);
-  for (const turn of merged) host.inputTextByTurnId.delete(turn.turnId);
+  const active = host.activeTurn();
+  if (!active && dispatched) host.patchState(terminalControlPatch(host.state(), outcome, error));
+  if (active?.submission && active.submission.state !== "consumed")
+    active.submission.state = "cancelled";
+  for (const turn of host.suspendedTurns()) {
+    if (turn.submission && turn.submission.state !== "consumed")
+      turn.submission.state = "cancelled";
+  }
   finalizeTurnContexts({
-    turns: merged,
-    outcome: "success",
+    turns: cancelled,
+    outcome,
     rowAt: host.rowAt,
     upsertRow: host.upsertRow,
     closeStreamingRows: () => {},

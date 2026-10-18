@@ -27,6 +27,12 @@ function parseDeviceIdFromArgs(): string {
 
 // 在 contextBridge 建立之前就暴露同步值，让 renderer 在 React 渲染前就能读到
 contextBridge.exposeInMainWorld("__ZCODE_DEVICE_ID__", parseDeviceIdFromArgs());
+// 只投影 Main 已固定的运行身份，不读取待重启的设置。
+contextBridge.exposeInMainWorld(
+  "__OMP_ACTIVE_PROFILE__",
+  process.argv.find((arg) => arg.startsWith("--omp-profile="))?.slice("--omp-profile=".length) ??
+    "default",
+);
 // 沙箱 Renderer 不读取 Node 环境；preload 只读投影继承值，先于任何页面日志。
 const rendererLogLevel = getApplicationLogLevel();
 contextBridge.exposeInMainWorld(
@@ -348,8 +354,6 @@ contextBridge.exposeInMainWorld("zcode", {
   /** 同步当前窗口的未读 task 数到 main 进程 */
   syncWindowUnreadCount: (count: number) =>
     ipcRenderer.send(PlatformChannels.SyncWindowUnreadCount, count),
-  syncActiveTaskSession: (sessionId: string | null) =>
-    ipcRenderer.send(PlatformChannels.SyncActiveTaskSession, sessionId),
   /** 同步需要 main 进程即时感知的应用设置 */
   syncAppSettings: (patch: Partial<AppSettings>) =>
     ipcRenderer.send(PlatformChannels.SyncAppSettings, patch),

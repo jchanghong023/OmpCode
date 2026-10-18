@@ -797,8 +797,6 @@ export interface IPlatformService {
 
   /** 同步当前窗口的未读 task 数给宿主环境，用于 Dock / 任务栏徽标聚合 */
   syncWindowUnreadCount(count: number): void;
-  /** 当前窗口 active task 变化；Main 只在该窗口前台时发布全局 PiP focus。 */
-  syncActiveTaskSession(sessionId: string | null): void;
 
   /** 同步需要 main 进程即时感知的应用设置；Web fallback 可忽略 */
   syncAppSettings?(patch: Partial<AppSettings>): void;

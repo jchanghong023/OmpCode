@@ -1,22 +1,70 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, writeFile, readFile, rm } from "node:fs/promises";
+import { glob, mkdtemp, mkdir, writeFile, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { exerciseEntryMechanisms } from "./test-gates-entry-selftest.mjs";
+import { fullPlan, slowPlan } from "./test-gates-plan.mjs";
 import {
   commandOutput,
   stopAll,
-  gateBudget,
   snapshot,
   gitText,
   runStages,
   exists,
 } from "./test-gates-process.mjs";
+import { gateBudget } from "./test-gates-clock.mjs";
+
+async function assertCurrentTestInventory() {
+  const full = await fullPlan();
+  assert.deepEqual(
+    await slowPlan(),
+    full,
+    "Full and slow must execute the same current-platform plan",
+  );
+  const discovered = [];
+  for (const pattern of [
+    "packages/*/test/*.test.ts",
+    "packages/*/test/*.test.tsx",
+    "packages/*/test/*.gui.e2e.mjs",
+    "packages/*/test/*.components.e2e.mjs",
+    "packages/*/test/*.windows-smoke.mjs",
+  ])
+    for await (const file of glob(pattern)) discovered.push(file.replaceAll("\\", "/"));
+  const scheduled = new Set(
+    full
+      .flatMap((stage) => stage.args)
+      .filter((arg) => typeof arg === "string" && discovered.includes(arg)),
+  );
+  // 手写文件名单曾漏掉 workspaceFileIndex；阶段全绿不代表现存测试已全部收录。
+  assert.deepEqual(
+    [...scheduled].sort(),
+    [...new Set(discovered)].sort(),
+    "Every existing applicable package test entry must be scheduled, including new GUI suites",
+  );
+  for (const file of discovered.filter((entry) => /\.test\.tsx?$/u.test(entry)))
+    assert.equal(
+      full.filter((stage) => stage.args.includes(file)).length,
+      1,
+      `${file} must be executed exactly once`,
+    );
+  for (const suite of ["conversation", "models", "agents", "native", "interactions"]) {
+    const stages = full.filter((stage) => stage.fixture && stage.suite === suite);
+    assert.deepEqual(
+      stages.map((stage) => stage.phase),
+      suite === "models" ? ["live", "profile", "default"] : ["live", "recovery"],
+    );
+    assert.ok(
+      stages.every((stage) => stage.realOmp),
+      `${suite} may not bypass the real OMP gate`,
+    );
+  }
+}
 
 export async function selfTest() {
   const root = await mkdtemp(join(tmpdir(), "ompcode-gates-selftest-"));
   // 修复依据：断言提前失败也必须释放本次短桩进程和临时根，不能只在成功路径清理。
   try {
+    await assertCurrentTestInventory();
     await runSelfTest(root);
   } finally {
     await stopAll();

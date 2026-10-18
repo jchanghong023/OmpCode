@@ -1,6 +1,5 @@
 // omp 子进程适配器：spawn 内嵌 omp 二进制（--mode rpc-ui），讲 omp RPC-UI。
 // 负责 ready、协议协商（v2 分片重组）、命令关联与事件/扩展 UI 分发。
-
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { createInterface } from "node:readline";
@@ -10,33 +9,29 @@ import { ompRpcChunkFrameSchema, ompStateDataSchema, type OmpCommandFrame } from
 import type { OmpBypassFrame } from "../domain/ompForkFrames.js";
 import { encodeJsonlLine } from "../domain/jsonlFraming.js";
 import { awaitOmpReady } from "./ompReady.js";
+import { OmpNativeCache } from "./ompNativeCache.js";
 import { dispatchOmpFrame } from "./ompFrameDispatch.js";
 import { parseJson } from "./jsonl.js";
 import type { OmpCommandOutcome, OmpProcessFactory, OmpSessionProcess, OmpStateData, OmpAskRequest, OmpUiRequest, OmpSideChannelHandlers } from "../app/ports.js";
 import { logger } from "./logger.js";
 import { PromptResultTracker } from "../domain/promptResultTracker.js";
 import { ompCoreFields, startOmpRpc, finishOmpRpc, finishOmpRpcResponse, logOmpCoreExit, logOmpCoreSubscription, type OmpRpcDiagnostic } from "./ompRpcDiagnostics.js";
-
 const COMMAND_TIMEOUT_MS = 120_000;
-
 // 修复（A8）：用户输入类命令（prompt/steer/follow_up/abort_and_prompt）的响应在 omp 输入门 admission 前有意挂起，可跨分钟
 // （图像规范化/视觉描述、rpc-fork-permission 权限门 await 无超时）；固定 120s 会误判在途 prompt 失败，放宽到 10 分钟，
 // 进程死亡由 handleExit 的 pending 结算兜底，超时不承担存活探测职责。
 const USER_INPUT_COMMAND_TIMEOUT_MS = 600_000;
 const USER_INPUT_COMMAND_TYPES: ReadonlySet<string> = new Set(["prompt", "steer", "follow_up", "abort_and_prompt"]);
-
 /** 按命令类型选择请求超时（项目模式进程共用；UT 覆盖映射矩阵）。 */
 function ompCommandTimeoutMs(command: { type?: unknown }): number {
   return typeof command.type === "string" && USER_INPUT_COMMAND_TYPES.has(command.type) ? USER_INPUT_COMMAND_TIMEOUT_MS : COMMAND_TIMEOUT_MS;
 }
-
 interface PendingCommand {
   resolve: (outcome: OmpCommandOutcome) => void;
   reject: (error: Error) => void;
   timer: NodeJS.Timeout;
   diagnostic: OmpRpcDiagnostic;
 }
-
 export function createOmpProcessFactory(binaryPath: string, extraArgs: string[] = [], env: NodeJS.ProcessEnv = process.env): OmpProcessFactory {
   return {
     create(options) {
@@ -44,12 +39,12 @@ export function createOmpProcessFactory(binaryPath: string, extraArgs: string[] 
     },
   };
 }
-
 class OmpChildProcess implements OmpSessionProcess {
   ompSessionFile: string | null = null;
   subagentSubscriptionAvailable: boolean | undefined;
   forkSurface: boolean | undefined;
   private child: ChildProcessWithoutNullStreams | null = null;
+  private readonly nativeCache: OmpNativeCache;
   private assembler = new OmpFrameAssembler();
   private pending = new Map<string, PendingCommand>();
   private readonly promptResults = new PromptResultTracker();
@@ -82,23 +77,27 @@ class OmpChildProcess implements OmpSessionProcess {
       onAskRequest?: (request: OmpAskRequest) => void;
       onExit: (code: number | null) => void;
     } & OmpSideChannelHandlers,
-    private readonly env: NodeJS.ProcessEnv,
-  ) {}
-
+    env: NodeJS.ProcessEnv,
+  ) {
+    this.nativeCache = new OmpNativeCache(env, this.coreInstanceId, () => this.coreFields());
+  }
   async start(): Promise<void> {
-    if (this.started) {
-      return;
-    }
+    if (this.started) return;
     this.started = true;
     this.spawnAt = Date.now();
     this.diagnosticSessionId = logger.context().sessionId ?? this.creationContext.sessionId;
     return logger.run({ ...this.creationContext, ...logger.context(), ...this.coreFields() }, async () => {
       try {
+        this.startStage = "native_cache";
+        const env = await this.nativeCache.prepare();
+        if (this.disposed) throw new Error("omp core disposed");
+        this.startStage = "spawn";
         const args = [...this.extraArgs, "--mode", "rpc-ui", ...(this.options.sessionless ? ["--no-session"] : []), ...(this.options.resumeSessionPath ? ["--resume", this.options.resumeSessionPath] : [])];
         logger.info("omp_core_spawn_started", { event: "omp_core_spawn_started", cwd: this.options.cwd, resumePresent: Boolean(this.options.resumeSessionPath), sessionless: this.options.sessionless === true, elapsedMs: 0 });
         // 修复依据：目录与会话进程必须继承入口的同一环境；OMP_CONFIG_ROOT/OMP_OFFLINE 由 OMP 解析。
-        const child = spawn(this.binaryPath, args, { cwd: this.options.cwd, env: this.env, stdio: ["pipe", "pipe", "pipe"], windowsHide: true }) as ChildProcessWithoutNullStreams;
+        const child = spawn(this.binaryPath, args, { cwd: this.options.cwd, env, stdio: ["pipe", "pipe", "pipe"], windowsHide: true }) as ChildProcessWithoutNullStreams;
         this.child = child;
+        this.nativeCache.track(child);
         this.peerPid = child.pid;
         child.once("spawn", () => logger.info("omp_core_spawned", { ...this.coreFields(), event: "omp_core_spawned", elapsedMs: Date.now() - this.spawnAt }));
         this.exitListener = (code) => this.handleExit(code);
@@ -142,6 +141,7 @@ class OmpChildProcess implements OmpSessionProcess {
         logger[this.startCompleted ? "info" : "error"](event, { ...this.coreFields(), event, success: this.startCompleted, stage: this.startCompleted ? "running" : "initialization_exit", elapsedMs: Date.now() - this.spawnAt });
       } catch (error) {
         logger.error("omp_core_start_failed", { ...this.coreFields(), event: "omp_core_start_failed", stage: this.startStage, error, elapsedMs: Date.now() - this.spawnAt });
+        await this.dispose().catch(() => undefined);
         throw error;
       }
     });
@@ -150,7 +150,6 @@ class OmpChildProcess implements OmpSessionProcess {
     const readline = createInterface({ input: child.stdout });
     readline.on("line", (line) => logger.run({ requestId: undefined, commandId: undefined, inputId: undefined, traceId: undefined, ...this.coreFields() }, () => this.handleLine(line)));
   }
-
   /** ready 等待 + 协商；ready 通告的 v2 重组上限接线到分片重组器。 */
   private async awaitReadyAndNegotiate(child: ChildProcessWithoutNullStreams): Promise<void> {
     await awaitOmpReady(child, {
@@ -265,14 +264,14 @@ class OmpChildProcess implements OmpSessionProcess {
   private request(command: OmpCommandFrame, timeoutMs = ompCommandTimeoutMs(command)): Promise<OmpCommandOutcome> {
     const child = this.child;
     const commandType = command.type;
-    const diagnostic = startOmpRpc(this.coreFields(), commandType, timeoutMs, child && !child.killed ? `omp-req-${this.commandCounter + 1}` : null);
+    const id = ("id" in command ? command.id : undefined) ?? `omp-req-${this.commandCounter + 1}`;
+    const diagnostic = startOmpRpc(this.coreFields(), commandType, timeoutMs, child && !child.killed ? id : null);
     if (!child || child.killed) {
       finishOmpRpc(diagnostic, false, "not_running", { error: "omp core is not running" });
       return Promise.resolve({ success: false, error: "omp core is not running" });
     }
     this.commandCounter += 1;
-    const id = `omp-req-${this.commandCounter}`;
-    const payload = { id, ...command };
+    const payload = { ...command, id };
     return new Promise<OmpCommandOutcome>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
@@ -375,6 +374,7 @@ class OmpChildProcess implements OmpSessionProcess {
     this.disposed = true;
     const child = this.child;
     if (!child) {
+      await this.nativeCache.dispose();
       logger.info("omp_core_dispose_completed", { ...this.coreFields(), event: "omp_core_dispose_completed", elapsedMs: Date.now() - disposeAt });
       return;
     }
@@ -393,6 +393,7 @@ class OmpChildProcess implements OmpSessionProcess {
       // stdin EOF 是 omp 的正常关闭信号（drain 后 exit 0）。
       child.stdin.end();
     });
+    await this.nativeCache.dispose();
     logger.info("omp_core_dispose_completed", { ...this.coreFields(), event: "omp_core_dispose_completed", elapsedMs: Date.now() - disposeAt });
   }
 }

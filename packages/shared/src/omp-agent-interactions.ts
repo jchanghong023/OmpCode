@@ -18,13 +18,14 @@ export type ZCodeAgentInteractionAgent = z.infer<typeof zcodeAgentInteractionAge
 export const zcodeAgentInteractionEventSchema = z
   .object({
     eventId: identity,
-    kind: z.enum(["task_dispatch", "task_result", "message"]),
+    kind: z.enum(["task_dispatch", "task_result", "message", "user_intervention"]),
     fromAgentId: identity,
     toAgentId: identity,
     body: z.string(),
     timestamp: z.number().int().nonnegative().optional(),
     timeBasis: z.enum(["sent", "recorded", "unknown"]).default("unknown"),
     messageId: identity.optional(),
+    sourceId: identity.optional(),
     replyTo: identity.optional(),
     delivery: z.enum(["injected", "woken", "revived", "failed", "observed", "unknown"]).optional(),
     source: z.enum(["live", "history", "live_and_history"]),

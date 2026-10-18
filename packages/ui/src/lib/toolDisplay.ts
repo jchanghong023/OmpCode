@@ -156,6 +156,22 @@ const writeToolStrategy: ToolDisplayStrategy = {
     return isFileContentWriteToolCall(context.toolCall, context.identity);
   },
   build(context) {
+    const path = isRecord(context.toolCall.input) ? context.toolCall.input.path : undefined;
+    if (
+      typeof path === "string" &&
+      /^[a-z][a-z0-9+.-]*:\/\//iu.test(path) &&
+      !/^file:\/\//iu.test(path)
+    ) {
+      // 设备 write 的 content 是请求而非文件正文；真实检索/控制结果不能被写文件确认规则吞掉。
+      return {
+        inlinePreview: { type: "none" },
+        viewerSource: null,
+        showSummaryFileLink: false,
+        showInput: true,
+        showOutput: context.toolCall.output !== undefined || Boolean(context.errorText),
+        showKind: false,
+      };
+    }
     const inlinePreview = toInlinePreview(context, false);
     const hasInlinePreview = inlinePreview.type !== "none";
 

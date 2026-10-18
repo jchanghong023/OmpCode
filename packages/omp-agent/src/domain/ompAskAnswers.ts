@@ -29,7 +29,11 @@ export function ompAskAnswers(details: unknown): Record<string, string[]> | null
     if (typeof result.customInput === "string" && result.customInput.trim()) {
       answers.push(result.customInput);
     }
-    if (answers.length > 0) entries.push([result.question, answers]);
+    // 两个题目的文字可以完全相同（需求：同文也按题序分别应答）；按题面作键会被
+    // Object.fromEntries 覆盖成"末题答案渲染两遍"。题 id 由 OMP 原样回传且唯一，
+    // 故优先用 id 作键（UI 的 answers[question.id] 兜底读取对齐），缺 id 才退回题面。
+    const id = typeof result.id === "string" && result.id.trim() ? result.id : undefined;
+    if (answers.length > 0) entries.push([id ?? result.question, answers]);
   }
   return entries.length > 0 ? Object.fromEntries(entries) : null;
 }

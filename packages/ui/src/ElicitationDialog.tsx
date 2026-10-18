@@ -14,6 +14,12 @@ import { Badge } from "@/components/ui/badge.js";
 import { Button } from "@/components/ui/button.js";
 import { cn } from "@/components/lib/utils.js";
 import { Textarea } from "@/components/ui/textarea.js";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip.js";
 import { InteractionRequestOriginBadge } from "@/InteractionRequestOriginBadge.js";
 import { isImeComposingKeyEvent } from "@/lib/imeComposition.js";
 import type { ElicitationFormDraft } from "@/store/zcodeSessionStoreTypes.js";
@@ -161,7 +167,7 @@ function resolveElicitationCustomInputKeyAction(event: {
 function normalizeElicitationQuestions(
   request: ZCodeElicitationRequest,
 ): NormalizedElicitationQuestion[] {
-  const sourceQuestions =
+  const sourceQuestions: ZCodeElicitationQuestion[] =
     request.questions && request.questions.length > 0
       ? request.questions
       : [
@@ -181,8 +187,10 @@ function normalizeElicitationQuestions(
       value: option.value,
       label: option.label || option.value,
       description: option.description,
+      preview: option.preview,
     })),
     ...(question.multiSelect ? { multiSelect: true } : {}),
+    recommended: question.recommended,
   }));
 }
 
@@ -751,7 +759,7 @@ function ElicitationDialogContent({
             id: "chat.elicitation.planApproval.approveDescription",
           })
         : option.description;
-    return (
+    const button = (
       <button
         key={option.value}
         ref={(node) => {
@@ -796,6 +804,14 @@ function ElicitationDialogContent({
           <span className="text-ui-base font-medium leading-normal text-foreground">
             {optionLabel}
           </span>
+          {question.recommended === index ? (
+            <>
+              {" "}
+              <Badge variant="outline" className="ml-2 rounded-sm align-middle text-ui-xs">
+                {intl.formatMessage({ id: "quickPick.section.recommended" })}
+              </Badge>
+            </>
+          ) : null}
           {optionDescription ? (
             <span className="ml-2 text-ui-base leading-normal text-foreground-subtle">
               {optionDescription}
@@ -803,6 +819,20 @@ function ElicitationDialogContent({
           ) : null}
         </span>
       </button>
+    );
+    if (!option.preview) return button;
+    return (
+      <Tooltip key={option.value}>
+        <TooltipTrigger asChild>{button}</TooltipTrigger>
+        <TooltipContent
+          side="top"
+          align="start"
+          sideOffset={6}
+          className="max-h-60 max-w-[min(32rem,calc(100vw-2rem))] overflow-y-auto whitespace-pre-wrap break-words"
+        >
+          {option.preview}
+        </TooltipContent>
+      </Tooltip>
     );
   };
 
@@ -1084,9 +1114,11 @@ function ElicitationDialogContent({
                   aria-label={titleQuestion}
                   className="space-y-1"
                 >
-                  {currentQuestion.options.map((option, index) =>
-                    renderOption(currentQuestion, option, index),
-                  )}
+                  <TooltipProvider>
+                    {currentQuestion.options.map((option, index) =>
+                      renderOption(currentQuestion, option, index),
+                    )}
+                  </TooltipProvider>
                   {allowCustomInput
                     ? renderCustomInput(currentQuestion, currentQuestion.options.length)
                     : null}

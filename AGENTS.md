@@ -2,7 +2,7 @@
 
 - 新增或修改行为前，先更新 `docs/requirements/` 中对应功能域的需求与验收场景；目录或权威体系缺失时先补齐。明确产品规则、状态所有者、接口和验收场景后再实现代码。
 - 以当前检出的源码、`package.json` 和架构策略为准。说明中只保留当前仓库提供的功能、命令和文件；删除功能时同步清理指令和技能中的引用。
-- OMP 本地源码目录 `D:\code1111111111\oh-my-pi` 存在，优先以其源码为权威资料。本机器安装的 omp 必然是最新版本，无需另行核验是否最新；未安装 omp 时不执行依赖真实 omp 的验证，明确记录为未验证，跳过不能算通过。
+- OMP 本地源码目录 `F:\code2026\oh-my-pi` 存在，优先以其源码为权威资料；RPC 协议权威见该仓库 `docs-zh-CN/requirements/rpc-ui-protocol.md`。本机器安装的 omp 必然是最新版本，无需另行核验是否最新；未安装 omp 时不执行依赖真实 omp 的验证，明确记录为未验证，跳过不能算通过。
 - 定位问题时，未明确要求修改代码就先调查原因。结合源码、日志和运行时证据，区分已确认原因与待验证假设。
 - 保留与任务无关的本地改动，不自行恢复已移除的模块或内部依赖。
 
@@ -65,17 +65,19 @@
 
 以下原始入口仅在 Windows 本机运行；根目录以三级门禁统一编排，没有名为 `test` 的根脚本。单独入口仍保留各自隔离环境前提与验证边界。AI 不执行 Linux/CentOS/WSL 测试；CentOS 专用测试及 VM、Citrix、目标网络盘专项测试已取消，不再是 Windows 测试前提，产品的两平台支持与打包完整性约束仍保留。
 
-| 验证范围                           | 实际入口与前提                                                                                                                                                                                                                                             |
-| ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| omp UT、协议模拟及真实核心测试合集 | `pnpm --filter @zcode/omp-agent test`；匹配 `test/*.test.ts`，包含复制模型引擎、回环流式传输与真实 OMP 核心文件，不只是 fake-omp                                                                                                                           |
-| 协议级 fake-omp 集成测试           | `pnpm --filter @zcode/omp-agent exec tsx --test test/adapter.e2e.test.ts`；不依赖真实模型，不覆盖真实 omp/GUI 边界                                                                                                                                         |
-| 真实核心 E2E                       | `pnpm --filter @zcode/omp-agent exec tsx --test test/real-omp.e2e.test.ts`；用 `OMP_RPC_BINARY_PATH` 指向本机已安装的 omp，仅连接测试自有本地模拟模型；本机未安装时不执行，不为验证另行下载或安装。设置 `OMP_AGENT_SKIP_REAL_E2E=1` 时跳过，跳过不能算通过 |
-| OMP 消费端与上游 UT/集成测试       | `packages/{ui,services,shared,client,server}/test/` 保留 OMP 输入、协议、工具结果、身份和恢复核心测试及所有上游原有测试；按真实文件用根 `pnpm exec tsx --test <测试文件>` 执行，不能假定各包有 `test` script                                               |
-| 桌面 GUI 冒烟                      | `node scripts/dev/gui-smoke-cdp.mjs`；需要当前测试桌面已启动、CDP 9230 及 localhost renderer，仅检查品牌/输入区并截图，不是完整功能 E2E                                                                                                                    |
+| 验证范围                           | 实际入口与前提                                                                                                                                                                                                                                                                                 |
+| ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| omp UT、协议边界及真实核心测试合集 | `pnpm --filter @zcode/omp-agent test`；匹配 `test/*.test.ts`，包含局部协议 UT、复制模型引擎、回环流式传输、真实适配器与核心 E2E；真实核文件缺环境或跳过时不能把合集记为完整通过                                                                                                                |
+| 真实适配器 E2E                     | `pnpm --filter @zcode/omp-agent exec tsx --test --test-concurrency=2 test/adapter.e2e.test.ts test/adapterRuntime.e2e.test.ts test/nativeControl.e2e.test.ts`；使用本机已安装的真实 OMP + 测试自有本地模拟模型，经公开 stdio/v4 验证适配行为，不替代 GUI 验收                                  |
+| 真实核心 E2E                       | `pnpm --filter @zcode/omp-agent exec tsx --test test/real-omp.e2e.test.ts`；与适配器 E2E 共用真实核启动器和隔离模型；可用 `OMP_RPC_BINARY_PATH` 指向本机安装核，本机未安装或设置 `OMP_AGENT_SKIP_REAL_E2E=1` 时两类均未验证，不另行下载、安装或回退到内嵌旧核                                  |
+| OMP 消费端与上游 UT/集成测试       | `packages/{ui,services,shared,client,server}/test/` 保留 OMP 输入、协议、工具结果、身份和恢复核心测试及所有上游原有测试；按真实文件用根 `pnpm exec tsx --test <测试文件>` 执行，不能假定各包有 `test` script；触及 OMP 进程/目录/会话边界时同样使用真实核及共用隔离 fixture，缺核/跳过均未验证 |
+| 桌面 GUI 冒烟                      | `node scripts/dev/gui-smoke-cdp.mjs`；需要当前测试桌面已启动、CDP 9230 及 localhost renderer，仅检查品牌/输入区并截图，不是完整功能 E2E                                                                                                                                                        |
 
-真实核心验收使用仓库内复制适配的 OMP 模拟模型，由测试进程持有回环临时端口和隔离配置根；审批通过运行时 flag 注入，不修改用户配置文件。不读取用户模型凭据、不接受外部模型覆盖、不连接真实提供者或失败后回退；缺少本机 OMP 或跳过不能算通过。能力矩阵、进程内字段与传输/核心/GUI 证据边界唯一见[本地模拟模型契约](docs/requirements/test-gates.md#本地模拟模型契约)，模拟不证明模型推理能力或真实提供者认证。
+适配器、核心及消费端的 OMP 边界验收使用共用 `realOmpHarness.ts` 和仓库内复制适配的 OMP 模拟模型，不保留 OMP 进程或端口对象桩；纯 schema、投影、tracker 和文件算法 UT 不注入伪造 OMP 进程。测试进程持有回环临时端口和隔离配置根；真实核与 GUI 固定通过运行时参数使用 OMP 原生 yolo，不修改用户配置文件。不读取用户模型凭据、不接受外部模型覆盖、不连接外部提供者或失败后回退；缺少本机 OMP 或跳过不能算通过。本轮不测工具权限审批，但 ask、连续工具调用、子代理界面、Todo 界面均为必验；唯一范围与真实 GUI/OMP/持久化/同根恢复证据见[本轮五项契约](docs/requirements/test-gates.md#本轮五项必验与排除范围)，不能据此删除产品通用权限或原生命令交互。启动器与门禁阶段所有权、能力矩阵及证据边界唯一见[本地模拟模型契约](docs/requirements/test-gates.md#本地模拟模型契约)和[三级编排](docs/requirements/test-gates.md#所有者与入口)。外部模型调用的配置、规程及相关历史细节仅由 [e2e.md](docs/requirements/e2e.md) 维护，不构成自动化门禁默认入口。
 
-fulltest/slowtest 使用同一本地模型计划，保留两个专用产品 GUI：`packages/desktop/test/ompStartup.gui.e2e.mjs` 检查真实启动与隔离模型目录；`packages/desktop/test/ompReviewedDefects.gui.e2e.mjs` 以 `OMP_E2E_PHASE=live` 通过真实用户入口完成流式消息、write 审批与落盘、ask 作答及 task 子代理，再由同根新进程以 `recovery` 验证稳定 UUID、唯一侧栏项、消息历史、工具/问答结果及实际子代理身份和记录。门禁用 `ompCore.launch.mjs` 自动创建隔离根与独占端口并持有完整子进程树，通过测试启动层保持窗口隐藏且不可全局聚焦；保留真实 Main/Host/Preload/OMP，只用 CDP/DOM，不连接日常实例，不接管鼠标或前台焦点。
+Windows 适配器在实际 `spawn` 边界为每个真实 OMP 核心创建独占临时 native 缓存叶目录，直接启动真实 binary，不使用 wrapper 或预热；显式 `PI_NATIVES_DIR` 仅作父根，未指定时用系统临时目录。核心仍共享原 `OMP_CONFIG_ROOT`、profile 和 cwd；实际核心退出并释放句柄后只清理自有叶目录，永不删除共享缓存。生产与真核测试走同一路径，业务冷启动保持并发；所有权及失败契约见上述本地模拟模型契约。
+
+fulltest/slowtest 使用同一本地模型计划：`packages/desktop/test/ompStartup.gui.e2e.mjs` 检查真实启动与隔离模型目录；`packages/desktop/test/ompReviewedDefects.gui.e2e.mjs` 的 `OMP_E2E_PHASE=live/recovery` 保留流式消息、yolo 下真实 write 与落盘、ask 作答、task 子代理及同根新进程冷恢复；五套 `omp{Conversation,Models,Agents,Native,Interactions}Acceptance.gui.e2e.mjs` suite 补充当前功能验收，连续工具链由 conversation 入口覆盖，具体必验与排除范围按上述权威契约。恢复核对稳定 UUID、唯一侧栏项、消息历史、逐工具/问答结果及实际子代理身份和记录，不能只看最终回复。门禁用 `ompCore.launch.mjs` 为各 suite 自动创建独立隔离根与独占端口并持有完整子进程树，通过测试启动层保持窗口隐藏且不可全局聚焦；保留真实 Main/Host/Preload/OMP，只用 CDP/DOM，不连接日常实例，不接管鼠标或前台焦点。
 
 工具详情组件验收：`node packages/desktop/test/toolContentPresentation.components.e2e.mjs` 创建临时端口、独立 Electron/userData，不调用模型，验证有效零/布尔、空参数、文本/JSON/Markdown、原始数据开合及错误。它不替代真实 OMP + 模拟模型的产品 GUI/冷恢复。
 
@@ -90,7 +92,7 @@ UI UT 的 `@/` 路径别名使用 `pnpm exec tsx --tsconfig packages/ui/tsconfig
 - 复用原有检查定义、质量配置和测试断言。此前授权删除的 Fork 专项不恢复；上游原有测试保留。不为门禁速度缩减现存适用测试，超预算 Fork 按完整上游差异与依赖图确定受影响模块范围，逐项声明遗漏的整仓覆盖，不能跳过受影响失败项。
 - fulltest/slowtest 需要当前用户明确执行指令。历史授权、代理建议、提交/推送或“检查一下”不授权。`--human-authorized` 是软约束，只反映原始明确执行指令，不是 Agent 自行决定；不能绕过门禁执行内部长步骤。
 - 三个入口只在本机运行，不调用 CI、远端/发布流水线、Computer Use，不移动/点击全局鼠标、不抢前台焦点。不接受 `--publish-releases`，不推送、不创建 Tag、不发布；独立分发 workflow 保留不动。接管鼠标的测试保留单独入口，必须另外获得用户明确指令，状态为 `NOT_RUN_SEPARATE_USER_INSTRUCTION_REQUIRED`，不记为门禁失败或通过。
-- 每次结果绑定本次 HEAD、未提交差异摘要、内容指纹与工具版本；源码变化后旧结果不能沿用或跨快照合并。真实 OMP + 模拟模型与 GUI 必须使用专用隔离 fixture 和数据根，不连接日常实例、不读取或修改用户模型配置/凭据；历史真实模型结果、失败、跳过和未验证记录不得改写成本次通过。
+- 每次结果绑定本次 HEAD、未提交差异摘要、内容指纹与工具版本；源码变化后旧结果不能沿用或跨快照合并。真实 OMP + 模拟模型与 GUI 必须使用专用隔离 fixture 和数据根，不连接日常实例、不读取或修改用户模型配置/凭据；历史结果、失败、跳过和未验证记录不得改写成本次通过。
 - 尚未授权时只执行 fastcheck 和临时短桩自检，不借专项入口执行完整门禁。保留既有质量检查及精简后有效的核心行为断言，不为通过放宽判据；删除的非核心/非 OMP/冗余/长耗时专项不能宣称已验收。
 - 任意阶段或用例首个失败立即停止后续调度并终止全部所属并行任务、嵌套 runner 及进程树；保留触发失败、非零退出和最终计时，不等待整组测试结束或预算耗尽。full/slow 的硬截止在失败、验证与清理期间仍有效，到时强制非零退出。未启动/取消的工作不记为通过。
 

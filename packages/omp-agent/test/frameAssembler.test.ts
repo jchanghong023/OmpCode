@@ -1,18 +1,13 @@
-// OmpFrameAssembler（rpc_chunk v2 无损分片重组）UT：钉住当前重组语义（正常序/乱序/
+// OmpFrameAssembler（rpc_chunk v2 无损分片重组）纯 UT：钉住当前重组语义（正常序/乱序/
 // 缺首片/重复/坏 base64/坏 UTF-8/字节总和不符/坏 JSON/超限/交错/单片直通/范围校验/
-// 上限更新/中断），以及 ready 帧通告的 maxReassembledFrameBytes 在 ompProcess /
-// ompProjectProcess 的接线（修复 B6：通告上限必须生效——超限分片拒绝、限内分片照常重组）。
+// 上限更新/中断）。协议进程与会话验收使用共享真实 OMP 启动器，不在此伪造核心。
 // 修复 S3-4 后分片形状与 omp 发送端（rpc-frame.ts）一致：先切 UTF-8 字节再逐片 base64
 //（各片自带 padding），重组完成校验实收字节总和、严格 UTF-8 解码。
 
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { test } from "node:test";
 import { OmpFrameAssembler } from "../src/domain/frameAssembler.js";
 import type { OmpRpcChunkFrame } from "../src/domain/ompFrames.js";
-import { createOmpProcessFactory } from "../src/adapters/ompProcess.js";
 
 function chunk(
   chunkId: string,
@@ -276,66 +271,4 @@ test("未齐片即超出声明字节数时立即丢弃序列", () => {
     reason: "rpc_chunk sequence exceeds declared length",
   });
   assert.equal(assembler.abort(), null);
-});
-
-// 实际子进程通告重组上限；消费端不得收到超限正文，随后合法帧仍须交付。
-
-// 128 字节允许 compact 的分片响应（约 91 字节），拒绝更大的输出帧。
-const WIRED_LIMIT = 128;
-
-// 内联 fake 核发送有效但超限的 command_output，再发普通输出作为顺序屏障。
-// 缺失 ready 上限会让超限输出错误进入消费端；限内 compact 响应仍需正常结算。
-// 当前会话启动会启用 ask；夹具须回握手 ACK，不能让分片验收无意义等待 10 秒超时。
-const FAKE_SESSION_CORE = `
-const { createInterface } = require("node:readline");
-process.stdout.write(JSON.stringify({ type: "ready", protocolVersion: 1, supportedProtocolVersions: [1, 2], maxReassembledFrameBytes: ${WIRED_LIMIT} }) + "\\n");
-createInterface({ input: process.stdin }).on("line", (line) => {
-  let cmd; try { cmd = JSON.parse(line); } catch { return; }
-  if (cmd.type === "negotiate_protocol" || cmd.type === "set_subagent_subscription" || cmd.type === "set_ask_dialog") {
-    if (cmd.type === "set_subagent_subscription") {
-      const oversized = Buffer.from(JSON.stringify({ type: "command_output", text: "x".repeat(${WIRED_LIMIT}) }), "utf8");
-      process.stdout.write(JSON.stringify({ type: "rpc_chunk", chunkId: "oversize", index: 0, count: 1, byteLength: oversized.byteLength, data: oversized.toString("base64") }) + "\\n");
-      process.stdout.write(JSON.stringify({ type: "command_output", text: "after-rejection" }) + "\\n");
-    }
-    process.stdout.write(JSON.stringify({ id: cmd.id, type: "response", command: cmd.type, success: true, data: {} }) + "\\n");
-    return;
-  }
-  if (cmd.type === "compact") {
-    const response = { id: cmd.id, type: "response", command: cmd.type, success: true, data: { ok: true } };
-    // 与 omp 发送端（rpc-frame.ts）同形：先切 UTF-8 字节再逐片 base64。
-    const bytes = Buffer.from(JSON.stringify(response), "utf8");
-    const half = Math.ceil(bytes.byteLength / 2);
-    process.stdout.write(JSON.stringify({ type: "rpc_chunk", chunkId: "ok-seq", index: 0, count: 2, byteLength: bytes.byteLength, data: bytes.subarray(0, half).toString("base64") }) + "\\n");
-    process.stdout.write(JSON.stringify({ type: "rpc_chunk", chunkId: "ok-seq", index: 1, count: 2, byteLength: bytes.byteLength, data: bytes.subarray(half).toString("base64") }) + "\\n");
-    return;
-  }
-});
-`;
-
-const scratchRoot = mkdtempSync(join(tmpdir(), "omp-assembler-wire-"));
-process.on("exit", () => {
-  rmSync(scratchRoot, { recursive: true, force: true });
-});
-
-test("ompProcess：超限输出不交付消费端，后续合法帧和分片响应照常交付", async () => {
-  const outputs: string[] = [];
-  const omp = createOmpProcessFactory(process.execPath, ["-e", FAKE_SESSION_CORE, "--"]).create({
-    cwd: scratchRoot,
-    onEvent() {},
-    onUiRequest() {},
-    onCommandOutput(frame) {
-      outputs.push(frame.text);
-    },
-    onExit() {},
-  });
-  try {
-    await omp.start();
-    assert.deepEqual(outputs, ["after-rejection"]);
-    // 限内（实际字节数 ≤ 128）分片响应必须照常重组并结算命令。
-    const outcome = await omp.send({ type: "compact" });
-    assert.equal(outcome.success, true);
-    assert.deepEqual(outcome.data, { ok: true });
-  } finally {
-    await omp.dispose();
-  }
 });

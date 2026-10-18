@@ -87,8 +87,22 @@ export class OmpDirectoryGateway {
         // 目录进程无会话语义：--no-session（上游旗标，open_session 之外的查询均可用）。
         sessionless: true,
         onEvent: () => {},
-        onUiRequest: ({ respond, frame }) =>
-          respond({ type: "extension_ui_response", id: frame.id, cancelled: true }),
+        onUiRequest: ({ respond, frame }) => {
+          // 原生通知没有 pending 请求；EOF 的 session_shutdown 仍会清理 setWidget，
+          // 对它或 cancel 自身回执会向已结束 stdin 的 child 制造虚构回应。
+          switch (frame.method) {
+            case "notify":
+            case "setStatus":
+            case "setWidget":
+            case "setTitle":
+            case "set_editor_text":
+            case "cancel":
+              return;
+            default:
+              // 目录无呈现面；真实等待中的交互与未知方法继续 fail-closed。
+              respond({ type: "extension_ui_response", id: frame.id, cancelled: true });
+          }
+        },
         onExit: (code) => {
           // ready 后的协商/订阅仍属于启动：exit 必须先使本代失效，
           // 不能依赖尚未发布的 this.process 才识别已死亡的实例。

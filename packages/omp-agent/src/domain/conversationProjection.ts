@@ -16,7 +16,7 @@ import { initialAState, type ProjectionAState, type TurnOutcome } from "./projec
 import { TurnFileFacts } from "./fileFacts.js";
 import { contextWindowPatch, modelConfigPatch, snoozePendingInteractions, usagePatch, withInteractionStopControl } from "./projectionStatePatches.js";
 import { mergeDeltas, type LoggedDelta } from "./deltaMerge.js";
-import { mergeProjectionRows } from "./projectionRowMerge.js";
+import { ProjectionRowStore } from "./projectionRowStore.js";
 import { OmpSubagentProjection } from "./ompSubagentDirectory.js";
 import { readProjectionFileChanges } from "./projectionFileChanges.js";
 import {
@@ -25,20 +25,18 @@ import {
   failCommandTurnOf,
   finishQueuedLocalOnlyTurnOf,
   finishTurnOf,
-  mergeQueuedTurnsIntoActiveOf,
-  reconcileQueuedTurnsOf,
-  requeueActiveTurnAsQueuedOf,
+  claimQueuedSubmissionOf,
+  cancelQueuedSubmissionsOf,
   type BeginTurnInput,
   type QueuedTurnReconcileHost,
 } from "./queuedTurnReconcile.js";
 import { applyProjectionToolCallUpdate } from "./projectionToolCallUpdate.js";
-import { ProjectionToolCallIndex } from "./projectionToolCallIndex.js";
-import { appendProjectionStreamDelta, closeProjectionStreamingRows, materializeStreamTextRow, type ProjectionStreamHost } from "./projectionStreamText.js";
-import { createMarkerRow, buildConversationSnapshot, conversationRowsRange, type ToolCallUpsert, type TurnContext } from "./projectionRows.js";
+import { appendProjectionStreamDelta, closeProjectionStreamingRows, type ProjectionStreamHost } from "./projectionStreamText.js";
+import { createMarkerRow, buildConversationSnapshot, conversationRowsRange, type ToolCallUpsert, type TurnContext, type TurnSubmission } from "./projectionRows.js";
 import { appendOmpCustomMessage } from "./OmpCustomMessage.js";
 import { appendOmpCommandOutput, type OmpCommandOutputRecord } from "./OmpCommandOutput.js";
 import { ensureOmpNativeTurn } from "./ompNativeTurn.js";
-import { ompTodoState, ompTodoStateFromRows } from "./ompTodoPlan.js";
+import { ompTodoStateFromRows } from "./ompTodoPlan.js";
 
 export type { BeginTurnInput } from "./queuedTurnReconcile.js";
 
@@ -47,11 +45,7 @@ export class ConversationProjection {
   readonly logEpoch: string = createLogEpoch();
   private sequence = 0;
   private revisionValue = 0;
-  private rows = new Map<number, ConversationRow>();
-  private readonly toolCallIndex = new ProjectionToolCallIndex();
-  private pendingStreamTextByRowId = new Map<number, string[]>();
-  private rowIds: number[] = [];
-  private nextRowId = 1;
+  private readonly rowStore = new ProjectionRowStore({ pushPending: (delta) => this.pushPending(delta), patchState: (patch) => this.patchState(patch), subagents: () => this.subagents });
   private state: ProjectionAState;
   private deltaLog: LoggedDelta[] = [];
   private pending: LoggedDelta[] = [];
@@ -64,9 +58,9 @@ export class ConversationProjection {
   private readonly queuedReconcileHost: QueuedTurnReconcileHost = {
     queuedTurns: this.queuedTurns,
     inputTextByTurnId: this.inputTextByTurnId,
-    rowIds: this.rowIds,
-    rowAt: (rowId) => this.rows.get(rowId),
-    upsertRow: (row) => this.upsertRow(row),
+    rowIds: this.rowStore.rowIds,
+    rowAt: (rowId) => this.rowStore.rowAt(rowId),
+    upsertRow: (row) => this.rowStore.upsert(row),
     turnFacts: this.turnFacts,
     activeTurn: () => this.turn,
     setActiveTurn: (turn) => {
@@ -76,19 +70,19 @@ export class ConversationProjection {
     patchState: (patch) => this.patchState(patch),
     state: () => this.state,
     seq: () => this.sequence,
-    nextRowId: () => this.nextRowId++,
-    appendRow: (row) => this.appendRow(row),
+    nextRowId: () => this.rowStore.allocateRowId(),
+    appendRow: (row) => this.rowStore.append(row),
     setLastError: (error) => (this.lastErrorValue = error),
     closeStreamingRows: (finalState, turn) => closeProjectionStreamingRows(this.streamHost, finalState, turn),
   };
   private readonly streamHost: ProjectionStreamHost = {
-    rows: this.rows,
-    pendingStreamTextByRowId: this.pendingStreamTextByRowId,
+    rows: this.rowStore.rows,
+    pendingStreamTextByRowId: this.rowStore.pendingStreamTextByRowId,
     turn: () => this.turn,
     sequence: () => this.sequence,
-    nextRowId: () => this.nextRowId++,
-    appendRow: (row) => this.appendRow(row),
-    upsertRow: (row) => this.upsertRow(row),
+    nextRowId: () => this.rowStore.allocateRowId(),
+    appendRow: (row) => this.rowStore.append(row),
+    upsertRow: (row) => this.rowStore.upsert(row),
     pushPending: (delta) => this.pushPending(delta),
   };
   private lastErrorValue: { code: string; message: string } | null = null;
@@ -98,15 +92,15 @@ export class ConversationProjection {
     this.sessionId = sessionId;
     this.state = initialAState({});
     this.subagents = new OmpSubagentProjection({
-      rowAt: (id) => this.rows.get(id),
+      rowAt: (id) => this.rowStore.rowAt(id),
       turnAnchor: () => {
-        const row = this.turn ?? [...this.rows.values()].reverse().find((r) => r.kind === "turnHeader");
+        const row = this.turn ?? [...this.rowStore.rows.values()].reverse().find((r) => r.kind === "turnHeader");
         return row ? { turnId: row.turnId, productTurnId: row.productTurnId ?? row.turnId } : null;
       },
-      nextRowId: () => this.nextRowId++,
+      nextRowId: () => this.rowStore.allocateRowId(),
       sequence: () => this.sequence,
       state: () => this.state.subagents,
-      upsertRow: (row) => this.upsertRow(row),
+      upsertRow: (row) => this.rowStore.upsert(row),
       patchState: (subagents) => this.patchState({ subagents }),
       viewIdOf,
     });
@@ -128,16 +122,13 @@ export class ConversationProjection {
     publishQueuedInputsOf(this.queuedReconcileHost);
   }
   activateQueuedTurn(text?: string, native = false): void {
-    consumeQueuedInputOf(this.queuedReconcileHost, text);
-    if (native) ensureOmpNativeTurn(this.queuedReconcileHost, text);
+    if (text !== undefined) consumeQueuedInputOf(this.queuedReconcileHost, text);
+    // agent_start 不是消费；已派发 prompt/steer 等待真实用户消息，不建立假 native 轮。
+    const awaitingUser = this.queuedTurns.some((turn) => turn.submission && turn.submission.state !== "pending" && turn.submission.state !== "cancelled");
+    if (native && (text !== undefined || !awaitingUser)) ensureOmpNativeTurn(this.queuedReconcileHost, text);
   }
   finishQueuedLocalOnlyTurn(sourceCommandId?: string): boolean {
-    const finished = finishQueuedLocalOnlyTurnOf(
-      this.queuedReconcileHost,
-      () => this.closeAssistantResponse(),
-      (outcome) => this.finishTurn(outcome),
-      sourceCommandId,
-    );
+    const finished = finishQueuedLocalOnlyTurnOf(this.queuedReconcileHost, sourceCommandId);
     publishQueuedInputsOf(this.queuedReconcileHost);
     return finished;
   }
@@ -166,24 +157,29 @@ export class ConversationProjection {
   hasQueuedTurns(): boolean {
     return this.queuedTurns.length > 0;
   }
-  reconcileQueuedTurns(queueTexts: string[] | null): number {
-    const closed = reconcileQueuedTurnsOf(this.queuedReconcileHost, queueTexts);
-    publishQueuedInputsOf(this.queuedReconcileHost);
-    return closed;
+  /** 沿用既有队列策略；等待项仍由 TurnContext 持有，开关不构造第二份队列。 */
+  setAutoDrain(autoDrain: boolean): void {
+    const queue = this.state.queue;
+    if (queue.autoDrain === autoDrain && (autoDrain || queue.pauseReason === "manual")) return;
+    this.patchState({ queue: { items: queue.items, autoDrain, ...(!autoDrain ? { pauseReason: "manual" as const } : {}) } });
   }
-  mergeQueuedTurnsIntoActive(): void {
-    if (this.turn === null) return;
-    mergeQueuedTurnsIntoActiveOf(this.queuedReconcileHost);
+  claimQueuedSubmission(generation: number): TurnSubmission | null {
+    if (!this.state.queue.autoDrain) return null;
+    return claimQueuedSubmissionOf(this.queuedReconcileHost, generation);
+  }
+  /** 命令身份只回读同一 owner 的 payload；原生异步终态不能借当前活跃轮推断归属。 */
+  submissionForCommand(sourceCommandId: string): TurnSubmission | null {
+    if (this.turn?.sourceCommandId === sourceCommandId) return this.turn.submission ?? null;
+    return this.queuedTurns.find((turn) => turn.sourceCommandId === sourceCommandId)?.submission ?? this.suspendedTurns.find((turn) => turn.sourceCommandId === sourceCommandId)?.submission ?? null;
+  }
+  cancelQueuedSubmissions(outcome: "interrupted" | "failed", error?: { code: string; message: string }): void {
+    cancelQueuedSubmissionsOf(this.queuedReconcileHost, outcome, error);
+    if (error && outcome === "failed" && !this.lastErrorValue) this.recordTurnError(error);
     publishQueuedInputsOf(this.queuedReconcileHost);
   }
-  /** 当前活跃轮的 sourceCommandId（无活跃轮为 null；A5 steer 在途判定用）。 */
+  /** 当前活跃轮身份，用于同步 ACK 与本地命令完成的精确归属。 */
   activeTurnSourceCommandId(): string | null {
     return this.turn?.sourceCommandId ?? null;
-  }
-  requeueActiveTurnAsQueued(outcome: TurnOutcome, error?: { code: string; message: string }): boolean {
-    const requeued = requeueActiveTurnAsQueuedOf(this.queuedReconcileHost, outcome, error);
-    publishQueuedInputsOf(this.queuedReconcileHost);
-    return requeued;
   }
   appendAssistantText(delta: string): void {
     appendProjectionStreamDelta(this.streamHost, delta, "assistantText");
@@ -214,10 +210,10 @@ export class ConversationProjection {
       turn,
       update,
       createdAtSeq: this.sequence + 1,
-      existing: this.toolCallIndex.firstRow(update.toolCallId, this.rows),
-      nextRowId: () => this.nextRowId++,
-      rowAt: (rowId) => this.rows.get(rowId),
-      upsertRow: (row) => this.upsertRow(row),
+      existing: this.rowStore.firstToolCallRow(update.toolCallId),
+      nextRowId: () => this.rowStore.allocateRowId(),
+      rowAt: (rowId) => this.rowStore.rowAt(rowId),
+      upsertRow: (row) => this.rowStore.upsert(row),
     });
   }
   /** 无主 transcript 的辅助投影：仍由同一序列发布状态，不操作主 turn/queue。 */
@@ -236,8 +232,12 @@ export class ConversationProjection {
   setTitle(title: string, source: "default" | "generated" | "custom"): void {
     this.patchState({ meta: { title, titleSource: source } });
   }
-  upsertSubagent(input: Parameters<OmpSubagentProjection["upsert"]>[0]): void {
+  upsertSubagent(input: Parameters<OmpSubagentProjection["upsert"]>[0], activeIds: readonly string[] = []): void {
     this.subagents.upsert(input);
+    this.publishSubagentBackgroundWorks(activeIds);
+  }
+  publishSubagentBackgroundWorks(activeIds: readonly string[]): void {
+    this.patchState({ backgroundWorks: this.subagents.backgroundWorks(activeIds) });
   }
   setSubagentAvailability(availability: "ready" | "unavailable"): void {
     this.subagents.setAvailability(availability);
@@ -258,19 +258,19 @@ export class ConversationProjection {
   }
   /** 权限卡锚定：按 omp toolCallId 找最近一条工具行（找不到返回 null）。 */
   rowIdOfToolCall(toolCallId: string): number | null {
-    return this.toolCallIndex.latestRowId(toolCallId);
+    return this.rowStore.rowIdOfToolCall(toolCallId);
   }
   addTimelineMarker(marker: TimelineMarkerPayload): void {
     const turn = this.turn;
     if (!turn) {
       return;
     }
-    const rowId = this.nextRowId++;
-    this.appendRow(createMarkerRow({ rowId, turnId: turn.turnId, productTurnId: turn.productTurnId, createdAtSeq: this.sequence + 1, marker }));
+    const rowId = this.rowStore.allocateRowId();
+    this.rowStore.append(createMarkerRow({ rowId, turnId: turn.turnId, productTurnId: turn.productTurnId, createdAtSeq: this.sequence + 1, marker }));
   }
 
   fileChangesForTarget(targetRowId: number): { files: number; additions: number; deletions: number; items: ReturnType<TurnFileFacts["items"]> } {
-    return readProjectionFileChanges(targetRowId, this.rows, this.turn, this.turnFacts);
+    return readProjectionFileChanges(targetRowId, this.rowStore.rows, this.turn, this.turnFacts);
   }
 
   buildSnapshot(): ConversationSnapshot {
@@ -281,48 +281,31 @@ export class ConversationProjection {
         seq: this.sequence,
         revision: this.revisionValue,
         state: this.state,
-        rowIds: this.rowIds,
-        rowAt: (rowId) => this.materializeStreamTextRow(rowId),
+        rowIds: this.rowStore.rowIds,
+        rowAt: (rowId) => this.rowStore.materialize(rowId),
       },
       PROTOCOL_V4_LIMITS.snapshotTailWindowRows,
     );
   }
 
   rowsRange(beforeRowId: number | undefined, limit: number): { rows: ConversationRow[]; hasMore: boolean } {
-    return conversationRowsRange(this.rowIds, (id) => this.materializeStreamTextRow(id), beforeRowId, limit);
+    return conversationRowsRange(this.rowStore.rowIds, (id) => this.rowStore.materialize(id), beforeRowId, limit);
   }
 
   /** 冷恢复：把历史行直接放入投影（无订阅者时使用；不产生 delta）。 */
   hydrateRows(rows: ConversationRow[]): void {
-    rows = rows.map((row) => this.subagents.withViewId(row));
-    for (const row of rows) {
-      this.rows.set(row.rowId, row);
-      this.rowIds.push(row.rowId);
-      this.claimRowId(row.rowId);
-    }
-    this.rowIds.sort((a, b) => a - b);
-    this.toolCallIndex.rebuild(this.rows, this.rowIds);
-    this.state = { ...this.state, subagents: this.subagents.hydrate(rows), plan: ompTodoStateFromRows(rows) };
+    const viewRows = this.rowStore.hydrate(rows);
+    this.state = { ...this.state, subagents: this.subagents.hydrate(viewRows), plan: ompTodoStateFromRows(viewRows) };
   }
 
   /** 只读详情视图的事件驱动重水合：全量重读行幂等合并（新行 append、同 rowId 内容变化才 upsert），订阅端实时增长且无重复行。 */
   mergeRows(rows: ConversationRow[]): void {
-    rows = rows.map((row) => this.subagents.withViewId(row));
-    mergeProjectionRows({ rows: this.rows, claimRowId: (rowId) => this.claimRowId(rowId), appendRow: (row) => this.appendRow(row), upsertRow: (row) => this.upsertRow(row) }, rows);
+    this.rowStore.merge(rows);
   }
   /** 只读记录重写：同一 owner 发删除屏障再追加，实时/恢复订阅看到相同替换结果。 */
   replaceHydratedRows(rows: ConversationRow[]): void {
-    rows = rows.map((row) => this.subagents.withViewId(row));
-    if (this.rowIds.length > 0) this.pushPending({ op: "row.removed", fromRowId: this.rowIds[0]! });
-    this.rows.clear();
-    this.toolCallIndex.clear();
-    this.pendingStreamTextByRowId.clear();
-    this.rowIds.length = 0;
-    for (const row of rows) {
-      this.claimRowId(row.rowId);
-      this.appendRow(row);
-    }
-    this.patchState({ subagents: this.subagents.hydrate(rows), plan: ompTodoStateFromRows(rows) });
+    const viewRows = this.rowStore.replace(rows);
+    this.patchState({ subagents: this.subagents.hydrate(viewRows), plan: ompTodoStateFromRows(viewRows) });
   }
 
   /** pending → delta log（合并连续同构 op）；返回合并后的列表。 */
@@ -348,37 +331,11 @@ export class ConversationProjection {
     return this.deltaLog.filter((entry) => entry.seq > fromSeq && entry.seq <= toSeq).map((entry) => entry.delta);
   }
 
-  private appendRow(row: ConversationRow): void {
-    this.rows.set(row.rowId, row);
-    this.rowIds.push(row.rowId);
-    this.toolCallIndex.append(row);
-    this.pushPending({ op: "row.appended", row });
-    const plan = ompTodoState(row);
-    if (plan !== undefined) this.patchState({ plan });
-  }
-
-  /** 水合/合并行自带稳定 rowId：只抬升分配下界，不回收编号。 */
-  private claimRowId(rowId: number): void {
-    this.nextRowId = Math.max(this.nextRowId, rowId + 1);
-  }
-
-  private upsertRow(row: ConversationRow): void {
-    // Bug 根因：首次工具/子代理行误发 row.upserted，桌面增量客户端对未知 rowId
-    // 按协议忽略，导致运行态只有状态计数、没有可见记录；首次必须 append。
-    const previous = this.rows.get(row.rowId);
-    const isNew = previous === undefined;
-    this.rows.set(row.rowId, row);
-    if (isNew) {
-      this.rowIds.push(row.rowId);
-    }
-    this.toolCallIndex.upsert(previous, row, this.rows, this.rowIds);
-    this.pushPending(isNew ? { op: "row.appended", row } : { op: "row.upserted", row });
-    const plan = ompTodoState(row);
-    if (plan !== undefined) this.patchState({ plan });
-  }
-  private materializeStreamTextRow = (rowId: number): ConversationRow | undefined => materializeStreamTextRow(this.rows, this.pendingStreamTextByRowId, rowId);
-
   private patchState(patch: StatePatch): void {
+    // 终态会重建 queue 读面；手动暂停原因必须随同一策略保留，不能被成功收口抹掉。
+    if (patch.queue && !patch.queue.autoDrain && !patch.queue.pauseReason) {
+      patch = { ...patch, queue: { ...patch.queue, pauseReason: this.state.queue.pauseReason ?? "manual" } };
+    }
     patch = withInteractionStopControl(this.state, patch);
     this.state = { ...this.state, ...patch } as ProjectionAState;
     this.revisionValue += 1;

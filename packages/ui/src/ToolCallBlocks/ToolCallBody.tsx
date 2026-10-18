@@ -14,6 +14,7 @@ import type { CodePreviewSettings } from "@/lib/codePreviewSettings.js";
 import { toMediaDataUrl } from "@/lib/mediaDataUrl.js";
 import type { TaskChatToolCallTreeNode } from "@/lib/toolCallTree.js";
 import type { ToolDisplayModel, ToolInlinePreview } from "@/lib/toolDisplay.js";
+import { isFileContentWriteToolCall } from "@/lib/toolIdentity.js";
 import type { Theme } from "@/useTheme.js";
 
 export function ToolCallBody({
@@ -44,6 +45,22 @@ export function ToolCallBody({
   onOpenBrowserUrl?: (url: string) => void;
 }) {
   const inlinePreview = inlinePreviewOverride ?? displayModel.inlinePreview;
+  const input = toolCall.input;
+  // agent:// write sends a message, not a file: retain routing parameters and show its body
+  // as readable text instead of a quoted JSON value or a synthetic file diff.
+  const messageInput =
+    isFileContentWriteToolCall(toolCall) &&
+    typeof input === "object" &&
+    input !== null &&
+    !Array.isArray(input) &&
+    "path" in input &&
+    typeof input.path === "string" &&
+    input.path.startsWith("agent://") &&
+    "content" in input &&
+    typeof input.content === "string"
+      ? input
+      : null;
+  const { content: messageBody, ...messageParameters } = messageInput ?? { content: undefined };
 
   return (
     <>
@@ -76,7 +93,21 @@ export function ToolCallBody({
             />
           ) : null}
           {displayModel.showInput && toolCall.input !== undefined ? (
-            <ToolInput input={toolCall.input} />
+            <>
+              <ToolInput input={messageInput ? messageParameters : toolCall.input} />
+              {typeof messageBody === "string" ? (
+                <MessageResponse
+                  className="min-w-0 whitespace-pre-wrap break-words"
+                  workspacePath={workspacePath}
+                  theme={theme}
+                  codePreviewSettings={codePreviewSettings}
+                  onOpenFileLink={onOpenFileLink}
+                  onOpenExternalUrl={onOpenBrowserUrl}
+                >
+                  {messageBody}
+                </MessageResponse>
+              ) : null}
+            </>
           ) : null}
           {displayModel.showOutput ? (
             <ToolOutput errorText={toolCall.error} output={outputOverride ?? toolCall.output} />

@@ -219,10 +219,10 @@ function OmpModelRolesEditor(
               const provider = catalogValue.slice(0, slash);
               const modelId = catalogValue.slice(slash + 1);
               if (!provider || !modelId) return null;
-              // 档位由调用方显式传入（空串/undefined = 不带 thinkingLevel，即清除档位后缀）。
+              // OMP 省略 thinkingLevel 会保留旧显式档位；inherit 才明确清除后缀。
               return {
                 kind: "model" as const,
-                model: { provider, modelId, ...(level ? { thinkingLevel: level } : {}) },
+                model: { provider, modelId, thinkingLevel: level || "inherit" },
               };
             })();
       // 保存期间也展示本次选择，不能等失败才回显或让控件跳回旧值。

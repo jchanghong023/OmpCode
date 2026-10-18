@@ -51,30 +51,32 @@ async function readOmpSkillCommands(process: OmpSessionProcess): Promise<unknown
 export async function stopEngineOperation(
   host: EngineOperationHost,
   projection: ConversationProjection,
-  prepareAbortReconciliation: () => () => Promise<void>,
   scheduleFlush: () => void,
 ): Promise<void> {
   try {
     await host.ensureStarted();
-    const reconcileAbort = prepareAbortReconciliation();
     const process = host.currentProcess();
+    // 普通 abort 会保留已接纳的 follow-up；必须由核心原子撤回队列再停止，避免续发消费旧输入。
     const outcome = process
       ? await diagnostics.run({ sessionId: host.sessionId() }, () =>
-          diagnosticSessionCommand(process, { type: "abort" }),
+          diagnosticSessionCommand(process, { type: "abort_and_restore_queue" }),
         )
       : undefined;
-    if (!outcome?.success)
+    if (!outcome?.success) {
       diagnostics.warn("omp.session.stop.failed", {
         ...turnContext(projection),
         failureStage: process ? "core_rejection" : "process_unavailable",
       });
-    if (outcome?.success) await reconcileAbort();
+      throw new Error(outcome?.error ?? "omp core unavailable during stop");
+    }
   } catch (error) {
     diagnostics.warn("omp.session.stop.failed", {
       ...turnContext(projection),
       failureStage: "stop_exception",
       errorType: error instanceof Error ? error.name : typeof error,
     });
+    throw error;
+  } finally {
     scheduleFlush();
   }
 }

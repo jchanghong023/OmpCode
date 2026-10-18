@@ -2,8 +2,7 @@
 import { useEffect, useRef } from "react";
 import { useZCodeSessionStore } from "@/store/zcodeSessionStore.js";
 import type { IPlatformService } from "@zcode/shared";
-import { isWorkspaceTab, type TabStoreState, type WindowTabState } from "@/store/tabStore.js";
-import { useTabStore } from "@/store/TabStoreProvider.js";
+import { isWorkspaceTab, type WindowTabState } from "@/store/tabStore.js";
 import { logger } from "@/logger.js";
 import { toast } from "@/components/ui/toast.js";
 import { matchesPrimaryShortcut } from "@/lib/keyboardShortcuts.js";
@@ -328,28 +327,4 @@ export function useRootPlatformEffects({
     // 失败态红点和 permission tag 仍留在各自 UI 语义里，避免把平台徽标混成泛化告警数。
     platform.syncWindowUnreadCount(totalUnreadTaskCount);
   }, [platform, totalUnreadTaskCount]);
-
-  const activeTabId = useTabStore((state: TabStoreState) => state.activeTabId);
-  const activeTabCandidate = useTabStore((state: TabStoreState) =>
-    state.tabs.find((tab: WindowTabState) => tab.id === state.activeTabId),
-  );
-  const activeTab =
-    activeTabCandidate && isWorkspaceTab(activeTabCandidate) ? activeTabCandidate : undefined;
-  const lastSyncedSessionIdRef = useRef<string | null | undefined>(undefined);
-  useEffect(() => {
-    if (!isDesktop) return;
-    const workspacePath = activeTab?.workspacePath;
-    const workspaceIdentity = activeTab?.workspaceIdentity;
-    const syncActiveSession = (): void => {
-      const nextSessionId = workspacePath
-        ? (useZCodeSessionStore.getState().getWorkspaceState(workspacePath, workspaceIdentity)
-            .activeTaskId ?? null)
-        : null;
-      if (nextSessionId === lastSyncedSessionIdRef.current) return;
-      lastSyncedSessionIdRef.current = nextSessionId;
-      platform.syncActiveTaskSession(nextSessionId);
-    };
-    syncActiveSession();
-    return useZCodeSessionStore.subscribe(syncActiveSession);
-  }, [activeTab, activeTabId, isDesktop, platform]);
 }

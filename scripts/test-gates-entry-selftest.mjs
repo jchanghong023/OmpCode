@@ -4,6 +4,7 @@ import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { commandOutput } from "./test-gates-process.mjs";
 import { exerciseHardDeadline } from "./test-gates-deadline-selftest.mjs";
+import { exerciseFirstFailure } from "./test-gates-failure-selftest.mjs";
 
 // 只在临时目录运行短桩；和真实入口共用生命周期，不提供绕过真实计划的 CLI/env 开关。
 export async function exerciseEntryMechanisms(root, { failure, tree, childPid }) {
@@ -102,6 +103,7 @@ if(streamFailures[scenario]){
  };
 }
 let stages;
+// 真实入口并发为 4：先占满活跃槽位，第 5 个哨兵才能证明首失败后的禁止准入。
 switch(scenario){
  case 'success': stages=[node('check','check',100)]; break;
  case 'hung-work': stages=[{id:'hung-work',kind:'compile'}]; break;
@@ -110,7 +112,8 @@ switch(scenario){
  case 'parallel-hang': stages=[{id:'failure',kind:'check',command:'node',args:[${JSON.stringify(failure)}],parallelGroup:'failure'},{id:'hung-work',kind:'check',parallelGroup:'failure'}]; break;
  case 'unhandled': stages=[{id:'owned-tree',kind:'check',command:'node',args:[${JSON.stringify(tree)}]}]; break;
  case 'failure': stages=[{id:'failure',kind:'check',command:'node',args:[${JSON.stringify(failure)}]}]; break;
- case 'failure-finally-hang': stages=[{id:'failure',kind:'check',command:'node',args:[${JSON.stringify(failure)}]}]; break;
+ case 'failure-late-pass': stages=[{id:'failure',kind:'check'},{id:'must-not-start',kind:'check',command:'node',args:[${JSON.stringify(laterTests)}]}]; break;
+ case 'failure-finally-hang': stages=[{id:'failure',kind:'check',command:'node',args:[${JSON.stringify(failure)}]},{id:'must-not-start',kind:'check',command:'node',args:[${JSON.stringify(laterTests)}]}]; break;
  case 'missing': stages=[{id:'missing',kind:'check',command:root+'/no-such-tool.exe',args:[]}]; break;
  case 'denied': stages=[{id:'must-not-run',kind:'check',command:'node',args:['--eval',"require('node:fs').writeFileSync("+JSON.stringify(root+'/unauthorized-ran')+",'bad')"]}]; break;
  case 'timeout':
@@ -130,6 +133,7 @@ switch(scenario){
    {id:'first-compiler-failure',kind:'compile',command:'node',args:['--input-type=module','--eval',${JSON.stringify(`import{readFile}from'node:fs/promises';${awaitPeer}console.log('error TS9999: PURE_COMPILER_FAILURE');setInterval(()=>{},1000);`)}],parallelGroup:'failure'},
    {id:'owned-peer-tree',kind:'compile',command:'node',args:[${JSON.stringify(tree)}],parallelGroup:'failure'},
    node('owned-compile','compile',10000,{parallelGroup:'failure'}),
+   node('owned-compile-peer','compile',10000,{parallelGroup:'failure'}),
    {id:'must-not-start',kind:'compile',command:'node',args:[${JSON.stringify(laterTests)}],parallelGroup:'failure'},
   ];
   break;
@@ -141,6 +145,7 @@ switch(scenario){
    {id:'first-stream-failure',kind,failFastTests:kind==='test',command:'node',args:['--input-type=module','--eval',streamCode[scenario]],parallelGroup:'failure'},
    {id:'owned-peer-tree',kind,command:'node',args:[${JSON.stringify(tree)}],parallelGroup:'failure'},
    node('owned-compile','compile',10000,{parallelGroup:'failure'}),
+   node('owned-compile-peer','compile',10000,{parallelGroup:'failure'}),
    {id:'must-not-start',kind,command:'node',args:[${JSON.stringify(laterTests)}],parallelGroup:'failure'},
   ];
   break;
@@ -155,7 +160,7 @@ switch(scenario){
    : scenario==='compiler-output-failure'
     ? {id:'first-compiler-failure',kind:'compile',command:'node',args:['--input-type=module','--eval',${JSON.stringify(`import{readFile}from'node:fs/promises';${awaitPeer}console.log('error TS9999: FIRST_COMPILER_FAILURE');setInterval(()=>{},1000);`)}]}
     : {id:'first-stage-failure',kind:'check',command:'node',args:['--input-type=module','--eval',${JSON.stringify(`import{readFile}from'node:fs/promises';${awaitPeer}process.exit(7);`)}]};
-  stages=[{...trigger,parallelGroup:'failure'}, {id:'owned-peer-tree',kind:'check',command:'node',args:[${JSON.stringify(tree)}],parallelGroup:'failure'},node('owned-compile','compile',10000,{parallelGroup:'failure'}),{id:'must-not-start',kind:'check',command:'node',args:[${JSON.stringify(laterTests)}],parallelGroup:'failure'}];
+  stages=[{...trigger,parallelGroup:'failure'}, {id:'owned-peer-tree',kind:'check',command:'node',args:[${JSON.stringify(tree)}],parallelGroup:'failure'},node('owned-compile','compile',10000,{parallelGroup:'failure'}),node('owned-compile-peer','compile',10000,{parallelGroup:'failure'}),{id:'must-not-start',kind:'check',command:'node',args:[${JSON.stringify(laterTests)}],parallelGroup:'failure'}];
   break;
  }
  default: throw new Error('Unknown fixture scenario');
@@ -163,17 +168,28 @@ switch(scenario){
 if(scenario==='interruption') setTimeout(()=>process.emit('SIGTERM'),1000);
 if(scenario==='unhandled') { void (async()=>{${awaitPeer}throw new Error('UNHANDLED_FIXTURE_FAILURE');})(); }
 const verification={calls:0};
+const failureEvents=[];
 const sourceBefore=scenario.startsWith('verify-')?await readFile(${JSON.stringify(sourceFile)},'utf8'):undefined;
 const details={
- scenario,cleanupObservations,streamSeen,
+ scenario,cleanupObservations,streamSeen,failureEvents,
  ...(sourceBefore===undefined?{}:{snapshot:{source:sourceBefore},tools:{node:process.version,nodePath:process.execPath},verification}),
 };
 const report=await gate.run(stages,async (stage,onFailure)=>{
  if(stage.id==='hung-work') return new Promise(()=>{});
- const result=await commandOutput(stage.command,stage.args,{clock:gate.clock,onFailure,failFast:true,quiet:!streamFailures[scenario],failFastTests:stage.failFastTests||stage.kind==='test'&&stage.args.includes('--test'),failFastCompiler:stage.kind==='compile'});
- if(result.output) console.log(result.output);
- if(scenario==='failure-finally-hang') return new Promise(()=>{});
- return {status:result.code?'FAIL':'PASS',exitCode:result.code,...(result.reason?{reason:result.reason}:{})};
+ if(scenario==='failure-late-pass'){
+  onFailure({status:'FAIL',exitCode:7,reason:'FIRST_ACCEPTED_FAILURE'});
+  return {status:'PASS',exitCode:0};
+ }
+ try {
+  const result=await commandOutput(stage.command,stage.args,{stageId:stage.id,clock:gate.clock,onFailure:failure=>{failureEvents.push('failure-notified');onFailure(failure);},failFast:true,quiet:!streamFailures[scenario],failFastTests:stage.failFastTests||stage.kind==='test'&&stage.args.includes('--test'),failFastCompiler:stage.kind==='compile'});
+  if(result.output) console.log(result.output);
+  return {status:result.code?'FAIL':'PASS',exitCode:result.code,...(result.reason?{reason:result.reason}:{})};
+ } finally {
+  if(scenario==='failure-finally-hang'){
+   failureEvents.push('finally-entered');
+   await new Promise(()=>{});
+  }
+ }
 },details,scenario.startsWith('verify-')?async records=>{
  verification.calls++;
  await writeFile(${JSON.stringify(verifyRan)},'verify ran');
@@ -230,11 +246,26 @@ process.exit(report.exitCode);
       assert.notEqual(failed.code, 0);
       assert.equal(failed.report.status, "FAIL");
     }
+    const latePass = await run(level, "failure-late-pass", 10);
+    assert.equal(latePass.code, 1, latePass.output);
+    assert.equal(latePass.report.status, "FAIL");
+    assert.equal(latePass.report.stages[0].status, "FAIL");
+    assert.equal(latePass.report.stages[0].exitCode, 7);
+    assert.equal(latePass.report.stages[0].reason, "FIRST_ACCEPTED_FAILURE");
+    assert.deepEqual(
+      latePass.report.stages.map((stage) => stage.id),
+      ["failure"],
+      "A late successful return must neither replace the first failure nor admit more work",
+    );
     // fastcheck 不需要授权，其余入口必须在执行任何桩之前拒绝。
     if (level !== "fastcheck") {
       const denied = await run(level, "denied");
       assert.equal(denied.code, 2);
-      await assert.rejects(() => readFile(join(root, "unauthorized-ran")));
+      await assert.rejects(
+        () => readFile(join(root, "unauthorized-ran")),
+        { code: "ENOENT" },
+        `${level}/denied must reject authorization before executing its stage`,
+      );
     }
     for (const scenario of ["timeout", "interruption"]) {
       // Windows taskkill 本身需要计费；留足短桩清理余量，不放宽真实门禁上限。
@@ -257,82 +288,12 @@ process.exit(report.exitCode);
     const compilerFailure = await run(level, "compile-fail");
     assert.notEqual(compilerFailure.code, 0);
     assert.equal(compilerFailure.report.status, "FAIL");
-    for (const scenario of [
-      "parallel-failure",
-      "compiler-output-failure",
-      ...(level === "fastcheck"
-        ? []
-        : ["nested-failure", "out-of-order-files", "concurrent-test-failure"]),
-    ]) {
-      await rm(childPid, { force: true });
-      await rm(blocked, { force: true });
-      const failedFast = await run(level, scenario, 10);
-      assert.notEqual(failedFast.code, 0);
-      assert.equal(failedFast.report.status, "FAIL");
-      assert.ok(failedFast.report.budgeted < failedFast.report.limitSeconds, failedFast.output);
-      const peerPid = Number(await readFile(childPid, "utf8"));
-      assert.throws(() => process.kill(peerPid, 0), `${level}/${scenario}: owned peer survived`);
-      await assert.rejects(() => readFile(blocked));
-      assert.equal(
-        failedFast.report.stages.some((stage) => stage.id === "must-not-start"),
-        false,
-      );
-      const trigger = failedFast.report.stages[0];
-      assert.equal(trigger.status, "FAIL");
-      if (scenario === "parallel-failure") assert.equal(trigger.exitCode, 7);
-      else if (scenario === "compiler-output-failure")
-        assert.match(trigger.reason, /error TS9999: FIRST_COMPILER_FAILURE/u);
-      else {
-        assert.match(trigger.reason, /FIRST_TEST_FAILURE|UNORDERED_TEST_FAILURE/u);
-        assert.match(failedFast.output, /FIRST_TEST_FAILURE|UNORDERED_TEST_FAILURE/u);
-      }
-    }
-    for (const scenario of ["compiler-cleanup", "stream-tap-failure", "stream-compiler-failure"]) {
-      for (const path of [childPid, blocked, streamFirstSeen, streamNoiseSeen])
-        await rm(path, { force: true });
-      const failed = await run(level, scenario, 10);
-      assert.equal(failed.report.status, "FAIL", `${level}/${scenario}: ${failed.output}`);
-      assert.notEqual(failed.code, 0);
-      assert.ok(failed.report.budgeted < failed.report.limitSeconds, failed.output);
-      assert.deepEqual(
-        failed.report.stages.map((stage) => stage.id),
-        [
-          scenario === "compiler-cleanup" ? "first-compiler-failure" : "first-stream-failure",
-          "owned-peer-tree",
-          "owned-compile",
-        ],
-        `${level}/${scenario} must stop the active group before admitting a later stage`,
-      );
-      const trigger = failed.report.stages[0];
-      assert.equal(trigger.status, "FAIL");
-      const pid = Number(await readFile(childPid, "utf8"));
-      assert.throws(() => process.kill(pid, 0), `${level}/${scenario}: owned grandchild survived`);
-      await assert.rejects(() => readFile(blocked));
-      if (scenario === "compiler-cleanup") {
-        assert.equal(trigger.reason, "error TS9999: PURE_COMPILER_FAILURE");
-        assert.ok(
-          failed.report.cleanupObservations.some(
-            ({ compileActive, checkActive, wasCompileOnly, compileOnly, before, after }) =>
-              compileActive === 3 &&
-              checkActive === 1 &&
-              wasCompileOnly &&
-              !compileOnly &&
-              after.budgeted > before.budgeted &&
-              after.compileExcluded === before.compileExcluded,
-          ),
-          `${level}: pure compiler tree cleanup must activate check time and charge its full interval: ${JSON.stringify(failed.report.cleanupObservations)}`,
-        );
-      } else {
-        assert.deepEqual(failed.report.streamSeen, ["stdout-head", "stderr-between"]);
-        assert.equal(
-          trigger.reason,
-          scenario === "stream-tap-failure"
-            ? "not ok 1 - STREAM_TAP_FAILURE"
-            : "error TS9999: STREAM_COMPILER_FAILURE",
-        );
-        assert.match(failed.output, /INTERLEAVED_STDERR/u);
-      }
-    }
+    await exerciseFirstFailure(run, level, {
+      childPid,
+      blocked,
+      streamFirstSeen,
+      streamNoiseSeen,
+    });
     for (const scenario of ["verify-source", "verify-failure"]) {
       await writeFile(sourceFile, "SOURCE_BEFORE");
       await rm(verifyRan, { force: true });
@@ -359,7 +320,11 @@ process.exit(report.exitCode);
         assert.equal(verified.report.stages[0].status, "FAIL");
         assert.equal(verified.report.verification.calls, 0);
         assert.equal(await readFile(sourceFile, "utf8"), "SOURCE_BEFORE");
-        await assert.rejects(() => readFile(verifyRan));
+        await assert.rejects(
+          () => readFile(verifyRan),
+          { code: "ENOENT" },
+          `${level}/${scenario} must not verify a failed run: ${verified.output}`,
+        );
         assert.equal(
           verified.report.stages.some((stage) => stage.id === "source-snapshot"),
           false,

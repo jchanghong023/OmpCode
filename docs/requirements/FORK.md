@@ -1,6 +1,6 @@
 # Fork 与上游差异
 
-本仓库 fork 自上游 [zai-org/ZCode](https://github.com/zai-org/ZCode) 的 `main` 分支，仅供个人使用，持续同步上游。本 Fork 的目的：把 ZCode 的 Agent 核心替换为 omp（oh-my-pi）的 RPC 核心，保留 ZCode 的全部用户界面与交互形态。
+本仓库 fork 自智谱开源的 [zai-org/ZCode](https://github.com/zai-org/ZCode) `main` 分支，仅供个人使用，持续同步上游。选择 ZCode 是为了沿用其桌面应用的 UI 风格与交互，Agent 核心则使用本人维护的 OMP（oh-my-pi）Fork；本项目解决二者原生协议不兼容的问题，不另造 Agent 核心，也不以把 OMP 全部功能做成 GUI 为目标。
 
 本页面向本人和 AI agent，只记录相对当前上游基线仍有效、对使用者有影响的差异需求，不记录实现细节、修复或同步历史。开发与同步规则见 [AGENTS.md](../../AGENTS.md)，功能域划分见 [需求索引](README.md)。
 
@@ -15,14 +15,30 @@
 
 ## 本 Fork 的目的
 
-把本地 Agent 核心从上游 `apps/zcode-cli`（Agent CLI 与运行时）替换为 omp 的 RPC 核心，ZCode 侧通过适配层对接。产品形态、界面与既有双链路语义除本目录明确记录的差异决策外保持上游形态；omp 自身的功能演进在其自己的 fork 仓库进行，本仓库只消费其 RPC 核心能力，不重定义 omp。
+把本地 Agent 核心从上游 `apps/zcode-cli`（Agent CLI 与运行时）替换为 OMP 的 RPC 核心，ZCode 侧通过适配层对接。优先保留并适配已有界面、组件、布局和交互，不因换核重设计正常的 ZCode UI；既有双链路与状态所有权保持不变。OMP 也是本人维护的 Fork，其业务和协议演进在 OMP 仓库进行，本仓库消费公开能力并记录接入缺口，不在 GUI 或 Host 中复制 OMP 业务。
+
+**产品需求优先级（2026-10-18 用户澄清）**：本节是项目目的、功能优先级及新增界面边界的唯一依据。其他文档或历史阶段规划与本节冲突时，以本次用户澄清为准；各功能的具体接口、产品规则与验收场景仍在所属功能域维护，不据旧规划扩大产品范围。
 
 ### 分阶段产品目标
 
-- **第一阶段：复用并适配 ZCode 界面。** ZCode 已有界面完善，以其 UI 风格、组件、布局和交互为产品基准。常用界面凡能由 OMP 当前公开能力支持，必须接入并复用；不能仅因换核而降为原始文本、通用工具输出或另造简化页面。适配同时覆盖入口、状态、过程、结果与历史恢复，具体规则及验收场景仍在对应功能域维护。
-- 子代理独立状态面板、Agent 卡片与详情侧栏，以及 Todo 独立待办面板，属于第一阶段的常用界面；能够获取的数据应进入现有 ZCode 展示面。验收依据见 [集成需求](integrations.md)，不能仅以 OMP 执行成功或工具文本可见认定界面适配完成。
+- **第一优先级：协议适配与现有界面复用。** ZCode 与 OMP 有各自原生协议，不能把协议不兼容误判为需要重做 UI。已有 ZCode 功能只要 OMP 公开能力能够支撑，就先通过适配层接入，完整保留入口、状态、工具调用过程、结果与历史恢复；不能为了通过测试改正常界面，也不能仅显示原始输出或返回假成功来代替适配。
+- 子代理独立状态面板、Agent 卡片与详情侧栏，以及 Todo 独立待办面板，属于现有界面的适配范围；能够获取的数据应进入这些展示面。验收依据见 [集成需求](integrations.md)，不能仅以 OMP 执行成功或工具文本可见认定界面适配完成。
 - 侧栏的项目/任务视图与文件树沿用原有滑动切换，由同一个侧栏视图状态持有；滑动视图的外壳只裁剪、不建立横向滚动。选择长标题任务、键盘聚焦及滚动查看子代理工具记录后，侧栏导航、文字和设置入口仍须完整留在原位置，不能因浏览器自动滚动而横向偏移。
-- **后续阶段：围绕 OMP 独有能力开发新界面。** 只有现有 ZCode 界面无法完整表达该能力时，才在复用其设计体系的基础上增加专用界面；不以未来的新界面规划替代第一阶段已有界面的适配。
+- **新增界面是受限例外，不是全量 GUI 化阶段。** 只有某项能力对日常使用很重要、且现有 ZCode 界面确实无法承载时，才复用其设计体系增加最小必要界面。OMP 功能多不构成新增页面、面板或入口的理由，不为每项 OMP 能力建立专用 GUI。
+
+### 日常核心功能与验收重点
+
+| 核心功能         | 产品边界与需求所有者                                                                                                                                |
+| ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 多轮工具调用对话 | 通过已有会话界面连续对话，完整显示实际工具调用顺序、结果、后续回复与历史；见 [核心接入](omp-core-integration.md)、[会话恢复](session-recovery.md)。 |
+| 子代理           | 复用已有目录、状态面板、Agent 卡片、详情及控制入口，真实身份与运行结果可核对；见 [集成需求](integrations.md)。                                      |
+| ask              | 复用已有问答组件，正确展示问题并把用户答案回传 OMP；见 [核心接入](omp-core-integration.md)。                                                        |
+| 技能             | 实际目录、选择、调用及结果对接 OMP，不另建技能执行引擎；见 [技能需求](skills.md)。                                                                  |
+| 内置命令         | 使用 OMP 公开的命令目录与现有输入、交互、结果展示路径；见 [核心命令](omp-native-commands.md)。                                                      |
+| Wiki             | 原 ZCode 没有对应界面，允许简单显示和管理知识索引；实际操作仍交由 OMP，见 [核心命令](omp-native-commands.md#项目索引与原生编排操作面板)。           |
+| Repo             | 原 ZCode 没有对应界面，允许简单显示和管理代码索引；不重做索引器或大型管理工作台，见 [核心命令](omp-native-commands.md#项目索引与原生编排操作面板)。 |
+
+上述是产品优先级，不是已完成或已验收声明。自动化优先证明这些能力从真实桌面入口、经协议适配到真实 OMP 执行及可观察结果的完整链路；测试不能反过来定义产品需求。
 
 本地 Git 中该提交是 HEAD 与已缓存 `upstream/main` 的共同基线；本文件记录已合入基线，不代表远端当前 `main` HEAD。初始化不执行 fetch 或同步，也不把尚未同步的上游变化识别为本地需求。以下本地要求仍需维护，尚未逐项证明上游等价满足。
 
@@ -61,10 +77,10 @@
 
 ## omp 侧依赖
 
-- 来源：本人维护的 fork `jchanghong023/oh-my-pi`（本地工作目录 `D:\code1111111111\oh-my-pi`；上游为 `can1357/oh-my-pi`）。
+- 来源：本人维护的 fork `jchanghong023/oh-my-pi`（本地工作目录 `F:\code2026\oh-my-pi`；上游为 `can1357/oh-my-pi`）。
 - 接入形态：`omp --mode rpc-ui` 启动的核心——stdio 上的 newline-delimited JSON 协议，含 ready 帧、协议版本协商、命令/响应关联、会话事件、工具交互 UI 请求与 host 工具请求。
 - omp 权威文档（固定，均在 omp 仓库内）：rpc 需求唯一权威为 `docs-zh-CN/requirements/rpc-ui-protocol.md`（rpc-ui 协议扩展与 RPC 项目运行服务需求）；`docs-zh-CN/requirements/fork.md` 的「预采纳的上游 PR」一节维护三条 RPC 条目（#13802、#13689、#14110，上游合并后按该节规则删除条目）；`docs-zh-CN/requirements/README.md` 为该需求目录索引。上游英文协议文档 `docs/rpc.md` 仅保留个别 fork 文案段；SDK 参阅上游自带的 `sdk/python/omp-rpc/README.md`、`sdk/go/omp-rpc/README.md`、`sdk/rust/omp-rpc/README.md`。
-- 接口参考与测试基线：接口与协议开发优先以本地目录 `D:\code1111111111\oh-my-pi` 的源码为权威资料，结合上述 omp 权威文档。真实核心验证使用本机已安装的 omp；本机器约定该安装必然为最新版本，不额外核验是否最新。未安装时不进行依赖真实 omp 的验证，不为验证另行下载或安装，并记录为未验证。分发资产的来源与完整性仍按下述规则独立检查，本机安装核通过不等于安装包已验收。
+- 接口参考与测试基线：接口与协议开发优先以本地目录 `F:\code2026\oh-my-pi` 的源码为权威资料，结合上述 omp 权威文档。真实核心验证使用本机已安装的 omp；本机器约定该安装必然为最新版本，不额外核验是否最新。未安装时不进行依赖真实 omp 的验证，不为验证另行下载或安装，并记录为未验证。分发资产的来源与完整性仍按下述规则独立检查，本机安装核通过不等于安装包已验收。
 - 分发：随 ZCode 安装包内嵌——打包时取该 fork GitHub releases 页面（`https://github.com/jchanghong023/oh-my-pi/releases`）的最新版本二进制，内嵌进应用资源并由应用拉起；用户无需单独安装 omp。不依赖上游 oh-my-pi 的 npm / Homebrew / Nix / `omp.sh` 分发。
 - 分发完整性：下载的 omp release 资产必须具有对应的发布 SHA256，缺失校验文件/资产条目或摘要不符时资源准备失败；复用缓存时仍验证资产摘要，不能只凭文件存在判定可分发。缓存按平台资产分别保存校验元数据，不能让同 tag 的其他平台覆盖来源信息。
 - Windows EXE 与 CentOS 7 ZIP 的 GitHub Actions 手动发布入口不提供任何自定义输入项：从 `main` 点击运行即可，发布 Tag 自动生成为 `v<UTC日期YYYYMMDD>-<时间HHmmss>-<run-id>-<run-attempt>`。同秒触发的两条流水线通过运行 ID 区分，重新运行全部 job 通过重试次数区分；构建 job 生成一次，发布 job 使用该输出。默认发布正式 Release，上传安装包与 SHA256 校验文件；发布流水线不单独运行测试。
@@ -88,9 +104,10 @@
 - `desktop-continuous` 实时链路与 `web-remote-replayable` 恢复链路：同一投影、按订阅 `clientMode` 区分；断线重连按水位续传（delta log 有界保留，超界回退整快照 resync），两种语义不因换核回退。
 - omp RPC 帧格式不渗入 UI，适配层内闭环（`packages/omp-agent` 独占 omp 协议词汇）。富 ask、通用输入及旧核降级复用 ZCode 原有交互面，字段、应答与超时规则唯一见 [OMP 核心接入](omp-core-integration.md#产品规则)。
 - 工具审批复用同一通用询问回路；持久决策仍由 omp 自身配置持有，旧六档权限卡不恢复，超时/销毁/断连 fail-closed。具体呈现与应答唯一见 [OMP 核心接入](omp-core-integration.md#产品规则)。
+- 普通启动与 Provider 刷新不依赖上游 ZCode Built-in 的公网配置下载：内建 Provider 元数据使用随应用交付的配置，OMP 的模型目录、角色、凭据与真实会话仍由 OMP 唯一持有。保留既有 Personal/Account Provider 配置和通用 Web 能力，不把上游配置服务不可达变成 OMP 启动条件，也不以空配置或吞掉真实配置/账号错误代替成功。
 - 无法等价提供的能力：见「已知与允许的差异」逐项。
 
-验收：从真实公开入口新建会话，覆盖流式、工具调用、双向交互、实际文件变更、完成/中断、冷恢复；同时验证桌面实时交付与 Web 断线后的续传/超界快照恢复。协议模拟仅补充 wire 校验，不能代替真实核心及 GUI 链路。
+验收：从真实公开入口新建会话，覆盖流式、工具调用、双向交互、实际文件变更、完成/中断、冷恢复；同时验证桌面实时交付与 Web 断线后的续传/超界快照恢复。普通 GUI 启动及 Provider 刷新不请求上游 Built-in client-config/CDN，不出现该下载导致的刷新异常，内建配置与 Personal Provider 仍可读，OMP 模型目录与实际会话正常；仍支持的配置/账号刷新失败继续显式报错。协议模拟仅补充 wire 校验，不能代替真实核心及 GUI 链路。
 
 ## 产品身份与图标
 
@@ -117,16 +134,19 @@
 
 换核后以下能力无法与上游等价提供，要求以显式拒绝（JSON-RPC `-32601` / v4 ACK `fault.command.unsupportedByOmpCore` 等 guard id）或明确的替代行为交付，不静默缺失。UI 侧表现为对应入口不可用（禁用态 tooltip / 操作失败提示），主对话链路不受影响。个别差异的功能域文档规定了入口隐藏等替代形态时（如插件市场入口隐藏）以该功能域文档为准；「上游同步策略与平台范围」的入口保留约束针对两平台之间的差异，不改变这些既定裁剪。
 
+- **协议尚不支持的能力先记录缺口，留待两个 Fork 协同完善。** 在对应功能域记录所需能力、当前公开协议缺少的接口或数据、用户可见影响、现行不可用说明与后续开放前提；本节只维护跨域差异索引，不复制各域清单。不为补齐功能数量新增 GUI、伪造状态或返回假成功，也不把记录缺口当作已经实现。
+- 必须区分「OMP 当前公开协议不支持」「OMP 已支持但本适配层未接入」和「仅未提供专用 GUI」。前者是待协同完善的协议缺口；第二类仍是本项目的适配工作，不能借协议缺失免责；第三类按上面的日常重要性与界面复用规则决定，不自动要求新界面。
+
 1. **插件与技能市场**：见 [原生集成](integrations.md) 与 [可执行技能](skills.md)。
 2. **工作流中枢与动态工作流**：已保存工作流 GUI（`workflows/*`）、`v4/conversation/workflowRun*` 全族、`startSavedWorkflow`/`resumeWorkflowRun`/`amendWorkflowRunSettings` 不可用。替代行为：无（omp 无等价工作流引擎）。自动 run 摘要查询在 UI transport 本地返回明确能力缺失，不发出注定失败的 Host/OMP RPC，不伪造空列表；能力缺失不记 warn 或重复查询，显式操作仍保持不可用语义。验收：打开普通会话无 workflowRuns RPC 失败日志，会话订阅与命令发送正常。
 3. **automation / Off-Peak**：见 [原生集成](integrations.md)。
 4. **会话内编辑类操作**：fork 某轮（`forkAssistant`）、重试（`retryTurn`）、编辑已发送消息（`editUserQuery`）、工作区文件回滚（`applyFileRewind`/`fileRewindPreview`）不可用。替代行为：无（omp 会话树的 `branch` 能力未进本适配层）。现有辅助对话入口接入原生 BTW，不属于编辑/分叉；唯一规则及验收见 [OMP 辅助对话](omp-core-integration.md#辅助对话原生-btw唯一需求权威)。
 5. **旧 ZCode 协作模式与 goal API**：`switchCollaborationMode`（build/edit/plan/yolo）、`sendGoalCommand`、`pauseGoal`/`resumeGoal` 不可用（v4 命令面显式拒绝）；OMP 原生 `/plan`、`/goal`、`/loop` 等通过 rpc-ui 核心接入，规则见 [核心命令需求](omp-native-commands.md)，不复活旧 ZCode 状态机。
-6. **输入队列编辑**：队列项编辑/重排/删除/立即发送（`editQueueItem` 等）不可用。替代行为：followup 模式等价保留——`guide` 映射 omp `steer`（本轮引导，工具间生效），`queue` 映射 omp `follow_up`（轮后队列），两个 omp 队列均为 one-at-a-time（每轮一条），与上游「每轮一条」语义一致；流式中发送即按当前模式路由。
+6. **输入队列编辑**：队列项编辑/重排/删除/立即发送（`editQueueItem` 等）不可用。替代行为：保留原有 `guide` / `queue` 输入模式与队列暂停/恢复策略，流式中发送按当前模式路由；OMP 适配、逐项消费和异常终止规则唯一见 [会话恢复](session-recovery.md#冷历史与身份连续性)，不以原生 `follow_up` 的内部队列替代产品队列所有权。
 7. **用量统计**：app 级用量（`v4/usage/stats`）返回合法空快照；会话级 `v4/conversation/usage` 返回本会话累计值。替代行为：历史聚合统计暂缺（数据源在 omp 会话库，未做聚合）。
 8. **MCP 状态面板**：见 [原生集成](integrations.md)。
 9. **模型连通性测试与 commit message 生成**（`provider/testModelConnectivity`、`workspace/generateText`）：均不可用（-32601）。omp v18.8.0 起 RPC 面不再提供 `test_model`（旧 v3 fork 面已随 RPC 收敛删除），替代行为：模型可用性以实际会话轮为准；commit message 生成（`workspace/generateText`）无 omp 等价物。
-10. **权限确认形态**：omp 审批仅在用户 omp 审批配置（如 `--approval-mode` 非默认值或 `tools.approval` 设置）生效时出现；默认 yolo 模式无权限确认（与用户日常 omp 行为一致）。审批以通用询问（`Approve`/`Deny` 两档 select）呈现，提示文本携带工具与目标信息；结构化六档审批卡已随 OMP 侧 RPC 收敛删除（见上文「Agent 核心与双链路」）。
+10. **权限确认形态**：omp 审批仅在用户 omp 审批配置（如 `--approval-mode` 非默认值或 `tools.approval` 设置）生效时出现；默认 yolo 模式无权限确认（与用户日常 omp 行为一致）。审批复用通用询问，完整保留核心提供的选项与工具、目标信息；选项规则唯一见 [OMP 核心接入](omp-core-integration.md#产品规则)。不恢复旧 ZCode 结构化六档审批卡。
 11. **子代理/后台任务面板**：见 [原生集成](integrations.md)。
 12. **legacy session 事件流**：`session/subscribe` 返回空事件（无 live 事件回放）。替代行为：桌面与 Web 主链路均走 v4 帧，不受影响；task 索引的 live 增量更新降级。
 13. **冷会话历史投影**：见 [会话恢复](session-recovery.md)。

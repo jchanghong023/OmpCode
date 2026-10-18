@@ -205,7 +205,7 @@ export function useComposerAttachments(
     listenAddToChatEvents = true,
   } = options;
   const platform = usePlatform();
-  const { promptAttachmentTransferService } = useServices();
+  const { promptAttachmentTransferService, fileService } = useServices();
   const { intl } = useZCodeIntl();
   const canonicalScopeId = resolveSharedComposerDraftScope({
     workspacePath,
@@ -214,6 +214,15 @@ export function useComposerAttachments(
   });
   const scopeKey = buildScopeKey(workspacePath, workspaceIdentity, canonicalScopeId);
   exposeComposerAttachmentScopeKeyForE2E(scopeKey);
+  const pickerScope = useMemo(() => ({ active: true }), [scopeKey]);
+  const currentPickerScopeRef = useRef(pickerScope);
+  currentPickerScopeRef.current = pickerScope;
+  useEffect(() => {
+    pickerScope.active = true;
+    return () => {
+      pickerScope.active = false;
+    };
+  }, [pickerScope]);
 
   const targetsRef = useRef(new Map<string, UploadTarget>());
   const uploadQueueRef = useRef<UploadQueueEntry[]>([]);
@@ -293,6 +302,46 @@ export function useComposerAttachments(
     },
     [commitScope],
   );
+
+  // The scoped draft remains the sole owner. Native selection has no browser File
+  // or object URL; hydrate only its display URL through the existing preview port.
+  const nativeImagePreviewIds = attachments
+    .filter((item) => !item.file && item.localPath && item.mimeType.startsWith("image/"))
+    .map((item) => item.id)
+    .join(" ");
+  useEffect(() => {
+    let disposed = false;
+    const ids = new Set(nativeImagePreviewIds.split(" "));
+    for (const item of readComposerAttachmentScope(scopeKey)) {
+      if (!ids.has(item.id) || item.objectUrl || !item.localPath) continue;
+      void fileService
+        .readMediaPreview({ path: item.localPath })
+        .then((preview) => {
+          if (disposed || !preview.mediaType.startsWith("image/")) return;
+          commitScope(scopeKey, (current) =>
+            current.map((candidate) =>
+              candidate.id === item.id &&
+              candidate.operationId === item.operationId &&
+              candidate.localPath === item.localPath &&
+              !candidate.objectUrl
+                ? {
+                    ...candidate,
+                    // Data URLs need no resource lease/revoke and follow the
+                    // existing draft's retention/removal lifecycle.
+                    objectUrl: `data:${preview.mediaType};base64,${preview.dataBase64}`,
+                  }
+                : candidate,
+            ),
+          );
+        })
+        .catch((error: unknown) => {
+          if (!disposed) logger.warn("[v4-composer-attachments] 读取图片缩略图失败", error);
+        });
+    }
+    return () => {
+      disposed = true;
+    };
+  }, [commitScope, fileService, nativeImagePreviewIds, scopeKey]);
 
   const enqueueUpload = useCallback(
     (targetScopeKey: string, attachmentId: string, expectedOperationId?: string) => {
@@ -870,8 +919,12 @@ export function useComposerAttachments(
       return;
     }
     void selectAttachmentLocalPaths(platform)
-      .then((paths) => addAttachmentLocalPaths(paths))
+      .then((paths) => {
+        if (pickerScope.active && currentPickerScopeRef.current === pickerScope)
+          addAttachmentLocalPaths(paths);
+      })
       .catch((error) => {
+        if (!pickerScope.active || currentPickerScopeRef.current !== pickerScope) return;
         logger.warn("[v4-composer-attachments] 选择附件路径失败", error);
         setAttachmentError(
           intl.formatMessage(
@@ -880,7 +933,7 @@ export function useComposerAttachments(
           ),
         );
       });
-  }, [addAttachmentLocalPaths, intl, platform, scopeKey, showAttachmentLimitWarning]);
+  }, [addAttachmentLocalPaths, intl, pickerScope, platform, scopeKey, showAttachmentLimitWarning]);
 
   const handleAttachmentInputChange = useCallback(
     (event: React.ChangeEvent<HTMLInputElement>) => {

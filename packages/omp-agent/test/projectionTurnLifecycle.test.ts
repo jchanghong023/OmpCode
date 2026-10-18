@@ -8,6 +8,7 @@ import {
 import type { ConversationDelta } from "@zcode/shared/zcode-protocol-v4";
 import { TurnFileFacts } from "../src/domain/fileFacts.js";
 import { PromptResultTracker } from "../src/domain/promptResultTracker.js";
+import type { TurnSubmission } from "../src/domain/projectionRows.js";
 
 const input = (id: string, routing: "startNow" | "guide" | "queue" = "startNow") => ({
   text: id,
@@ -89,7 +90,20 @@ test("guide 收口旧轮和新轮的流式行及文件事实", () => {
     status: "success",
     input: { path: "old.txt", content: "a\n" },
   });
-  projection.beginUserTurn(input("guide", "guide"));
+  // 依据 docs/requirements/session-recovery.md：只有真实用户 message_start 消费等待项，ACK 不算消费。
+  // 这里按 ompProjector 的真实驱动方式给 guide 轮带上 steer submission，并用用户文本激活。
+  const guideSubmission: TurnSubmission = {
+    text: "guide",
+    originalText: "guide",
+    images: [],
+    sourceCommandId: "guide",
+    clientId: "test",
+    generation: 1,
+    delivery: "steer",
+    state: "accepted",
+  };
+  projection.beginUserTurn({ ...input("guide", "guide"), submission: guideSubmission });
+  projection.activateQueuedTurn("guide", true);
   projection.appendAssistantText("guided text");
   projection.finishTurn("success");
   const rows = projection.rowsRange(undefined, 100).rows;
@@ -105,14 +119,15 @@ test("guide 收口旧轮和新轮的流式行及文件事实", () => {
   assert.equal(first?.kind === "turnHeader" && first.fileChanges.files, 1);
 });
 
-test("queue 保留当前轮输出，下一次 agent_start 才激活后续轮", () => {
+test("queue 保留当前轮输出，真实用户回显才激活后续轮", () => {
   const projection = new ConversationProjection("session");
   projection.beginUserTurn(input("first"));
   projection.appendAssistantText("before");
   projection.beginUserTurn(input("queued", "queue"));
   projection.appendAssistantText("after");
   projection.finishTurn("success");
-  projection.activateQueuedTurn();
+  // 依据 session-recovery.md：agent_start/ACK 不消费等待项，必须由真实用户 message_start 的文本激活。
+  projection.activateQueuedTurn("queued", true);
   projection.appendAssistantText("next");
   projection.finishTurn("success");
   const rows = projection.rowsRange(undefined, 100).rows;
@@ -171,7 +186,8 @@ test("turn 进行中到达的 startNow 入队等待，不覆盖活跃轮", () =>
   // 旧轮保持激活：后续流式文本仍归属旧轮。
   projection.appendAssistantText("after");
   projection.finishTurn("success");
-  projection.activateQueuedTurn();
+  // 依据 session-recovery.md：等待轮只能由真实用户 message_start 的文本激活，agent_start 不消费。
+  projection.activateQueuedTurn("second", true);
   projection.appendAssistantText("next");
   projection.finishTurn("success");
   const rows = projection.rowsRange(undefined, 100).rows;

@@ -252,7 +252,9 @@ export async function applyEngineModelSelection(
   process: OmpSessionProcess,
   selection: EngineModelSelection,
   current: { provider: string; model: string; thought: string },
+  isCurrent: () => boolean,
 ): Promise<{ code: string; message: string } | null> {
+  if (!isCurrent()) return { code: "omp_input_cancelled", message: "input dispatch cancelled" };
   if (current.provider !== selection.provider || current.model !== selection.model) {
     const outcome = await diagnosticSessionCommand(process, {
       type: "set_model",
@@ -263,6 +265,7 @@ export async function applyEngineModelSelection(
       return { code: "omp_set_model_failed", message: outcome.error ?? "set_model failed" };
     }
   }
+  if (!isCurrent()) return { code: "omp_input_cancelled", message: "input dispatch cancelled" };
   if (selection.thought && selection.thought !== current.thought) {
     // "off" 也是合法档位（rpc.md：set_thinking_level 接受 off），显式关闭思考必须下发。
     const thought = await diagnosticSessionCommand(process, {

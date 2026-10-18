@@ -1,14 +1,33 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import {
+  GUI_MOCK_MODELS,
   MOCK_MODEL_ID,
   MOCK_MODEL_SELECTOR,
   MOCK_PROVIDER,
   startMockModelServer,
 } from "./fixtures/ompMockServer.mjs";
+import { strictAttachmentRequests } from "./fixtures/strictAttachmentRequests.js";
+import { assertAskModelResult } from "../../desktop/test/ompInteractionsAcceptance.contract.mjs";
+
+test("cancel-result validation rejects partial answers regardless of text option layout", () => {
+  const nonce = "cancel_guard";
+  for (const partial of [
+    `Cancelled\n${nonce}_primary: Postgres, SQLite`,
+    `已取消\n${nonce}_secondary: custom-secondary`,
+    JSON.stringify({
+      cancelled: true,
+      answers: [{ id: `${nonce}_primary`, selectedOptions: ["Postgres"] }],
+    }),
+  ])
+    assert.throws(
+      () => assertAskModelResult("ask-cancel", partial, nonce),
+      (error: unknown) => error instanceof Error && error.name === "AssertionError",
+    );
+});
 
 type WireMessage = { role: string; content: unknown };
 type WireFrame = {
@@ -23,7 +42,7 @@ type WireFrame = {
     stop_reason: string;
   };
   content_block: { type: string; id: string; name: string; input: unknown };
-  message: { id: string };
+  message: { id: string; model: string };
   usage: Record<string, number>;
   error: { type: string; message: string };
 };
@@ -34,22 +53,41 @@ async function request(baseUrl: string, messages: WireMessage[], extra = {}) {
     body: JSON.stringify({ model: MOCK_MODEL_ID, messages, stream: true, ...extra }),
   });
 }
-async function frames(response: Response) {
+async function* incrementalFrames(response: Response) {
   assert.equal(response.status, 200);
   assert.match(response.headers.get("content-type") ?? "", /text\/event-stream/);
-  const wire = await response.text();
-  return wire
-    .trim()
-    .split("\n\n")
-    .map((frame) => {
-      const lines = frame.split("\n");
-      const name = lines.find((line) => line.startsWith("event: "))?.slice(7);
-      const value: WireFrame = JSON.parse(
-        lines.find((line) => line.startsWith("data: "))?.slice(6) ?? "null",
-      );
-      assert.equal(value.type, name);
-      return value;
-    });
+  assert.ok(response.body, "HTTP SSE response must have a readable body");
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let pending = "";
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      pending += decoder.decode(value, { stream: !done });
+      let boundary: number;
+      while ((boundary = pending.indexOf("\n\n")) !== -1) {
+        const lines = pending.slice(0, boundary).split("\n");
+        pending = pending.slice(boundary + 2);
+        const name = lines.find((line) => line.startsWith("event: "))?.slice(7);
+        const frame: WireFrame = JSON.parse(
+          lines.find((line) => line.startsWith("data: "))?.slice(6) ?? "null",
+        );
+        assert.equal(frame.type, name);
+        yield frame;
+      }
+      if (done) {
+        assert.equal(pending.trim(), "", "HTTP SSE response must not end inside a frame");
+        return;
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+}
+async function frames(response: Response) {
+  const events: WireFrame[] = [];
+  for await (const frame of incrementalFrames(response)) events.push(frame);
+  return events;
 }
 function output(events: WireFrame[]) {
   return events
@@ -145,6 +183,140 @@ test("HTTP SSE preserves text/thinking/signature/tool IDs/JSON, response headers
     await server.close();
   }
 });
+
+test(
+  "HTTP streams same-index text/thinking/JSON deltas before completion and preserves signatures and tool IDs",
+  { timeout: 10_000 },
+  async () => {
+    const blocked = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const input = { path: 'dir\\file"quoted.txt', content: "line1\nline2" };
+    const json = JSON.stringify(input);
+    // Both cuts leave a JSON escape unfinished; the closing brace is a separate delta.
+    const slashBoundary = json.indexOf("\\\\") + 1;
+    const quoteBoundary = json.indexOf('\\"') + 1;
+    const jsonDeltas = [
+      json.slice(0, slashBoundary),
+      json.slice(slashBoundary, quoteBoundary),
+      json.slice(quoteBoundary, -1),
+      json.slice(-1),
+    ];
+    const server = await startMockModelServer({
+      responses: [
+        {
+          responseId: "msg_fragmented",
+          content: [
+            { type: "text", deltas: ["hel", "lo"] },
+            {
+              type: "thinking",
+              thinkingSignature: "fragmented-signature",
+              deltas: (async function* () {
+                yield "rea";
+                blocked.resolve();
+                await release.promise;
+                yield "son";
+                yield "ing";
+              })(),
+            },
+            { type: "toolCall", id: "fragmented-tool", name: "write", deltas: jsonDeltas },
+          ],
+          stopReason: "toolUse",
+        },
+      ],
+    });
+    try {
+      const stream = incrementalFrames(await request(server.baseUrl, [user("fragmented")]));
+      const events: WireFrame[] = [];
+      while (!events.some((event) => event.delta?.type === "thinking_delta")) {
+        const next = await stream.next();
+        assert.equal(next.done, false, "HTTP stream must expose the prefix before completion");
+        assert.ok(next.value);
+        events.push(next.value);
+      }
+      await blocked.promise;
+      assert.equal(frameAt(events, 0, "message_start").message.id, "msg_fragmented");
+      assert.equal(output(events), "hello");
+      assert.deepEqual(
+        events
+          .filter((event) => event.index === 1)
+          .map((event) => [event.type, event.delta?.thinking]),
+        [
+          ["content_block_start", undefined],
+          ["content_block_delta", "rea"],
+        ],
+      );
+      assert.equal(
+        events.some((event) => event.delta?.type === "signature_delta"),
+        false,
+      );
+      assert.equal(
+        events.some((event) => event.type === "message_stop"),
+        false,
+      );
+
+      release.resolve();
+      for await (const event of stream) events.push(event);
+      assert.deepEqual(
+        events
+          .filter((event) => event.type === "content_block_start")
+          .map((event) => [event.index, event.content_block.type]),
+        [
+          [0, "text"],
+          [1, "thinking"],
+          [2, "tool_use"],
+        ],
+      );
+      for (const [index, deltaTypes] of [
+        [0, ["text_delta", "text_delta"]],
+        [1, ["thinking_delta", "thinking_delta", "thinking_delta", "signature_delta"]],
+        [2, jsonDeltas.map(() => "input_json_delta")],
+      ] as const) {
+        assert.deepEqual(
+          events
+            .filter((event) => event.index === index)
+            .map((event) => event.delta?.type ?? event.type),
+          ["content_block_start", ...deltaTypes, "content_block_stop"],
+        );
+      }
+      assert.deepEqual(
+        events
+          .filter((event) => event.delta?.type === "text_delta")
+          .map((event) => event.delta.text),
+        ["hel", "lo"],
+      );
+      assert.equal(
+        events
+          .filter((event) => event.delta?.type === "thinking_delta")
+          .map((event) => event.delta.thinking)
+          .join(""),
+        "reasoning",
+      );
+      assert.equal(
+        events.find((event) => event.delta?.type === "signature_delta")?.delta.signature,
+        "fragmented-signature",
+      );
+      assert.deepEqual(
+        events
+          .filter((event) => event.delta?.type === "input_json_delta")
+          .map((event) => event.delta.partial_json),
+        jsonDeltas,
+      );
+      assert.deepEqual(toolCall(events), {
+        type: "tool_use",
+        id: "fragmented-tool",
+        name: "write",
+        input,
+      });
+      assert.equal(frameAt(events, -2, "message_delta").delta.stop_reason, "tool_use");
+      frameAt(events, -1, "message_stop");
+      assert.equal(events.filter((event) => event.type === "message_stop").length, 1);
+      server.assertHealthy();
+    } finally {
+      release.resolve();
+      await server.close();
+    }
+  },
+);
 
 test("HTTP scripts support sync/async iterables and asynchronous context handlers without shared instance state", async () => {
   const first = await startMockModelServer({
@@ -681,6 +853,91 @@ test("disconnect during delayed HTTP response aborts copied engine; close owns a
   }
 });
 
+test(
+  "client abort closes a blocked in-block HTTP stream without releasing its producer or completing the request",
+  { timeout: 10_000 },
+  async () => {
+    const entered = Promise.withResolvers<AbortSignal>();
+    const blocked = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    let producerReleased = false;
+    const server = await startMockModelServer({
+      handler(_context: unknown, options: { signal: AbortSignal }) {
+        entered.resolve(options.signal);
+        return {
+          content: [
+            {
+              type: "text",
+              deltas: (async function* () {
+                yield "visible-prefix";
+                blocked.resolve();
+                await release.promise;
+                producerReleased = true;
+                yield "must-not-arrive";
+              })(),
+            },
+          ],
+        };
+      },
+    });
+    const controller = new AbortController();
+    try {
+      const response = await fetch(`${server.baseUrl}/v1/messages`, {
+        method: "POST",
+        signal: controller.signal,
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: MOCK_MODEL_ID,
+          messages: [user("cancel-block")],
+          stream: true,
+        }),
+      });
+      const stream = incrementalFrames(response);
+      const events: WireFrame[] = [];
+      while (!events.some((event) => event.delta?.type === "text_delta")) {
+        const next = await stream.next();
+        assert.equal(next.done, false, "HTTP stream must deliver the prefix before cancellation");
+        assert.ok(next.value);
+        events.push(next.value);
+      }
+      await blocked.promise;
+      assert.equal(output(events), "visible-prefix");
+      assert.deepEqual(
+        events.filter((event) => event.index === 0).map((event) => event.type),
+        ["content_block_start", "content_block_delta"],
+      );
+      assert.equal(
+        events.some((event) => event.type === "message_stop"),
+        false,
+      );
+      const signal = await entered.promise;
+      const aborted = new Promise<void>((resolve) =>
+        signal.addEventListener("abort", () => resolve(), { once: true }),
+      );
+      const readFailed = assert.rejects(stream.next(), /abort/i);
+      controller.abort();
+      await readFailed;
+      await aborted;
+      await server.close();
+      assert.equal(signal.aborted, true);
+      assert.equal(
+        producerReleased,
+        false,
+        "server close must not wait for the blocked delta producer",
+      );
+      assert.deepEqual(
+        server.requests.map(({ aborted, completed }) => ({ aborted, completed })),
+        [{ aborted: true, completed: false }],
+      );
+      server.assertHealthy();
+    } finally {
+      controller.abort();
+      await server.close();
+      release.resolve();
+    }
+  },
+);
+
 test("server close cancels active delayed requests and is idempotent without leaving a live listener", async () => {
   const entered = Promise.withResolvers<AbortSignal>();
   const server = await startMockModelServer({
@@ -719,5 +976,103 @@ test("default text scenario streams deterministic marker/thinking with observabl
     server.assertHealthy();
   } finally {
     await server.close();
+  }
+});
+
+test("GUI catalog keeps distinct local model identities on real HTTP and records exact completed requests", async () => {
+  let next = 0;
+  const server = await startMockModelServer({
+    models: GUI_MOCK_MODELS,
+    handler(context: { messages: WireMessage[] }, options: { modelId: string }) {
+      const expected = GUI_MOCK_MODELS[next++];
+      assert.ok(expected, "No extra model call is allowed");
+      assert.equal(options.modelId, expected.id);
+      assert.deepEqual(context.messages, [user(`catalog-${expected.id}`)]);
+      return { content: [`response-${expected.id}`] };
+    },
+  });
+  try {
+    for (const entry of GUI_MOCK_MODELS) {
+      const events = await frames(
+        await request(server.baseUrl, [user(`catalog-${entry.id}`)], { model: entry.id }),
+      );
+      assert.equal(frameAt(events, 0, "message_start").message.model, entry.id);
+      assert.equal(output(events), `response-${entry.id}`);
+    }
+    assert.deepEqual(
+      server.requests.map(({ model, completed, aborted }) => ({ model, completed, aborted })),
+      GUI_MOCK_MODELS.map(({ id }) => ({ model: id, completed: true, aborted: false })),
+    );
+    assert.equal(next, GUI_MOCK_MODELS.length);
+    server.assertHealthy();
+  } finally {
+    await server.close();
+  }
+});
+
+test("new GUI model port refresh preserves saved default and named-profile role configuration", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "omp-model-config-restart-"));
+  const old = await startMockModelServer({ models: GUI_MOCK_MODELS });
+  const fresh = await startMockModelServer({ models: GUI_MOCK_MODELS });
+  try {
+    for (const profile of ["", "acceptance"]) {
+      await old.writeConfig(root, { profile });
+      const agentDir = profile
+        ? path.join(root, "profiles", profile, "agent")
+        : path.join(root, "agent");
+      const configPath = path.join(agentDir, "config.yml");
+      const saved = await readFile(configPath, "utf8");
+      const changed = saved.replaceAll(MOCK_MODEL_SELECTOR, `${MOCK_PROVIDER}/scripted-alt:high`);
+      await writeFile(configPath, changed);
+      await fresh.writeConfig(root, { profile, preserveConfig: true });
+      assert.equal(
+        await readFile(configPath, "utf8"),
+        changed,
+        "Test preparation must not repair or overwrite real GUI-saved role choices",
+      );
+      const modelConfig = JSON.parse(await readFile(path.join(agentDir, "models.yml"), "utf8"));
+      assert.equal(modelConfig.providers[MOCK_PROVIDER].baseUrl, fresh.baseUrl);
+      assert.notEqual(modelConfig.providers[MOCK_PROVIDER].baseUrl, old.baseUrl);
+    }
+    await assert.rejects(
+      fresh.writeConfig(root, { profile: "missing", preserveConfig: true }),
+      { code: "ENOENT" },
+      "Missing saved configuration must fail recovery preparation, not be silently recreated",
+    );
+  } finally {
+    await Promise.all([old.close(), fresh.close()]);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("strict attachment HTTP scenarios accept both envelope layouts and reject any extra request", async () => {
+  const prompt = "Read the exact attached note.";
+  const file = { name: "note.txt", mime: "text/plain", text: "EXACT_ATTACHMENT\n中文 Ω\n" };
+  const envelope = `<attached_file name="${file.name}" mime="${file.mime}">\n${file.text}\n</attached_file>`;
+  for (const input of [`${envelope}\n\n${prompt}`, `${prompt}\n${envelope}`]) {
+    const script = strictAttachmentRequests([
+      { prompt, files: [file], reply: "ATTACHMENT_VERIFIED" },
+    ]);
+    const server = await startMockModelServer({ handler: script.handler });
+    try {
+      assert.equal(
+        output(await frames(await request(server.baseUrl, [user(input)]))),
+        "ATTACHMENT_VERIFIED",
+      );
+      script.assertFinished(server.calls);
+      server.assertHealthy();
+      const extra = await request(server.baseUrl, [user("unexpected extra input")]);
+      assert.equal(
+        extra.status,
+        400,
+        "A custom attachment handler must not answer an unplanned request",
+      );
+      assert.throws(
+        () => server.assertHealthy(),
+        (error: unknown) => error instanceof AggregateError && error.errors.length === 1,
+      );
+    } finally {
+      await server.close();
+    }
   }
 });

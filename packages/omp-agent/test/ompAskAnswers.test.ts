@@ -147,8 +147,37 @@ test("OMP 多题保留多选、自定义文本与超时实际答案，不把未�
     },
     "Answers:\ndb: [Postgres, SQLite] + custom\nempty: []\ntimeout: Yes (auto-selected after timeout)",
     {
-      "Which database?": ["Postgres", "SQLite", "another, database\nsecond line"],
-      "Enable cache?": ["Yes"],
+      db: ["Postgres", "SQLite", "another, database\nsecond line"],
+      timeout: ["Yes"],
+    },
+  );
+});
+
+test("两个题目文字完全相同也按题序分别保留答案（题面作键会互相覆盖）", () => {
+  assertAgreement(
+    {
+      results: [
+        {
+          id: "same-1",
+          question: QUESTION,
+          options: ["Mock answer A", "Mock answer B"],
+          multi: true,
+          selectedOptions: ["Mock answer A"],
+        },
+        {
+          id: "same-2",
+          question: QUESTION,
+          options: ["Mock answer A", "Mock answer B"],
+          multi: true,
+          selectedOptions: ["Mock answer B"],
+          customInput: "second only",
+        },
+      ],
+    },
+    "Answers:\nsame-1: [Mock answer A]\nsame-2: [Mock answer B] + custom",
+    {
+      "same-1": ["Mock answer A"],
+      "same-2": ["Mock answer B", "second only"],
     },
   );
 });

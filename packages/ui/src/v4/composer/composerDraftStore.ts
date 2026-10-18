@@ -12,6 +12,7 @@ import { logger } from "@/logger.js";
 import { modelSelectionSchema, type ModelSelection } from "@zcode/shared";
 import { submissionModeSchema, type SubmissionMode } from "@zcode/shared/zcode-protocol-v4";
 import type { ComposerMentionPrefill } from "@/store/zcodeSessionStoreTypes.js";
+import { composerProfileStorageSuffix } from "@/lib/composerProfileStorage.js";
 
 export interface V4ComposerDraft {
   text: string;
@@ -65,7 +66,7 @@ function getStorage(): Storage | null {
 
 function getV4ComposerDraftStorageKey(workspacePath: string, workspaceIdentity?: string): string {
   const workspaceKey = workspaceIdentity?.trim() || workspacePath;
-  return `${STORAGE_KEY_PREFIX}${encodeURIComponent(workspaceKey)}`;
+  return `${STORAGE_KEY_PREFIX}${encodeURIComponent(workspaceKey)}${composerProfileStorageSuffix()}`;
 }
 
 function readDraftFile(key: string): V4DraftFile {

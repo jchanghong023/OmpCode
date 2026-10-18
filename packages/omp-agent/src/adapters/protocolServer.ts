@@ -35,9 +35,9 @@ interface PendingReverseRequest {
   resolve: (result: unknown) => void;
   reject: (error: Error) => void;
   timer: NodeJS.Timeout;
+  releaseSignal: () => void;
   context: Record<string, unknown>;
   startedAt: number;
-  diagnosticsFinished: boolean;
 }
 
 interface RequestOutbox {
@@ -137,20 +137,19 @@ export class ProtocolServer implements HostGateway {
       if (pending) {
         this.pending.delete(String(record.id));
         clearTimeout(pending.timer);
-        if (!pending.diagnosticsFinished) {
-          if (record.error !== undefined) {
-            logHostInteraction(
-              "error",
-              pending.context,
-              pending.startedAt,
-              "response",
-              safeErrorSummary(record.error),
-            );
-          } else {
-            logHostInteraction("response", pending.context, pending.startedAt, "response", {
-              action: safeInteractionAction(record.result),
-            });
-          }
+        pending.releaseSignal();
+        if (record.error !== undefined) {
+          logHostInteraction(
+            "error",
+            pending.context,
+            pending.startedAt,
+            "response",
+            safeErrorSummary(record.error),
+          );
+        } else {
+          logHostInteraction("response", pending.context, pending.startedAt, "response", {
+            action: safeInteractionAction(record.result),
+          });
         }
         if (record.error !== undefined) {
           pending.reject(
@@ -276,8 +275,8 @@ export class ProtocolServer implements HostGateway {
     hostDiagnostics.closed(this.pending.size, error, Date.now() - this.startedAt);
     for (const pending of this.pending.values()) {
       clearTimeout(pending.timer);
-      if (!pending.diagnosticsFinished)
-        logHostInteraction("disconnect", pending.context, pending.startedAt, "disconnect");
+      pending.releaseSignal();
+      logHostInteraction("disconnect", pending.context, pending.startedAt, "disconnect");
       pending.reject(error ?? new Error("host transport closed"));
     }
     this.pending.clear();
@@ -309,13 +308,16 @@ export class ProtocolServer implements HostGateway {
     this.notify("v4/conversation/frame", params);
   }
 
-  requestUserInput(params: {
-    requestId: string;
-    sessionId: string;
-    prompt: string;
-    options?: { optionId: string; label: string }[];
-    questions?: unknown[];
-  }): Promise<HostUserInputAnswer> {
+  requestUserInput(
+    params: {
+      requestId: string;
+      sessionId: string;
+      prompt: string;
+      options?: { optionId: string; label: string }[];
+      questions?: unknown[];
+    },
+    signal?: AbortSignal,
+  ): Promise<HostUserInputAnswer> {
     const startedAt = Date.now();
     const context = {
       ...logger.context(),
@@ -327,6 +329,10 @@ export class ProtocolServer implements HostGateway {
       optionCount: params.options?.length,
     });
     return new Promise<HostUserInputAnswer>((resolve, reject) => {
+      if (signal?.aborted) {
+        reject(new DOMException("Host interaction wait released", "AbortError"));
+        return;
+      }
       if (this.closed) {
         logHostInteraction("disconnect", context, startedAt, "send");
         reject(new Error("host transport closed"));
@@ -334,8 +340,8 @@ export class ProtocolServer implements HostGateway {
       }
       const timer = setTimeout(() => {
         this.pending.delete(params.requestId);
-        if (!pending.diagnosticsFinished)
-          logHostInteraction("timeout", context, startedAt, "timeout");
+        pending.releaseSignal();
+        logHostInteraction("timeout", context, startedAt, "timeout");
         reject(new Error("host interaction timeout"));
       }, INTERACTION_REVERSE_REQUEST_TIMEOUT_MS);
       timer.unref?.();
@@ -343,11 +349,20 @@ export class ProtocolServer implements HostGateway {
         resolve: (result) => resolve(userInputAnswerOf(result)),
         reject,
         timer,
+        releaseSignal: () => signal?.removeEventListener("abort", onAbort),
         context,
         startedAt,
-        diagnosticsFinished: false,
       };
       this.pending.set(params.requestId, pending);
+      // 反向 pending 的唯一 owner 在此；其他结算入口只撤销等待，不伪造宿主答案。
+      const onAbort = () => {
+        if (this.pending.get(params.requestId) !== pending) return;
+        this.pending.delete(params.requestId);
+        clearTimeout(timer);
+        pending.releaseSignal();
+        reject(new DOMException("Host interaction wait released", "AbortError"));
+      };
+      signal?.addEventListener("abort", onAbort, { once: true });
       try {
         this.write({
           id: params.requestId,
@@ -362,10 +377,11 @@ export class ProtocolServer implements HostGateway {
           },
         });
       } catch (error) {
-        // 只收口诊断配对，不改变原 pending/timer 的业务清理时序。
-        pending.diagnosticsFinished = true;
+        this.pending.delete(params.requestId);
+        clearTimeout(timer);
+        pending.releaseSignal();
         logHostInteraction("error", context, startedAt, "send", safeErrorSummary(error));
-        throw error;
+        reject(error instanceof Error ? error : new Error(String(error)));
       }
     });
   }

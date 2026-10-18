@@ -3,7 +3,8 @@
  * 57672f546162e16b019484626c3b5fa9300aafef, MIT (see third-party/upstream/omp-mock.LICENSE).
  * Modified by ZCode: erase TypeScript, remove catalog/global API registration,
  * use native errors and local event stream; catch unexpected producer failures
- * so malformed scripts cannot create background unhandled rejections.
+ * so malformed scripts cannot create background unhandled rejections; add
+ * cancellable per-block deltas without changing complete-block scripts.
  */
 import { AssistantMessageEventStream } from "./ompMockStream.mjs";
 
@@ -169,25 +170,38 @@ async function runMock(stream, model, context, options) {
     timestamp: startedAt,
   };
   stream.push({ type: "start", partial });
-  for (const input of response.content ?? []) {
-    const block = normalizeContent(input, model);
-    blocks.push(block);
-    const contentIndex = blocks.length - 1;
-    if (block.type === "text") {
-      stream.push({ type: "text_start", contentIndex, partial });
-      stream.push({ type: "text_delta", contentIndex, delta: block.text, partial });
-      stream.push({ type: "text_end", contentIndex, content: block.text, partial });
-    } else if (block.type === "thinking") {
-      stream.push({ type: "thinking_start", contentIndex, partial });
-      stream.push({ type: "thinking_delta", contentIndex, delta: block.thinking, partial });
-      stream.push({ type: "thinking_end", contentIndex, content: block.thinking, partial });
-    } else {
-      const serialized =
-        typeof block.arguments === "string" ? block.arguments : JSON.stringify(block.arguments);
-      stream.push({ type: "toolcall_start", contentIndex, partial });
-      stream.push({ type: "toolcall_delta", contentIndex, delta: serialized, partial });
-      stream.push({ type: "toolcall_end", contentIndex, toolCall: block, partial });
+  try {
+    for await (const input of cancellableContent(response.content ?? [], options?.signal)) {
+      const block = normalizeContent(input, model);
+      blocks.push(block);
+      const contentIndex = blocks.length - 1;
+      if (input.deltas !== undefined) {
+        await emitBlockDeltas(stream, partial, contentIndex, input.deltas, options?.signal);
+        continue;
+      }
+      if (block.type === "text") {
+        stream.push({ type: "text_start", contentIndex, partial });
+        stream.push({ type: "text_delta", contentIndex, delta: block.text, partial });
+        stream.push({ type: "text_end", contentIndex, content: block.text, partial });
+      } else if (block.type === "thinking") {
+        stream.push({ type: "thinking_start", contentIndex, partial });
+        stream.push({ type: "thinking_delta", contentIndex, delta: block.thinking, partial });
+        stream.push({ type: "thinking_end", contentIndex, content: block.thinking, partial });
+      } else {
+        const serialized =
+          typeof block.arguments === "string" ? block.arguments : JSON.stringify(block.arguments);
+        stream.push({ type: "toolcall_start", contentIndex, partial });
+        stream.push({ type: "toolcall_delta", contentIndex, delta: serialized, partial });
+        stream.push({ type: "toolcall_end", contentIndex, toolCall: block, partial });
+      }
     }
+  } catch (error) {
+    if (!options?.signal?.aborted) throw error;
+    partial.stopReason = "aborted";
+    partial.errorMessage = "Mock aborted during content.";
+    partial.duration = performance.now() - perfStart;
+    stream.push({ type: "error", reason: "aborted", error: partial });
+    return;
   }
   const hasToolCall = blocks.some((block) => block.type === "toolCall");
   const reason = response.stopReason ?? (hasToolCall ? "toolUse" : "stop");
@@ -209,8 +223,72 @@ async function runMock(stream, model, context, options) {
   stream.push({ type: "done", reason, message: partial });
 }
 
+async function emitBlockDeltas(stream, partial, contentIndex, deltas, signal) {
+  const block = partial.content[contentIndex];
+  const tool = block.type === "toolCall";
+  const prefix = tool ? "toolcall" : block.type;
+  const field = tool ? "arguments" : block.type;
+  stream.push({ type: `${prefix}_start`, contentIndex, partial });
+  // 分片只能追加到同一块；复用可取消迭代器，避免屏障阻塞取消或晚到内容复活。
+  for await (const delta of cancellableContent(deltas, signal)) {
+    if (typeof delta !== "string") throw new TypeError("Mock block deltas must be strings.");
+    block[field] += delta;
+    stream.push({ type: `${prefix}_delta`, contentIndex, delta, partial });
+  }
+  if (tool) block.arguments = JSON.parse(block.arguments);
+  stream.push({
+    type: `${prefix}_end`,
+    contentIndex,
+    ...(tool ? { toolCall: block } : { content: block[field] }),
+    partial,
+  });
+}
+
+async function* cancellableContent(source, signal) {
+  const iterator = iteratorOf(source);
+  let finished = false;
+  let abort;
+  const cancelled = new Promise((_, reject) => {
+    abort = () => reject(signal.reason ?? new Error("Mock content aborted"));
+    if (signal?.aborted) abort();
+    else signal?.addEventListener("abort", abort, { once: true });
+  });
+  // 预先取消或 next() 同步抛错时可能尚未建立 race；拒绝仍由下面的 abort 分支交付。
+  cancelled.catch(() => {});
+  // 取消时 next() 可能仍停在模型屏障；终态不能等待生产者配合，也不能晚到复活。
+  try {
+    while (true) {
+      if (signal?.aborted) throw signal.reason ?? new Error("Mock content aborted");
+      const result = await Promise.race([Promise.resolve(iterator.next()), cancelled]);
+      if (signal?.aborted) throw signal.reason ?? new Error("Mock content aborted");
+      if (result.done) {
+        finished = true;
+        return;
+      }
+      yield result.value;
+    }
+  } finally {
+    signal?.removeEventListener("abort", abort);
+    if (!finished && iterator.return) {
+      if (signal?.aborted) void Promise.resolve(iterator.return()).catch(() => {});
+      else await iterator.return();
+    }
+  }
+}
+
 function normalizeContent(input, state) {
   if (typeof input === "string") return { type: "text", text: input };
+  if (input.deltas !== undefined) {
+    const field = { text: "text", thinking: "thinking", toolCall: "arguments" }[input.type];
+    if (!field) throw new TypeError(`Unsupported mock delta block: ${input.type}`);
+    if (input[field] !== undefined)
+      throw new TypeError(`Mock block deltas cannot be combined with ${field}.`);
+    const block = { ...input };
+    delete block.deltas;
+    block[field] = "";
+    if (block.type === "toolCall") block.id = block.id ?? generateToolCallId(state);
+    return block;
+  }
   if (input.type === "toolCall")
     return {
       type: "toolCall",

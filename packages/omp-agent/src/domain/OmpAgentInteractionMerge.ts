@@ -4,6 +4,17 @@ import type { InteractionObservation } from "./OmpAgentInteractionRecords.js";
 type Issue = ZCodeAgentInteractionCoverage["issues"][number];
 const identity = (event: ZCodeAgentInteractionEvent) =>
   `${event.fromAgentId}\0${event.toAgentId}\0${event.body}`;
+const originRank = { incoming: 3, relay: 2, send: 1, task: 0 } as const;
+function preferredSource(
+  left: InteractionObservation,
+  right: InteractionObservation,
+): InteractionObservation {
+  if (!left.event.sourceId) return right;
+  if (!right.event.sourceId) return left;
+  const difference = originRank[left.origin] - originRank[right.origin];
+  if (difference !== 0) return difference > 0 ? left : right;
+  return left.event.sourceId < right.event.sourceId ? left : right;
+}
 function combinedSource(
   left: ZCodeAgentInteractionEvent["source"],
   right: ZCodeAgentInteractionEvent["source"],
@@ -15,14 +26,17 @@ function mergeObservation(
   next: InteractionObservation,
 ): InteractionObservation {
   const priorTime = prior.event.timeBasis === "sent" || next.event.timestamp === undefined;
+  const source = preferredSource(prior, next);
   return {
     ...next,
+    origin: source.origin,
     startTimestamp: next.startTimestamp ?? prior.startTimestamp,
     endTimestamp: next.endTimestamp ?? prior.endTimestamp,
     event: {
       ...prior.event,
       ...next.event,
       ...(priorTime ? { timestamp: prior.event.timestamp, timeBasis: prior.event.timeBasis } : {}),
+      ...(source.event.sourceId ? { sourceId: source.event.sourceId } : {}),
       source: combinedSource(prior.event.source, next.event.source),
       ...(next.event.delivery === "observed" &&
       prior.event.delivery &&
@@ -66,6 +80,15 @@ export function mergeInteractionObservations(
           target.event.timeBasis === "sent" &&
           item.event.timestamp === target.event.timestamp
         );
+      if (item.origin === "incoming")
+        return (
+          item.event.timeBasis === "recorded" &&
+          item.event.timestamp !== undefined &&
+          target.startTimestamp !== undefined &&
+          target.endTimestamp !== undefined &&
+          item.event.timestamp >= target.startTimestamp &&
+          item.event.timestamp <= target.endTimestamp
+        );
       if (item.origin !== "send" || item.event.delivery === "failed") return false;
       const time = target.event.timestamp;
       return (
@@ -87,12 +110,19 @@ export function mergeInteractionObservations(
               identity(other.event) === identity(item.event) &&
               (other.origin === "relay"
                 ? other.event.timestamp === candidates[0]!.event.timestamp
-                : other.origin === "send" &&
-                  other.startTimestamp !== undefined &&
-                  other.endTimestamp !== undefined &&
-                  candidates[0]!.event.timestamp !== undefined &&
-                  candidates[0]!.event.timestamp! >= other.startTimestamp &&
-                  candidates[0]!.event.timestamp! <= other.endTimestamp),
+                : other.origin === "incoming"
+                  ? other.event.timeBasis === "recorded" &&
+                    other.event.timestamp !== undefined &&
+                    candidates[0]!.startTimestamp !== undefined &&
+                    candidates[0]!.endTimestamp !== undefined &&
+                    other.event.timestamp >= candidates[0]!.startTimestamp &&
+                    other.event.timestamp <= candidates[0]!.endTimestamp
+                  : other.origin === "send" &&
+                    other.startTimestamp !== undefined &&
+                    other.endTimestamp !== undefined &&
+                    candidates[0]!.event.timestamp !== undefined &&
+                    candidates[0]!.event.timestamp >= other.startTimestamp &&
+                    candidates[0]!.event.timestamp <= other.endTimestamp),
           )
         : [];
     if (candidates.length === 1 && competing.length === 0) {
@@ -112,7 +142,10 @@ export function mergeInteractionObservations(
     } else if (candidates.length > 0 || item.origin === "relay") issues.add("ambiguous_identity");
   }
   const events = [...merged.values()].map((item) => item.event);
-  if (events.some((event) => event.timestamp === undefined)) issues.add("missing_timestamp");
+  for (const event of events) {
+    if (event.timestamp === undefined) issues.add("missing_timestamp");
+    if (!event.sourceId) issues.add("legacy_history_gaps");
+  }
   return events.sort(
     (left, right) =>
       (left.timestamp ?? Number.MAX_SAFE_INTEGER) - (right.timestamp ?? Number.MAX_SAFE_INTEGER) ||

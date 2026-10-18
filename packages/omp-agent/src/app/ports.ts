@@ -27,7 +27,7 @@ export interface OmpCommandOutcome {
 export interface OmpSessionProcess {
   /** omp 会话文件绝对路径（omp 落盘后可用；新会话/目录进程可能为 null）。 */
   readonly ompSessionFile: string | null;
-  /** ready 后 set_subagent_subscription 的事实；旧测试进程可省略。 */
+  /** ready 后 set_subagent_subscription 的事实；未就绪时尚未确定。 */
   readonly subagentSubscriptionAvailable?: boolean;
   /** negotiate_protocol v3（fork surface）协商成功的事实；未协商/协商中为 false。 */
   readonly forkSurface?: boolean;
@@ -72,12 +72,6 @@ export interface OmpProcessFactory {
     } & OmpSideChannelHandlers,
   ): OmpSessionProcess;
 }
-
-/** 会话进程的处理器集合（不含 cwd/resume/sessionless；各进程实现共用同一形状）。 */
-export type OmpSessionProcessHandlers = Omit<
-  Parameters<OmpProcessFactory["create"]>[0],
-  "cwd" | "resumeSessionPath" | "sessionless"
->;
 
 export interface OmpUiRequest {
   frame: {
@@ -176,19 +170,24 @@ export interface HostUserInputQuestion {
   header: string;
   options: { value: string; label: string; description?: string; preview?: string }[];
   multiSelect?: boolean;
+  /** 0-based 选项索引；仅作推荐提示，超时决策由 OMP 持有。 */
+  recommended?: number;
 }
 
 export interface HostGateway {
   /** 发送 v4/conversation/frame 通知（params = 物理 wire 帧）。 */
   emitFrame(params: unknown): void;
-  /** 反向请求 interaction/requestUserInput，等待宿主应答。 */
-  requestUserInput(params: {
-    requestId: string;
-    sessionId: string;
-    prompt: string;
-    options?: { optionId: string; label: string }[];
-    questions?: HostUserInputQuestion[];
-  }): Promise<HostUserInputAnswer>;
+  /** 等待宿主应答；signal 仅释放已由其他入口结算的反向等待，不构造宿主答案。 */
+  requestUserInput(
+    params: {
+      requestId: string;
+      sessionId: string;
+      prompt: string;
+      options?: { optionId: string; label: string }[];
+      questions?: HostUserInputQuestion[];
+    },
+    signal?: AbortSignal,
+  ): Promise<HostUserInputAnswer>;
 }
 
 /**

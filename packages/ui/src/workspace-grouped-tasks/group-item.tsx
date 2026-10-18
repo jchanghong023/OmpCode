@@ -332,13 +332,16 @@ export function GroupItem({
           })
         ) {
           // group 重命名里中文输入法用 Enter 确认候选词时也会冒出 keydown。
-          // 这不是用户要提交重命名，不能 blur，否则 blur 会继续触发 commitRename。
+          // 这不是用户要提交重命名：既不提交，也不失焦（失焦会被当作确认而提交）。
           logger.debug("[WorkspaceGroupedTasksSection] ignore group rename enter during IME", {
             groupId: node.group.id,
           });
           return;
         }
-        event.currentTarget.blur();
+        // Enter 是显式提交意图，不能借 blur 提交：新建分组后的初始焦点保护窗口会把这次 blur
+        // 当成 Radix 抢焦并回焦输入框，提交被静默丢弃，用户按 Enter 无事发生。直接提交，
+        // 保护窗口仍然只处理非用户意图的失焦。
+        commitRename();
         return;
       }
       if (event.key === "Escape") {
@@ -348,7 +351,7 @@ export function GroupItem({
         cancelRename();
       }
     },
-    [cancelRename, node.group.id],
+    [cancelRename, commitRename, node.group.id],
   );
 
   const handleRenameBlur = useCallback(() => {
@@ -503,6 +506,10 @@ export function GroupItem({
             data-grouped-group-header-id={node.group.id}
             role="button"
             tabIndex={0}
+            // 重命名期间 dnd-kit 会把 header 标成 aria-disabled；而正在编辑的 name input 就在 header 内，
+            // aria-disabled 会沿祖先链继承到可聚焦后代，使可编辑的输入框在无障碍树与自动化里变成「不可用」。
+            // 拖拽停用只应影响拖拽本身：header 仍可点击折叠并托管编辑焦点（下面 tabIndex 也是恒为 0），因此不发布 disabled。
+            aria-disabled={renaming ? undefined : groupDraggable.attributes["aria-disabled"]}
             aria-controls={groupContentId}
             aria-expanded={!visualCollapsed}
             className={cn(
@@ -536,6 +543,11 @@ export function GroupItem({
                 className="w-40 min-w-40"
                 onClick={(event) => event.stopPropagation()}
                 onPointerDown={(event) => event.stopPropagation()}
+                // 新建 group 时颜色菜单是程序化展开的，初始焦点保护窗口会把所有关闭请求都改写成「保持展开」。
+                // 用户按 Esc 是显式关闭意图，必须先解除保护，否则菜单只能等下一次外部点击才消失。
+                onEscapeKeyDown={() => {
+                  newGroupInitialFocusGuardRef.current = false;
+                }}
               >
                 <DropdownMenuLabel>
                   {intl.formatMessage({ id: "taskGroup.color" })}

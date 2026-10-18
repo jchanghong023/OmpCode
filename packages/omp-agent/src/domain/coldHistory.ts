@@ -4,6 +4,7 @@ import type { ConversationRow } from "@zcode/shared/zcode-protocol-v4";
 import { rowBaseFields } from "./projectionTypes.js";
 import { ompTodoPlan } from "./ompTodoPlan.js";
 import { ompAskAnswers } from "./ompAskAnswers.js";
+import { ompReadOutput } from "./ompReadOutput.js";
 import {
   readableOmpAgentInput,
   readableOmpSkillInput,
@@ -307,7 +308,15 @@ export function rowsFromOmpEntries(
             message.toolName === "ask" && existing.status === "success"
               ? ompAskAnswers(message.details)
               : null;
-          existing.output = { text, ...(plan ? { plan } : {}), ...(answers ? { answers } : {}) };
+          const readText =
+            message.toolName === "read" && existing.status === "success"
+              ? ompReadOutput(message.details)
+              : undefined;
+          existing.output = {
+            text: readText ?? text,
+            ...(plan ? { plan } : {}),
+            ...(answers ? { answers } : {}),
+          };
           existing.endedAt = timestamp;
         }
         if (message.toolName === "task") {

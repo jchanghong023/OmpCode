@@ -7,13 +7,13 @@ import { FallbackToolCallBlock } from "../src/ToolCallBlocks/renderers/fallback.
 import { TooltipProvider } from "../src/components/ui/tooltip.js";
 import type { ToolCallBlockRenderContext } from "../src/ToolCallBlocks/shared.js";
 
-function render(output: string, input: unknown = {}, error?: string) {
+function render(output: string, input: unknown = {}, error?: string, toolName = "wait") {
   const context: ToolCallBlockRenderContext = {
     toolCallNode: {
       toolCall: {
         toolId: "fixture-wait",
-        toolName: "wait",
-        kind: "wait",
+        toolName,
+        kind: toolName,
         status: error ? "failed" : "completed",
         input,
         output,
@@ -75,4 +75,32 @@ test("Markdown 工具结果呈现标题且保留代码原文", () => {
   assert.match(html, /<h2[^>]*>Completed \(1\)<\/h2>/);
   assert.match(html, /hello/);
   assert.doesNotMatch(html, /raw-only-marker/);
+});
+
+for (const toolName of ["write", "Write"]) {
+  test(`${toolName} agent message body is readable and retains the delivery result`, () => {
+    const html = render(
+      "Delivered to Main.",
+      { path: "agent://Main", content: "AGENTS_REPLY_a" },
+      undefined,
+      toolName,
+    );
+    // ToolInput's JSON viewer mounts in a browser effect; the communication body must
+    // already be readable text, independent of that structured-parameter viewer.
+    assert.match(html, /AGENTS_REPLY_a/);
+    assert.match(html, /Delivered to Main\./);
+    assert.equal(html.split("AGENTS_REPLY_a").length - 1, 1, "Message body is shown once");
+  });
+}
+
+test("device write requests remain structured parameters rather than message bodies", () => {
+  const html = render(
+    "GENUINE_DEVICE_RESULT",
+    { path: "xd://repo", content: "DEVICE_REQUEST_NOT_A_MESSAGE" },
+    undefined,
+    "write",
+  );
+  assert.match(html, /GENUINE_DEVICE_RESULT/);
+  assert.match(html, /data-language="json"/);
+  assert.doesNotMatch(html, /DEVICE_REQUEST_NOT_A_MESSAGE/);
 });

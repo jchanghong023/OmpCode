@@ -29,6 +29,8 @@
 9. 记录实际生效的 OMP 根目录、OmpCode 数据目录、工作区及进程信息，并验证它们没有指向真实用户数据目录。
 10. 核对测试子进程继承的 `OMP_PROFILE`、`PI_PROFILE`、`PI_CODING_AGENT_DIR`、`PI_CONFIG_DIR`、认证来源及 `OMP_RPC_ARGS_JSON` 等覆盖项。只在测试子进程环境中移除或替换会破坏隔离、强制其他模型或思考等级的值；不能仅设置 `OMP_CONFIG_ROOT` 就认为其他覆盖项必然安全。
 11. 用唯一应用身份启动本次实例；开发态如需远程调试，使用专属空闲端口，并关闭默认固定调试端口。保存测试 PID 与进程树，退出和重启仅处理这些进程。启动前确认所运行应用对应本次源码或所记录安装包；开发态运行时与依赖以 `mise.toml` 为准。
+12. 开发态跨进程恢复必须沿用同一 renderer origin（包括端口），否则 Chromium 会隔离 localStorage，不能将跨 origin 的空草稿误判为产品丢失。启动器在隔离根保存并严格复用该端口；端口被占用则明确失败，不自动换源。profile 验收须移除继承的启动专用覆盖项，不能注入空 `OMPCODE_CENTOS7_PROFILE` 抢先覆盖 GUI 已保存的待重启设置。
+13. 相位结束先请求测试实例的 token 化正常退出端点，交由 Chromium 刷新存储并走真实 `app.quit`；最多等待 10 秒，失败或超时仍执行原有整树强杀。跨相位冷恢复不能把刚写入但尚在 Chromium 内存中的 localStorage 直接强杀后宣称为正常重启；存储字节扫描应使用 `<OMP_CONFIG_ROOT>_ompcode/electron/<应用名>` 的实际根。
 
 ## 三、复制 OMP 认证信息
 

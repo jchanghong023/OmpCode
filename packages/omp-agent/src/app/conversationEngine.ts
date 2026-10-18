@@ -7,9 +7,8 @@ import type { OmpSessionEventFrame, OmpStateData } from "../domain/ompFrames.js"
 import type { HostGateway, HostUserInputAnswer, OmpProcessFactory, OmpSessionProcess } from "./ports.js";
 import { ConversationTopicPublisher, type SubscribeOptions } from "./topicPublisher.js";
 import { OmpInteractionProxy } from "./ompInteractionProxy.js";
-import { projectEngineContextWindow, startEngineProcess, createEngineEventHandler } from "./ompEngineProcess.js";
+import { projectEngineContextWindow, startEngineProcess, createEngineEventHandler, refreshEngineStateAfterActivity } from "./ompEngineProcess.js";
 import { applyEngineAutoCompaction, applyEngineCompaction, applyEngineSetModel, applyEngineThoughtLevel, readEngineSkillCommands, runEngineOperation, stopEngineOperation, type EngineOperationHost } from "./engineOperationDiagnostics.js";
-import { PromptQueueReconciler } from "./promptQueueReconciler.js";
 import type { SlashCommandResolver } from "./ompPromptDispatch.js";
 import { EnginePromptTurnCloser } from "./promptTurnCloser.js";
 import { TrailingThrottle } from "./trailingThrottle.js";
@@ -21,6 +20,7 @@ import { OmpCommandOutputBridge } from "./ompCommandOutput.js";
 import { OmpAgentInteractionLog } from "../domain/OmpAgentInteractionLog.js";
 import { diagnostics } from "./diagnostics.js";
 import { diagnosticSessionCommand, logSessionExit, logTurnTransitions } from "./turnDiagnostics.js";
+import { EngineSessionClock } from "./engineSessionClock.js";
 export class ConversationEngine {
   readonly sessionId: string;
   readonly workspaceId: string;
@@ -28,6 +28,13 @@ export class ConversationEngine {
   readonly projection: ConversationProjection;
   readonly projector: OmpEventProjector;
   readonly agentInteractions = new OmpAgentInteractionLog();
+  private readonly historyClock = new EngineSessionClock();
+  get createdAt(): number {
+    return this.historyClock.createdAt;
+  }
+  get activityBaselineAt(): number {
+    return this.historyClock.activityBaselineAt;
+  }
   private readonly ompFactory: OmpProcessFactory | undefined;
   private readonly gateway: HostGateway;
   private readonly onIndexChange: (engine: ConversationEngine) => void;
@@ -39,7 +46,7 @@ export class ConversationEngine {
   private readonly interactionProxy: OmpInteractionProxy;
   private ompProcess: OmpSessionProcess | null = null;
   private ompStarting: Promise<void> | null = null;
-  private readonly operationHost: EngineOperationHost = { sessionId: () => this.sessionId, ensureStarted: () => this.ensureOmpStarted(), currentProcess: () => this.ompProcess, refreshState: () => this.queueReconciler.refreshAfterActivity(), applyState: (state) => this.applyOmpState(state) };
+  private readonly operationHost: EngineOperationHost = { sessionId: () => this.sessionId, ensureStarted: () => this.ensureOmpStarted(), currentProcess: () => this.ompProcess, refreshState: () => this.refreshStateAfterActivity(), applyState: (state) => this.applyOmpState(state) };
   private disposed = false;
   private readonly indexNotify = new TrailingThrottle(500, () => this.notifyIndexChange());
   private readonly btw = new OmpBtwEventBridge();
@@ -55,7 +62,7 @@ export class ConversationEngine {
     onTerminalEnd: () => {
       this.promptTurns.onTerminalAgentEnd();
       this.scheduleFlush();
-      void this.queueReconciler.refreshAfterActivity({ graceRecheckAfter: true });
+      void this.refreshStateAfterActivity();
     },
   });
   private resumeSessionPath: string | undefined;
@@ -72,9 +79,6 @@ export class ConversationEngine {
         this.projection.setTitle(deriveTitle(text), "generated");
       }
     },
-    markSteerInFlight: (sourceCommandId) => this.queueReconciler.markSteerInFlight(sourceCommandId),
-    clearSteerInFlight: () => this.queueReconciler.clearSteerInFlight(),
-    noteInputAccepted: () => this.queueReconciler.noteInputAccepted(),
     ensureStarted: () => this.ensureOmpStarted(),
     currentProcess: () => this.ompProcess,
     flush: () => this.scheduleFlush(),
@@ -82,8 +86,6 @@ export class ConversationEngine {
     resolveSlashCommand: (text) => (this.resolveSlashCommand ? this.resolveSlashCommand(text) : Promise.resolve({ kind: "dispatch" } as const)),
   });
   private readonly subagents: OmpSubagentBridge;
-  /** A3/A5：队列对账（get_state 回读判定 + debounce）与 steer 在途标记的协调器。 */
-  private readonly queueReconciler: PromptQueueReconciler;
   constructor(init: EngineInit<ConversationEngine>) {
     this.sessionId = init.sessionId;
     this.workspaceId = init.workspaceId;
@@ -94,7 +96,16 @@ export class ConversationEngine {
     this.gateway = init.gateway;
     this.onIndexChange = init.onIndexChange;
     this.onCommandsUpdate = init.onCommandsUpdate;
-    this.commandOutputs = new OmpCommandOutputBridge({ projection: () => this.projection, sessionPath: () => this.ompSessionFile, save: init.onCommandOutput, flush: init.flushCommandOutputs, scheduleFlush: () => this.scheduleFlush(), refresh: () => this.queueReconciler.scheduleQueueReconciliation() });
+    this.commandOutputs = new OmpCommandOutputBridge({
+      projection: () => this.projection,
+      sessionPath: () => this.ompSessionFile,
+      save: init.onCommandOutput,
+      flush: init.flushCommandOutputs,
+      scheduleFlush: () => this.scheduleFlush(),
+      refresh: () => {
+        void this.refreshStateAfterActivity();
+      },
+    });
     this.resumeSessionPath = init.resumeSessionPath;
     this.projection = new ConversationProjection(init.sessionId, init.viewIdOf);
     this.subagents = new OmpSubagentBridge(
@@ -102,17 +113,7 @@ export class ConversationEngine {
       () => this.ompProcess,
       () => this.scheduleFlush(),
     );
-    // A5：在途 guide 轮在 terminal agent_end 转回等待；A3：queue_update 的真实快照
-    // 到达即登记，debounce 仅合并后续 get_state，不能把快速消费的事实一起延迟掉。
-    this.queueReconciler = new PromptQueueReconciler({
-      projection: this.projection,
-      currentProcess: () => this.ompProcess,
-      isCurrentProcess: (process) => this.ompProcess === process,
-      applyState: (state) => this.applyOmpState(state),
-      isStreaming: () => this.projector.isStreaming,
-      scheduleFlush: () => this.scheduleFlush(),
-    });
-    this.projector = new OmpEventProjector(this.projection, { steerGuideCommandId: () => this.queueReconciler.steerGuideCommandIdOf(), onQueueUpdate: () => this.queueReconciler.scheduleQueueReconciliation(), onCustomMessage: this.commandOutputs.custom });
+    this.projector = new OmpEventProjector(this.projection, { onCustomMessage: this.commandOutputs.custom });
     this.interactionProxy = new OmpInteractionProxy({
       sessionId: init.sessionId,
       gateway: init.gateway,
@@ -202,6 +203,13 @@ export class ConversationEngine {
       this.scheduleFlush();
     }
   }
+  private refreshStateAfterActivity(): Promise<void> {
+    return refreshEngineStateAfterActivity(
+      this.ompProcess,
+      (process) => !this.disposed && this.ompProcess === process,
+      (state) => this.applyOmpState(state),
+    );
+  }
   private applyOmpState(state: OmpStateData | null): void {
     if (!state) {
       return;
@@ -223,7 +231,6 @@ export class ConversationEngine {
   handleOmpEvent(event: OmpSessionEventFrame): void {
     if (this.disposed) return;
     this.agentInteractions.ingest("$root", event);
-    if (event.type === "queue_update") this.queueReconciler.noteQueueSnapshot(event);
     this.projectEvent(event);
   }
   /** v4 resolveInteraction 命令入口：把 UI 应答汇入等待中的交互。 */
@@ -250,11 +257,9 @@ export class ConversationEngine {
     if (exitedSessionFile) this.resumeSessionPath = exitedSessionFile;
     this.ompProcess = null;
     this.btw.emit(null);
-    this.promptTurns.reset();
-    // A5/A3 状态随进程终结：在途 steer 标记与挂起的对账不再有意义（failAllTurns 已收口）。
-    this.queueReconciler.dispose();
-    diagnostics.run({ interactionDisposalStage: "process_exit" }, () => this.interactionProxy.dispose());
     const error = { code: "omp_process_exit", message: `omp core exited unexpectedly (code ${code ?? "null"})` };
+    this.promptTurns.reset(error);
+    diagnostics.run({ interactionDisposalStage: "process_exit" }, () => this.interactionProxy.dispose());
     this.projection.failAllTurns(error);
     logTurnTransitions(this.projection, beforeSeq, "process_exit");
     // 崩溃无 agent_end；必须在 exit 时清流式状态，避免重启前的输入误走 follow_up。
@@ -262,20 +267,20 @@ export class ConversationEngine {
     this.scheduleFlush();
   }
   // ── 命令翻译 ──
-  /** 发送用户输入；返回实际 delivery（omp 流式中转为 follow_up 队列）。图片附件直接进 omp prompt。
-   *  完整 dispatch 流程（排队/steer 在途标记与失败收口）在 promptTurnCloser。 */
+  /** 发送用户输入；queue 仅在既有 owner 接纳，成功终态后逐项派发普通 prompt。
+   * native guide 继续使用真实 steer；图片与临时模型随同一 payload 保留。 */
   async sendText(text: string, sourceCommandId: string, clientId: string, images: { type: "image"; data: string; mimeType: string }[] = [], modelSelection?: { provider: string; model: string; thought?: string }, originalText = text): Promise<"startNow" | "queue"> {
     return this.promptTurns.sendText(text, sourceCommandId, clientId, images, modelSelection, originalText);
   }
   async stop(): Promise<void> {
+    const finishStop = this.promptTurns.beginStop();
     this.projector.noteStopRequested();
     this.scheduleFlush();
-    await stopEngineOperation(
-      this.operationHost,
-      this.projection,
-      () => this.queueReconciler.prepareAbortReconciliation(),
-      () => this.scheduleFlush(),
-    );
+    try {
+      await stopEngineOperation(this.operationHost, this.projection, () => this.scheduleFlush());
+    } finally {
+      finishStop();
+    }
   }
   async compact(): Promise<void> {
     this.projection.addTimelineMarker({ type: "compact", origin: "manual", status: "running" });
@@ -293,11 +298,15 @@ export class ConversationEngine {
     return applyEngineSetModel(this.operationHost, { provider, model, thought });
   }
 
-  /** guide/queue 均接受；实际路由在 sendText 流式分支（guide→steer、queue→follow_up）。 */
+  /** guide/queue 均接受；guide 走真实 steer，queue 由同一 owner 轮后派发。 */
   setFollowupMode(mode: SessionConfigState["followupMode"]): void {
     this.followupMode = mode;
     this.projection.setModelConfig({ followupMode: mode });
     this.scheduleFlush();
+  }
+  /** 保留 v4 队列恢复入口；策略与派发都交给既有轮次 owner。 */
+  setAutoDrain(autoDrain: boolean): void {
+    this.promptTurns.setAutoDrain(autoDrain);
   }
 
   async setThoughtLevel(level: string): Promise<{ error?: string }> {
@@ -325,8 +334,7 @@ export class ConversationEngine {
     this.indexNotify.dispose();
     this.publisher.dispose();
     this.interactionProxy.dispose();
-    // A3：销毁时清理挂起的对账定时器，避免引擎销毁后仍触发 get_state。
-    this.queueReconciler.dispose();
+    this.promptTurns.reset({ code: "session_closed", message: "session closed" });
     const process = this.ompProcess;
     this.ompProcess = null;
     this.btw.dispose();
@@ -337,6 +345,7 @@ export class ConversationEngine {
 
   /** 删除前仅释放文件占用；磁盘删除失败时仍可用原投影和订阅重新启动。 */
   async preparePermanentDeletion(): Promise<string | null> {
+    this.promptTurns.reset({ code: "session_delete", message: "session stopped for deletion" });
     await this.ompStarting?.catch(() => diagnostics.warn("omp.session.delete.start_failed", { sessionId: this.sessionId, failureStage: "pending_start" }));
     const process = this.ompProcess;
     this.resumeSessionPath = process?.ompSessionFile ?? this.resumeSessionPath;
@@ -375,7 +384,8 @@ export class ConversationEngine {
   }
 
   /** 冷恢复水合（订阅建立前，不产生 delta）；merge=true 为只读详情视图的事件驱动重水合：幂等合并并产生增量下发。 */
-  hydrateRows(rows: ConversationRow[], merge = false): void {
+  hydrateRows(rows: ConversationRow[], merge = false, times?: { createdAt?: number; updatedAt?: number }): void {
+    if (!merge && times) this.historyClock.restore(times);
     if (merge) this.projection.mergeRows(rows);
     else this.projection.hydrateRows(rows);
     this.scheduleFlush();

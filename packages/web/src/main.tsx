@@ -212,7 +212,6 @@ function createWebPlatform(): IPlatformService {
     syncWindowTabs: () => {},
     // Web 端没有宿主层 Dock / 任务栏徽标，保持空实现以兼容统一平台接口
     syncWindowUnreadCount: () => {},
-    syncActiveTaskSession: () => {},
     onFocusTab: () => () => {},
     onNewTab: () => () => {},
     onCloseActiveContextRequest: () => () => {},

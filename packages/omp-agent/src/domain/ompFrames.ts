@@ -137,6 +137,8 @@ export const ompSessionEventFrameSchema = z.discriminatedUnion("type", [
   // 修复依据：OMP 的两种无载荷通知是合法帧；会话静止不等同单轮结束，不能借此收口。
   z.object({ type: z.literal("session_settled") }),
   z.object({ type: z.literal("advisor_cost_changed") }),
+  // OMP 的 Goal 变更通知不是轮次终态；状态仍归核心及原生命令输出，不从通知新建投影。
+  z.object({ type: z.literal("goal_updated") }),
   z.object({
     type: z.literal("agent_end"),
     // 修复依据：技能注入的 custom 历史消息以字符串 content 出现在 agent_end.messages；
@@ -220,6 +222,16 @@ export const ompConfigUpdateFrameSchema = z.object({
   thinkingLevel: z.string().optional(),
 });
 export type OmpConfigUpdateFrame = z.infer<typeof ompConfigUpdateFrameSchema>;
+
+// set_model_role 保存成功后由 omp 广播（docs/rpc.md「Fork v3 surface」：
+// 「A successful save emits a settings_changed { scope: "user" } frame」）。
+// 它是通知帧而非会话事件：缺显式分支会落进会话事件校验并被判为拒帧。
+export const ompSettingsChangedFrameSchema = z
+  .object({
+    type: z.literal("settings_changed"),
+    scope: z.string(),
+  })
+  .passthrough();
 
 export const ompAvailableCommandsFrameSchema = z.object({
   type: z.literal("available_commands_update"),
@@ -309,6 +321,7 @@ export type OmpCommandFrame =
   | { id?: string; type: "steer"; message: string; images?: unknown[] }
   | { id?: string; type: "follow_up"; message: string; images?: unknown[] }
   | { id?: string; type: "abort" }
+  | { id?: string; type: "abort_and_restore_queue" }
   | { id?: string; type: "new_session" }
   | { id?: string; type: "negotiate_protocol"; protocolVersion: number }
   | { id?: string; type: "get_state" }

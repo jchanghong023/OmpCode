@@ -8,6 +8,7 @@ import { ProtocolError } from "./errors.js";
 import { buildLegacySnapshot } from "./legacySnapshot.js";
 import type { AttachmentStore } from "./attachmentStore.js";
 import type { ConversationEngine } from "./conversationEngine.js";
+import { createId } from "../domain/ids.js";
 
 export interface LegacyMethodContext {
   registry: SessionRegistry;
@@ -91,7 +92,7 @@ export function createLegacyHandlers(context: LegacyMethodContext) {
       const content = record?.content;
       const text = typeof content === "string" ? content : contentText(content);
       const images = collectImages(context.attachments, record);
-      await engine.sendText(text, "legacy-send", "legacy", images);
+      await engine.sendText(text, createId("legacy-input"), "legacy", images);
       return { sessionId, accepted: true as const, stateRevision: engine.projection.revision };
     },
     [zcodeProtocolMethods.sessionStop]: async (params) => {

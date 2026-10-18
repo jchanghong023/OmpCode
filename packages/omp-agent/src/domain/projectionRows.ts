@@ -11,6 +11,19 @@ import type { TurnFileFacts } from "./fileFacts.js";
 import { ompTodoPlan } from "./ompTodoPlan.js";
 import { ompAskAnswers } from "./ompAskAnswers.js";
 
+/** 唯一 accepted payload 随 TurnContext 持有；应用 queue 不再预塞 native follow_up。 */
+export interface TurnSubmission {
+  text: string;
+  originalText: string;
+  images: { type: "image"; data: string; mimeType: string }[];
+  modelSelection?: { provider: string; model: string; thought?: string };
+  sourceCommandId: string;
+  clientId: string;
+  generation: number;
+  delivery: "prompt" | "steer";
+  state: "pending" | "dispatching" | "accepted" | "consumed" | "cancelled";
+}
+
 export interface TurnContext {
   turnId: string;
   sourceCommandId: string;
@@ -20,6 +33,7 @@ export interface TurnContext {
   responseCounter: number;
   streamingTextRow: { rowId: number; entityId: string } | null;
   streamingReasoningRow: { rowId: number; entityId: string } | null;
+  submission?: TurnSubmission;
 }
 
 export function conversationRowsRange(

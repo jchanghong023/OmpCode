@@ -1,29 +1,22 @@
 import assert from "node:assert/strict";
-import fs from "node:fs";
-import {
-  appendFile,
-  mkdir,
-  mkdtemp,
-  readFile,
-  rename,
-  rm,
-  utimes,
-  writeFile,
-} from "node:fs/promises";
-import { syncBuiltinESMExports } from "node:module";
-import { homedir, tmpdir } from "node:os";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join, resolve, sep } from "node:path";
 import { test, type TestContext } from "node:test";
 import { createOmpStore } from "../src/adapters/ompStore.js";
-import { SessionRegistry } from "../src/app/sessionRegistry.js";
-import { ServerApp } from "../src/app/serverApp.js";
-import { conversationSnapshotSchema } from "@zcode/shared/zcode-protocol-v4";
+import { OmpCommandOutputBridge } from "../src/app/ompCommandOutput.js";
+import { ConversationProjection } from "../src/domain/conversationProjection.js";
 import { rowsFromOmpEntries } from "../src/domain/coldHistory.js";
 import { mergeOmpCommandOutputHistory } from "../src/domain/OmpCommandOutputHistory.js";
-import type { HostGateway, OmpStorePort, OmpSessionProcessHandlers } from "../src/app/ports.js";
-import { createDirectoryStub } from "./fixtures/directoryStub.js";
+import {
+  applyConversationDeltas,
+  commandAckSchema,
+  conversationSnapshotSchema,
+  v4ConversationSubscribeResultSchema,
+} from "@zcode/shared/zcode-protocol-v4";
+import { realOmpSkip, startRealOmpHarness } from "./fixtures/realOmpHarness.js";
 
-const cwd = homedir();
+const cwd = join(tmpdir(), "omp-command-output-workspace");
 const output = { id: "output-1", text: "repo index: 8 files", createdAt: 1000 };
 const logicalId = "omp-session-command-only";
 const stableId = "01a0d66e-1891-7035-ab59-f8e5f0a33703";
@@ -38,25 +31,7 @@ async function scratch(context: TestContext) {
   return { root, env, store: createOmpStore(env) };
 }
 
-function registryWith(store: OmpStorePort) {
-  let processStarts = 0;
-  const directory = createDirectoryStub();
-  directory.setForkSurface(true);
-  const registry = new SessionRegistry({
-    store,
-    directory,
-    ompFactory: {
-      create() {
-        processStarts += 1;
-        throw new Error("cold output history must not start OMP");
-      },
-    },
-    gateway: { emitFrame() {} } as HostGateway,
-  });
-  return { registry, directory, starts: () => processStarts };
-}
-
-test("仅 command_output 的会话持久恢复，不创建 OMP journal，不重发命令", async (context) => {
+test("仅 command_output 的会话持久恢复，存储去重且不创建 OMP journal", async (context) => {
   const { store, env } = await scratch(context);
   const session = { cwd, sessionId: logicalId, sessionPath: null, title: "/repo" };
   await Promise.all([
@@ -82,25 +57,135 @@ test("仅 command_output 的会话持久恢复，不创建 OMP journal，不重�
       commandOutputOnly: true,
     },
   ]);
-  const fixture = registryWith(reopened);
-  const engine = await fixture.registry.resumeSession({
-    sessionId: logicalId,
-    workspaceId: "ws",
-    workspacePath: cwd,
-  });
-  const rows = engine.projection.rowsRange(undefined, 20).rows;
+  const records = await reopened.readCommandOutputs!(cwd, logicalId);
+  const rows = mergeOmpCommandOutputHistory([], records);
   assert.deepEqual(
     rows.filter((row) => row.kind === "assistantText").map((row) => row.text),
     [output.text, "repo index ready"],
   );
   assert.equal(new Set(rows.map((row) => row.entityId)).size, 2);
-  assert.equal(engine.ompSessionFile, null);
-  assert.equal(fixture.starts(), 0);
-  assert.equal(fixture.directory.sentDirectoryCommands.length, 0);
-  await fixture.registry.closeSession(logicalId);
-  assert.equal((await reopened.listSessions(cwd)).length, 1, "关闭不删除已收到的派生历史");
-  await fixture.registry.dispose();
 });
+
+test(
+  "真实原生命令输出 live→重启冷订阅保留合法重复且不重发模型输入",
+  {
+    skip: realOmpSkip,
+  },
+  async (context) => {
+    const { root } = await scratch(context);
+    const marker = "COMMAND_HISTORY_MODEL_DONE";
+    const live = await startRealOmpHarness({ root, handler: () => ({ content: [marker] }) });
+    let sessionId: string;
+    let expected: string[];
+    let expectedCommandOutputs: { id: string; text: string; createdAt: number }[];
+    try {
+      sessionId = await live.create(
+        "command-history",
+        "Initialize the command history recovery scenario.",
+      );
+      await live.waitUntil(() => live.terminal(sessionId));
+      assert.equal(live.terminal(sessionId)?.state, "completedSuccess");
+      const outputs: string[] = [];
+      for (let index = 0; index < 2; index += 1) {
+        const commandId = `history-native-show-${index}`;
+        const prior = new Set(live.rows(sessionId).keys());
+        const ack = commandAckSchema.parse(
+          await live.request("v4/command", {
+            commandId,
+            clientId: "history-real-client",
+            sessionId,
+            type: "sendText",
+            payload: { text: "/goal show" },
+            issuedAt: Date.now(),
+          }),
+        );
+        assert.equal(ack.status, "accepted");
+        const terminal = await live.waitUntil(() =>
+          [...live.rows(sessionId).values()].find(
+            (row) =>
+              row.kind === "turnHeader" &&
+              row.sourceCommandId === commandId &&
+              ["completedSuccess", "completedInterrupted", "failed"].includes(String(row.state)),
+          ),
+        );
+        assert.equal(terminal.state, "completedSuccess");
+        outputs.push(
+          await live.waitUntil(() => {
+            const text = [...live.rows(sessionId)]
+              .filter(([rowId, row]) => !prior.has(rowId) && row.kind === "assistantText")
+              .map(([, row]) => String(row.text ?? ""))
+              .join("\n");
+            return text.trim() ? text : undefined;
+          }),
+        );
+      }
+      assert.equal(outputs[0], outputs[1], "相同命令的独立事件必须都保留");
+      expected = [...live.rows(sessionId).values()]
+        .filter((row) => row.kind === "assistantText")
+        .map((row) => String(row.text ?? ""));
+      assert.ok(expected.includes(marker), "冷恢复同时保留模型 journal 和派生命令输出");
+      assert.ok(expected.filter((text) => text === outputs[0]).length >= 2);
+      expectedCommandOutputs = [...live.rows(sessionId).values()]
+        .filter((row) => String(row.entityId ?? "").startsWith("omp-command-output:"))
+        .map((row) => ({
+          id: String(row.entityId),
+          text: String(row.text),
+          createdAt: Number(row.createdAt),
+        }));
+      assert.equal(expectedCommandOutputs.length, 2, "同文命令须各有独立 live 输出身份");
+    } finally {
+      await live.close();
+    }
+    const cold = await startRealOmpHarness({
+      root,
+      handler: () => ({ content: ["UNEXPECTED_REPLAY"] }),
+    });
+    try {
+      // 重复公开请求复用 Registry owner；不能直接重复 hydrateRows 伪造业务重入。
+      const modes = [
+        "desktop-continuous",
+        "web-remote-replayable",
+        "desktop-continuous",
+        "web-remote-replayable",
+      ] as const;
+      for (const [index, clientMode] of modes.entries()) {
+        const { ack } = v4ConversationSubscribeResultSchema.parse(
+          await cold.request("v4/conversation/subscribe", {
+            topic: `conversation/${sessionId}`,
+            connectionId: `history-cold-${clientMode}-${index}`,
+            clientMode,
+          }),
+        );
+        const snapshot = await cold.waitUntil(() =>
+          cold
+            .conversationFrames(sessionId)
+            .find(
+              (frame) =>
+                frame.subscriptionId === ack.subscriptionId && frame.payload.kind === "snapshot",
+            ),
+        );
+        assert.ok(snapshot.payload.kind === "snapshot", "冷恢复必须收到当前订阅的完整 snapshot");
+        const parsed = conversationSnapshotSchema.parse(snapshot.payload.snapshot);
+        assert.deepEqual(
+          parsed.rows.window.filter((row) => row.kind === "assistantText").map((row) => row.text),
+          expected,
+        );
+        assert.deepEqual(
+          parsed.rows.window.flatMap((row) =>
+            row.kind === "assistantText" && row.entityId?.startsWith("omp-command-output:")
+              ? [{ id: row.entityId, text: row.text, createdAt: row.createdAt }]
+              : [],
+          ),
+          expectedCommandOutputs,
+          "每次公开冷订阅保留 live ID、全文、时间和顺序，恰好一次",
+        );
+      }
+      assert.equal(cold.mock.calls.length, 0, "冷订阅不能重新执行旧模型输入");
+    } finally {
+      await cold.close();
+    }
+  },
+);
 
 test("原生文件随后生成时关联 UUID，冷恢复合并模型历史且不复制 journal", async (context) => {
   const { store, env } = await scratch(context);
@@ -141,119 +226,18 @@ test("原生文件随后生成时关联 UUID，冷恢复合并模型历史且不
   assert.equal((await reopened.findSession!(cwd, logicalId))?.sessionPath, nativePath);
   assert.deepEqual(await reopened.readCommandOutputs!(cwd, stableId, nativePath), [output]);
   assert.deepEqual(await reopened.readCommandOutputs!(cwd, logicalId), [output]);
-  const fixture = registryWith(reopened);
-  const engine = await fixture.registry.resumeSession({
-    sessionId: stableId,
-    workspaceId: "ws",
-    workspacePath: cwd,
-  });
-  const rows = engine.projection.rowsRange(undefined, 20).rows;
+  const rows = mergeOmpCommandOutputHistory(
+    rowsFromOmpEntries(await reopened.readSessionEntries(nativePath)),
+    await reopened.readCommandOutputs!(cwd, stableId, nativePath),
+    entries,
+    stableId,
+  );
   assert.equal(
     rows.filter((row) => row.kind === "assistantText" && row.text === output.text).length,
     1,
   );
   assert.ok(rows.some((row) => row.kind === "assistantText" && row.text === "actual model answer"));
   assert.equal(await readFile(nativePath, "utf8"), journal);
-  assert.equal(fixture.starts(), 0);
-  await fixture.registry.dispose();
-});
-
-test("原生文件存在后，旧 GUI ID 两链路公开冷订阅保留多轮模型及派生输出", async (context) => {
-  const { store, env } = await scratch(context);
-  const nativeDirectory = join(env.OMP_CONFIG_ROOT, "agent", "sessions", "-");
-  await mkdir(nativeDirectory, { recursive: true });
-  const nativePath = join(nativeDirectory, `2026-10-08T00-00-00-000Z_${stableId}.jsonl`);
-  const entries = [
-    { type: "session", id: stableId, cwd },
-    { type: "message", message: { role: "user", content: "first turn", timestamp: 1500 } },
-    {
-      type: "message",
-      id: "earlier-answer",
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text: "earlier native saved answer" }],
-        timestamp: 2000,
-      },
-    },
-    { type: "message", message: { role: "user", content: "next turn", timestamp: 2500 } },
-    {
-      type: "message",
-      id: "answer",
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text: "native saved answer" }],
-        timestamp: 3000,
-      },
-    },
-  ];
-  const journal = entries.map((entry) => JSON.stringify(entry)).join("\n") + "\n";
-  await writeFile(nativePath, journal);
-  await store.appendCommandOutput!({ cwd, sessionId: logicalId, sessionPath: nativePath }, output);
-  await store.flushCommandOutputs!();
-  const frames: unknown[] = [];
-  const resumedPaths: Array<string | undefined> = [];
-  const sentTypes: string[] = [];
-  const app = new ServerApp({
-    store: createOmpStore(env),
-    workspacePath: cwd,
-    workspaceKey: "ws",
-    directory: createDirectoryStub(),
-    gateway: {
-      emitFrame: (frame) => frames.push(frame),
-      requestUserInput: async () => ({ action: "cancel" as const }),
-    },
-    loadWorkspaceConfig: async () => ({ configOptions: [], slashCommands: [] }),
-    loadWorkspaceSkillCommands: async () => [],
-    ompFactory: {
-      create(options) {
-        resumedPaths.push(options.resumeSessionPath);
-        return {
-          ompSessionFile: nativePath,
-          async start() {},
-          async dispose() {},
-          respondUi() {},
-          async refreshState() {
-            return null;
-          },
-          async readContextReport() {
-            return null;
-          },
-          async send(command) {
-            sentTypes.push(command.type);
-            return { success: true, data: {} };
-          },
-        };
-      },
-    },
-  });
-  try {
-    for (const mode of ["desktop-continuous", "web-remote-replayable"] as const) {
-      const priorFrameCount = frames.length;
-      const result = (await app.handleRequest("v4/conversation/subscribe", {
-        topic: `conversation/${logicalId}`,
-        connectionId: `cold-old-gui-id-${mode}`,
-        clientMode: mode,
-      })) as { ack: { mode: string } };
-      assert.equal(result.ack.mode, "snapshot");
-      const wire = frames.slice(priorFrameCount).find((frame) => {
-        const candidate = frame as { frame?: { payload?: { snapshot?: unknown } } };
-        return candidate.frame?.payload?.snapshot !== undefined;
-      }) as { frame: { payload: { snapshot: unknown } } };
-      assert.ok(wire, "每条冷订阅链路必须实际发布 snapshot");
-      const snapshot = conversationSnapshotSchema.parse(wire.frame.payload.snapshot);
-      assert.equal(snapshot.sessionId, logicalId);
-      assert.deepEqual(
-        snapshot.rows.window.filter((row) => row.kind === "assistantText").map((row) => row.text),
-        [output.text, "earlier native saved answer", "native saved answer"],
-      );
-    }
-    assert.equal(app.registry.requireEngine(logicalId).ompSessionFile, nativePath);
-    assert.deepEqual(resumedPaths, [nativePath]);
-    assert.ok(!sentTypes.includes("prompt"), "冷订阅不能重发已执行命令");
-    assert.equal(await readFile(nativePath, "utf8"), journal);
-  } finally {
-    await app.dispose();
-  }
 });
 
 test("冷合并按输出 ID 去重，保留相同文本的不同事件及原生行", () => {
@@ -281,6 +265,55 @@ test("冷合并按输出 ID 去重，保留相同文本的不同事件及原生�
     rows.map((_, index) => index + 1),
   );
   assert.ok(rows.some((row) => row.kind === "assistantText" && row.text === "model"));
+});
+
+test("已合并 Team 输出再次合并不吞掉没有派生副本的同文原生事件", () => {
+  const sessionId = stableId;
+  const text = "## /team 最终报告\n\n完整的独立报告正文";
+  const entries = [
+    { type: "session", id: sessionId },
+    ...[1000, 2000, 3000].map((timestamp, index) => ({
+      type: "custom_message",
+      id: `report-${index}`,
+      customType: "team-result",
+      content: text,
+      display: true,
+      timestamp,
+    })),
+  ];
+  const records = [1000, 2000].map((timestamp, index) => ({
+    id: `live-report-${index}`,
+    text,
+    createdAt: timestamp - 1,
+    customType: "team-result",
+    nativeTimestamp: timestamp - 1,
+    nativeSessionId: sessionId,
+  }));
+  const rows = mergeOmpCommandOutputHistory(
+    rowsFromOmpEntries(entries),
+    records,
+    entries,
+    sessionId,
+  );
+  const twice = mergeOmpCommandOutputHistory(rows, [...records, records[0]!], entries, sessionId);
+  assert.deepEqual(twice, rows);
+  assert.deepEqual(
+    rows.map((row) => ({
+      id: row.entityId,
+      text: row.kind === "assistantText" ? row.text : undefined,
+      createdAt: row.createdAt,
+    })),
+    [
+      { id: "omp-command-output:live-report-0", text, createdAt: 999 },
+      { id: "omp-command-output:live-report-1", text, createdAt: 1999 },
+      {
+        id: rowsFromOmpEntries(entries).at(-1)!.entityId,
+        text,
+        createdAt: 3000,
+      },
+    ],
+  );
+  assert.ok(rows[2]!.entityId?.startsWith("omp-native-custom"));
 });
 
 test("派生冷合并保留多轮及同轮多段原生历史，不按类别 entityId 覆盖模型回复", () => {
@@ -317,7 +350,7 @@ test("派生冷合并保留多轮及同轮多段原生历史，不按类别 enti
   const twice = mergeOmpCommandOutputHistory(rows, [output, output]);
   assert.deepEqual(
     rows
-      .filter((row) => !row.entityId.startsWith("omp-command-output:"))
+      .filter((row) => !row.entityId?.startsWith("omp-command-output:"))
       .map(({ rowId: _rowId, createdAtSeq: _seq, ...row }) => row),
     native.map(({ rowId: _rowId, createdAtSeq: _seq, ...row }) => row),
   );
@@ -426,76 +459,7 @@ test("同 cwd 不同 workspaceIdentity 的 GUI 派生历史隔离", async (conte
   assert.equal((await remoteA.listSessions(cwd)).length, 1);
 });
 
-test("公开 sendText 入口收到 ACK 前后输出，关闭并冷恢复只展示收到的事实", async (context) => {
-  const { store, env } = await scratch(context);
-  let handlers: OmpSessionProcessHandlers | null = null;
-  let prompts = 0;
-  const registry = new SessionRegistry({
-    store,
-    directory: createDirectoryStub(),
-    gateway: { emitFrame() {} } as HostGateway,
-    ompFactory: {
-      create(options) {
-        handlers = options;
-        return {
-          ompSessionFile: null,
-          async start() {},
-          async send(command) {
-            if (command.type === "prompt") {
-              prompts += 1;
-              options.onCommandOutput?.({ text: "repo index started" });
-              return { success: true, data: { agentInvoked: false } };
-            }
-            return { success: true };
-          },
-          respondUi() {},
-          async refreshState() {
-            return null;
-          },
-          async readContextReport() {
-            return null;
-          },
-          async dispose() {},
-        };
-      },
-    },
-  });
-  const engine = await registry.createSession({
-    sessionId: logicalId,
-    workspaceId: "ws",
-    workspacePath: cwd,
-  });
-  await engine.sendText("/repo status", "command-1", "client-1");
-  assert.ok(handlers);
-  (handlers as OmpSessionProcessHandlers).onCommandOutput?.({ text: "repo index ready after ACK" });
-  const live = engine.projection
-    .rowsRange(undefined, 20)
-    .rows.filter((row) => row.kind === "assistantText");
-  await registry.closeSession(logicalId);
-  await registry.dispose();
-  const reopened = registryWith(createOmpStore(env));
-  const cold = await reopened.registry.resumeSession({
-    sessionId: logicalId,
-    workspaceId: "ws",
-    workspacePath: cwd,
-  });
-  const restored = cold.projection
-    .rowsRange(undefined, 20)
-    .rows.filter((row) => row.kind === "assistantText");
-  assert.deepEqual(
-    restored.map((row) => row.text),
-    live.map((row) => row.text),
-  );
-  assert.deepEqual(
-    restored.map((row) => row.entityId),
-    live.map((row) => row.entityId),
-  );
-  assert.equal(prompts, 1);
-  assert.equal(reopened.starts(), 0);
-  await reopened.registry.dispose();
-});
-
-test("OMP 只分配路径未落盘时保留 UUID 冷锚点，不将空文件路径传给 resume", async (context) => {
+test("OMP 只分配路径未落盘时保留 UUID 冷锚点，存储不返回空文件为 journal", async (context) => {
   const { store, env } = await scratch(context);
   const nativePath = join(
     env.OMP_CONFIG_ROOT,
@@ -510,22 +474,11 @@ test("OMP 只分配路径未落盘时保留 UUID 冷锚点，不将空文件路�
   assert.equal(summaries[0]?.sessionId, stableId);
   assert.equal(summaries[0]?.commandOutputOnly, true);
   assert.equal(summaries[0]?.sessionPath, "");
-  const fixture = registryWith(reopened);
-  const engine = await fixture.registry.resumeSession({
-    sessionId: stableId,
-    workspaceId: "ws",
-    workspacePath: cwd,
-  });
-  assert.equal(engine.ompSessionFile, null);
-  assert.ok(
-    engine.projection
-      .rowsRange(undefined, 20)
-      .rows.some((row) => row.kind === "assistantText" && row.text === output.text),
-  );
-  await fixture.registry.deleteSession(stableId);
-  assert.equal(fixture.directory.sentDirectoryCommands.length, 0);
-  assert.deepEqual(await store.readCommandOutputs!(cwd, logicalId), []);
-  await fixture.registry.dispose();
+  const records = await reopened.readCommandOutputs!(cwd, stableId);
+  // UUID 属于 history 的路径/别名关联；普通 command_output 不携带 custom 事件 epoch。
+  assert.deepEqual(records, [output]);
+  assert.deepEqual(await reopened.readCommandOutputs!(cwd, logicalId), records);
+  assert.equal((await reopened.findSession!(cwd, stableId))?.sessionPath, "");
 });
 
 test("首次真正落盘后记录文件事实，外部删除原生会话不会被派生文本复活", async (context) => {
@@ -544,177 +497,211 @@ test("首次真正落盘后记录文件事实，外部删除原生会话不会�
 test("派生历史写入失败会显式拒绝，flush 不冒充落盘成功", async (context) => {
   const { root } = await scratch(context);
   const blockedRoot = join(root, "blocked");
+  const nativePath = join(root, `2026-10-08T00-00-00-000Z_${stableId}.jsonl`);
+  const custom = { ...output, customType: "team-result", nativeTimestamp: output.createdAt };
+  await writeFile(
+    nativePath,
+    [
+      { type: "session", id: stableId, cwd },
+      {
+        type: "custom_message",
+        customType: custom.customType,
+        content: custom.text,
+        display: true,
+        timestamp: custom.nativeTimestamp,
+      },
+    ]
+      .map((entry) => JSON.stringify(entry))
+      .join("\n") + "\n",
+  );
   await writeFile(`${blockedRoot}_ompcode`, "not a directory");
   const store = createOmpStore({ OMP_CONFIG_ROOT: blockedRoot });
   await assert.rejects(
-    store.appendCommandOutput!({ cwd, sessionId: logicalId, sessionPath: null }, output),
+    store.appendCommandOutput!({ cwd, sessionId: logicalId, sessionPath: nativePath }, custom),
   );
   await assert.rejects(store.flushCommandOutputs!());
 });
 
-test("仅 display:true custom 的原生结果没有 parent journal 时，ACK 后保存并双链路冷恢复", async (context) => {
-  const { store, env } = await scratch(context);
-  const nativePath = join(
-    env.OMP_CONFIG_ROOT,
-    "agent",
-    "sessions",
-    "-",
-    `2026-10-08T00-00-00-000Z_${stableId}.jsonl`,
-  );
-  let handlers!: OmpSessionProcessHandlers;
-  let promptCount = 0;
-  const registry = new SessionRegistry({
-    store,
-    directory: createDirectoryStub(),
-    gateway: { emitFrame() {} } as HostGateway,
-    ompFactory: {
-      create(options) {
-        handlers = options;
-        return {
-          ompSessionFile: nativePath,
-          async start() {},
-          async dispose() {},
-          respondUi() {},
-          async refreshState() {
-            return { sessionFile: nativePath };
-          },
-          async readContextReport() {
-            return null;
-          },
-          async send(command) {
-            if (command.type === "prompt") promptCount++;
-            return { success: true, data: { agentInvoked: false } };
-          },
-        };
-      },
-    },
-  });
-  const engine = await registry.createSession({
-    sessionId: logicalId,
-    workspaceId: "ws",
-    workspacePath: cwd,
-  });
-  const message = {
-    role: "custom",
-    customType: "team-result",
-    content: "## team-result\n真实最终方案",
-    display: true,
-    timestamp: 2000,
-  };
-  await engine.sendText("/team read-only task", "team", "client");
-  handlers.onEvent({ type: "message_end", message: { ...message, display: false } });
-  handlers.onEvent({ type: "message_start", message });
-  assert.equal(
-    engine.projection.rowsRange(undefined, 100).rows.filter((row) => row.kind === "assistantText")
-      .length,
-    0,
-  );
-  handlers.onEvent({ type: "message_end", message });
-  const live = engine.projection
-    .rowsRange(undefined, 100)
-    .rows.filter((row) => row.kind === "assistantText");
-  assert.equal(live.length, 1);
-  await registry.closeSession(logicalId);
-  await registry.dispose();
-  await assert.rejects(readFile(nativePath, "utf8"), { code: "ENOENT" });
-  const fixture = registryWith(createOmpStore(env));
-  try {
-    const cold = await fixture.registry.resumeSession({
-      sessionId: logicalId,
-      workspaceId: "ws",
-      workspacePath: cwd,
-    });
-    for (const mode of ["desktop-continuous", "web-remote-replayable"] as const) {
-      cold.subscribe({ connectionId: mode, clientMode: mode });
-      const rows = cold.projection
-        .rowsRange(undefined, 100)
-        .rows.filter((row) => row.kind === "assistantText");
-      assert.deepEqual(
-        rows.map((row) => [row.entityId, row.text]),
-        live.map((row) => [row.entityId, row.text]),
-      );
-    }
-    assert.equal(fixture.starts(), 0);
-    assert.equal(promptCount, 1);
-  } finally {
-    await fixture.registry.dispose();
-  }
-});
-
-test("已写 journal 的 custom 不保存派生副本；迟到原生落盘按类型和文本计数去重", async (context) => {
+test("custom 在原生落盘前后均保存 GUI 身份，重启合并保留同文事件且仅显示一次", async (context) => {
   const { store, env } = await scratch(context);
   const nativeDirectory = join(env.OMP_CONFIG_ROOT, "agent", "sessions", "-");
   const nativePath = join(nativeDirectory, `2026-10-08T00-00-00-000Z_${stableId}.jsonl`);
   const session = { cwd, sessionId: logicalId, sessionPath: nativePath };
-  const custom = { ...output, customType: "team-result", nativeTimestamp: 1000 };
-  await store.appendCommandOutput!(session, custom);
-  await store.appendCommandOutput!(session, {
-    ...custom,
-    id: "second-custom",
-    createdAt: 1001,
-    nativeTimestamp: 1001,
-  });
+  const text = "## /team 最终报告\n\n完整结果😀中文\n\n最后一段必须保留。";
+  const records = [1000, 2000].map((timestamp, index) => ({
+    id: `live-custom-${index}`,
+    text,
+    createdAt: timestamp,
+    customType: "team-result",
+    nativeTimestamp: timestamp,
+    nativeSessionId: stableId,
+  }));
+  await store.appendCommandOutput!(session, records[0]!);
   const entries = [
     { type: "session", id: stableId, cwd },
-    {
+    ...records.map((record, index) => ({
       type: "custom_message",
-      customType: custom.customType,
-      content: custom.text,
+      id: `native-custom-${index}`,
+      customType: record.customType,
+      content: record.text,
       display: true,
-      timestamp: new Date(1000).toISOString(),
-    },
-    {
-      type: "message",
-      message: {
-        role: "custom",
-        customType: custom.customType,
-        content: custom.text,
-        display: true,
-        timestamp: 1001,
-      },
-    },
-    {
-      type: "message",
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text: custom.text }],
-        timestamp: 3000,
-      },
-    },
+      timestamp: record.nativeTimestamp,
+    })),
   ];
   await mkdir(nativeDirectory, { recursive: true });
   const journal = entries.map((entry) => JSON.stringify(entry)).join("\n") + "\n";
   await writeFile(nativePath, journal);
-  await store.appendCommandOutput!(session, { ...custom, id: "already-native", createdAt: 2000 });
-  const records = await store.readCommandOutputs!(cwd, logicalId);
-  assert.equal(records.length, 2, "journal 已持有的事件不能保存第二份");
+  // 核心先持久化正文再发 custom 仍必须保存 GUI 已发布身份；同 ID 重投保持幂等。
+  await store.appendCommandOutput!(session, records[1]!);
+  await store.appendCommandOutput!(session, records[1]!);
+  await store.associateCommandOutputs!(session);
+  await store.flushCommandOutputs!();
+  const reopened = createOmpStore(env);
+  const restored = await reopened.readCommandOutputs!(cwd, stableId, nativePath);
+  assert.deepEqual(restored, records);
+  assert.deepEqual(await reopened.readCommandOutputs!(cwd, logicalId), records);
+  const coldEntries = await reopened.readSessionEntries(nativePath);
   const merged = mergeOmpCommandOutputHistory(
-    rowsFromOmpEntries(entries),
-    [...records, records[0]!],
-    entries,
+    rowsFromOmpEntries(coldEntries),
+    restored,
+    coldEntries,
     stableId,
   );
-  assert.equal(
-    merged.filter((row) => row.kind === "assistantText" && row.text === custom.text).length,
-    3,
+  assert.deepEqual(
+    merged
+      .filter((row) => row.kind === "assistantText")
+      .map((row) => ({
+        id: row.entityId,
+        text: row.text,
+        createdAt: row.createdAt,
+      })),
+    records.map((record) => ({
+      id: `omp-command-output:${record.id}`,
+      text: record.text,
+      createdAt: record.createdAt,
+    })),
+    "两个同文独立事件按原始 ID、全文、时间和顺序恢复，不能只恢复 native 身份",
   );
-  assert.ok(merged.every((row) => !row.entityId.startsWith("omp-command-output:")));
+  assert.deepEqual(mergeOmpCommandOutputHistory(merged, restored, coldEntries, stableId), merged);
   assert.equal(await readFile(nativePath, "utf8"), journal);
-  const fixture = registryWith(createOmpStore(env));
-  try {
-    const cold = await fixture.registry.resumeSession({
-      sessionId: logicalId,
-      workspaceId: "ws",
-      workspacePath: cwd,
+});
+
+test("bridge 接纳迟到原生报告以发布时间恢复完成提示之后的完整消费者顺序", async (context) => {
+  for (const journalFirst of [true, false]) {
+    await context.test(journalFirst ? "原生先落盘" : "原生后落盘", async (context) => {
+      const { store, env } = await scratch(context);
+      const directory = join(env.OMP_CONFIG_ROOT, "agent", "sessions", "-");
+      const sessionPath = join(directory, `2026-10-08T00-00-00-000Z_${stableId}.jsonl`);
+      const session = { cwd, sessionId: logicalId, sessionPath };
+      const report = "## /team 最终报告\n\n完整结果😀中文\n\n最后一段必须保留。";
+      const entries = [
+        { type: "session", id: stableId, cwd },
+        ...[1501, 1601].map((timestamp, index) => ({
+          type: "custom_message",
+          id: `native-late-report-${index}`,
+          customType: "team-result",
+          content: report,
+          display: true,
+          timestamp,
+        })),
+      ];
+      const journal = entries.map((entry) => JSON.stringify(entry)).join("\n") + "\n";
+      await mkdir(directory, { recursive: true });
+      if (journalFirst) await writeFile(sessionPath, journal);
+      const live = new ConversationProjection(logicalId);
+      const consumerBase = conversationSnapshotSchema.parse(live.buildSnapshot());
+      const bridge = new OmpCommandOutputBridge({
+        projection: () => live,
+        sessionPath: () => sessionPath,
+        save: (record, path) =>
+          store.appendCommandOutput!({ ...session, sessionPath: path }, record),
+        flush: () => store.flushCommandOutputs!(),
+        scheduleFlush: () => {},
+      });
+      // 复用 Date-only 确定性时钟；不改变 IO/进程或以等待制造时序。
+      context.mock.timers.enable({ apis: ["Date"], now: 2000 });
+      bridge.emit({ text: "讨论完成" });
+      context.mock.timers.setTime(3000);
+      bridge.custom({
+        role: "custom",
+        customType: "team-result",
+        content: report,
+        display: true,
+        timestamp: 1500,
+      });
+      context.mock.timers.setTime(4000);
+      bridge.custom({
+        role: "custom",
+        customType: "team-result",
+        content: report,
+        display: true,
+        timestamp: 1600,
+      });
+      await bridge.flush();
+      if (!journalFirst) await writeFile(sessionPath, journal);
+      await store.associateCommandOutputs!(session);
+      await bridge.flush();
+      const liveSnapshot = conversationSnapshotSchema.parse(live.buildSnapshot());
+      const consumer = applyConversationDeltas(consumerBase, live.drainPendingDeltas());
+      assert.deepEqual(consumer.rows, liveSnapshot.rows, "实际增量消费者保留发布顺序");
+      const visible = liveSnapshot.rows.window.filter((row) => row.kind === "assistantText");
+      assert.deepEqual(
+        visible.map((row) => row.text),
+        ["讨论完成", report, report],
+      );
+      assert.deepEqual(
+        visible.map((row) => row.createdAt),
+        [2000, 3000, 4000],
+      );
+      assert.equal(new Set(visible.map((row) => row.entityId)).size, 3);
+      assert.ok(visible[0]!.entityId?.startsWith("omp-command-output:omp-command-output-"));
+      assert.ok(
+        visible
+          .slice(1)
+          .every((row) => row.entityId?.startsWith("omp-command-output:omp-custom-output-")),
+      );
+      const reopened = createOmpStore(env);
+      const restored = await reopened.readCommandOutputs!(cwd, stableId, sessionPath);
+      assert.deepEqual(
+        restored.map((record) => ({
+          id: `omp-command-output:${record.id}`,
+          text: record.text,
+          createdAt: record.createdAt,
+        })),
+        visible.map((row) => ({
+          id: row.entityId,
+          text: row.text,
+          createdAt: row.createdAt,
+        })),
+        "预期身份取自真实 bridge 发布，不手造派生 records 绕开时间所有者",
+      );
+      assert.deepEqual(
+        restored.slice(1).map((record) => record.nativeTimestamp),
+        [1500, 1600],
+      );
+      assert.ok(restored.slice(1).every((record) => record.nativeSessionId === stableId));
+      const coldEntries = await reopened.readSessionEntries(sessionPath);
+      assert.deepEqual(coldEntries, entries);
+      const merged = mergeOmpCommandOutputHistory(
+        rowsFromOmpEntries(coldEntries),
+        restored,
+        coldEntries,
+        stableId,
+      );
+      assert.deepEqual(
+        mergeOmpCommandOutputHistory(merged, restored, coldEntries, stableId),
+        merged,
+      );
+      const cold = new ConversationProjection(logicalId);
+      cold.hydrateRows(merged);
+      assert.deepEqual(
+        conversationSnapshotSchema.parse(cold.buildSnapshot()).rows,
+        liveSnapshot.rows,
+        "冷快照逐字段等于已发布 live 行；原生时间仅匹配，不重排、不多显同文报告",
+      );
+      assert.deepEqual(await reopened.readCommandOutputs!(cwd, logicalId), restored);
+      assert.equal(await readFile(sessionPath, "utf8"), journal, "journal 字节保持不变");
     });
-    assert.equal(
-      cold.projection.rowsRange(undefined, 100).rows.filter((row) => row.kind === "assistantText")
-        .length,
-      3,
-    );
-    assert.equal(fixture.starts(), 0);
-  } finally {
-    await fixture.registry.dispose();
   }
 });
 
@@ -739,27 +726,21 @@ test("同文 custom 的旧 journal t1000 不能吞掉未落盘新事件 t2000", 
     { ...output, createdAt: 2000, nativeTimestamp: 2000, customType: "team-result" },
   );
   assert.equal((await store.readCommandOutputs!(cwd, logicalId)).length, 1);
-  const fixture = registryWith(createOmpStore(env));
-  try {
-    const cold = await fixture.registry.resumeSession({
-      sessionId: logicalId,
-      workspaceId: "ws",
-      workspacePath: cwd,
-    });
-    const visible = cold.projection
-      .rowsRange(undefined, 100)
-      .rows.filter((row) => row.kind === "assistantText");
-    assert.deepEqual(
-      visible.map((row) => row.text),
-      [output.text, output.text],
-    );
-    assert.deepEqual(
-      visible.map((row) => row.createdAt),
-      [1000, 2000],
-    );
-  } finally {
-    await fixture.registry.dispose();
-  }
+  const reopened = createOmpStore(env);
+  const visible = mergeOmpCommandOutputHistory(
+    rowsFromOmpEntries(entries),
+    await reopened.readCommandOutputs!(cwd, logicalId),
+    entries,
+    stableId,
+  ).filter((row) => row.kind === "assistantText");
+  assert.deepEqual(
+    visible.map((row) => row.text),
+    [output.text, output.text],
+  );
+  assert.deepEqual(
+    visible.map((row) => row.createdAt),
+    [1000, 2000],
+  );
 });
 
 test("同事件 frame/entry 时间微差按源因果顺序冷去重，不猜时间容差", async (context) => {
@@ -787,23 +768,16 @@ test("同事件 frame/entry 时间微差按源因果顺序冷去重，不猜时�
     1,
     "时间不同不能在保存前假定已落盘",
   );
-  const fixture = registryWith(createOmpStore(env));
-  try {
-    const cold = await fixture.registry.resumeSession({
-      sessionId: logicalId,
-      workspaceId: "ws",
-      workspacePath: cwd,
-    });
-    assert.deepEqual(
-      cold.projection
-        .rowsRange(undefined, 100)
-        .rows.filter((row) => row.kind === "assistantText")
-        .map((row) => row.text),
-      [output.text],
-    );
-  } finally {
-    await fixture.registry.dispose();
-  }
+  const visible = mergeOmpCommandOutputHistory(
+    rowsFromOmpEntries(entries),
+    await createOmpStore(env).readCommandOutputs!(cwd, logicalId),
+    entries,
+    stableId,
+  ).filter((row) => row.kind === "assistantText");
+  assert.deepEqual(
+    visible.map((row) => row.text),
+    [output.text],
+  );
 });
 
 test("原生 file/UUID 变化后，旧 epoch derived 不匹配新 file 的同文 custom", async (context) => {
@@ -830,269 +804,18 @@ test("原生 file/UUID 变化后，旧 epoch derived 不匹配新 file 的同文
   await writeFile(newPath, entries.map((entry) => JSON.stringify(entry)).join("\n") + "\n");
   await store.associateCommandOutputs!({ cwd, sessionId: logicalId, sessionPath: newPath });
   assert.equal((await store.readCommandOutputs!(cwd, logicalId))[0]!.nativeSessionId, stableId);
-  const fixture = registryWith(createOmpStore(env));
-  try {
-    const cold = await fixture.registry.resumeSession({
-      sessionId: logicalId,
-      workspaceId: "ws",
-      workspacePath: cwd,
-    });
-    const visible = cold.projection
-      .rowsRange(undefined, 100)
-      .rows.filter((row) => row.kind === "assistantText");
-    assert.deepEqual(
-      visible.map((row) => row.text),
-      [output.text, output.text],
-    );
-    assert.deepEqual(
-      visible.map((row) => row.createdAt),
-      [2000, 3000],
-    );
-  } finally {
-    await fixture.registry.dispose();
-  }
-});
-
-test("native 增量索引续接 UTF-8 半字符和 partial line，迟到 flush 不永久缓存缺失", async (context) => {
-  const { store, env } = await scratch(context);
-  const directory = join(env.OMP_CONFIG_ROOT, "agent", "sessions", "-");
-  const nativePath = join(directory, `2026-10-08T00-00-00-000Z_${stableId}.jsonl`);
-  await mkdir(directory, { recursive: true });
-  const header = `${JSON.stringify({ type: "session", id: stableId, cwd })}\n`;
-  const text = "结果😀中文\n下一行";
-  const custom = {
-    type: "custom_message",
-    customType: "team-result",
-    content: text,
-    display: true,
-    timestamp: 2000,
-  };
-  const bytes = Buffer.from(JSON.stringify(custom));
-  const split = bytes.indexOf(Buffer.from("😀")) + 2;
-  await writeFile(nativePath, Buffer.concat([Buffer.from(header), bytes.subarray(0, split)]));
-  const session = { cwd, sessionId: logicalId, sessionPath: nativePath };
-  const record = {
-    id: "partial-before-flush",
-    text,
-    customType: custom.customType,
-    nativeTimestamp: custom.timestamp,
-    createdAt: custom.timestamp,
-  };
-  await store.appendCommandOutput!(session, record);
-  assert.equal((await store.readCommandOutputs!(cwd, logicalId)).length, 1);
-  await appendFile(nativePath, bytes.subarray(split));
-  await store.appendCommandOutput!(session, { ...record, id: "after-complete-no-newline" });
-  assert.equal(
-    (await store.readCommandOutputs!(cwd, logicalId)).length,
-    1,
-    "未换行的完整 UTF-8 JSON 已落盘，不保存第二份",
-  );
-  await appendFile(nativePath, "\n" + JSON.stringify({ ...custom, timestamp: 3000 }) + "\n");
-  await store.appendCommandOutput!(session, {
-    ...record,
-    id: "after-next-line",
-    nativeTimestamp: 3000,
-    createdAt: 3000,
-  });
-  assert.equal((await store.readCommandOutputs!(cwd, logicalId)).length, 1);
-  const fixture = registryWith(createOmpStore(env));
-  try {
-    const cold = await fixture.registry.resumeSession({
-      sessionId: logicalId,
-      workspaceId: "ws",
-      workspacePath: cwd,
-    });
-    assert.deepEqual(
-      cold.projection
-        .rowsRange(undefined, 100)
-        .rows.filter((row) => row.kind === "assistantText")
-        .map((row) => [row.text, row.createdAt]),
-      [
-        [text, 2000],
-        [text, 3000],
-      ],
-    );
-  } finally {
-    await fixture.registry.dispose();
-  }
-});
-
-test("native 索引在 truncate、同路径文件替换和 session/path 迁移后失效", async (context) => {
-  const { store, env } = await scratch(context);
-  const directory = join(env.OMP_CONFIG_ROOT, "agent", "sessions", "-");
-  const nativePath = join(directory, `2026-10-08T00-00-00-000Z_${stableId}.jsonl`);
-  await mkdir(directory, { recursive: true });
-  const header = `${JSON.stringify({ type: "session", id: stableId, cwd })}\n`;
-  const entry = {
-    type: "custom_message",
-    customType: "team-result",
-    content: output.text,
-    display: true,
-    timestamp: 1000,
-  };
-  const session = { cwd, sessionId: logicalId, sessionPath: nativePath };
-  const record = { ...output, customType: entry.customType, nativeTimestamp: 1000 };
-  await writeFile(nativePath, header + JSON.stringify(entry) + "\n");
-  await store.appendCommandOutput!(session, record);
-  assert.deepEqual(await store.readCommandOutputs!(cwd, logicalId), []);
-
-  await writeFile(nativePath, header);
-  await store.appendCommandOutput!(session, { ...record, id: "after-truncate" });
-  await appendFile(nativePath, JSON.stringify({ ...entry, timestamp: 2000 }) + "\n");
-  await store.appendCommandOutput!(session, {
-    ...record,
-    id: "truncated-new-native",
-    nativeTimestamp: 2000,
-  });
+  const visible = mergeOmpCommandOutputHistory(
+    rowsFromOmpEntries(entries),
+    await createOmpStore(env).readCommandOutputs!(cwd, logicalId),
+    entries,
+    newId,
+  ).filter((row) => row.kind === "assistantText");
   assert.deepEqual(
-    (await store.readCommandOutputs!(cwd, logicalId)).map((item) => item.id),
-    ["after-truncate"],
+    visible.map((row) => row.text),
+    [output.text, output.text],
   );
-
-  const replacement = `${nativePath}.replacement`;
-  await writeFile(
-    replacement,
-    header +
-      JSON.stringify({
-        ...entry,
-        timestamp: 3000,
-        content: [{ type: "text", text: output.text }],
-      }) +
-      "\n",
-  );
-  await rename(replacement, nativePath);
-  await store.appendCommandOutput!(session, {
-    ...record,
-    id: "old-replaced-event",
-    nativeTimestamp: 2000,
-  });
-  await store.appendCommandOutput!(session, {
-    ...record,
-    id: "replacement-native",
-    nativeTimestamp: 3000,
-  });
-
-  const newId = "01a0d66e-1891-7035-ab59-f8e5f0a33704";
-  const newPath = join(directory, `2026-10-08T00-00-01-000Z_${newId}.jsonl`);
-  await writeFile(
-    newPath,
-    `${JSON.stringify({ type: "session", id: newId, cwd })}\n${JSON.stringify(entry)}\n`,
-  );
-  const migrated = { ...session, sessionPath: newPath };
-  await store.appendCommandOutput!(migrated, {
-    ...record,
-    id: "old-session-same-event",
-    nativeSessionId: stableId,
-  });
-  await store.appendCommandOutput!(migrated, {
-    ...record,
-    id: "new-session-native",
-    nativeSessionId: newId,
-  });
-  await store.appendCommandOutput!(migrated, {
-    ...record,
-    id: "other-type",
-    customType: "other-result",
-    nativeSessionId: newId,
-  });
-  await store.flushCommandOutputs!();
   assert.deepEqual(
-    (await createOmpStore(env).readCommandOutputs!(cwd, logicalId)).map((item) => item.id),
-    ["after-truncate", "old-replaced-event", "old-session-same-event", "other-type"],
+    visible.map((row) => row.createdAt),
+    [2000, 3000],
   );
-});
-
-test("同 inode 同尺寸 journal 重写后旧 custom 命中失效", async (context) => {
-  const { store, env } = await scratch(context);
-  const directory = join(env.OMP_CONFIG_ROOT, "agent", "sessions", "-");
-  const nativePath = join(directory, `2026-10-08T00-00-00-000Z_${stableId}.jsonl`);
-  await mkdir(directory, { recursive: true });
-  const header = `${JSON.stringify({ type: "session", id: stableId, cwd })}\n`;
-  const entry = {
-    type: "custom_message",
-    customType: "team-result",
-    content: output.text,
-    display: true,
-    timestamp: 1000,
-  };
-  const before = header + JSON.stringify(entry) + "\n";
-  const after = header + JSON.stringify({ ...entry, timestamp: 2000 }) + "\n";
-  assert.equal(Buffer.byteLength(before), Buffer.byteLength(after));
-  const session = { cwd, sessionId: logicalId, sessionPath: nativePath };
-  const record = { ...output, customType: entry.customType, nativeTimestamp: 1000 };
-  await writeFile(nativePath, before);
-  await store.appendCommandOutput!(session, record);
-  assert.deepEqual(await store.readCommandOutputs!(cwd, logicalId), []);
-  await writeFile(nativePath, after);
-  // 不依赖文件系统时间精度；显式改变元数据但仍保留同一 inode/size。
-  const modified = new Date(Date.now() + 60_000);
-  await utimes(nativePath, modified, modified);
-  await store.appendCommandOutput!(session, { ...record, id: "old-same-size-event" });
-  await store.appendCommandOutput!(session, {
-    ...record,
-    id: "rewritten-native-event",
-    nativeTimestamp: 2000,
-  });
-  await store.flushCommandOutputs!();
-  assert.deepEqual(
-    (await createOmpStore(env).readCommandOutputs!(cwd, logicalId)).map((item) => item.id),
-    ["old-same-size-event"],
-  );
-});
-
-test("native journal 读取失败释放描述符并保留原始错误，后续 append 可重新索引", async (context) => {
-  const { store, env } = await scratch(context);
-  const directory = join(env.OMP_CONFIG_ROOT, "agent", "sessions", "-");
-  const nativePath = join(directory, `2026-10-08T00-00-00-000Z_${stableId}.jsonl`);
-  await mkdir(directory, { recursive: true });
-  const entry = {
-    type: "custom_message",
-    customType: "team-result",
-    content: output.text,
-    display: true,
-    timestamp: 1000,
-  };
-  await writeFile(
-    nativePath,
-    JSON.stringify({ type: "session", id: stableId, cwd }) + "\n" + JSON.stringify(entry) + "\n",
-  );
-  const session = { cwd, sessionId: logicalId, sessionPath: nativePath };
-  const record = { ...output, customType: entry.customType, nativeTimestamp: entry.timestamp };
-  const readError = new Error("native journal read interrupted");
-  const actualReadStream = fs.createReadStream;
-  let descriptor: number | undefined;
-  let interruptNextRead = true;
-  const streamMock = context.mock.method(
-    fs,
-    "createReadStream",
-    (...args: Parameters<typeof fs.createReadStream>) => {
-      const stream = actualReadStream(...args);
-      if (args[0] === nativePath && interruptNextRead) {
-        interruptNextRead = false;
-        const options = args[1];
-        if (typeof options === "object") {
-          const fd = options.fd;
-          descriptor = typeof fd === "number" ? fd : fd?.fd;
-        }
-        // 读取实际字节后再打断，避免消费者挂上异步迭代器前人为发出未处理错误。
-        // 仍经过真实 stream.destroy → FileHandle.close，不能用监听器吞掉读错。
-        stream.once("data", () => stream.destroy(readError));
-      }
-      return stream;
-    },
-  );
-  syncBuiltinESMExports();
-  context.after(() => {
-    streamMock.mock.restore();
-    syncBuiltinESMExports();
-  });
-
-  await assert.rejects(store.appendCommandOutput!(session, record), (error) => error === readError);
-  assert.equal(typeof descriptor, "number");
-  assert.throws(() => fs.fstatSync(descriptor!), { code: "EBADF" });
-  await assert.rejects(store.flushCommandOutputs!(), (error) => error === readError);
-  // 先通过 flush 确认失败，再显式重试同一事件；新事件不能替代失败提交。
-  await store.appendCommandOutput!(session, record);
-  await store.flushCommandOutputs!();
-  assert.deepEqual(await createOmpStore(env).readCommandOutputs!(cwd, logicalId), []);
 });

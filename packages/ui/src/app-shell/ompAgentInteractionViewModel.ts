@@ -5,6 +5,7 @@ const INTERACTION_NODE_HEIGHT = 72;
 
 interface OmpInteractionNode {
   agent: ZCodeAgentInteractionAgent;
+  isUser: boolean;
   x: number;
   y: number;
   depth: number;
@@ -63,7 +64,9 @@ export function buildOmpInteractionGraph(
   options: { viewportWidth?: number } = {},
 ): OmpInteractionGraphModel {
   const byId = new Map(agents.map((agent) => [agent.id, agent]));
+  const userIds = new Set<string>();
   for (const event of events) {
+    if (event.kind === "user_intervention") userIds.add(event.fromAgentId);
     for (const id of [event.fromAgentId, event.toAgentId]) {
       if (!byId.has(id)) byId.set(id, { id, label: id, known: false });
     }
@@ -116,6 +119,7 @@ export function buildOmpInteractionGraph(
       const rowWidth = count * nodeWidth + (count - 1) * 20;
       return {
         agent,
+        isUser: userIds.has(agent.id),
         depth,
         x: (width - rowWidth) / 2 + nodeWidth / 2 + (index % columns) * (nodeWidth + 20),
         y: 16 + nodeHeight / 2 + (rowOffset + row) * rowPitch,
@@ -181,6 +185,7 @@ export function filterOmpInteractionEvents(
       labels.get(event.fromAgentId),
       labels.get(event.toAgentId),
       event.messageId,
+      event.sourceId,
       event.replyTo,
     ].some((text) => text?.toLocaleLowerCase().includes(search));
   });

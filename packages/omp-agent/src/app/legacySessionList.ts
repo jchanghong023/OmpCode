@@ -2,6 +2,7 @@ import { ompSessionIdOfFilePath } from "../domain/ids.js";
 import { deriveTitle } from "../domain/titleText.js";
 import type { ConversationEngine } from "./conversationEngine.js";
 import type { OmpStorePort } from "./ports.js";
+import { engineSessionTimes } from "./engineSessionSummary.js";
 
 /** legacy 读面从 Registry 的唯一会话所有者和 omp 冷存储派生，不持有独立索引。 */
 export async function listLegacySessions(input: {
@@ -23,6 +24,7 @@ export async function listLegacySessions(input: {
     seen.add(stableId);
     seen.add(engine.sessionId);
     const state = engine.projection.stateSnapshot;
+    const times = engineSessionTimes(engine);
     sessions.push({
       sessionId: indexId,
       workspace,
@@ -35,8 +37,8 @@ export async function listLegacySessions(input: {
           : state.control.phase === "error"
             ? "error"
             : "idle",
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
+      createdAt: times.createdAt,
+      updatedAt: times.updatedAt,
     });
   }
   for (const cold of await input.store.listSessions(input.workspacePath)) {

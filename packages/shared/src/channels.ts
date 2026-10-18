@@ -213,8 +213,6 @@ export const PlatformChannels = {
   SyncWindowTabs: "zcode:sync-window-tabs",
   /** Renderer → Main：同步当前窗口的未读 task 数 */
   SyncWindowUnreadCount: "zcode:sync-window-unread-count",
-  /** Renderer → Main：当前窗口 active task，只更新 Main 的临时焦点映射。 */
-  SyncActiveTaskSession: "zcode:sync-active-task-session",
   /** Renderer → Main：同步 main 进程需即时感知的应用设置 */
   SyncAppSettings: "zcode:sync-app-settings",
   /** Renderer → Main：快捷键设置页录制态开关；true = main 暂时摘除可配置菜单 accelerator */

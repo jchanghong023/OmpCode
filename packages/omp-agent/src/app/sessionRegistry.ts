@@ -15,6 +15,7 @@ import { hydrateEngineFromCold } from "./coldHydration.js";
 import { diagnostics } from "./diagnostics.js";
 import { SessionIndexTopics } from "./sessionIndexTopics.js";
 import { closeSessionWith, deleteSessionWith, SessionRegistryGates, type SessionTeardownHost } from "./sessionRegistryGates.js";
+import { coldResumeOwner, pendingResumeClosures, resumeSessionWith, type PendingResume } from "./sessionRegistryResume.js";
 
 export interface RegistryDeps {
   ompFactory: OmpProcessFactory;
@@ -34,8 +35,8 @@ export class SessionRegistry {
   private engines = new Map<string, ConversationEngine>();
   /** 权威冷摘要学到的查找别名；只指向唯一已登记 owner，不持有第二份会话状态。 */
   private engineAliases = new Map<string, string>();
-  /** 并发 resume 去重：同 sessionId 只允许一次冷加载（见 resumeSession 修复说明）。 */
-  private pendingResumes = new Map<string, Promise<ConversationEngine>>();
+  /** 同地址的有效恢复共享一次加载；已遇关闭的旧代保留到完成，不再供新恢复复用。 */
+  private pendingResumes = new Map<string, Set<PendingResume>>();
   /** 在途 createSession：resume/read 必须等其登记完成，否则会在注册空窗期构建冷引擎并覆盖活引擎（GUI 实测缺陷）。 */
   private pendingCreates = new Set<Promise<unknown>>();
   private readonly gates: SessionRegistryGates;
@@ -71,11 +72,7 @@ export class SessionRegistry {
       primaryWorkspacePath: () => this.primaryWorkspace?.path ?? null,
       rekeyedEngineIds: this.rekeyedEngineIds,
     });
-    this.gates = new SessionRegistryGates({
-      engines: this.engines,
-      getEngine: (sessionId) => this.getEngine(sessionId),
-      removeIndexSession: (workspaceId, sessionId) => this.indexTopics.removeSession(workspaceId, sessionId),
-    });
+    this.gates = new SessionRegistryGates({ engines: this.engines, getEngine: (sessionId) => this.getEngine(sessionId), pendingResumeClosures: () => pendingResumeClosures(this.pendingResumes) });
   }
 
   getEngine(sessionId: string): ConversationEngine | null {
@@ -121,7 +118,7 @@ export class SessionRegistry {
     const sessionId = params.sessionId ?? createId("omp-session");
     const engine = this.createEngine(sessionId, params, undefined, params.title);
     this.engines.set(sessionId, engine);
-    this.upsertEngineSummary(engine, { createdAt: Date.now(), lastActivityAt: Date.now() });
+    this.upsertEngineSummary(engine);
     return engine;
   }
 
@@ -146,20 +143,16 @@ export class SessionRegistry {
     });
   }
 
-  /**
-   * 恢复会话：冷历史行先行入投影；omp 进程按 --resume 惰性启动。
-   * 修复依据：同一会话的并发 resume（如会话创建 ACK 后宿主 readSession 与 task-index 回源
-   * 同时到达）会各自构建冷引擎并相互覆盖注册表，把正在运行回合的活引擎顶成 0 行冷引擎，
-   * 会话面板因此永久空白（GUI 实测缺陷）。此处按 sessionId 去重并发加载；加载完成后若
-   * 已有更早登记的引擎（并发 create 或先完成的加载），一律返回已登记引擎，
-   * 丢弃本次冷恢复结果（冷恢复引擎惰性挂载、无子进程，丢弃无副作用）。
-   */
   async resumeSession(params: { sessionId: string; workspaceId: string; workspacePath: string }): Promise<ConversationEngine> {
     this.primaryWorkspace = { id: params.workspaceId, path: params.workspacePath };
+    return resumeSessionWith(this.pendingResumes, this.gates, params, this.loadSessionForResume);
+  }
+
+  private readonly loadSessionForResume = async (params: { sessionId: string; workspaceId: string; workspacePath: string }, closedSessionIds: ReadonlySet<string>): Promise<ConversationEngine> => {
     await this.settlePendingCreates();
     const existing = this.getEngine(params.sessionId);
     if (existing) {
-      if (!this.gates.canResume(params.sessionId, existing.sessionId, ompSessionIdOfFilePath(existing.ompSessionFile) ?? existing.sessionId)) {
+      if (!this.gates.canResumeFrom(closedSessionIds, params.sessionId, existing.sessionId, ompSessionIdOfFilePath(existing.ompSessionFile) ?? existing.sessionId)) {
         diagnostics.warn("omp.session.resume.unavailable", {
           event: "omp.session.resume.unavailable",
           sessionId: params.sessionId,
@@ -171,30 +164,6 @@ export class SessionRegistry {
       }
       diagnostics.debug("omp.session.resume.owner_reused", { event: "omp.session.resume.owner_reused", sessionId: params.sessionId, ownerSessionId: existing.sessionId, reuseStage: "registered" });
       return existing;
-    }
-    const pending = this.pendingResumes.get(params.sessionId);
-    if (pending) {
-      diagnostics.debug("omp.session.resume.joined", { event: "omp.session.resume.joined", sessionId: params.sessionId, stage: "cold_load" });
-      return pending;
-    }
-    const load = this.loadSessionForResume(params).finally(() => {
-      this.pendingResumes.delete(params.sessionId);
-    });
-    this.pendingResumes.set(params.sessionId, load);
-    return load;
-  }
-
-  private async loadSessionForResume(params: { sessionId: string; workspaceId: string; workspacePath: string }): Promise<ConversationEngine> {
-    // 排队期间可能已有并发加载/create 完成：再查一次，绝不覆盖已登记引擎。
-    const raced = this.getEngine(params.sessionId);
-    if (raced) {
-      diagnostics.debug("omp.session.resume.owner_reused", {
-        event: "omp.session.resume.owner_reused",
-        sessionId: params.sessionId,
-        ownerSessionId: raced.sessionId,
-        reuseStage: "registry_before_lookup",
-      });
-      return raced;
     }
     const startedAt = Date.now();
     const lookupMethod = this.store.findSession ? "find" : "list";
@@ -215,9 +184,9 @@ export class SessionRegistry {
       });
       throw new ProtocolError(-32004, `session unavailable: ${params.sessionId}`);
     }
-    const racedAfterCold = this.coldOwner(params, cold);
+    const racedAfterCold = coldResumeOwner(this.getEngine(cold.sessionId), params, cold);
     if (racedAfterCold) {
-      const owner = this.settleColdOwner(params.sessionId, racedAfterCold, cold);
+      const owner = this.settleColdOwner(params.sessionId, racedAfterCold, cold, closedSessionIds);
       diagnostics.debug("omp.session.resume.owner_reused", { event: "omp.session.resume.owner_reused", sessionId: params.sessionId, ownerSessionId: owner.sessionId, reuseStage: "canonical_lookup" });
       diagnostics.info("omp.session.cold_resume.completed", {
         event: "omp.session.cold_resume.completed",
@@ -229,9 +198,22 @@ export class SessionRegistry {
       return owner;
     }
     const engine = this.createEngine(params.sessionId, params, cold.sessionPath, cold.title ?? undefined);
-    // 冷行水合复用 coldHydration 的行投影；登记统一走登记门（墓碑 + winner 判定）。
-    await hydrateEngineFromCold({ store: this.store, upsertEngineSummary: (e, o) => this.upsertEngineSummary(e, o) }, engine, cold.sessionPath, cold.createdAt, cold.updatedAt);
-    const owner = this.settleColdOwner(params.sessionId, engine, cold, this.coldOwner(params, cold));
+    // 索引发布也在登记门之后：旧恢复晚到不得覆盖/移除关闭后新 owner 的摘要。
+    let summaryOverrides: { createdAt?: number; lastActivityAt?: number } | undefined;
+    await hydrateEngineFromCold(
+      {
+        store: this.store,
+        upsertEngineSummary: (_engine, overrides) => {
+          summaryOverrides = overrides;
+        },
+      },
+      engine,
+      cold.sessionPath,
+      cold.createdAt,
+      cold.updatedAt,
+    );
+    const owner = this.settleColdOwner(params.sessionId, engine, cold, closedSessionIds, coldResumeOwner(this.getEngine(cold.sessionId), params, cold));
+    if (owner === engine) this.upsertEngineSummary(engine, summaryOverrides);
     diagnostics.info("omp.session.cold_resume.completed", {
       event: "omp.session.cold_resume.completed",
       sessionId: params.sessionId,
@@ -243,22 +225,16 @@ export class SessionRegistry {
       diagnostics.debug("omp.session.resume.owner_reused", { event: "omp.session.resume.owner_reused", sessionId: params.sessionId, ownerSessionId: owner.sessionId, reuseStage: "hydration_winner" });
     }
     return owner;
-  }
+  };
 
-  private coldOwner(params: { workspaceId: string; workspacePath: string }, cold: OmpStoreSessionSummary): ConversationEngine | null {
-    const owner = this.getEngine(cold.sessionId);
-    // 根因：旧 GUI alias 仅在存储中识别；canonical 先恢复时另建引擎会争同一原生 lease。
-    // 权威摘要证明身份后仍核对 workspace 与文件 epoch，不能仅凭 UUID 复用邻域 owner。
-    return owner &&
-      (owner.workspaceId.trim() || owner.workspacePath) === (params.workspaceId.trim() || params.workspacePath) &&
-      owner.workspacePath === params.workspacePath &&
-      owner.ompSessionFile === (cold.sessionPath || null)
-      ? owner
-      : null;
-  }
-
-  private settleColdOwner(requestedId: string, candidate: ConversationEngine, cold: OmpStoreSessionSummary, winner: ConversationEngine | null = null): ConversationEngine {
-    const owner = this.gates.settleColdHydration(requestedId, candidate, cold.sessionId, winner ?? undefined);
+  private settleColdOwner(
+    requestedId: string,
+    candidate: ConversationEngine,
+    cold: OmpStoreSessionSummary,
+    closedSessionIds: ReadonlySet<string>,
+    winner: ConversationEngine | null = null,
+  ): ConversationEngine {
+    const owner = this.gates.settleColdHydration(requestedId, candidate, closedSessionIds, cold.sessionId, winner ?? undefined);
     if (requestedId !== owner.sessionId) {
       this.engineAliases.set(requestedId, owner.sessionId);
       diagnostics.debug("omp.session.alias.bound", { event: "omp.session.alias.bound", aliasId: requestedId, ownerSessionId: owner.sessionId, aliasKind: "requested_id" });

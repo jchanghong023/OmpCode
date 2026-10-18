@@ -1,8 +1,4 @@
-// 子代理只读详情视图（omp-core-integration.md）：合成 childSessionId 复用引擎的投影/订阅；
-// 行来自父会话进程 get_subagent_messages（fromByte/nextByte 续读，上游无 hasMore，以游标
-// 不再推进为读尽）。实时更新 = subagent_event 尾随节流（≥800ms）触发「记录重读 + mergeRows
-// 幂等合并」；reset=true 按同一订阅的删除屏障替换视图行（S6-4）。lifecycle 终态后
-// 停止重读调度。查看不触发模型执行、不产生控制副作用。
+// 子代理只读详情：游标续读、尾随节流、reset 替换订阅；终态停表，重开重读，不执行模型或控制。
 
 import { ConversationEngine } from "./conversationEngine.js";
 import { rowsFromOmpEntries } from "../domain/coldHistory.js";
@@ -143,7 +139,10 @@ export class SubagentViewStore {
           state.nextByte,
         );
         if (entries) {
-          if (entries.length === 0) return "unavailable";
+          if (entries.length === 0) {
+            state.unavailable = true;
+            return "unavailable";
+          }
           state.resetSeen ||= state.entries.length > 0;
           state.entries = entries;
           state.nextByte = 0;
@@ -163,6 +162,11 @@ export class SubagentViewStore {
         // 形状异常按读尽处理：保持当前内容，不向订阅链路抛错（G7 同语义）。
         viewDiagnostics.invalidRecord(viewId, state);
         return "complete";
+      }
+      // 中文原因：OMP 对已删除文件返回成功空窗；只有从起点读取的空转录能证明源不可用。
+      if (state.nextByte === 0 && record.entries.length === 0 && record.nextByte === 0) {
+        state.unavailable = true;
+        return "unavailable";
       }
       if (typeof record.nextByte !== "number") {
         // 无 nextByte 的旧形状：一次性全量响应整体替换（防重复追加）。
@@ -222,7 +226,13 @@ export class SubagentViewStore {
     if (!parsed) return null;
     const existing = this.views.get(viewId);
     if (existing) {
-      await this.hydrating.get(viewId);
+      await this.refreshStates.get(viewId)?.refreshing;
+      if (!this.hydrating.has(viewId)) {
+        // 重新订阅不能只复用旧成功投影；从源起点重读，并与实时补读串行。
+        this.viewReadState(viewId).nextByte = 0;
+        this.viewReadState(viewId).entries = [];
+      }
+      await this.ensureHydrated(viewId, parsed.parentSessionId, parsed.subagentId, true);
       return this.views.get(viewId) ?? null;
     }
     const engine = this.createViewEngine(viewId);
@@ -232,16 +242,12 @@ export class SubagentViewStore {
     return this.disposed ? null : (this.views.get(viewId) ?? null);
   }
 
-  /**
-   * 首次水合（hydrating 去重并发订阅）。G7：命令失败/传输层 reject（超时/EPIPE）与记录
-   * 不可用同语义——视图保持当前内容（空或已水合），acquire 不 reject，订阅不得因此 -32603；
-   * 后续 subagent_event 仍会触发重读自愈。记录不可用（不存在/已清理）时插入「记录不可用」
-   * 提示行（Z14：缺失内容要有明确提示），不再静默返回空视图；已有内容保持不变。
-   */
+  /** 单飞水合：明确空/缺失源替换旧内容；普通传输失败保留投影，后续重订阅/事件可自愈。 */
   private ensureHydrated(
     viewId: string,
     parentSessionId: string,
     subagentId: string,
+    replace = false,
   ): Promise<void> {
     let pending = this.hydrating.get(viewId);
     if (pending) return pending;
@@ -251,12 +257,16 @@ export class SubagentViewStore {
         const engine = this.views.get(viewId);
         if (!engine) return;
         if (result === "unavailable") {
-          if (engine.projection.rowsRange(undefined, 1).rows.length === 0) {
+          if (this.viewReadState(viewId).unavailable) {
+            this.viewReadState(viewId).entries = [];
+            engine.replaceHydratedRows([recordUnavailableMarkerRow(1)]);
+          } else if (engine.projection.rowsRange(undefined, 1).rows.length === 0) {
             engine.hydrateRows([recordUnavailableMarkerRow(1)]);
           }
           return;
         }
-        this.rebuildRows(viewId, false);
+        this.viewReadState(viewId).resetSeen ||= replace;
+        this.rebuildRows(viewId, replace);
       } catch (error) {
         // 传输层失败同语义：不向订阅链路抛错（G7）。
         viewDiagnostics.failed(viewId, "hydrate", error);

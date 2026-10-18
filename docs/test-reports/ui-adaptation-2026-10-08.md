@@ -11,16 +11,16 @@
 
 ## 环境与真实 GUI 证据
 
-Node 24.14.0、pnpm 10.33.2，内嵌 OMP `v18.8.3+fork.300`，模型 `zhipu-coding-plan/glm-5.3-flash`，使用已有凭据。隔离应用身份为 `OmpCode UI Acceptance`，CDP 9231，renderer localhost:5194；data/home/userData/sessionData 均位于 `%TEMP%/ompcode-ui-adaptation-20261008/`。测试调用模型并新增测试会话，任务只执行等待与输出标记，不修改项目文件。原有日常 GUI 未被停止或替换。
+Node 24.14.0、pnpm 10.33.2，内嵌 OMP `v18.8.3+fork.300`。隔离应用身份为 `OmpCode UI Acceptance`，CDP 9231，renderer localhost:5194；data/home/userData/sessionData 均位于 `%TEMP%/ompcode-ui-adaptation-20261008/`。历史会话链路新增了测试会话，未修改项目文件。原有日常 GUI 未被停止或替换。
 
 | 验收            | 实际结果                                                                                                   | 证据                                                                                                                                                                                                                                        |
 | --------------- | ---------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Todo 运行与完成 | 独立面板显示三项，状态由 inProgress/pending 更新到全部 completed，进度 0/3 → 3/3；时间线 todo 仍按缺省隐藏 | [运行](evidence-20261008-ui-adaptation/live-todo-running.png)、[完成](evidence-20261008-ui-adaptation/live-completed.png)                                                                                                                   |
 | 并发子代理      | 独立面板记录两个运行项，主对话每个任务一张 Agent 卡片，结束后运行计数为零                                  | [运行](evidence-20261008-ui-adaptation/live-agents-running.png)、[实际状态](evidence-20261008-ui-adaptation/live-result.json)                                                                                                               |
 | 详情            | 两张卡片分别打开自己的只读侧栏，展开真实工具结果，分别看到 UI_ALPHA 与 UI_BETA                             | [Alpha](evidence-20261008-ui-adaptation/live-detail-0.png)、[Beta](evidence-20261008-ui-adaptation/live-detail-1.png)                                                                                                                       |
-| 重启恢复        | 重启同一隔离桌面后，独立 Todo 保持 3/3；两个子代理卡片与各自工具结果仍可查看，没有重新执行模型             | [面板](evidence-20261008-ui-adaptation/cold-completed.png)、[Alpha](evidence-20261008-ui-adaptation/cold-detail-0.png)、[Beta](evidence-20261008-ui-adaptation/cold-detail-1.png)、[结果](evidence-20261008-ui-adaptation/cold-result.json) |
+| 重启恢复        | 重启同一隔离桌面后，独立 Todo 保持 3/3；两个子代理卡片与各自工具结果仍可从保存的历史查看                   | [面板](evidence-20261008-ui-adaptation/cold-completed.png)、[Alpha](evidence-20261008-ui-adaptation/cold-detail-0.png)、[Beta](evidence-20261008-ui-adaptation/cold-detail-1.png)、[结果](evidence-20261008-ui-adaptation/cold-result.json) |
 
-公开 GUI 验收入口为 `packages/desktop/test/ompStatusPanels.gui.e2e.mjs`；以 `OMP_E2E_CDP_URL` 与 `OMP_E2E_EVIDENCE_DIR` 指定隔离实例及证据目录，默认 live，重启后用 `OMP_E2E_PHASE=cold`。检查仅通过 UI 操作及读取 DOM，不注入投影、工具结果或状态；详情结果限定在对应子代理侧栏，不能用父任务正文里的标记冒充结果。
+历史公开 GUI 验收入口为 `packages/desktop/test/ompStatusPanels.gui.e2e.mjs`。检查仅通过 UI 操作及读取 DOM，不注入投影、工具结果或状态；详情结果限定在对应子代理侧栏，不能用父任务正文里的标记冒充结果。当前自动化验收使用真实 OMP 与本地模拟模型；外部调用规程仅见 [E2E 规程](../requirements/e2e.md)。本报告保留历史验收状态，不将其改记为本地模拟模型验收结果。
 
 ## 自动化验证及边界
 

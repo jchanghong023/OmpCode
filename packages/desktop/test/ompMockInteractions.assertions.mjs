@@ -1,34 +1,15 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { readFile, readdir } from "node:fs/promises";
+import { readFile, readdir, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { captureIsolationScreenshot } from "./ompCore.evidence.cjs";
 
 const answer = "Mock answer A";
 const tool = (page, name) => page.locator(`[data-tool-call-id][data-tool-name="${name}"]`);
-const approve = (page) =>
-  page
-    .locator('[data-elicitation-dialog-card="true"]')
-    .getByRole("option", { name: /\bApprove\b/u });
 
 async function submit(page, prompt) {
   await page.getByTestId("v4-composer-input").fill(prompt);
   await page.getByTestId("v4-composer-send").click();
-}
-
-async function allowOnce(page, evidencePath) {
-  const option = approve(page);
-  await option.waitFor({ state: "visible" });
-  await captureIsolationScreenshot(evidencePath);
-  // OMP 审批实际复用富问答卡；选择真实 Approve 选项，不操作旧六档权限弹窗。
-  await option.click();
-  await option.waitFor({ state: "hidden" });
-}
-
-async function allowUntilVisible(page, target, evidencePath) {
-  await target.or(approve(page)).first().waitFor({ state: "visible" });
-  if (await approve(page).isVisible()) await allowOnce(page, evidencePath);
-  await target.waitFor({ state: "visible" });
 }
 
 async function complete(page, marker) {
@@ -37,33 +18,84 @@ async function complete(page, marker) {
 }
 
 // ConversationTimeline is virtualized. Scroll its real DOM viewport, never its store/projection.
-async function reveal(page, target) {
+async function reveal(page, target, scope) {
   if (await target.isVisible()) return;
-  const openWorkDisclosures = async () => {
-    // 完成后的工具收进“已工作”历史折叠层；通过真实按钮展开后才有工具 DOM。
-    const collapsed = page.locator(
-      'button[data-testid^="chat-assistant-history-trigger-"][data-history-open="false"]',
-    );
-    while (await collapsed.count()) await collapsed.first().click();
-    // Changes 分组默认关闭且单次 write 不建分组；只展开已存在的容器，不能把容器当作工具成功条件。
-    for (const group of await tool(page, "ChangesGroup").all()) {
-      const id = await group.getAttribute("data-tool-call-id");
-      const toggle = group.getByTestId(`tool-summary-trigger-${id}`);
-      if ((await toggle.getAttribute("aria-expanded")) === "false") await toggle.click();
-    }
-  };
-  await openWorkDisclosures();
-  if (await target.isVisible()) return;
-  const timeline = page.getByTestId("v4-timeline").first();
-  await timeline.hover();
-  await page.mouse.wheel(0, -100_000);
-  for (let step = 0; step < 30; step++) {
-    await page.evaluate(
+  const timeline = scope
+    ? scope.locator('[data-v4-timeline-scroll="true"]')
+    : page.getByTestId("v4-timeline").first();
+  assert.equal(await timeline.count(), 1, "Browse exactly one actual timeline viewport");
+  const settleLayout = () =>
+    timeline.evaluate(
       () => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))),
     );
+  const openWorkDisclosures = async () => {
+    const collapsed = timeline.locator(
+      'button[data-testid^="chat-assistant-history-trigger-"][data-history-open="false"], ' +
+        '[data-tool-name="ChangesGroup"] [data-testid^="tool-summary-trigger-"][aria-expanded="false"]',
+    );
+    for (;;) {
+      if (await target.isVisible()) return;
+      const id = await collapsed.evaluateAll((nodes) => {
+        for (const node of nodes) {
+          const viewport = node.closest('[data-v4-timeline-scroll="true"]');
+          if (!viewport) continue;
+          const bounds = viewport.getBoundingClientRect();
+          const rect = node.getBoundingClientRect();
+          const x = (rect.left + rect.right) / 2;
+          const y = (rect.top + rect.bottom) / 2;
+          if (
+            !node.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }) ||
+            rect.width <= 0 ||
+            rect.height <= 0 ||
+            x < Math.max(0, bounds.left) ||
+            x >= Math.min(innerWidth, bounds.right) ||
+            y < Math.max(0, bounds.top) ||
+            y >= Math.min(innerHeight, bounds.bottom)
+          )
+            continue;
+          return node.getAttribute("data-testid");
+        }
+        return null;
+      });
+      if (!id) break;
+      // 候选预检只限定 viewport 与身份；未选中候选的瞬时遮挡不是最终 UI 契约。
+      // 测高/贴底可能移动控件；标准 click 重新测量并强验选中控件的 stable/receives-events。
+      await timeline.getByTestId(id).click();
+      await timeline
+        .getByTestId(id)
+        .and(timeline.locator('[aria-expanded="true"]'))
+        .waitFor({ state: "visible" });
+      await settleLayout();
+      if (await target.isVisible()) return;
+    }
+  };
+  await settleLayout();
+  // 正常 following 会在展开后的内容测高时贴底，先展开尾部会把候选挤出 viewport。
+  // 先真实微量上滚解除 following，从当前 viewport 向后找；到末尾才回顶部完整扫一次。
+  await timeline.hover();
+  await page.mouse.wheel(0, -1);
+  await settleLayout();
+  let wrapped = false;
+  for (;;) {
     await openWorkDisclosures();
     if (await target.isVisible()) return;
-    await page.mouse.wheel(0, 350);
+    const before = await timeline.evaluate((node) => ({
+      top: node.scrollTop,
+      height: node.clientHeight,
+      end: node.scrollTop + node.clientHeight >= node.scrollHeight - 1,
+    }));
+    if (before.end) {
+      if (wrapped) break;
+      wrapped = true;
+      await timeline.hover();
+      await page.mouse.wheel(0, -(await timeline.evaluate((node) => node.scrollHeight)));
+      await settleLayout();
+      continue;
+    }
+    await timeline.hover();
+    await page.mouse.wheel(0, Math.max(1, Math.floor(before.height * 0.7)));
+    await settleLayout();
+    if ((await timeline.evaluate((node) => node.scrollTop)) <= before.top) break;
   }
   await target.waitFor({ state: "visible" });
 }
@@ -79,13 +111,17 @@ async function expandTool(page, name, expectedId) {
   const id = await block.getAttribute("data-tool-call-id");
   assert.ok(id);
   const summary = block.getByTestId(`tool-summary-trigger-${id}`);
-  if ((await summary.getAttribute("aria-expanded")) === "false") await summary.click();
+  if ((await summary.getAttribute("aria-expanded")) === "false") {
+    // 隔离 GUI 实测：write 摘要行可视中心是文件名 chip（内层按钮），点击打开预览并停止冒泡，
+    // 因此 .click() 不会展开摘要；沿用同一真实控件已验证的 focus + Enter 键盘激活路径。
+    await summary.focus();
+    await page.keyboard.press("Enter");
+  }
   return { block, id };
 }
 
 export async function exerciseMockInteractions(page, runtime, evidenceDir, runId) {
   await submit(page, "ZCODE_MOCK_WRITE greeting-real.txt");
-  await allowOnce(page, join(evidenceDir, `write-approval-${runId}.png`));
   await complete(page, "OMP_MOCK_WRITE_DONE");
   assert.equal(
     await readFile(join(runtime.requestedWorkspace, "greeting-real.txt"), "utf8"),
@@ -98,7 +134,6 @@ export async function exerciseMockInteractions(page, runtime, evidenceDir, runId
   const askMarker = `GUI_ASK_${runId}`;
   await submit(page, `ZCODE_MOCK_ASK ${askMarker}`);
   const card = page.locator('[data-elicitation-dialog-card="true"]');
-  await allowUntilVisible(page, card, join(evidenceDir, `ask-approval-${runId}.png`));
   await card
     .getByRole("listbox", { name: `Choose the mock answer for ${askMarker}`, exact: true })
     .waitFor({ state: "visible" });
@@ -113,11 +148,6 @@ export async function exerciseMockInteractions(page, runtime, evidenceDir, runId
 
   const taskMarker = `GUI_TASK_${runId}`;
   await submit(page, `ZCODE_MOCK_TASK ${taskMarker}`);
-  await allowUntilVisible(
-    page,
-    page.getByText(`${taskMarker}_TASK_DONE`, { exact: true }),
-    join(evidenceDir, `task-approval-${runId}.png`),
-  );
   await complete(page, `${taskMarker}_TASK_DONE`);
   const child = await inspectChild(page, `${taskMarker}_CHILD_DONE`);
   await captureIsolationScreenshot(join(evidenceDir, `child-details-${runId}.png`));
@@ -310,9 +340,11 @@ export async function assertStoredInteractions(runtime, taskTestId, interaction,
     `GUI_IDENTITY_FIRST_${interaction.runId}`,
     `GUI_IDENTITY_SECOND_${interaction.runId}`,
   ]) {
-    assert.ok(
-      parent.some((message) => message.role === "assistant" && textOf(message).includes(marker)),
-      `Original assistant turn ${marker} must persist`,
+    assert.equal(
+      parent.filter((message) => message.role === "assistant" && textOf(message).includes(marker))
+        .length,
+      1,
+      `Original assistant turn ${marker} must persist exactly once`,
     );
   }
   assert.equal(
@@ -327,6 +359,8 @@ export async function assertStoredInteractions(runtime, taskTestId, interaction,
     childAgentId,
     childContentHash: createHash("sha256").update(JSON.stringify(childEntries)).digest("hex"),
     taskToolCallId: taskResult.toolCallId,
+    parentMessageCount: parent.length,
+    parentContentHash: createHash("sha256").update(JSON.stringify(parent)).digest("hex"),
   };
   if (previous)
     assert.deepEqual(
@@ -335,6 +369,33 @@ export async function assertStoredInteractions(runtime, taskTestId, interaction,
       "Cold process must read the same persisted parent/child records",
     );
   return receipt;
+}
+
+export async function finalizeStoredInteractions(runtime, receiptPath) {
+  const saved = JSON.parse(await readFile(receiptPath, "utf8"));
+  const entries = await readEntries(saved.records.childPath);
+  const hash = (value) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
+  // live 正文已完成不代表核心已 dispose；退出诊断必须纳入最终 receipt，
+  // 但不能借“定稿”接纳任何正文改写或恢复阶段追加。
+  if (hash(entries) !== saved.records.childContentHash) {
+    assert.equal(
+      hash(entries.slice(0, -1)),
+      saved.records.childContentHash,
+      "Shutdown must preserve the entire observed child journal prefix",
+    );
+    const exit = entries.at(-1);
+    assert.equal(exit.type, "custom");
+    assert.equal(exit.customType, "session_exit");
+    assert.equal(exit.data?.reason, "dispose");
+    assert.equal(exit.data?.kind, "normal");
+  }
+  const records = await assertStoredInteractions(runtime, saved.taskTestId, saved.interactions);
+  assert.deepEqual(
+    { ...records, childContentHash: saved.records.childContentHash },
+    saved.records,
+    "Shutdown may only append the child's normal exit diagnostic",
+  );
+  await writeFile(receiptPath, JSON.stringify({ ...saved, records }, null, 2));
 }
 
 export { reveal };

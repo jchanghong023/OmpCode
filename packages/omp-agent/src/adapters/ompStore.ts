@@ -4,7 +4,7 @@
 // 迁移目录存在时 sessions 根对齐 omp DirResolver XDG 规则（见 ompSessionsRoot）。
 
 import { createReadStream } from "node:fs";
-import { readdir, rm, stat } from "node:fs/promises";
+import { open, readdir, rm, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import { createInterface } from "node:readline";
@@ -18,6 +18,7 @@ import {
 } from "@zcode/shared/node";
 import type { OmpStorePort, OmpStoreSessionSummary } from "../app/ports.js";
 import { titleFromOmpEntries } from "../domain/coldHistory.js";
+import { readableOmpSkillInput, visibleOmpCustomMessage } from "../domain/OmpCustomMessage.js";
 import { logger } from "./logger.js";
 import { createOmpCommandOutputStore } from "./OmpCommandOutputStore.js";
 import { safeInteractionAgentId } from "../domain/OmpInteractionIds.js";
@@ -50,13 +51,21 @@ export function createOmpStore(env: NodeJS.ProcessEnv = process.env): OmpStorePo
     try {
       const info = await stat(sessionPath);
       // Bug 根因：stat 毫秒时间含小数，Host 索引协议要求 safeint。
+      const [header] = await readEntries(sessionPath, 1);
+      const headerTime = journalTimestamp(
+        typeof header === "object" && header !== null && "timestamp" in header
+          ? header.timestamp
+          : undefined,
+      );
+      const createdAt = headerTime ?? Math.trunc(info.birthtimeMs || info.mtimeMs);
+      const updatedAt = (await readLastActivityAt(sessionPath, info.size)) ?? createdAt;
       return {
         sessionId,
         sessionPath,
         title: null,
         firstUserText: null,
-        updatedAt: Math.trunc(info.mtimeMs),
-        createdAt: Math.trunc(info.birthtimeMs || info.mtimeMs),
+        updatedAt,
+        createdAt,
       };
     } catch (error) {
       logStoreFallback("summary", "stat", startedAt, error, { sessionId });
@@ -300,4 +309,66 @@ async function readEntries(
     lines.close();
     stream.destroy();
   }
+}
+
+function journalTimestamp(value: unknown): number | undefined {
+  const timestamp =
+    typeof value === "number" ? value : typeof value === "string" ? Date.parse(value) : NaN;
+  return Number.isSafeInteger(Math.trunc(timestamp)) && timestamp >= 0
+    ? Math.trunc(timestamp)
+    : undefined;
+}
+
+/** Read backwards only as far as the latest activity; exit diagnostics never promote a task. */
+async function readLastActivityAt(sessionPath: string, size: number): Promise<number | undefined> {
+  const file = await open(sessionPath, "r");
+  const chunk = Buffer.allocUnsafe(64 * 1024);
+  let position = size;
+  let pending = Buffer.alloc(0);
+  try {
+    while (position > 0) {
+      const length = Math.min(chunk.length, position);
+      position -= length;
+      const { bytesRead } = await file.read(chunk, 0, length, position);
+      const bytes = Buffer.concat([chunk.subarray(0, bytesRead), pending]);
+      let end = bytes.length;
+      for (let index = bytes.length - 1; index >= 0; index -= 1) {
+        if (bytes[index] !== 10) continue;
+        const activity = journalActivityAt(bytes.subarray(index + 1, end).toString("utf8"));
+        if (activity !== undefined) return activity;
+        end = index;
+      }
+      pending = Buffer.from(bytes.subarray(0, end));
+    }
+    return journalActivityAt(pending.toString("utf8"));
+  } finally {
+    await file.close();
+  }
+}
+
+function journalActivityAt(line: string): number | undefined {
+  let record: Record<string, unknown>;
+  try {
+    const value: unknown = JSON.parse(line);
+    if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+    record = value as Record<string, unknown>;
+  } catch {
+    // Match the history reader: an incomplete append is not a completed activity.
+    return undefined;
+  }
+  const message =
+    record.message && typeof record.message === "object"
+      ? (record.message as Record<string, unknown>)
+      : undefined;
+  if (
+    record.type === "message" &&
+    ["user", "assistant", "toolResult"].includes(String(message?.role))
+  ) {
+    return journalTimestamp(message?.timestamp) ?? journalTimestamp(record.timestamp);
+  }
+  const custom = record.type === "custom_message" ? record : message;
+  const visible = readableOmpSkillInput(custom) ?? visibleOmpCustomMessage(custom);
+  return visible
+    ? (journalTimestamp(visible.timestamp) ?? journalTimestamp(record.timestamp))
+    : undefined;
 }

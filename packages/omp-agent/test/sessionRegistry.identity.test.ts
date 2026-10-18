@@ -1,416 +1,292 @@
+// Registry 身份与索引时序通过真实 stdio/v4 观察，不直接改投影或注入 OMP 端口。
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { z } from "zod";
+import { zcodeProtocolMethods } from "@zcode/shared";
 import {
-  V4_METHODS,
   commandAckSchema,
-  conversationTopicWireFrameSchema,
+  sessionsIndexTopicFrameSchema,
   sessionsIndexTopicWireFrameSchema,
-  type CommandPayloadMap,
+  TopicWireFrameAssembler,
+  v4SessionsIndexSubscribeResultSchema,
+  type SessionsIndexTopicFrame,
 } from "@zcode/shared/zcode-protocol-v4";
-import { ServerApp } from "../src/app/serverApp.js";
-import { SessionRegistry } from "../src/app/sessionRegistry.js";
-import type { HostGateway, OmpProcessFactory, OmpStorePort } from "../src/app/ports.js";
-import { buildLegacySnapshot } from "../src/app/legacySnapshot.js";
-// 保留的公开 v4 身份场景仍需要目录夹具，不能随标题专项一并清理导入。
-import { createDirectoryStub } from "./fixtures/directoryStub.js";
+import {
+  realOmpSkip,
+  startRealOmpHarness,
+  type RealOmpHarness,
+} from "./fixtures/realOmpHarness.js";
 
-test("omp 稳定会话 ID 绑定后，legacy 列表与引擎查找不重复", async () => {
-  const stableId = "01a0d66e-1891-7035-ab59-f8e5f0a33703";
-  const sessionPath = `C:/sessions/2026-09-25T02-38-54-609Z_${stableId}.jsonl`;
-  const registry = new SessionRegistry({
-    ompFactory: {
-      create: () => ({
-        ompSessionFile: sessionPath,
-        start: async () => {},
-        send: async () => ({ success: true }),
-        respondUi: () => {},
-        refreshState: async () => null,
-        readContextReport: async () => null,
-        dispose: async () => {},
-      }),
-    } as OmpProcessFactory,
-    store: {
-      listSessions: async () => [
-        {
-          sessionId: stableId,
-          sessionPath,
-          title: "test",
-          firstUserText: "test",
-          createdAt: 1,
-          updatedAt: 2,
-        },
-      ],
-      readSessionEntries: async () => [],
-      deleteSession: async () => true,
-    } as OmpStorePort,
-    gateway: { send: () => {} } as unknown as HostGateway,
-  });
-  const engine = await registry.createSession({
-    sessionId: "omp-session-temporary",
-    workspaceId: "ws",
-    workspacePath: "C:/work",
-  });
-  await engine.ensureOmpStarted();
-  // draft 相位不再进 legacy 列表（isDraftSession 过滤）；身份语义测试需真实会话相位。
-  engine.projection.beginUserTurn({
-    text: "x",
-    inputId: "t1",
-    sourceCommandId: "c1",
-    clientId: "test",
-  });
-  const sessions = await registry.listLegacySessions("C:/work", "ws");
-  assert.deepEqual(
-    sessions.map((item) => item.sessionId),
-    ["omp-session-temporary"],
-  );
-  assert.equal(registry.getEngine(stableId), engine);
-  assert.equal(registry.getEngine("omp-session-temporary"), engine);
-});
+const workspaceId = "real-e2e-workspace";
+const topic = `sessions-index/${workspaceId}`;
+const listSchema = z.object({ sessions: z.array(z.looseObject({ sessionId: z.string() })) });
 
-test("运行中保持临时 ID，先结算该 ID 的终态再切到稳定 UUID", async () => {
-  const stableId = "01a0d6d2-37bb-73c0-b13b-9f4fb3ea388c";
-  const temporaryId = "omp-session-automation";
-  const sessionPath = `C:/sessions/2026-09-25T04-28-16-187Z_${stableId}.jsonl`;
-  const frames: string[] = [];
-  const registry = new SessionRegistry({
-    ompFactory: {
-      create: () => ({
-        ompSessionFile: sessionPath,
-        start: async () => {},
-        send: async () => ({ success: true }),
-        respondUi: () => {},
-        refreshState: async () => null,
-        readContextReport: async () => null,
-        dispose: async () => {},
-      }),
-    } as OmpProcessFactory,
-    store: {
-      listSessions: async () => [
-        {
-          sessionId: stableId,
-          sessionPath,
-          title: "test",
-          firstUserText: "test",
-          createdAt: 1,
-          updatedAt: 2,
-        },
-      ],
-      readSessionEntries: async () => [],
-      deleteSession: async () => true,
-    } as OmpStorePort,
-    gateway: { emitFrame: (frame: unknown) => frames.push(JSON.stringify(frame)) } as HostGateway,
-  });
-  const engine = await registry.createSession({
-    sessionId: temporaryId,
-    workspaceId: "ws",
-    workspacePath: "C:/work",
-  });
-  await engine.ensureOmpStarted();
-  engine.projection.beginUserTurn({
-    text: "run",
-    inputId: "input-auto",
-    sourceCommandId: "cmd-auto",
-    clientId: "client",
-  });
-  registry.upsertEngineSummary(engine);
-  await registry.subscribeSessionsIndex({
-    workspaceId: "ws",
-    workspacePath: "C:/work",
-    connectionId: "test",
-  });
-  assert.deepEqual(
-    (await registry.listLegacySessions("C:/work", "ws")).map((item) => item.sessionId),
-    [temporaryId],
-  );
-  engine.projection.finishTurn("success");
-  registry.upsertEngineSummary(engine);
-  const terminal = frames.findIndex(
-    (frame) =>
-      frame.includes('"session.upserted"') &&
-      frame.includes(temporaryId) &&
-      frame.includes("completedSuccess"),
-  );
-  const removed = frames.findIndex(
-    (frame) => frame.includes('"session.removed"') && frame.includes(temporaryId),
-  );
-  const stable = frames.findIndex(
-    (frame) => frame.includes('"session.upserted"') && frame.includes(stableId),
-  );
-  assert.ok(
-    terminal >= 0 && removed > terminal && stable > removed,
-    JSON.stringify(frames.slice(-5)),
-  );
-  assert.deepEqual(
-    (await registry.listLegacySessions("C:/work", "ws")).map((item) => item.sessionId),
-    [stableId],
-  );
-  const tempAck = engine.subscribe({
-    sessionId: temporaryId,
-    connectionId: "old",
-    clientMode: "desktop-continuous",
-  });
-  const stableAck = engine.subscribe({
-    sessionId: stableId,
-    connectionId: "new",
-    clientMode: "web-remote-replayable",
-  });
-  assert.ok(
-    frames.some(
-      (frame) =>
-        frame.includes(`"topic":"conversation/${temporaryId}"`) &&
-        frame.includes(tempAck.subscriptionId),
-    ),
-  );
-  assert.ok(
-    frames.some(
-      (frame) =>
-        frame.includes(`"topic":"conversation/${stableId}"`) &&
-        frame.includes(stableAck.subscriptionId),
-    ),
-  );
-  const legacy = buildLegacySnapshot({
-    engine,
-    sessionId: stableId,
-    workspaceKey: "ws",
-    workspacePath: "C:/work",
-  });
-  assert.equal((legacy.session as { sessionId: string }).sessionId, stableId);
-  assert.equal((legacy.projection as { sessionId: string }).sessionId, stableId);
-});
-
-test("sessions-index 与 workspace-config 恢复后从当前水位继续发 delta", async () => {
-  type Wire = {
-    kind: string;
-    topic: string;
-    subscriptionId: string;
-    deliveryKind: string;
-    frame?: { fromSeq: number; toSeq: number };
-  };
-  const frames: Wire[] = [];
-  const registry = new SessionRegistry({
-    ompFactory: {
-      create: () => {
-        throw new Error("unexpected omp process");
-      },
-    } as OmpProcessFactory,
-    store: { listSessions: async () => [] } as unknown as OmpStorePort,
-    gateway: { emitFrame: (frame: Wire) => frames.push(frame) } as unknown as HostGateway,
-  });
-  const engine = await registry.createSession({ workspaceId: "ws", workspacePath: "C:/work" });
-  // draft 相位不入 sessions-index（isDraftSession 过滤）；本测试验证恢复水位，需非 draft 相位。
-  engine.projection.beginUserTurn({
-    text: "x",
-    inputId: "t1",
-    sourceCommandId: "c1",
-    clientId: "test",
-  });
-  const index = await registry.subscribeSessionsIndex({
-    workspaceId: "ws",
-    workspacePath: "C:/work",
-    connectionId: "test",
-  });
-  registry.upsertEngineSummary(engine);
-  registry.resyncIndexOrConfig(index.subscriptionId, null, true);
-  registry.upsertEngineSummary(engine);
-  const indexFrames = frames.filter(
-    (frame) => frame.topic === "sessions-index/ws" && frame.subscriptionId === index.subscriptionId,
-  );
-  assert.equal(indexFrames.at(-2)?.deliveryKind, "recovery");
-  assert.equal(indexFrames.at(-2)?.frame?.toSeq, 2);
-  assert.equal(indexFrames.at(-1)?.frame?.fromSeq, 2);
-
-  const config = { configOptions: [], slashCommands: [] };
-  const configAck = registry.subscribeWorkspaceConfig({ workspaceId: "ws", config });
-  registry.updateWorkspaceConfig("ws", config);
-  registry.resyncIndexOrConfig(configAck.subscriptionId, null, true);
-  registry.updateWorkspaceConfig("ws", config);
-  const configFrames = frames.filter(
-    (frame) =>
-      frame.topic === "workspace-config/ws" && frame.subscriptionId === configAck.subscriptionId,
-  );
-  assert.equal(configFrames.at(-2)?.deliveryKind, "recovery");
-  assert.equal(configFrames.at(-2)?.frame?.toSeq, 2);
-  assert.equal(configFrames.at(-1)?.frame?.fromSeq, 2);
-});
-
-for (const identityKind of ["local-fallback", "explicit-local", "remote"] as const) {
-  test(`F016: 公开 v4 createSession 严格绑定 ${identityKind} 身份，拒绝先于创建和附件处理`, async (context) => {
-    const root = await mkdtemp(join(tmpdir(), "omp-create-identity-"));
-    const workspacePath = join(root, "workspace");
-    const filesPath = join(root, "sessions");
-    await mkdir(workspacePath);
-    await mkdir(filesPath);
-    const workspaceKey =
-      identityKind === "local-fallback"
-        ? workspacePath
-        : identityKind === "explicit-local"
-          ? "local:bound-project"
-          : "ssh:host:bound-project";
-    const frames: unknown[] = [];
-    const processCwds: string[] = [];
-    const prompts: string[] = [];
-    const app = new ServerApp({
-      workspacePath,
-      workspaceKey,
-      ...(identityKind !== "local-fallback" ? { workspaceIdentity: workspaceKey } : {}),
-      loadWorkspaceConfig: async () => ({ configOptions: [], slashCommands: [] }),
-      loadWorkspaceSkillCommands: async () => [],
-      directory: createDirectoryStub(),
-      store: {
-        listSessions: async () => [],
-        readSessionEntries: async () => [],
-        readSubagentEntries: async () => [],
-        deleteSession: async () => true,
-      },
-      gateway: {
-        emitFrame: (frame) => frames.push(frame),
-        requestUserInput: async () => ({ action: "cancel" }),
-      },
-      ompFactory: {
-        create(options) {
-          processCwds.push(options.cwd);
-          const sessionFile = join(filesPath, `process-${processCwds.length}.jsonl`);
-          return {
-            ompSessionFile: sessionFile,
-            start: async () => {
-              await writeFile(sessionFile, '{"type":"session"}\\n');
-            },
-            send: async (command) => {
-              if (command.type === "prompt") {
-                prompts.push(command.message);
-                return { success: true, data: { agentInvoked: false } };
-              }
-              return { success: true, data: {} };
-            },
-            refreshState: async () => null,
-            readContextReport: async () => null,
-            respondUi: () => {},
-            dispose: async () => {},
-          };
-        },
-      },
-    });
-    context.after(async () => {
-      await app.registry.dispose();
-      await rm(root, { recursive: true, force: true });
-    });
-    let creates = 0;
-    const createSession = app.registry.createSession.bind(app.registry);
-    app.registry.createSession = (params) => {
-      creates += 1;
-      return createSession(params);
-    };
-    const envelope = (commandId: string, payload: CommandPayloadMap["createSession"]) => ({
-      commandId,
-      clientId: "identity-test",
-      sessionId: null,
-      type: "createSession",
-      issuedAt: 1,
-      payload,
-    });
-    // 显式身份和远程身份不能把同一执行路径当作另一合法 workspace key。
-    const wrongWorkspace = identityKind === "local-fallback" ? "other-workspace" : workspacePath;
-    for (const firstInput of [
-      undefined,
-      { text: "must not send" },
-      {
-        text: "must not inspect attachment",
-        attachments: [
-          { ref: "missing-reference", fileName: "test.txt", mime: "text/plain", bytes: 1 },
-        ],
-      },
-    ]) {
-      const commandId = `wrong-${firstInput?.text ?? "draft"}`;
-      const request = envelope(commandId, {
-        workspaceId: wrongWorkspace,
-        ...(firstInput ? { firstInput } : {}),
-      });
-      const [first, concurrent] = await Promise.all([
-        app.handleRequest(V4_METHODS.command, request),
-        app.handleRequest(V4_METHODS.command, request),
-      ]);
-      const rejected = commandAckSchema.parse(first);
-      assert.equal(rejected.status, "rejected");
-      assert.equal(rejected.reasonCode, "fault.command.workspaceMismatch");
-      assert.deepEqual(concurrent, first);
-      assert.deepEqual(await app.handleRequest(V4_METHODS.command, request), first);
-      // 同一 command ID 即使换成匹配 payload，也不能把已决拒绝改成创建。
-      assert.deepEqual(
-        await app.handleRequest(
-          V4_METHODS.command,
-          envelope(commandId, { workspaceId: workspaceKey }),
-        ),
-        first,
-      );
+function indexFrames(harness: RealOmpHarness): SessionsIndexTopicFrame[] {
+  const assembler = new TopicWireFrameAssembler(sessionsIndexTopicFrameSchema);
+  const logical: SessionsIndexTopicFrame[] = [];
+  for (const envelope of harness.frames) {
+    if (envelope.method !== "v4/conversation/frame") continue;
+    const params = envelope.params;
+    if (!params || typeof params !== "object" || !("topic" in params) || params.topic !== topic)
+      continue;
+    for (const event of assembler.accept(sessionsIndexTopicWireFrameSchema.parse(params))) {
+      assert.notEqual(event.kind, "fault", JSON.stringify(event));
+      if (event.kind !== "fault") logical.push(event.frame);
     }
-    assert.equal(creates, 0, "不构造任何会话引擎");
-    assert.deepEqual(processCwds, [], "不构造任何 omp 进程");
-    assert.deepEqual(prompts, [], "不发送首问");
-    assert.deepEqual(await readdir(filesPath), [], "不落盘会话文件");
-    for (const key of [workspaceKey, wrongWorkspace]) {
-      await app.handleRequest(V4_METHODS.conversationSubscribe, {
-        topic: `sessions-index/${key}`,
-        connectionId: "index-test",
-      });
-      const wire = sessionsIndexTopicWireFrameSchema.parse(frames.at(-1));
-      assert.equal(wire.kind, "complete");
-      if (wire.kind === "complete") {
-        assert.equal(wire.frame.payload.kind, "snapshot");
-        if (wire.frame.payload.kind === "snapshot")
-          assert.deepEqual(wire.frame.payload.snapshot.sessions, []);
-      }
-    }
-    const draft = commandAckSchema.parse(
-      await app.handleRequest(
-        V4_METHODS.command,
-        envelope("matching-draft", { workspaceId: workspaceKey }),
-      ),
-    );
-    assert.equal(draft.status, "accepted");
-    assert.equal(creates, 1);
-    assert.deepEqual(processCwds, [], "匹配的空会话仍惰性启动");
-    const accepted = commandAckSchema.parse(
-      await app.handleRequest(
-        V4_METHODS.command,
-        envelope("matching-input", {
-          workspaceId: workspaceKey,
-          firstInput: { text: "bound first input" },
-        }),
-      ),
-    );
-    assert.equal(accepted.status, "accepted");
-    assert.equal(creates, 2);
-    assert.deepEqual(processCwds, [workspacePath]);
-    assert.deepEqual(prompts, ["bound first input"]);
-    assert.equal((await readdir(filesPath)).length, 1);
-    assert.ok(accepted.result?.type === "createSession");
-    if (accepted.result?.type !== "createSession") throw new Error("expected create result");
-    const engine = app.registry.requireEngine(accepted.result.sessionId);
-    assert.equal(engine.workspaceId, workspaceKey);
-    assert.equal(engine.workspacePath, workspacePath);
-    app.registry.upsertEngineSummary(engine);
-    await app.handleRequest(V4_METHODS.conversationSubscribe, {
-      topic: `sessions-index/${workspaceKey}`,
-      connectionId: "index-positive",
-    });
-    const index = sessionsIndexTopicWireFrameSchema.parse(frames.at(-1));
-    assert.equal(index.kind, "complete");
-    if (index.kind === "complete" && index.frame.payload.kind === "snapshot") {
-      const session = index.frame.payload.snapshot.sessions.find(
-        (item) => item.sessionId === engine.sessionId,
-      );
-      assert.equal(session?.workspaceId, workspaceKey);
-    } else throw new Error("expected complete index snapshot");
-    await app.handleRequest(V4_METHODS.conversationSubscribe, {
-      topic: `conversation/${engine.sessionId}`,
-      sessionId: engine.sessionId,
-      connectionId: "session-positive",
-      clientMode: "desktop-continuous",
-    });
-    const conversation = conversationTopicWireFrameSchema.parse(frames.at(-1));
-    assert.equal(conversation.topic, `conversation/${engine.sessionId}`);
-  });
+  }
+  return logical;
 }
+
+test(
+  "真实身份：临时地址先终结再迁移唯一 UUID，旧/新 topic 与索引恢复连续",
+  { skip: realOmpSkip },
+  async () => {
+    let release!: () => void;
+    const modelGate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const marker = "IDENTITY_REAL_RESPONSE";
+    const harness = await startRealOmpHarness({
+      handler: async () => {
+        await modelGate;
+        return { content: [marker] };
+      },
+    });
+    try {
+      const subscription = v4SessionsIndexSubscribeResultSchema.parse(
+        await harness.request("v4/conversation/subscribe", {
+          topic,
+          connectionId: "identity-index",
+          clientMode: "desktop-continuous",
+        }),
+      );
+      const draft = commandAckSchema.parse(
+        await harness.request("v4/command", {
+          commandId: "create-identity-draft",
+          clientId: "identity",
+          sessionId: null,
+          type: "createSession",
+          payload: { workspaceId },
+          issuedAt: Date.now(),
+        }),
+      );
+      assert.equal(draft.status, "accepted");
+      const temporaryId = z.object({ sessionId: z.string() }).parse(draft.result).sessionId;
+      assert.match(temporaryId, /^omp-session-/u);
+      await harness.subscribe(temporaryId);
+      const sent = commandAckSchema.parse(
+        await harness.request("v4/command", {
+          commandId: "identity-first-input",
+          clientId: "identity",
+          sessionId: temporaryId,
+          type: "sendText",
+          payload: { text: "Keep this identity through completion." },
+          issuedAt: Date.now(),
+        }),
+      );
+      assert.equal(sent.status, "accepted");
+      await harness.waitUntil(() => harness.mock.calls.length > 0);
+      assert.deepEqual(
+        listSchema
+          .parse(await harness.request(zcodeProtocolMethods.sessionList, {}))
+          .sessions.map((session) => session.sessionId),
+        [temporaryId],
+        "真实模型仍等待时不能提前发布另一条 UUID 会话",
+      );
+      release();
+      await harness.waitUntil(() => harness.terminal(temporaryId));
+      assert.equal(harness.terminal(temporaryId)?.state, "completedSuccess");
+      const listed = listSchema.parse(await harness.request(zcodeProtocolMethods.sessionList, {}));
+      assert.equal(listed.sessions.length, 1);
+      const stableId = z.uuid().parse(listed.sessions[0]!.sessionId);
+      assert.notEqual(stableId, temporaryId);
+      const deltas = await harness.waitUntil(() => {
+        const observed = indexFrames(harness).flatMap((frame) =>
+          frame.payload.kind === "deltas" ? frame.payload.deltas : [],
+        );
+        return observed.some(
+          (delta) => delta.op === "session.upserted" && delta.session.sessionId === stableId,
+        )
+          ? observed
+          : undefined;
+      });
+      const terminal = deltas.findIndex(
+        (delta) =>
+          delta.op === "session.upserted" &&
+          delta.session.sessionId === temporaryId &&
+          delta.session.phase === "completedSuccess",
+      );
+      const removed = deltas.findIndex(
+        (delta) => delta.op === "session.removed" && delta.sessionId === temporaryId,
+      );
+      const stable = deltas.findIndex(
+        (delta) => delta.op === "session.upserted" && delta.session.sessionId === stableId,
+      );
+      assert.ok(terminal >= 0 && removed > terminal && stable > removed, JSON.stringify(deltas));
+
+      await Promise.all([harness.subscribe(temporaryId), harness.subscribe(stableId)]);
+      for (const id of [temporaryId, stableId]) {
+        await harness.waitUntil(() =>
+          [...harness.rows(id).values()].find(
+            (row) => row.kind === "assistantText" && String(row.text ?? "").includes(marker),
+          ),
+        );
+        const snapshot = z
+          .object({
+            session: z.looseObject({ sessionId: z.string() }),
+            projection: z.looseObject({ sessionId: z.string() }),
+          })
+          .parse(await harness.request(zcodeProtocolMethods.sessionRead, { sessionId: id }));
+        assert.equal(snapshot.session.sessionId, id);
+        assert.equal(snapshot.projection.sessionId, id);
+      }
+      const recoveryStart = indexFrames(harness).length;
+      const recoveryAck = z
+        .object({ ack: z.object({ subscriptionId: z.string(), mode: z.literal("snapshot") }) })
+        .parse(
+          await harness.request("v4/conversation/resync", {
+            topic,
+            subscriptionId: subscription.ack.subscriptionId,
+            base: null,
+            forceSnapshot: true,
+          }),
+        );
+      assert.equal(recoveryAck.ack.subscriptionId, subscription.ack.subscriptionId);
+      // stdio 是 ACK-first：响应不证明后置通知已经读到，且后面还可跟在线 delta。
+      // 只等待本次 forceSnapshot 之后、属于原订阅的完整快照，不把最后一帧当快照。
+      const recovery = await harness.waitUntil(() =>
+        indexFrames(harness)
+          .slice(recoveryStart)
+          .find(
+            (frame) =>
+              frame.subscriptionId === subscription.ack.subscriptionId &&
+              frame.payload.kind === "snapshot",
+          ),
+      );
+      if (recovery.payload.kind !== "snapshot") throw new Error("expected real recovery snapshot");
+      assert.deepEqual(
+        recovery.payload.snapshot.sessions.map((session) => session.sessionId),
+        [stableId],
+      );
+      const renamed = commandAckSchema.parse(
+        await harness.request("v4/command", {
+          commandId: "rename-after-recovery",
+          clientId: "identity",
+          sessionId: stableId,
+          type: "renameSession",
+          payload: { title: "Identity after recovery" },
+          issuedAt: Date.now(),
+        }),
+      );
+      assert.equal(renamed.status, "accepted");
+      const continuation = await harness.waitUntil(() => {
+        const frames = indexFrames(harness).slice(recoveryStart);
+        const snapshotIndex = frames.findIndex(
+          (frame) =>
+            frame.subscriptionId === subscription.ack.subscriptionId &&
+            frame.payload.kind === "snapshot",
+        );
+        const following = frames
+          .slice(snapshotIndex + 1)
+          .filter((frame) => frame.subscriptionId === subscription.ack.subscriptionId);
+        return following.some(
+          (frame) =>
+            frame.payload.kind === "deltas" &&
+            frame.payload.deltas.some(
+              (delta) =>
+                delta.op === "session.upserted" &&
+                delta.session.sessionId === stableId &&
+                delta.session.title === "Identity after recovery",
+            ),
+        )
+          ? following
+          : undefined;
+      });
+      let seq = recovery.toSeq;
+      for (const frame of continuation) {
+        assert.equal(frame.fromSeq, seq, "恢复后的每条真实 delta 必须连续");
+        assert.ok(frame.toSeq > seq);
+        seq = frame.toSeq;
+      }
+      harness.mock.assertHealthy();
+    } finally {
+      release();
+      await harness.close();
+    }
+  },
+);
+
+test(
+  "F016: 真实公开 createSession 拒绝错误 workspace、缺失附件及重复改写，不创建幽灵会话",
+  { skip: realOmpSkip },
+  async () => {
+    const harness = await startRealOmpHarness({
+      responses: [{ content: ["IDENTITY_BOUND_INPUT"] }],
+    });
+    try {
+      for (const [index, firstInput] of [
+        undefined,
+        { text: "must not send" },
+        {
+          text: "must not inspect attachment",
+          attachments: [
+            { ref: "missing-reference", fileName: "test.txt", mime: "text/plain", bytes: 1 },
+          ],
+        },
+      ].entries()) {
+        const envelope = {
+          commandId: `wrong-workspace-${index}`,
+          clientId: "identity",
+          sessionId: null,
+          type: "createSession",
+          issuedAt: Date.now(),
+          payload: { workspaceId: harness.workspace, ...(firstInput ? { firstInput } : {}) },
+        };
+        const [first, second] = await Promise.all([
+          harness.request("v4/command", envelope),
+          harness.request("v4/command", envelope),
+        ]);
+        const ack = commandAckSchema.parse(first);
+        assert.equal(ack.status, "rejected");
+        assert.equal(ack.reasonCode, "fault.command.workspaceMismatch");
+        assert.deepEqual(second, first);
+        assert.deepEqual(
+          await harness.request("v4/command", {
+            ...envelope,
+            payload: { workspaceId },
+          }),
+          first,
+          "同 commandId 不能把已决 workspace 拒绝变成创建",
+        );
+      }
+      assert.equal(harness.mock.calls.length, 0);
+      assert.deepEqual(
+        listSchema.parse(await harness.request(zcodeProtocolMethods.sessionList, {})).sessions,
+        [],
+      );
+      const sessionId = await harness.create(
+        "bound-identity",
+        "Use the matching workspace identity.",
+      );
+      await harness.waitUntil(() => harness.terminal(sessionId));
+      assert.equal(harness.terminal(sessionId)?.state, "completedSuccess");
+      const snapshot = z
+        .object({
+          session: z.object({
+            workspace: z.object({ workspaceKey: z.string(), workspacePath: z.string() }),
+          }),
+        })
+        .parse(await harness.request(zcodeProtocolMethods.sessionRead, { sessionId }));
+      assert.equal(snapshot.session.workspace.workspaceKey, workspaceId);
+      assert.equal(snapshot.session.workspace.workspacePath, harness.workspace);
+      assert.equal(
+        listSchema.parse(await harness.request(zcodeProtocolMethods.sessionList, {})).sessions
+          .length,
+        1,
+      );
+      harness.mock.assertHealthy();
+    } finally {
+      await harness.close();
+    }
+  },
+);

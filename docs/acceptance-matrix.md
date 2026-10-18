@@ -7,7 +7,7 @@
 ## 列说明
 
 - **来源**：需求出处锚点，链接到 `docs/requirements/` 对应文档章节。
-- **验证方式**：`UT`（单元/协议模拟测试）、`E2E`（真实入口到可观察结果，含 fake-omp 协议级与真实核心）、`GUI`（真实界面操作走查）、`VM`（CentOS 7 VM 包级验收）、`人工`（人工核对/环境依赖的人工步骤）。多值表示需组合覆盖。
+- **验证方式**：`UT`（单元/协议边界测试）、`E2E`（真实入口到可观察结果；当前适配器及核心使用真实 OMP + 本地模拟模型，边界见[本地模拟模型契约](requirements/test-gates.md#本地模拟模型契约)）、`GUI`（真实界面操作走查）、`VM`（历史 CentOS 7 VM 包级验收）、`人工`（人工核对/环境依赖的人工步骤）。多值表示需组合覆盖；历史协议替身报告仅保留原版本证据，不代表当前真实核心已验收。
 - **负责工作流**：`W1` 构建双轨、`W2` 双运行时兼容、`W3` 桌面 Main/Host、`W4` UI 统一、`W5` 会话/协议核验、`W6` 文档与验收组织、`P2` 集成验证（见 [refactor-plan.md](test-reports/refactor-plan.md)）。
 - **状态**：空白 = 尚未执行或结果未知。**只能由 P2 及各工作流实际执行后回填**；不得预填「通过」。验证不绿、跳过或环境缺失均须如实记录（AGENTS.md「实现与验证」）。
 
@@ -79,7 +79,7 @@
 | S03  | 「设置 → 技能」只读：仅 omp 目录、错误与刷新；无工作区空态引导；无本地扫描/安装/删除/开关；独立导航入口两平台保留（含离线锁定构建） | [产品规则](requirements/skills.md#产品规则)         | GUI      | W4         |      |
 | S04  | 草稿按目标工作区、已有会话按会话进程读取；未知会话报错；远端只查远端 Host；请求代次隔离、目录变化清缓存                             | [产品规则](requirements/skills.md#产品规则)         | UT+E2E   | W5         |      |
 | S05  | 目录查询失败显式错误，不回退本地扫描伪目录；`agent_end.messages` 自定义上下文不阻塞终态收口                                         | [所有者和接口](requirements/skills.md#所有者和接口) | UT       | W5         |      |
-| S06  | 综合验收：fake-omp 目录过滤、`$`/`/skill:` 候选一致、真实 omp 与 GUI 技能集合一致、真实模型调用项目技能读文件并冷恢复保留           | [验收](requirements/skills.md#验收)                 | E2E+GUI  | P2         |      |
+| S06  | 综合验收：真实 OMP + 本地模拟模型目录过滤、`$`/`/skill:` 候选一致、真实 omp 与 GUI 技能集合一致、调用项目技能读文件并冷恢复保留     | [验收](requirements/skills.md#验收)                 | E2E+GUI  | P2         |      |
 
 ## 5. [integrations.md](requirements/integrations.md) — 原生工具、扩展与自动化
 
@@ -128,20 +128,20 @@
 
 ## 7. [performance.md](requirements/performance.md) — 性能热路径
 
-| 编号 | 需求要点                                                                                                                                                       | 来源                                                             | 验证方式     | 负责工作流 | 状态 |
-| ---- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------- | ------------ | ---------- | ---- |
-| P01  | 优化不改变对话内容、任务状态、历史分页、订阅水位与双链路可见结果                                                                                               | [产品规则与所有者](requirements/performance.md#产品规则与所有者) | UT+GUI       | W5         |      |
-| P02  | `zcodeSessionStore`/`ConversationProjectionStore`：重复通知不出新引用；一帧 deltas 一份不可变新快照                                                            | [产品规则与所有者](requirements/performance.md#产品规则与所有者) | UT           | W5         |      |
-| P03  | `ConversationProjection` 流式缓冲但 snapshot/rowsRange/终态 upsert 物化完整文本                                                                                | [产品规则与所有者](requirements/performance.md#产品规则与所有者) | UT           | W5         |      |
-| P04  | wire codec 分片保持物理帧上限、校验和、序号与错误语义；帧只编码一次，调试日志关闭不额外编码                                                                    | [产品规则与所有者](requirements/performance.md#产品规则与所有者) | UT           | W5         |      |
-| P05  | UI 订阅最小字段；非首屏组件异步装载但打开即可用                                                                                                                | [产品规则与所有者](requirements/performance.md#产品规则与所有者) | UT+GUI       | W4         |      |
-| P06  | 查找：输入立刻回显、150ms 去抖执行昂贵匹配、切换/关闭/清空取消旧查询                                                                                           | [产品规则与所有者](requirements/performance.md#产品规则与所有者) | UT+GUI       | W4         |      |
-| P07  | 「打开方式」编辑器探测不在主线程同步等待外部命令；静态路径优先、命令兜底异步、结果复用                                                                         | [产品规则与所有者](requirements/performance.md#产品规则与所有者) | UT+GUI       | W3         |      |
-| P08  | Agent stdio 适配器按会话串行有状态命令；慢历史读取不阻塞他会话；ACK 先于本请求首帧；同 topic 帧按生成顺序上线                                                  | [产品规则与所有者](requirements/performance.md#产品规则与所有者) | UT           | W5         |      |
-| P09  | 冷会话目录有界读取、按 ID 定位、标题只读头部；长会话恢复避免整文件拆分内存峰值                                                                                 | [产品规则与所有者](requirements/performance.md#产品规则与所有者) | UT+E2E       | W5         |      |
-| P10  | 传输背压：每连接未发送字节有上限；桌面流不丢帧、Web 流按水位补发/重取快照                                                                                      | [产品规则与所有者](requirements/performance.md#产品规则与所有者) | UT+E2E       | W5         |      |
-| P11  | 主进程生产日志异步写入、退出前刷盘、错误日志可见（与 centos7-performance 日志域共用实现）                                                                      | [产品规则与所有者](requirements/performance.md#产品规则与所有者) | UT           | W3         |      |
-| P12  | 综合验收：真实模型 GUI 流式会话与导航、设置页往返、查找高亮、打开方式、跨会话隔离、优化前后测量（列表/恢复/时间线/内存）、慢 WebSocket 与饱和 MessagePort 有界 | [验收场景](requirements/performance.md#验收场景)                 | GUI+E2E+人工 | P2         |      |
+| 编号 | 需求要点                                                                                                                                                                      | 来源                                                             | 验证方式     | 负责工作流 | 状态 |
+| ---- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------- | ------------ | ---------- | ---- |
+| P01  | 优化不改变对话内容、任务状态、历史分页、订阅水位与双链路可见结果                                                                                                              | [产品规则与所有者](requirements/performance.md#产品规则与所有者) | UT+GUI       | W5         |      |
+| P02  | `zcodeSessionStore`/`ConversationProjectionStore`：重复通知不出新引用；一帧 deltas 一份不可变新快照                                                                           | [产品规则与所有者](requirements/performance.md#产品规则与所有者) | UT           | W5         |      |
+| P03  | `ConversationProjection` 流式缓冲但 snapshot/rowsRange/终态 upsert 物化完整文本                                                                                               | [产品规则与所有者](requirements/performance.md#产品规则与所有者) | UT           | W5         |      |
+| P04  | wire codec 分片保持物理帧上限、校验和、序号与错误语义；帧只编码一次，调试日志关闭不额外编码                                                                                   | [产品规则与所有者](requirements/performance.md#产品规则与所有者) | UT           | W5         |      |
+| P05  | UI 订阅最小字段；非首屏组件异步装载但打开即可用                                                                                                                               | [产品规则与所有者](requirements/performance.md#产品规则与所有者) | UT+GUI       | W4         |      |
+| P06  | 查找：输入立刻回显、150ms 去抖执行昂贵匹配、切换/关闭/清空取消旧查询                                                                                                          | [产品规则与所有者](requirements/performance.md#产品规则与所有者) | UT+GUI       | W4         |      |
+| P07  | 「打开方式」编辑器探测不在主线程同步等待外部命令；静态路径优先、命令兜底异步、结果复用                                                                                        | [产品规则与所有者](requirements/performance.md#产品规则与所有者) | UT+GUI       | W3         |      |
+| P08  | Agent stdio 适配器按会话串行有状态命令；慢历史读取不阻塞他会话；ACK 先于本请求首帧；同 topic 帧按生成顺序上线                                                                 | [产品规则与所有者](requirements/performance.md#产品规则与所有者) | UT           | W5         |      |
+| P09  | 冷会话目录有界读取、按 ID 定位、标题只读头部；长会话恢复避免整文件拆分内存峰值                                                                                                | [产品规则与所有者](requirements/performance.md#产品规则与所有者) | UT+E2E       | W5         |      |
+| P10  | 传输背压：每连接未发送字节有上限；桌面流不丢帧、Web 流按水位补发/重取快照                                                                                                     | [产品规则与所有者](requirements/performance.md#产品规则与所有者) | UT+E2E       | W5         |      |
+| P11  | 主进程生产日志异步写入、退出前刷盘、错误日志可见（与 centos7-performance 日志域共用实现）                                                                                     | [产品规则与所有者](requirements/performance.md#产品规则与所有者) | UT           | W3         |      |
+| P12  | 综合验收：真实 OMP + 本地模拟模型 GUI 流式会话与导航、设置页往返、查找高亮、打开方式、跨会话隔离、优化前后测量（列表/恢复/时间线/内存）、慢 WebSocket 与饱和 MessagePort 有界 | [验收场景](requirements/performance.md#验收场景)                 | GUI+E2E+人工 | P2         |      |
 
 ## 9. [centos7-release.md](requirements/centos7-release.md) — CentOS 7 发布
 

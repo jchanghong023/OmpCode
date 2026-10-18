@@ -6,6 +6,10 @@ import { dirname, join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { commandOutput, startCommand, stopCommand } from "./test-gates-process.mjs";
 import { readIsolationEvidence } from "../packages/desktop/test/ompCore.evidence.cjs";
+import { shutdownOwnedGui } from "../packages/desktop/test/ompCore.shutdown.mjs";
+import { finalizeStoredInteractions } from "../packages/desktop/test/ompMockInteractions.assertions.mjs";
+import { finalizeAgentsReceipt } from "../packages/desktop/test/ompAgentsAcceptance.lifecycle.mjs";
+import { finalizeNativeReceipt } from "../packages/desktop/test/ompNativeAcceptance.lifecycle.mjs";
 
 const missing = (reason) => ({ status: "UNVERIFIED_MISSING_ENV", reason });
 let packagingState;
@@ -22,8 +26,9 @@ async function snapshotPackagingState() {
     "installSection.nsh",
   );
   // Windows native-prebuild hook explicitly skips mutations; NSIS is the sole dependency write.
+  console.log("[gate] packaging snapshot begin");
   packagingState = { template, bytes: await readFile(template) };
-  console.log("Local packaging dependency snapshot: Windows NSIS template (1 file)");
+  console.log("[gate] packaging snapshot complete files=1");
 }
 
 export function restorePackagingState() {
@@ -31,10 +36,11 @@ export function restorePackagingState() {
   packagingCleanup = Promise.resolve()
     .then(async () => {
       if (!packagingState) return;
+      console.log("[gate] packaging restoration begin");
       const { template, bytes } = packagingState;
       if (!(await readFile(template)).equals(bytes)) await writeFile(template, bytes);
       packagingState = undefined;
-      console.log("Local packaging dependency restoration: complete (1 file)");
+      console.log("[gate] packaging restoration complete files=1");
     })
     .finally(() => {
       packagingCleanup = undefined;
@@ -62,52 +68,84 @@ async function verifyIsolation(runtime, launcher) {
 }
 
 async function fixtureStage(stage, context, env) {
-  let fixture = context.guiProcesses.get(stage.file);
+  const suite = stage.suite ?? (stage.file === "ompStartup.gui.e2e.mjs" ? "startup" : "identity");
+  const log = (event) =>
+    console.log(`[GUI] stage=${stage.id} suite=${suite} phase=${stage.phase} ${event}`);
+  log("fixture preparation begin");
+  const fixtureKey = `${stage.file}:${stage.suite ?? "identity"}`;
+  let fixture = context.guiProcesses.get(fixtureKey);
   if (!fixture) {
     fixture = {
       root: await mkdtemp(join(tmpdir(), "ompcode-core-gui-")),
       runId: `CORE_${Date.now()}`,
     };
-    context.guiProcesses.set(stage.file, fixture);
+    context.guiProcesses.set(fixtureKey, fixture);
   }
+  log(`fixture preparation complete evidence=${fixture.root}`);
   const launcher = startCommand("node", ["packages/desktop/test/ompCore.launch.mjs"], {
+    stageId: stage.id,
     env: {
       ...env,
       OMP_E2E_ISOLATED_ROOT: fixture.root,
       OMP_E2E_STARTUP: stage.file === "ompStartup.gui.e2e.mjs" ? "1" : "0",
+      OMP_E2E_SUITE: suite,
+      OMP_E2E_STAGE_ID: stage.id,
+      OMP_E2E_PHASE: stage.phase,
       OMP_RPC_BINARY_PATH: context.omp,
     },
   });
+  let runtime;
+  let stopWatching = () => {};
+  log(`launcher readiness begin pid=${launcher.pid ?? "unavailable"}`);
   try {
-    const runtime = await new Promise((done, reject) => {
+    runtime = await new Promise((done, reject) => {
       const lines = createInterface({ input: launcher.stdout });
+      let failed = false;
+      const fail = (error) => {
+        if (failed) return;
+        failed = true;
+        // 调度器消费阶段结果而非 Error；直接传 Error 会丢失 FAIL，误报成缺环境。
+        context.onFailure?.({ status: "FAIL", exitCode: 1, reason: error.message });
+        reject(error);
+      };
+      const onError = (error) => fail(error);
+      const onExit = (code, signal) =>
+        fail(
+          new Error(
+            `Core GUI launcher exited unexpectedly: code=${code} signal=${signal}; evidence ${fixture.root}`,
+          ),
+        );
+      launcher.on("error", onError);
+      launcher.on("exit", onExit);
+      stopWatching = () => {
+        launcher.removeListener("error", onError);
+        launcher.removeListener("exit", onExit);
+        lines.close();
+      };
       lines.on("line", (line) => {
         if (line.startsWith("OMP_CORE_GUI_READY=")) {
           try {
             done(JSON.parse(line.slice("OMP_CORE_GUI_READY=".length)));
           } catch (error) {
-            reject(error);
+            fail(error);
           }
-        } else if (line.startsWith("OMP_CORE_GUI_FAILED=")) {
-          reject(
-            new Error(`${line.slice("OMP_CORE_GUI_FAILED=".length)}; evidence ${fixture.root}`),
-          );
+        } else if (
+          line.startsWith("OMP_CORE_GUI_FAILED=") ||
+          line.startsWith("OMP_CORE_GUI_EXITED=")
+        ) {
+          fail(new Error(`${line.slice(line.indexOf("=") + 1)}; evidence ${fixture.root}`));
         } else console.log(line);
       });
       launcher.stderr.on("data", (data) => process.stderr.write(data));
-      launcher.once("error", reject);
-      launcher.once("close", (code) =>
-        reject(
-          new Error(`Core GUI launcher exited before readiness: ${code}; evidence ${fixture.root}`),
-        ),
-      );
     });
-    console.log(`Core GUI evidence: ${fixture.root}`);
+    log(`launcher readiness complete pid=${runtime.electronPid} evidence=${fixture.root}`);
     await verifyIsolation(runtime, launcher);
-    if (stage.phase === "recovery" && runtime.electronPid === fixture.pid)
-      throw new Error("Recovery must use a new Electron process in the same isolated root");
+    if (stage.phase !== "live" && runtime.electronPid === fixture.pid)
+      throw new Error("Every continuation phase must use a new Electron process in the same root");
     fixture.pid = runtime.electronPid;
+    log(`acceptance begin pid=${runtime.electronPid}`);
     const result = await commandOutput(stage.command, stage.args, {
+      stageId: stage.id,
       clock: context.clock,
       failFast: true,
       onFailure: context.onFailure,
@@ -120,15 +158,66 @@ async function fixtureStage(stage, context, env) {
         OMP_E2E_EVIDENCE_DIR: join(fixture.root, "evidence"),
         OMP_E2E_RUN_ID: fixture.runId,
         OMP_E2E_PHASE: stage.phase,
+        OMP_E2E_SUITE: stage.suite,
       },
     });
+    log(`acceptance complete pid=${runtime.electronPid} exitCode=${result.code}`);
     if (result.code) return outcome(result);
     const isolation = await verifyIsolation(runtime, launcher);
-    console.log(`Core GUI isolation: ${JSON.stringify(isolation)}`);
+    log(`isolation verified pid=${runtime.electronPid} evidence=${runtime.isolationEvidence}`);
+    if (stage.file === "ompReviewedDefects.gui.e2e.mjs" && stage.phase === "live") {
+      stopWatching();
+      log(`shutdown begin pid=${runtime.electronPid} evidence=${fixture.root}`);
+      await shutdownOwnedGui(runtime, launcher);
+      log(`interaction finalization begin pid=${runtime.electronPid}`);
+      await finalizeStoredInteractions(
+        runtime,
+        join(fixture.root, "evidence", `reviewed-defects-${fixture.runId}.json`),
+      );
+      log(`interaction finalization complete pid=${runtime.electronPid}`);
+    }
+    if (stage.file === "ompAgentsAcceptance.gui.e2e.mjs" && stage.phase === "live") {
+      stopWatching();
+      log(`shutdown begin pid=${runtime.electronPid} evidence=${fixture.root}`);
+      await shutdownOwnedGui(runtime, launcher);
+      log(`agents finalization begin pid=${runtime.electronPid}`);
+      await finalizeAgentsReceipt(
+        runtime,
+        join(fixture.root, "evidence", `agents-${fixture.runId}.json`),
+      );
+      log(`agents finalization complete pid=${runtime.electronPid}`);
+    }
+    if (stage.file === "ompNativeAcceptance.gui.e2e.mjs" && stage.phase === "live") {
+      stopWatching();
+      log(`shutdown begin pid=${runtime.electronPid} evidence=${fixture.root}`);
+      await shutdownOwnedGui(runtime, launcher);
+      assert.ok(
+        launcher.exitCode !== null || launcher.signalCode !== null,
+        "Native receipt finalization requires the owned launcher to have exited",
+      );
+      assert.equal(launcher.exitCode, 0, "Native receipt requires a normal launcher exit");
+      assert.equal(launcher.signalCode, null, "Native receipt must not follow signal termination");
+      log(`native finalization begin pid=${runtime.electronPid}`);
+      await finalizeNativeReceipt(
+        runtime,
+        join(fixture.root, "evidence", "native-acceptance-receipt.json"),
+      );
+      log(`native finalization complete pid=${runtime.electronPid}`);
+    }
     return { ...outcome(result), isolation };
+  } catch (error) {
+    // 隔离校验或恢复断言也必须先通知首失败，不能被后续的宽限关闭阻塞。
+    context.onFailure?.({ status: "FAIL", exitCode: 1, reason: error.message });
+    throw error;
   } finally {
+    stopWatching();
+    log(
+      `cleanup begin pid=${runtime?.electronPid ?? launcher.pid ?? "unavailable"} evidence=${fixture.root}`,
+    );
+    await shutdownOwnedGui(runtime, launcher);
     // 启动器一直存活；正常结束及总时限都能终止完整测试树，不能留下 detached supervisor。
     await stopCommand(launcher);
+    log(`cleanup complete evidence=${fixture.root}`);
   }
 }
 
@@ -187,12 +276,14 @@ export async function regularStage(stage, context) {
       CSC_KEY_PASSWORD: "",
       WIN_CSC_KEY_PASSWORD: "",
     });
-    console.log(`Local unpacked packaging evidence: ${packagingOutput}`);
+    console.log(`[gate] stage=${stage.id} packaging preparation begin evidence=${packagingOutput}`);
     await snapshotPackagingState();
+    console.log(`[gate] stage=${stage.id} packaging execution begin evidence=${packagingOutput}`);
   }
   try {
     const result = outcome(
       await commandOutput(stage.command, args, {
+        stageId: stage.id,
         env,
         clock: context.clock,
         failFast: true,

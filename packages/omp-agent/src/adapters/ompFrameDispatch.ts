@@ -10,6 +10,7 @@ import {
   ompResponseFrameSchema,
   ompSessionEventFrameSchema,
   ompSessionInfoUpdateFrameSchema,
+  ompSettingsChangedFrameSchema,
   ompSubagentFrameSchema,
   type OmpConfigUpdateFrame,
   type OmpPromptResultFrame,
@@ -152,6 +153,24 @@ export function dispatchOmpFrame(frame: unknown, deps: OmpFrameDispatchDeps): vo
           event: "omp_core_frame_decode_failed",
           stage: "frame_decode",
           frameType: "config_update",
+          issueCount: parsed.error.issues.length,
+        });
+      return;
+    }
+    case "settings_changed": {
+      const parsed = ompSettingsChangedFrameSchema.safeParse(record);
+      if (parsed.success) {
+        // 通知帧：ZCode 的角色目录始终按 RPC 现读、会话侧设置由核心 reload，
+        // 这里只确认收到，不落本地状态，也绝不因它走会话事件分支被拒帧。
+        logger.debug("omp_settings_changed", {
+          event: "omp_settings_changed",
+          scope: parsed.data.scope,
+        });
+      } else
+        logger.warn("omp_core_frame_decode_failed", {
+          event: "omp_core_frame_decode_failed",
+          stage: "frame_decode",
+          frameType: "settings_changed",
           issueCount: parsed.error.issues.length,
         });
       return;

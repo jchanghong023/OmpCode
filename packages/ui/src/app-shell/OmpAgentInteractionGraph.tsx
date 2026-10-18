@@ -1,6 +1,6 @@
 import { memo, useEffect, useId, useMemo, useRef, useState } from "react";
 import type { ZCodeAgentInteractionEvent } from "@zcode/shared";
-import { BotIcon, OrbitIcon } from "lucide-react";
+import { BotIcon, OrbitIcon, UserRoundIcon } from "lucide-react";
 import { cn } from "@/components/lib/utils.js";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
 import {
@@ -176,10 +176,11 @@ export const OmpAgentInteractionGraph = memo(function OmpAgentInteractionGraph({
             <MessageSignal path={activeRoute.path} eventId={selected.eventId} />
           ) : null}
         </svg>
-        {model.nodes.map(({ agent, x, y }) => {
+        {model.nodes.map(({ agent, isUser, x, y }) => {
           const isSelected = agent.id === selected?.fromAgentId || agent.id === selected?.toAgentId;
-          const label =
-            agent.id === "main"
+          const label = isUser
+            ? intl.formatMessage({ id: "ompInteractions.user" })
+            : agent.id === "main"
               ? intl.formatMessage({ id: "ompInteractions.mainAgent" })
               : agent.label;
           const statusKey =
@@ -204,9 +205,10 @@ export const OmpAgentInteractionGraph = memo(function OmpAgentInteractionGraph({
               data-testid="omp-agent-interaction-node"
               data-agent-id={agent.id}
               data-label={agent.label}
+              data-identity={isUser ? "user" : "agent"}
               data-parent-agent-id={agent.parentAgentId}
               data-selected={isSelected}
-              title={agent.label}
+              title={label}
               className={cn(
                 "absolute flex flex-col justify-center rounded-xl border bg-card/95 px-3 text-ui-base text-foreground shadow-sm transition-colors motion-reduce:transition-none",
                 isSelected ? "border-brand ring-2 ring-brand/10" : "border-card-border",
@@ -224,7 +226,9 @@ export const OmpAgentInteractionGraph = memo(function OmpAgentInteractionGraph({
               }}
             >
               <span className="flex min-w-0 items-center gap-2 font-medium">
-                {agent.id === "main" ? (
+                {isUser ? (
+                  <UserRoundIcon className="size-4 shrink-0 text-brand" aria-hidden />
+                ) : agent.id === "main" ? (
                   <OrbitIcon className="size-4 shrink-0 text-brand" aria-hidden />
                 ) : (
                   <BotIcon className="size-4 shrink-0 text-brand" aria-hidden />
@@ -232,11 +236,13 @@ export const OmpAgentInteractionGraph = memo(function OmpAgentInteractionGraph({
                 <span className="truncate">{label}</span>
               </span>
               <span className="mt-1 truncate pl-6 text-ui-sm text-foreground-subtle">
-                {agent.known === false
-                  ? intl.formatMessage({ id: "ompInteractions.unknownAgent" })
-                  : statusKey
-                    ? intl.formatMessage({ id: statusKey })
-                    : agent.status || agent.id}
+                {isUser
+                  ? agent.id
+                  : agent.known === false
+                    ? intl.formatMessage({ id: "ompInteractions.unknownAgent" })
+                    : statusKey
+                      ? intl.formatMessage({ id: statusKey })
+                      : agent.status || agent.id}
               </span>
             </div>
           );

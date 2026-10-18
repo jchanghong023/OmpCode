@@ -1,6 +1,7 @@
 /* eslint-disable max-lines -- 桌面窗口 chrome、webview 安全策略和 popup 路由共享同一 BrowserWindow 生命周期上下文。 */
 import { app, BrowserWindow, Menu, nativeImage, nativeTheme, screen } from "electron";
 import { join } from "node:path";
+import { resolveOmpProfileFromEnv } from "@zcode/shared/omp-profile";
 import type {
   ContextMenuParams,
   Input,
@@ -593,7 +594,10 @@ export function createBrowserWindow(options: {
       // 和 GPU。窗口保持默认节流；截图期只临时唤醒 owner renderer 与当前目标 guest。
       zoomFactor: initialDesktopZoomFactor,
       // 将 deviceMid 透传给 preload，供 renderer 在 React 渲染前同步读取
-      additionalArguments: [`--device-id=${options.deviceMid ?? ""}`],
+      additionalArguments: [
+        `--device-id=${options.deviceMid ?? ""}`,
+        `--omp-profile=${resolveOmpProfileFromEnv(process.env)}`,
+      ],
     },
   });
 

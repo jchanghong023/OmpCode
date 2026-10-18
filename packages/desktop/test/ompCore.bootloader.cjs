@@ -6,6 +6,7 @@ const { createServer } = require("node:http");
 const { registerHooks, syncBuiltinESMExports } = require("node:module");
 const { appendIsolationEvidence } = require("./ompCore.evidence.cjs");
 const { isAbsolute, join, resolve } = require("node:path");
+const { ownedHostUtilityProcess } = require("./ompInteractionQueryFault.cjs");
 const { pathToFileURL } = require("node:url");
 const electron = require("electron");
 const { app, BrowserWindow: NativeBrowserWindow } = electron;
@@ -13,6 +14,14 @@ const root = process.env.OMP_E2E_ISOLATED_ROOT;
 assert.ok(root && isAbsolute(root), "Use an absolute isolated GUI root");
 const desktopRoot = resolve(__dirname, "..");
 const evidencePath = join(root, "evidence", `window-isolation-${process.pid}.jsonl`);
+const interactionFault =
+  process.env.OMP_E2E_SUITE === "agents"
+    ? ownedHostUtilityProcess(electron.utilityProcess, {
+        root,
+        hostPath: join(desktopRoot, "out", "host", "index.js"),
+        nonce: randomUUID(),
+      })
+    : null;
 const native = Object.fromEntries(
   ["isVisible", "isFocused", "isFocusable"].map((name) => [
     name,
@@ -23,6 +32,44 @@ let failure;
 let previous;
 let evidenceWrite = Promise.resolve();
 const suppressed = {};
+// 仅观察真实公开调用；不替换 bridge、结果或业务状态，也不保存参数正文。
+const observations = { agentInteractionQueries: 0 };
+const observedPorts = new WeakSet();
+function observeQuery(value, seen = new WeakSet()) {
+  if (typeof value === "string") {
+    if (["session/agentInteractions", "listSessionAgentInteractions"].includes(value)) return true;
+    if (value.startsWith("{") || value.startsWith("[")) {
+      try {
+        return observeQuery(JSON.parse(value), seen);
+      } catch {
+        return false;
+      }
+    }
+    return false;
+  }
+  if (!value || typeof value !== "object" || seen.has(value)) return false;
+  seen.add(value);
+  return Object.values(value).some((item) => observeQuery(item, seen));
+}
+function observePacket(event, args) {
+  if (observeQuery(args)) observations.agentInteractionQueries++;
+  for (const port of event?.ports ?? []) {
+    if (observedPorts.has(port)) continue;
+    observedPorts.add(port);
+    port.on("message", (message) => observePacket(message, message.data));
+  }
+}
+const realHandle = electron.ipcMain.handle.bind(electron.ipcMain);
+electron.ipcMain.handle = (channel, listener) =>
+  realHandle(channel, (event, ...args) => {
+    observePacket(event, args);
+    return listener(event, ...args);
+  });
+const realEmit = electron.ipcMain.emit;
+electron.ipcMain.emit = function (channel, event, ...args) {
+  observePacket(event, args);
+  return realEmit.call(this, channel, event, ...args);
+};
 
 // 沙箱数据根不隔离 HKCU；测试 Main 不得覆盖用户协议处理器或 Explorer 菜单。
 app.setAsDefaultProtocolClient = () => {
@@ -137,6 +184,10 @@ const HiddenBrowserWindow = new Proxy(NativeBrowserWindow, {
 // Electron 的原生导出是不可改写 getter；进程内模块 hook 只替换构造器，其他 API 原样转发。
 const isolatedElectron = Object.create(electron);
 Object.defineProperty(isolatedElectron, "BrowserWindow", { value: HiddenBrowserWindow });
+if (interactionFault)
+  Object.defineProperty(isolatedElectron, "utilityProcess", {
+    value: interactionFault.utilityProcess,
+  });
 const exportKey = Symbol.for("omp-core-isolated-electron");
 globalThis[exportKey] = isolatedElectron;
 const electronSource = [
@@ -189,7 +240,26 @@ app.setAppPath(desktopRoot);
 
 void (async () => {
   const captureRoute = `/capture/${randomUUID()}`;
+  const observationsRoute = `/observations/${randomUUID()}`;
+  const shutdownRoute = `/shutdown/${randomUUID()}`;
   const captureServer = createServer(async (request, response) => {
+    if (request.method === "POST" && request.url === shutdownRoute) {
+      // 普通重启先走 Chromium 持久化/应用退出；不能把强杀前的内存存储冒充冷恢复事实。
+      const sessions = new Set(
+        NativeBrowserWindow.getAllWindows().map((win) => win.webContents.session),
+      );
+      for (const session of sessions) session.flushStorageData();
+      response.writeHead(200).end();
+      setImmediate(() => app.quit());
+      return;
+    }
+    if (request.method === "GET" && request.url === observationsRoute) {
+      report();
+      response
+        .writeHead(200, { "Content-Type": "application/json" })
+        .end(JSON.stringify({ ...observations, ...interactionFault?.observations() }));
+      return;
+    }
     if (request.method !== "GET" || request.url !== captureRoute) {
       response.writeHead(404).end();
       return;
@@ -216,6 +286,12 @@ void (async () => {
   });
   console.log(
     `OMP_CORE_GUI_SCREENSHOT_URL=http://127.0.0.1:${captureServer.address().port}${captureRoute}`,
+  );
+  console.log(
+    `OMP_CORE_GUI_OBSERVATIONS_URL=http://127.0.0.1:${captureServer.address().port}${observationsRoute}`,
+  );
+  console.log(
+    `OMP_CORE_GUI_SHUTDOWN_URL=http://127.0.0.1:${captureServer.address().port}${shutdownRoute}`,
   );
   // Electron ESM 必须看到同一构造器；不允许补救为已展示窗口事后 hide。
   assert.equal((await import("electron")).BrowserWindow, HiddenBrowserWindow);

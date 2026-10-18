@@ -1,7 +1,7 @@
 // 子代理控制（omp-core-integration.md）：stop → omp cancel_subagent、send_message →
 // omp steer_subagent，均在父会话自己的进程上执行（上游 v1 面；新核仅运行中子代理可达，
-// 未运行/未知 id 的取消按成功 no-op、发送按错误文案返回——oh-my-pi rpc-mode.ts
-// handleRpcCancelSubagent/handleRpcSteerSubagent 语义）。
+// 未运行/未知 id 的原生取消虽为成功 no-op，适配器仍明确拒绝，只有 cancelled:true 才接纳；
+// 发送失败保留原生错误（oh-my-pi rpc-mode.ts handleRpcCancelSubagent/handleRpcSteerSubagent）。
 // 只读详情的记录续读（get_subagent_messages fromByte/nextByte）同经父会话进程。
 
 import type { OmpCommandOutcome, OmpSessionProcess } from "./ports.js";
@@ -11,6 +11,7 @@ import { diagnostics } from "./diagnostics.js";
 export interface EngineSubagentHost {
   ensureStarted(): Promise<void>;
   currentProcess(): OmpSessionProcess | null;
+  observedSubagentStatus?(id: string, process: OmpSessionProcess | null): string | undefined;
 }
 
 /** 控制入口的引擎定位面（SessionRegistry 的窄视图）。 */
@@ -48,6 +49,17 @@ export async function controlSubagent(
       };
       const engine = deps.getEngine(sessionId);
       if (!engine) return failed({ success: false, error: `session unavailable: ${sessionId}` });
+      const admittedProcess = engine.currentProcess();
+      if (
+        action === "stop" &&
+        engine.observedSubagentStatus &&
+        engine.observedSubagentStatus(subagentId, admittedProcess) !== "running"
+      )
+        return failed({
+          success: false,
+          error: "Subagent is not observed running",
+          code: "not_running",
+        });
       stage = "start";
       try {
         await engine.ensureStarted();
@@ -68,6 +80,22 @@ export async function controlSubagent(
           success: false,
           error: "omp core failed to start",
           code: "omp_start_failed",
+        });
+      if (action === "stop" && admittedProcess && process !== admittedProcess)
+        return failed({
+          success: false,
+          error: "Subagent process generation changed",
+          code: "stale_process",
+        });
+      if (
+        action === "stop" &&
+        engine.observedSubagentStatus &&
+        engine.observedSubagentStatus(subagentId, process) !== "running"
+      )
+        return failed({
+          success: false,
+          error: "Subagent is no longer running",
+          code: "not_running",
         });
       stage =
         action === "send_message" && (message === undefined || message.length === 0)
@@ -100,10 +128,9 @@ export async function controlSubagent(
 }
 
 /**
- * 会话引擎的控制转发：stop → cancel_subagent（响应 {cancelled:boolean}——未知/已结束
- * 子代理按成功 no-op）；send_message → steer_subagent（响应无 data；错误以 error 文案
- * 返回，如 "Subagent not running: <id>"）。状态词对齐上游真值（cancelled/stopping 语义
- * 由上游消息承载），适配器不伪造同步完成。
+ * 会话引擎的控制转发：stop → cancel_subagent，仅原生 {cancelled:true} 映射 stopping；
+ * 未知/已结束的成功 no-op 明确失败。send_message → steer_subagent，原生错误原样返回。
+ * 适配器不从 ACK 伪造完成，终态仍由原生生命周期与记录承载。
  */
 async function sendSubagentControl(
   process: OmpSessionProcess,
@@ -113,9 +140,15 @@ async function sendSubagentControl(
 ): Promise<OmpCommandOutcome> {
   if (action === "stop") {
     const outcome = await process.send({ type: "cancel_subagent", subagentId });
-    return outcome.success
-      ? { success: true, data: { subagentId, action, status: "stopping" } }
-      : outcome;
+    if (!outcome.success) return outcome;
+    const data = outcome.data as { cancelled?: unknown } | undefined;
+    if (data?.cancelled !== true)
+      return {
+        success: false,
+        error: "OMP did not cancel a running subagent",
+        code: "not_running",
+      };
+    return { success: true, data: { subagentId, action, status: "stopping" } };
   }
   if (message === undefined || message.length === 0) {
     return { success: false, error: "send_message requires a message", code: "invalid_params" };

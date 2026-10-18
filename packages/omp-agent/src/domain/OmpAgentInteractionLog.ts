@@ -1,8 +1,5 @@
-import {
-  interactionEntryFromEvent,
-  interactionObject,
-  type InteractionSource,
-} from "./OmpAgentInteractionRecords.js";
+import { interactionEntryFromEvent } from "./OmpAgentInteractionEntry.js";
+import { interactionObject, type InteractionSource } from "./OmpAgentInteractionRecords.js";
 
 /** 会话引擎拥有的轻量 live 观察；普通对话不进入该读面，不额外落盘。 */
 export class OmpAgentInteractionLog {

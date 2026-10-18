@@ -2,7 +2,7 @@
 
 > 技能：`jch-gui-android-tui-e2e-repair`（全自动模式，用户授权全部权限）。运行 ID：`gui-e2e-20261001-225016`。
 > 目标：OmpCode Windows 桌面（`pnpm dev:desktop` 隔离开发态，devServer 5194 / CDP 9230，agent-browser 0.38.1 经 CDP 驱动）。
-> 真实模型：`zhipu-coding-plan/glm-5.3-flash`（用户 omp 既有配置，默认 yolo 无审批弹窗）。证据目录：`docs/test-reports/evidence-gui-20261001/`。
+> 证据目录：`docs/test-reports/evidence-gui-20261001/`。本文件保留历史缺陷与验证状态；现行自动化使用真实 OMP + 本地模拟模型，外部调用规程仅见 [e2e.md](../requirements/e2e.md)。
 
 ## 范围与切入点
 
@@ -31,7 +31,7 @@
 
 ### 缺陷 3：创建即发会话面板永久空白（修复缺陷 2 后暴露的潜伏竞态）
 
-- **复现**：无预热路径下新建任务发送首条消息：会话创建、omp 回合真实完成（glm 回复在事实源 jsonl 中），但会话面板永久空白、输入器禁用；冷重载后依旧。证据：`e06-e10` 截图、探针日志。
+- **复现**：历史会话链路中，会话已创建且事实源 jsonl 已记录完成状态，但会话面板永久空白、输入器禁用；冷重载后依旧。证据：`e06-e10` 截图、探针日志。
 - **根因**（探针链定位，`evidence-gui-20261001` 探针输出）：会话创建 ACK 后，宿主并发 `session/read` 在 `registry.createSession` 尚未登记引擎的空窗期触发 `resumeSession`；两个并发冷恢复（其一经项目分支、其二因项目进程可用性抖动走 legacy 分支）先后以 0 行冷引擎覆盖注册表，顶替正在运行回合的活引擎——面板订阅到空引擎。
 - **修复**（`packages/omp-agent/src/app/sessionRegistry.ts`）：① `resumeSession` 先等待在途 `createSession` 登记（`settlePendingCreates` 串行屏障）；② 同 sessionId 并发冷加载按 `pendingResumes` 去重；③ 冷加载完成后再查注册表，已有更早登记的引擎（并发 create 或先完成的加载）一律返回已登记引擎、丢弃本次冷恢复结果（冷恢复引擎惰性挂载、无子进程，丢弃无副作用）。
 - **复测**：带探针验证订阅命中活引擎（`rows=3 phase=running`→`completedSuccess`）；干净构建原路径复测「新建任务→首发送→回复全链路渲染」（`e12`、`e13-final-clean-build.png`）。

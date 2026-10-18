@@ -1,6 +1,7 @@
 import { modelSelectionSchema, type ModelSelection } from "@zcode/shared/model-selection";
 import { submissionModeSchema, type SubmissionMode } from "@zcode/shared/zcode-protocol-v4";
 import { logger } from "@/logger.js";
+import { composerProfileStorageSuffix } from "./composerProfileStorage.js";
 
 // 沿用旧 key，读取时兼容只保存 ModelSelection 的历史记录。
 const COMPOSER_RECENT_KEY_PREFIX = "zcode-model-selection-recent-v1";
@@ -20,7 +21,7 @@ const acceptedSequences = new WeakMap<StorageLike, Map<string, number>>();
 
 function resolveComposerRecentKey(workspacePath: string, workspaceIdentity?: string): string {
   const workspaceKey = workspaceIdentity?.trim() || workspacePath;
-  return `${COMPOSER_RECENT_KEY_PREFIX}:${workspaceKey}`;
+  return `${COMPOSER_RECENT_KEY_PREFIX}:${workspaceKey}${composerProfileStorageSuffix()}`;
 }
 
 export function readComposerRecent(

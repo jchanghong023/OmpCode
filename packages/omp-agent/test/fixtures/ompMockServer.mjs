@@ -7,7 +7,7 @@
  */
 import { createServer } from "node:http";
 import { randomUUID } from "node:crypto";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { createMockModel } from "./ompMockModel.mjs";
 import { createStrictMockHandler } from "./ompMockScenarios.mjs";
@@ -16,6 +16,10 @@ export const MOCK_PROVIDER = "zcode-mock";
 export const MOCK_MODEL_ID = "scripted";
 export const MOCK_MODEL_NAME = "ZCode Mock";
 export const MOCK_MODEL_SELECTOR = `${MOCK_PROVIDER}/${MOCK_MODEL_ID}`;
+export const GUI_MOCK_MODELS = [
+  { id: MOCK_MODEL_ID, name: MOCK_MODEL_NAME, efforts: ["high", "max"] },
+  { id: "scripted-alt", name: "ZCode Mock Alt", efforts: ["high"] },
+].map((model) => ({ ...model, selector: `${MOCK_PROVIDER}/${model.id}` }));
 
 function usageOnWire(usage) {
   return {
@@ -49,7 +53,7 @@ async function serveStream(response, stream, signal, metadata) {
           id: event.partial.responseId ?? id,
           type: "message",
           role: "assistant",
-          model: MOCK_MODEL_ID,
+          model: metadata.modelId ?? MOCK_MODEL_ID,
           content: [],
           stop_reason: null,
           usage: usageOnWire(event.partial.usage),
@@ -98,6 +102,7 @@ async function serveStream(response, stream, signal, metadata) {
       }
       frame(response, "content_block_stop", { index });
     } else if (event.type === "done") {
+      metadata.terminalReason = event.reason;
       frame(response, "message_delta", {
         delta: {
           stop_reason: { stop: "end_turn", length: "max_tokens", toolUse: "tool_use" }[
@@ -109,6 +114,7 @@ async function serveStream(response, stream, signal, metadata) {
       });
       frame(response, "message_stop", {});
     } else if (event.type === "error") {
+      metadata.terminalReason = event.reason;
       frame(response, "error", {
         error: {
           type: event.reason === "aborted" ? "request_aborted" : "api_error",
@@ -125,13 +131,26 @@ export async function startMockModelServer(options = {}) {
   const controllers = new Set();
   const tasks = new Set();
   const custom = options.handler !== undefined || options.responses !== undefined;
-  const model = createMockModel({
-    id: MOCK_MODEL_ID,
-    provider: MOCK_PROVIDER,
-    reasoning: true,
-    responses: options.responses,
-    handler: custom ? options.handler : createStrictMockHandler(),
-  });
+  const catalog = options.models ?? [GUI_MOCK_MODELS[0]];
+  const calls = [];
+  const requests = [];
+  const handler = custom ? options.handler : createStrictMockHandler();
+  const models = new Map(
+    catalog.map((entry) => {
+      const instance = createMockModel({
+        id: entry.id,
+        provider: MOCK_PROVIDER,
+        reasoning: true,
+        responses: options.responses,
+        handler,
+      });
+      instance.calls = calls;
+      return [entry.id, instance];
+    }),
+  );
+  if (!models.has(MOCK_MODEL_ID) || models.size !== catalog.length)
+    throw new Error("Mock catalog requires the primary model and unique model IDs");
+  const model = models.get(MOCK_MODEL_ID);
   const recordFailure = (error) =>
     failures.push(error instanceof Error ? error : new Error(String(error)));
   const server = createServer((request, response) => {
@@ -147,12 +166,32 @@ export async function startMockModelServer(options = {}) {
       const chunks = [];
       for await (const chunk of request) chunks.push(chunk);
       const body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-      if (body.model !== MOCK_MODEL_ID) throw new Error(`Unsupported mock model: ${body.model}`);
+      const selectedModel = models.get(body.model);
+      if (!selectedModel) throw new Error(`Unsupported mock model: ${body.model}`);
       if (!Array.isArray(body.messages) || body.stream !== true)
         throw new Error("Expected streaming Anthropic messages");
-      const metadata = {};
-      const stream = model.stream(
-        model,
+      const recorded = {
+        requestId: randomUUID(),
+        model: body.model,
+        messages: body.messages,
+        system: body.system ?? null,
+        tools: body.tools ?? [],
+        thinking: body.thinking ?? null,
+        outputConfig: body.output_config ?? null,
+        aborted: false,
+        completed: false,
+      };
+      requests.push(recorded);
+      controller.signal.addEventListener(
+        "abort",
+        () => {
+          recorded.aborted = true;
+        },
+        { once: true },
+      );
+      const metadata = { modelId: body.model };
+      const stream = selectedModel.stream(
+        selectedModel,
         {
           messages: body.messages,
           systemPrompt: body.system,
@@ -160,12 +199,16 @@ export async function startMockModelServer(options = {}) {
         },
         {
           signal: controller.signal,
+          modelId: body.model,
           onResponse(value) {
             Object.assign(metadata, value);
           },
         },
       );
       await serveStream(response, stream, controller.signal, metadata);
+      recorded.completed =
+        !controller.signal.aborted &&
+        ["stop", "length", "toolUse"].includes(metadata.terminalReason);
     })()
       .catch((error) => {
         if (controller.signal.aborted) return;
@@ -197,12 +240,17 @@ export async function startMockModelServer(options = {}) {
   });
   server.on("error", recordFailure);
   const baseUrl = `http://127.0.0.1:${server.address().port}`;
-  model.baseUrl = baseUrl;
+  for (const instance of models.values()) instance.baseUrl = baseUrl;
   let closed = false;
   return {
     baseUrl,
     model,
-    calls: model.calls,
+    calls,
+    requests,
+    models: catalog.map((entry) => ({
+      ...entry,
+      selector: `${MOCK_PROVIDER}/${entry.id}`,
+    })),
     assertHealthy() {
       if (failures.length)
         throw new AggregateError(failures, failures.map((error) => error.message).join("\n"));
@@ -217,8 +265,20 @@ export async function startMockModelServer(options = {}) {
       });
       await Promise.all(tasks);
     },
-    async writeConfig(configRoot, { defaultModel = MOCK_MODEL_SELECTOR } = {}) {
-      const agentDir = path.join(configRoot, "agent");
+    async writeConfig(
+      configRoot,
+      {
+        defaultModel = MOCK_MODEL_SELECTOR,
+        input = ["text", "image"],
+        profile = "",
+        preserveConfig = false,
+      } = {},
+    ) {
+      if (profile && !/^[A-Za-z0-9_-]+$/u.test(profile))
+        throw new Error("Fixture profile must be a single safe directory name");
+      const agentDir = profile
+        ? path.join(configRoot, "profiles", profile, "agent")
+        : path.join(configRoot, "agent");
       await mkdir(agentDir, { recursive: true });
       const models = {
         providers: {
@@ -228,18 +288,16 @@ export async function startMockModelServer(options = {}) {
             apiKey: "zcode-mock-fixture-key",
             auth: "apiKey",
             compat: { requiresToolResultId: true },
-            models: [
-              {
-                id: MOCK_MODEL_ID,
-                name: MOCK_MODEL_NAME,
-                reasoning: true,
-                input: ["text"],
-                thinking: { mode: "anthropic-budget-effort", efforts: ["high", "max"] },
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: 200000,
-                maxTokens: 32768,
-              },
-            ],
+            models: catalog.map((entry) => ({
+              id: entry.id,
+              name: entry.name,
+              reasoning: true,
+              input,
+              thinking: { mode: "anthropic-budget-effort", efforts: entry.efforts },
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              contextWindow: 200000,
+              maxTokens: 32768,
+            })),
           },
         },
       };
@@ -282,6 +340,11 @@ export async function startMockModelServer(options = {}) {
         `${JSON.stringify(models, null, 2)}\n`,
         "utf8",
       );
+      // 冷启动只更新临时端口；覆盖角色配置会把“保存丢失”的回归伪装成测试准备。
+      if (preserveConfig) {
+        await readFile(path.join(agentDir, "config.yml"));
+        return;
+      }
       await writeFile(
         path.join(agentDir, "config.yml"),
         `${JSON.stringify(config, null, 2)}\n`,

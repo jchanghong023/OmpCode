@@ -80,10 +80,10 @@ export async function hydrateEngineFromCold(
     rowCount: hydratedRows.length,
     commandOutputCount: outputs.length,
   });
-  engine.hydrateRows(hydratedRows);
+  engine.hydrateRows(hydratedRows, false, { createdAt, updatedAt });
   host.upsertEngineSummary(engine, {
-    createdAt: createdAt ?? Date.now(),
-    lastActivityAt: updatedAt ?? Date.now(),
+    createdAt: engine.createdAt,
+    lastActivityAt: engine.activityBaselineAt,
   });
   diagnostics.info("omp.session.cold_history.hydrate.completed", {
     sessionId: engine.sessionId,

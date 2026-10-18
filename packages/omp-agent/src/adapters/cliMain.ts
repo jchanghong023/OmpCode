@@ -169,8 +169,8 @@ export async function runCliMain(
       store: createOmpStore(env),
       gateway: {
         emitFrame: (params) => gatewayRef.server?.emitFrame(params),
-        requestUserInput: (params) =>
-          gatewayRef.server?.requestUserInput(params) ??
+        requestUserInput: (params, signal) =>
+          gatewayRef.server?.requestUserInput(params, signal) ??
           Promise.resolve({ action: "cancel" as const }),
       },
       workspacePath,
@@ -247,7 +247,7 @@ export async function runCliMain(
 export function buildOmpExtraArgs(env: NodeJS.ProcessEnv): string[] {
   const launchProfile = env.OMPCODE_CENTOS7_PROFILE;
   const profile = launchProfile ? resolveOmpProfileFromEnv(env) : null;
-  // OMP_RPC_ARGS_JSON：开发/测试用的附加 omp 启动参数（如 fake 核心脚本路径）。
+  // OMP_RPC_ARGS_JSON：开发/测试用的附加 omp 启动参数，如隔离模拟模型的选择与审批模式。
   return [...parseExtraArgs(env.OMP_RPC_ARGS_JSON), ...(profile ? ["--profile", profile] : [])];
 }
 

@@ -277,7 +277,7 @@
         "sourcePath": "packages/ai/src/providers/mock.ts",
         "sha256": "3631d4b13ac1b1cf39a0d86d80a8fcd3e2bc0940c07ce34af21002b09c45b632",
         "localPath": "packages/omp-agent/test/fixtures/ompMockModel.mjs",
-        "adaptation": "Preserve scripted content/events, handlers/iterables, push/reset/fallback, errors/cancellation, stop reasons, usage/cost and response metadata; remove production catalog/global registry integration and adapt error dependencies for Node."
+        "adaptation": "Preserve scripted content/events, handlers/iterables, push/reset/fallback, errors/cancellation, stop reasons, usage/cost and response metadata; remove production catalog/global registry integration and adapt error dependencies for Node. Add optional synchronous/asynchronous per-block deltas with stable content indexes, exact prefix accumulation, final JSON argument parsing and cancellation through the existing iterator boundary."
       },
       {
         "sourcePath": "packages/ai/src/utils/event-stream.ts",

@@ -677,6 +677,8 @@ function ConversationTimelineImpl({
     overscan: ROW_OVERSCAN,
     getItemKey,
     measureElement,
+    // 历史展开期间同步应用 RO 测高会再次改变观察布局；下一帧应用避免通知循环。
+    useAnimationFrameWithResizeObserver: true,
     // headerSlot（分享导入的只读块）与虚拟列表同处一个滚动容器，
     // 且高度可观。不告知这段偏移，虚拟窗口会按 scrollTop 直接索引 item，
     // 渲染窗口整体偏移一个 header 高度，用户滚到的区域会是空白。

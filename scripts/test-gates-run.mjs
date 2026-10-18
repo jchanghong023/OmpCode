@@ -2,12 +2,12 @@ import { writeSync } from "node:fs";
 import {
   budgetExpired,
   cancelCommands,
-  createGateClock,
-  gateBudget,
   runStages,
+  logGateProgress,
   startBudget,
   stopAll,
 } from "./test-gates-process.mjs";
+import { createGateClock, gateBudget } from "./test-gates-clock.mjs";
 
 export function createGateRun({
   level,
@@ -20,6 +20,8 @@ export function createGateRun({
 }) {
   if (limitSeconds !== null) gateBudget(level, limitSeconds);
   let timer;
+  let heartbeat;
+  let phase = "idle";
   let finishing;
   let activeWork;
   let terminal;
@@ -33,6 +35,7 @@ export function createGateRun({
   };
   const report = (status, exitCode, extra = {}) => {
     if (reported) return reported;
+    clearInterval(heartbeat);
     const timing = clock.read();
     const budgetMode = level === "fastcheck" ? "non-compilation" : "wall-clock";
     if (
@@ -77,6 +80,8 @@ export function createGateRun({
     if (finishing) return finishing;
     finishDetails = extra;
     const endCleanup = clock.enter("check");
+    phase = "cleanup";
+    logGateProgress(clock, "cleanup-start", phase);
     cancelCommands();
     finishing = (async () => {
       try {
@@ -84,7 +89,9 @@ export function createGateRun({
         // 失败/取消不等待挂起的用例或 verify；只能等待真正拥有的进程树。
         if (status === "PASS") await activeWork;
         await cleanup?.();
+        logGateProgress(clock, "cleanup-complete", phase);
       } catch (error) {
+        logGateProgress(clock, "cleanup-failed", phase);
         finishDetails = { ...finishDetails, cleanupError: error.message };
         status = "FAIL";
         exitCode = 1;
@@ -122,10 +129,14 @@ export function createGateRun({
     timer = startBudget(
       limitSeconds,
       clock,
-      () => terminate("TIMEOUT", 124),
+      () => {
+        logGateProgress(clock, "timeout", phase);
+        return terminate("TIMEOUT", 124);
+      },
       level,
       () => {
         force("TIMEOUT", 124);
+        logGateProgress(clock, "forced-exit", phase);
         report("TIMEOUT", 124, {
           ...finishDetails,
           reason:
@@ -141,14 +152,20 @@ export function createGateRun({
         return finish("NOT RUN — HUMAN AUTHORIZATION REQUIRED", 2);
       if (finishing) return finishing;
       runDetails = details;
+      phase = "stages";
+      heartbeat = setInterval(() => logGateProgress(clock, "progress", phase), 15_000);
+      heartbeat.unref();
       try {
-        activeWork = runStages(stages, operation, 3, clock);
+        activeWork = runStages(stages, operation, 4, clock);
         const records = await activeWork;
         if (finishing) return finishing;
         const allPassed = () =>
           records.length === stages.length && records.every((record) => record.status === "PASS");
+        phase = "verify";
+        if (allPassed() && verify) logGateProgress(clock, "verify-start", phase);
         activeWork = Promise.resolve(allPassed() ? verify?.(records) : undefined);
         await activeWork;
+        if (allPassed() && verify) logGateProgress(clock, "verify-complete", phase);
         if (finishing) return finishing;
         const passed = allPassed();
         const failed = records.some((record) => record.status === "FAIL");

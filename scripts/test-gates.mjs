@@ -2,7 +2,8 @@ import { readFile } from "node:fs/promises";
 import { fastPlan, fullPlan, slowPlan, installedOmp } from "./test-gates-plan.mjs";
 import { regularStage, restorePackagingState } from "./test-gates-environments.mjs";
 import { createGateRun } from "./test-gates-run.mjs";
-import { createGateClock, gateBudget, snapshot, sameSnapshot } from "./test-gates-process.mjs";
+import { snapshot, sameSnapshot } from "./test-gates-process.mjs";
+import { createGateClock, gateBudget } from "./test-gates-clock.mjs";
 
 const clock = createGateClock();
 const args = process.argv.slice(2);
@@ -74,8 +75,14 @@ try {
     if (["fulltest", "slowtest"].includes(level) && !planOnly && !authorized) {
       await finish("NOT RUN — HUMAN AUTHORIZATION REQUIRED", 2);
     } else {
+      const progress = (message) => {
+        if (!planOnly && level !== "--snapshot") console.log(`[gate] ${message}`);
+      };
+      progress("preparation begin: toolchain");
       const tools = await validateToolchain();
+      progress("toolchain verified; source snapshot begin");
       const source = await snapshot();
+      progress("source snapshot complete");
       if (level === "--snapshot") {
         await finish("PASS", 0, { snapshot: source, tools });
       } else {
@@ -91,7 +98,7 @@ try {
                 snapshot: source,
                 tools,
                 limitSeconds: budget,
-                concurrency: 3,
+                concurrency: 4,
                 stages,
               },
               null,
@@ -106,6 +113,7 @@ try {
             omp: await installedOmp(),
             guiProcesses: new Map(),
           };
+          progress(`plan ready stages=${stages.length} installedOmp=${Boolean(context.omp)}`);
           console.log(
             JSON.stringify({
               snapshot: source,
@@ -118,6 +126,7 @@ try {
             (stage, onFailure) => regularStage(stage, { ...context, onFailure }),
             { snapshot: source, tools },
             async (records) => {
+              progress("source snapshot verification begin");
               const current = await snapshot();
               if (!sameSnapshot(source, current))
                 records.push({
@@ -125,6 +134,7 @@ try {
                   status: "UNVERIFIED_MISSING_ENV",
                   reason: "Source changed during validation; results belong to different snapshots",
                 });
+              progress("source snapshot verification complete");
             },
           );
           process.exitCode = report.exitCode;

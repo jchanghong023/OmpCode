@@ -1,4 +1,5 @@
 import type {
+  BackgroundWorkSummary,
   ConversationRow,
   SubagentProjectionState,
   SubagentRow,
@@ -184,6 +185,33 @@ export class OmpSubagentProjection {
       childSessionIds: [...this.statuses.keys()].map((id) => this.host.viewIdOf(id)),
       running,
       endedTotal: [...this.statuses.values()].filter((status) => status !== "running").length,
+    });
+  }
+
+  /** 只派生有真实行的运行项；work 身份就是该行的既有 entityId，不创建另一份生命周期。 */
+  backgroundWorks(activeIds: readonly string[]): BackgroundWorkSummary[] {
+    return activeIds.flatMap((id) => {
+      const row = this.host.rowAt(this.rowIds.get(id) ?? -1);
+      if (
+        this.statuses.get(id) !== "running" ||
+        row?.kind !== "subagent" ||
+        row.status !== "running" ||
+        !row.entityId ||
+        !row.childSessionId
+      )
+        return [];
+      return [
+        {
+          workId: row.entityId,
+          kind: "subagent" as const,
+          title: row.summaryText,
+          status: "running" as const,
+          startedAt: row.startedAt ?? row.createdAt,
+          cancellable: true,
+          anchorRowId: row.rowId,
+          childSessionId: row.childSessionId,
+        },
+      ];
     });
   }
 
