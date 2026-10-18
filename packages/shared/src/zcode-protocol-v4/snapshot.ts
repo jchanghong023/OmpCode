@@ -396,6 +396,7 @@ export const runningSubagentSummarySchema = z.object({
   agentId: z.string().optional(),
   toolCallId: z.string().optional(),
   subagentType: z.string(),
+  model: z.string().optional(),
   title: z.string(),
   summary: z.string().optional(),
   status: z.enum(["running", "waiting", "blocked"]),

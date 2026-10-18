@@ -93,6 +93,7 @@ const coreTests = {
     "promptResultSemantics",
     "protocolServerConcurrency",
     "queueReconciliation",
+    "subagentModelProjection",
     "topicFlowControl",
     "topicWireBudget",
     "v4InteractionAck",

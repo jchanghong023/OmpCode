@@ -19,8 +19,10 @@ export function useOmpSubagentControlState(
     return () => next.release();
   }, [layer, parentSessionId]);
   const snapshot = lease?.sessionId === parentSessionId ? projection.snapshot : null;
-  const running =
-    snapshot?.subagents?.running.some((item) => item.childSessionId === childSessionId) === true;
+  const runningSubagent = snapshot?.subagents?.running.find(
+    (item) => item.childSessionId === childSessionId,
+  );
+  const running = runningSubagent !== undefined;
   const row = snapshot?.rows.window.findLast(
     (item) => item.kind === "subagent" && item.childSessionId === childSessionId,
   );
@@ -29,5 +31,6 @@ export function useOmpSubagentControlState(
     : row?.kind === "subagent"
       ? row.status
       : "unknown";
-  return { status, controllable: running && projection.status === "live" };
+  const model = runningSubagent?.model ?? (row?.kind === "subagent" ? row.model : undefined);
+  return { status, model, controllable: running && projection.status === "live" };
 }

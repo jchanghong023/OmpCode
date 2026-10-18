@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { captureIsolationScreenshot } from "./ompCore.evidence.cjs";
 import { reveal } from "./ompMockInteractions.assertions.mjs";
 import { eventually } from "./ompAgentsAcceptance.assertionsShared.mjs";
+import { assertCardModel, assertDetailModel } from "./ompAgentsAcceptance.models.mjs";
 
 export * from "./ompAgentsAcceptance.assertionsShared.mjs";
 export * from "./ompAgentsAcceptance.assertionsPanels.mjs";
@@ -200,8 +201,15 @@ export async function openChild(page, child, parentId) {
 export async function assertDetails(page, children, records, parentId, evidenceDir, phase) {
   assert.equal(children.length, 3);
   for (const child of children) {
-    const pane = await openChild(page, child, parentId);
     const source = records.children.find((item) => item.rawId === child.rawId);
+    assert.equal(
+      source?.model,
+      child.model,
+      "HTTP and persisted assistant model identities must agree",
+    );
+    await assertCardModel(page, child, parentId);
+    const pane = await openChild(page, child, parentId);
+    await assertDetailModel(pane, child);
     assert.ok(source && source.toolIds.length >= 4);
     for (const id of source.toolIds) {
       const row = pane.locator(`[data-tool-call-id="${id}"]`);
@@ -248,6 +256,7 @@ export async function assertDetails(page, children, records, parentId, evidenceD
       .getByRole("button", { name: /关闭|Close/u })
       .click();
     const reopened = await openChild(page, child, parentId);
+    await assertDetailModel(reopened, child);
     const persistedWrite = reopened.locator(
       `[data-tool-call-id="agents-child-${child.name}-write"]`,
     );

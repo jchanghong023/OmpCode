@@ -70,7 +70,7 @@ export function createChildHandlers({
     for (const child of persisted.details.progress) {
       assert.equal(typeof child.id, "string");
       assert.ok(child.id.length > 0);
-      assert.equal(child.agent, "task");
+      assert.equal(child.agent, child.assignment === "AGENTS_CHILD_b" ? "sonic" : "task");
       assert.ok(
         ["pending", "running"].includes(child.status),
         "Observe a real unfinished asynchronous dispatch, never a substituted synchronous completion",
@@ -120,12 +120,18 @@ export function createChildHandlers({
     assert.ok(issued.has(owner), "Child cannot precede a genuine task");
     observed.children[name] ??= {
       assignment: false,
+      model: `zcode-mock/${options.modelId}`,
       hello: false,
       writes: false,
       read: false,
       yielded: false,
     };
     const state = observed.children[name];
+    assert.equal(
+      state.model,
+      `zcode-mock/${options.modelId}`,
+      `Child ${name} must keep its actual HTTP model identity across callbacks`,
+    );
     const messages = context.messages
       .filter((message) => message.role === "user")
       .map((message) => promptOf(message.content));

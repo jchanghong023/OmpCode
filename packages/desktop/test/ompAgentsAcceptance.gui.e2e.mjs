@@ -26,6 +26,12 @@ import {
   captureLiveAgentsReceipt,
   recoverAgents,
 } from "./ompAgentsAcceptance.lifecycle.mjs";
+import {
+  assertDetailModel,
+  assertEndedModels,
+  assertRunningModel,
+  observedChildModels,
+} from "./ompAgentsAcceptance.models.mjs";
 import { exercisePanelStop } from "./ompAgentsAcceptance.panelStop.mjs";
 import {
   inspectRecords,
@@ -137,15 +143,11 @@ try {
       3,
       await taskDispatch(runtime, parentId, "agents-batch-task"),
     );
+    children = observedChildModels(children, await initial());
     for (const child of children) {
-      assert.equal(
-        await panel
-          .locator(`[data-child-session-id="${child.route}"][data-work-status="running"]`)
-          .count(),
-        1,
-        "Every running status row must retain its exact actual child identity",
-      );
+      await assertRunningModel(page, panel, child);
       const pane = await openChild(page, child);
+      await assertDetailModel(pane, child);
       await pane.getByRole("button", { name: /^(?:停止|Stop)$/u }).waitFor({ state: "visible" });
       assert.equal(await pane.getByRole("button", { name: /^(?:停止|Stop)$/u }).isEnabled(), true);
     }
@@ -280,6 +282,7 @@ try {
       failure: failed,
       control: controlled,
     });
+    await assertEndedModels(page, await openAgentPanel(page), children, parentId);
     receipt = await captureLiveAgentsReceipt({
       runtime,
       records: finalRecords,

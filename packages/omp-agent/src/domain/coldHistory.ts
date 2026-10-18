@@ -331,6 +331,7 @@ export function rowsFromOmpEntries(
                   kind: "subagent",
                   parentToolCallId: agent.parentToolCallId,
                   subagentType: agent.agent,
+                  ...(agent.model ? { model: agent.model } : {}),
                   status: agent.status,
                   summaryText: agent.summary,
                   ...(subagentTranscripts.get(agent.id) || agent.resultText

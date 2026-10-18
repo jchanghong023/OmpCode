@@ -8,10 +8,16 @@ import type { ConversationProjection } from "../domain/conversationProjection.js
 import type { OmpSessionProcess } from "./ports.js";
 import { diagnostics } from "./diagnostics.js";
 import { transcriptFromOmpEntries } from "../domain/coldHistory.js";
+import {
+  ompHistoryModel,
+  ompResolvedSubagentModel,
+  ompSubagentEventModel,
+} from "../domain/OmpSubagentHistory.js";
 
 type Status = "running" | "success" | "failed" | "cancelled";
 type RecordState = {
   agent: string;
+  model?: string;
   status: Status;
   summaryText: string;
   startedAt: number;
@@ -70,7 +76,21 @@ export class OmpSubagentBridge {
   }
 
   handle(frame: OmpSubagentFrame): void {
-    if (frame.type === "subagent_event") return;
+    if (frame.type === "subagent_event") {
+      const prior = this.records.get(frame.payload.id);
+      const model = ompSubagentEventModel(frame.payload.event);
+      // Events enrich an established child only; they cannot invent lifecycle or control proof.
+      if (
+        prior &&
+        model &&
+        model !== prior.model &&
+        prior.observedProcessEpoch === this.observedProcessEpoch &&
+        this.observedProcess === this.currentProcess()
+      ) {
+        this.update(frame.payload.id, { ...prior, model });
+      }
+      return;
+    }
     if (frame.type === "subagent_progress") {
       const { payload } = frame;
       const prior = this.records.get(payload.progress.id);
@@ -81,6 +101,7 @@ export class OmpSubagentBridge {
           : subagentStatus(payload.progress.status ?? "running");
       this.update(payload.progress.id, {
         agent: payload.agent,
+        model: ompResolvedSubagentModel(payload.progress) ?? prior?.model,
         parentToolCallId: payload.parentToolCallId ?? prior?.parentToolCallId,
         status,
         summaryText: payload.assignment ?? payload.task ?? prior?.summaryText ?? payload.agent,
@@ -95,6 +116,7 @@ export class OmpSubagentBridge {
     const status = subagentStatus(payload.status);
     this.update(payload.id, {
       agent: payload.agent,
+      model: prior?.model,
       parentToolCallId: payload.parentToolCallId ?? prior?.parentToolCallId,
       status,
       summaryText: payload.description ?? prior?.summaryText ?? payload.agent,
@@ -224,6 +246,7 @@ export class OmpSubagentBridge {
       prior?.status && prior.status !== "running" ? prior.status : subagentStatus(snapshot.status);
     this.update(snapshot.id, {
       agent: snapshot.agent,
+      model: ompResolvedSubagentModel(snapshot.progress) ?? prior?.model,
       parentToolCallId: snapshot.parentToolCallId ?? prior?.parentToolCallId,
       status,
       summaryText:
@@ -304,14 +327,21 @@ export class OmpSubagentBridge {
       const data = outcome.data as { messages?: unknown[] } | undefined;
       // 真实 IRC/custom 的 content 可以是字符串；按数组 filter 会在子代理结束时崩溃。
       // 复用冷历史文本转换，统一处理字符串/文本块与 custom.display，不执行原生 renderer。
-      const transcriptText = transcriptFromOmpEntries(
-        (Array.isArray(data?.messages) ? data.messages : []).map((message) => ({
-          type: "message",
-          message,
-        })),
-      );
+      const entries = (Array.isArray(data?.messages) ? data.messages : []).map((message) => ({
+        type: "message",
+        message,
+      }));
+      const transcriptText = transcriptFromOmpEntries(entries);
       const current = this.records.get(id);
-      if (current && transcriptText) this.update(id, { ...current, transcriptText });
+      if (current) {
+        // Do not replace a serving identity observed while this transcript request was in flight.
+        const model =
+          current.model === prior.model
+            ? (ompHistoryModel(entries)?.model ?? current.model)
+            : current.model;
+        if (transcriptText || model !== current.model)
+          this.update(id, { ...current, model, ...(transcriptText ? { transcriptText } : {}) });
+      }
     } finally {
       this.transcriptReads.delete(id);
     }

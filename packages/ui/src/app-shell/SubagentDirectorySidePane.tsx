@@ -71,6 +71,9 @@ const DirectoryRow = memo(function DirectoryRow({
 }) {
   const { intl } = useZCodeIntl();
   const timestamp = "endedAt" in item ? item.endedAt : item.startedAt;
+  const modelLabel = item.model
+    ? intl.formatMessage({ id: "subagent.model" }, { model: item.model })
+    : intl.formatMessage({ id: "subagent.modelUnavailable" });
   // Fork（omp-project-mode.md）：omp 子代理详情以合成地址 `omp-subagent:<id>@<parent>`
   // 下钻（含父会话归属的可订阅视图）；旧格式（无 @parent，旧拓扑）仍禁用。
   const hasChildSession =
@@ -97,6 +100,12 @@ const DirectoryRow = memo(function DirectoryRow({
             {item.summary}
           </span>
         ) : null}
+        <span
+          className="mt-0.5 block min-w-0 truncate text-ui-sm text-foreground-subtle"
+          title={modelLabel}
+        >
+          {modelLabel}
+        </span>
       </span>
       {timestamp ? (
         <span className="shrink-0 text-ui-sm text-foreground-subtlest">

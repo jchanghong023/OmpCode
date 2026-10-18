@@ -188,6 +188,29 @@ nodes:
     invariants:
       - Current OMP execution enters through SessionPane and the omp-agent adapter; historical
         apps/zcode-cli seeds elsewhere in this graph are not the current native-tools execution entry.
+  - id: capability.omp-subagent-model-display
+    kind: capability
+    label: Actual model identity of each OMP subagent
+    aliases:
+      - subagent model display
+      - 子代理实际模型
+      - 智能体模型显示
+    codeSeeds:
+      - file: packages/omp-agent/src/app/ompSubagentBridge.ts
+        symbol: OmpSubagentBridge
+      - file: packages/omp-agent/src/domain/OmpColdSubagents.ts
+        symbol: coldSubagents
+      - file: packages/omp-agent/src/domain/ompSubagentDirectory.ts
+        symbol: OmpSubagentProjection
+      - file: packages/ui/src/v4/ConversationStatusPanel.tsx
+        symbol: ConversationStatusPanel
+      - file: packages/ui/src/app-shell/SubagentSessionSidePane.tsx
+        symbol: SubagentSessionSidePane
+    invariants:
+      - Model identity is a native child execution fact projected by child ID, not the parent model
+        or a requested role alias. Cold history never guesses missing model identity.
+      - Existing popup, directory, conversation card and detail surfaces consume the same projection;
+        model display does not create another cache, execution path or control authority.
   - id: state.conversation-projection
     kind: state-owner
     label: Client conversation projection and pending optimistic overlay
@@ -1000,3 +1023,11 @@ edges:
     type: uses-delivery-policy
     rank: conditional
     condition: For replayable Web remote attachments; native tools do not add another recovery owner.
+  - from: capability.omp-subagent-model-display
+    to: capability.conversation-runtime
+    type: reads-native-child-execution-from
+    rank: must-inspect
+  - from: capability.omp-subagent-model-display
+    to: state.conversation-projection
+    type: consumes-snapshot-and-delta-from
+    rank: must-inspect

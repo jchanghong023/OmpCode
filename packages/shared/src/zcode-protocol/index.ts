@@ -1526,6 +1526,7 @@ const zcodeSessionSubagentBaseSchema = z
     agentId: nonEmptyString.optional(),
     toolCallId: nonEmptyString.optional(),
     subagentType: nonEmptyString,
+    model: z.string().optional(),
     title: nonEmptyString,
     summary: z.string().optional(),
     startedAt: z.number().int().nonnegative().optional(),

@@ -281,6 +281,8 @@ export const ompSubagentFrameSchema = z.discriminatedUnion("type", [
           .object({
             id: z.string().min(1),
             status: z.string().optional(),
+            resolvedModelIdentity: z.string().optional(),
+            resolvedModel: z.string().optional(),
             recentOutput: z.array(z.string()).optional(),
           })
           .passthrough(),
@@ -293,7 +295,6 @@ export const ompSubagentFrameSchema = z.discriminatedUnion("type", [
   }),
 ]);
 export type OmpSubagentFrame = z.infer<typeof ompSubagentFrameSchema>;
-
 export const ompSubagentSnapshotSchema = z
   .object({
     id: z.string().min(1),
@@ -305,10 +306,16 @@ export const ompSubagentSnapshotSchema = z
     sessionFile: z.string().optional(),
     lastUpdate: z.number().optional(),
     parentToolCallId: z.string().optional(),
+    progress: z
+      .object({
+        resolvedModelIdentity: z.string().optional(),
+        resolvedModel: z.string().optional(),
+      })
+      .passthrough()
+      .optional(),
   })
   .passthrough();
 export type OmpSubagentSnapshot = z.infer<typeof ompSubagentSnapshotSchema>;
-
 // ── 入站命令（我们 → omp）──
 export type OmpCommandFrame =
   | {

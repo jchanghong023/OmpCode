@@ -748,6 +748,8 @@ const enUS: Record<string, string> = {
   "subagentDirectory.status.cancelled": "Cancelled",
   "subagentDirectory.status.lost": "Lost",
   "subagentDirectory.status.unknown": "Status unconfirmed",
+  "subagent.model": "Model: {model}",
+  "subagent.modelUnavailable": "Model not provided",
   "ompSubagentControl.readOnly": "Read-only execution record",
   "chat.statusPanel.endedAgents": "Ended",
   "chat.statusPanel.endedWorkflows": "Ended workflows",

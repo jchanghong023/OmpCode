@@ -254,6 +254,7 @@ export const subagentRowSchema = z.object({
   // 触发该子智能体的 Agent/Task 工具调用；并发 spawn 顺序不可作为关联依据。
   parentToolCallId: z.string().optional(),
   subagentType: z.string(),
+  model: z.string().optional(),
   status: z.enum(["running", "success", "failed", "cancelled", "unknown"]),
   summaryText: z.string(),
   transcriptText: z.string().optional(),

@@ -1402,6 +1402,9 @@ function SubagentStatusSection({
             subagent,
           });
           const canOpenSubagentSession = Boolean(request && onOpenSubagentSession);
+          const modelLabel = subagent.model
+            ? intl.formatMessage({ id: "subagent.model" }, { model: subagent.model })
+            : intl.formatMessage({ id: "subagent.modelUnavailable" });
           return (
             <li
               key={subagent.childSessionId}
@@ -1414,6 +1417,7 @@ function SubagentStatusSection({
               data-child-session-id={subagent.childSessionId}
               data-work-id={subagent.controlWorkId}
               data-work-status="running"
+              title={modelLabel}
               className={cn(
                 "group relative flex min-w-0 items-start gap-2 rounded-lg px-2 py-2 hover:bg-[var(--color-hover)]",
                 canOpenSubagentSession && "cursor-pointer",
@@ -1437,6 +1441,12 @@ function SubagentStatusSection({
               <div className="pointer-events-none relative z-[1] flex min-w-0 flex-1 flex-col gap-1.5">
                 <span className="line-clamp-2 text-ui-base leading-5 text-[var(--color-foreground)]">
                   {subagent.title}
+                </span>
+                <span
+                  className="min-w-0 truncate text-ui-sm text-foreground-subtle"
+                  title={modelLabel}
+                >
+                  {modelLabel}
                 </span>
                 <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-ui-base">
                   <span className="text-ui-base tabular-nums text-[var(--color-foreground-subtle)]">

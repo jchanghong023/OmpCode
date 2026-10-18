@@ -17,6 +17,54 @@ export function ompHistoryTimestamp(value: unknown): number | undefined {
   return Number.isFinite(time) && time >= 0 ? Math.trunc(time) : undefined;
 }
 
+/** Only execution facts; requested models and role aliases are not serving identities. */
+export function ompResolvedSubagentModel(value: unknown): string | undefined {
+  const item = record(value);
+  for (const candidate of [item?.resolvedModelIdentity, item?.resolvedModel]) {
+    if (typeof candidate === "string" && candidate.trim()) return candidate;
+  }
+  return undefined;
+}
+
+function modelIdentity(value: unknown): string | undefined {
+  const item = record(value);
+  if (typeof item?.model !== "string" || !item.model.trim()) return undefined;
+  return typeof item.provider === "string" && item.provider.trim()
+    ? `${item.provider}/${item.model}`
+    : item.model;
+}
+
+/** Bare model_changed is only a notification, not a model identity. */
+export function ompSubagentEventModel(value: unknown): string | undefined {
+  const event = record(value);
+  if (event?.type === "model_changed") return modelIdentity(event);
+  if (!["message_start", "message_update", "message_end"].includes(String(event?.type)))
+    return undefined;
+  const message = record(event?.message);
+  return message?.role === "assistant" ? modelIdentity(message) : undefined;
+}
+
+export function ompHistoryModel(
+  entries: readonly unknown[],
+): { model: string; at?: number } | undefined {
+  let latest: { model: string; at?: number } | undefined;
+  for (const entry of entries) {
+    const item = record(entry);
+    const message = record(item?.message);
+    const model =
+      item?.type === "model_change" && (item.role === undefined || item.role === "default")
+        ? modelIdentity(item)
+        : message?.role === "assistant"
+          ? modelIdentity(message)
+          : undefined;
+    if (!model) continue;
+    const at = ompHistoryTimestamp(message?.timestamp ?? item?.timestamp);
+    if (latest?.at !== undefined && at !== undefined && at < latest.at) continue;
+    latest = { model, at };
+  }
+  return latest;
+}
+
 export function ompHistoricalStatus(value: unknown): OmpHistoryStatus {
   if (value === "completed" || value === "success" || value === "parked") return "success";
   if (value === "failed" || value === "error") return "failed";

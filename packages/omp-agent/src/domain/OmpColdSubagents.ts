@@ -1,12 +1,16 @@
 import {
   ompHistoricalStatus,
   ompHistoryOutcome,
+  ompHistoryModel,
+  ompHistoryTimestamp,
+  ompResolvedSubagentModel,
   type OmpHistoryStatus,
 } from "./OmpSubagentHistory.js";
 
 interface ColdSubagent {
   id: string;
   agent: string;
+  model?: string;
   summary: string;
   status: OmpHistoryStatus;
   parentToolCallId: string;
@@ -26,6 +30,7 @@ export function coldSubagents(
   childRecords: ReadonlyMap<string, readonly unknown[]> = new Map(),
 ): Map<string, ColdSubagent> {
   const agents = new Map<string, ColdSubagent>();
+  const modelTimes = new Map<string, number | undefined>();
   for (const entry of entries) {
     const message = object(object(entry)?.message);
     if (message?.role !== "toolResult") continue;
@@ -38,9 +43,17 @@ export function coldSubagents(
       ]) {
         const progress = object(raw);
         if (!progress || typeof progress.id !== "string" || !progress.id) continue;
+        const prior = agents.get(progress.id);
+        const model = ompResolvedSubagentModel(progress);
+        if (model)
+          modelTimes.set(
+            progress.id,
+            ompHistoryTimestamp(message.timestamp ?? object(entry)?.timestamp),
+          );
         agents.set(progress.id, {
           id: progress.id,
           agent: typeof progress.agent === "string" ? progress.agent : "task",
+          model: model ?? prior?.model,
           summary: (typeof progress.description === "string"
             ? progress.description
             : typeof progress.assignment === "string"
@@ -79,6 +92,16 @@ export function coldSubagents(
   for (const agent of agents.values()) {
     const records = childRecords.get(agent.id);
     if (!records?.length) continue;
+    const latestModel = ompHistoryModel(records);
+    const modelAt = modelTimes.get(agent.id);
+    // Child record ownership is checked by the caller. A stale record cannot overwrite a
+    // newer resolved parent result, but status evidence is evaluated independently below.
+    if (
+      latestModel &&
+      (!agent.model ||
+        (latestModel.at !== undefined && (modelAt === undefined || latestModel.at >= modelAt)))
+    )
+      agent.model = latestModel.model;
     const outcome = ompHistoryOutcome(records);
     if (agent.endedAt !== undefined && outcome.at !== undefined && outcome.at < agent.endedAt)
       continue;

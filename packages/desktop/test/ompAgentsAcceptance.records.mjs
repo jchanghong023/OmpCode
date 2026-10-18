@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { basename, join } from "node:path";
+import { assertRecordedChildModel } from "./ompAgentsAcceptance.models.mjs";
 import { assertTaskArguments, dispatched, textOf } from "./ompAgentsAcceptance.protocol.mjs";
 import {
   assertCompletionDeliveries,
@@ -122,6 +123,7 @@ export async function inspectRecords(runtime, parentId, identities, extras = {})
     assertOriginalAssignment(childEntries, parentPath, `AGENTS_CHILD_${identity.name}`);
     const messages = messagesOf(childEntries);
     const name = identity.name;
+    const model = assertRecordedChildModel(messages, name);
     const prefix = `agents-child-${name}`;
     const write = successful(messages, `${prefix}-write`, "write");
     assert.deepEqual(write.call.arguments, {
@@ -195,6 +197,7 @@ export async function inspectRecords(runtime, parentId, identities, extras = {})
     children.push({
       ...identity,
       parentAgentId: communication.call.arguments.path.slice("agent://".length),
+      model,
       path,
       sha256: digest(bytes),
       toolIds: callsOf(messages).map((call) => call.id),

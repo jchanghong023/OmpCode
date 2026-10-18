@@ -50,6 +50,9 @@ export function ConversationAgentToolCallRow({
   const toolCallNode = useMemo(() => toolCallRowToLegacyNode(item.row), [item.row]);
   const childSessionId = item.subagentRow.childSessionId;
   const subagentType = item.subagentRow.subagentType;
+  const modelLabel = item.subagentRow.model
+    ? intl.formatMessage({ id: "subagent.model" }, { model: item.subagentRow.model })
+    : intl.formatMessage({ id: "subagent.modelUnavailable" });
   // 与 Agent 摘要行复用同一 title resolver，保证右侧 tab 和用户点击的可见标题逐字一致。
   const title = getAgentPrimaryText(toolCallNode.toolCall, "");
   const canOpenChildSession = Boolean(
@@ -82,6 +85,7 @@ export function ConversationAgentToolCallRow({
       data-row-id={item.row.rowId}
       data-conversation-selectable="true"
       data-testid={testId(TID_V4_ROW, String(item.row.rowId))}
+      className="min-w-0"
     >
       {item.subagentRow.status === "unknown" ? (
         <Button
@@ -112,6 +116,9 @@ export function ConversationAgentToolCallRow({
           authoritativeAgentType={subagentType}
         />
       )}
+      <div className="min-w-0 truncate text-ui-sm text-foreground-subtle" title={modelLabel}>
+        {modelLabel}
+      </div>
     </div>
   );
 }

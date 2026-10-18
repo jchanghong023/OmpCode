@@ -701,6 +701,8 @@ const zhCN: Record<string, string> = {
   "subagentDirectory.status.cancelled": "已取消",
   "subagentDirectory.status.lost": "已丢失",
   "subagentDirectory.status.unknown": "状态未确认",
+  "subagent.model": "模型：{model}",
+  "subagent.modelUnavailable": "模型未提供",
   "ompSubagentControl.readOnly": "执行记录只读",
   "chat.statusPanel.endedAgents": "已结束",
   // workflow run 目录（任务页脚行 → 这一页 → 详情页）。状态词复用

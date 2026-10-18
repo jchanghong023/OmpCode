@@ -103,12 +103,18 @@ export const OmpSubagentControlBar = memo(function OmpSubagentControlBar({
   if (!target) {
     return null;
   }
+  const modelLabel = control.model
+    ? intl.formatMessage({ id: "subagent.model" }, { model: control.model })
+    : intl.formatMessage({ id: "subagent.modelUnavailable" });
 
   return (
     <div
       data-subagent-control-state={control.status}
-      className="border-b border-border bg-surface px-3 py-2"
+      className="min-w-0 border-b border-border bg-surface px-3 py-2"
     >
+      <p className="mb-1.5 min-w-0 truncate text-ui-sm text-foreground-subtle" title={modelLabel}>
+        {modelLabel}
+      </p>
       <div className="flex items-center gap-2">
         <input
           disabled={busy || !resolution.rpcReady || !control.controllable}

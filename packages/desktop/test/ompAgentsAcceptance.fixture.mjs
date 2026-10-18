@@ -113,17 +113,18 @@ export async function prepareSuite({ root, workspace, configRoot, phase }) {
   });
   async function handler(context, options) {
     assert.equal(phase, "live", "Cold recovery and read-only tabs must never execute a model");
+    const users = context.messages.filter((message) => message.role === "user");
+    const lastPrompt = promptOf(users.at(-1)?.content);
+    const allPrompts = users.map((message) => promptOf(message.content));
+    const childName = allPrompts.map(assignmentName).find(Boolean);
     assert.equal(
       options.modelId,
-      "scripted",
-      "All parent/child requests must stay on the isolated model",
+      childName === "b" ? "scripted-alt" : "scripted",
+      "Only child b's actual assignment may use the isolated alternate model",
     );
     const panelResponse = await panelStop.handler(context, options);
     if (panelResponse !== undefined) return panelResponse;
     const received = results(context);
-    const users = context.messages.filter((message) => message.role === "user");
-    const lastPrompt = promptOf(users.at(-1)?.content);
-    const allPrompts = users.map((message) => promptOf(message.content));
     const label = /^<user>\nAGENTS_CHILD_(a|b|c|control|failure)\n<\/user>$/u.exec(lastPrompt);
     if (label) {
       assert.ok(
@@ -156,7 +157,6 @@ export async function prepareSuite({ root, workspace, configRoot, phase }) {
       assert.ok(effortCalls <= limit, "Reject additional unconfigured effort-judgment calls");
       return output("low");
     }
-    const childName = allPrompts.map(assignmentName).find(Boolean);
     if (childName) return child(context, options, childName, lastPrompt);
     const todo = allPrompts
       .map((text) =>
@@ -363,6 +363,11 @@ export async function prepareSuite({ root, workspace, configRoot, phase }) {
       const config = JSON.parse(await readFile(path, "utf8"));
       config.async = { ...config.async, enabled: true };
       config.task = { ...config.task, batch: true, structured: true };
+      // 真实 OMP 仅允许 seance 显式传 model；普通子代理沿原生按 Agent 的模型覆盖配置。
+      config.task.agentModelOverrides = {
+        ...config.task.agentModelOverrides,
+        sonic: "zcode-mock/scripted-alt",
+      };
       await writeFile(path, `${JSON.stringify(config, null, 2)}\n`, "utf8");
     },
     control(action) {

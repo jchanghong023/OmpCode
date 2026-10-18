@@ -106,7 +106,7 @@ export function taskArgs(context, names) {
   assert.ok(schema.properties.tasks, "Batch-enabled genuine task schema must expose tasks");
   const items = names.map((name) => ({
     name: `Acceptance_${name}`,
-    agent: "task",
+    agent: name === "b" ? "sonic" : "task",
     task: `AGENTS_CHILD_${name}`,
     solutionSpace:
       "One exact assignment: use the specified real tools and yield the correlated result.",
@@ -152,7 +152,7 @@ export function assertTaskArguments(call, names) {
       "# Goal\nExecute each exact assigned acceptance task with real tools.\n# Contract\nUse the isolated workspace and report only actual execution results; keep every child identity and message distinct.",
     tasks: names.map((name) => ({
       name: `Acceptance_${name}`,
-      agent: "task",
+      agent: name === "b" ? "sonic" : "task",
       task: `AGENTS_CHILD_${name}`,
       solutionSpace:
         "One exact assignment: use the specified real tools and yield the correlated result.",
@@ -177,7 +177,7 @@ export function dispatched(result, identities, mode) {
   );
   for (const identity of identities) {
     const item = values.find((value) => value.id === identity.rawId);
-    assert.equal(item.agent, "task");
+    assert.equal(item.agent, identity.name === "b" ? "sonic" : "task");
     assert.equal(item.assignment, `AGENTS_CHILD_${identity.name}`);
     if (mode === "async")
       assert.ok(

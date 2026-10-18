@@ -13,6 +13,7 @@ import {
 import { assertInteractionPage } from "./ompAgentsAcceptance.interactions.mjs";
 import { inspectRecords, recordSnapshot } from "./ompAgentsAcceptance.records.mjs";
 import { inspectPanelStopReceipt, recoverPanelStop } from "./ompAgentsAcceptance.panelStop.mjs";
+import { assertDirectoryModels } from "./ompAgentsAcceptance.models.mjs";
 
 const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const journalPaths = (records) => [
@@ -71,6 +72,13 @@ export async function captureLiveAgentsReceipt({
       Object.values(modelEvidence.acceptance.dispatched[toolId]).sort(),
       sources.map((child) => child.rawId).sort(),
       "Model routing IDs must equal the actual dispatch/GUI child set, never injected control facts",
+    );
+  }
+  for (const child of children) {
+    assert.equal(modelEvidence.acceptance.children[child.name].model, child.model);
+    assert.equal(
+      records.children.find((source) => source.rawId === child.rawId)?.model,
+      child.model,
     );
   }
   return {
@@ -243,6 +251,7 @@ export async function recoverAgents({ page, runtime, saved, evidenceDir, taskIds
     .locator('[data-side-pane-tab-type="subagent-directory"]')
     .and(page.locator(`[data-side-pane-tab-id$=":${encodeURIComponent(parentId)}"]`));
   assert.equal(await directoryTab.count(), 1, "The ended directory must belong to this parent");
+  await assertDirectoryModels(page, directory, children, parentId);
   const stopped = directory.getByRole("button").filter({
     has: page.getByText(`AGENTS_CHILD_${controlled.name}`, { exact: true }),
   });

@@ -24,6 +24,7 @@ function buildOmpSubagentDirectory(
         childSessionId: viewIdOf(id),
         agentId: id,
         subagentType: row.subagentType,
+        ...(row.model ? { model: row.model } : {}),
         title: row.summaryText || row.subagentType,
         summary: row.transcriptText?.slice(0, 200) ?? "",
         status,
@@ -47,6 +48,7 @@ function buildOmpSubagentDirectory(
 type SubagentInput = {
   id: string;
   agent: string;
+  model?: string;
   status: SubagentRow["status"];
   summaryText: string;
   startedAt?: number;
@@ -109,6 +111,7 @@ export class OmpSubagentProjection {
             childSessionId: this.host.viewIdOf(id),
             agentId: id,
             subagentType: row.subagentType,
+            ...(row.model ? { model: row.model } : {}),
             title: row.summaryText,
             status: "running" as const,
             ...(row.startedAt ? { startedAt: row.startedAt } : {}),
@@ -128,10 +131,12 @@ export class OmpSubagentProjection {
     const prior = rowId === undefined ? null : this.host.rowAt(rowId);
     const parentToolCallId =
       input.parentToolCallId ?? (prior?.kind === "subagent" ? prior.parentToolCallId : undefined);
+    const model = input.model ?? (prior?.kind === "subagent" ? prior.model : undefined);
     if (
       prior?.kind === "subagent" &&
       prior.status === input.status &&
       prior.summaryText === input.summaryText &&
+      prior.model === model &&
       prior.parentToolCallId === parentToolCallId &&
       prior.transcriptText === input.transcriptText
     )
@@ -150,12 +155,13 @@ export class OmpSubagentProjection {
         childSessionId: this.host.viewIdOf(input.id),
         ...(parentToolCallId ? { parentToolCallId } : {}),
         subagentType: input.agent,
+        ...(model ? { model } : {}),
         status: input.status,
         summaryText: input.summaryText,
         ...(input.transcriptText ? { transcriptText: input.transcriptText } : {}),
         ...(input.startedAt ? { startedAt: input.startedAt } : {}),
         ...(input.status !== "running" && input.status !== "unknown"
-          ? { endedAt: Date.now() }
+          ? { endedAt: prior?.kind === "subagent" ? (prior.endedAt ?? Date.now()) : Date.now() }
           : {}),
         createdAt: prior?.createdAt ?? Date.now(),
         createdAtSeq: prior?.createdAtSeq ?? this.host.sequence() + 1,
@@ -174,6 +180,7 @@ export class OmpSubagentProjection {
           subagentType: candidate?.kind === "subagent" ? candidate.subagentType : input.agent,
           title: candidate?.kind === "subagent" ? candidate.summaryText : input.summaryText,
           status: "running" as const,
+          ...(candidate?.kind === "subagent" && candidate.model ? { model: candidate.model } : {}),
           ...(candidate?.kind === "subagent" && candidate.startedAt
             ? { startedAt: candidate.startedAt }
             : {}),
