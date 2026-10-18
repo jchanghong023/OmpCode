@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { join } from "node:path";
 import { chromium } from "playwright-core";
+import { MOCK_MODEL_NAME } from "../../omp-agent/test/fixtures/ompMockServer.mjs";
 import { captureIsolationScreenshot } from "./ompCore.evidence.cjs";
 
 const endpoint = process.env.OMP_E2E_CDP_URL;
@@ -25,19 +26,16 @@ try {
   const defaultRole = section.getByRole("combobox", { name: "default", exact: true });
   await defaultRole.waitFor({ state: "visible" });
   // 已配置的 role 可以引用当前目录外的模型；原值仍需可见，供用户换到已有模型。
-  assert.match(
-    await defaultRole.innerText(),
-    /commandcode\/inclusionai\/ling-3\.0-flash-sante:free/u,
-  );
+  assert.match(await defaultRole.innerText(), /zcode-missing\/absent-model/u);
   await defaultRole.click();
   await page
-    .getByRole("option", { name: /GLM-5\.3-Flash/u })
+    .getByRole("option", { name: new RegExp(MOCK_MODEL_NAME, "u") })
     .first()
     .waitFor({ state: "visible" });
   await page.keyboard.press("Escape");
   if (process.env.OMP_E2E_EVIDENCE_DIR)
     await captureIsolationScreenshot(join(process.env.OMP_E2E_EVIDENCE_DIR, "startup-models.png"));
-  console.log("omp GUI startup: configured default preserved; real GLM candidate available");
+  console.log("omp GUI startup: configured default preserved; local mock candidate available");
 } finally {
   await browser.close();
 }

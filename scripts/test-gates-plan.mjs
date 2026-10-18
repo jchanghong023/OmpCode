@@ -80,7 +80,10 @@ const coreTests = {
     "conversationEngineStatus",
     "conversationRecovery",
     "frameAssembler",
+    "mockModel",
+    "mockServer",
     "nativeCommandFirstIdentity",
+    "ompAskAnswers",
     "ompCommandOutputHistory",
     "ompCustomMessages",
     "ompExecutionHistory",
@@ -123,6 +126,7 @@ const coreTests = {
   web: ["oauthRedirect"],
   ui: [
     "conversationRecoveryBudget",
+    "ompAskPresentation",
     "ompAttachmentRejection",
     "ompComposerModelSync",
     "ompModelCatalog",
@@ -142,6 +146,7 @@ export async function fullPlan() {
   const stages = [
     ...staticPlan(true),
     node("gate-entry-selftest", ["scripts/test-gates.mjs", "--self-test"], { kind: "test" }),
+    node("license-graph-tests", ["--test", "scripts/third-party-npm.test.mjs"], { kind: "test" }),
     pnpm(
       "offline-desktop-core-tests",
       ["exec", "tsx", "--test", "packages/desktop/test/offlineDesktop.test.ts"],
@@ -241,6 +246,7 @@ export async function fullPlan() {
       "--eval",
       "import { createRequire } from 'node:module'; import { resolve } from 'node:path'; const require = createRequire(resolve('packages/desktop/package.json')); console.log(`Electron runtime prepared: ${require('electron')}`);",
     ]),
+    // realOmp 要求已安装的真实二进制；模型响应仅来自测试/GUI 自有的本地 mock fixture。
     // 构建和 staging 共享产物，先完成；之后真实 OMP、组件和 GUI 各自使用独立沙箱。
     pnpm(
       "real-omp.e2e.test.ts",

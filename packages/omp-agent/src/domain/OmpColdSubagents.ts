@@ -31,7 +31,11 @@ export function coldSubagents(
     if (message?.role !== "toolResult") continue;
     const details = object(message.details);
     if (message.toolName === "task" && typeof message.toolCallId === "string") {
-      for (const raw of Array.isArray(details?.progress) ? details.progress : []) {
+      // 同步 task 将实际子代理写入 results；后台任务用 progress，二者共享子记录终态证据。
+      for (const raw of [
+        ...(Array.isArray(details?.progress) ? details.progress : []),
+        ...(Array.isArray(details?.results) ? details.results : []),
+      ]) {
         const progress = object(raw);
         if (!progress || typeof progress.id !== "string" || !progress.id) continue;
         agents.set(progress.id, {

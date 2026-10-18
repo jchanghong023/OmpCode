@@ -10,6 +10,7 @@
 - **会话生命周期**：创建 = 惰性每会话进程（首次发送现场启动）；恢复 = `--resume <file>` + 冷历史先行入投影；关闭 = stdin EOF 卸载进程（保留历史，会话文件由 omp 持久化）；删除 = 先结束该会话进程，再经目录进程 `delete_session`（omp 权威删除；旧核无 v3 时回落本地文件删除，仍须确认文件删除成功后才发索引移除事件）；改名 = 已加载走会话进程 `set_session_name`，冷会话走目录进程 `rename_session`（按稳定 ID）。会话 ID 身份沿用既有「临时 ID → 文件 UUID」迁移规则（见 [session-recovery.md](session-recovery.md)）。
 - **斜杠输入严格分发**：以 `/` 起始的输入先按命令目录（目录进程 `get_available_commands`，v3 富目录含 `execution`/`availability` 判定）在适配层解析：目录内且 omp 可执行的命令以 `prompt` 原文发送；运行中附带原生 `streamingBehavior`，由 OMP 决定命令消费或剩余文本的排队/引导。未知命令或仅 TUI 可执行（`tui_only`/`unsupported`）明确报错，**绝不发给模型**。携带图片或文本附件的斜杠输入明确拒绝（`omp_command_attachments_unsupported`），不静默丢弃。普通运行中补充仍走 steer/follow_up；`/context` 等内部本地查询同经 prompt。本次核心命令、ACK 与迟到输出、历史投影及验收唯一见 [核心 rpc-ui 命令接入](omp-native-commands.md)。
 - **交互回路**：会话进程 ready 后发送 `set_ask_dialog {enabled:true}`；此后 omp `ask` 以 `extension_ui_request{method:"ask"}` 单帧携带完整问题集（多题/多选/选项说明/preview/`recommended`），投影为 ZCode `ElicitationDialog` 富问答，「其他」自定义回答映射 `customInput`，应答经 `extension_ui_response{answers:[{id,selectedOptions,customInput}]}` 按题回传，取消整体收口；服务端超时自动按 recommended 收尾，适配器投影倒计时展示。未启用 ask 对话框（旧核）时 ask 沿用 `select`（选项）+ `editor`（自由文本，`promptStyle:true`）逐题降级路径。
+- **ask 已完成结果**：OMP 的结构化 `details` 是已提交答案的事实源。适配层将单题或多题的选项及自定义回答投影为 v4 工具结果 `output.answers`（题目 → 回答字符串数组），保留原 `output.text`；实时结果与冷历史使用同一映射，GUI 从该结果显示实际答案。不解析自然语言结果正文、不从已关闭的交互草稿重建答案，失败或取消不能伪造已作答。
 - **审批形态**：工具审批由 omp extension runner 发 `extension_ui_request{method:"select"}`（选项 `Approve`/`Deny`，提示携带工具名、原因与 `formatApprovalDetails` 行），沿通用询问回路呈现与应答；六档结构化审批卡（旧 v3 `permission_request`）已随 OMP 侧删除不再提供，会话级/始终允许等持久决策由 omp 自身 approvalMode 与 `tools.approval` 配置持有。omp 审批仅在用户 omp 审批配置生效时出现；默认 yolo 无确认。超时、销毁与断连一律 fail-closed 拒绝，无静默放行。
 - **extension_ui 其余方法**：`select/confirm/input/editor` 沿用通用询问回路（`sensitive` 投影密码输入，`editor` 携带 `prefill` 透传）；`notify/setStatus/setWidget/setTitle/set_editor_text/open_url` 无宿主呈现面，按取消回执不让 omp 挂起；`cancel+targetId` 立即收口等待中交互。
 - **原生扩展文本输出**：`pi.sendMessage` 的 `role:"custom"`、`display:true` 消息支持标准字符串/文本块内容，经 `message_end` 显示一次，冷恢复读取对应 `custom_message`（或合法 message 包装）内容；`display:false` 不显示、也不进入供 UI 使用的派生 transcript。仅投影普通文本，不运行 TUI 自定义 renderer、不承诺其布局/图片呈现；此消息不是 assistant 模型响应，不改变模型用量、当前错误、流式锚点或主轮结算，扩展未请求 triggerTurn 时不得制造模型调用。技能注入的 `skill-prompt` 不是普通扩展正文，其 chip、原始输入及冷恢复呈现唯一按 [技能需求](skills.md) 管理，不以此通用规则展开技能全文。
@@ -94,7 +95,7 @@ desktop-continuous: 同一 topic owner → 连续实时帧
 web-remote-replayable: 同一 owner → 水位增量 / 缺口快照；冷启动从 get_btw_history 重建
 ```
 
-验收：空入口零模型请求；参数/划词首问真实流式；同主题追问在 sidecar 的 followUps 中且主 transcript 不增长；主回合 streaming 时 BTW 正常执行；另一 tab 或父会话的停止不影响当前 BTW/主回合；complete/error/cancelled/interrupted 正确；历史入口发现全部主题并在关闭重开、Host/OMP 重启后继续；旧核能力错误、未知主题及保存失败明确显示；桌面连续与 Web 重连水位恢复均无重复发送。AI 仅在 Windows 本机以隔离真 GUI 与真实模型逐项记录验收，静态检查不替代；CentOS 产品行为仍与 Windows 一致，但专属测试已取消，不宣称已验收。
+验收：空入口零模型请求；参数/划词首问真实流式；同主题追问在 sidecar 的 followUps 中且主 transcript 不增长；主回合 streaming 时 BTW 正常执行；另一 tab 或父会话的停止不影响当前 BTW/主回合；complete/error/cancelled/interrupted 正确；历史入口发现全部主题并在关闭重开、Host/OMP 重启后继续；旧核能力错误、未知主题及保存失败明确显示；桌面连续与 Web 重连水位恢复均无重复发送。AI 仅在 Windows 本机以隔离真 GUI 与真实 OMP 逐项记录验收，模型来源和覆盖边界按[测试契约](test-gates.md#本地模拟模型契约)声明，静态检查不替代；CentOS 产品行为仍与 Windows 一致，但专属测试已取消，不宣称已验收。
 
 ## 验收场景
 
@@ -117,7 +118,7 @@ web-remote-replayable: 同一 owner → 水位增量 / 缺口快照；冷启动�
 
 - **共享目录环境验收（无模型）**：在隔离配置根/profile 与工作区中用当前目标 OMP 源码启动适配器，分别查询工作区与已创建会话的 `skills/referenceCatalog`；附加共享技能及同名共享优先结果按 [skills.md](skills.md) 验收。核对目录进程带 `--no-session`、会话进程不带，两者实际收到完全相同的 `OMP_SKILLS_DIR`、`OMP_WIKI_DIR`、cwd、配置根及 profile，且未设置 `OMP_OFFLINE` 也生效。远端环境透传白名单不包含这两个本机路径变量；此静态边界不冒充真实远端/NFS 验收。
 
-- **辅助事件边界**：在运行中、成功/失败终态及新轮开始后插入合法 `advisor_cost_changed`/`session_settled`，轮次、错误与用量保持原值；后续 `agent_end`/`prompt_result` 仍按既有规则完成。真实 GLM 两轮与同根冷恢复日志不再出现这两种帧的 `omp_core_frame_decode_failed`；未知事件继续报告解码失败。
+- **辅助事件边界**：在运行中、成功/失败终态及新轮开始后插入合法 `advisor_cost_changed`/`session_settled`，轮次、错误与用量保持原值；后续 `agent_end`/`prompt_result` 仍按既有规则完成。真实 OMP + 本地模拟模型两轮与同根冷恢复日志不再出现这两种帧的 `omp_core_frame_decode_failed`；未知事件继续报告解码失败。
 
 核心五项（普通消息、技能调用+补全、内置命令+补全、子代理过程、模型双入口）必须逐项真实 GUI 操作验收并记录证据；协议类型检查或页面可打开不替代操作验收。
 

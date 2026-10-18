@@ -3,6 +3,7 @@
 import type { ConversationRow } from "@zcode/shared/zcode-protocol-v4";
 import { rowBaseFields } from "./projectionTypes.js";
 import { ompTodoPlan } from "./ompTodoPlan.js";
+import { ompAskAnswers } from "./ompAskAnswers.js";
 import {
   readableOmpAgentInput,
   readableOmpSkillInput,
@@ -302,7 +303,11 @@ export function rowsFromOmpEntries(
         if (existing) {
           existing.status = message.isError === true ? "error" : "success";
           const plan = message.toolName === "todo" ? ompTodoPlan(message.details) : null;
-          existing.output = { text, ...(plan ? { plan } : {}) };
+          const answers =
+            message.toolName === "ask" && existing.status === "success"
+              ? ompAskAnswers(message.details)
+              : null;
+          existing.output = { text, ...(plan ? { plan } : {}), ...(answers ? { answers } : {}) };
           existing.endedAt = timestamp;
         }
         if (message.toolName === "task") {

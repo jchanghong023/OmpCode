@@ -2,7 +2,20 @@ import assert from "node:assert/strict";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { chromium } from "playwright-core";
-import { captureIsolationScreenshot } from "./ompCore.evidence.cjs";
+import {
+  MOCK_MODEL_NAME,
+  MOCK_MODEL_SELECTOR,
+  MOCK_PROVIDER,
+  MOCK_MODEL_ID,
+} from "../../omp-agent/test/fixtures/ompMockServer.mjs";
+import { captureIsolationScreenshot, readIsolationEvidence } from "./ompCore.evidence.cjs";
+import {
+  assertRecoveredInteractions,
+  assertStoredInteractions,
+  exerciseMockInteractions,
+  readMockRequests,
+  reveal,
+} from "./ompMockInteractions.assertions.mjs";
 
 const endpoint = process.env.OMP_E2E_CDP_URL;
 assert.ok(endpoint, "Set OMP_E2E_CDP_URL to an isolated OmpCode Electron CDP endpoint");
@@ -13,12 +26,11 @@ assert.ok(phase === "live" || phase === "recovery", "OMP_E2E_PHASE must be live 
 const evidenceDir = process.env.OMP_E2E_EVIDENCE_DIR;
 assert.ok(evidenceDir, "Set OMP_E2E_EVIDENCE_DIR for live and same-root recovery evidence");
 const identityReceipt = join(evidenceDir, `reviewed-defects-${runId}.json`);
-// 配置存在时只连接 fixture 的 renderer；无配置的手动入口保留原来的两种回环主机。
-const rendererUrl =
-  process.env.OMP_E2E_RENDERER_URL ??
-  (process.env.OMP_E2E_RUNTIME_MANIFEST
-    ? JSON.parse(await readFile(process.env.OMP_E2E_RUNTIME_MANIFEST, "utf8")).rendererUrl
-    : undefined);
+const manifestPath = process.env.OMP_E2E_RUNTIME_MANIFEST;
+assert.ok(manifestPath, "Use the owned launcher runtime manifest, never a daily GUI instance");
+const runtime = JSON.parse(await readFile(manifestPath, "utf8"));
+assert.equal(runtime.mock.modelSelector, MOCK_MODEL_SELECTOR);
+const rendererUrl = runtime.rendererUrl;
 const rendererPrefix = rendererUrl ? `${rendererUrl.replace(/\/+$/u, "")}/` : undefined;
 
 const browser = await chromium.connectOverCDP(endpoint);
@@ -40,18 +52,34 @@ try {
     }
   });
   page.on("pageerror", (error) => rendererProblems.push(error.message));
+  async function assertIsolation() {
+    const isolation = await readIsolationEvidence(runtime.isolationEvidence);
+    assert.equal(isolation.electronPid, runtime.electronPid);
+    assert.equal(isolation.verified, true);
+    assert.equal(isolation.mode, "hidden-native-windows");
+    assert.ok(isolation.windows.length);
+    for (const window of isolation.windows) {
+      assert.equal(window.visible, false);
+      assert.equal(window.focused, false);
+      assert.equal(window.focusable, false);
+    }
+  }
+  await assertIsolation();
+  await readMockRequests(runtime);
 
   const model = page.getByTestId("chat-model-select-trigger");
   await model.waitFor({ state: "visible" });
-  if ((await model.getAttribute("aria-label")) !== "zhipu-coding-plan/GLM-5.3-Flash") {
+  if ((await model.getAttribute("aria-label")) !== `${MOCK_PROVIDER}/${MOCK_MODEL_NAME}`) {
     await model.click();
-    await page.getByTestId("chat-model-select-group-omp-provider:zhipu-coding-plan").hover();
-    await page.getByTestId("chat-model-select-item-custom:zhipu-coding-plan:glm-5.3-flash").click();
+    await page.getByTestId(`chat-model-select-group-omp-provider:${MOCK_PROVIDER}`).hover();
+    await page
+      .getByTestId(`chat-model-select-item-custom:${MOCK_PROVIDER}:${MOCK_MODEL_ID}`)
+      .click();
   }
-  assert.equal(await model.getAttribute("aria-label"), "zhipu-coding-plan/GLM-5.3-Flash");
+  assert.equal(await model.getAttribute("aria-label"), `${MOCK_PROVIDER}/${MOCK_MODEL_NAME}`);
 
   async function sendAndWait(marker) {
-    const prompt = `请只回复 ${marker}，不要使用工具。`;
+    const prompt = `ZCODE_MOCK_TEXT ${marker}`;
     const input = page.getByTestId("v4-composer-input");
     const send = page.getByTestId("v4-composer-send");
     await input.fill(prompt);
@@ -75,6 +103,14 @@ try {
   // OMP 标题真实截断到 60 字再加省略号；身份验收不能按完整提示词或自动标题定位。
   const saved = phase === "recovery" ? JSON.parse(await readFile(identityReceipt, "utf8")) : null;
   if (saved) assert.equal(saved.runId, runId, "Recovery must consume this exact live attempt");
+  if (saved) {
+    assert.equal(
+      saved.launcherPid === runtime.launcherPid,
+      false,
+      "Recovery requires a new launcher process",
+    );
+    assert.equal(saved.runRoot, runtime.runRoot, "Recovery must reuse the same isolated root");
+  }
   const before = saved?.before ?? (await readTaskIds());
   if (phase === "live") await sendAndWait(`GUI_IDENTITY_FIRST_${runId}`);
   await page.waitForFunction((previous) => {
@@ -91,17 +127,30 @@ try {
   if (saved) assert.equal(taskTestId, saved.taskTestId, "Cold recovery must keep the live UUID");
   const matchingTask = page.getByTestId(taskTestId);
   await matchingTask.click();
-  await page
-    .getByText(`GUI_IDENTITY_FIRST_${runId}`, { exact: true })
-    .waitFor({ state: "visible" });
+  const firstReply = page.getByText(`GUI_IDENTITY_FIRST_${runId}`, { exact: true });
+  await reveal(page, firstReply);
+  await firstReply.waitFor({ state: "visible" });
   if (phase === "live") {
     await sendAndWait(`GUI_IDENTITY_SECOND_${runId}`);
     await page.getByTestId("v4-composer-send").waitFor({ state: "visible" });
   } else {
-    await page
-      .getByText(`GUI_IDENTITY_SECOND_${runId}`, { exact: true })
-      .waitFor({ state: "visible" });
+    const secondReply = page.getByText(`GUI_IDENTITY_SECOND_${runId}`, { exact: true });
+    await reveal(page, secondReply);
+    await secondReply.waitFor({ state: "visible" });
   }
+  await captureIsolationScreenshot(join(evidenceDir, `identity-${phase}-${runId}.png`));
+  const interactions =
+    phase === "live"
+      ? { runId, ...(await exerciseMockInteractions(page, runtime, evidenceDir, runId)) }
+      : saved.interactions;
+  if (phase === "recovery")
+    await assertRecoveredInteractions(page, interactions, taskTestId.slice("task-item-".length));
+  const records = await assertStoredInteractions(runtime, taskTestId, interactions, saved?.records);
+  const requests = await readMockRequests(runtime);
+  await writeFile(
+    join(evidenceDir, `mock-requests-${phase}-${runId}.json`),
+    JSON.stringify(requests, null, 2),
+  );
   assert.equal(
     (await readTaskIds()).filter((id) => !before.includes(id)).length,
     1,
@@ -110,16 +159,31 @@ try {
   assert.equal(await matchingTask.getAttribute("data-testid"), taskTestId);
   if (phase === "live") {
     await mkdir(evidenceDir, { recursive: true });
-    await writeFile(identityReceipt, JSON.stringify({ runId, before, taskTestId }, null, 2));
+    await writeFile(
+      identityReceipt,
+      JSON.stringify(
+        {
+          runId,
+          before,
+          taskTestId,
+          interactions,
+          records,
+          launcherPid: runtime.launcherPid,
+          runRoot: runtime.runRoot,
+        },
+        null,
+        2,
+      ),
+    );
   }
-  await captureIsolationScreenshot(join(evidenceDir, `identity-${phase}-${runId}.png`));
+  await captureIsolationScreenshot(join(evidenceDir, `interactions-${phase}-${runId}.png`));
+  await assertIsolation();
   assert.deepEqual(
     rendererProblems,
     [],
     "Real conversation transitions must have no renderer problems",
   );
-  if (process.env.OMP_E2E_RUNTIME_MANIFEST) {
-    const runtime = JSON.parse(await readFile(process.env.OMP_E2E_RUNTIME_MANIFEST, "utf8"));
+  {
     // Renderer 正常不代表适配器接受了核心帧；真实两轮曾因 schema 缺项持续拒绝合法通知。
     const stderr = await readFile(join(runtime.runRoot, "electron-stderr.log"), "utf8");
     assert.doesNotMatch(
@@ -129,7 +193,7 @@ try {
     );
   }
   console.log(
-    `omp GUI identity ${phase}: glm-5.3-flash replies visible; stable task ${taskTestId}`,
+    `omp GUI identity ${phase}: real OMP + local mock; tools/ask/child records; stable task ${taskTestId}`,
   );
 } finally {
   await browser.close();

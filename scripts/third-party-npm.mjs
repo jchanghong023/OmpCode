@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { readFile, readdir, realpath } from "node:fs/promises";
 import { join, relative } from "node:path";
 import { promisify } from "node:util";
+import { parse as parseYaml } from "yaml";
 import { resolveSpawnRuntimeOptions } from "./spawn-command.mjs";
 
 const exec = promisify(execFile);
@@ -65,11 +66,59 @@ function productionPackages(projects) {
   return required;
 }
 
-function assertProductionGraphs(lockedProjects, installedProjects) {
+async function nonApplicableOptionalPackages(root) {
+  const [lockfile, modules, workspace] = await Promise.all(
+    ["pnpm-lock.yaml", "node_modules/.modules.yaml", "pnpm-workspace.yaml"].map(async (file) =>
+      parseYaml(await readFile(join(root, file), "utf8")),
+    ),
+  );
+  const skipped = new Set(modules.skipped ?? []);
+  const architectures = workspace.supportedArchitectures ?? {};
+  function matches(wanted, supported) {
+    if (!wanted) return true;
+    const values = (Array.isArray(wanted) ? wanted : [wanted]).filter(
+      (value) => typeof value === "string",
+    );
+    if (values.length === 1 && values[0] === "any") return true;
+    if (supported.some((value) => values.includes(`!${value}`))) return false;
+    return (
+      values.every((value) => value.startsWith("!")) ||
+      supported.some((value) => values.includes(value))
+    );
+  }
+  const supported = Object.fromEntries(
+    [
+      ["os", process.platform],
+      ["cpu", process.arch],
+    ].map(([field, current]) => [
+      field,
+      (architectures[field] ?? ["current"]).map((value) => (value === "current" ? current : value)),
+    ]),
+  );
+  return new Set(
+    Object.entries(lockfile.snapshots).flatMap(([id, snapshot]) => {
+      const key = id.split("(")[0];
+      const metadata = lockfile.packages[key];
+      // pnpm JSON 丢弃 isSkipped/optional。只接受安装器已跳过、锁文件确认 optional，
+      // 且 OS/CPU 与全部支持目标不相交的包；普通 optional 缺失或构建失败仍须报错。
+      if (
+        !snapshot.optional ||
+        !skipped.has(id) ||
+        !metadata ||
+        (matches(metadata.os, supported.os) && matches(metadata.cpu, supported.cpu))
+      )
+        return [];
+      return [key];
+    }),
+  );
+}
+
+function assertProductionGraphs(lockedProjects, installedProjects, skippedPackages) {
   const locked = productionPackages(lockedProjects);
   const installed = productionPackages(installedProjects);
   const missing = [...locked].filter(
-    ([key, item]) => !installed.has(key) && !unsupportedCanvas.has(item.name),
+    ([key, item]) =>
+      !installed.has(key) && !unsupportedCanvas.has(item.name) && !skippedPackages.has(key),
   );
   const stale = [...installed.keys()].filter((key) => !locked.has(key));
   if (missing.length || stale.length) {
@@ -82,31 +131,30 @@ function assertProductionGraphs(lockedProjects, installedProjects) {
 
 export async function readWorkspaceProductionGraph(root) {
   root = await realpath(root);
-  // 修复：pnpm ls 默认读取安装快照，不能把旧图与当前锁文件哈希拼成有效声明。
-  const [locked, actual] = await Promise.all(
-    [true, false].map(async (lockfileOnly) => {
-      const { stdout } = await exec(
-        "pnpm",
-        [
-          "-r",
-          "ls",
-          "--prod",
-          "--json",
-          "--depth",
-          "Infinity",
-          ...(lockfileOnly ? ["--lockfile-only"] : []),
-        ],
-        {
-          cwd: root,
-          maxBuffer: 256 * 1024 * 1024,
-          ...resolveSpawnRuntimeOptions("pnpm"),
-        },
-      );
-      return JSON.parse(stdout);
-    }),
-  );
-  const required = assertProductionGraphs(locked, actual);
-  return { required, projects: actual };
+  async function list(cwd, args) {
+    const { stdout } = await exec("pnpm", ["ls", ...args, "--json"], {
+      cwd,
+      maxBuffer: 256 * 1024 * 1024,
+      ...resolveSpawnRuntimeOptions("pnpm"),
+    });
+    return JSON.parse(stdout);
+  }
+  // -1 只枚举 workspace manifest，不展开依赖，也不扫描提升安装中的 unsaved 包。
+  const projects = await list(root, ["-r", "--depth", "-1"]);
+  projects.sort((a, b) => a.path.localeCompare(b.path, "en"));
+  const locked = [];
+  const actual = [];
+  // pnpm 10 的递归 ls 对所有项目 Promise.all，并发读取同一提升目录的 unsaved 包；
+  // workspace-concurrency 不约束这条路径。每次仅展开一个项目，锁文件与安装图也串行。
+  for (const project of projects) {
+    const args = ["--prod", "--depth", "Infinity"];
+    // 项目路径仅作 cwd，不进入 Windows shell 命令参数。
+    locked.push(...(await list(project.path, [...args, "--lockfile-only"])));
+    actual.push(...(await list(project.path, args)));
+  }
+  const skippedPackages = await nonApplicableOptionalPackages(root);
+  const required = assertProductionGraphs(locked, actual, skippedPackages);
+  return { required, projects: actual, skippedPackages };
 }
 
 export async function scanInstalledPackages(root, projects) {
@@ -148,10 +196,10 @@ export async function scanInstalledPackages(root, projects) {
   return installed;
 }
 
-export function missingProductionPackages(required, installed) {
+export function missingProductionPackages(required, installed, skippedPackages = new Set()) {
   const missing = [...required].filter(([key]) => !installed.has(key)).map(([, item]) => item);
   for (const item of missing) {
-    if (!unsupportedCanvas.has(item.name))
+    if (!unsupportedCanvas.has(item.name) && !skippedPackages.has(`${item.name}@${item.version}`))
       throw new Error(`Missing installed dependency: ${item.name}@${item.version}`);
   }
   return missing;
@@ -159,12 +207,12 @@ export function missingProductionPackages(required, installed) {
 
 export async function collectNpmNotices(root, overrides) {
   root = await realpath(root);
-  const { required, projects } = await readWorkspaceProductionGraph(root);
+  const { required, projects, skippedPackages } = await readWorkspaceProductionGraph(root);
   // 修复：标识门禁和声明生成必须扫描同一安装集合，避免嵌套版本只进声明、不进门禁。
   const installed = await scanInstalledPackages(root, projects);
   const packages = [];
   const missing = [];
-  const notInstalled = missingProductionPackages(required, installed);
+  const notInstalled = missingProductionPackages(required, installed, skippedPackages);
   for (const [key, item] of [...required].sort(([a], [b]) => a.localeCompare(b, "en"))) {
     const installedPackage = installed.get(key);
     if (!installedPackage) {

@@ -1,0 +1,20 @@
+@electron-internal/extract-zip@1.0.5
+Publisher-declared license: BSD-2-Clause
+Evidence: https://registry.npmjs.org/@electron-internal%2fextract-zip/1.0.5
+The exact published package/upstream snapshot did not supply a separate copyright notice.
+No copyright holder or year has been inferred from authors, maintainers, or another package.
+The following is the standard license text, NOT an original publisher notice or a claim that the exact package supplied a complete LICENSE.
+Publisher notice review remains unresolved for this exact version.
+The publisher later added an MIT license in commit 3c33b76429ebd9bf724bcfc32d3e8fae7eeb3e82; its applicability to previously published 1.0.5 source and binaries remains unanswered in https://github.com/electron/extract-zip/issues/18.
+Standard terms source: https://raw.githubusercontent.com/spdx/license-list-data/v3.27.0/text/BSD-2-Clause.txt
+The standard template's copyright placeholder is omitted because no exact-version publisher copyright notice is available.
+
+BSD 2-Clause License
+
+Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met:
+
+1. Redistributions of source code must retain the above copyright notice, this list of conditions and the following disclaimer.
+
+2. Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the following disclaimer in the documentation and/or other materials provided with the distribution.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.

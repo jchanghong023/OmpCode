@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -61,7 +61,7 @@ async function verifyIsolation(runtime, launcher) {
   return { ...isolation, evidence: runtime.isolationEvidence };
 }
 
-async function fixtureStage(stage, context) {
+async function fixtureStage(stage, context, env) {
   let fixture = context.guiProcesses.get(stage.file);
   if (!fixture) {
     fixture = {
@@ -72,6 +72,7 @@ async function fixtureStage(stage, context) {
   }
   const launcher = startCommand("node", ["packages/desktop/test/ompCore.launch.mjs"], {
     env: {
+      ...env,
       OMP_E2E_ISOLATED_ROOT: fixture.root,
       OMP_E2E_STARTUP: stage.file === "ompStartup.gui.e2e.mjs" ? "1" : "0",
       OMP_RPC_BINARY_PATH: context.omp,
@@ -111,6 +112,7 @@ async function fixtureStage(stage, context) {
       failFast: true,
       onFailure: context.onFailure,
       env: {
+        ...env,
         OMP_E2E_CDP_URL: runtime.endpoint,
         OMP_E2E_RENDERER_URL: runtime.rendererUrl,
         OMP_E2E_SCREENSHOT_URL: runtime.screenshotUrl,
@@ -141,9 +143,37 @@ function outcome(result) {
 
 export async function regularStage(stage, context) {
   if (stage.realOmp && !context.omp)
-    return missing("No installed omp; real validation is not run and omp is not downloaded");
-  if (stage.fixture) return await fixtureStage(stage, context);
+    return missing("No installed omp; local mock-model validation still requires the real binary");
   const env = { ...stage.env };
+  if (stage.realOmp) {
+    // startCommand 会重新合并 process.env；必须覆盖 Windows 大小写别名，不能只删副本。
+    // broker 启动即取快照，配置叠加可改子模型；离线公司通道与 HOME/.env 也会重读用户凭据。
+    for (const key of new Set([...Object.keys(process.env), ...Object.keys(env)]))
+      if (
+        /^(?:OMP_RPC_ARGS_JSON|OMP_E2E_MODEL_SELECTOR|OMP_CONFIG_ROOT|OMP_PROFILE|PI_PROFILE|OMPCODE_CENTOS7_PROFILE|PI_CONFIG_DIR|PI_CODING_AGENT_DIR|PI_CONFIG_FILES|OMP_AUTH_BROKER_.+|CLAUDE_CONFIG_DIR|OMP_OFFLINE|HOME|USERPROFILE|(?:PI|OMP)_(?:SMOL|SLOW|PLAN|COMPACT|ADVISOR|DEFAULT)_MODEL)$/iu.test(
+          key,
+        )
+      )
+        env[key] = undefined;
+    const home = await mkdtemp(join(tmpdir(), "ompcode-mock-home-"));
+    await mkdir(join(home, ".claude"));
+    Object.assign(env, {
+      HOME: home,
+      USERPROFILE: home,
+      CLAUDE_CONFIG_DIR: join(home, ".claude"),
+      OMP_CONFIG_ROOT: join(home, ".omp"),
+      OMP_PROFILE: "",
+      PI_PROFILE: "",
+      OMPCODE_CENTOS7_PROFILE: "",
+      PI_CONFIG_DIR: "",
+      PI_CODING_AGENT_DIR: "",
+      PI_CONFIG_FILES: "",
+      OMP_OFFLINE: "",
+      OMP_RPC_BINARY_PATH: context.omp,
+      OMP_AGENT_SKIP_REAL_E2E: "0",
+    });
+  }
+  if (stage.fixture) return await fixtureStage(stage, context, env);
   let args = stage.args;
   let packagingOutput;
   if (stage.packaging) {
@@ -160,11 +190,6 @@ export async function regularStage(stage, context) {
     console.log(`Local unpacked packaging evidence: ${packagingOutput}`);
     await snapshotPackagingState();
   }
-  if (stage.realOmp)
-    Object.assign(env, {
-      OMP_RPC_BINARY_PATH: context.omp,
-      OMP_AGENT_SKIP_REAL_E2E: "0",
-    });
   try {
     const result = outcome(
       await commandOutput(stage.command, args, {

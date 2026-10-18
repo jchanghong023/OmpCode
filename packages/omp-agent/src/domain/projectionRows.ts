@@ -9,6 +9,7 @@ import type {
 import { rowBaseFields } from "./projectionTypes.js";
 import type { TurnFileFacts } from "./fileFacts.js";
 import { ompTodoPlan } from "./ompTodoPlan.js";
+import { ompAskAnswers } from "./ompAskAnswers.js";
 
 export interface TurnContext {
   turnId: string;
@@ -100,6 +101,8 @@ export function createStreamingRow(
 
 export function createToolCallRow(init: RowInit & ToolCallUpsert): ToolCallRow {
   const plan = init.toolName === "todo" ? ompTodoPlan(init.resultDetails) : null;
+  const answers =
+    init.toolName === "ask" && init.status === "success" ? ompAskAnswers(init.resultDetails) : null;
   return {
     ...rowBaseFields({ ...init, entityId: `tool-${init.toolCallId}` }),
     kind: "toolCall",
@@ -109,7 +112,13 @@ export function createToolCallRow(init: RowInit & ToolCallUpsert): ToolCallRow {
     inputText: init.inputText ?? "",
     ...(init.input !== undefined ? { input: init.input } : {}),
     ...(init.outputText !== undefined
-      ? { output: { text: init.outputText, ...(plan ? { plan } : {}) } }
+      ? {
+          output: {
+            text: init.outputText,
+            ...(plan ? { plan } : {}),
+            ...(answers ? { answers } : {}),
+          },
+        }
       : {}),
     ...(init.error !== undefined ? { error: init.error } : {}),
     ...(init.startedAt !== undefined ? { startedAt: init.startedAt } : {}),
@@ -119,13 +128,23 @@ export function createToolCallRow(init: RowInit & ToolCallUpsert): ToolCallRow {
 
 export function mergeToolCallRow(existing: ToolCallRow, update: ToolCallUpsert): ToolCallRow {
   const plan = update.toolName === "todo" ? ompTodoPlan(update.resultDetails) : null;
+  const answers =
+    update.toolName === "ask" && update.status === "success"
+      ? ompAskAnswers(update.resultDetails)
+      : null;
   return {
     ...existing,
     status: update.status,
     ...(update.inputText !== undefined ? { inputText: update.inputText } : {}),
     ...(update.input !== undefined ? { input: update.input } : {}),
     ...(update.outputText !== undefined
-      ? { output: { text: update.outputText, ...(plan ? { plan } : {}) } }
+      ? {
+          output: {
+            text: update.outputText,
+            ...(plan ? { plan } : {}),
+            ...(answers ? { answers } : {}),
+          },
+        }
       : {}),
     ...(update.error !== undefined ? { error: update.error } : {}),
     ...(update.startedAt !== undefined ? { startedAt: update.startedAt } : {}),

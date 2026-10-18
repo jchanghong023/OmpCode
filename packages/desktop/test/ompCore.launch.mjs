@@ -3,13 +3,17 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createWriteStream } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
+import { createServer as createHttpServer } from "node:http";
 import { createRequire } from "node:module";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import { createServer } from "vite";
 import { chromium } from "playwright-core";
-import { realOmpCredential } from "../../omp-agent/test/fixtures/realOmpCredential.mjs";
+import {
+  MOCK_MODEL_SELECTOR,
+  startMockModelServer,
+} from "../../omp-agent/test/fixtures/ompMockServer.mjs";
 import { readIsolationEvidence, captureIsolationScreenshot } from "./ompCore.evidence.cjs";
 
 const desktopRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -18,23 +22,33 @@ assert.ok(root && isAbsolute(root), "Use an absolute isolated GUI root");
 const require = createRequire(join(desktopRoot, "package.json"));
 const omp = process.env.OMP_RPC_BINARY_PATH;
 assert.ok(omp, "Use the installed OMP binary supplied by the gate");
-const credentials = await realOmpCredential(omp);
 const configRoot = join(root, "omp");
 const workspace = join(root, "workspace");
 await Promise.all(
-  ["omp/agent", "workspace", "home", "userData", "sessionData", "evidence"].map((name) =>
+  ["omp/agent", "workspace", "home/.claude", "userData", "sessionData", "evidence"].map((name) =>
     mkdir(join(root, name), { recursive: true }),
   ),
 );
 const startup = process.env.OMP_E2E_STARTUP === "1";
-// 配置仅在沙箱；startup 保留目录外默认值，identity 固定已有 GLM。
-const model = startup
-  ? "commandcode/inclusionai/ling-3.0-flash-sante:free"
-  : "zhipu-coding-plan/glm-5.3-flash";
-await writeFile(
-  join(configRoot, "agent", "config.yml"),
-  `modelRoles:\n  default: ${model}\n  plan: zhipu-coding-plan/glm-5.3-flash\n  smol: zhipu-coding-plan/glm-5.3-flash\n  slow: zhipu-coding-plan/glm-5.3-flash\n  compact: zhipu-coding-plan/glm-5.3-flash\n  advisor: zhipu-coding-plan/glm-5.3-flash\nadvisor:\n  enabled: false\ngoal:\n  continuationModes: []\n`,
-);
+// 目录外默认值只用于设置页；其余角色（包括真实子代理）全部由本地 fixture 配置。
+const mock = await startMockModelServer();
+await mock.writeConfig(configRoot, {
+  defaultModel: startup ? "zcode-missing/absent-model" : MOCK_MODEL_SELECTOR,
+});
+// 仅发布无认证头的请求体和健康状态，供独立 CDP 驱动进程关联实际工具/子代理请求。
+const requestEvidence = () => mock.calls.map(({ context }) => ({ messages: context.messages }));
+const diagnostics = createHttpServer((_request, response) => {
+  try {
+    mock.assertHealthy();
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(JSON.stringify({ baseUrl: mock.baseUrl, calls: requestEvidence() }));
+  } catch (error) {
+    response.writeHead(500, { "content-type": "application/json" });
+    response.end(JSON.stringify({ error: error.message, calls: requestEvidence() }));
+  }
+});
+await new Promise((done) => diagnostics.listen(0, "127.0.0.1", done));
+const mockDiagnosticsUrl = `http://127.0.0.1:${diagnostics.address().port}/`;
 process.chdir(desktopRoot);
 process.env.ZCODE_ENV = "test";
 const vite = await createServer({
@@ -46,17 +60,33 @@ const vite = await createServer({
 });
 await vite.listen();
 const rendererUrl = vite.resolvedUrls.local[0];
+// 只删密钥无法阻止 broker 启动请求、settings 叠加与 Claude 配置读取；先剥离继承入口和大小写别名。
+const inheritedEnv = { ...process.env };
+for (const key of Object.keys(inheritedEnv)) {
+  if (
+    /(?:API_?KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|AUTHORIZATION)/iu.test(key) ||
+    /^(?:PI|OMP)_(?:SMOL|SLOW|PLAN|COMPACT|ADVISOR|DEFAULT)_MODEL$/iu.test(key) ||
+    /^(?:OMP_E2E_MODEL_SELECTOR|OMP_AUTH_BROKER_.+|PI_CONFIG_FILES|CLAUDE_CONFIG_DIR|OMP_OFFLINE|HOME|USERPROFILE|OMP_CONFIG_ROOT|OMP_PROFILE|PI_PROFILE|OMPCODE_CENTOS7_PROFILE|PI_CONFIG_DIR|PI_CODING_AGENT_DIR|OMP_RPC_ARGS_JSON)$/iu.test(
+      key,
+    )
+  )
+    delete inheritedEnv[key];
+}
 const env = {
-  ...process.env,
-  ...credentials,
+  ...inheritedEnv,
+  // 从不读取用户认证库；模型 provider 的假密钥只存在于隔离 models.yml。
   ZCODE_ENV: "test",
   ZCODE_DISABLE_FIXED_REMOTE_DEBUGGING_PORT: "1",
   ZCODE_DESKTOP_APPLICATION_NAME: "OmpCode Core Acceptance",
   OMP_CONFIG_ROOT: configRoot,
   OMP_PROFILE: "",
   PI_PROFILE: "",
+  OMPCODE_CENTOS7_PROFILE: "",
   PI_CONFIG_DIR: "",
   PI_CODING_AGENT_DIR: "",
+  PI_CONFIG_FILES: "",
+  OMP_OFFLINE: "",
+  CLAUDE_CONFIG_DIR: join(root, "home", ".claude"),
   HOME: join(root, "home"),
   USERPROFILE: join(root, "home"),
   ZCODE_DATA_BASE_DIR: join(root, "data"),
@@ -64,20 +94,15 @@ const env = {
   ZCODE_DESKTOP_USER_DATA_DIR: join(root, "userData"),
   ZCODE_DESKTOP_SESSION_DATA_DIR: join(root, "sessionData"),
   ELECTRON_RENDERER_URL: rendererUrl,
-  OMP_RPC_ARGS_JSON: startup
-    ? ""
-    : JSON.stringify([
-        "--provider",
-        "zhipu-coding-plan",
-        "--model",
-        "glm-5.3-flash",
-        "--thinking",
-        "low",
-        "--no-extensions",
-        "--no-rules",
-        "--no-lsp",
-        "--no-pty",
-      ]),
+  OMP_RPC_ARGS_JSON: JSON.stringify([
+    "--no-title",
+    "--no-extensions",
+    "--no-rules",
+    "--no-lsp",
+    "--no-pty",
+    "--approval-mode",
+    "always-ask",
+  ]),
 };
 delete env.ELECTRON_RUN_AS_NODE;
 const electron = spawn(
@@ -181,6 +206,11 @@ async function prepareRuntime(endpoint) {
     requestedWorkspace: workspace,
     isolation,
     isolationEvidence: join(root, "evidence", `window-isolation-${electron.pid}.jsonl`),
+    mock: {
+      baseUrl: mock.baseUrl,
+      modelSelector: MOCK_MODEL_SELECTOR,
+      diagnosticsUrl: mockDiagnosticsUrl,
+    },
   };
   await writeFile(join(root, "runtime.json"), JSON.stringify(metadata, null, 2));
   console.log(`OMP_CORE_GUI_READY=${JSON.stringify(metadata)}`);
@@ -189,6 +219,11 @@ electron.once("error", (error) => {
   console.error(error.message);
   process.exitCode = 1;
 });
-await new Promise((done) => electron.once("close", done));
-await vite.close();
+try {
+  await new Promise((done) => electron.once("close", done));
+  mock.assertHealthy();
+} finally {
+  diagnostics.closeAllConnections();
+  await Promise.all([vite.close(), mock.close(), new Promise((done) => diagnostics.close(done))]);
+}
 process.exitCode = electron.exitCode ?? 1;

@@ -154,6 +154,8 @@ export type ToolResultDisplay = z.infer<typeof toolResultDisplaySchema>;
 // display 是展示载荷；版本不兼容时降级为无卡片，避免同一内容导致整条订阅反复恢复失败。
 export const toolOutputSchema = z.object({
   text: z.string(),
+  // ask 的已提交答案必须独立于自然语言正文，否则协议校验会丢失实际选择。
+  answers: z.record(z.string(), z.array(z.string())).optional(),
   // omp todo phases 的清单投影；文本摘要仍保留在 text，不把 JSON 冒充工具输出。
   plan: z
     .array(

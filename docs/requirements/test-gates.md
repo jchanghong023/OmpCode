@@ -7,7 +7,7 @@
 - 根 `package.json` 提供 `pnpm fastcheck`、`pnpm fulltest`、`pnpm slowtest`；三个入口只允许 Windows 执行测试。Node 支持范围沿用根 `package.json` 的 `engines.node`（当前 `>=24.0.0`）；`mise.toml` 的 Node 固定版本仅用于可复现开发基线，不是门禁精确版本准入条件。脚本复用并记录当前 Node，不自动降级或安装；pnpm 仍按 `mise.toml` 校验固定版本，不清除缓存。
 - `scripts/test-gates.mjs` 拥有入口权限、最终状态及快照；过程模块是单一计时、阶段准入、首失败记录与所属子进程树所有者。命令的失败事件直接通知调度所有者，不等待阶段 `finally` 或流关闭；收尾不能吞掉原失败或将其拖成超时。只调整编排，复用原有检查、编译和测试原语，不修改产品代码、测试断言或质量配置。结果绑定 HEAD、未提交差异、内容指纹及工具版本。
 - `fastcheck` 只运行增量 TypeScript 编译、Lint、变更架构和格式检查；根检查之外复用 formal-proof 的独立 typecheck 与 Lint 原语，纯 TypeScript 编译均按编译计时。不执行任何 UT、集成、GUI、冒烟或门禁自检。大量变更格式名单按 Windows 命令行上限分批，不截断。安全独立阶段有界并行，非编译预算最多 **60 秒**。
-- `fulltest` 包含 fastcheck 全部检查原语（全量检查可覆盖其变更子集，不重复运行）、全部现存适用 Windows 核心/上游测试、门禁自检、真实 OMP E2E，以及当前 Main/Host/Preload/Renderer 构建、工具详情和真实产品 GUI 启动/身份/同根冷恢复。复用现有本地资源准备与 Electron unpacked 打包原语和 afterPack 校验，显式 `--publish never`，不调用发布入口；不等同正式安装器或两平台分发。**总墙钟最多 900 秒，包含编译、准备、测试、报告与清理。**
+- `fulltest` 包含 fastcheck 全部检查原语（全量检查可覆盖其变更子集，不重复运行）、全部现存适用 Windows 核心/上游测试、门禁自检、真实 OMP + 本地模拟模型 E2E，以及当前 Main/Host/Preload/Renderer 构建、工具详情和真实产品 GUI 启动/身份/同根冷恢复。模型模拟只替换模型响应，不替换 OMP、工具、审批、协议、持久化或 GUI。复用现有本地资源准备与 Electron unpacked 打包原语和 afterPack 校验，显式 `--publish never`，不调用发布入口；不等同正式安装器或两平台分发。**总墙钟最多 900 秒，包含编译、准备、测试、报告与清理。**
 - `slowtest` 复用 fulltest 相同计划一次，不再用 GUI 或较慢的当前平台测试区分层级。项目已取消 WSL 测试扩展，不探测或启动 WSL，也不额外增加环境、CI、远程阶段或重复 fulltest。**总墙钟最多 1500 秒，包含编译；不是可暂停的非编译预算。**
 - 先前用户授权精简的 Fork 新增专项保持已删除；上游原有测试与有效断言仍全部保留。不再按耗时移动层级、删除现存测试或缩减覆盖。当前快照没有预算超限依据，不启用 `fork-affected` 缩域；不宣称已验收历史删除专项或两平台打包。
 - 编译前后复用既有 `tsc -b` composite/incremental、固定 dist/out 和稳定 Vite 缓存，不调用 clean 或为计时删除/切换缓存。只将纯编译原语标记为编译；staging、初始化、准备、静态检查、测试、等待、快照、聚合与清理均计入非编译时间。GUI 中的 Vite 懒编译是混合测试阶段，保守全部计费。
@@ -40,18 +40,74 @@ flowchart TD
 
 ## 环境与失败语义
 
-- 真实 OMP 使用本机安装版本；源码权威及无安装时不验证的规则见 [FORK.md](FORK.md#omp-侧依赖)。缺少安装、凭据、二进制或测试发生跳过时，记录未验证而非通过，不静默使用旧缓存核或临时安装。
+- 真实 OMP 使用本机安装版本；源码权威及无安装时不验证的规则见 [FORK.md](FORK.md#omp-侧依赖)。缺少安装、二进制或测试发生跳过时，记录未验证而非通过，不静默使用旧缓存核或临时安装。fulltest/slowtest 不读取用户模型凭据、不连接真实提供者、不允许外部模型覆盖或失败后回退；两级使用同一套本地模拟模型计划，不把真实模型调用转移到 slowtest。
 - adapter 编译只依赖源码、构建工具和 workspace 依赖，不以本机安装 OMP 为前提；缺 OMP 只阻止真正使用它的真实核心和产品 GUI 阶段，并记录未验证，不能误跳过离线编译。
 - 产品 GUI 必须由专用隔离 fixture 提供；保留真实启动、工具结果呈现和 `identityMigration` 的 before/after 同根新进程冷恢复，不连接日常实例。被删除专项不再构成缺环境阶段，也不得在测试结果中声称已验证。
 - GUI 判据基于产品契约与独立真实持久记录，不把自动生成的会话标题当作稳定身份。身份迁移按实际稳定会话 ID 验证唯一侧栏项及同根重启连续性。
 - 工具结果组件入口自己创建临时 Vite/Electron/userData，不调用模型；它补充工具结果显示验证，不代替真实产品 GUI。
 - 产品 GUI 必须使用当前构建的真实 Main/Preload。Preload 需内联其第三方运行依赖，保持既有沙箱与 context isolation 设置；不能因沙箱无法加载 npm 模块而留下空白 Renderer，也不能注入假 bridge、关闭沙箱或加空值兜底冒充通过。
-- 产品 GUI 由 `ompCore.launch.mjs` 创建专用临时根、独占端口和当前真实 Electron/renderer；通过 Electron 测试启动层在任何产品 BrowserWindow 创建前设置隐藏、不可全局聚焦，保持真实 Main/Preload、沙箱和安全边界。Playwright/CDP 只驱动目标页面 DOM，不调用 Computer Use、全局输入或通知焦点操作；隔离性须观察实际所有测试窗口，而非仅凭工具名称推断。凭据只留在测试子进程环境，不落证据或认证库。
+- 产品 GUI 由 `ompCore.launch.mjs` 创建专用临时根、独占端口和当前真实 Electron/renderer；通过 Electron 测试启动层在任何产品 BrowserWindow 创建前设置隐藏、不可全局聚焦，保持真实 Main/Preload、沙箱和安全边界。Playwright/CDP 只驱动目标页面 DOM，不调用 Computer Use、全局输入或通知焦点操作；隔离性须观察实际所有测试窗口，而非仅凭工具名称推断。本地模型配置及测试专用假密钥仅写入隔离根，不读取或复制用户认证库。
 - GUI 启动层在导入真实 Main 之前拒绝协议客户端注册及 `reg.exe add` 系统写入；这些系统集成不属于此沙箱 GUI 的验收覆盖，拒绝不能伪装为成功。隔离证据串行追加 JSONL，每次读取最后完整行，仍核对当前 PID、所有窗口状态和新鲜度；不通过重试、忽略写入错误或放宽窗口断言处理 Windows 文件替换失败。
 - 隐藏窗口采用 Electron 离屏渲染保持真实 DOM/动画帧可运行；准备及验收截图统一通过该 Electron 进程的 `webContents.capturePage`（保持隐藏、保持唤醒）采集。专用回环临时端口只返回该 fixture Renderer 的 PNG；不通过展示/聚焦窗口获得截图，也不依赖可见合成面。GUI 准备不增加独立的 Playwright 默认截止，仍由外层同一非编译预算终止所属进程树；既有 DOM 验收断言不变。
 - 全新 GUI 根必须通过产品公开的首次引导跳过入口完成准备；不能直接改 store 或设置文件伪造完成。就绪须证明引导已关闭、真实主界面入口可用，并保留页面截图；准备失败立即让阶段失败，启动器仍由门禁持有并清理整棵进程树。
 - 三个测试入口不接受 `--publish-releases`，不发现或检查 workflow、不调用 GitHub CLI，不推送、不创建 Tag、不发布。CI 不是测试环境或验收步骤；既有分发 workflow 不改动、不触发。
 - 源码变化后不能沿用此前测试结果。所有 Windows 测试阶段记录耗时，失败、取消、跳过和缺环境保持非通过状态；CentOS 产品支持及构建期产物完整性约束不因此取消。
+
+## 本地模拟模型契约
+
+- fulltest/slowtest 必须从真实 OMP 和隐藏 GUI 入口覆盖工具调用、子代理与 ask：真实 `write` 审批及文件落盘；真实 `task` 启动的子代理具有独立身份、实际子模型请求、结果和可读取记录；真实 `ask` 的选项在 GUI 作答后回到模型并完成。冷恢复保留工具结果、问答结果和子代理身份/记录，不以父代理最终回复替代子代理运行证据。两级使用同一计划，不将真实模型调用移到 slowtest。
+- 测试引擎来自 OMP `57672f546162e16b019484626c3b5fa9300aafef` 的 `packages/ai/src/providers/mock.ts`，事件流支持来自 `packages/ai/src/utils/event-stream.ts`，Anthropic SSE 传输模式来自 `scripts/repo-ui-smoke.ts`。源文件、原始内容摘要、适配范围和未改动的 MIT 许可证登记于 `third-party/copied-components.json` 与 `third-party/upstream/omp-mock.LICENSE`；运行时不依赖相邻 OMP 源码目录、Bun 或生产模型包。全局 provider 注册、catalog 分类及库专属错误类型属于未复制的集成依赖，不以空实现冒充保留；响应脚本、事件、终止与错误的可观察语义必须保留。
+- `ompMockModel.mjs` 拥有进程内脚本状态和调用记录，`ompMockStream.mjs` 拥有事件流，`ompMockScenarios.mjs` 拥有严格场景脚本状态、prompt 归一化及工具结果/子模型请求关联，`ompMockServer.mjs` 拥有回环 Anthropic HTTP/SSE 传输、隔离配置及服务生命周期，并调用场景模块；后两者均由同一 `scripts/repo-ui-smoke.ts` 来源适配拆分。真实工具、子代理、交互及会话仍唯一由 OMP 执行。每个服务独占 `127.0.0.1` 临时端口，由所属测试/GUI 启动器持有和关闭；独立 OMP 进程只通过隔离 `models.yml` 连接 `zcode-mock/scripted`。测试假密钥只写隔离根，清除继承的角色/profile/模型覆盖，禁用后台标题生成；不读取用户凭据或复用日常模型配置。
+- 模拟测试的隔离边界同时覆盖门禁与可独立运行的核心/GUI 入口：清除继承的认证 broker、`PI_CONFIG_FILES` 配置叠加和 `CLAUDE_CONFIG_DIR` 凭据目录，禁用继承的离线公司模型发现；`HOME` / `USERPROFILE` 指向本次拥有的空目录，避免用户 home `.env` 重新注入凭据或配置根。
+- `--no-title` 只禁用会话自动标题；真实 task 仍可能发起任务标签与自动思考档位判断。两类辅助请求也必须由本地模拟服务明确应答，但不得计作子代理执行证据；只有真实子任务 assignment 请求、独立子会话记录及关联结果才能证明子代理已执行。
+- 未知场景、错误路径/模型、未配置响应、模拟服务异常或缺失/不匹配/失败的工具结果必须明确失败，不能通用回复成功、仅凭原始 prompt 结束工具场景，或回退到外部模型。HTTP fixture 不写目标文件、不代答 ask、不伪造子代理进程或结果；完成标记须由实际匹配的工具结果驱动，子代理另须观察真实子模型请求及可读取记录。
+- 下表是 full/slow 必须满足的能力与证据矩阵，不是通过记录。引擎与传输入口分别为 `packages/omp-agent/test/mockModel.test.ts`、`mockServer.test.ts`；核心入口为同目录 `real-omp.e2e.test.ts`（real 指已安装的 OMP，不指真实提供者）。GUI 入口为 `packages/desktop/test/ompStartup.gui.e2e.mjs` 和 `ompReviewedDefects.gui.e2e.mjs`，均经 `packages/desktop/test/ompCore.launch.mjs` 使用真实 Main/Host/Preload/Renderer/OMP。
+
+| 能力组                 | 进程内引擎验收：`mockModel.test.ts`                                                                                        | 回环传输 / 真实 OMP / 产品 GUI 证据与边界                                                                                                                                                                                                            |
+| ---------------------- | -------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 文本、思考和工具块     | 字符串及显式 text、thinking（含签名）、toolCall 的有序 start/delta/end 和最终内容                                          | `mockServer.test.ts` 验证实际 HTTP SSE 文本/思考/工具事件；核心与 GUI 验证流式回复和工具呈现，不据此宣称模型具备推理能力                                                                                                                             |
+| 工具参数与身份         | 对象参数与原样字符串参数、显式 ID 与自动递增 ID、实例间计数隔离                                                            | 传输验证 JSON 参数与工具 ID；核心/GUI 实际 `write`、ask、task 按工具 ID 关联后续结果，不能用最终回复替代关联证据                                                                                                                                     |
+| 顺序与动态来源         | 数组、同步/异步 iterable、异步 context/options handler、调用记录                                                           | `mockServer.test.ts` 经实际请求验证脚本/handler 驱动，不以 mock fetch 回显代替传输；不要求 GUI 暴露脚本 API                                                                                                                                          |
+| push、reset 与优先级   | 构造序列 → push 队列 → fallback；reset 清调用/追加队列/工具计数，但不重放构造序列；实例隔离                                | 属于进程内状态能力，以引擎验收为准，不宣称 HTTP 或 GUI 提供 push/reset 接口                                                                                                                                                                          |
+| 耗尽与异常             | 无响应、handler/iterator 抛错、显式 throw 及 onResponse 回调拒绝在事件迭代和 result 中的可观察结果                         | 传输验证未知请求、错误模型、无脚本及工具结果关联失败明确失败；引擎异常不冒充真实提供者错误认证                                                                                                                                                       |
+| 延迟与取消             | 正常延迟、已取消 signal 和延迟期间 abort 的终态                                                                            | 传输验证客户端取消/断连及 fixture 关闭；GUI 经真实发送/停止入口观察状态与 Tooltip，保持隐藏不可聚焦                                                                                                                                                  |
+| 终止原因               | 默认 stop/toolUse、显式 stop/length/toolUse/error/aborted，错误正文与 error/done 事件                                      | 传输覆盖 Anthropic 可表达的 stop 映射与错误；核心验证工具后续轮和成功收口；不要求所有引擎 stop 字段在 GUI 原样可见                                                                                                                                   |
+| 用量与费用             | 缺省零、部分字段、cache 与 orchestration token 合计、显式 totalTokens 优先；费用分量合计及显式 cost.total 优先             | 传输验证 Anthropic 可表达的 input/output/cache token 字段；cost、orchestration 与任意显式总量的完整语义由引擎验收，不声称全部透传到 OMP/GUI                                                                                                          |
+| 响应元数据             | responseId、serviceTier、stopDetails、fallbackCreditHandle；onResponse 的小写 header、status/requestId、默认状态及回调错误 | 任意 serviceTier、结构化 stopDetails、内存 fallbackCreditHandle 和合成 onResponse 回调只作为引擎证据；HTTP 只验实际可传输的消息 ID/头与状态，不声称 GUI/真实提供者支持全部字段                                                                       |
+| 真实工具、ask 与子代理 | 引擎仅生成工具意图，不执行或证明工具成功                                                                                   | `real-omp.e2e.test.ts` 经公开 v4 输入/响应验证真实 write/always-ask 审批/精确文件内容、ask 应答投影及 task 子代理；GUI live 通过产品 DOM 控件审批、选答、打开子代理详情，recovery 同根新进程核对工具结果、问答结果、子代理真实 ID/记录和两条消息标记 |
+
+- GUI 保留真实用户入口、两轮消息、发送/停止交互、唯一任务身份及同根新进程冷恢复；截图、隐藏不可聚焦窗口和系统集成写入隔离要求不变。组件展示测试只补充局部呈现，不替代真实核心/产品 GUI/冷恢复。
+- 验收结果标记为“真实 OMP + 模拟模型”，不声称真实提供者认证/可用性、真实模型任务质量或外网连通性已通过。既有真实模型历史记录保持原样，不改写为本次模拟验收；所有通过结论仍必须绑定实际运行的源码快照。
+
+以下所有权与时序必须由真实边界满足；回环模型仅提供脚本响应，不持有工具、交互或会话事实：
+
+```mermaid
+sequenceDiagram
+  participant GUI as 隐藏 GUI / 真实 Main与Preload
+  participant Host as Host / Adapter 投影与路由
+  participant OMP as 真实 OMP 会话与工具 owner
+  participant Mock as 回环模型 / 测试进程 owner
+  GUI->>Host: 产品输入
+  Host->>OMP: 公开 v4 转 RPC
+  OMP->>Mock: 隔离模型 HTTP 请求
+  Mock-->>OMP: SSE 文本/思考/工具意图与 ID
+  alt write 审批或 ask
+    OMP->>Host: 真实交互请求
+    Host->>GUI: 审批或选项
+    GUI->>Host: 用户控件作答
+    Host->>OMP: 关联请求 ID 的应答
+    OMP->>OMP: 执行真实 write 或完成 ask
+  else task 子代理
+    OMP->>OMP: 启动独立子代理并持有身份与记录
+    OMP->>Mock: 实际子模型请求
+    Mock-->>OMP: 子代理脚本响应
+  end
+  OMP->>Mock: 后续请求携带实际匹配的工具结果
+  Mock-->>OMP: 仅在结果核对后返回完成标记
+  OMP->>Host: 真实终态与持久记录的投影
+  Host->>GUI: 工具/ask/子代理结果及记录入口
+  Note over GUI,OMP: 同根新进程冷恢复须核对稳定身份与上述持久结果
+```
 
 ## 验收
 
@@ -64,7 +120,7 @@ flowchart TD
    三个入口分别注入首阶段失败与长时间并行孙进程，full/slow 另注入原生 Node runner 首测试失败，以及较早文件/并发子测试挂起、较晚用例先失败。证明后续阶段/测试未启动、同伴进程树终止、原失败未被 TIMEOUT 覆盖且完整计时非零退出。命令失败后即使阶段 `finally` 不结束，也必须保留该失败并立即退出。再注入不结束的操作、验证及清理 Promise，证明 full/slow 不等待它们超过硬截止。
    全部活跃阶段都是编译时，首失败的所属进程树终止与等待仍必须计入同一非编译预算；不能把清理排除为编译。分别在 TAP/TypeScript 诊断的 stdout 分片之间插入 stderr，首失败识别仍须可靠，不能跨流拼成或切断结果。
    真实生命周期的 verify 回调发现源码变化后必须拒绝 PASS；首失败不再执行 verify，失败、超时或取消报告仍保留运行前绑定的快照及工具版本。
-5. 实际运行必要的 fastcheck/fulltest/slowtest，记录完整命令、退出码、总/编译排除/非编译耗时、预算与源码快照。GUI 必须实际证明没有可见或可聚焦窗口，且真实回复和冷恢复判据仍通过。
+5. 实际运行必要的 fastcheck/fulltest/slowtest，记录完整命令、退出码、总/编译排除/非编译耗时、预算与源码快照。GUI 必须实际证明没有可见或可聚焦窗口，且真实 OMP + 模拟模型回复和冷恢复判据仍通过。
 6. 系统 Node 满足项目支持范围但不同于 mise 固定版本时，三级入口的只读计划可正常生成并记录实际 Node；普通 fastcheck 可进入并执行检查。full/slow 的授权、预算与 pnpm 版本拒绝语义不变，不能把入口准入通过冒充完整测试通过。
 
 ## 实现与验证状态

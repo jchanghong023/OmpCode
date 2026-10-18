@@ -249,5 +249,54 @@
     "license": "MIT",
     "scope": "Vendored React/Next.js guidance and local adaptations; local README preserves Shu Ding / Vercel attribution.",
     "reviewRequired": "Pinned upstream README and skill declare MIT, but a complete original copyright/license notice has not been obtained."
+  },
+  {
+    "id": "OMP mock-model test fixtures",
+    "referenceRevision": "57672f546162e16b019484626c3b5fa9300aafef",
+    "importRevision": "57672f546162e16b019484626c3b5fa9300aafef",
+    "source": "https://raw.githubusercontent.com/jchanghong023/oh-my-pi/57672f546162e16b019484626c3b5fa9300aafef/LICENSE",
+    "file": "third-party/upstream/omp-mock.LICENSE",
+    "sha256": "16c45f9d667442781f03fa198914cc39abcaa48ec5ed8f644643e554ca2fbf63",
+    "license": "MIT",
+    "provenance": "Imported directly from the local jchanghong023/oh-my-pi checkout at F:/code2026/oh-my-pi, revision 57672f546162e16b019484626c3b5fa9300aafef. Source files and LICENSE were clean at this revision; no source or license was downloaded. Source SHA256 values below cover original file bytes, not adapted local files; the generated inventory records local content hashes.",
+    "roots": [
+      "packages/omp-agent/test/fixtures/ompMockModel.mjs",
+      "packages/omp-agent/test/fixtures/ompMockStream.mjs",
+      "packages/omp-agent/test/fixtures/ompMockServer.mjs",
+      "packages/omp-agent/test/fixtures/ompMockScenarios.mjs"
+    ],
+    "modifiedFiles": [
+      "packages/omp-agent/test/fixtures/ompMockModel.mjs",
+      "packages/omp-agent/test/fixtures/ompMockStream.mjs",
+      "packages/omp-agent/test/fixtures/ompMockServer.mjs",
+      "packages/omp-agent/test/fixtures/ompMockScenarios.mjs"
+    ],
+    "scope": "Node-only test fixtures derived from OMP's scripted mock model, required event-stream support and Anthropic SSE smoke pattern. Local adaptations remove TypeScript-only types, global API registration and catalog classification dependencies, use native named errors instead of production error classes, and separate loopback HTTP/config lifecycle from strict scripted scenario state, prompt normalization and tool-result correlation. No dependency on adjacent source, Bun or production model packages; no production provider/runtime code is replaced.",
+    "sourceFiles": [
+      {
+        "sourcePath": "packages/ai/src/providers/mock.ts",
+        "sha256": "3631d4b13ac1b1cf39a0d86d80a8fcd3e2bc0940c07ce34af21002b09c45b632",
+        "localPath": "packages/omp-agent/test/fixtures/ompMockModel.mjs",
+        "adaptation": "Preserve scripted content/events, handlers/iterables, push/reset/fallback, errors/cancellation, stop reasons, usage/cost and response metadata; remove production catalog/global registry integration and adapt error dependencies for Node."
+      },
+      {
+        "sourcePath": "packages/ai/src/utils/event-stream.ts",
+        "sha256": "ca48025e83e6d213df0d5353cedc33cf731d51622229c0186a9bed1c83f5d13d",
+        "localPath": "packages/omp-agent/test/fixtures/ompMockStream.mjs",
+        "adaptation": "Adapt the event queue, async iteration, terminal result and failure support required by the mock engine to standalone Node JavaScript."
+      },
+      {
+        "sourcePath": "scripts/repo-ui-smoke.ts",
+        "sha256": "c927529e987402eb5564b38e70dcac7ae1e727a410d8dc93bed4c2659829dc99",
+        "localPath": "packages/omp-agent/test/fixtures/ompMockServer.mjs",
+        "adaptation": "Adapt Anthropic message/content-block SSE framing into a test-owned loopback HTTP server driven by the copied engine; own isolated model config and HTTP lifecycle, delegating strict scripted scenarios to ompMockScenarios.mjs without executing tools in the fixture."
+      },
+      {
+        "sourcePath": "scripts/repo-ui-smoke.ts",
+        "sha256": "c927529e987402eb5564b38e70dcac7ae1e727a410d8dc93bed4c2659829dc99",
+        "localPath": "packages/omp-agent/test/fixtures/ompMockScenarios.mjs",
+        "adaptation": "Split the strict scenario portion of the locally adapted SSE fixture into a scripted-state module; own prompt normalization, deterministic usage, text/write/ask/task scenario responses and actual tool-result/child-request correlation. Derived from the same original source bytes as ompMockServer.mjs, not a new upstream import; no tools are executed in the fixture."
+      }
+    ]
   }
 ]

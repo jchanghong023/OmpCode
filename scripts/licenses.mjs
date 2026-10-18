@@ -30,7 +30,7 @@ if (command === "notices") {
 }
 
 // 标识门禁与声明生成共用 workspace 图和递归扫描，不按包名猜测生产范围。
-const { required, projects } = await readWorkspaceProductionGraph(ROOT);
+const { required, projects, skippedPackages } = await readWorkspaceProductionGraph(ROOT);
 const ownNames = new Set(projects.map((project) => project.name));
 const installed = new Map();
 const MANUAL_LICENSE = {
@@ -46,7 +46,7 @@ function normLicense(value) {
   return value?.type?.trim() || "(missing)";
 }
 const scanned = await scanInstalledPackages(ROOT, projects);
-missingProductionPackages(required, scanned);
+missingProductionPackages(required, scanned, skippedPackages);
 for (const [key, { pkg }] of scanned) {
   if (ownNames.has(pkg.name)) continue;
   installed.set(key, {

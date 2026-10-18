@@ -89,6 +89,14 @@ export function toolCallRowToLegacyNode(row: ToolCallRow): TaskChatToolCallTreeN
   // CUA v1 历史 display 会重复保存 input；工具调用行已经持有唯一输入，桥接时丢弃旧副本。
   const legacyDisplay =
     display?.kind === "cua" ? (({ input: _legacyInput, ...rest }) => rest)(display) : display;
+  // ask 仅传正文会丢失已提交答案，旧问答渲染器因此误报“未提供回答”。
+  // 用既有 { answers } 结果入口桥接 canonical 答案，同时保留正文；其他工具仍使用原文本。
+  const output =
+    (row.toolName === "ask" || row.toolName === "AskUserQuestion") &&
+    row.status === "success" &&
+    row.output?.answers !== undefined
+      ? { text: row.output.text, answers: row.output.answers }
+      : row.output?.text;
   return {
     toolCall: {
       toolId: row.toolCallId,
@@ -97,7 +105,7 @@ export function toolCallRowToLegacyNode(row: ToolCallRow): TaskChatToolCallTreeN
       kind: row.toolName,
       input: inputPreview.input,
       status: legacyStatus,
-      output: row.output?.text,
+      output,
       // V4 ToolCallRow 没有 legacy taskNotification raw；background Agent
       // 的终态摘要只落在 output。Agent renderer 读取 content 展示活动结果，因此在
       // Agent/Task 行显式桥接，避免失败详情虽已投影却仍只显示一张空卡。
