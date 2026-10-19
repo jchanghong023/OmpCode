@@ -1,6 +1,24 @@
 #!/bin/bash
 set -euo pipefail
 
+# 内网离线策略必须先于帮助、校验及子进程生效；仅修改本次进程树，不改用户配置。
+# stdout/stderr 统一丢弃以覆盖 Chromium/输入法等原始输出，文件日志仍走既有 ERROR 过滤。
+# OMP 已移除 --offline；环境原值直接继承，桌面门控按相同真值规则派生。
+offline_value=${OMP_OFFLINE:-}
+offline_value="${offline_value#"${offline_value%%[![:space:]]*}"}"
+offline_value="${offline_value%"${offline_value##*[![:space:]]}"}"
+case "${offline_value,,}" in
+  1|true|yes|on)
+    exec >/dev/null 2>&1
+    export JCH_LOG_LEVEL=error
+    export OMPCODE_CENTOS7_LOCAL_ONLY=1
+    unset ZCODE_ARMS_RUM_ENDPOINT ZCODE_TELEMETRY_REPORT_ENDPOINT
+    ;;
+  *)
+    unset OMPCODE_CENTOS7_LOCAL_ONLY
+    ;;
+esac
+
 for arg in "$@"; do
   case "$arg" in
     --help|-h)
@@ -11,7 +29,7 @@ for arg in "$@"; do
   -h, --help         显示此帮助并退出
 
 环境变量：OMP_CONFIG_ROOT 指定 omp 数据根，应用使用该路径加 _ompcode 后缀；
-OMP_OFFLINE=1 启用离线锁定，活动数据位于 /dev/shm；就绪后每十分钟异步备份到持久根。
+OMP_OFFLINE=1 启用内网离线锁定（终端静默、仅记录 ERROR），活动数据位于 /dev/shm；就绪后每十分钟异步备份到持久根。
 环境变量原样传给内嵌 omp。未启用离线锁定时桌面为全功能，与 Windows
 基准一致。其他参数会传递给桌面程序。
 X11 下自动连接当前用户的 IBus；该账号没有守护进程时尝试后台启动。
@@ -74,20 +92,6 @@ if ((profile_requested)); then
 elif [[ ${OMPCODE_CENTOS7_PROFILE+x} ]]; then
   unset OMPCODE_CENTOS7_PROFILE
 fi
-
-# 修复依据：OMP 已移除 --offline；环境值直接继承，桌面门控按相同真值规则派生。
-offline_value=${OMP_OFFLINE:-}
-offline_value="${offline_value#"${offline_value%%[![:space:]]*}"}"
-offline_value="${offline_value%"${offline_value##*[![:space:]]}"}"
-case "${offline_value,,}" in
-  1|true|yes|on)
-    export OMPCODE_CENTOS7_LOCAL_ONLY=1
-    unset ZCODE_ARMS_RUM_ENDPOINT ZCODE_TELEMETRY_REPORT_ENDPOINT
-    ;;
-  *)
-    unset OMPCODE_CENTOS7_LOCAL_ONLY
-    ;;
-esac
 
 offline_runtime_root=
 offline_temp=
