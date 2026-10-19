@@ -31,6 +31,7 @@ import { runUserAction } from "@/lib/userActionTelemetry.js";
 import { Button } from "@/components/ui/button.js";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
 import { logger } from "@/logger.js";
+import { useOfflineLock } from "@/lib/offlineLockGate.js";
 import { ConversationTurnGroup } from "@/v4/ConversationTurnGroup.js";
 import { ConversationPendingGuideList } from "@/v4/ConversationPendingGuideList.js";
 import type { AssistantFeedbackHandler } from "@/v4/ConversationRowView.js";
@@ -47,6 +48,7 @@ import {
 } from "@/v4/conversationTurnRenderBuilder.js";
 import type { ConversationTurnRenderUnit } from "@/v4/conversationTurnRenderUnits.js";
 import {
+  CONVERSATION_TURN_NAVIGATOR_MIN_WIDTH_PX,
   resolveConversationTurnNavigatorActiveQueryRowId,
   resolveConversationTurnNavigatorHydrationRetryDelayMs,
   shouldHydrateConversationTurnNavigatorDirectory,
@@ -366,6 +368,10 @@ function ConversationTimelineImpl({
   scrollToQueryActionRef,
   selectionActions,
 }: ConversationTimelineProps) {
+  const offlineRendering = useOfflineLock();
+  // 门控异步到达不能改变滚动回调身份，否则会重跑初始化并把离底阅读拉回底部。
+  const offlineRenderingRef = useRef(offlineRendering);
+  offlineRenderingRef.current = offlineRendering;
   const { intl } = useZCodeIntl();
   const scrollRef = useRef<HTMLDivElement>(null);
   const headerSlotRef = useRef<HTMLDivElement>(null);
@@ -541,7 +547,13 @@ function ConversationTimelineImpl({
     // 资格边界，窄屏 Web 与窄分屏也会请求全部 rows。这里仅同步只读分页资格；
     // rail 的显隐、占位与过渡仍完全由 CSS 裁决，不恢复 composer 几何测量。
     const commitWidth = (width: number) => {
-      const normalizedWidth = Math.max(0, Math.round(width));
+      // 离线缩放只需维护目录资格，断点内逐像素更新会反复渲染时间线。
+      const roundedWidth = Math.max(0, Math.round(width));
+      const normalizedWidth = offlineRendering
+        ? roundedWidth >= CONVERSATION_TURN_NAVIGATOR_MIN_WIDTH_PX
+          ? CONVERSATION_TURN_NAVIGATOR_MIN_WIDTH_PX
+          : 0
+        : roundedWidth;
       setTurnNavigatorContainerWidthPx((current) =>
         current === normalizedWidth ? current : normalizedWidth,
       );
@@ -561,7 +573,7 @@ function ConversationTimelineImpl({
 
     window.addEventListener("resize", readWidth);
     return () => window.removeEventListener("resize", readWidth);
-  }, []);
+  }, [offlineRendering]);
 
   useEffect(() => {
     if (
@@ -830,6 +842,12 @@ function ConversationTimelineImpl({
   const syncMessageLayerMask = useCallback((element: HTMLDivElement) => {
     const messageLayer = messageLayerRef.current;
     if (!messageLayer) return;
+    // 离线输入区用不透明背景遮挡历史，不再为整层消息更新渐变遮罩。
+    if (offlineRenderingRef.current) {
+      messageLayer.style.maskImage = "none";
+      messageLayer.style.webkitMaskImage = "none";
+      return;
+    }
 
     if (
       isAtBottom({
@@ -916,7 +934,7 @@ function ConversationTimelineImpl({
 
     window.addEventListener("resize", sync);
     return () => window.removeEventListener("resize", sync);
-  }, [syncMessageLayerMask, renderUnits.length === 0]);
+  }, [syncMessageLayerMask, offlineRendering, renderUnits.length === 0]);
 
   const buildCurrentScrollMemoryState = useCallback(
     (element: HTMLDivElement): ChatSessionScrollMemoryState => {
@@ -1867,6 +1885,7 @@ function ConversationTimelineImpl({
                   "pointer-events-auto relative z-10 w-full shrink-0 transition-[width,max-width,transform] duration-150 ease-out @min-[1280px]/conversation:transition-[transform]",
                   contentWidthClassName,
                   !centeredEmptyLayout && "px-4 pb-4",
+                  offlineRendering && !centeredEmptyLayout && "bg-background",
                   !centeredEmptyLayout && summaryPanelInlineOffsetClassName,
                 )}
               >

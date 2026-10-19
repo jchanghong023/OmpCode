@@ -138,7 +138,7 @@ function isLinuxDesktopWindow() {
   return process.platform === "linux";
 }
 
-function buildDesktopWindowVisualOptions() {
+function buildDesktopWindowVisualOptions(offlineRendering = false) {
   if (process.platform === "darwin") {
     return {
       backgroundColor: "#00000000",
@@ -159,11 +159,14 @@ function buildDesktopWindowVisualOptions() {
   }
 
   return {
-    // 不透明 BrowserWindow 会把 renderer 的圆角裁切重新填成直角黑底，
-    // Linux 外壳无法与内层 12px 面板形成同心圆弧。透明底只负责露出四角，
-    // renderer 根面仍使用不透明 token，避免桌面底色混入侧栏。
-    backgroundColor: "#00000000",
-    transparent: true,
+    // 离线远程桌面优先避免整窗透明合成；普通模式保留用于四角裁切的透明底。
+    // Electron 28 文档不支持透明窗口可靠缩放，离线模式接受直角外窗。
+    backgroundColor: offlineRendering
+      ? nativeTheme.shouldUseDarkColors
+        ? "#1e1e1e"
+        : "#ffffff"
+      : "#00000000",
+    transparent: !offlineRendering,
     // Linux 原生标题栏会和 renderer 自绘顶部菜单重复，隐藏 frame 后统一用自定义窗口控制。
     frame: false,
     // Linux 部分窗口管理器会给 frameless 窗口绘制额外外侧阴影/描边，
@@ -554,6 +557,8 @@ export function createBrowserWindow(options: {
   initialDesktopZoomLevel?: number;
   /** 主进程设置服务读取的最近一次普通窗口尺寸与最大化状态。 */
   initialWindowSize?: DesktopWindowSize;
+  /** Main 唯一离线门控；不在窗口层重新解释环境变量。 */
+  offlineRendering?: boolean;
   /** 每次弹出原生菜单时读取，确保应用切换语言后无需重建窗口。 */
   currentApplicationLocale?: () => Locale;
   resolveBrowserViewOwner?: (webContentsId: number) =>
@@ -583,7 +588,7 @@ export function createBrowserWindow(options: {
     icon: options.iconPath,
     // Linux frameless 后部分桌面环境仍可能显示 Electron 原生菜单栏，自动隐藏避免顶部出现两套菜单。
     autoHideMenuBar: isLinuxDesktopWindow(),
-    ...buildDesktopWindowVisualOptions(),
+    ...buildDesktopWindowVisualOptions(options.offlineRendering),
     webPreferences: {
       preload: options.preloadPath,
       contextIsolation: true,

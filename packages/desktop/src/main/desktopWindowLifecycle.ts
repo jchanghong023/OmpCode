@@ -72,6 +72,7 @@ export function createWindow(options: {
   deviceMid: string;
   initialDesktopZoomLevel?: number;
   initialWindowSize?: DesktopWindowSize;
+  offlineRendering?: boolean;
   currentApplicationLocale?: () => Locale;
   persistWindowSize?: (state: DesktopWindowSize) => Promise<void>;
   /** Main 模块初始化期已开始的异步环境采集；通常在 renderer dom-ready 前完成。 */
@@ -106,6 +107,7 @@ export function createWindow(options: {
     deviceMid: options.deviceMid,
     initialDesktopZoomLevel: options.initialDesktopZoomLevel,
     initialWindowSize: options.initialWindowSize,
+    offlineRendering: options.offlineRendering,
     currentApplicationLocale: options.currentApplicationLocale,
     resolveBrowserViewOwner: options.resolveBrowserViewOwner,
   });

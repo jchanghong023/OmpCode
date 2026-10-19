@@ -85,6 +85,12 @@ function getOfflineLockSnapshot(): OfflineGateState {
   return currentState;
 }
 
+/** 离线呈现策略复用 Main 的门控事实，不另建环境判断或持久状态。 */
+export function useOfflineLock(): boolean {
+  return useSyncExternalStore(subscribeOfflineLock, getOfflineLockSnapshot, getOfflineLockSnapshot)
+    .localOnly;
+}
+
 /** React 消费口：单个功能的禁用态（键见 offlineGate.ts 的门控面清单）。 */
 export function useOfflineFeature(feature: keyof OfflineDisabledFeatures): boolean {
   const state = useSyncExternalStore(

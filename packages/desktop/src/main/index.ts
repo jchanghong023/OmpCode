@@ -1786,6 +1786,7 @@ function createWindowInstance(startupBootstrap: StartupWindowBootstrap = {}) {
     preloadPath,
     logger,
     forceQuitRef,
+    offlineRendering: offlineGate.localOnly,
     handleBeforeClose: (win, label) =>
       handleDesktopWindowCloseRequest({
         platform: process.platform,
