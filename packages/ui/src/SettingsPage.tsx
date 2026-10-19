@@ -309,7 +309,7 @@ export function SettingsPage({
   const [toolGroupingTerminalEnabled, setToolGroupingTerminalEnabled] = useState(true);
   const [toolGroupingChangesEnabled, setToolGroupingChangesEnabled] = useState(false);
   const [zcodeInteractionBehavior, setZCodeInteractionBehavior] =
-    useState<ZCodeInteractionBehavior>("queue");
+    useState<ZCodeInteractionBehavior>("guide");
   const [hostPlatform, setHostPlatform] = useState("");
 
   useEffect(
@@ -356,7 +356,7 @@ export function SettingsPage({
         setToolGroupingExploreEnabled(settings.toolGroupingExploreEnabled ?? true);
         setToolGroupingTerminalEnabled(settings.toolGroupingTerminalEnabled ?? true);
         setToolGroupingChangesEnabled(settings.toolGroupingChangesEnabled ?? false);
-        setZCodeInteractionBehavior(settings.zcodeInteractionBehavior ?? "queue");
+        setZCodeInteractionBehavior(settings.zcodeInteractionBehavior ?? "guide");
       })
       .catch(() => {});
     // 这里配置的是本地全局设置。远端 workspace 激活时 useServices()
@@ -388,7 +388,7 @@ export function SettingsPage({
     setToolGroupingExploreEnabled(sharedSettings.toolGroupingExploreEnabled ?? true);
     setToolGroupingTerminalEnabled(sharedSettings.toolGroupingTerminalEnabled ?? true);
     setToolGroupingChangesEnabled(sharedSettings.toolGroupingChangesEnabled ?? false);
-    setZCodeInteractionBehavior(sharedSettings.zcodeInteractionBehavior ?? "queue");
+    setZCodeInteractionBehavior(sharedSettings.zcodeInteractionBehavior ?? "guide");
     setReceivePreviewUpdates(sharedSettings.receivePreviewUpdates ?? false);
     setAutoDownloadAndInstallUpdates(sharedSettings.autoDownloadAndInstallUpdates ?? false);
   }, [sharedSettings]);

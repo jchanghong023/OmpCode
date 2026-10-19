@@ -458,7 +458,7 @@ const appSettingsObjectSchema = z.object({
   toolGroupingExploreEnabled: z.boolean().default(true),
   toolGroupingTerminalEnabled: z.boolean().default(true),
   toolGroupingChangesEnabled: z.boolean().default(false),
-  zcodeInteractionBehavior: zcodeInteractionBehaviorSchema.default("queue"),
+  zcodeInteractionBehavior: zcodeInteractionBehaviorSchema.default("guide"),
   askUserQuestionAutoResolutionEnabled: z.boolean().default(true),
   modelIoFullRetentionEnabled: z.boolean().default(false),
   startPlanRecommendationDismissed: z.boolean().default(false),

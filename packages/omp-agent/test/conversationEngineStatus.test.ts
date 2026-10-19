@@ -18,7 +18,7 @@ async function submit(
   harness: RealOmpHarness,
   sessionId: string,
   commandId: string,
-  type: "sendText" | "stop" | "setAutoDrain",
+  type: "sendText" | "stop" | "setAutoDrain" | "setFollowupMode",
   payload: unknown,
 ) {
   // setAutoDrain 是 CAS 命令（协议层 COMMANDS_REQUIRING_BASE_REVISION）：信封缺 baseRevision 会被
@@ -143,10 +143,10 @@ for (const ending of ["success", "failure", "stop", "exit"] as const) {
           });
         }
         await harness.waitUntil(() => activeCalls === 1);
-        assert.equal(
-          conversationSnapshotSchema.parse(harness.state(sessionId)).config.followupMode,
-          "queue",
-        );
+        // 默认已改为引导；队列边界场景显式选择排队，不能依赖产品默认值。
+        await submit(harness, sessionId, `queue-boundary-${ending}-mode`, "setFollowupMode", {
+          mode: "queue",
+        });
         for (const commandId of waitingIds) {
           const ack = await submit(harness, sessionId, commandId, "sendText", {
             text: waitingInput,

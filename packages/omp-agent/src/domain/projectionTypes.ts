@@ -76,7 +76,7 @@ export function initialAState(config: Partial<SessionConfigState>): ProjectionAS
       model: config.model ?? "",
       thought: config.thought ?? "",
       thoughtLevels: config.thoughtLevels ?? [],
-      followupMode: "queue",
+      followupMode: "guide",
       mode: "build",
     },
     modelTransition: null,

@@ -66,7 +66,7 @@ export class ConversationEngine {
     },
   });
   private resumeSessionPath: string | undefined;
-  private followupMode: SessionConfigState["followupMode"] = "queue";
+  private followupMode: SessionConfigState["followupMode"] = "guide";
   private titleInitialized: boolean;
   /** prompt 轮收口与输入分发：经惰性宿主回写引擎状态。 */
   private readonly promptTurns = new EnginePromptTurnCloser({
