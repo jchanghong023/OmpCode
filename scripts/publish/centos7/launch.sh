@@ -32,7 +32,7 @@ for arg in "$@"; do
 OMP_OFFLINE=1 启用内网离线锁定（终端静默、仅记录 ERROR），活动数据位于 /dev/shm；就绪后每十分钟异步备份到持久根。
 环境变量原样传给内嵌 omp。未启用离线锁定时桌面为全功能，与 Windows
 基准一致。其他参数会传递给桌面程序。
-X11 下自动连接当前用户的 IBus；该账号没有守护进程时尝试后台启动。
+X11 下自动连接当前用户、当前显示会话的 IBus；该显示会话没有守护进程时尝试后台启动。
 HELP
       exit 0
       ;;
@@ -150,7 +150,7 @@ verified_ibus_session() {
 
 start_missing_ibus_session() (
   local tool selected_bus= selection_result=0 lock_dir bus bus_owner= launch_output entry
-  local created_bus_pid= readiness_deadline
+  local created_bus_pid= readiness_deadline pids pid daemon_display
   # 显式地址不触发自动启动；进程存在与否要在锁内重查，避免拒绝尚在启动的会话。
   if [[ -n ${IBUS_ADDRESS:-} ]]; then
     echo 'OmpCode: no verified IBus session for the explicit IBUS_ADDRESS; keeping input-method environment.' >&2
@@ -165,7 +165,7 @@ start_missing_ibus_session() (
 
   # 根因补充（2026-10）：另一个 SSH 用户只有 ibus 环境变量，当前 UID 根本没有
   # ibus-daemon；别人的守护进程不能提供该用户的 GTK 会话服务。创建用户总线并启动
-  # IBus 后，其服务所有者 PID 校验通过。只在该账号完全没有守护进程时补齐；
+  # IBus 后，其服务所有者 PID 校验通过。只在当前显示会话没有守护进程时补齐；
   # 不使用 -r 替换已有会话，也不使用 -x 接管共享 X server 的全局 XIM。
   # subshell 保留原 HOME/XDG 配置并隔离环境变更；锁只串行化本项目的启动器。
   umask 077
@@ -192,9 +192,22 @@ start_missing_ibus_session() (
     echo 'OmpCode: multiple IBus sessions match this DISPLAY; keeping input-method environment.' >&2
     return 1
   fi
-  if pgrep -u "$EUID" -x ibus-daemon >/dev/null 2>&1; then
-    echo 'OmpCode: IBus daemon exists for this user but its DISPLAY/session bus could not be verified; keeping input-method environment.' >&2
-    return 1
+  # 同账号的其他远程桌面不应阻止当前 DISPLAY 启动；归属未知时仍保护已有会话。
+  if pids=$(pgrep -u "$EUID" -x ibus-daemon 2>/dev/null); then
+    for pid in $pids; do
+      daemon_display=
+      if [[ -O /proc/$pid/environ && -r /proc/$pid/environ ]]; then
+        {
+          while IFS= read -r -d '' entry; do
+            case "$entry" in DISPLAY=*) daemon_display=${entry#DISPLAY=} ;; esac
+          done < "/proc/$pid/environ"
+        } 2>/dev/null || daemon_display=
+      fi
+      if [[ -z $daemon_display || $daemon_display == "$DISPLAY" ]]; then
+        echo 'OmpCode: IBus daemon exists for this DISPLAY or its DISPLAY could not be verified; keeping input-method environment.' >&2
+        return 1
+      fi
+    done
   else
     selection_result=$?
     if ((selection_result != 1)); then
