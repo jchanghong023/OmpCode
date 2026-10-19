@@ -384,3 +384,11 @@ queue 的唯一接纳/派发事实源为 ConversationEngine 既有 TurnContext �
 - 另行授权的可见 Computer Use 已有真实鼠标、键盘与本地模型证据，独立于不接管全局输入的 fulltest。证据根为 `F:/Temp/User/ompcode-native-tools-acceptance-20261019/evidence/`；`native-tools-receipt.json` 记录 Electron PID `54152`、模型请求 35 次、finiteTurns=3、stopTurns=1、abortedRequests=1，Team 报告工具为 8 个 read ID 和 8 个 yield ID，并登记 Wiki、Repo、Skill、goal、loop 与 Team 对应截图。此为既有手工实跑证据，不代表其余全部功能均有手工截图。
 - 上述可见运行另以同根新 Electron 进程完成冷恢复：`native-tools-cold-receipt.json` 记录旧 PID `54152`、新 PID `48644`、`sameRoot=true`、`modelRequests=0`、`teamReportRestored=true` 和两张恢复截图。该收据证明报告恢复没有再次调用模型，不将其扩大为所有持久化边界均正常。
 - 日志状态与门禁 PASS 分开记录：上述旧手工 native 根的 `log-audit-summary.json` 为 `NOT_NORMAL_EXTERNAL_CORE_FAILURE`，其限定范围内 15 个文件、7547 条记录中仍有 8 次真实 OMP Team 工件持久化 `ENOENT`，来源为 OMP `session/artifacts.ts:46-65`，尚未解决。报告仍可显示及冷恢复不消除该缺陷，也不据此把本次 fulltest PASS 改写为失败或把 Team 判为完全不可用。该旧根摘要中的 `coverageComplete=true` 只适用于它自己的审计范围；本次通过运行的全部 root 只读日志审计仍在进行，不能宣称已完成或“日志全部正常”。保留全部旧失败历史，不修改需求、产品、测试断言、门禁范围或时限以合理化缺陷。
+
+### 2026-10-19 默认引导调整后的 fulltest 复验
+
+- 修正原有 autoDrain 验收的前提：默认输入已为 guide，验证应用队列时显式选择 queue，不改 FIFO、暂停、恢复或逐项结果断言。
+- 原生 GUI 历史扫描改为跨过已实际读取的虚拟单元并保留重叠，不再逐半屏重复扫描长工具正文；保留每个单元都已访问、命令 ID 唯一、全文及顺序不变和同根冷恢复的全部断言。此前完整运行 `TIMEOUT total=896.0s compile_excluded=10.5s budgeted=885.5s limit=900.0s` 保持失败记录。
+- 随后一次运行在 Agents GUI 首发失败：目录核心的模型注册刷新阻塞后续串行命令，提前提交的 `get_state` 在 10 秒请求时限后失败，导致首屏缺少模型初值。该轮 `FAIL total=165.7s compile_excluded=9.5s budgeted=156.2s limit=900.0s`。配置加载器改为等待目录响应后再请求真实状态；不增加时限、重试、模型兜底或第二状态所有者，产品规则不变。
+- 最终 `pnpm fulltest --human-authorized` 退出 0，52 阶段通过：`PASS total=849.2s compile_excluded=19.3s budgeted=829.9s limit=900.0s`。绑定 HEAD `6795285496b0a43f2c2dae35a594ede02a2afa19`、内容指纹 `5784a9f977cd0a6ce6fa2438f0dbc9d1119a6238cf25dd5e0d569009a36e0a2b`、原有未提交改动、Node 24.20.0 / pnpm 10.33.2；源码快照核对及所属进程清理完成。该指纹在追加本段记录之前，不跨快照沿用。
+- 真实 OMP + 本地模拟模型、全部现存适用 Windows 测试、静态检查、构建及未发布 unpacked 打包通过。全部产品 GUI 阶段通过，包含 Agents live/recovery、models live/profile/default 及 native live 346.2 秒、recovery 60.2 秒；native 证据根为 `F:/Temp/User/ompcode-core-gui-RRpW3D`，Agents 为 `F:/Temp/User/ompcode-core-gui-aF7ZAx`。不宣称 Linux/CentOS、完整日志审计或正式发布已验证；没有扩大门禁时限、缩减覆盖或放宽断言。

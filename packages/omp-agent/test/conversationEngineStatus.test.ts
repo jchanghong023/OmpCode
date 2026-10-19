@@ -366,6 +366,10 @@ test(
     try {
       const sessionId = await harness.create("queue-auto-drain", inputs[0]!);
       await harness.waitUntil(() => requested.length === 1);
+      // 默认已改为引导；autoDrain 验证应用队列，必须显式选择排队。
+      await submit(harness, sessionId, "queue-auto-drain-mode", "setFollowupMode", {
+        mode: "queue",
+      });
       for (const [index, commandId] of commandIds.entries()) {
         const ack = await submit(harness, sessionId, commandId, "sendText", {
           text: inputs[index + 1],

@@ -33,16 +33,17 @@ export function createWorkspaceConfigLoader(
 
   async function loadWorkspaceConfig(): Promise<WorkspaceConfigState> {
     try {
-      const [modelsOutcome, levelsOutcome, commandsOutcome, state] = await Promise.all([
+      const [modelsOutcome, levelsOutcome, commandsOutcome] = await Promise.all([
         directory.send({ type: "get_available_models" }),
         directory.send({ type: "get_available_thinking_levels" }),
         directory.send({ type: "get_available_commands" }).catch((error: unknown) => ({
           success: false as const,
           error: String(error),
         })),
-        // 目录进程 --no-session：get_state 仍返回进程级模型事实（探测探针已验证）。
-        sendStateQuery(),
       ]);
+      // 核心串行处理目录命令；模型注册刷新可能超过 get_state 的 10 秒请求时限。
+      // 先等目录刷新完成，再回读真实模型，避免排队时间耗尽时限后丢失首屏模型初值。
+      const state = await sendStateQuery();
       if (!modelsOutcome.success) {
         logger.warn("workspace config model catalog fallback", {
           event: "omp.workspace_config.models.fallback",
