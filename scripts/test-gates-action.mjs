@@ -1,5 +1,5 @@
 import { appendFileSync, realpathSync } from "node:fs";
-import { mkdir, readFile } from "node:fs/promises";
+import { mkdir, open, readFile, unlink } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { repositoryRoot, gatesInputsDir } from "./test-gates-bazel-locations.mjs";
@@ -41,6 +41,35 @@ const outputPaths = (stage, workspace) =>
     const path = ownedPath(workspace, output);
     return process.platform === "win32" ? path.toLowerCase() : path;
   });
+
+// 跨动作依赖恢复锁：真实工作区可写缓存下的独占文件；持锁者恢复，超时抢占防陈锁卡死。
+async function withRestoreLock(workspace, key, run) {
+  const lockRoot = join(workspace, "node_modules", ".cache", "gate-restore-locks");
+  await mkdir(lockRoot, { recursive: true });
+  const lockPath = join(lockRoot, `${key}.lock`);
+  const acquire = () => open(lockPath, "wx");
+  let handle;
+  const deadline = Date.now() + 120000;
+  while (!handle) {
+    try {
+      handle = await acquire();
+    } catch (error) {
+      if (error.code !== "EEXIST") throw error;
+      if (Date.now() > deadline) {
+        // 陈锁（持锁动作被强杀）不阻塞分发；抢占后由本次恢复收敛最终内容。
+        await unlink(lockPath).catch(() => {});
+        continue;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+  }
+  try {
+    await run();
+  } finally {
+    await handle.close();
+    await unlink(lockPath).catch(() => {});
+  }
+}
 const overlappingOutputs = (left, right) =>
   left.some((a) =>
     right.some(
@@ -130,11 +159,16 @@ async function runAction() {
       const dependencyControl = JSON.parse(
         await readFile(join(gatesInputsDir, `${targetName(dependency)}.json`), "utf8"),
       );
-      await materializeStageArtifacts(
-        dependencyControl.stage,
-        resolve(artifact, "../../.."),
-        workspace,
-      );
+      // 原因：同一 bazel 调用内并行动作可能同时把同一共享依赖产物恢复到真实工作区同一路径，
+      // 曾使一方 chmod/copyFile 撞上另一方的替换（ENOENT/EEXIST）。依据：按依赖目标在真实
+      // 工作区的可写缓存目录加跨动作文件锁，恢复自身串行；锁只覆盖恢复段，不覆盖业务命令。
+      await withRestoreLock(workspace, targetName(dependency), async () => {
+        await materializeStageArtifacts(
+          dependencyControl.stage,
+          resolve(artifact, "../../.."),
+          workspace,
+        );
+      });
     }
     await prepareWritableOutputs(stage, workspace);
     frame("end", { kind: activeKind });
