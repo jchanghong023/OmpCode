@@ -204,7 +204,9 @@ export function createGateRun({
         );
       } catch (error) {
         activeWork = undefined;
-        return finish("FAIL", 1, { reason: error.message });
+        // 原因：CI Linux 曾报 EISDIR 但无堆栈，无法定位读取点；随首异常报告堆栈一次，
+        // 不含凭据，只含代码位置与路径，便于精确定位环境差异。
+        return finish("FAIL", 1, { reason: error.message, stack: error.stack });
       }
     },
   };
