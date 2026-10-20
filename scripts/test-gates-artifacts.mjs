@@ -1,5 +1,15 @@
-import { chmod, copyFile, cp, lstat, mkdir, open, readdir, unlink } from "node:fs/promises";
-import { basename, dirname, join, toNamespacedPath } from "node:path";
+import {
+  chmod,
+  copyFile,
+  cp,
+  lstat,
+  mkdir,
+  open,
+  readdir,
+  readlink,
+  unlink,
+} from "node:fs/promises";
+import { basename, dirname, isAbsolute, join, toNamespacedPath } from "node:path";
 import {
   commandOutput,
   commandsAreCancelled,
@@ -137,8 +147,23 @@ export function createArtifactIO() {
         if (process.platform === "win32") {
           await nativeLink(entry.source, entry.destination);
         } else {
-          // cp 的 verbatimSymlinks 保留相对链接文本，不读取链接目标。
-          await cp(entry.source, entry.destination, { force: true, verbatimSymlinks: true });
+          // 原因：bazel Linux 沙箱把动作声明输入物化为指向沙箱内部的绝对符号链接；
+          // 按原文本复制会得到工作区外悬空链接，并与既有目标冲突（EEXIST symlink）。
+          // 依据：绝对链接（沙箱/bazel-out 链接）解引用按真实内容复制；相对链接仍按
+          // 原文本保留，仓库内相对缓存链接语义不变。
+          const target = await readlink(ioPath(entry.source));
+          if (isAbsolute(target))
+            await cp(ioPath(entry.source), ioPath(entry.destination), {
+              force: true,
+              dereference: true,
+              recursive: true,
+            });
+          else
+            await cp(ioPath(entry.source), ioPath(entry.destination), {
+              force: true,
+              verbatimSymlinks: true,
+              recursive: true,
+            });
         }
         return;
       }
