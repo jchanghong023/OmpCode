@@ -152,18 +152,16 @@ export function createArtifactIO() {
           // 依据：绝对链接（沙箱/bazel-out 链接）解引用按真实内容复制；相对链接仍按
           // 原文本保留，仓库内相对缓存链接语义不变。
           const target = await readlink(ioPath(entry.source));
-          if (isAbsolute(target))
-            await cp(ioPath(entry.source), ioPath(entry.destination), {
-              force: true,
-              dereference: true,
-              recursive: true,
-            });
-          else
-            await cp(ioPath(entry.source), ioPath(entry.destination), {
-              force: true,
-              verbatimSymlinks: true,
-              recursive: true,
-            });
+          await writable(entry.destination, await existing(entry.destination));
+          await cp(
+            ioPath(entry.source),
+            ioPath(entry.destination),
+            isAbsolute(target)
+              ? { force: true, dereference: true, recursive: true }
+              : { force: true, verbatimSymlinks: true, recursive: true },
+          );
+          // cp 保留源权限，而沙箱声明输入是只读的；补 owner 写位避免后续覆盖 EACCES。
+          await writable(entry.destination, await existing(entry.destination));
         }
         return;
       }
