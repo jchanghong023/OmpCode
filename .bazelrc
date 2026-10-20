@@ -1,0 +1,11 @@
+# 只声明与 Bazel 9.3.0 默认值不同的配置。
+# 常驻 server、分析缓存保留与测试结果复用均使用默认值，不重复写入。
+# 普通 build/test 共用原生通知与摘要缓存；test 继承 build，避免仅门禁生效。
+# Windows 通知开关不能全平台启用，交给 Bazel 按宿主系统自动选择配置。
+common --enable_platform_specific_config
+build --watchfs
+build --cache_computed_file_digests=500000
+build:windows --experimental_windows_watchfs
+
+# cache-debug 仅用于让配置变化导致的分析缓存丢弃显式失败。
+build:cache-debug --noallow_analysis_cache_discard

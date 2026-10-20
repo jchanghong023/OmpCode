@@ -1,24 +1,22 @@
 import { workerData, parentPort } from "node:worker_threads";
 import { readFileSync, write } from "node:fs";
-import { spawn } from "node:child_process";
-import { killByOutputBaseMarker } from "./test-gates-bazel-runtime.mjs";
-import { dirname, resolve } from "node:path";
-import { gatesInputsDir } from "./test-gates-bazel-locations.mjs";
 import { windowsSystemToolPath } from "./test-gates-process.mjs";
+import { cleanupOwnedProcesses } from "./test-gates-process-cleanup.mjs";
 
 // Bazel owns target timeouts. This worker owns only the whole-run deadline,
 // including a blocked supervisor event loop or blocked final-report destination.
 const { shared, level, limitSeconds, startedAt, pid } = workerData;
 const state = new BigInt64Array(shared);
 let paths = [];
-let usedNativeTargets = false;
+const children = new Map();
+const bazelAdmissions = [];
 const cleanupAt = limitSeconds - Math.min(5, limitSeconds * 0.5);
 let cleanupStarted = false;
 parentPort.on("message", (message) => {
-  if (message.paths) {
-    paths = message.paths;
-    usedNativeTargets ||= paths.some((path) => dirname(resolve(path)) === gatesInputsDir);
-  }
+  if (message.paths) paths = message.paths;
+  if (message.child?.pid) children.set(message.child.pid, message.child);
+  if (message.closedPid) children.delete(message.closedPid);
+  if (message.bazelAdmission) bazelAdmissions.push(message.bazelAdmission);
 });
 const snapshot = () => {
   for (;;) {
@@ -75,13 +73,15 @@ function pendingExclusion(sampledAt, now, paused) {
 let forced = false;
 function forceTermination() {
   if (forced) return;
-  forced = true;
-  clearInterval(timer);
   const now = Number(process.hrtime.bigint() / 1_000_000n);
   const [, excludedMs, paused, sampledAt] = snapshot();
   const total = (now - startedAt) / 1000;
   const compileExcluded = (excludedMs + pendingExclusion(sampledAt, now, paused)) / 1000;
   const budgeted = total - compileExcluded;
+  // 终态清理在预留点后仍可合法完成；只有实际硬截止才允许覆盖已接纳的失败/取消。
+  if (Atomics.load(state, 5) === 1n && (level === "fastcheck" ? budgeted : total) < limitSeconds)
+    return;
+  forced = true;
   // The reserve includes OS process-tree termination, not just issuing cleanup.
   const report = {
     level,
@@ -96,24 +96,35 @@ function forceTermination() {
     budgetMode: level === "fastcheck" ? "non-compilation" : "wall-clock",
     reason: "Independent whole-run watchdog requested forced OS tree termination",
   };
-  // Never await the destination: a blocked report pipe is itself a deadline
-  // case. The OS tree kill must proceed even when this best-effort write stalls.
+  // CAS 同时封住尚为空的准入，避免检查后主线程恰好 spawn 的跨线程竞态。
+  Atomics.compareExchange(state, 6, 0n, 2n);
+  let terminated = false;
+  const terminate = () => {
+    if (terminated) return;
+    terminated = true;
+    // 监督者 /T 会沿刚启动的 server 祖先误杀缓存拥有者；独立清理器只按核对后的 PID 终止。
+    cleanupOwnedProcesses([...children.values()], {
+      supervisorPid: pid,
+      bazelAdmissions,
+      powershell:
+        process.platform === "win32"
+          ? windowsSystemToolPath("WindowsPowerShell/v1.0/powershell.exe")
+          : undefined,
+      detached: true,
+    });
+  };
+  // 无后代时立即 SIGKILL 会丢掉异步 write；提交完成后再终止，但阻塞管道不能延长硬截止。
+  const remaining = (limitSeconds - (level === "fastcheck" ? budgeted : total)) * 1000;
+  const flushDeadline = setTimeout(terminate, Math.max(0, Math.min(25, remaining)));
   write(
     1,
     `${level}: TIMEOUT total=${total.toFixed(1)}s compile_excluded=${compileExcluded.toFixed(1)}s budgeted=${budgeted.toFixed(1)}s limit=${limitSeconds.toFixed(1)}s\n${JSON.stringify(report)}\n`,
-    () => {},
+    () => {
+      clearTimeout(flushDeadline);
+      terminate();
+    },
   );
-  if (process.platform === "win32") {
-    const killer = spawn(windowsSystemToolPath("taskkill.exe"), ["/PID", String(pid), "/T", "/F"], {
-      windowsHide: true,
-      detached: true,
-      stdio: "ignore",
-    });
-    killer.unref();
-  } else {
-    // Windows taskkill /T covers owned descendants as well as the supervisor.
-    process.kill(pid, "SIGKILL");
-  }
+  if (remaining <= 0) terminate();
 }
 const timer = setInterval(() => {
   const now = Number(process.hrtime.bigint() / 1_000_000n);
@@ -121,13 +132,20 @@ const timer = setInterval(() => {
   const total = (now - startedAt) / 1000;
   const compileExcluded = (excludedMs + pendingExclusion(sampledAt, now, paused)) / 1000;
   const used = level === "fastcheck" ? total - compileExcluded : total;
-  if (!cleanupStarted && used >= cleanupAt) {
+  if (!cleanupStarted && Atomics.load(state, 5) !== 1n && used >= cleanupAt) {
     cleanupStarted = true;
-    // Give the detached-server marker cleanup its existing reserve first.
-    // Once it settles, terminate the remaining supervisor tree immediately.
-    if (usedNativeTargets) void killByOutputBaseMarker().then(forceTermination, forceTermination);
-    else forceTermination();
+    // 预留区间包含真实工作进程清理；server 生命周期不再是取消路径的一部分。
+    forceTermination();
   }
-  // Last-resort fallback must not await a hung marker scan or report sink.
-  if (used >= limitSeconds) forceTermination();
+  // 硬截止不等待报告管道；脱离监督者的清理器继续收口本轮工作。
+  if (used >= limitSeconds) {
+    forceTermination();
+    clearInterval(timer);
+    // CIM 枚举或脱离清理器卡住也不能延长总截止；这里只杀监督者自身，清理器继续执行。
+    try {
+      process.kill(pid, "SIGKILL");
+    } catch (error) {
+      if (error.code !== "ESRCH") throw error;
+    }
+  }
 }, 25);

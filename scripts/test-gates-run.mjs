@@ -90,6 +90,7 @@ export function createGateRun({
   const finish = (status, exitCode, extra = {}) => {
     if (status === "TIMEOUT" || status === "CANCELLED") force(status, exitCode);
     if (finishing) return finishing;
+    if (status === "FAIL" || status === "CANCELLED") timer?.beginTerminalCleanup();
     finishDetails = extra;
     const endCleanup = clock.enter("check");
     phase = "cleanup";

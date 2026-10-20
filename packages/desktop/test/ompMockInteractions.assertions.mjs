@@ -3,6 +3,13 @@ import { createHash } from "node:crypto";
 import { readFile, readdir, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { captureIsolationScreenshot } from "./ompCore.evidence.cjs";
+import {
+  readTimelineViewport,
+  scrollTimelineViewport,
+  settleTimelineLayout,
+  timelineBoundaryCommitted,
+  timelineTargetInViewport,
+} from "./ompMockInteractions.viewport.mjs";
 
 const answer = "Mock answer A";
 const tool = (page, name) => page.locator(`[data-tool-call-id][data-tool-name="${name}"]`);
@@ -18,23 +25,40 @@ async function complete(page, marker) {
 }
 
 // ConversationTimeline is virtualized. Scroll its real DOM viewport, never its store/projection.
-async function reveal(page, target, scope) {
-  if (await target.isVisible()) return;
+async function reveal(page, target, scope, { deadline = Date.now() + 90_000 } = {}) {
   const timeline = scope
     ? scope.locator('[data-v4-timeline-scroll="true"]')
     : page.getByTestId("v4-timeline").first();
   assert.equal(await timeline.count(), 1, "Browse exactly one actual timeline viewport");
-  const settleLayout = () =>
-    timeline.evaluate(
-      () => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))),
-    );
+  let scans = 0;
+  const bounded = async () => {
+    if (Date.now() < deadline) return;
+    const viewport = await readTimelineViewport(timeline);
+    assert.fail(`Timeline reveal exceeded 90s: ${JSON.stringify({ scans, viewport })}`);
+  };
+  const inViewport = () => timelineTargetInViewport(target);
+  // scrollIntoViewIfNeeded 会等待 stable frame；隐藏窗口可能暂停 rAF，
+  // 因此已挂载的 overscan 节点也必须走同一真实 offset 所有者，而非等待帧稳定。
+  const revealMounted = async () => {
+    await bounded();
+    if (await inViewport()) return true;
+    await scrollTimelineViewport(timeline, { target, deadline });
+    await settleLayout();
+    return inViewport();
+  };
+  // Yield only; readiness is established from observable viewport state below.
+  const settleLayout = async () => {
+    await bounded();
+    await settleTimelineLayout();
+  };
   const openWorkDisclosures = async () => {
     const collapsed = timeline.locator(
       'button[data-testid^="chat-assistant-history-trigger-"][data-history-open="false"], ' +
         '[data-tool-name="ChangesGroup"] [data-testid^="tool-summary-trigger-"][aria-expanded="false"]',
     );
     for (;;) {
-      if (await target.isVisible()) return;
+      await bounded();
+      if (await inViewport()) return;
       const id = await collapsed.evaluateAll((nodes) => {
         for (const node of nodes) {
           const viewport = node.closest('[data-v4-timeline-scroll="true"]');
@@ -60,44 +84,45 @@ async function reveal(page, target, scope) {
       if (!id) break;
       // 候选预检只限定 viewport 与身份；未选中候选的瞬时遮挡不是最终 UI 契约。
       // 测高/贴底可能移动控件；标准 click 重新测量并强验选中控件的 stable/receives-events。
-      await timeline.getByTestId(id).click();
+      await timeline.getByTestId(id).click({ timeout: Math.max(1, deadline - Date.now()) });
       await timeline
         .getByTestId(id)
         .and(timeline.locator('[aria-expanded="true"]'))
-        .waitFor({ state: "visible" });
+        .waitFor({ state: "visible", timeout: Math.max(1, deadline - Date.now()) });
       await settleLayout();
-      if (await target.isVisible()) return;
+      if (await inViewport()) return;
     }
   };
-  await settleLayout();
-  // 正常 following 会在展开后的内容测高时贴底，先展开尾部会把候选挤出 viewport。
-  // 先真实微量上滚解除 following，从当前 viewport 向后找；到末尾才回顶部完整扫一次。
-  await timeline.hover();
-  await page.mouse.wheel(0, -1);
-  await settleLayout();
-  let wrapped = false;
+  await bounded();
+  await timeline.waitFor({ state: "visible", timeout: Math.max(1, deadline - Date.now()) });
+  let restarted = false;
   for (;;) {
+    await bounded();
+    if (await revealMounted()) return;
+    scans++;
     await openWorkDisclosures();
-    if (await target.isVisible()) return;
-    const before = await timeline.evaluate((node) => ({
-      top: node.scrollTop,
-      height: node.clientHeight,
-      end: node.scrollTop + node.clientHeight >= node.scrollHeight - 1,
-    }));
-    if (before.end) {
-      if (wrapped) break;
-      wrapped = true;
-      await timeline.hover();
-      await page.mouse.wheel(0, -(await timeline.evaluate((node) => node.scrollHeight)));
+    if (await revealMounted()) return;
+    const advanced = await scrollTimelineViewport(timeline, { deadline });
+    if (!advanced && (await timelineBoundaryCommitted(timeline, "end"))) {
+      if (restarted) break;
+      // 顺序核对工具时先延续当前真实 viewport；仅到已提交末尾仍未找到时回到开头，
+      // 避免每条工具记录都重复扫描此前已经核对的全部历史。
+      restarted = true;
+      await scrollTimelineViewport(timeline, { reset: true, deadline });
       await settleLayout();
-      continue;
+      // scrollTop=0 不代表虚拟列表首单元已提交，仍以真实首索引作证。
+      while (!(await timelineBoundaryCommitted(timeline, "start"))) {
+        await bounded();
+        const state = await readTimelineViewport(timeline);
+        if (state.top !== 0 || (state.height > state.viewport && state.following !== "false"))
+          await scrollTimelineViewport(timeline, { reset: true, deadline });
+        await settleLayout();
+      }
     }
-    await timeline.hover();
-    await page.mouse.wheel(0, Math.max(1, Math.floor(before.height * 0.7)));
     await settleLayout();
-    if ((await timeline.evaluate((node) => node.scrollTop)) <= before.top) break;
   }
-  await target.waitFor({ state: "visible" });
+  // 全历史已经扫描完；只等待真实目标的后续提交，不另开超时或 rAF 等待。
+  while (!(await revealMounted())) await settleLayout();
 }
 
 async function expandTool(page, name, expectedId) {

@@ -2,8 +2,8 @@ import { join, delimiter, posix } from "node:path";
 import { homedir } from "node:os";
 import { exists, gitText } from "./test-gates-snapshot.mjs";
 import { annotateBuildOutputs } from "./test-gates-build-outputs.mjs";
+import { pnpm, staticPlan } from "./test-gates-static-plan.mjs";
 
-const pnpm = (id, args, extra = {}) => ({ id, command: "pnpm", args, kind: "check", ...extra });
 const node = (id, args, extra = {}) => ({ id, command: "node", args, kind: "check", ...extra });
 
 // Keep each Node test file as the cache unit without collecting its individual test() cases.
@@ -24,22 +24,6 @@ function expandTestFiles(stages) {
   });
 }
 
-const staticPlan = (all) => [
-  pnpm("typecheck", ["typecheck", "--stopBuildOnErrors"], { kind: "compile" }),
-  pnpm("lint", ["lint"]),
-  pnpm("formal-proof-typecheck", ["--filter", "@zcode/formal-proof", "typecheck"], {
-    kind: "compile",
-  }),
-  pnpm("formal-proof-lint", ["--filter", "@zcode/formal-proof", "lint"]),
-  pnpm(all ? "architecture-all" : "architecture-changed", [
-    "architecture:check",
-    ...(all ? [] : ["--changed"]),
-  ]),
-  ...(all
-    ? [pnpm("format-all", ["fmt:check"]), pnpm("unused-dependencies-exports", ["knip"])]
-    : []),
-];
-
 export async function installedOmp() {
   const candidates = [process.env.OMP_RPC_BINARY_PATH];
   if (process.platform === "win32") {
@@ -55,15 +39,17 @@ export async function installedOmp() {
   return undefined;
 }
 
-export async function fastPlan() {
-  const changed = [
-    ...new Set([
-      ...(await gitText(["diff", "--name-only", "-z", "HEAD"])).split("\0"),
-      ...(await gitText(["ls-files", "--others", "--exclude-standard", "-z"])).split("\0"),
-    ]),
-  ]
-    .filter(Boolean)
-    .sort();
+export async function fastPlan({ changedFiles } = {}) {
+  const changed =
+    changedFiles ??
+    [
+      ...new Set([
+        ...(await gitText(["diff", "--name-only", "-z", "HEAD"])).split("\0"),
+        ...(await gitText(["ls-files", "--others", "--exclude-standard", "-z"])).split("\0"),
+      ]),
+    ]
+      .filter(Boolean)
+      .sort();
   const formatFiles = [];
   for (const name of changed)
     if (/\.(?:[cm]?[jt]sx?|json|md|ya?ml|toml|css|html)$/u.test(name) && (await exists(name)))
@@ -176,11 +162,17 @@ const coreTests = {
 
 export async function fullPlan() {
   // 无失败率统计时按风险层次排序；静态错误先阻止昂贵的真实核、GUI 和分发准备。
+  const electronPackageContext = "packages/desktop/package.json";
   const stages = [
     ...staticPlan(true).map((stage) => ({ ...stage, parallelGroup: "static" })),
     node("gate-entry-selftest", ["scripts/test-gates.mjs", "--self-test"], {
       kind: "test",
       parallelGroup: "offline-core",
+      // 原因：自检内含大量秒级小预算夹具（首失败即停、取消回收、软截止收敛），
+      // 其墙钟断言按近空闲机器校准；与其他测试目标并行时 CPU 争用使这些断言间歇失败。
+      // 依据：exclusive 是 Bazel 原生调度标签，令本目标在无其他测试并发时单独执行，
+      // 不改任何夹具预算或断言判据。
+      exclusive: true,
     }),
     node("license-graph-tests", ["--test", "scripts/third-party-npm.test.mjs"], {
       kind: "test",
@@ -297,9 +289,9 @@ export async function fullPlan() {
       [
         "--input-type=module",
         "--eval",
-        "import { createRequire } from 'node:module'; import { resolve } from 'node:path'; const require = createRequire(resolve('packages/desktop/package.json')); console.log(`Electron runtime prepared: ${require('electron')}`);",
+        `import { createRequire } from 'node:module'; import { resolve } from 'node:path'; const require = createRequire(resolve(${JSON.stringify(electronPackageContext)})); console.log(\`Electron runtime prepared: \${require('electron')}\`);`,
       ],
-      { noCache: true },
+      { noCache: true, preparation: true, sourceInputs: [electronPackageContext] },
     ),
     node(
       "components-tool-content",
@@ -375,11 +367,13 @@ export async function fullPlan() {
     node("embedded-omp-assets", ["packages/desktop/scripts/fetch-omp-release.mjs"], {
       parallelGroup: "local-assets",
       noCache: true,
+      preparation: true,
       env: { OMP_RELEASE_SKIP: "0", ZCODE_TARGET_OS: "win32", ZCODE_TARGET_ARCH: "x64" },
     }),
     node("native-search-assets", ["scripts/prepare-native-search-tools.mjs"], {
       parallelGroup: "local-assets",
       noCache: true,
+      preparation: true,
       env: { ZCODE_TARGET_OS: "win32", ZCODE_TARGET_ARCH: "x64" },
     }),
   );

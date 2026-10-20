@@ -1,0 +1,44 @@
+# Bazel 9.3.0 仅支持逐行的仓库相对目录前缀；不用 glob、否定规则或行尾注释。
+# 下列目录均已由 scripts/test-gates-bazel-graph-inputs.mjs 的 excludes 排除。
+# 这里只限制包发现与递归目标扫描，不能代替 BUILD 中真实输入 glob 的 exclude。
+# 仍保留 packages、scripts、config、dependencies、third-party、fixture 与 gates；
+# 尤其不屏蔽 gates/inputs 和 gates/toolchain.json，它们虽不进源码 glob，仍是显式输入。
+
+# Git 元数据和依赖安装/下载缓存，不是工作区源码包；依赖版本由锁文件声明。
+.git
+node_modules
+.cache
+.pnpm-store
+.electron-builder-cache
+.electron-cache
+.npm-cache
+
+# 根构建/覆盖率产物；源码与必要配置仍从原目录进入输入闭包。
+dist
+dist-release
+out
+coverage
+prebuilds
+
+# 当前工作区已有的 Bazel 便利链接指向 output_base，不能递归发现其中的包。
+bazel-bin
+bazel-out
+bazel-testlogs
+bazel-forkzcode
+
+# 本地门禁产物、独立 worktree、下载暂存、运行日志及 E2E 产物，均不属于源码 scope。
+.gates-bazel
+.worktrees
+.tmp
+.run-logs
+.zcode-runtime
+.e2e-artifacts
+
+# 已有 scope 显式排除的独立工作目录，不是根 pnpm workspace 的 packages/*。
+z-work
+openclaw
+
+# apps/zcode-cli 自有 pnpm workspace；根 workspace 仅声明 packages/*。
+# scripts/build-desktop-agent-cli.mjs 已改为 packages/omp-agent 的构建/暂存链，
+# 不再消费旧 apps 构建链；现有 Bazel 源码 scope 同样排除 apps/**。
+apps

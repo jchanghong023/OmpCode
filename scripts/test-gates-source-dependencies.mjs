@@ -1,5 +1,6 @@
 import { dirname, isAbsolute, matchesGlob, relative, resolve } from "node:path";
 import { createRequire, isBuiltin } from "node:module";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { createSourceBindingAnalyzer } from "./test-gates-source-bindings.mjs";
 
 const ts = createRequire(import.meta.url)("@typescript/typescript6");
@@ -19,17 +20,38 @@ export function workspaceSourcePath(workspace, path) {
   };
 }
 
+// Only ESM module specifiers have URL query/fragment semantics. Ordinary data
+// paths and CommonJS requests must retain their literal filenames.
+export function localEsmModulePath(specifier, file, mode) {
+  if (mode !== ts.ModuleKind.ESNext || !/^(?:\.{1,2}\/|\/|file:)/u.test(specifier))
+    return undefined;
+  try {
+    return fileURLToPath(new URL(specifier, pathToFileURL(file)));
+  } catch {
+    return undefined;
+  }
+}
+
 export function createSourceDependencyAnalyzer({
   workspace,
   excludes,
   codePatterns,
   runnableEntries,
 }) {
+  // Facts live only for this analyzer's source snapshot, never across runs.
+  const workspacePathCache = new Map();
+  const literalExistsCache = new Map();
+  function literalExists(path) {
+    if (!literalExistsCache.has(path)) literalExistsCache.set(path, ts.sys.fileExists(path));
+    return literalExistsCache.get(path);
+  }
   function repoPath(path) {
     return relative(workspace, path).replaceAll("\\", "/");
   }
   function workspacePath(path) {
-    return workspaceSourcePath(workspace, path);
+    if (!workspacePathCache.has(path))
+      workspacePathCache.set(path, workspaceSourcePath(workspace, path));
+    return workspacePathCache.get(path);
   }
   // These owners return recipes; merely naming another recipe is not a read of
   // its entry's contents. Each selected recipe/lifecycle is expanded separately.
@@ -207,23 +229,23 @@ export function createSourceDependencyAnalyzer({
       conservative ||= bindings.conservative;
       function moduleReference(literal, mode) {
         if (!literal || !ts.isStringLiteralLike(literal)) {
-          // A template ending in e.g. /package.json cannot load a runnable test.
-          // Keep only candidates compatible with its known suffix.
+          // A suffix may narrow known entry candidates, but cannot prove the
+          // complete module/data closure (including JSON and native modules).
+          conservative = true;
           const suffix =
             literal && ts.isTemplateExpression(literal)
               ? literal.templateSpans.at(-1)?.literal.text
               : undefined;
-          if (!suffix || !/\.(?:json|node)$/u.test(suffix)) conservative = true;
           if (suffix)
             for (const entry of runnableEntries) {
               if (entry.endsWith(suffix)) enqueue(resolve(entry));
             }
-          else conservative = true;
           return;
         }
         const specifier = literal.text;
+        const localModule = localEsmModulePath(specifier, file, mode);
         const result = ts.resolveModuleName(
-          specifier,
+          localModule ?? specifier,
           file,
           configuration.options,
           ts.sys,
@@ -232,6 +254,7 @@ export function createSourceDependencyAnalyzer({
           mode,
         ).resolvedModule;
         if (result) enqueue(result.resolvedFileName);
+        else if (localModule && literalExists(localModule)) enqueue(localModule);
         else if (!isBuiltin(specifier)) conservative = true;
       }
       function dataLiteral(node) {
@@ -327,7 +350,7 @@ export function createSourceDependencyAnalyzer({
             else {
               const path =
                 argument === literal ? resolve(literal.text) : resolve(dirname(file), literal.text);
-              if (ts.sys.fileExists(path)) enqueue(path);
+              if (literalExists(path)) enqueue(path);
               else conservative = true;
             }
           }
@@ -355,7 +378,7 @@ export function createSourceDependencyAnalyzer({
           (!recipeModules.has(repoPath(file)) || dataLiteral(node))
         ) {
           for (const candidate of [resolve(dirname(file), node.text), resolve(node.text)]) {
-            if (ts.sys.fileExists(candidate)) enqueue(candidate);
+            if (literalExists(candidate)) enqueue(candidate);
           }
           for (const entry of entryLiterals.get(node.text.replaceAll("\\", "/")) ?? [])
             enqueue(resolve(entry));
@@ -365,7 +388,7 @@ export function createSourceDependencyAnalyzer({
       visit(source);
       for (const reference of runtime ? [] : source.referencedFiles) {
         const dependency = resolve(dirname(file), reference.fileName);
-        if (ts.sys.fileExists(dependency)) enqueue(dependency);
+        if (literalExists(dependency)) enqueue(dependency);
         else conservative = true;
       }
       fileFactsCache.set(factsKey, {
@@ -375,8 +398,8 @@ export function createSourceDependencyAnalyzer({
       recording = undefined;
       conservative ||= inheritedConservative;
     }
-    // Unknown runtime module paths must not masquerade as a precise cache. Keep
-    // all runnable entries in that target's package/runner scope in this case.
+    // Unknown module/I/O paths retain runnable entries here; the target's
+    // conservative scripts/gates scope also covers non-entry helper modules.
     if (conservative && !metadata) {
       for (const entry of runnableEntries)
         if (

@@ -9,7 +9,7 @@ export async function exerciseCleanupFailure(root, fixtureEnv) {
   const cleanupEntry = join(root, "entry-cleanup-failure.mjs");
   const runtimeInput = join(root, "entry-runtime.json");
   const entry = pathToFileURL(resolve("scripts/test-gates.mjs")).href;
-  const environments = pathToFileURL(resolve("scripts/test-gates-environments.mjs")).href;
+  const environments = pathToFileURL(resolve("scripts/test-gates-command-stage.mjs")).href;
   const bazel = pathToFileURL(resolve("scripts/test-gates-bazel.mjs")).href;
   await writeFile(runtimeInput, JSON.stringify({ env: { FIXTURE_SECRET: "run-owned" } }));
   await writeFile(

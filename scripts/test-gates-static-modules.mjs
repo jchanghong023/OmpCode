@@ -1,6 +1,6 @@
 import { createRequire, isBuiltin } from "node:module";
 import { resolve } from "node:path";
-import { workspaceSourcePath } from "./test-gates-source-dependencies.mjs";
+import { localEsmModulePath, workspaceSourcePath } from "./test-gates-source-dependencies.mjs";
 
 const ts = createRequire(import.meta.url)("@typescript/typescript6");
 
@@ -26,8 +26,9 @@ export function staticModuleInputs(workspace, entries) {
     source.impliedNodeFormat = ts.getImpliedNodeFormatForFile(file, undefined, ts.sys, options);
     function moduleReference(literal, mode) {
       if (!literal || !ts.isStringLiteralLike(literal) || isBuiltin(literal.text)) return;
+      const localModule = localEsmModulePath(literal.text, input.canonical, mode);
       const result = ts.resolveModuleName(
-        literal.text,
+        localModule ?? literal.text,
         input.canonical,
         options,
         ts.sys,
@@ -36,6 +37,7 @@ export function staticModuleInputs(workspace, entries) {
         mode,
       ).resolvedModule;
       if (result) pending.push(result.resolvedFileName);
+      else if (localModule && ts.sys.fileExists(localModule)) pending.push(localModule);
       else throw new Error(`Cannot resolve wrapper module ${literal.text} from ${input.local}`);
     }
     function visit(node) {
@@ -56,6 +58,12 @@ export function staticModuleInputs(workspace, entries) {
         node.expression.text === "require"
       ) {
         moduleReference(node.arguments[0], ts.ModuleKind.CommonJS);
+      } else if (
+        ts.isCallExpression(node) &&
+        node.expression.kind === ts.SyntaxKind.ImportKeyword
+      ) {
+        // 字面量动态 import 也是静态可知的模块边，必须进入共享 runner 闭包。
+        moduleReference(node.arguments[0], ts.ModuleKind.ESNext);
       }
       ts.forEachChild(node, visit);
     }

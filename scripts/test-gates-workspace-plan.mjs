@@ -1,24 +1,16 @@
-import { readFile, readdir } from "node:fs/promises";
+import { workspacePackageManifests } from "./test-gates-workspace-metadata.mjs";
 import { join } from "node:path";
 import { compilerOutputs } from "./test-gates-build-outputs.mjs";
 
 // Package primitives remain unchanged; Bazel exclusively owns their ordering,
 // parallelism, product identity and successful action reuse.
 export async function workspaceBuildPlan({ bootstrap = false, target } = {}) {
-  const packages = new Map();
-  for (const entry of await readdir(new URL("../packages/", import.meta.url), {
-    withFileTypes: true,
-  })) {
-    if (!entry.isDirectory()) continue;
-    try {
-      const manifest = JSON.parse(
-        await readFile(new URL(`../packages/${entry.name}/package.json`, import.meta.url), "utf8"),
-      );
-      packages.set(manifest.name, { manifest, directory: `packages/${entry.name}` });
-    } catch (error) {
-      if (error.code !== "ENOENT") throw error;
-    }
-  }
+  const packages = new Map(
+    [...(await workspacePackageManifests())].map(([directory, manifest]) => [
+      manifest.name,
+      { manifest, directory: `packages/${directory}` },
+    ]),
+  );
   const buildable = new Map([...packages].filter(([, value]) => value.manifest.scripts?.build));
   function dependencies(name, visited = new Set()) {
     if (visited.has(name)) return [];

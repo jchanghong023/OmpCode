@@ -1,10 +1,11 @@
 import { appendFileSync, realpathSync } from "node:fs";
-import { cp, mkdir, readFile, stat } from "node:fs/promises";
-import { basename, dirname, isAbsolute, join, resolve, relative } from "node:path";
+import { mkdir, readFile } from "node:fs/promises";
+import { dirname, isAbsolute, join, resolve, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { repositoryRoot, gatesInputsDir } from "./test-gates-bazel-locations.mjs";
 import { prepareBazelEnvironment } from "./test-gates-bazel-runtime.mjs";
-import { commandOutput, startCommand, windowsSystemToolPath } from "./test-gates-process.mjs";
+import { createArtifactIO } from "./test-gates-artifacts.mjs";
+import { cancelCommands, skipSignalPattern, startCommand, stopAll } from "./test-gates-process.mjs";
 
 const targetName = (id) => `gate-${id.replace(/[^a-zA-Z0-9_-]/gu, "_")}`;
 
@@ -16,93 +17,84 @@ function ownedPath(root, output) {
   return path;
 }
 
-async function copyOutput(source, destination) {
-  if (process.platform !== "win32") {
-    await cp(source, destination, { recursive: true, force: true });
-    return;
-  }
-  // 数千个 TS 产物的逐文件 JS 复制会耗尽门禁预算；用系统并行复制，不另建增量账本。
-  const directory = (await stat(source)).isDirectory();
-  const result = await commandOutput(
-    windowsSystemToolPath("robocopy.exe"),
-    [
-      ...(directory
-        ? [source, destination]
-        : [dirname(source), dirname(destination), basename(source)]),
-      ...(directory ? ["/E"] : []),
-      "/MT:32",
-      "/COPY:DAT",
-      "/DCOPY:DT",
-      // 必须复制 A 属性后再去掉 R；只用 DT 时 /A-:R 无效，Bazel 只读产物会使后续编译失败。
-      "/A-:R",
-      "/SL",
-      "/SJ",
-      "/IS",
-      "/IT",
-      // 同 size/mtime、不同 change-time 属于 Modified，IS/IT 不包含，仍须完整回填。
-      "/IM",
-      "/R:0",
-      "/W:0",
-      "/NFL",
-      "/NDL",
-      "/NJH",
-      "/NJS",
-      "/NP",
-    ],
-    { quiet: true, stageId: "artifact-copy" },
-  );
-  // Robocopy 的 0–7 是成功/文件差异状态，8 起才是复制失败。
-  if (result.reason || result.code >= 8 || result.code < 0)
-    throw new Error(`Artifact copy failed (${result.code}): ${result.output.trim()}`);
-}
-
 // Bazel's declared tree is the only reusable product. Copying merges owned
 // subtrees and never clears compiler caches or another stage's sibling outputs.
-export async function materializeStageArtifacts(stage, binRoot, workspace = repositoryRoot) {
+async function materializeStageArtifacts(
+  stage,
+  binRoot,
+  workspace = repositoryRoot,
+  io = createArtifactIO(),
+) {
   if (!stage.outputs?.length) return;
   const artifact = join(binRoot, "gates", "artifacts", targetName(stage.id));
-  await copyOutput(artifact, workspace);
-  if (process.platform !== "win32") {
-    // 只恢复声明产物的 owner 写权限，保留可执行位；不修改源码或共享缓存的权限。
-    const result = await commandOutput(
-      "chmod",
-      ["-R", "u+w", ...stage.outputs.map((output) => ownedPath(workspace, output))],
-      { quiet: true, stageId: "artifact-writable" },
+  // 调度按声明输出判独立，实际复制也必须限制在同一边界，不能并行遍历整棵 artifact。
+  // 逐声明输出保留 stage 内原合并/覆盖顺序，不碰未声明兄弟输出或共享缓存属性。
+  for (const output of stage.outputs) {
+    const destination = ownedPath(workspace, output);
+    await mkdir(dirname(destination), { recursive: true });
+    await io.copy(ownedPath(artifact, output), destination);
+  }
+}
+
+const outputPaths = (stage, workspace) =>
+  (stage.outputs ?? []).map((output) => {
+    const path = ownedPath(workspace, output);
+    return process.platform === "win32" ? path.toLowerCase() : path;
+  });
+const overlappingOutputs = (left, right) =>
+  left.some((a) =>
+    right.some(
+      (b) =>
+        a === b ||
+        a.startsWith(`${b}/`) ||
+        b.startsWith(`${a}/`) ||
+        a.startsWith(`${b}\\`) ||
+        b.startsWith(`${a}\\`),
+    ),
+  );
+
+// 原先按 stage 分批会把单 stage 的多个输出串行化；按声明顺序拆成单输出操作解除瓶颈。
+// 只准入至多四个互不重叠路径，首个冲突即封住本批，保留覆盖顺序且不越过冲突挑任务。
+export async function materializeStageGroup(
+  stages,
+  binRoot,
+  { workspace = repositoryRoot, clock } = {},
+) {
+  const pending = stages.flatMap((stage) =>
+    (stage.outputs ?? []).map((output) => {
+      const singleOutputStage = { ...stage, outputs: [output] };
+      return { stage: singleOutputStage, paths: outputPaths(singleOutputStage, workspace) };
+    }),
+  );
+  const io = createArtifactIO();
+  for (let index = 0; index < pending.length;) {
+    const batch = [pending[index++]];
+    while (
+      batch.length < 4 &&
+      index < pending.length &&
+      batch.every((member) => !overlappingOutputs(member.paths, pending[index].paths))
+    )
+      batch.push(pending[index++]);
+    const copies = batch.map(({ stage }) =>
+      materializeStageArtifacts(stage, binRoot, workspace, io),
     );
-    if (result.code !== 0) throw new Error(`Artifact permissions failed: ${result.output.trim()}`);
+    try {
+      await Promise.all(copies);
+    } catch (error) {
+      io.fail(error);
+      // Stop admission before awaiting cleanup. stopAll owns native copy trees
+      // and the gate's existing budget/cancellation path; retain the first error.
+      cancelCommands();
+      await stopAll(clock).catch(() => {});
+      await Promise.allSettled(copies);
+      throw error;
+    }
   }
 }
 
 async function prepareWritableOutputs(stage, workspace) {
-  for (const output of stage.outputs ?? []) {
-    const target = ownedPath(workspace, output);
-    let info;
-    try {
-      info = await stat(target);
-    } catch (error) {
-      if (error.code === "ENOENT") continue;
-      throw error;
-    }
-    // 旧缓存曾把只读属性带回工作区；缓存 miss 的生产者也必须能覆盖自己的产物。
-    // 只清理声明输出的 R 属性，不修改源码、其他目标或共享缓存。
-    const result =
-      process.platform === "win32"
-        ? await commandOutput(
-            windowsSystemToolPath("attrib.exe"),
-            [
-              "-R",
-              info.isDirectory() ? join(target, "*") : target,
-              ...(info.isDirectory() ? ["/S", "/D"] : []),
-            ],
-            { quiet: true, stageId: "artifact-writable" },
-          )
-        : await commandOutput("chmod", ["-R", "u+w", target], {
-            quiet: true,
-            stageId: "artifact-writable",
-          });
-    if (result.code !== 0)
-      throw new Error(`Cannot prepare writable declared output ${output}: ${result.output.trim()}`);
-  }
+  const io = createArtifactIO();
+  for (const output of stage.outputs ?? []) await io.prepare(ownedPath(workspace, output));
 }
 
 async function runAction() {
@@ -168,12 +160,19 @@ async function runAction() {
         let tail = "";
         stream.on("data", (text) => {
           destination.write(text);
-          if (stage.kind !== "compile" || notified) return;
+          if (notified) return;
           tail = (tail + text).slice(-12000);
-          const diagnostic = tail.match(/^[^\r\n]*\berror TS\d+: [^\r\n]+/mu);
-          if (diagnostic) {
+          const skipped = skipSignalPattern.test(tail);
+          const diagnostic =
+            stage.kind === "compile" ? tail.match(/^[^\r\n]*\berror TS\d+: [^\r\n]+/mu) : undefined;
+          if (skipped || diagnostic) {
             notified = true;
-            frame("failure", { code: 1, reason: diagnostic[0].trim() });
+            frame("failure", {
+              code: 1,
+              reason: skipped
+                ? "Gate action reported skipped or unverified work"
+                : diagnostic[0].trim(),
+            });
           }
         });
       }
@@ -190,10 +189,11 @@ async function runAction() {
     activeKind = "check";
     frame("start", { kind: activeKind });
     await mkdir(artifact, { recursive: true });
+    const io = createArtifactIO();
     for (const outputPath of stage.outputs ?? []) {
       const destination = ownedPath(artifact, outputPath);
       await mkdir(dirname(destination), { recursive: true });
-      await copyOutput(ownedPath(workspace, outputPath), destination);
+      await io.copy(ownedPath(workspace, outputPath), destination);
     }
   } catch (error) {
     frame("failure", { code: 1 });

@@ -31,6 +31,8 @@ const noMatches =
 const only = (snapshot, identity) => snapshot.filter((db) => db.path === identity.path);
 
 async function maintenance(page, runtime, action, pattern, label) {
+  const started = Date.now();
+  console.log(`Native index maintenance: ${label} start`);
   const count = (await diagnostics(runtime)).calls.length;
   if (pattern === null) {
     const before = new Set((await commandRows(page)).map((row) => row.id));
@@ -52,19 +54,27 @@ async function maintenance(page, runtime, action, pattern, label) {
     count,
     `${label} must not send the untouched composer or a model request`,
   );
+  console.log(`Native index maintenance: ${label} complete elapsedMs=${Date.now() - started}`);
 }
 
 async function repoSearch(page, runtime, query, key, reply, expected, fileContent) {
+  const started = Date.now();
+  console.log(`Native repo search: ${key} start`);
   const dialog = await panel(page, runtime, "知识与代码索引");
   assert.match(await dialog.innerText(), /当前会话模型.*repo|repo.*当前会话模型/iu);
   await dialog.getByRole("textbox", { name: "代码检索内容", exact: true }).fill(query);
   await dialog.getByRole("button", { name: "通过当前会话模型使用 repo 工具", exact: true }).click();
   await dialog.waitFor({ state: "hidden" });
-  await visibleText(page, reply);
+  // 精确的新回复证明异步准入；等 live tail 定稿后才进行一次真实历史浏览。
+  await page.getByTestId("v4-timeline").getByText(reply, { exact: true }).waitFor({
+    state: "visible",
+  });
   await idle(page);
+  await visibleText(page, reply);
   await assertToolResult(page, runtime, `${key}-docs`, "Execute by writing JSON to xd://repo.");
   await assertToolResult(page, runtime, key, expected);
   if (fileContent) await assertToolResult(page, runtime, `${key}-file`, fileContent.trim());
+  console.log(`Native repo search: ${key} complete elapsedMs=${Date.now() - started}`);
 }
 
 export async function exerciseIndexes(page, runtime, manifest) {

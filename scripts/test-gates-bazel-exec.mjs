@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { gatesInputsDir } from "./test-gates-bazel-locations.mjs";
 import { prepareBazelEnvironment } from "./test-gates-bazel-runtime.mjs";
 import { createGateClock } from "./test-gates-clock.mjs";
-import { regularStage } from "./test-gates-environments.mjs";
+import { regularStage } from "./test-gates-command-stage.mjs";
 import { stopAll } from "./test-gates-process.mjs";
 
 const target = process.argv[process.argv.indexOf("--stage") + 1];
@@ -35,7 +35,6 @@ try {
   result = await regularStage(stage, {
     clock,
     omp: runtime.omp,
-    guiProcesses: new Map(),
     onFailure,
   });
   if (result.status !== "PASS") onFailure(result);

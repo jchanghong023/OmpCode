@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
 // BEP is the sole source of target completion, timing, cache provenance and logs.
-export async function parseBuildEventFile(path, targets) {
+export async function parseBuildEventFile(path, targets, { checkTestsUpToDate = false } = {}) {
   const results = new Map();
   let text;
   try {
@@ -11,6 +11,9 @@ export async function parseBuildEventFile(path, targets) {
     return results;
   }
   const actions = new Map();
+  const attempts = new Map();
+  const completedTargets = new Map();
+  let finishedSuccessfully = false;
   for (const line of text.split("\n")) {
     let event;
     try {
@@ -18,6 +21,9 @@ export async function parseBuildEventFile(path, targets) {
     } catch {
       continue;
     }
+    if (event.finished)
+      finishedSuccessfully =
+        event.finished.overallSuccess === true && Number(event.finished.exitCode?.code ?? 0) === 0;
     const label =
       event.id?.testResult?.label ??
       event.id?.testSummary?.label ??
@@ -42,6 +48,7 @@ export async function parseBuildEventFile(path, targets) {
       });
     }
     if (event.completed) {
+      completedTargets.set(target, event.completed.success === true);
       const test = event.children?.some((child) => child.testSummary);
       results.set(target, {
         ...previous,
@@ -55,18 +62,38 @@ export async function parseBuildEventFile(path, targets) {
     }
     if (event.testResult) {
       const result = event.testResult;
+      const info = result.executionInfo;
       const cacheState = result.cachedLocally
         ? "localCache"
-        : result.executionInfo?.cachedRemotely
-          ? "diskCache"
+        : info?.cachedRemotely
+          ? /^disk cache hit$/iu.test(info.strategy ?? "")
+            ? "diskCache"
+            : /^remote cache hit$/iu.test(info.strategy ?? "")
+              ? "remoteCache"
+              : "unknownCache"
           : "new";
+      const identity = JSON.stringify(event.id?.testResult ?? event.id);
+      if (!attempts.has(target)) attempts.set(target, new Map());
+      attempts.get(target).set(identity, {
+        cacheState,
+        seconds: Number(result.testAttemptDurationMillis ?? 0) / 1000,
+      });
+      const runs = [...attempts.get(target).values()];
+      const currentState = runs.some((run) => run.cacheState === "new")
+        ? "new"
+        : runs.every((run) => run.cacheState === cacheState)
+          ? cacheState
+          : "unknownCache";
       results.set(target, {
         ...previous,
         testTarget: true,
         status: result.status,
-        cached: cacheState !== "new",
-        cacheState,
-        seconds: Number(result.testAttemptDurationMillis ?? 0) / 1000,
+        cached: currentState !== "new",
+        cacheState: currentState,
+        seconds: runs.reduce((sum, run) => sum + (run.cacheState === "new" ? run.seconds : 0), 0),
+        ...(currentState !== "new"
+          ? { previousRunSeconds: runs.reduce((sum, run) => sum + run.seconds, 0) }
+          : {}),
         logPath: uriPath(
           (result.testActionOutput ?? []).find((output) => output.name === "test.log")?.uri,
         ),
@@ -78,10 +105,25 @@ export async function parseBuildEventFile(path, targets) {
         ...previous,
         complete: true,
         status: summary.overallStatus,
-        seconds: Number(summary.totalRunDurationMillis ?? (previous.seconds ?? 0) * 1000) / 1000,
+        // Native summaries replay historical duration on cache hits. Only this
+        // invocation's testResult attempts establish current execution time.
+        seconds: previous.seconds ?? 0,
       });
     }
   }
+  // 只读查询不发布 testResult/testSummary；必须同时取得原生成功结束与目标完成，
+  // 才能确认 upToDate，不能因没有执行事件就推断缓存命中。
+  if (checkTestsUpToDate && finishedSuccessfully)
+    for (const [target, success] of completedTargets)
+      if (success)
+        results.set(target, {
+          ...results.get(target),
+          complete: true,
+          status: "PASSED",
+          cached: true,
+          cacheState: "upToDate",
+          seconds: 0,
+        });
   return results;
 }
 const uriPath = (uri) => (uri?.startsWith("file:") ? fileURLToPath(uri) : undefined);
@@ -119,8 +161,20 @@ export async function actionCacheStates(path) {
     const spawn = JSON.parse(text.slice(start, index + 1));
     const target = spawn.targetLabel?.replace(/^\/\/:/u, "");
     if (!target) continue;
-    const state = spawn.cacheHit ? "diskCache" : "new";
-    if (!states.has(target) || state === "new") states.set(target, state);
+    const runner = spawn.runner ?? "";
+    const state =
+      spawn.cacheHit === true || /cache hit/iu.test(runner)
+        ? /^disk cache hit$/iu.test(runner)
+          ? "diskCache"
+          : /^remote cache hit$/iu.test(runner)
+            ? "remoteCache"
+            : "unknownCache"
+        : runner
+          ? "new"
+          : "unknown";
+    const previous = states.get(target);
+    if (previous === "new") continue;
+    states.set(target, state === "new" || !previous || previous === state ? state : "unknown");
   }
   return states;
 }

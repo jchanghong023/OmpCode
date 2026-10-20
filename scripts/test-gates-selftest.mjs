@@ -120,8 +120,181 @@ async function assertChangedArchitectureScope(root) {
   );
 }
 
+async function assertReadOnlyGraphDiagnostics(root) {
+  const fixture = join(root, "readonly-graph-diagnostic.mjs");
+  // 仅替换 IO/原生命令边界；实际入口与图同步代码共同验证无授权诊断不会执行/回填。
+  await writeFile(
+    fixture,
+    `
+import assert from 'node:assert/strict';
+import {registerHooks} from 'node:module';
+import {pathToFileURL} from 'node:url';
+const [scenario,level,...flags]=process.argv.slice(2);
+const base=pathToFileURL(${JSON.stringify(resolve("scripts") + "/")});
+const url=name=>new URL(name,base).href;
+const entry=url('test-gates.mjs'),graph=url('test-gates-bazel-graph.mjs');
+const calls=[],reads=[],writes=[],removals=[];
+const original=Buffer.from('graph-A'),different=Buffer.from('graph-B');
+const missing=()=>Object.assign(new Error('missing graph'),{code:'ENOENT'});
+globalThis.fixtureState={scenario,calls,reads,writes,removals,original,different,missing};
+const modules=new Map([
+ ['fixture:fs',\`
+ const state=globalThis.fixtureState;
+ export async function readFile(path){
+  const name=String(path).replaceAll('\\\\\\\\','/');state.reads.push(name);
+  if(name==='mise.toml') return 'pnpm = "fixture"';
+  if(name.endsWith('/BUILD.bazel')){
+   if(state.scenario==='root-missing') throw state.missing();
+   return state.original;
+  }
+  if(state.scenario==='artifact-missing') throw state.missing();
+  if(state.scenario==='artifact-error') throw Object.assign(new Error('artifact denied'),{code:'EACCES'});
+  return ['mismatch','normal-update'].includes(state.scenario)?state.different:state.original;
+ }
+ export async function writeFile(path,data){state.writes.push({path:String(path),text:String(data)});}
+ export async function rm(path){state.removals.push(String(path));}
+ \`],
+ [url('test-gates-plan.mjs'),\`
+ const plan=async()=>[{id:'cacheable'},{id:'external',noCache:true}];
+ export const fastPlan=plan,fullPlan=plan,slowPlan=plan,installedOmp=async()=>'/fixture/omp';
+ \`],
+ [url('test-gates-command-stage.mjs'),'export async function restorePackagingState(){};export async function snapshotPackagingState(){throw Error("packaging executed");}'],
+ [url('test-gates-bazel.mjs'),\`
+ export const bazelizeStages=stages=>[{id:'native',bazel:{stages}}];
+ export const assertBazelReady=async()=>({path:'fixture',version:'fixture'});
+ export const isUncachedStage=stage=>Boolean(stage.noCache);
+ export async function cleanupBazelInputs(){}
+ export async function runBazelStage(stage){
+  const state=globalThis.fixtureState;
+  state.calls.push(stage);
+  if(!state.scenario.startsWith('normal-')) assertCacheOnly(stage);
+  const graph=stage.bazel.stages[0].id==='bazel-graph';
+  const status=graph
+   ?state.scenario==='graph-miss'?'CACHE_MISS':state.scenario==='graph-fail'?'FAIL':'PASS'
+   :state.scenario==='query-miss'?'CACHE_MISS':state.scenario==='query-fail'?'FAIL':'PASS';
+  return {status,targets:[],reason:status};
+ }
+ function assertCacheOnly(stage){if(stage.bazel.cacheOnly!==true) throw Error('NON_READONLY_EXECUTION');}
+ \`],
+ [url('test-gates-snapshot.mjs'),"export const snapshot=async()=>({contentHash:'current'}),sameSnapshot=()=>true,gitText=async()=>'',exists=async()=>true;"],
+ [url('test-gates-clock.mjs'),'export const createGateClock=()=>({}),gateBudget=()=>900;'],
+ [url('test-gates-bazel-locations.mjs'),\`export const repositoryRoot=\${JSON.stringify(process.cwd())};\`],
+ [url('test-gates-diagnostics.mjs'),'export const createGateDiagnostics=async()=>({summarize:async()=>({})});'],
+ [url('test-gates-run.mjs'),\`
+ export function createGateRun(options){
+  let report;
+  const finish=async(status,exitCode)=>{
+   if(report) return report;
+   report={status,exitCode,...globalThis.fixtureState};
+   console.log('FIXTURE_EVIDENCE '+JSON.stringify(report));
+   return report;
+  };
+  return {clock:options.clock,finish,async run(operation){
+   if(!options.authorized&&['fulltest','slowtest'].includes(options.level))
+    return finish('NOT RUN — HUMAN AUTHORIZATION REQUIRED',2);
+   await operation([],()=>{throw Error('unexpected execution failure callback');});
+   return report??finish('PASS',0);
+  }};
+ }
+ \`],
+]);
+registerHooks({
+ resolve(specifier,context,next){
+  if(specifier==='node:fs/promises'&&[entry,graph].includes(context.parentURL))
+   return {url:'fixture:fs',shortCircuit:true};
+  return next(specifier,context);
+ },
+ load(name,context,next){
+  if(modules.has(name)) return {format:'module',source:modules.get(name),shortCircuit:true};
+  return next(name,context);
+ },
+});
+delete process.env.npm_config_user_agent;
+if(level==='graph'){
+ const {ensureBazelGraph}=await import(graph);
+ const result=await ensureBazelGraph({}, {readOnly:!scenario.startsWith('normal-')});
+ console.log('FIXTURE_EVIDENCE '+JSON.stringify({...result,...globalThis.fixtureState}));
+}else{
+ process.argv=[process.execPath,entry,level,...flags];
+ await import(entry);
+}
+`,
+  );
+  const run = async (scenario, level, flags = ["--check-tests-up-to-date"]) => {
+    const result = await commandOutput("node", [fixture, scenario, level, ...flags], {
+      quiet: true,
+    });
+    const evidence = result.output
+      .split(/\r?\n/u)
+      .find((line) => line.startsWith("FIXTURE_EVIDENCE "));
+    assert.ok(evidence, result.output);
+    return JSON.parse(evidence.slice("FIXTURE_EVIDENCE ".length));
+  };
+  for (const level of ["fastcheck", "fulltest", "slowtest"]) {
+    for (const [scenario, status, count] of [
+      ["hit", "DIAGNOSTIC_UP_TO_DATE", 2],
+      ["graph-miss", "DIAGNOSTIC_OUT_OF_DATE", 1],
+      ["graph-fail", "FAIL", 1],
+      ["mismatch", "DIAGNOSTIC_OUT_OF_DATE", 1],
+      ["artifact-missing", "DIAGNOSTIC_OUT_OF_DATE", 1],
+      ["root-missing", "DIAGNOSTIC_OUT_OF_DATE", 1],
+      ["artifact-error", "FAIL", 1],
+      ["query-miss", "DIAGNOSTIC_OUT_OF_DATE", 2],
+      ["query-fail", "FAIL", 2],
+    ]) {
+      const report = await run(scenario, level);
+      assert.equal(report.status, status, `${level}/${scenario}`);
+      assert.equal(report.calls.length, count);
+      assert.deepEqual(report.writes, []);
+      assert.deepEqual(report.removals, []);
+      if (count === 2)
+        assert.deepEqual(
+          report.calls[1].bazel.stages.map((stage) => stage.id),
+          ["cacheable"],
+        );
+      if (scenario === "hit")
+        assert.ok(
+          report.reads.some((name) =>
+            name.endsWith(
+              "/bazel-bin/gates/artifacts/gate-bazel-graph/gates/inputs/generated-build.bazel",
+            ),
+          ),
+        );
+      if (["graph-miss", "graph-fail"].includes(scenario))
+        assert.equal(
+          report.reads.some((name) => name.includes("generated-build.bazel")),
+          false,
+        );
+      if (scenario === "hit") assert.equal(report.exitCode, 0);
+    }
+    const plan = await run("hit", level, ["--plan", "--check-tests-up-to-date"]);
+    assert.equal(plan.status, "PLAN ONLY — NOT RUN");
+    assert.deepEqual(plan.calls, []);
+    const authorized = await run("hit", level, ["--human-authorized", "--check-tests-up-to-date"]);
+    assert.equal(authorized.status, "DIAGNOSTIC_UP_TO_DATE");
+    assert.ok(authorized.calls.every((call) => call.bazel.cacheOnly === true));
+    if (level !== "fastcheck") {
+      const denied = await run("hit", level, []);
+      assert.equal(denied.exitCode, 2);
+      assert.deepEqual(denied.calls, []);
+    }
+  }
+  const snapshot = await run("hit", "--snapshot");
+  assert.equal(snapshot.status, "PASS");
+  assert.deepEqual(snapshot.calls, []);
+  // 图函数只负责生成与根 BUILD 的字节更新；传输清理已归 GateRun 结束后的桥接 owner。
+  for (const scenario of ["normal-same", "normal-update"]) {
+    const report = await run(scenario, "graph", []);
+    assert.equal(report.status, "PASS");
+    assert.equal(report.calls.length, 1);
+    assert.equal(report.calls[0].bazel.cacheOnly, undefined);
+    assert.equal(report.writes.length, scenario === "normal-update" ? 1 : 0);
+  }
+}
+
 async function runSelfTest(root) {
   await assertChangedArchitectureScope(root);
+  await assertReadOnlyGraphDiagnostics(root);
   const failure = join(root, "failure.mjs");
   const sleeper = join(root, "sleeper.mjs");
   const missingTool = join(root, "no-such-tool.exe");

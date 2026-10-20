@@ -11,23 +11,56 @@ import {
   orchestrate,
   assertToolResult,
 } from "./ompNativeAcceptance.helpers.mjs";
+import {
+  readTimelineViewport,
+  scrollTimelineViewport,
+  settleTimelineLayout,
+} from "./ompMockInteractions.viewport.mjs";
 
 export async function assertNoSkillLeak(page, manifest) {
   const timeline = page.getByTestId("v4-timeline");
-  await timeline.hover();
-  await page.mouse.wheel(0, -100_000);
-  // Virtualized history must be inspected across the scroll range, not only its last reply.
-  for (let step = 0; step < 60; step++) {
-    await new Promise((done) => setTimeout(done, 40));
-    const text = await timeline.innerText();
+  const started = Date.now();
+  const deadline = started + 90_000;
+  const visited = new Set();
+  const scroll = (reset, lastIndex) =>
+    scrollTimelineViewport(timeline, { reset, lastIndex, fraction: 0.5 });
+  console.log("Native skill leak scan: start");
+  await scroll(true);
+  for (;;) {
+    assert.ok(Date.now() < deadline, "Skill leak history scan exceeded 90s");
+    // 宿主 yield 不是提交证据；必须同时检查真实起点几何、following 与首索引。
+    await settleTimelineLayout();
+    const state = await readTimelineViewport(timeline, { includeText: true });
+    if (
+      visited.size === 0 &&
+      (state.top !== 0 ||
+        (state.height > state.viewport && state.following !== "false") ||
+        (state.count > 0 && !state.indices.includes(0)))
+    ) {
+      await scroll(true);
+      continue;
+    }
     for (const skill of manifest.skills)
       assert.ok(
-        !text.includes(skill.sentinel),
+        !state.text.includes(skill.sentinel),
         `Visible skill body leaked: ${skill.scope}/${skill.name}`,
       );
-    assert.doesNotMatch(text, /<skill-prompt>|<\/skill-prompt>/u);
-    await page.mouse.wheel(0, 400);
+    assert.ok(!/<skill-prompt>|<\/skill-prompt>/u.test(state.text), "Skill prompt tags leaked");
+    for (const index of state.indices) visited.add(index);
+    if (state.bottom && (state.count === 0 || state.indices.includes(state.count - 1))) {
+      assert.ok(
+        Array.from({ length: state.count }, (_, index) => index).every((index) =>
+          visited.has(index),
+        ),
+        "Skill leak scan must inspect every virtual timeline unit, in full",
+      );
+      break;
+    }
+    await scroll(false, state.indices.at(-1));
   }
+  console.log(
+    `Native skill leak scan: complete units=${visited.size} elapsedMs=${Date.now() - started}`,
+  );
 }
 function displaySkillName(name) {
   return name
@@ -45,7 +78,7 @@ async function skillCandidates(list) {
   const deadline = Date.now() + 90_000;
   for (;;) {
     assert.ok(Date.now() < deadline, "Skill candidate scan exceeded 90s");
-    await new Promise((done) => setTimeout(done, 40));
+    await settleTimelineLayout();
     const mounted = await list.getByRole("option").evaluateAll((nodes) =>
       nodes.map((node) => ({
         id: node.getAttribute("data-option-id"),

@@ -1,13 +1,12 @@
 import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
-import { spawn } from "node:child_process";
 import { access, readFile } from "node:fs/promises";
-import { join, dirname, delimiter } from "node:path";
+import { join, dirname, delimiter, basename } from "node:path";
 import { homedir } from "node:os";
-import { commandOutput, windowsSystemToolPath } from "./test-gates-process.mjs";
-import { bazelOutputBase, repositoryRoot, gatesInputsDir } from "./test-gates-bazel-locations.mjs";
+import { commandOutput } from "./test-gates-process.mjs";
+import { repositoryRoot, gatesInputsDir } from "./test-gates-bazel-locations.mjs";
 
-// Bazel 可执行定位与取消路径的所属进程清理；正常入口复用 Bazel server。
+// Bazel 可执行定位与动作环境；server 和缓存生命周期始终归 Bazel 所有。
 
 let bazelRuntime;
 export async function bazelRuntimeInfo() {
@@ -40,6 +39,66 @@ export async function bazelRuntimeInfo() {
     };
     return bazelRuntime;
   }
+  const binaryContent = createHash("sha256")
+    .update(await readFile(found))
+    .digest("hex");
+  // 默认 Windows/Bazelisk 固定版本已安装时，只读真实二进制身份，不为显示标签再启动一次客户端。
+  // 显式工具、环境覆盖或本地配置仍走原有精确探测；实际执行始终保留原 launcher 的选择语义。
+  let installedPin =
+    process.platform === "win32" &&
+    basename(found).toLowerCase() === "bazelisk.exe" &&
+    !process.env.GATES_BAZEL_BIN?.trim() &&
+    !Object.keys(process.env).some((key) =>
+      /^(?:BAZELISK_|USE_BAZEL_VERSION$|BAZEL_REAL$)/iu.test(key),
+    );
+  if (installedPin)
+    for (const file of [
+      join(repositoryRoot, ".bazeliskrc"),
+      join(homedir(), ".bazeliskrc"),
+      join(repositoryRoot, "tools/bazel"),
+      join(repositoryRoot, "tools/bazel.bat"),
+      join(repositoryRoot, "tools/bazel.ps1"),
+    ]) {
+      try {
+        await access(file);
+        installedPin = false;
+      } catch (error) {
+        if (error.code !== "ENOENT") throw error;
+      }
+    }
+  if (installedPin) {
+    try {
+      const pin = (await readFile(join(repositoryRoot, ".bazelversion"), "utf8")).trim();
+      if (/^\d+\.\d+\.\d+$/u.test(pin) && process.arch === "x64") {
+        const downloads = join(
+          process.env.LOCALAPPDATA ?? join(homedir(), "AppData/Local"),
+          "bazelisk/downloads",
+        );
+        const installedDigest = (
+          await readFile(
+            join(downloads, "metadata/bazelbuild", `bazel-${pin}-windows-x86_64`),
+            "utf8",
+          )
+        ).trim();
+        if (/^[a-f0-9]{64}$/u.test(installedDigest)) {
+          const installedBinary = join(downloads, "sha256", installedDigest, "bin/bazel.exe");
+          const installedContent = createHash("sha256")
+            .update(await readFile(installedBinary))
+            .digest("hex");
+          bazelRuntime = {
+            path: found,
+            version: `unobserved (installed pin ${pin}; see invocation BEP)`,
+            installedPin: pin,
+            identity: { binaryContent, installedContent },
+          };
+          return bazelRuntime;
+        }
+      }
+    } catch (error) {
+      // 缺少安装证据不等于工具不可用；保留原探测和 Bazelisk 行为，不用元数据推断成功。
+      if (error.code !== "ENOENT") throw error;
+    }
+  }
   const version = await commandOutput(found, ["--version"], { quiet: true });
   if (version.code !== 0) {
     bazelRuntime = {
@@ -47,7 +106,11 @@ export async function bazelRuntimeInfo() {
     };
     return bazelRuntime;
   }
-  bazelRuntime = { path: found, version: version.output.trim() };
+  bazelRuntime = {
+    path: found,
+    version: version.output.trim(),
+    identity: { binaryContent, version: version.output.trim() },
+  };
   return bazelRuntime;
 }
 
@@ -59,43 +122,6 @@ export async function assertBazelReady() {
         "install Bazelisk (winget install Bazel.Bazelisk) or point GATES_BAZEL_BIN at bazelisk/bazel",
     );
   return info;
-}
-
-// 批客户端 java 可能脱离 bazelisk 父进程（此前崩溃/被杀的运行会遗留持有
-// output_base 锁的 java）。按 --output_base 标记匹配进程命令行并整树终止，
-// 只命中本门禁专属路径，不触碰其他 Bazel 工程。
-export async function killByOutputBaseMarker(outputBase = bazelOutputBase) {
-  if (process.platform !== "win32") {
-    // 复用 Bazel 原生 PID 文件；Linux 上再核对命令行，避免旧 PID 被复用时误杀其他工程。
-    try {
-      const pid = Number(await readFile(join(outputBase, "server", "server.pid.txt"), "utf8"));
-      if (!Number.isSafeInteger(pid) || pid <= 1) return;
-      const commandLine = await readFile(`/proc/${pid}/cmdline`, "utf8");
-      if (commandLine.includes(outputBase)) process.kill(pid, "SIGTERM");
-    } catch (error) {
-      if (!["ENOENT", "ESRCH"].includes(error.code)) throw error;
-    }
-    return;
-  }
-  const markerBackslash = outputBase.replaceAll("'", "''");
-  const markerSlash = outputBase.split("\\").join("/").replaceAll("'", "''");
-  const script =
-    "$m1='" +
-    markerBackslash +
-    "';$m2='" +
-    markerSlash +
-    "';" +
-    "Get-CimInstance Win32_Process | Where-Object { ($_.CommandLine -like ('*'+$m1+'*') " +
-    "-or $_.CommandLine -like ('*'+$m2+'*')) -and $_.ProcessId -ne $PID } | " +
-    `ForEach-Object { & '${windowsSystemToolPath("taskkill.exe").replaceAll("'", "''")}' /PID $_.ProcessId /T /F | Out-Null }; exit 0`;
-  const killer = spawn("powershell", ["-NoProfile", "-Command", script], {
-    windowsHide: true,
-    stdio: "ignore",
-  });
-  return await new Promise((done) => {
-    killer.once("error", () => done());
-    killer.once("close", () => done());
-  });
 }
 
 export async function resolveBashSh() {

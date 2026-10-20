@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { readdir, readFile } from "node:fs/promises";
 import { basename, join, relative } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { setImmediate } from "node:timers/promises";
 import { reveal } from "./ompMockInteractions.assertions.mjs";
 
 export async function diagnostics(runtime) {
@@ -32,7 +33,7 @@ export async function eventually(read, check, label) {
       Date.now() < deadline,
       `${label}: exceeded 90s waiting for actual evidence; last=${JSON.stringify(value)}`,
     );
-    await new Promise((resolve) => setTimeout(resolve, 40));
+    await setImmediate();
   }
 }
 export async function visibleText(page, text) {
@@ -49,13 +50,25 @@ export async function timelineContains(page, pattern) {
 }
 export async function idle(page) {
   await page.getByTestId("v4-composer-send").waitFor({ state: "visible" });
+  // 面板提交异步准入时，旧发送分支可先被观察到；停止分支必须真实退出后再断言。
+  await page.getByTestId("v4-stop").waitFor({ state: "detached" });
   assert.equal(await page.getByTestId("v4-stop").count(), 0);
+  // composer 可先切回发送分支；等待 timeline 自己完成 live tail -> 虚拟历史迁移。
+  await page
+    .getByTestId("v4-timeline")
+    .locator('[data-v4-running-live-tail="true"]')
+    .waitFor({ state: "detached" });
 }
 export async function send(page, text, reply) {
   await page.getByTestId("v4-composer-input").fill(text);
   await page.getByTestId("v4-composer-send").click();
-  await visibleText(page, reply);
+  // 新回复先作为本次提交的准入屏障；在 live tail 上浏览历史会主动脱离贴底，
+  // 既重复展开旧工具正文，也会与完成后的虚拟历史迁移竞争。
+  await page.getByTestId("v4-timeline").getByText(reply, { exact: true }).waitFor({
+    state: "visible",
+  });
   await idle(page);
+  await visibleText(page, reply);
 }
 export const taskIds = (page) =>
   page

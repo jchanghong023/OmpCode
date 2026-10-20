@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { basename } from "node:path";
 import { commandRows } from "./ompNativeAcceptance.commandRows.mjs";
 import { reveal } from "./ompMockInteractions.assertions.mjs";
 import {
@@ -7,7 +8,6 @@ import {
   journalEvidence,
   dashboard,
   orchestrate,
-  assertToolResult,
 } from "./ompNativeAcceptance.helpers.mjs";
 
 export async function commandOutput(page, action, expected, label) {
@@ -97,6 +97,12 @@ const textOf = (content) =>
         .join("\n");
 
 export async function assertRepoHistory(page, runtime, evidence, { paths, values }) {
+  const started = Date.now();
+  const deadline = started + 90_000;
+  const remaining = () => {
+    assert.ok(Date.now() < deadline, "Native repo history exceeded its shared 90s deadline");
+    return Math.max(1, deadline - Date.now());
+  };
   const issued = evidence.acceptance.issued.filter((item) => item.key.startsWith("repo-"));
   const completed = evidence.acceptance.completed.filter((item) => item.key.startsWith("repo-"));
   assert.equal(issued.length, 15, "Six device docs/search pairs and three hit-file reads");
@@ -118,6 +124,8 @@ export async function assertRepoHistory(page, runtime, evidence, { paths, values
   let owner;
   let previous = -1;
   for (const item of issued) {
+    remaining();
+    console.log(`Native repo history: ${item.key} start elapsedMs=${Date.now() - started}`);
     const done = completed.filter((result) => result.id === item.id && result.key === item.key);
     assert.equal(done.length, 1);
     assert.equal(done[0].isError, false);
@@ -230,13 +238,24 @@ export async function assertRepoHistory(page, runtime, evidence, { paths, values
     assert.equal(result.length, 1);
     assert.equal(result[0].is_error, false);
     assert.equal(textOf(result[0].content), done[0].output);
+    const block = page.locator(`[data-tool-call-id="${item.id}"]`);
+    await reveal(page, block, undefined, { deadline });
+    remaining();
+    assert.equal(await block.getAttribute("data-status", { timeout: remaining() }), "completed");
     if (source !== undefined) {
-      // Recovery reuses the captured live evidence without asking the cold model server to replay.
-      await assertToolResult(page, runtime, item.key, done[0].output, evidence);
-    } else {
-      const block = page.locator(`[data-tool-call-id="${item.id}"]`);
-      await reveal(page, block);
-      assert.equal(await block.getAttribute("data-status"), "completed");
+      // 冷恢复复用 live HTTP 证据；GUI 仍走真实控件，但不能为每条历史另开 90s 等待。
+      assert.equal(issued.filter((candidate) => candidate.key === item.key).length, 1);
+      assert.equal(completed.filter((candidate) => candidate.key === item.key).length, 1);
+      assert.equal(done[0].id, item.id);
+      const toggle = block.getByTestId(`tool-summary-trigger-${item.id}`);
+      if ((await toggle.getAttribute("aria-expanded", { timeout: remaining() })) === "false")
+        await toggle.click({ timeout: remaining() });
+      assert.ok(
+        (await block.innerText({ timeout: remaining() })).includes(basename(item.args.path)),
+        `Visible read-file summary for ${item.key}`,
+      );
     }
+    remaining();
+    console.log(`Native repo history: ${item.key} complete elapsedMs=${Date.now() - started}`);
   }
 }

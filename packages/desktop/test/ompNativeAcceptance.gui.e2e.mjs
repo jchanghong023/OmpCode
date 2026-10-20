@@ -59,6 +59,21 @@ try {
   assert.equal(pages.length, 1, "Use only this owned renderer");
   const page = pages[0];
   page.setDefaultTimeout(90_000);
+  // 只记录步骤身份/耗时；不输出提示词、答案、工具正文或凭据。
+  const step = async (label, action) => {
+    const started = Date.now();
+    console.log(`Native acceptance ${phase}: ${label} start`);
+    try {
+      const result = await action();
+      console.log(
+        `Native acceptance ${phase}: ${label} complete elapsedMs=${Date.now() - started}`,
+      );
+      return result;
+    } catch (error) {
+      console.log(`Native acceptance ${phase}: ${label} failed elapsedMs=${Date.now() - started}`);
+      throw error;
+    }
+  };
   const errors = [];
   page.on("pageerror", (error) => errors.push(error.message));
   const isolation = async () => {
@@ -81,8 +96,10 @@ try {
   let receipt;
   if (phase === "live") {
     const before = await taskIds(page);
-    const mainTask = await exerciseInitialDraft(page, runtime, manifest, before, input);
-    const names = await exerciseSkills(page, runtime, manifest);
+    const mainTask = await step("initial-draft", () =>
+      exerciseInitialDraft(page, runtime, manifest, before, input),
+    );
+    const names = await step("skills", () => exerciseSkills(page, runtime, manifest));
 
     // 空参数不能靠表单预览或模型的通用回复伪装已完成。
     const callsBefore = (await diagnostics(runtime)).calls.length;
@@ -117,9 +134,9 @@ try {
     );
     assert.equal((await diagnostics(runtime)).calls.length, callsBefore);
 
-    const indexIdentities = await exerciseIndexes(page, runtime, manifest);
+    const indexIdentities = await step("indexes", () => exerciseIndexes(page, runtime, manifest));
 
-    await exerciseGoal(page, runtime, manifest);
+    await step("goal", () => exerciseGoal(page, runtime, manifest));
 
     await orchestrate(page, runtime, "/loop", "启动有限循环", {
       循环限制: "2",
@@ -180,8 +197,18 @@ try {
     await page.evaluate((id) => document.querySelector(`[data-testid="${id}"]`)?.click(), mainTask);
     const beforeTeam = await journalEvidence(runtime);
     await orchestrate(page, runtime, "/team", null, { 任务正文: values.team });
-    await timelineContains(page, /NATIVE_TEAM_REPORT_731/u);
-    await idle(page);
+    await step("team-report", async () => {
+      // 根因：旧发送分支可在 Team 异步准入前仍可见；先等本次真实报告标题，
+      // 再等 stop/live tail 退出，最后才允许历史 reveal 脱离贴底。
+      await page
+        .getByTestId("v4-timeline")
+        .getByText("NATIVE_TEAM_REPORT_731", {
+          exact: true,
+        })
+        .waitFor({ state: "visible" });
+      await idle(page);
+      await timelineContains(page, /NATIVE_TEAM_REPORT_731/u);
+    });
     const teamData = await eventually(
       () => diagnostics(runtime),
       (data) => {
@@ -208,7 +235,7 @@ try {
     );
     assert.equal(await readFile(paths.attachment, "utf8"), values.attachment);
 
-    await deleteIndexes(page, runtime, indexIdentities, isolatedTask);
+    await step("delete-indexes", () => deleteIndexes(page, runtime, indexIdentities, isolatedTask));
     const deletedIndexes = await indexSnapshot(runtime);
     dialog = await panel(page, runtime, "知识与代码索引");
     await dialog
@@ -218,29 +245,33 @@ try {
       .getByRole("button", { name: "通过当前会话模型使用 repo 工具", exact: true })
       .click();
     await dialog.waitFor({ state: "hidden" });
-    await visibleText(page, "NATIVE_REPO_UNAVAILABLE_731");
-    await idle(page);
+    await step("missing-repo-reply", () => visibleText(page, "NATIVE_REPO_UNAVAILABLE_731"));
+    await step("missing-repo-idle", () => idle(page));
     const failedRepo = await diagnostics(runtime);
     // 设备成功返回 missing，不代表索引查询成功；必须展示真实缺索引原因。
-    await assertToolResult(
-      page,
-      runtime,
-      "repo-search-failed-docs",
-      "Execute by writing JSON to xd://repo.",
+    await step("missing-repo-docs", () =>
+      assertToolResult(
+        page,
+        runtime,
+        "repo-search-failed-docs",
+        "Execute by writing JSON to xd://repo.",
+      ),
     );
-    await assertToolResult(
-      page,
-      runtime,
-      "repo-search-failed",
-      "No repository index exists. Open /repo to build one; use read/grep for current files meanwhile.",
+    await step("missing-repo-result", () =>
+      assertToolResult(
+        page,
+        runtime,
+        "repo-search-failed",
+        "No repository index exists. Open /repo to build one; use read/grep for current files meanwhile.",
+      ),
     );
-    await assertRepoHistory(page, runtime, failedRepo, manifest);
+    await step("repo-history", () => assertRepoHistory(page, runtime, failedRepo, manifest));
     assert.deepEqual(
       await indexSnapshot(runtime),
       deletedIndexes,
       "A failed model lookup must not recreate deleted native indexes",
     );
-    await assertNoSkillLeak(page, manifest);
+    await step("final-skill-leak", () => assertNoSkillLeak(page, manifest));
     assert.equal(
       (await diagnostics(runtime)).acceptance.stopTurns,
       1,
@@ -259,7 +290,7 @@ try {
       journalPhase: "live",
       journalsObservedAt: new Date().toISOString(),
       journals: await journalEvidence(runtime),
-      commandOutputs: await commandRows(page),
+      commandOutputs: await step("capture-command-history", () => commandRows(page)),
       repoEvidence: failedRepo,
       replies: [
         "NATIVE_ATTACHMENT_CONSUMED_731",
@@ -299,8 +330,9 @@ try {
       (id) => document.querySelector(`[data-testid="${id}"]`)?.click(),
       receipt.mainTask,
     );
-    for (const reply of receipt.replies) await visibleText(page, reply);
-    await assertCommandHistory(page, receipt.commandOutputs);
+    for (const [index, reply] of receipt.replies.entries())
+      await step(`recover-reply-${index}`, () => visibleText(page, reply));
+    await step("recover-command-history", () => assertCommandHistory(page, receipt.commandOutputs));
     // Compact read summaries recover in the GUI; journal/HTTP evidence retains all three bodies.
     await assertRepoHistory(page, runtime, receipt.repoEvidence, manifest);
     await timelineContains(page, /NATIVE_TEAM_REPORT_731/u);

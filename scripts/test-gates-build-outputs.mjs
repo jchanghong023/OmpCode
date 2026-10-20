@@ -1,6 +1,6 @@
-import { readFile } from "node:fs/promises";
+import { workspaceRootManifest } from "./test-gates-workspace-metadata.mjs";
 import { createRequire } from "node:module";
-import { dirname, isAbsolute, relative, resolve } from "node:path";
+import { isAbsolute, relative, resolve } from "node:path";
 
 const require = createRequire(import.meta.url);
 // The installed compiler is TS7 (native CLI); TS6 supplies the compatible public
@@ -9,6 +9,37 @@ const ts = require("@typescript/typescript6");
 const workspace = resolve(import.meta.dirname, "..");
 // 同一入口会构造多级计划；配置元数据只读且最终快照校验负责拒绝运行中的源码变化。
 const parsedConfigs = new Map();
+const configTexts = new Map();
+
+// The generator consumes the same parse as output discovery, including every
+// config read (extends may be an array or a package) and included source file.
+// Keep recoverable diagnostics on the result: dependency discovery retains its
+// existing tolerance, while compiler output planning rejects them below.
+export function parsedCompilerConfig(path) {
+  let config = resolve(workspace, path);
+  if (!config.endsWith(".json")) config = resolve(config, "tsconfig.json");
+  if (parsedConfigs.has(config)) return parsedConfigs.get(config);
+  const readFiles = new Set();
+  const parsed = ts.getParsedCommandLineOfConfigFile(
+    config,
+    {},
+    {
+      ...ts.sys,
+      readFile(path) {
+        const absolute = resolve(path);
+        readFiles.add(absolute);
+        if (!configTexts.has(absolute)) configTexts.set(absolute, ts.sys.readFile(absolute));
+        return configTexts.get(absolute);
+      },
+      onUnRecoverableConfigFileDiagnostic(error) {
+        throw new Error(ts.flattenDiagnosticMessageText(error.messageText, "\n"));
+      },
+    },
+  );
+  const result = { config, parsed, readFiles };
+  parsedConfigs.set(config, result);
+  return result;
+}
 
 function workspacePath(path) {
   const value = relative(workspace, path).replaceAll("\\", "/");
@@ -21,30 +52,15 @@ export async function compilerOutputs(configPaths, { build = false, noEmit = fal
   const outputs = new Set();
   const visited = new Set();
   function visit(path) {
-    let config = resolve(workspace, path);
-    if (!config.endsWith(".json")) config = resolve(config, "tsconfig.json");
+    const { config, parsed } = parsedCompilerConfig(path);
     if (visited.has(config)) return;
     visited.add(config);
-    let parsed = parsedConfigs.get(config);
-    if (!parsed) {
-      const source = ts.readConfigFile(config, ts.sys.readFile);
-      if (source.error)
-        throw new Error(ts.flattenDiagnosticMessageText(source.error.messageText, "\n"));
-      parsed = ts.parseJsonConfigFileContent(
-        source.config,
-        ts.sys,
-        dirname(config),
-        undefined,
-        config,
+    if (parsed.errors.length)
+      throw new Error(
+        parsed.errors
+          .map((error) => ts.flattenDiagnosticMessageText(error.messageText, "\n"))
+          .join("\n"),
       );
-      if (parsed.errors.length)
-        throw new Error(
-          parsed.errors
-            .map((error) => ts.flattenDiagnosticMessageText(error.messageText, "\n"))
-            .join("\n"),
-        );
-      parsedConfigs.set(config, parsed);
-    }
     const options = {
       ...parsed.options,
       configFilePath: config,
@@ -64,7 +80,7 @@ export async function compilerOutputs(configPaths, { build = false, noEmit = fal
 }
 
 export async function annotateBuildOutputs(stages) {
-  const root = JSON.parse(await readFile(resolve(workspace, "package.json"), "utf8"));
+  const root = await workspaceRootManifest();
   const typecheckProjects = root.scripts.typecheck
     .split(/\s+/u)
     .slice(2)

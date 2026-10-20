@@ -3,6 +3,8 @@ import { join, matchesGlob, relative, resolve } from "node:path";
 import { createRequire } from "node:module";
 import { fastPlan, slowPlan } from "./test-gates-plan.mjs";
 import { workspaceBuildPlan } from "./test-gates-workspace-plan.mjs";
+import { parsedCompilerConfig } from "./test-gates-build-outputs.mjs";
+import { workspacePackageManifests } from "./test-gates-workspace-metadata.mjs";
 import {
   bazelizeStages,
   bazelTargetName,
@@ -11,75 +13,39 @@ import {
 } from "./test-gates-bazel.mjs";
 import { createSourceDependencyAnalyzer } from "./test-gates-source-dependencies.mjs";
 import { createStageEntrypointReader, staticModuleInputs } from "./test-gates-static-modules.mjs";
+import { graphStage } from "./test-gates-bazel-graph.mjs";
+import { excludes, rootFiles, repositoryGlobIncludes } from "./test-gates-bazel-graph-inputs.mjs";
 
 const ts = createRequire(import.meta.url)("@typescript/typescript6");
 const workspace = resolve(".");
 const stageEntrypoints = createStageEntrypointReader(workspace);
 
-const excludes = [
-  "**/node_modules/**",
-  "**/dist/**",
-  "**/dist-*/**",
-  "**/out/**",
-  "**/*.tsbuildinfo",
-  "**/coverage/**",
-  "**/.git",
-  ".git",
-  "**/.git/**",
-  ".git/**",
-  "bazel-*/**",
-  "bazel-*",
-  "gates/inputs/**",
-  "gates/toolchain.json",
-  ".gates-bazel/**",
-  ".worktrees/**",
-  ".tmp*/**",
-  ".run-logs/**",
-  ".zcode-runtime/**",
-  "**/bundled-agents/**",
-  "**/bundled-resources/**",
-  "**/bundled-tools/**",
-  "**/.e2e-*/**",
-  "**/mock-cdn/**",
-  "**/.test-real-e2e-workspace/**",
-  "**/.omp-release-cache/**",
-  ".cache/**",
-  ".pnpm-store/**",
-  ".electron-builder-cache/**",
-  ".electron-cache/**",
-  ".npm-cache/**",
-  "prebuilds/**",
-  "z-work/**",
-  "openclaw/**",
-  "apps/**",
-];
-const rootFiles = [
-  "package.json",
-  "pnpm-workspace.yaml",
-  "pnpm-lock.yaml",
-  "mise.toml",
-  "tsconfig.base.json",
-  ".oxlintrc.json",
-  ".env.example",
-  ".env.development",
-  ".env.production",
-];
-const manifests = new Map();
-for (const entry of await readdir("packages", { withFileTypes: true })) {
-  if (!entry.isDirectory()) continue;
-  try {
-    manifests.set(
-      entry.name,
-      JSON.parse(await readFile(join("packages", entry.name, "package.json"), "utf8")),
-    );
-  } catch (error) {
-    if (error.code !== "ENOENT") throw error;
-  }
-}
+const argument = (name) => {
+  const index = process.argv.indexOf(name);
+  if (index < 0) return undefined;
+  const value = process.argv[index + 1];
+  if (!value || value.startsWith("--")) throw new Error(`${name} requires a pathname`);
+  return value;
+};
+const output = argument("--output") ?? "BUILD.bazel";
+const changedFilesControl = argument("--changed-files-control");
+const changedFiles = changedFilesControl
+  ? JSON.parse(await readFile(changedFilesControl, "utf8")).stage.changedFiles
+  : undefined;
+if (changedFilesControl && !Array.isArray(changedFiles))
+  throw new Error("Graph control requires stage.changedFiles");
+const manifests = await workspacePackageManifests();
 const names = new Map([...manifests].map(([directory, manifest]) => [manifest.name, directory]));
 const edges = new Map();
 const packageConfigs = new Map();
-const configTextCache = new Map();
+const configEntries = new Map();
+const directories = [...manifests.keys()];
+for (let offset = 0; offset < directories.length; offset += 8) {
+  const batch = directories.slice(offset, offset + 8);
+  const entries = await Promise.all(batch.map((directory) => readdir(join("packages", directory))));
+  for (let index = 0; index < batch.length; index++)
+    configEntries.set(batch[index], entries[index]);
+}
 for (const [directory, manifest] of manifests) {
   const dependencies = new Set(
     Object.keys({
@@ -92,31 +58,15 @@ for (const [directory, manifest] of manifests) {
       .filter(Boolean),
   );
   // 复用 TypeScript 官方解析器跟踪 references 和 extends（含数组及包配置），不手写 JSON 正则。
-  for (const entry of await readdir(join("packages", directory))) {
+  for (const entry of configEntries.get(directory)) {
     if (!/^tsconfig.*\.json$/u.test(entry)) continue;
-    const configs = new Set();
-    const parsed = ts.getParsedCommandLineOfConfigFile(
+    const { config, parsed, readFiles } = parsedCompilerConfig(
       resolve("packages", directory, entry),
-      {},
-      {
-        ...ts.sys,
-        readFile(path) {
-          configs.add(path);
-          const absolute = resolve(path);
-          if (!configTextCache.has(absolute)) configTextCache.set(absolute, ts.sys.readFile(path));
-          return configTextCache.get(absolute);
-        },
-        onUnRecoverableConfigFileDiagnostic(error) {
-          throw new Error(ts.flattenDiagnosticMessageText(error.messageText, "\n"));
-        },
-      },
     );
+    const configs = new Set(readFiles);
     if (!packageConfigs.has(directory)) packageConfigs.set(directory, []);
-    packageConfigs.get(directory).push({
-      path: resolve("packages", directory, entry),
-      files: parsed?.fileNames ?? [],
-    });
-    for (const reference of parsed?.projectReferences ?? []) configs.add(reference.path);
+    packageConfigs.get(directory).push({ path: config, files: parsed.fileNames });
+    for (const reference of parsed.projectReferences ?? []) configs.add(reference.path);
     for (const config of configs) {
       const path = relative(workspace, config).replaceAll("\\", "/");
       const target = path.match(/^packages\/([^/]+)/u)?.[1];
@@ -160,7 +110,7 @@ function sourcePackages(stage) {
   return [...found].sort();
 }
 const stages = [
-  ...bazelizeStages([...(await fastPlan()), ...(await slowPlan())]).flatMap(
+  ...bazelizeStages([...(await fastPlan({ changedFiles })), ...(await slowPlan())]).flatMap(
     (group) => group.bazel.stages,
   ),
   ...(await workspaceBuildPlan({ bootstrap: false })),
@@ -203,6 +153,18 @@ const retainedCodePatterns = ["test", "tests", "fixtures", "__fixtures__", "conf
     codePatterns.map((pattern) => pattern.replace("**/", `**/${directory}/**/`)),
   )
   .concat(codePatterns.map((pattern) => pattern.replace("**/*.", "**/*.config.")));
+// Pattern sets are fixed for this generation; classify a path only when needed.
+const sourcePatterns = {
+  code: codePatterns,
+  excluded: fileExcludes,
+  retained: retainedCodePatterns,
+};
+const sourceClassifications = new Map();
+function sourceMatches(input, kind) {
+  let fact = sourceClassifications.get(input);
+  if (!fact) sourceClassifications.set(input, (fact = {}));
+  return (fact[kind] ??= sourcePatterns[kind].some((pattern) => matchesGlob(input, pattern)));
+}
 const analyzeSources = createSourceDependencyAnalyzer({
   workspace,
   excludes,
@@ -219,66 +181,59 @@ function fileDependencies(stage) {
   });
 }
 
+// Assemble each stage's entry/lifecycle/producer analyses once. The underlying
+// analyzer caches file facts; both input emission and fallback selection consume
+// this same closure rather than independently rediscovering dependencies.
+const stageSourceCache = new Map();
+function stageSourceDependencies(stage) {
+  if (stageSourceCache.has(stage)) return stageSourceCache.get(stage);
+  const inputs = new Set(stage.sourceInputs ?? []);
+  let conservative = false;
+  function include(entry, args = stage.args) {
+    const analysis = fileDependencies({ ...stage, testFile: entry, args });
+    conservative ||= analysis.conservative;
+    for (const input of analysis.inputs) inputs.add(input);
+  }
+  for (const entry of stageEntrypoints(stage)) include(entry);
+  if (isBuildStage(stage) && !hasMetadataContract(stage)) {
+    for (const directory of sourcePackages(stage))
+      for (const config of packageConfigs.get(directory) ?? [])
+        for (const file of config.files) {
+          const entry = repoPath(file);
+          if (runnableEntries.has(entry)) include(entry, ["--tsconfig", config.path]);
+        }
+  }
+  const result = { inputs, conservative };
+  stageSourceCache.set(stage, result);
+  return result;
+}
+
 function repoPath(path) {
   return relative(workspace, path).replaceAll("\\", "/");
 }
 
-function hasPreciseSources(stage) {
-  return Boolean(stage.testFile && !fileDependencies(stage).conservative);
-}
 function stageInputs(stage) {
-  if (hasMetadataContract(stage)) {
-    // collectBuildMetadata's explicit product contract reads only manifests,
-    // installed tooling identity and HEAD, not product sources or fixtures.
-    // HEAD/toolchain identity remains owned by the existing stage/toolchain.
-    const inputs = new Set();
-    for (const entry of stageEntrypoints(stage))
-      for (const input of fileDependencies({ ...stage, testFile: entry }).inputs) inputs.add(input);
-    return [...inputs].sort();
-  }
+  // 显式实际读盘契约/元数据只消费自身闭包；配置和工具链仍由公共声明保留。
+  if (stage.sourceInputs || hasMetadataContract(stage))
+    return [...stageSourceDependencies(stage).inputs].sort();
   if (!prunesEntries(stage)) return [];
-  const inputs = new Set();
   const entries = new Set(stageEntrypoints(stage));
   const packages = sourcePackages(stage);
-  const precise = hasPreciseSources(stage);
-  for (const entry of entries)
-    for (const input of fileDependencies({ ...stage, testFile: entry }).inputs) inputs.add(input);
-  if (isBuildStage(stage)) {
-    // A producer can legitimately compile a test entry. Preserve every entry
-    // selected by its packages' parsed configs, including project references
-    // already represented by sourcePackages' dependency closure.
-    for (const directory of packages)
-      for (const config of packageConfigs.get(directory) ?? [])
-        for (const file of config.files) {
-          const entry = repoPath(file);
-          if (!runnableEntries.has(entry)) continue;
-          for (const input of fileDependencies({
-            ...stage,
-            testFile: entry,
-            args: ["--tsconfig", config.path],
-          }).inputs)
-            inputs.add(input);
-        }
-  }
-  // The shared filegroups already own ordinary source/config/fixture inputs.
-  // Keep explicit entries plus dependencies outside those globs, rather than
-  // repeating the full product import closure on every target.
+  const precise = stage.testFile && !stageSourceDependencies(stage).conservative;
+  const { inputs } = stageSourceDependencies(stage);
+  // 产品源码/配置/fixture 仍由各产品 scope 共享；scripts/gates 不再有公共
+  // glob，入口静态闭包及实际读盘得到的这些路径必须逐目标显式保留。
   return [...inputs]
     .filter((input) => {
       if (entries.has(input) || runnableEntries.has(input)) return true;
-      if (
-        precise &&
-        codePatterns.some((pattern) => matchesGlob(input, pattern)) &&
-        !retainedCodePatterns.some((pattern) => matchesGlob(input, pattern))
-      )
+      if (input.startsWith("scripts/") || input.startsWith("gates/") || input === "BUILD.bazel")
         return true;
+      if (precise && sourceMatches(input, "code") && !sourceMatches(input, "retained")) return true;
       if (rootFiles.includes(input)) return false;
       const covered =
         !packages.length ||
-        input.startsWith("scripts/") ||
-        input.startsWith("gates/") ||
         packages.some((directory) => input.startsWith(`packages/${directory}/`));
-      return !covered || fileExcludes.some((pattern) => matchesGlob(input, pattern));
+      return !covered || sourceMatches(input, "excluded");
     })
     .sort();
 }
@@ -289,26 +244,27 @@ for (const stage of stages) {
     throw new Error(`Bazel target collision ${target}`);
   unique.set(target, stage);
 }
-const scopes = new Map([
-  ["repo", ["**/*"]],
-  ["runner", ["scripts/**", "gates/**"]],
-  ["runner-files", ["scripts/**", "gates/**"]],
-]);
+const scopes = new Map([["repo", ["**/*"]]]);
 const scopeOf = new Map();
 for (const [target, stage] of unique) {
+  if (stage.sourceInputs) {
+    if (!scopes.has("command")) scopes.set("command", rootFiles);
+    scopeOf.set(target, "command");
+    continue;
+  }
   if (hasMetadataContract(stage)) {
-    const key = "metadata";
-    if (!scopes.has(key)) scopes.set(key, ["packages/desktop/package.json"]);
-    scopeOf.set(target, key);
+    if (!scopes.has("metadata")) scopes.set("metadata", ["packages/desktop/package.json"]);
+    scopeOf.set(target, "metadata");
     continue;
   }
   const packages = sourcePackages(stage);
   const base = packages.length ? `pkg-${packages.join("-")}` : "repo";
-  const key = hasPreciseSources(stage)
-    ? `resources-${base}`
-    : prunesEntries(stage)
-      ? `files-${base}`
-      : base;
+  const key =
+    stage.testFile && !stageSourceDependencies(stage).conservative
+      ? `resources-${base}`
+      : prunesEntries(stage)
+        ? `files-${base}`
+        : base;
   if (!scopes.has(key))
     scopes.set(
       key,
@@ -316,79 +272,126 @@ for (const [target, stage] of unique) {
     );
   scopeOf.set(target, key);
 }
-// Partition the repository glob at the root so Bazel need not walk subtrees
-// already wholly excluded. Keep symlinks/unknown entry types: Bazel, not Node,
-// decides whether they expose source files or cross a package boundary.
-const excludedRootTrees = excludes.flatMap((pattern) => {
-  if (!pattern.endsWith("/**")) return [];
-  const segment = pattern.startsWith("**/") ? pattern.slice(3, -3) : pattern.slice(0, -3);
-  if (!segment || segment.includes("/") || segment === "**") return [];
-  const expression = segment
-    .split("*")
-    .map((part) => part.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"))
-    .join(".*");
-  return [{ segment, expression: new RegExp(`^${expression}$`, "u") }];
-});
-const repoIncludes = [
-  "*",
-  ...(await readdir(workspace, { withFileTypes: true }))
-    .filter(
-      (entry) =>
-        !entry.isFile() &&
-        !excludedRootTrees.some(
-          ({ segment, expression }) =>
-            (!entry.name.startsWith(".") || segment === "*" || segment.startsWith(".")) &&
-            expression.test(entry.name),
-        ),
-    )
-    .map((entry) => `${entry.name}/**`)
-    .sort(),
-];
+const repoIncludes = await repositoryGlobIncludes(workspace);
+const runnableScopeExcludes = [...fileExcludes, "scripts/**", "gates/**", "BUILD.bazel"];
+const resourceScopeExcludes = [...runnableScopeExcludes, ...codePatterns];
+const fileScopeIncludes = scopes.has("files-repo")
+  ? repoIncludes
+  : [
+      ...new Set(
+        [...scopes].filter(([key]) => key.startsWith("files-")).flatMap(([, includes]) => includes),
+      ),
+    ].sort();
+function retainedPatterns(includes) {
+  return includes.flatMap((include) =>
+    retainedCodePatterns.map((pattern) =>
+      include === "**/*" ? pattern : pattern.replace("packages/**/", `${include.slice(0, -3)}/**/`),
+    ),
+  );
+}
+const resourcePackageIncludes = [
+  ...new Set(
+    [...scopes]
+      .filter(([key]) => key.startsWith("resources-") && key !== "resources-repo")
+      .flatMap(([, includes]) => includes),
+  ),
+].sort();
 const lines = [
   "# Generated by scripts/test-gates-bazel-sync.mjs; source scopes follow workspace manifests and tsconfig references.",
-  'load("//:gates/rules.bzl", "gate_test", "gate_action")',
+  'load("//:gates/rules.bzl", "gate_test", "gate_action", "gate_source_scopes")',
+  "",
+  // 排除的根树不必递归遍历；点目录、未知目录和目录符号链接仍由原生 glob 发现。
+  `_REPOSITORY_FILES = glob(${JSON.stringify(repoIncludes)}, exclude = ${JSON.stringify(excludes)}, allow_empty = True)`,
+  "_REPOSITORY_SCOPES = gate_source_scopes(_REPOSITORY_FILES)",
   "",
 ];
-// 全仓 glob 已包含根配置；再拼接会触发 Bazel duplicate label，包作用域仍需显式依赖根配置。
-for (const [key, includes] of scopes) {
-  const precise = key.startsWith("resources-");
-  const fileScope = precise || key.startsWith("files-") || key === "runner-files";
-  const sharedCode = precise
-    ? includes.flatMap((include) =>
-        retainedCodePatterns.map((pattern) =>
-          include === "**/*"
-            ? pattern
-            : pattern.replace("packages/**/", `${include.slice(0, -3)}/**/`),
-        ),
-      )
-    : [];
-  const scopeExcludes = precise
-    ? [...fileExcludes, ...codePatterns]
-    : fileScope
-      ? fileExcludes
-      : excludes;
-  const rootScope = ["repo", "files-repo", "resources-repo"].includes(key);
-  const globIncludes =
-    rootScope && includes.length === 1 && includes[0] === "**/*" ? repoIncludes : includes;
+if (fileScopeIncludes.length)
   lines.push(
-    `filegroup(name = "src-${key}", srcs = glob(${JSON.stringify(globIncludes)}, exclude = ${JSON.stringify(scopeExcludes)}${rootScope ? ", allow_empty = True" : ""})${precise ? ` + glob(${JSON.stringify(sharedCode)}, exclude = ${JSON.stringify(fileExcludes)}, allow_empty = True)` : ""} + ${JSON.stringify(rootScope ? [] : rootFiles)})`,
+    // 所有包组合共享一次文件分类，避免为每组依赖闭包重做递归 glob。
+    `_FILE_SCOPES = gate_source_scopes(glob(${JSON.stringify(fileScopeIncludes)}, exclude = ${JSON.stringify(runnableScopeExcludes)}, allow_empty = True))`,
+    "",
+  );
+if (resourcePackageIncludes.length)
+  lines.push(
+    // 保留代码仍按包内相对路径匹配，不能把名为 test/config 的包根误当作 fixture。
+    `_RESOURCE_SCOPES = gate_source_scopes(glob(${JSON.stringify(resourcePackageIncludes)}, exclude = ${JSON.stringify(resourceScopeExcludes)}, allow_empty = True) + glob(${JSON.stringify([...new Set(retainedPatterns(resourcePackageIncludes))])}, exclude = ${JSON.stringify(fileExcludes)}, allow_empty = True))`,
+    "",
+  );
+// 全仓集合已包含根配置；只有包分区仍需显式依赖根配置。
+for (const [key, includes] of scopes) {
+  // 内联准备原先没有文件入口，被错误归入全仓 scope；只对完整声明的读盘契约收窄。
+  if (key === "command") {
+    lines.push(`filegroup(name = "src-${key}", srcs = ${JSON.stringify(includes)})`, "");
+    continue;
+  }
+  if (key === "repo") {
+    lines.push('filegroup(name = "src-repo", srcs = _REPOSITORY_FILES)', "");
+    continue;
+  }
+  const precise = key.startsWith("resources-");
+  const fileScope = precise || key.startsWith("files-");
+  const rootScope = key === "files-repo" || key === "resources-repo";
+  if (key === "metadata" || key === "resources-repo") {
+    // 根资源 scope 的保留模式不同于包内模式，保持原生匹配语义，不扩大输入集合。
+    lines.push(
+      `filegroup(name = "src-${key}", srcs = glob(${JSON.stringify(rootScope ? repoIncludes : includes)}, exclude = ${JSON.stringify(precise ? resourceScopeExcludes : excludes)}${rootScope ? ", allow_empty = True" : ""})${precise ? ` + glob(${JSON.stringify(retainedPatterns(includes))}, exclude = ${JSON.stringify(fileExcludes)}, allow_empty = True)` : ""} + ${JSON.stringify(rootScope ? [] : rootFiles)})`,
+      "",
+    );
+    continue;
+  }
+  const partition = precise
+    ? "_RESOURCE_SCOPES"
+    : fileScope
+      ? "_FILE_SCOPES"
+      : "_REPOSITORY_SCOPES";
+  const sources = rootScope
+    ? `${partition}[""]`
+    : includes
+        .map((include) => `${partition}.get(${JSON.stringify(include.slice(9, -3))}, [])`)
+        .join(" + ");
+  lines.push(
+    `filegroup(name = "src-${key}", srcs = ${sources} + ${JSON.stringify(rootScope ? [] : rootFiles)})`,
     "",
   );
 }
-// 实际测试包装器跨包导入的 helper 必须共享失效，不能把动态 fixture 读盘扩大成全包输入。
-const wrapperModules = staticModuleInputs(workspace, ["scripts/test-gates-bazel-exec.mjs"]).filter(
-  (input) => !input.startsWith("scripts/") && !input.startsWith("gates/"),
-);
-lines.push(`filegroup(name = "src-test-wrapper", srcs = ${JSON.stringify(wrapperModules)})`, "");
+// 构建/测试包装器各自共享完整本地静态闭包（含跨包 helper），不共享其动态
+// fixture 读盘，也不因生成器或不相干脚本变化让所有目标失效。
+for (const [key, entry] of [
+  ["build", "scripts/test-gates-action.mjs"],
+  ["test", "scripts/test-gates-bazel-exec.mjs"],
+]) {
+  const inputs = staticModuleInputs(workspace, [entry]);
+  lines.push(`filegroup(name = "src-${key}-runner", srcs = ${JSON.stringify(inputs)})`, "");
+}
 lines.push('filegroup(name = "gate-toolchain", srcs = ["gates/toolchain.json"])', "");
+// 图输入复用同一全仓集合，仅剔除生成物 BUILD；根目录分区由同一生成所有者自动更新。
+lines.push(
+  'filegroup(name = "src-bazel-graph", srcs = [source for source in _REPOSITORY_FILES if source != "BUILD.bazel"])',
+  "",
+  "gate_action(",
+  `    name = ${JSON.stringify(bazelTargetName(graphStage.id))},`,
+  `    stage = ${JSON.stringify(bazelTargetName(graphStage.id))},`,
+  `    data = ${JSON.stringify([`gates/inputs/${bazelTargetName(graphStage.id)}.json`, ":gate-toolchain", ":src-bazel-graph"])},`,
+  ")",
+  "",
+);
+// Only consumers with an unprovable entry/lifecycle/producer closure get this
+// fallback. It includes ordinary helpers as well as runnable entries, without
+// restoring a public scripts glob to precise tests or metadata targets.
+lines.push(
+  'filegroup(name = "src-conservative-scripts", srcs = [source for source in _REPOSITORY_FILES if source.startswith("scripts/") or source.startswith("gates/")])',
+  "",
+);
 for (const [target, stage] of [...unique].sort(([a], [b]) => a.localeCompare(b))) {
   const dependencies = stage.dependsOn ?? [];
   const data = [
     `gates/inputs/${target}.json`,
     ":gate-toolchain",
-    prunesEntries(stage) ? ":src-runner-files" : ":src-runner",
+    isBuildStage(stage) || stage.preparation ? ":src-build-runner" : ":src-test-runner",
     `:src-${scopeOf.get(target)}`,
-    ...(!isBuildStage(stage) ? [":src-test-wrapper"] : []),
+    ...(!hasMetadataContract(stage) && stageSourceDependencies(stage).conservative
+      ? [":src-conservative-scripts"]
+      : []),
     ...stageInputs(stage),
     ...dependencies.map((id) => `:${bazelTargetName(id)}`),
   ];
@@ -396,13 +399,20 @@ for (const [target, stage] of [...unique].sort(([a], [b]) => a.localeCompare(b))
   // dependent command. Their semantic contents must also be native inputs.
   for (const id of dependencies) data.push(`gates/inputs/${bazelTargetName(id)}.json`);
   const noCache = isUncachedStage(stage);
+  // exclusive 交给 Bazel 原生调度：声明该测试目标须在无其他测试并发时单独执行；
+  // 这里只映射计划属性，不新增任何外层调度器。
+  const tags = [
+    ...(noCache ? ["no-cache", "no-remote"] : []),
+    ...(stage.exclusive ? ["exclusive"] : []),
+  ];
   lines.push(
     `${isBuildStage(stage) ? "gate_action" : "gate_test"}(`,
     `    name = ${JSON.stringify(target)},`,
     `    stage = ${JSON.stringify(target)},`,
     ...(!isBuildStage(stage) ? ['    timeout = "eternal",'] : []),
+    ...(stage.preparation ? ["    preparation = True,"] : []),
     `    data = ${JSON.stringify([...new Set(data)])},`,
-    ...(noCache ? ['    tags = ["no-cache", "no-remote"],'] : []),
+    ...(tags.length ? [`    tags = ${JSON.stringify(tags)},`] : []),
     ")",
     "",
   );
@@ -410,11 +420,11 @@ for (const [target, stage] of [...unique].sort(([a], [b]) => a.localeCompare(b))
 const generated = lines.join("\n");
 let existing;
 try {
-  existing = await readFile("BUILD.bazel", "utf8");
+  existing = await readFile(output, "utf8");
 } catch (error) {
   if (error.code !== "ENOENT") throw error;
 }
-if (existing !== generated) await writeFile("BUILD.bazel", generated);
+if (existing !== generated) await writeFile(output, generated);
 console.log(
-  `BUILD.bazel regenerated: ${unique.size} native targets; ${scopes.size} dependency scopes`,
+  `${output} regenerated: ${unique.size + 1} native targets; ${scopes.size} dependency scopes`,
 );

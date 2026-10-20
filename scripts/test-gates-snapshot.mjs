@@ -12,17 +12,19 @@ export async function gitText(args) {
 }
 
 export async function snapshot() {
-  const head = (await gitText(["rev-parse", "HEAD"])).trim();
-  const diff = await gitText(["diff", "--binary", "HEAD"]);
-  const untracked = (await gitText(["ls-files", "--others", "--exclude-standard", "-z"]))
-    .split("\0")
-    .filter(Boolean)
-    .sort();
+  const [headText, diff, untrackedText, statusText] = await Promise.all([
+    gitText(["rev-parse", "HEAD"]),
+    gitText(["diff", "--binary", "HEAD"]),
+    gitText(["ls-files", "--others", "--exclude-standard", "-z"]),
+    gitText(["status", "--short"]),
+  ]);
+  const head = headText.trim();
+  const untracked = untrackedText.split("\0").filter(Boolean).sort();
   const hash = createHash("sha256").update(diff);
   for (const name of untracked) {
     hash.update(name).update(await readFile(name));
   }
-  const status = (await gitText(["status", "--short"])).trim();
+  const status = statusText.trim();
   return {
     head,
     contentHash: hash.digest("hex"),

@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { withPinnedNodePath } from "./mise-toolchain-env.mjs";
 import { immediateTestArguments } from "./test-gates-test-reporter.mjs";
 import { gateBudget } from "./test-gates-clock.mjs";
+import { cleanupOwnedProcesses } from "./test-gates-process-cleanup.mjs";
 
 export function windowsSystemToolPath(executable) {
   // PATH 搜索在短截止场景中实测耗尽清理余量；直接定位当前 Windows 的系统工具。
@@ -15,13 +16,15 @@ export function windowsSystemToolPath(executable) {
 }
 
 const activeChildren = new Set();
+const activeGateIO = new Set();
 const stoppingTrees = new WeakMap();
 const commandLabels = new WeakMap();
+const bazelClients = new WeakMap();
 const label = (value) =>
   String(value ?? "unlabelled")
     .replace(/[^a-zA-Z0-9_.:/-]/gu, "_")
     .slice(0, 160);
-const diagnostic = (text) => writeSync(1, `[gate] ${text}\n`);
+const diagnostic = (text) => writeSync(1, `[gate] ${text} epochMillis=${Date.now()}\n`);
 
 export function logGateProgress(clock, event, phase = "stages") {
   const timing = clock.read();
@@ -38,20 +41,38 @@ let commandsCancelled = false;
 let budgetTimedOut = false;
 
 export const budgetExpired = () => budgetTimedOut;
+// 文件 IO 与子进程共用此取消事实，避免取消后仍准入新的产物复制。
+export const commandsAreCancelled = () => commandsCancelled;
+
+export function trackGateIO(promise) {
+  activeGateIO.add(promise);
+  // finally 会产生另一个可能无人处理的拒绝 Promise；双方只撤销登记，错误仍归调用者。
+  const settled = () => activeGateIO.delete(promise);
+  promise.then(settled, settled);
+  return promise;
+}
 
 let deadlineWorker;
+let deadlineState;
+let ownedProcessAdmission = false;
+const markOwnedProcessAdmission = () => {
+  ownedProcessAdmission = true;
+  if (deadlineState && Atomics.compareExchange(deadlineState, 6, 0n, 1n) === 2n)
+    throw new Error("Gate deadline sealed process admission");
+};
 export function watchBudgetTargets(paths) {
+  if (paths.length) markOwnedProcessAdmission();
   deadlineWorker?.postMessage({ paths });
   return () => deadlineWorker?.postMessage({ paths: [] });
 }
 
-// Node 原生测试的跳过标记不可被 commandOutput 当作已验证通过。
-const skipSignalPattern = /# SKIP|(?:#|ℹ) skipped [1-9]|\[UNVERIFIED|requires .*; skipped/u;
+// 测试与资源准备共用跳过判据，任何执行器都不能把未验证输出当作通过。
+export const skipSignalPattern = /# SKIP|(?:#|ℹ) skipped [1-9]|\[UNVERIFIED|requires .*; skipped/u;
 
-// Bazel 批客户端 java 可能脱离已注册子进程；桥接模块按 --output_base 标记注册
-// 附加进程树终止器，stopAll 清理直跑子进程后一并执行，仍计入同一计费区间。
+// 仅保留调用方登记的附加工作进程清理；Bazel server 不属于进程注册表。
 const extraTreeKillers = new Set();
 export const registerTreeKiller = (killer) => {
+  markOwnedProcessAdmission();
   extraTreeKillers.add(killer);
   return () => extraTreeKillers.delete(killer);
 };
@@ -78,39 +99,24 @@ async function stopOwnedTrees(children) {
     const running = children.filter(
       (child) => child.pid && child.exitCode === null && child.signalCode === null,
     );
-    if (running.length && process.platform === "win32") {
-      // Windows 每次 /T 都枚举进程；并发 taskkill 争用会拖慢清理，批量终止本门禁所属根。
-      // 不能提前杀掉清理器再等待未终止的子进程；保留完整清理耗时和真实预算结果。
-      await new Promise((done, reject) => {
-        const killer = spawn(
-          windowsSystemToolPath("taskkill.exe"),
-          [...running.flatMap((child) => ["/PID", String(child.pid)]), "/T", "/F"],
-          { windowsHide: true, stdio: "ignore" },
-        );
-        killer.once("error", reject);
-        killer.once("exit", (code, signal) => {
-          // 批量 taskkill 与自然退出竞争时可能返回 128；清理成功只以全部 close 为准。
-          if (code !== 0)
-            diagnostic(
-              `tree-cleanup-taskkill-exit pid=${pids} exit=${code} signal=${signal ?? "none"} waiting=owned-close`,
-            );
-          done();
-        });
-      });
-    } else {
-      for (const child of running) {
-        try {
-          process.kill(-child.pid, "SIGKILL");
-        } catch (error) {
-          if (error.code !== "ESRCH") throw error;
-        }
-      }
-    }
+    if (running.length)
+      await cleanupOwnedProcesses(
+        running.map((child) => ({
+          pid: child.pid,
+          outputBase: bazelClients.get(child),
+        })),
+        {
+          powershell:
+            process.platform === "win32"
+              ? windowsSystemToolPath("WindowsPowerShell/v1.0/powershell.exe")
+              : undefined,
+        },
+      );
     await Promise.all(closed);
     diagnostic(`tree-cleanup-complete pid=${pids} seconds=${elapsed(started)}`);
   } catch (error) {
     diagnostic(
-      `tree-cleanup-failed method=${process.platform === "win32" ? "taskkill" : "kill"} pid=${pids} code=${label(error.code ?? "unknown")} exit=${error.exitCode ?? "n/a"} seconds=${elapsed(started)}`,
+      `tree-cleanup-failed method=owned-processes pid=${pids} code=${label(error.code ?? "unknown")} exit=${error.exitCode ?? "n/a"} seconds=${elapsed(started)}`,
     );
     throw error;
   }
@@ -120,16 +126,25 @@ export async function stopAll(clock) {
   // 首诊断到达时编译阶段尚未退出，taskkill 等待曾被误算为纯编译；清理必须显式计费。
   // 复用门禁时钟的活跃区间计数，和超时/finish 的清理重叠也只计同一段墙钟时间。
   const endCleanup = clock?.enter("check");
-  // 取消时先接管附加清理器：等待客户端 close 会触发阶段 finally 注销，
-  // 若在 await 后才读取集合，已脱离客户端的 Bazel server 就会漏清理。
+  // 首失败先接管附加工作清理；客户端 close 会触发阶段 finally 注销。
   const cancelledTreeKillers = commandsCancelled ? [...extraTreeKillers] : [];
+  // Node copy/chmod 无法随子进程终止；先接管已准入 IO，不能只等待可能挂起的阶段任务。
+  const admittedIO = [...activeGateIO];
   try {
-    await stopTrees([...activeChildren]);
-    // 附加进程树终止器只在取消/首失败路径启用：正常完成的收尾杀掉 Bazel server
-    // 会中断其动作缓存簿记落盘，下一轮出现 _tmp/actions 幻影输入（平台缺陷）。
-    await Promise.allSettled(cancelledTreeKillers.map((killer) => killer()));
+    const [trees] = await Promise.allSettled([stopTrees([...activeChildren])]);
+    // 取消只收口本轮已准入工作进程；正常或异常退出都不能接管 Bazel server。
+    // 单个清理器同步抛错也不能阻止其他已接管清理，保留原始错误。
+    const results = await Promise.allSettled(cancelledTreeKillers.map(async (killer) => killer()));
+    const failure =
+      trees.status === "rejected" ? trees : results.find((result) => result.status === "rejected");
+    if (failure) throw failure.reason;
   } finally {
-    endCleanup?.();
+    try {
+      // 只收口不可取消 IO，不将其拒绝改写成取消结果或覆盖原清理失败。
+      await Promise.allSettled(admittedIO);
+    } finally {
+      endCleanup?.();
+    }
   }
 }
 
@@ -146,8 +161,10 @@ export function startBudget(limitSeconds, clock, onTimeout, level = "fastcheck",
   gateBudget(level, limitSeconds);
   if (!clock?.read || !clock?.subscribe || !clock?.compileOnly)
     throw new Error("startBudget requires a gate clock");
-  const shared = new SharedArrayBuffer(BigInt64Array.BYTES_PER_ELEMENT * 5);
+  const shared = new SharedArrayBuffer(BigInt64Array.BYTES_PER_ELEMENT * 7);
   const state = new BigInt64Array(shared);
+  deadlineState = state;
+  Atomics.store(state, 6, ownedProcessAdmission ? 1n : 0n);
   const publish = () => {
     const timing = clock.read();
     Atomics.add(state, 4, 1n);
@@ -181,8 +198,9 @@ export function startBudget(limitSeconds, clock, onTimeout, level = "fastcheck",
   let hardTimer;
   let expiring = false;
   let cancelled = false;
+  let terminalCleanup = false;
   const expire = () => {
-    if (cancelled || expiring) return;
+    if (cancelled || expiring || terminalCleanup) return;
     if (paused() || used() < cleanupAt) return schedule();
     expiring = true;
     budgetTimedOut = true;
@@ -198,6 +216,21 @@ export function startBudget(limitSeconds, clock, onTimeout, level = "fastcheck",
     cancelCommands();
     logGateProgress(clock, "hard-deadline");
     onHardTimeout?.();
+    cleanupOwnedProcesses(
+      [...activeChildren]
+        .filter((child) => child.pid && child.exitCode === null && child.signalCode === null)
+        .map((child) => ({
+          pid: child.pid,
+          outputBase: bazelClients.get(child),
+        })),
+      {
+        powershell:
+          process.platform === "win32"
+            ? windowsSystemToolPath("WindowsPowerShell/v1.0/powershell.exe")
+            : undefined,
+        detached: true,
+      },
+    );
     process.exit(124);
   };
   const schedule = () => {
@@ -205,12 +238,20 @@ export function startBudget(limitSeconds, clock, onTimeout, level = "fastcheck",
     clearTimeout(hardTimer);
     if (cancelled || paused()) return;
     const elapsed = used();
-    if (!expiring) softTimer = setTimeout(expire, Math.max(0, (cleanupAt - elapsed) * 1000));
+    if (!expiring && !terminalCleanup)
+      softTimer = setTimeout(expire, Math.max(0, (cleanupAt - elapsed) * 1000));
     hardTimer = setTimeout(forceExit, Math.max(0, (limitSeconds - elapsed) * 1000));
   };
   const unsubscribe = clock.subscribe(schedule);
   schedule();
   return {
+    beginTerminalCleanup() {
+      // 已确认失败/取消正在收尾，预留点不是新超时；硬截止与独立监督仍保留。
+      if (expiring) return;
+      terminalCleanup = true;
+      Atomics.store(state, 5, 1n);
+      clearTimeout(softTimer);
+    },
     cancel() {
       cancelled = true;
       clearTimeout(softTimer);
@@ -218,7 +259,10 @@ export function startBudget(limitSeconds, clock, onTimeout, level = "fastcheck",
       unsubscribe();
       clearInterval(publishing);
       unpublish();
-      if (deadlineWorker === watchdog) deadlineWorker = undefined;
+      if (deadlineWorker === watchdog) {
+        deadlineWorker = undefined;
+        deadlineState = undefined;
+      }
       void watchdog.terminate();
     },
   };
@@ -236,6 +280,15 @@ export function startCommand(command, args = [], options = {}) {
     executable = process.execPath;
     args = [entry, ...args];
   }
+  // 必须先发布再 spawn；主线程随后即使阻塞，watchdog 也不能漏掉刚准入的后代。
+  markOwnedProcessAdmission();
+  // info/version 等客户端不拥有动作；仅显式 build/test 准入可收回 server 下的本轮 worker。
+  const outputBase =
+    options.bazel && args.some((arg) => arg === "build" || arg === "test")
+      ? args.find((arg) => arg.startsWith("--output_base="))?.slice("--output_base=".length)
+      : undefined;
+  if (outputBase)
+    deadlineWorker?.postMessage({ bazelAdmission: { command: executable, args, outputBase } });
   const child = spawn(executable, args, {
     cwd: options.cwd ?? process.cwd(),
     env: withPinnedNodePath({ ...process.env, ...options.env }, process.execPath),
@@ -244,6 +297,8 @@ export function startCommand(command, args = [], options = {}) {
     stdio: ["ignore", "pipe", "pipe"],
   });
   activeChildren.add(child);
+  if (outputBase) bazelClients.set(child, outputBase);
+  deadlineWorker?.postMessage({ child: { pid: child.pid, outputBase } });
   const stageId = label(options.stageId ?? command);
   commandLabels.set(child, stageId);
   if (!options.quiet) diagnostic(`process-start stage=${stageId} pid=${child.pid ?? "pending"}`);
@@ -253,7 +308,9 @@ export function startCommand(command, args = [], options = {}) {
         `process-error stage=${stageId} pid=${child.pid ?? "pending"} code=${label(error.code)}`,
       );
   });
+  child.once("exit", () => deadlineWorker?.postMessage({ closedPid: child.pid }));
   child.once("close", (code, signal) => {
+    deadlineWorker?.postMessage({ closedPid: child.pid });
     activeChildren.delete(child);
     if (!options.quiet)
       diagnostic(

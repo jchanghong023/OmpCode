@@ -1,3 +1,4 @@
 module(name = "zcode_gates", version = "0")
 
 bazel_dep(name = "rules_shell", version = "0.6.1")
+bazel_dep(name = "bazel_lib", version = "3.0.0")

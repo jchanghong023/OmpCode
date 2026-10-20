@@ -1,8 +1,7 @@
-import { createHash } from "node:crypto";
-import { access, readFile, writeFile, mkdir, rm } from "node:fs/promises";
+import { access, readFile, writeFile, mkdir, rm, truncate } from "node:fs/promises";
 import { join } from "node:path";
 import { createRequire } from "node:module";
-import { startCommand, registerTreeKiller, watchBudgetTargets } from "./test-gates-process.mjs";
+import { startCommand, watchBudgetTargets } from "./test-gates-process.mjs";
 import {
   repositoryRoot,
   gatesInputsDir,
@@ -12,14 +11,15 @@ import {
 } from "./test-gates-bazel-locations.mjs";
 import {
   assertBazelReady,
-  killByOutputBaseMarker,
   resolveBashSh,
   readElectronRuntimeIdentity,
 } from "./test-gates-bazel-runtime.mjs";
-import { materializeStageArtifacts } from "./test-gates-action.mjs";
+import { materializeStageGroup } from "./test-gates-action.mjs";
 export { assertBazelReady };
 import { parseBuildEventFile, actionCacheStates, isBazelCacheMiss } from "./test-gates-bep.mjs";
 import { monitorBazelStage } from "./test-gates-bazel-monitor.mjs";
+import { recordInvalidationEvidence } from "./test-gates-invalidation.mjs";
+import { buildStageControl, digest, needsElectron } from "./test-gates-bazel-controls.mjs";
 
 export const bazelTargetName = (id) => `gate-${id.replace(/[^a-zA-Z0-9_-]/gu, "_")}`;
 export const isBuildStage = (stage) =>
@@ -27,7 +27,6 @@ export const isBuildStage = (stage) =>
 export const isUncachedStage = (stage) =>
   Boolean(stage.noCache || stage.packaging || stage.externalMutable);
 
-// Every recipe is native; GUI phases share one native lifecycle target.
 export function bazelizeStages(raw) {
   const suites = new Map();
   for (const stage of raw)
@@ -80,84 +79,30 @@ export function bazelizeStages(raw) {
 
 let inputsWritten = false;
 const writtenControls = new Set();
+const graphTransportOutput = "gates/inputs/generated-build.bazel";
+let graphTransportOwned = false;
 let toolchainIdentity;
 let runtimeToolchain = {};
 let cachedToolchainValidated = false;
-const normalize = (value) =>
-  typeof value === "string"
-    ? value
-        .split(repositoryRoot)
-        .join("${WORKSPACE}")
-        .split(repositoryRoot.replaceAll("\\", "/"))
-        .join("${WORKSPACE}")
-    : value;
-const digest = (value) => createHash("sha256").update(value).digest("hex");
-const semanticKey =
-  /^(?:ZCODE_|OMP_|OMPCODE_|PI_|CLAUDE_|CI$|NODE_ENV$|NODE_OPTIONS$|ELECTRON_|PLAYWRIGHT_|VITE_|CSC_|WIN_CSC_|TZ$|LANG$|LC_)/iu;
-const needsElectron = (stage) => Boolean(stage.electron || stage.lifecycle || stage.packaging);
 async function writeControlFile(stage, context) {
-  const env = Object.fromEntries(
-    Object.entries(process.env)
-      .filter(([key]) => {
-        if (!semanticKey.test(key)) return false;
-        if (
-          !/^(?:build|bootstrap):/u.test(stage.id) &&
-          /^ZCODE_(?:BUILTIN|PERSONAL)_PROVIDER_CONFIG_FILE$/iu.test(key)
-        )
-          return false;
-        if (key === "OMP_RPC_BINARY_PATH") return false; // content identity is in toolchain
-        if (
-          stage.realOmp &&
-          /^(?:OMP_RPC_ARGS_JSON|OMP_E2E_MODEL_SELECTOR|OMP_CONFIG_ROOT|OMP_PROFILE|PI_PROFILE|OMPCODE_CENTOS7_PROFILE|PI_CONFIG_DIR|PI_CODING_AGENT_DIR|PI_CONFIG_FILES|OMP_AUTH_BROKER_.+|CLAUDE_CONFIG_DIR|OMP_OFFLINE|(?:PI|OMP)_(?:SMOL|SLOW|PLAN|COMPACT|ADVISOR|DEFAULT)_MODEL)$/iu.test(
-            key,
-          )
-        )
-          return false;
-        return true;
-      })
-      .map(([key, value]) => [key, normalize(value)]),
-  );
-  const recipe = { ...stage, command: stage.command === process.execPath ? "node" : stage.command };
-  delete recipe.parallelGroup;
-  if (recipe.lifecycle)
-    recipe.lifecycle = recipe.lifecycle.map((phase) => {
-      const semantic = { ...phase };
-      delete semantic.parallelGroup;
-      return semantic;
-    });
-  if (recipe.semanticHead) recipe.head = context.snapshot?.head ?? context.head;
-  const control = { stage: recipe, env };
-  control.toolchain = {
-    ...(stage.realOmp ? { omp: runtimeToolchain.omp } : {}),
-    ...(needsElectron(stage) ? { electron: runtimeToolchain.electron } : {}),
-  };
-  // External configuration content participates even when its stable pathname does not change.
-  const files = {};
-  for (const [key, value] of Object.entries({ ...env, ...stage.env })) {
-    if (
-      typeof value !== "string" ||
-      !/(?:FILE|PATH|ROOT)$/iu.test(key) ||
-      key === "OMP_RPC_BINARY_PATH"
-    )
-      continue;
-    try {
-      files[key] = digest(await readFile(value.replaceAll("${WORKSPACE}", repositoryRoot)));
-    } catch (error) {
-      if (!["ENOENT", "EISDIR", "EINVAL"].includes(error.code)) throw error;
-    }
-  }
-  control.configurationFiles = files;
+  const control = await buildStageControl(stage, context, runtimeToolchain);
   const target = bazelTargetName(stage.id);
-  await writeFile(join(gatesInputsDir, `${target}.json`), JSON.stringify(control));
+  // 写入可能先截断再失败；准入时登记所有权，退出仍须清空本轮已触碰的配方。
   writtenControls.add(target);
+  await writeFile(join(gatesInputsDir, `${target}.json`), JSON.stringify(control));
   return target;
 }
-async function writeToolchainFile(context) {
-  if (toolchainIdentity) {
-    await writeFile(gatesToolchainFile, toolchainIdentity);
-    return;
+async function writeToolchainFile(context, consumers) {
+  // 图生成先初始化基础身份；真实核消费者准入时仍须补全内容身份，不能沿用空身份控制。
+  if (context.omp && !runtimeToolchain.omp && consumers.some((stage) => stage.realOmp)) {
+    runtimeToolchain.omp = digest(await readFile(context.omp));
+    for (const recipe of consumers.filter((stage) => stage.realOmp))
+      if (writtenControls.has(bazelTargetName(recipe.id))) await writeControlFile(recipe, context);
   }
+  if (toolchainIdentity) return writeFile(gatesToolchainFile, toolchainIdentity);
   const info = {
+    // 工具路径只用于执行；本轮真实 launcher/已安装 native 内容才进入动作身份。
+    bazel: (await assertBazelReady()).identity,
     node: process.versions.node,
     nodeContent: digest(await readFile(process.execPath)),
     platform: process.platform,
@@ -178,12 +123,9 @@ async function writeToolchainFile(context) {
   delete installed.storeDir;
   delete installed.prunedAt;
   info.installedGraph = digest(JSON.stringify(installed));
-  if (context.omp && context.nativeStages?.some((stage) => stage.realOmp))
-    runtimeToolchain.omp = digest(await readFile(context.omp));
   toolchainIdentity = JSON.stringify(info);
   await writeFile(gatesToolchainFile, toolchainIdentity);
 }
-
 export async function runBazelStage(stage, context, onFailure) {
   const started = performance.now();
   const originals = stage.bazel.stages;
@@ -209,16 +151,28 @@ export async function runBazelStage(stage, context, onFailure) {
       if (error.code !== "ENOENT") throw error;
       return { status: "CACHE_MISS", targets: [], reason: "Electron preparation required" };
     }
+    // 静态组已提前写过配方；查询前补全 Electron 身份，否则旧空身份必然导致 GUI 缓存 miss。
+    for (const recipe of (context.nativeStages ?? originals).filter(needsElectron))
+      if (writtenControls.has(bazelTargetName(recipe.id))) await writeControlFile(recipe, context);
   }
   if (originals.some(needsElectron) && !runtimeToolchain.electron)
     throw new Error("Electron runtime consumers require successful electron-runtime-prepare");
   await mkdir(gatesInputsDir, { recursive: true });
   inputsWritten = true;
+  // 只有普通 graph 声明准入才接管工作区传输；查询即使写了同名控件也不拥有旧产物。
+  // 此标志仅用于既有 stopAll 后的清理，不能作为生成成功或缓存命中的依据。
+  if (
+    !cacheOnly &&
+    originals.some(
+      (recipe) => recipe.id === "bazel-graph" && recipe.outputs?.includes(graphTransportOutput),
+    )
+  )
+    graphTransportOwned = true;
   await writeFile(
     join(gatesInputsDir, "runtime.json"),
     JSON.stringify({ env: process.env, omp: context.omp, workspace: repositoryRoot }),
   );
-  await writeToolchainFile(context);
+  await writeToolchainFile(context, context.nativeStages ?? originals);
   // Dependencies can be analyzed before their risk group is invoked. Populate every
   // declared control once up front, while still scheduling only the current group.
   const all = context.nativeStages ?? originals;
@@ -231,11 +185,12 @@ export async function runBazelStage(stage, context, onFailure) {
     targets.push(target);
   }
   const info = await assertBazelReady();
-  const bepPath = join(gatesInputsDir, `bep-${stage.id}.json`);
-  const profilePath = join(gatesInputsDir, `profile-${stage.id}.json.gz`);
-  const executionPath = join(gatesInputsDir, `execution-${stage.id}.json`);
+  const paths = context.diagnostics?.createInvocationPaths(stage.id);
+  const bepPath = paths?.bep ?? join(gatesInputsDir, `bep-${stage.id}.json`);
+  const profilePath = paths?.profile ?? join(gatesInputsDir, `profile-${stage.id}.json.gz`);
+  const executionPath = paths?.jsonexecution ?? join(gatesInputsDir, `execution-${stage.id}.json`);
   await rm(bepPath, { force: true });
-  for (const target of targets) await rm(join(gatesInputsDir, `${target}.live`), { force: true });
+  for (const target of targets) await writeFile(join(gatesInputsDir, `${target}.live`), "");
   const monitor = cacheOnly
     ? undefined
     : monitorBazelStage(targets, bepPath, context.clock, (failure) =>
@@ -244,39 +199,46 @@ export async function runBazelStage(stage, context, onFailure) {
           targetId: originals[targets.indexOf(failure.target)]?.id,
         }),
       );
-  let code;
-  const unregister = registerTreeKiller(() => killByOutputBaseMarker());
+  let code, invocation, commandArgs;
   const stopBudgetTargets = watchBudgetTargets(
     targets.map((target) => join(gatesInputsDir, `${target}.live`)),
   );
   try {
-    const child = startCommand(
-      info.path,
-      [
-        "--nohome_rc",
-        "--nosystem_rc",
-        `--output_base=${bazelOutputBase}`,
-        originals.every(isBuildStage) ? "build" : "test",
-        "--test_summary=short",
-        "--test_output=errors",
-        "--cache_test_results=auto",
-        ...(cacheOnly ? ["--check_tests_up_to_date"] : []),
-        "--nokeep_going",
-        "--notest_keep_going",
-        "--noenable_runfiles",
-        "--jobs=4",
-        `--local_test_jobs=${stage.bazel.localTestJobs}`,
-        `--disk_cache=${bazelDiskCache}`,
-        "--build_event_publish_all_actions",
-        `--build_event_json_file=${bepPath}`,
-        `--profile=${profilePath}`,
-        `--execution_log_json_file=${executionPath}`,
-        `--define=GATES_NODE=${process.execPath}`,
-        `--test_env=JCH_GATES_NODE=${process.execPath}`,
-        ...targets.map((target) => `//:${target}`),
-      ],
-      { stageId: stage.id, env: { BAZEL_SH: await resolveBashSh() } },
-    );
+    commandArgs = [
+      "--nohome_rc",
+      "--nosystem_rc",
+      `--output_base=${bazelOutputBase}`,
+      originals.every(isBuildStage) ? "build" : "test",
+      "--announce_rc",
+      ...(context.cacheDebug ? ["--config=cache-debug"] : []),
+      "--test_summary=short",
+      "--test_output=errors",
+      "--cache_test_results=auto",
+      ...(cacheOnly ? ["--check_tests_up_to_date"] : []),
+      "--nokeep_going",
+      "--notest_keep_going",
+      "--noenable_runfiles",
+      "--jobs=4",
+      `--local_test_jobs=${stage.bazel.localTestJobs}`,
+      `--disk_cache=${bazelDiskCache}`,
+      "--build_event_publish_all_actions",
+      `--build_event_json_file=${bepPath}`,
+      `--profile=${profilePath}`,
+      `--execution_log_json_file=${executionPath}`,
+      ...(paths ? [`--explain=${paths.explain}`, "--verbose_explanations"] : []),
+      `--define=GATES_NODE=${process.execPath}`,
+      `--test_env=JCH_GATES_NODE=${process.execPath}`,
+      ...targets.map((target) => `//:${target}`),
+    ];
+    const env = { BAZEL_SH: await resolveBashSh() };
+    invocation = await context.diagnostics?.beginInvocation({
+      id: stage.id,
+      command: info.path,
+      args: commandArgs,
+      env,
+      paths,
+    });
+    const child = startCommand(info.path, commandArgs, { stageId: stage.id, env, bazel: true });
     for (const stream of [child.stdout, child.stderr])
       stream.on("data", (text) => process.stdout.write(text));
     code = await new Promise((done) => {
@@ -285,8 +247,26 @@ export async function runBazelStage(stage, context, onFailure) {
     });
   } finally {
     await monitor?.stop();
-    unregister();
     stopBudgetTargets();
+    const diagnosticStarted = performance.now();
+    await invocation?.finish({ exitCode: code });
+    context.diagnostics?.recordPhase(stage.id, "nativeEvidence", diagnosticStarted);
+  }
+  if (paths) {
+    const invalidationStarted = performance.now();
+    await recordInvalidationEvidence({
+      snapshot: context.snapshot,
+      evidenceDir: `${paths.evidence}.details`,
+      invocation: {
+        id: stage.id,
+        bepPath,
+        executionPath,
+        explainPath: paths.explain,
+        cli: commandArgs,
+        forcedExternalTargets: originals.filter(isUncachedStage).map((s) => bazelTargetName(s.id)),
+      },
+    });
+    context.diagnostics?.recordPhase(stage.id, "invalidationEvidence", invalidationStarted);
   }
   if (cacheOnly && (await isBazelCacheMiss(bepPath, code))) {
     console.log("[gate] native cache check requires execution; retaining original risk groups");
@@ -297,7 +277,7 @@ export async function runBazelStage(stage, context, onFailure) {
       seconds: (performance.now() - started) / 1000,
     };
   }
-  const events = await parseBuildEventFile(bepPath, targets);
+  const events = await parseBuildEventFile(bepPath, targets, { checkTestsUpToDate: cacheOnly });
   const cacheStates = await actionCacheStates(executionPath);
   const records = originals.map((original, index) => {
     const event = events.get(targets[index]);
@@ -311,19 +291,31 @@ export async function runBazelStage(stage, context, onFailure) {
     const cacheState =
       status !== "PASS"
         ? "incomplete"
-        : isBuildStage(original)
-          ? cacheStates
-            ? (cacheStates.get(targets[index]) ?? "localCache")
-            : "incomplete"
-          : event.cacheState;
+        : cacheOnly && code === 0
+          ? "upToDate"
+          : isBuildStage(original)
+            ? (cacheStates?.get(targets[index]) ?? "unknown")
+            : event.cacheState;
     return {
       id: original.id,
       status,
       seconds: event?.seconds ?? 0,
-      cached: status === "PASS" && ["localCache", "diskCache"].includes(cacheState),
+      cached:
+        status === "PASS" &&
+        ["localCache", "diskCache", "remoteCache", "unknownCache", "upToDate"].includes(cacheState),
       cacheState,
       executor: "bazel",
       logPath: event?.logPath,
+      evidenceSource: cacheOnly
+        ? `${bepPath} (--check_tests_up_to_date)`
+        : isBuildStage(original)
+          ? cacheStates?.has(targets[index])
+            ? executionPath
+            : `${bepPath} (completion only; cache provenance unobserved)`
+          : bepPath,
+      ...(event?.previousRunSeconds !== undefined
+        ? { previousRunSeconds: event.previousRunSeconds }
+        : {}),
       ...(status !== "PASS"
         ? {
             reason: complete
@@ -336,9 +328,18 @@ export async function runBazelStage(stage, context, onFailure) {
   const passed =
     code === 0 &&
     records.every((record) => record.status === "PASS" && (!cacheOnly || record.cached));
-  if (passed)
-    for (const recipe of originals.filter(isBuildStage))
-      await materializeStageArtifacts(recipe, join(repositoryRoot, "bazel-bin"));
+  // 查询不能恢复声明产物；仅真实完整执行通过后物化，避免暖路径重复复制。
+  if (passed && !cacheOnly) {
+    const materializing = performance.now();
+    const products = originals.filter((recipe) => recipe.outputs?.length);
+    await materializeStageGroup(products, join(repositoryRoot, "bazel-bin"), {
+      clock: context.clock,
+    });
+    context.diagnostics?.recordPhase(stage.id, "materialization", materializing);
+    console.log(
+      `[gate] materialization stages=${products.length} seconds=${((performance.now() - materializing) / 1000).toFixed(3)}`,
+    );
+  }
   if (passed && cacheOnly) cachedToolchainValidated = true;
   if (passed && originals.some((recipe) => recipe.id === "electron-runtime-prepare")) {
     // 静态组只需要可读的前序控制文件；准备后才以真实 binary 内容更新消费者，
@@ -355,7 +356,7 @@ export async function runBazelStage(stage, context, onFailure) {
   }
   for (const record of records)
     console.log(
-      `[${record.status}] ${record.id} ${record.seconds.toFixed(1)}s (bazel ${record.cacheState})${record.reason ? `: ${record.reason}` : ""}`,
+      `[${record.status}] ${record.id} ${record.seconds.toFixed(1)}s (bazel ${record.cacheState}; source=${record.evidenceSource}; log=${record.logPath ?? "unobserved"})${record.previousRunSeconds !== undefined ? ` previous-run=${record.previousRunSeconds.toFixed(1)}s` : ""}${record.reason ? `: ${record.reason}` : ""}`,
     );
   return {
     status: passed ? "PASS" : "FAIL",
@@ -369,12 +370,27 @@ export async function runBazelStage(stage, context, onFailure) {
 }
 export async function cleanupBazelInputs() {
   if (!inputsWritten) return;
-  // Preserve official BEP/profile/execution evidence; remove runtime credentials
-  // and recipes only. Source globs exclude this entire transport directory.
-  for (const target of writtenControls) {
-    await rm(join(gatesInputsDir, `${target}.json`), { force: true });
-    await rm(join(gatesInputsDir, `${target}.live`), { force: true });
+  // 删除/新建会使 Windows 根 glob 每组失效；敏感传输仅截断为稳定的零字节占位。
+  // 非敏感工具链声明保留；每次入口仍实际重算身份、配方与环境，不能复用占位作成功证据。
+  let firstError;
+  const paths = [
+    ...[...writtenControls].flatMap((target) => [
+      join(gatesInputsDir, `${target}.json`),
+      join(gatesInputsDir, `${target}.live`),
+    ]),
+    join(gatesInputsDir, "runtime.json"),
+    ...(graphTransportOwned ? [join(repositoryRoot, graphTransportOutput)] : []),
+  ];
+  for (const path of paths) {
+    try {
+      // truncate 不创建未知文件；尚未准入 .live 或部分写入失败留下的 ENOENT 可忽略。
+      await truncate(path, 0);
+    } catch (error) {
+      if (error.code === "ENOENT") continue;
+      // 一个权限/IO 错误不能阻止其他敏感输入清空，也不能替换最先出现的异常。
+      if (!firstError) firstError = error;
+      else console.error("[gate] Additional Bazel input cleanup failure:", error);
+    }
   }
-  await rm(join(gatesInputsDir, "runtime.json"), { force: true });
-  await rm(gatesToolchainFile, { force: true });
+  if (firstError) throw firstError;
 }

@@ -1,7 +1,7 @@
 import { writeSync } from "node:fs";
 import { parseArgs } from "node:util";
 import { createGateClock } from "./test-gates-clock.mjs";
-import { regularStage } from "./test-gates-environments.mjs";
+import { fixtureStage } from "./test-gates-environments.mjs";
 import { fullPlan, installedOmp } from "./test-gates-plan.mjs";
 import { createGateRun } from "./test-gates-run.mjs";
 
@@ -46,7 +46,7 @@ try {
           onFailure({ ...failure, id: stage.id });
         };
         try {
-          const phase = await regularStage(stage, { ...context, onFailure: fail });
+          const phase = await fixtureStage(stage, { ...context, onFailure: fail });
           if (!records.some((record) => record.id === stage.id))
             records.push({ ...phase, id: stage.id });
           if (phase.status !== "PASS") fail(phase);

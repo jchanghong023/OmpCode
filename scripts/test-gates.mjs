@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { fastPlan, fullPlan, slowPlan, installedOmp } from "./test-gates-plan.mjs";
-import { restorePackagingState, snapshotPackagingState } from "./test-gates-environments.mjs";
+import { restorePackagingState, snapshotPackagingState } from "./test-gates-command-stage.mjs";
 import {
   bazelizeStages,
   assertBazelReady,
@@ -12,15 +12,26 @@ import { createGateRun } from "./test-gates-run.mjs";
 import { snapshot, sameSnapshot } from "./test-gates-snapshot.mjs";
 import { createGateClock, gateBudget } from "./test-gates-clock.mjs";
 import { repositoryRoot } from "./test-gates-bazel-locations.mjs";
+import { createGateDiagnostics } from "./test-gates-diagnostics.mjs";
+import { ensureBazelGraph, graphStage } from "./test-gates-bazel-graph.mjs";
 
-const clock = createGateClock();
+const startedAt = performance.now();
+const clock = createGateClock(startedAt);
+let diagnostics;
+const diagnosticReport = {};
 // scoped package scripts 也从统一仓库根执行，避免相对 mise/manifest 路径落到 desktop 包。
 process.chdir(repositoryRoot);
 const args = process.argv.slice(2);
 const level = args.shift();
 const value = (flag) => args[args.indexOf(flag) + 1];
 const authorized = args.includes("--human-authorized");
-const knownFlags = new Set(["--human-authorized", "--plan", "--budget-seconds"]);
+const knownFlags = new Set([
+  "--human-authorized",
+  "--plan",
+  "--budget-seconds",
+  "--cache-debug",
+  "--check-tests-up-to-date",
+]);
 const valueFlags = new Set(["--budget-seconds"]);
 const buildOnly = ["build", "bootstrap"].includes(level);
 if (buildOnly) {
@@ -28,6 +39,11 @@ if (buildOnly) {
   valueFlags.add("--target");
 }
 const validLevel = ["fastcheck", "fulltest", "slowtest"].includes(level);
+// 同一个明确模式同时控制两层准入和执行分支，不能借只读旗标放行普通 full/slow。
+const diagnosticOnly =
+  (validLevel || buildOnly) &&
+  args.includes("--check-tests-up-to-date") &&
+  !args.includes("--plan");
 let budget = validLevel ? gateBudget(level) : null;
 let argumentError;
 try {
@@ -40,7 +56,7 @@ const gate = createGateRun({
   level,
   limitSeconds: budget,
   clock,
-  authorized,
+  authorized: authorized || diagnosticOnly,
   timed: validLevel && !args.includes("--plan") && !argumentError,
   // Bazel 运行期控制文件只在本轮内存活；收尾与打包状态恢复共用同一清理链。
   cleanup: async () => {
@@ -49,11 +65,12 @@ const gate = createGateRun({
     } finally {
       // 恢复失败仍须删除本轮含运行环境的控制文件；原恢复错误继续使门禁失败。
       await cleanupBazelInputs();
+      if (diagnostics) Object.assign(diagnosticReport, await diagnostics.summarize({ startedAt }));
     }
   },
 });
 async function finish(status, code, extra = {}) {
-  const report = await gate.finish(status, code, extra);
+  const report = await gate.finish(status, code, { ...extra, diagnostics: diagnosticReport });
   process.exitCode = report.exitCode;
   if (report.exitCode !== 0) process.exit(report.exitCode);
   return report;
@@ -95,39 +112,44 @@ try {
       if (valueFlags.has(args[index]) && !args[++index]) throw new Error("Missing flag value");
     }
     const planOnly = args.includes("--plan");
-    if (["fulltest", "slowtest"].includes(level) && !planOnly && !authorized) {
+    if (["fulltest", "slowtest"].includes(level) && !planOnly && !diagnosticOnly && !authorized) {
       await finish("NOT RUN — HUMAN AUTHORIZATION REQUIRED", 2);
     } else {
       const progress = (message) => {
         if (!planOnly && level !== "--snapshot") console.log(`[gate] ${message}`);
       };
+      const prepare = async (name, operation) => {
+        const started = performance.now();
+        try {
+          return await operation();
+        } finally {
+          progress(
+            `preparation ${name} seconds=${((performance.now() - started) / 1000).toFixed(3)}`,
+          );
+        }
+      };
       progress("preparation begin: toolchain");
-      const tools = await validateToolchain();
-      if (!planOnly && level !== "--snapshot") {
-        progress("toolchain verified; synchronizing generated Bazel graph");
-        await import("./test-gates-bazel-sync.mjs");
-      }
-      progress("source snapshot begin");
-      const source = await snapshot();
-      progress("source snapshot complete");
-      if (level === "--snapshot") {
-        await finish("PASS", 0, { snapshot: source, tools });
-      } else {
-        const rawStages = buildOnly
-          ? await (
-              await import("./test-gates-workspace-plan.mjs")
-            ).workspaceBuildPlan({
+      const tools = await prepare("toolchain", validateToolchain);
+      const readOnly = planOnly || level === "--snapshot";
+      const plan = async () =>
+        buildOnly
+          ? (await import("./test-gates-workspace-plan.mjs")).workspaceBuildPlan({
               bootstrap: level === "bootstrap",
               target: args.includes("--target") ? value("--target") : undefined,
             })
-          : await (level === "fastcheck"
-              ? fastPlan()
-              : level === "slowtest"
-                ? slowPlan()
-                : fullPlan());
-        // Every risk group is native; Bazel owns all target execution and reuse.
-        const stages = planOnly ? rawStages : bazelizeStages(rawStages);
-        if (planOnly) {
+          : level === "fastcheck"
+            ? fastPlan()
+            : level === "slowtest"
+              ? slowPlan()
+              : fullPlan();
+      if (readOnly) {
+        progress("source snapshot begin");
+        const source = await prepare("snapshot", snapshot);
+        progress("source snapshot complete");
+        if (level === "--snapshot") {
+          await finish("PASS", 0, { snapshot: source, tools });
+        } else {
+          const stages = await plan();
           console.log(
             JSON.stringify(
               {
@@ -142,137 +164,161 @@ try {
             ),
           );
           await finish("PLAN ONLY — NOT RUN", 0);
-        } else {
-          const context = {
-            clock: gate.clock,
-            snapshot: source,
-            nativeStages: stages.flatMap((stage) => stage.bazel.stages),
-            omp: await installedOmp(),
-            guiProcesses: new Map(),
-          };
-          progress(`plan ready stages=${stages.length} installedOmp=${Boolean(context.omp)}`);
-          const bazelInfo = await assertBazelReady();
-          progress(`bazel ready path=${bazelInfo.path} version=${bazelInfo.version}`);
-          console.log(
-            JSON.stringify({
-              snapshot: source,
-              tools,
-              ...(bazelInfo.path ? { bazel: bazelInfo } : {}),
-              cache: "existing cache; cold cache not verified",
-            }),
-          );
-          const report = await gate.run(
-            async (records, onFailure) => {
-              let cachedValidated = false;
-              if (level === "fulltest" && stages.length > 1) {
-                const cacheable = context.nativeStages.filter((target) => !isUncachedStage(target));
-                const cached = await runBazelStage(
-                  {
-                    id: "bazel-cached-gate",
-                    bazel: { stages: cacheable, localTestJobs: 4, cacheOnly: true },
-                  },
-                  context,
-                  onFailure,
-                );
-                if (cached.status !== "CACHE_MISS") {
-                  records.push({ ...cached, id: "bazel-cached-gate" });
-                  if (cached.status !== "PASS") return;
-                  cachedValidated = true;
-                }
-              }
-              if (cachedValidated) {
-                // Only a complete native cache proof admits this parallel group.
-                // All three fulltest mandatory targets have no declared dependencies;
-                // the original risk-group barriers remain intact on every cache miss.
-                const mandatory = stages.flatMap((stage) =>
-                  stage.bazel.stages
-                    .filter(isUncachedStage)
-                    .map((target) => ({ target, stageId: stage.id })),
-                );
-                if (!mandatory.length) return;
-                const runnable = {
-                  id: "bazel-mandatory-gate",
-                  bazel: { stages: mandatory.map(({ target }) => target), localTestJobs: 4 },
-                };
-                if (mandatory.some(({ target }) => target.packaging))
-                  await snapshotPackagingState();
-                const result = await runBazelStage(runnable, context, (failure) =>
-                  onFailure({
-                    ...failure,
-                    id:
-                      mandatory.find(({ target }) => target.id === failure.targetId)?.stageId ??
-                      runnable.id,
-                  }),
-                );
-                for (const stageId of new Set(mandatory.map((entry) => entry.stageId))) {
-                  const ids = new Set(
-                    mandatory
-                      .filter((entry) => entry.stageId === stageId)
-                      .map(({ target }) => target.id),
-                  );
-                  const targets = result.targets.filter((target) => ids.has(target.id));
-                  if (!records.some((record) => record.id === stageId))
-                    records.push({
-                      ...result,
-                      id: stageId,
-                      status:
-                        targets.length === ids.size &&
-                        targets.every((target) => target.status === "PASS")
-                          ? "PASS"
-                          : "FAIL",
-                      seconds: targets.reduce((seconds, target) => seconds + target.seconds, 0),
-                      targets,
-                      slowTargets: result.slowTargets?.filter((target) => ids.has(target.id)),
-                    });
-                }
-                // A nonzero Bazel exit must fail even if individual targets passed.
-                if (result.status !== "PASS" && !records.some((record) => record.status === "FAIL"))
-                  records.push({ ...result, id: runnable.id });
-                return;
-              }
-              for (const stage of stages) {
-                const targets = stage.bazel.stages;
-                if (!targets.length) continue;
-                const runnable = { ...stage, bazel: { ...stage.bazel, stages: targets } };
-                // executor 会被取消强杀；外层必须在准入前持有共享模板原文，
-                // gate.finish 在所属进程树停止后恢复，不能只依赖 executor finally。
-                if (stage.bazel.stages.some((target) => target.packaging))
-                  await snapshotPackagingState();
-                const result = await runBazelStage(runnable, context, (failure) =>
-                  onFailure({ ...failure, id: stage.id }),
-                );
-                if (!records.some((record) => record.id === stage.id))
-                  records.push({ ...result, id: stage.id });
-                if (result.status !== "PASS" || records.some((record) => record.status === "FAIL"))
-                  break;
-              }
-            },
-            {
-              snapshot: source,
-              tools,
-              bazel: bazelInfo,
-              requiredTargets: stages.flatMap((stage) =>
-                (stage.bazel?.stages ?? []).map((target) => target.id),
-              ),
-            },
-            async (records) => {
-              progress("source snapshot verification begin");
-              const current = await snapshot();
-              if (!sameSnapshot(source, current))
-                records.push({
-                  id: "source-snapshot",
-                  status: "UNVERIFIED_MISSING_ENV",
-                  reason: "Source changed during validation; results belong to different snapshots",
-                });
-              progress("source snapshot verification complete");
-            },
-          );
-          process.exitCode = report.exitCode;
-          if (report.exitCode !== 0) process.exit(report.exitCode);
         }
+      } else {
+        // 图生成与产品门禁共用一次生命周期，失败、取消及预算均保留原生证据。
+        diagnostics = await createGateDiagnostics();
+        const context = {
+          clock: gate.clock,
+          guiProcesses: new Map(),
+          cacheDebug: args.includes("--cache-debug"),
+          diagnostics,
+        };
+        const source = {};
+        const bazelInfo = {};
+        const requiredTargets = [graphStage.id];
+        const report = await gate.run(
+          async (records, onFailure) => {
+            progress(
+              diagnosticOnly
+                ? "toolchain verified; checking generated Bazel graph"
+                : "toolchain verified; synchronizing generated Bazel graph",
+            );
+            const generated = await prepare("graph", () =>
+              ensureBazelGraph(context, { readOnly: diagnosticOnly }),
+            );
+            records.push({ ...generated, id: graphStage.id });
+            if (generated.status !== "PASS") {
+              if (diagnosticOnly)
+                await finish(
+                  generated.status === "CACHE_MISS" ? "DIAGNOSTIC_OUT_OF_DATE" : "FAIL",
+                  1,
+                  { query: generated },
+                );
+              return;
+            }
+            progress("source snapshot begin");
+            Object.assign(source, await prepare("snapshot", snapshot));
+            context.snapshot = source;
+            progress("source snapshot complete");
+            const stages = bazelizeStages(await plan());
+            context.nativeStages = stages.flatMap((stage) => stage.bazel.stages);
+            context.omp = await prepare("omp-discovery", installedOmp);
+            requiredTargets.push(...context.nativeStages.map((target) => target.id));
+            progress(`plan ready stages=${stages.length} installedOmp=${Boolean(context.omp)}`);
+            Object.assign(bazelInfo, await prepare("bazel-discovery", assertBazelReady));
+            progress(`bazel ready path=${bazelInfo.path} version=${bazelInfo.version}`);
+            console.log(
+              JSON.stringify({
+                snapshot: source,
+                tools,
+                bazel: bazelInfo,
+                cache: "existing cache; cold cache not verified",
+              }),
+            );
+            if (diagnosticOnly) {
+              const query = await runBazelStage(
+                {
+                  id: "bazel-diagnostic-query",
+                  bazel: {
+                    stages: context.nativeStages.filter((stage) => !isUncachedStage(stage)),
+                    localTestJobs: 4,
+                    cacheOnly: true,
+                  },
+                },
+                context,
+              );
+              records.push({ ...query, id: "bazel-diagnostic-query" });
+              await finish(
+                query.status === "PASS"
+                  ? "DIAGNOSTIC_UP_TO_DATE"
+                  : query.status === "CACHE_MISS"
+                    ? "DIAGNOSTIC_OUT_OF_DATE"
+                    : "FAIL",
+                query.status === "PASS" ? 0 : 1,
+                { query },
+              );
+              return;
+            }
+            let scheduled = stages;
+            if (level === "fulltest" && context.omp) {
+              // 上次失败会关闭 server；遗留 stable-status 文件不代表新 server 已执行其原生动作。
+              // 保留原静态准入，用真实执行初始化，再查询剩余目标，不能吞掉查询错误。
+              const first = stages[0];
+              const checked = await runBazelStage(first, context, (failure) =>
+                onFailure({ ...failure, id: first.id }),
+              );
+              if (!records.some((record) => record.id === first.id))
+                records.push({ ...checked, id: first.id });
+              if (checked.status !== "PASS") return;
+              scheduled = stages.slice(1);
+              const remaining = scheduled.flatMap((group) => group.bazel.stages);
+              // 只读命中仅决定调度；验收仍来自覆盖剩余完整目标的普通 bazel test。
+              const probe = await runBazelStage(
+                {
+                  id: "bazel-native-cache-probe",
+                  bazel: {
+                    stages: remaining.filter((target) => !isUncachedStage(target)),
+                    localTestJobs: 2,
+                    cacheOnly: true,
+                  },
+                },
+                context,
+              );
+              if (probe.status === "FAIL")
+                throw new Error(
+                  `Native cache probe failed; evidence=${probe.bepPath ?? probe.reason}`,
+                );
+              if (probe.status === "PASS")
+                scheduled = [
+                  {
+                    id: "bazel-native-fulltest",
+                    bazel: { stages: remaining, localTestJobs: 2 },
+                  },
+                ];
+            }
+            for (const stage of scheduled) {
+              const targets = stage.bazel.stages;
+              if (!targets.length) continue;
+              const runnable = { ...stage, bazel: { ...stage.bazel, stages: targets } };
+              // executor 会被取消强杀；外层必须在准入前持有共享模板原文，
+              // gate.finish 在所属进程树停止后恢复，不能只依赖 executor finally。
+              if (stage.bazel.stages.some((target) => target.packaging))
+                await snapshotPackagingState();
+              const result = await runBazelStage(runnable, context, (failure) =>
+                onFailure({ ...failure, id: stage.id }),
+              );
+              if (!records.some((record) => record.id === stage.id))
+                records.push({ ...result, id: stage.id });
+              if (result.status !== "PASS" || records.some((record) => record.status === "FAIL"))
+                break;
+            }
+          },
+          {
+            snapshot: source,
+            tools,
+            bazel: bazelInfo,
+            diagnostics: diagnosticReport,
+            requiredTargets,
+          },
+          async (records) => {
+            progress("source snapshot verification begin");
+            const current = await prepare("snapshot-verification", snapshot);
+            if (!sameSnapshot(source, current))
+              records.push({
+                id: "source-snapshot",
+                status: "UNVERIFIED_MISSING_ENV",
+                reason: "Source changed during validation; results belong to different snapshots",
+              });
+            progress("source snapshot verification complete");
+          },
+        );
+        process.exitCode = report.exitCode;
+        if (report.exitCode !== 0) process.exit(report.exitCode);
       }
     }
   }
 } catch (error) {
-  await finish("FAIL", 1, { reason: error.message });
+  // 入口自检直接在此抛错；堆栈随首异常报告一次，不被后续 cleanup 错误替代。
+  await finish("FAIL", 1, { reason: error.message, stack: error.stack });
 }
