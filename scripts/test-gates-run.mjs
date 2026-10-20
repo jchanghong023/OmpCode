@@ -2,7 +2,6 @@ import { writeSync } from "node:fs";
 import {
   budgetExpired,
   cancelCommands,
-  runStages,
   logGateProgress,
   startBudget,
   stopAll,
@@ -45,6 +44,18 @@ export function createGateRun({
         timing[budgetMode === "wall-clock" ? "total" : "budgeted"] >= limitSeconds)
     )
       terminal = { status: "TIMEOUT", exitCode: 124 };
+    const targets = (extra.stages ?? runDetails.stages ?? []).flatMap(
+      (stage) => stage.targets ?? [],
+    );
+    const successful = targets.filter((target) => target.status === "PASS");
+    const cache = {
+      required: runDetails.requiredTargets ?? [],
+      executedSuccessful: successful.filter((target) => !target.cached).map((target) => target.id),
+      cachedSuccessful: successful.filter((target) => target.cached).map((target) => target.id),
+      incomplete: (runDetails.requiredTargets ?? []).filter(
+        (id) => !successful.some((target) => target.id === id),
+      ),
+    };
     reported = {
       ...(level === "slowtest"
         ? {
@@ -59,6 +70,7 @@ export function createGateRun({
       ...extra,
       ...timing,
       budgetMode,
+      cache,
       limitSeconds,
       status: terminal?.status ?? status,
       level,
@@ -147,25 +159,40 @@ export function createGateRun({
   return {
     clock,
     finish,
-    async run(stages, operation, details = {}, verify) {
+    async run(operation, details = {}, verify) {
       if (!authorized && ["fulltest", "slowtest"].includes(level))
         return finish("NOT RUN — HUMAN AUTHORIZATION REQUIRED", 2);
       if (finishing) return finishing;
-      runDetails = details;
+      const records = [];
+      runDetails = { ...details, stages: records };
       phase = "stages";
       heartbeat = setInterval(() => logGateProgress(clock, "progress", phase), 15_000);
       heartbeat.unref();
+      let firstFailure;
+      const failedEarly = new Promise((resolve) => {
+        firstFailure = resolve;
+      });
+      const onFailure = (record) => {
+        if (records.some((entry) => entry.status === "FAIL")) return;
+        const index = records.findIndex((entry) => entry.id === record.id);
+        if (index === -1) records.push(record);
+        else records[index] = record;
+        cancelCommands();
+        firstFailure();
+      };
       try {
-        activeWork = runStages(stages, operation, 4, clock);
-        const records = await activeWork;
+        // The caller owns a simple serial risk-group/GUI-phase loop; Bazel alone
+        // owns target admission, concurrency, dependency barriers and timing.
+        activeWork = Promise.resolve().then(() => operation(records, onFailure));
+        await Promise.race([activeWork, failedEarly]);
         if (finishing) return finishing;
         const allPassed = () =>
-          records.length === stages.length && records.every((record) => record.status === "PASS");
-        phase = "verify";
-        if (allPassed() && verify) logGateProgress(clock, "verify-start", phase);
-        activeWork = Promise.resolve(allPassed() ? verify?.(records) : undefined);
-        await activeWork;
-        if (allPassed() && verify) logGateProgress(clock, "verify-complete", phase);
+          records.length > 0 && records.every((record) => record.status === "PASS");
+        if (allPassed() && verify) {
+          phase = "verify";
+          activeWork = Promise.resolve().then(() => verify(records));
+          await activeWork;
+        }
         if (finishing) return finishing;
         const passed = allPassed();
         const failed = records.some((record) => record.status === "FAIL");

@@ -1,9 +1,28 @@
-import { join, delimiter } from "node:path";
+import { join, delimiter, posix } from "node:path";
 import { homedir } from "node:os";
-import { exists, gitText } from "./test-gates-process.mjs";
+import { exists, gitText } from "./test-gates-snapshot.mjs";
+import { annotateBuildOutputs } from "./test-gates-build-outputs.mjs";
 
 const pnpm = (id, args, extra = {}) => ({ id, command: "pnpm", args, kind: "check", ...extra });
 const node = (id, args, extra = {}) => ({ id, command: "node", args, kind: "check", ...extra });
+
+// Keep each Node test file as the cache unit without collecting its individual test() cases.
+function expandTestFiles(stages) {
+  return stages.flatMap((stage) => {
+    if (stage.kind !== "test" || !stage.args.includes("--test")) return [stage];
+    const files = stage.args.filter((arg) => /\.test\.[cm]?[jt]sx?$/u.test(arg));
+    if (files.length === 0) return [stage];
+    return files.map((file) => {
+      const testFile = posix.normalize(file.replaceAll("\\", "/"));
+      return {
+        ...stage,
+        id: `test-file:${testFile}`,
+        testFile,
+        args: stage.args.filter((arg) => !files.includes(arg) || arg === file),
+      };
+    });
+  });
+}
 
 const staticPlan = (all) => [
   pnpm("typecheck", ["typecheck", "--stopBuildOnErrors"], { kind: "compile" }),
@@ -42,35 +61,53 @@ export async function fastPlan() {
       ...(await gitText(["diff", "--name-only", "-z", "HEAD"])).split("\0"),
       ...(await gitText(["ls-files", "--others", "--exclude-standard", "-z"])).split("\0"),
     ]),
-  ].filter((name) => /\.(?:[cm]?[jt]sx?|json|md|ya?ml|toml|css|html)$/u.test(name));
+  ]
+    .filter(Boolean)
+    .sort();
   const formatFiles = [];
-  for (const name of changed) if (await exists(name)) formatFiles.push(name);
-  // 修复：pnpm exec 在 Windows 会经 cmd 转发；大量文件超过 8191 字符时还未检查就失败。
-  // 为命令前缀、引号和工具路径保留余量，分批检查完整名单，不放宽 60 秒计费预算。
-  const formatBatches = [];
+  for (const name of changed)
+    if (/\.(?:[cm]?[jt]sx?|json|md|ya?ml|toml|css|html)$/u.test(name) && (await exists(name)))
+      formatFiles.push(name);
+  // JSON 控制文件只解决运输；最终 pnpm/oxfmt 启动仍受 Windows 命令行长度限制。
+  const formatStages = [];
   let batch = [];
-  let argumentLength = 0;
-  for (const name of formatFiles) {
-    if (argumentLength + name.length + 3 > 6000 && batch.length) {
-      formatBatches.push(batch);
+  let characters = 0;
+  for (const file of formatFiles) {
+    const length = JSON.stringify(file).length + 1;
+    if (batch.length && characters + length > 6000) {
+      formatStages.push(
+        pnpm(`format-changed-${formatStages.length + 1}`, ["exec", "oxfmt", "--check", ...batch]),
+      );
       batch = [];
-      argumentLength = 0;
+      characters = 0;
     }
-    batch.push(name);
-    argumentLength += name.length + 3;
+    batch.push(file);
+    characters += length;
   }
-  if (batch.length) formatBatches.push(batch);
-  return [
-    ...staticPlan(false),
-    ...formatBatches.map((files, index) =>
-      pnpm(index ? `format-changed-${index + 1}` : "format-changed", [
-        "exec",
-        "oxfmt",
-        "--check",
-        ...files,
-      ]),
-    ),
-  ].map((stage) => ({ ...stage, parallelGroup: "static" }));
+  if (batch.length)
+    formatStages.push(
+      pnpm(`format-changed-${formatStages.length + 1}`, ["exec", "oxfmt", "--check", ...batch]),
+    );
+  return annotateBuildOutputs(
+    [
+      ...staticPlan(false).map((stage) =>
+        stage.id === "architecture-changed"
+          ? node(
+              stage.id,
+              [
+                "scripts/architecture/architecture-check.mjs",
+                "check",
+                "--changed",
+                "--changed-files-control",
+                "gates/inputs/gate-architecture-changed.json",
+              ],
+              { changedFiles: changed },
+            )
+          : stage,
+      ),
+      ...formatStages,
+    ].map((stage) => ({ ...stage, parallelGroup: "static" })),
+  );
 }
 
 const coreTests = {
@@ -255,11 +292,15 @@ export async function fullPlan() {
     ),
     // 根因：Electron 缺失时 require 会下载并解压；并发 GUI 可覆盖正在启动的 exe，触发 EBUSY。
     // 由门禁先完成共享运行时准备，再并行启动消费者；下载计费，已有安装和缓存保持复用。
-    node("electron-runtime-prepare", [
-      "--input-type=module",
-      "--eval",
-      "import { createRequire } from 'node:module'; import { resolve } from 'node:path'; const require = createRequire(resolve('packages/desktop/package.json')); console.log(`Electron runtime prepared: ${require('electron')}`);",
-    ]),
+    node(
+      "electron-runtime-prepare",
+      [
+        "--input-type=module",
+        "--eval",
+        "import { createRequire } from 'node:module'; import { resolve } from 'node:path'; const require = createRequire(resolve('packages/desktop/package.json')); console.log(`Electron runtime prepared: ${require('electron')}`);",
+      ],
+      { noCache: true },
+    ),
     node(
       "components-tool-content",
       ["packages/desktop/test/toolContentPresentation.components.e2e.mjs"],
@@ -333,12 +374,21 @@ export async function fullPlan() {
     }),
     node("embedded-omp-assets", ["packages/desktop/scripts/fetch-omp-release.mjs"], {
       parallelGroup: "local-assets",
+      noCache: true,
       env: { OMP_RELEASE_SKIP: "0", ZCODE_TARGET_OS: "win32", ZCODE_TARGET_ARCH: "x64" },
     }),
     node("native-search-assets", ["scripts/prepare-native-search-tools.mjs"], {
       parallelGroup: "local-assets",
+      noCache: true,
       env: { ZCODE_TARGET_OS: "win32", ZCODE_TARGET_ARCH: "x64" },
     }),
+  );
+  return annotateBuildOutputs(expandTestFiles(stages));
+}
+
+export async function slowPlan() {
+  // 用户明确要求：fulltest 不打包，slowtest 在完整 fulltest 之后追加本地打包。
+  const packaging = await annotateBuildOutputs([
     pnpm(
       "desktop-windows-unpacked-packaging",
       [
@@ -359,11 +409,6 @@ export async function fullPlan() {
         env: { NODE_ENV: "production", ZCODE_TARGET_OS: "win32", ZCODE_TARGET_ARCH: "x64" },
       },
     ),
-  );
-  return stages;
-}
-
-export async function slowPlan() {
-  // 项目禁止 Linux/WSL；当前 Windows 本地覆盖与 full 完全一致，不重复执行 full。
-  return await fullPlan();
+  ]);
+  return [...(await fullPlan()), ...packaging];
 }

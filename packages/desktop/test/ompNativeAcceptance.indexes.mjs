@@ -15,6 +15,7 @@ import {
 } from "./ompNativeAcceptance.helpers.mjs";
 import { commandRows } from "./ompNativeAcceptance.commandRows.mjs";
 import { indexIdentity } from "./ompNativeAcceptance.indexIdentity.mjs";
+import { repositoryDiscoveryComplete } from "./ompNativeAcceptance.discovery.mjs";
 import { commandOperation, nativeStatus } from "./ompNativeAcceptance.history.mjs";
 import { exerciseWiki } from "./ompNativeAcceptance.wiki.mjs";
 
@@ -26,6 +27,7 @@ const positiveDeleted =
 const unavailable = /(?:No.*index|未.*索引|not.*indexed|0\s*(?:documents|files|篇))/iu;
 const noMatches =
   /No indexed matches\. Try another query or use grep for exhaustive\/current file coverage\./u;
+
 const only = (snapshot, identity) => snapshot.filter((db) => db.path === identity.path);
 
 async function maintenance(page, runtime, action, pattern, label) {
@@ -226,7 +228,11 @@ export async function exerciseIndexes(page, runtime, manifest) {
   return [wiki, rebuiltIdentity];
 }
 
-export async function deleteIndexes(page, runtime, identities) {
+export async function deleteIndexes(page, runtime, identities, isolationTask) {
+  // 新建隔离会话会启动独立的 RepoLifecycle Git discovery；模型 idle / Team yield
+  // 不等待该所有者，后续仍会把 fixture 路径写入 pending。必须先等其真实完成收据，
+  // 再采集全部索引的取消基线，不能以数据库稳定或固定延时冒充后台维护完成。
+  await repositoryDiscoveryComplete(runtime, isolationTask);
   for (const identity of identities) {
     const { kind } = identity;
     const built = await indexSnapshot(runtime);

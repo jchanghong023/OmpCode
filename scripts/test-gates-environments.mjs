@@ -15,19 +15,24 @@ const missing = (reason) => ({ status: "UNVERIFIED_MISSING_ENV", reason });
 let packagingState;
 let packagingCleanup;
 
-async function snapshotPackagingState() {
+function packagingTemplate() {
   assert.equal(process.platform, "win32", "Local packaging validation is Windows-only");
-  assert.ok(!packagingState, "Packaging must not overlap another packaging operation");
   const require = createRequire(resolve("packages/desktop/package.json"));
-  const template = join(
+  return join(
     dirname(require.resolve("app-builder-lib/package.json")),
     "templates",
     "nsis",
     "installSection.nsh",
   );
-  // Windows native-prebuild hook explicitly skips mutations; NSIS is the sole dependency write.
+}
+
+export async function snapshotPackagingState(template = packagingTemplate()) {
+  assert.ok(!packagingState, "Packaging must not overlap another packaging operation");
+  // 先登记读取所有权再 await；取消清理等待同一读取，不能漏掉迟到的快照。
   console.log("[gate] packaging snapshot begin");
-  packagingState = { template, bytes: await readFile(template) };
+  const ready = readFile(template);
+  packagingState = { template, ready };
+  await ready;
   console.log("[gate] packaging snapshot complete files=1");
 }
 
@@ -37,7 +42,8 @@ export function restorePackagingState() {
     .then(async () => {
       if (!packagingState) return;
       console.log("[gate] packaging restoration begin");
-      const { template, bytes } = packagingState;
+      const { template, ready } = packagingState;
+      const bytes = await ready;
       if (!(await readFile(template)).equals(bytes)) await writeFile(template, bytes);
       packagingState = undefined;
       console.log("[gate] packaging restoration complete files=1");
@@ -104,7 +110,7 @@ async function fixtureStage(stage, context, env) {
       const fail = (error) => {
         if (failed) return;
         failed = true;
-        // 调度器消费阶段结果而非 Error；直接传 Error 会丢失 FAIL，误报成缺环境。
+        // Failure frames must reach the lifecycle owner before GUI teardown can hang.
         context.onFailure?.({ status: "FAIL", exitCode: 1, reason: error.message });
         reject(error);
       };
@@ -148,6 +154,7 @@ async function fixtureStage(stage, context, env) {
       stageId: stage.id,
       clock: context.clock,
       failFast: true,
+      captureOutput: false,
       onFailure: context.onFailure,
       env: {
         ...env,
@@ -230,10 +237,16 @@ function outcome(result) {
   };
 }
 
-export async function regularStage(stage, context) {
-  if (stage.realOmp && !context.omp)
-    return missing("No installed omp; local mock-model validation still requires the real binary");
+// Native action/test executors share the same isolated environment semantics.
+// GUI lifecycle phases reuse one prepared environment and fixture root.
+async function prepareStageEnvironment(stage, context) {
   const env = { ...stage.env };
+  // 门禁可能宿主在 ZCode 产品会话内，宿主会把本机安装运行时与个人 provider 配置注入这两个变量；
+  // 继承后同一源码快照的构建校验、打包嵌入与 GUI 随宿主环境漂移（安装运行时 revision 31 的
+  // highspeed 卡曾使 tsup 构建期 Release 校验失败）。清除继承值，让构建校验与打包统一使用仓库受控
+  // config/provider/zcode-builtin.json、GUI 不读取用户日常配置；校验、打包与断言语义本身不变。
+  for (const key of new Set([...Object.keys(process.env), ...Object.keys(env)]))
+    if (/^ZCODE_(?:BUILTIN|PERSONAL)_PROVIDER_CONFIG_FILE$/iu.test(key)) env[key] = undefined;
   if (stage.realOmp) {
     // startCommand 会重新合并 process.env；必须覆盖 Windows 大小写别名，不能只删副本。
     // broker 启动即取快照，配置叠加可改子模型；离线公司通道与 HOME/.env 也会重读用户凭据。
@@ -262,6 +275,16 @@ export async function regularStage(stage, context) {
       OMP_AGENT_SKIP_REAL_E2E: "0",
     });
   }
+  return env;
+}
+
+export async function regularStage(stage, context) {
+  if (stage.realOmp && !context.omp)
+    return missing("No installed omp; local mock-model validation still requires the real binary");
+  // 生命周期目标复用外层已隔离的环境，避免每个 phase 再创建一套 HOME/配置根。
+  const env = context.preparedEnv
+    ? { ...context.preparedEnv, ...stage.env }
+    : await prepareStageEnvironment(stage, context);
   if (stage.fixture) return await fixtureStage(stage, context, env);
   let args = stage.args;
   let packagingOutput;
@@ -287,6 +310,7 @@ export async function regularStage(stage, context) {
         env,
         clock: context.clock,
         failFast: true,
+        captureOutput: false,
         onFailure: context.onFailure,
         failFastTests: stage.kind === "test" && args.includes("--test"),
         failFastCompiler: stage.kind === "compile",

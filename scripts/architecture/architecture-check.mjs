@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readFile } from "node:fs/promises";
 import {
   checkArchitecture,
   changedFilesFromGit,
@@ -19,7 +20,20 @@ if (command === "context") {
   process.exit(0);
 }
 
-const changed = args.includes("--changed") ? await changedFilesFromGit(cwd) : null;
+const scopeOption = args.indexOf("--changed-files-control");
+let changed = null;
+if (scopeOption !== -1) {
+  const filename = args[scopeOption + 1];
+  if (!filename || filename.startsWith("--"))
+    throw new Error("--changed-files-control requires a control JSON file");
+  // 门禁缓存与执行必须消费同一个文件集合；这里不能再次读取可能不同的 HEAD。
+  const control = JSON.parse(await readFile(filename, "utf8"));
+  changed = control.stage?.changedFiles;
+  if (!Array.isArray(changed) || !changed.every((file) => typeof file === "string"))
+    throw new Error("--changed-files-control requires stage.changedFiles: string[]");
+} else if (args.includes("--changed")) {
+  changed = await changedFilesFromGit(cwd);
+}
 const result = await checkArchitecture({ cwd, changedFiles: changed });
 
 if (command === "baseline:update") {

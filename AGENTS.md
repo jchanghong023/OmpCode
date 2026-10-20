@@ -88,7 +88,8 @@ UI UT 的 `@/` 路径别名使用 `pnpm exec tsx --tsconfig packages/ui/tsconfig
 ## 三级测试门禁
 
 - `pnpm fastcheck`：仅 Windows 本机，只运行静态分析、格式和增量编译，不执行任何测试（包括快速 UT、冒烟和门禁自检）。AI 只在相关修改成批完成且确有验证需要时选择执行；非编译预算最多 60 秒，不给纯编译继承此墙钟限制。
-- 三级计划、计时与失败语义唯一维护于[三级测试需求](docs/requirements/test-gates.md)：fulltest 包含全部 fastcheck 原语和现存适用当前平台测试（包括隔离 GUI），总墙钟最多 900 秒；slowtest 包含 fulltest 一次，总墙钟最多 1500 秒；编译、准备与清理均不暂停 full/slow 的截止时间。项目无适用 WSL 测试扩展，报告 `SKIPPED_NOT_APPLICABLE`，slowtest 与 fulltest 覆盖相同。不再按耗时区分层级，参数只能下调预算。
+- 三级计划、计时与失败语义唯一维护于[三级测试需求](docs/requirements/test-gates.md)：fulltest 包含全部 fastcheck 原语和现存适用当前平台测试（包括隔离 GUI），不执行打包，总墙钟最多 900 秒；slowtest 包含 fulltest 一次并追加本地 Windows unpacked 打包及原 afterPack 校验，总墙钟最多 1500 秒。编译、准备与清理均不暂停 full/slow 的截止时间。项目无适用 WSL 测试扩展，单独报告 `SKIPPED_NOT_APPLICABLE`；这不取消 slowtest 的打包职责。参数只能下调预算，不能因此删改测试或打包判据。
+- 构建、静态检查、测试、资源准备与本地打包统一由 Bazel 目标调度；`BUILD.bazel` 从现有 workspace manifests、锁文件、tsconfig 及门禁计划生成，不逐文件维护规则。原生动作声明并缓存真实构建产物，命中后物化到原产品路径；GUI live/退出定稿/同根恢复是一个原子测试目标。BEP、test.log、profile 记录状态、缓存来源、失败位置和慢目标；不保留 JS worker pool、重复成功账本或自动重试。每个 Worktree 独立 output_base，共享 `%LOCALAPPDATA%/zcode-gates-bazel/disk-cache` 内容缓存；源码、依赖、工具链与语义环境决定失效，checkout 路径与 mtime 不决定结果身份。无法可靠声明的外部下载/准备/打包使用原生 no-cache。正常入口复用 server，不清缓存；只保留全程预算、Node 用例级首失败及真实 GUI 所有权所需的最小适配。
 - 复用原有检查定义、质量配置和测试断言。此前授权删除的 Fork 专项不恢复；上游原有测试保留。不为门禁速度缩减现存适用测试，超预算 Fork 按完整上游差异与依赖图确定受影响模块范围，逐项声明遗漏的整仓覆盖，不能跳过受影响失败项。
 - fulltest/slowtest 需要当前用户明确执行指令。历史授权、代理建议、提交/推送或“检查一下”不授权。`--human-authorized` 是软约束，只反映原始明确执行指令，不是 Agent 自行决定；不能绕过门禁执行内部长步骤。
 - 三个入口只在本机运行，不调用 CI、远端/发布流水线、Computer Use，不移动/点击全局鼠标、不抢前台焦点。不接受 `--publish-releases`，不推送、不创建 Tag、不发布；独立分发 workflow 保留不动。接管鼠标的测试保留单独入口，必须另外获得用户明确指令，状态为 `NOT_RUN_SEPARATE_USER_INSTRUCTION_REQUIRED`，不记为门禁失败或通过。

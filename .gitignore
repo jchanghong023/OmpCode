@@ -85,3 +85,8 @@ packages/desktop/src/scheduler/schedulerProtocol.d.ts*
 # 仓库根的一次性调试探针与图标验证临时文件（评审发现 .probe-*/.tmp-* 误提交入库）。
 /.probe-*
 /.tmp-*
+# 三级门禁的 Bazel 运行时产物：输入控制文件含完整环境快照，不入库。
+/gates/inputs/
+/gates/toolchain.json
+# Bazel 便利符号链接（junction），指向工作区外的 output_base。
+/bazel-*/

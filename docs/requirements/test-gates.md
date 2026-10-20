@@ -1,45 +1,79 @@
 # 三级测试入口
 
-本域维护 **Windows 本机**现有 OMP 核心及上游保留测试的三级编排、覆盖关系与验收。不执行 CI、发布、Computer Use 或接管全局鼠标/前台焦点的测试。项目没有适用的 WSL 测试扩展，AI 不执行 CentOS/Linux/WSL 测试；slowtest 报告 `SKIPPED_NOT_APPLICABLE` 并与 fulltest 覆盖相同。产品两平台分发要求不属于测试通过结论。
+本域维护 **Windows 本机**现有 OMP 核心及上游保留测试的三级编排、覆盖关系与验收。不执行 CI、发布、Computer Use 或接管全局鼠标/前台焦点的测试。项目没有适用的 WSL 测试扩展，AI 不执行 CentOS/Linux/WSL 测试；slowtest 的 WSL 扩展报告 `SKIPPED_NOT_APPLICABLE`，但仍在 fulltest 之外执行本地打包验证。产品两平台分发要求不属于测试通过结论。
 
 ## 所有者与入口
 
 - 根 `package.json` 提供 `pnpm fastcheck`、`pnpm fulltest`、`pnpm slowtest`；三个入口只允许 Windows 执行测试。Node 支持范围沿用根 `package.json` 的 `engines.node`（当前 `>=24.0.0`）；`mise.toml` 的 Node 固定版本仅用于可复现开发基线，不是门禁精确版本准入条件。脚本复用并记录当前 Node，不自动降级或安装；pnpm 仍按 `mise.toml` 校验固定版本，不清除缓存。
+- 普通 `pnpm build` 与 `pnpm build:bootstrap` 也复用统一 Bazel 构建基础设施，从工作区 package manifests 的既有 build 命令和依赖自动推导构建图，不夹带测试或本地打包。bootstrap 保留 desktop `build:no-runtime-assets` 的原语义。仅测试三级入口受 Windows-only 与 full/slow 执行授权约束；普通构建不新增该平台限制，独立发布脚本仍不接入门禁。
 - `scripts/test-gates.mjs` 拥有入口权限、最终状态及快照；`scripts/test-gates-clock.mjs` 唯一维护预算上限和单调时钟，过程模块拥有阶段准入、首失败记录与所属子进程树。命令的失败事件直接通知调度所有者，不等待阶段 `finally` 或流关闭；收尾不能吞掉原失败或将其拖成超时。门禁编排复用原有检查、编译和测试原语；覆盖维护只新增或强化需求对应的行为断言，不修改产品代码、不放宽原断言或质量配置。结果绑定 HEAD、未提交差异、内容指纹及工具版本。
 - `fastcheck` 只运行增量 TypeScript 编译、Lint、变更架构和格式检查；根检查之外复用 formal-proof 的独立 typecheck 与 Lint 原语，纯 TypeScript 编译均按编译计时。不执行任何 UT、集成、GUI、冒烟或门禁自检。大量变更格式名单按 Windows 命令行上限分批，不截断。安全独立阶段有界并行，非编译预算最多 **60 秒**。
-- `fulltest` 包含 fastcheck 全部检查原语（全量检查可覆盖其变更子集，不重复运行）、全部现存适用 Windows 核心/上游测试、门禁自检、真实 OMP + 本地模拟模型 E2E，以及当前 Main/Host/Preload/Renderer 构建、工具详情和真实产品 GUI 启动/身份/同根冷恢复。模型模拟只替换模型响应，不替换 OMP、工具、交互、协议、持久化或 GUI；工具权限审批不在本次自动化验收范围，真实入口统一使用下述原生 yolo 契约。复用现有本地资源准备与 Electron unpacked 打包原语和 afterPack 校验，显式 `--publish never`，不调用发布入口；不等同正式安装器或两平台分发。**总墙钟最多 900 秒，包含编译、准备、测试、报告与清理。**
-- `slowtest` 复用 fulltest 相同计划一次，不再用 GUI 或较慢的当前平台测试区分层级。项目已取消 WSL 测试扩展，不探测或启动 WSL，也不额外增加环境、CI、远程阶段或重复 fulltest。**总墙钟最多 1500 秒，包含编译；不是可暂停的非编译预算。**
-- 先前用户授权精简的 Fork 新增专项保持已删除；上游原有测试与有效断言仍全部保留。不再按耗时移动层级、删除现存测试或缩减覆盖。当前快照没有预算超限依据，不启用 `fork-affected` 缩域；不宣称已验收历史删除专项或两平台打包。
+- `fulltest` 包含 fastcheck 全部检查原语（全量检查可覆盖其变更子集，不重复运行）、全部现存适用 Windows 核心/上游测试、门禁自检、真实 OMP + 本地模拟模型 E2E，以及当前 Main/Host/Preload/Renderer 构建、工具详情和真实产品 GUI 启动/身份/同根冷恢复。模型模拟只替换模型响应，不替换 OMP、工具、交互、协议、持久化或 GUI；工具权限审批不在本次自动化验收范围，真实入口统一使用下述原生 yolo 契约。按最新用户分级，**不执行 electron-builder 打包或 afterPack 打包校验**；编译和现有资源检查保留。**总墙钟最多 900 秒，包含编译、准备、测试、报告与清理。**
+- `slowtest` 继承 fulltest 全部检查和测试一次，再执行 Windows Electron unpacked 打包与原 afterPack 校验，显式 `--publish never`，不调用发布入口；不等同正式安装器或两平台分发。项目没有 WSL 测试扩展，不探测或启动 WSL，也不额外增加环境、CI、远程阶段或重复 fulltest。**总墙钟最多 1500 秒，包含编译；不是可暂停的非编译预算。**
+- 先前用户授权精简的 Fork 新增专项保持已删除；上游原有测试与有效断言仍全部保留。本轮唯一分级调整是用户明确要求把打包从 fulltest 移至 slowtest，不删除打包断言、不借此缩减其他测试。当前快照没有预算超限依据，不启用 `fork-affected` 缩域；不宣称已验收历史删除专项或两平台打包。
 - 编译前后复用既有 `tsc -b` composite/incremental、固定 dist/out 和稳定 Vite 缓存，不调用 clean 或为计时删除/切换缓存。只将纯编译原语标记为编译；staging、初始化、准备、静态检查、测试、等待、快照、聚合与清理均计入非编译时间。GUI 中的 Vite 懒编译是混合测试阶段，保守全部计费。
 - 每个入口只有一个单调时钟：`budgeted = total - compile_excluded`；排除观察到的“至少一个编译活跃且没有非编译工作活跃”的区间并集用于诊断。只有 fastcheck 按 `budgeted` 限时；fulltest/slowtest 始终按 `total` 限时，编译、并发、连续阶段及收尾均不暂停或重置截止时间。
-- full/slow 按“报错概率优先、依赖约束优先于排序”组织：没有可靠失败率统计时，使用静态诊断 → 局部行为测试 → 真实核心 → 产品 GUI/冷恢复 → 分发资源与 unpacked 打包的风险代理顺序，不伪称为实测概率排名。静态检查全部成功后才准入离线测试；真实核只等待其实际依赖的构建/staging，不等待下载或打包；分发专属的构建、资源准备及打包放到功能回归之后。保留全部现存覆盖及断言，不增加重复执行。
-- 独立阶段使用现有调度器支持的最高并发 4，文件级真实核并发仍为 2，不突破共享产物屏障。首失败自检必须先占满 4 个活跃槽位，再以第 5 个阶段验证失败后禁止准入；纯编译清理仍验证全部 4 个活跃编译阶段的清理区间计费。adapter 编译先于 staging，桌面编译先于产品 GUI，同根 live/cold 先后执行。独立 GUI 使用不同根/端口/进程；依赖或共享不兼容产物的阶段保留屏障。
-- `scripts/test-gates-plan.mjs` 唯一维护 full/slow 阶段清单：真实核测试分为适配器三入口、核心/状态/历史/附件/启动、会话身份/注册表三个阶段，各以 `--test-concurrency=2` 有界并行，统一标记 `realOmp: true`，在 adapter 构建/staging 屏障后的独立真实核组内运行，不进入离线测试组，每个文件仅运行一次。原有测试文件保留；纯投影、tracker、schema 与文件算法 UT 留在离线阶段。真实核准入、首失败、所属进程树及总预算仍由门禁过程模块统一持有，不新增独立预算。
+- full/slow 按“报错概率优先、依赖约束优先于排序”组织：静态诊断 → 局部行为测试 → 真实核心 → 产品 GUI/冷恢复 → 分发构建与资源检查；只有 slowtest 在这些结果成功后追加 unpacked 打包。静态检查全部成功后才准入离线测试；真实核只等待其实际依赖的构建/staging，不等待下载或打包。保留全部测试与断言，风险顺序不伪称为实测失败率排名。
+- 并发、动作依赖与目标级失败即停统一交给 Bazel（`--jobs=4`、`--local_test_jobs=4`、`--nokeep_going`、`--notest_keep_going`）；删除 JavaScript worker pool 和重复的阶段耗时/日志汇总。文件级真实核并发仍为 2。风险组之间只保留原有准入屏障，组内由原生依赖图调度。Bazel 的单目标超时不能代替入口全程预算；Node 用例级首失败和 GUI 的正常关闭/收据定稿仍由最小协议适配层通知统一监督。
+- fulltest 在原分组执行前可用一次 Bazel `--check_tests_up_to_date` 原生只读检查覆盖全部可缓存目标；该选项同时禁止构建动作执行。只有全部可缓存目标具有完整原生成功缓存证据才合并返回，仍恢复声明的真实构建产物、核对源码快照并清理；完整缓存证明通过后，彼此独立的 Electron 运行时与本地资源必跑准备可合并为一次 Bazel 调用，由原生依赖图并发调度，准备后真实 Electron 内容身份不得偏离已验证值。缓存未完整命中时仍按原风险分组执行。不执行测试/构建的查询不改变失败风险组顺序；BEP `ACTION_NOT_UP_TO_DATE` 仅表示进入原分组执行，不是重试失败测试。其他查询错误保持失败，缺少真实 OMP 不查询，Electron 尚未准备时沿用原准备屏障，slowtest 不绕过打包。查询、证据、工具链与产物回填均计入原总预算，不新增成功账本或降低覆盖。
+- 原生缓存尚未初始化（本 worktree 的 Bazel workspace-status 产物不存在）时直接按原分组执行；不对首次准备强行做只读缓存查询，也不从缺少目标级 BEP 的控制台文字推断成功或可重试错误。
+- 规则生成期可在单次生成实例内按绝对路径复用配置查找和原始文件文本；配置解析仍记录每个消费者实际读取的全部依赖，源码 AST、模块解析与分析事实仍按原配置/模式隔离。全根递归 glob 可按本次实际根条目拆为根文件与各未整体排除子树的 glob，保留点目录、未知目录和符号链接、原 exclude 及 subpackage 边界，不维护目录白名单；优化前后的原生标签集合必须等价。缓存不跨轮次、不持久化，不按 mtime/size 判等，不能吞掉读取异常或以文本复用漏掉依赖边。
+- 同一次入口中的 fast/full/slow 与构建计划可共享按绝对配置路径缓存的 TypeScript 解析结果，避免相同配置重复枚举源码；保留原解析诊断、`references` 递归与 build/noEmit 输出计算，编译仍调用原始命令。配置缓存仅在当前进程内有效，最终源码快照变化仍使验收失败，不跨运行复用解析结果。
+- `scripts/test-gates-plan.mjs` 唯一维护 full/slow 的测试范围与真实核分类；从现有 Node `--test` 文件参数自动展开，每个独立测试文件生成一个稳定路径标识的 Bazel 测试目标，保留原文件、断言、CLI 参数、UI tsconfig 别名及真实核门控，不手写第二份 BUILD 文件名单，不执行用例收集来生成规则。文件内的 `test()`/子测试仍属于同一次执行，不宣称单用例缓存。真实核文件目标只等待 adapter 构建/staging，以 Bazel 的本地测试并发上限 2 调度；离线文件和 GUI 目标保持原有并发上限。首失败、所属进程树与总预算仍由统一门禁监督。
+- Bazel 原生测试缓存是成功结果的唯一所有者：采用固定版本 `rules_shell 0.6.1` 的官方 `sh_test` 与 runfiles 库处理 Windows 原生启动和 manifest，声明源码、配置、控制文件和工具链输入，不再自行实现摘要或 runfiles 解析、不维护第二份成功账本。根 `BUILD.bazel` 仍由计划确定性生成；桥接读取 Build Event Protocol 的目标状态与 `cachedLocally` 证据，不能以控制台文本或空执行集合推断通过。失败、跳过、缺环境与不完整结果不得缓存为成功；不得在一次失败运行中自动重试。
+- 独立文件目标的 JS/TS 产品源码输入以 TypeScript 官方模块解析得到的本地导入闭包为准，不因同属一个 workspace 包就依赖该包全部业务源码；本文件、实际导入的其他测试入口、字面量引用的源码数据文件都必须声明。公共输入保守保留配置、非代码资源及非入口测试 helper/fixture。动态模块、代码数据读取或目录扫描无法可靠分析时，该目标恢复原包源码范围，不能漏报依赖以制造缓存命中。
+- 产物生产者、staging 和有明确执行入口的组件/GUI 目标也剔除未消费的测试入口，避免经构建链间接扩大失效；GUI 仍声明全部生命周期入口、真实构建产物和共享 fixture，产物实际变化时必须失效。tsconfig 实际包含的测试文件不能漏掉；全局静态检查、自检审计和无法可靠分析的入口保持保守范围。本轮仅修改门禁、输入依赖声明与相关约定，不修改业务实现，不减少测试覆盖或改变断言。
+- 禁止由目标名称中的 `package`、`install`、`prepare` 等子串推断是否禁用缓存；只有明确标注外部可变准备、共享运行时准备或打包的阶段使用原生 `no-cache`。文件目标不因路径含 `packages/` 或测试名称而意外失去缓存。
+- `gate_test` 的必跑准备目标除动作级 `no-cache` 外统一带原生 `external` 标签，禁止 `--cache_test_results=auto` 复用本地测试结果；不能只禁用磁盘/远端动作缓存后把必跑阶段当作本地测试缓存成功。
+- 每套 GUI 的 live → 正常退出/收据定稿 → 同根新进程 recovery（models 为 live → profile → default）组成一个原子 Bazel 测试目标。阶段仍调用原有启动器、隔离检查和断言，任何一步失败立即取消所属进程树；只有全生命周期成功才产生可复用结果，不能单独缓存 live 后在缺少其持久根时执行 recovery。组件和 Windows 离线冒烟各为独立目标。GUI 目标声明消费的当前构建产物、源码、fixture、真实 OMP 和 Electron 工具链身份；缺少安装核在缓存查询前拒绝。随机隔离根不参与语义缓存键，固定环境及工具链参与。
+- 编译与 staging 作为 Bazel 构建动作声明真实产物，缓存命中后必须物化实际 dist/out/暂存产物，不能以“以前命令成功”代替产物；沿用原 tsc/tsup/Vite 原语与稳定编译缓存，不清缓存。资源下载、共享运行时准备及 unpacked 打包也统一作为 Bazel 目标调度；其外部可变资源无法声明完整时使用原生 `no-cache` 标记，不复用未经验证的成功。正常入口不终止 server、不删除输出或磁盘缓存。
+- 生产者重跑前须恢复其已声明工作区产物的 owner 写权限，包括旧缓存回填后遗留的只读文件或目录内文件；权限准备与依赖回填都计入非编译时间。只处理该目标声明的工作区输出，不删除编译缓存、不改源码或共享 Bazel 缓存权限，真实读写错误仍失败。
+- 构建元数据由 Bazel 原生动作声明输出并物化到既有 `out/metadata/build-meta.json`，仍调用原 `collectBuildMetadata()`；其输入按实际读取的根/desktop 包清单、安装依赖版本身份、元数据执行脚本与静态依赖、HEAD 声明，不夹带未读取的业务源码或测试 fixture。包构建的既有完成顺序由组准入屏障保留，不把未读取的包产物当元数据缓存输入。局部业务代码修改不能仅因同包而重新生成 `buildTime`、连带失效整个桌面及 GUI。元数据实际输入或 HEAD 改变时正常重建；元数据内容、产品读取方式与编译判据不变，不以自制快照账本决定是否重建。
+- 验收要求在最终相同源码和配置快照上连续两次 `pnpm fulltest --human-authorized` 成功，且第二次入口报告的总耗时小于 30 秒；记录各次总耗时、编译排除、计费时间、退出码、必需目标与新执行/缓存成功/不完整数量。加速必须来自原生缓存复用，不能删测试、放宽判据、清缓存造冷样本或把旧结果写成本次执行。真实外部/不可声明资源的阶段禁用结果复用并如实说明。
+- 每个 Git Worktree 拥有独立 output_base，使用同一本机 Bazel `disk_cache` 共享基于内容和依赖的构建/测试成功结果；不同分支相同语义输入可复用，不以 HEAD 或 mtime 代替内容判定（确实消费提交身份的 metadata 除外）。动作参数与显式环境不包含 checkout 绝对路径；必要路径通过 runfiles、执行根或本次运行配置解析，依赖锁、实际工具链与必要语义环境仍参与缓存身份。修改共享输入必须失效所有相关目标，不能影响无关目标。
+- 规则从现有 pnpm workspace manifests、锁文件、TypeScript 官方配置解析器（`references`、`extends`）和门禁计划自动生成，以 glob 管理源码，不逐文件维护 BUILD 清单；少量工具输出/GUI 生命周期属于显式产品契约。已评估 [Aspect Gazelle JS/TS](https://github.com/aspect-build/aspect-gazelle/blob/main/language/js/README.md)、[rules_js pnpm 转译](https://github.com/aspect-build/rules_js/blob/main/docs/pnpm.md) 和 rules_ts：Gazelle 可生成常规源码/import 依赖，但不能自动推导 OMP/GUI 生命周期和三级范围；rules_js 的隔离依赖树/phantom hoisting 限制须与本仓现有 hoisted 安装等价验证；rules_ts `ts_project` 不能直接当作当前 `tsc -b` 的等价替换。本轮保留成熟 pnpm 与现有编译判据，由原生 Bazel 动作缓存，不新增第二套包管理器。未发现 Rust/Python 产品清单，不引入无关的 rules_rust/crate_universe/rules_python/Gazelle 依赖。
+- 生成职责分离：`test-gates-bazel-sync.mjs` 负责目标、作用域与生产者输入组合；`test-gates-source-dependencies.mjs` 负责配置、模块和源码数据闭包；`test-gates-source-bindings.mjs` 通过 TypeScript 单源符号绑定区分真实文件/进程操作、同名属性及局部遮蔽。源码事实仅在当前生成进程内复用，不写持久化缓存或第二份成功账本。
+- 实际 gate/build 入口在同一计费准备阶段、捕获源码快照之前自动同步生成规则；生成内容不变时不重写 BUILD。`--plan` 与 `--snapshot` 保持只读。保留 `node scripts/test-gates-bazel-sync.mjs` 作为显式生成入口，而不是要求每次手工维护规则或创建新包时逐文件补目标。
+- 审查修正边界：执行包装器的跨包静态模块闭包也是每个测试目标的输入；配方声明不是产物读取，linked worktree 的 `.git` 文件不参与缓存。变更架构检查以显式、确定性的变更文件集合执行并缓存；格式检查在实际工具启动边界保留 Windows 有界参数批次。静态阶段不提前要求 Electron 可执行文件，共享准备成功后才读取其内容身份并准入消费者。
+- GUI 生命周期的既有首失败帧必须在退出或清理完成前通知外层门禁，不依赖 Node `--test` reporter 注入。打包共享模板原文由外层门禁在准入前持有，所属子进程树停止后恢复，不能只依赖会被终止的 executor `finally`。
+- Bazel 原生 BEP、execution log、test.log 和 profile 是目标状态、日志位置、缓存来源及目标耗时的权威；BEP 判目标完整结果、测试缓存和时长，构建动作的本地/磁盘缓存来源由官方 execution log 的 runner/cacheHit 证明，不从缺失动作事件猜测。输出必需/新执行/缓存/不完整目标及最慢目标。Node 原生测试报告器保留用例定位与耗时，窄首失败通道只补充目标结束前的通知，不另建日志采集或重试框架。既有自研 worker、重复成功账本、阶段计时和已被原生能力替代的自检实现随切换删除，不保留双轨入口。
+- 验收必须实际覆盖三个入口、原生并发和依赖屏障、首/后续用例失败、超时与挂起清理、真实 Git Worktree 跨输出根共享命中、mtime-only 不重跑、共享输入失效和无关结果复用、失败日志定位与慢目标统计；保留所有现存业务测试及断言。以本轮重构前 fulltest 实测作为比较基线，最终相同快照连续两次 fulltest 通过并对比总耗时，不把 fixture 验证冒充产品全量验收。
+- 本轮统一基础设施迁移前的实测基线：`pnpm fulltest --human-authorized`，HEAD `714878a33fda800a4b29034214e7760801bf0a31`、dirty 内容指纹 `b11bf7b4950abf24afdb4b3a28322e0a3f4d7fbbaccb5368f19fa2b8ed013049`，Node 24.20.0 / pnpm 10.33.2 / Bazel 9.3.0，PASS、退出 0，total 865.3 秒、compile_excluded 28.0 秒、budgeted 837.3 秒。28 个测试目标均为本次执行；该结果只证明迁移前快照，不作为迁移后通过证据，也不是清缓存制造的冷样本。
 - Electron npm 运行时是组件及产品 GUI 的共享依赖；门禁在并行运行它们之前，串行调用同一 Desktop 包解析得到的 `require("electron")`，完成缺失二进制的下载与解压。准备阶段计入非编译预算，失败阻止所有 GUI；既有安装直接复用，不修改依赖安装器、不清缓存，也不让并发测试同时改写共享可执行文件。
+- 三个测试门禁的阶段统一清除宿主继承的 `ZCODE_BUILTIN_PROVIDER_CONFIG_FILE` 与 `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE`：门禁宿主在 ZCode 产品会话内时，宿主会把本机安装运行时与个人 provider 配置注入这两个变量，继承会使同一源码快照的构建期 Release 校验、打包嵌入与 GUI 运行时随宿主环境漂移。清除后门禁构建校验与打包统一使用仓库受控 `config/provider/zcode-builtin.json`，GUI 不读取用户日常配置；校验、打包与断言判据本身不变。普通 workspace build 保留原有显式 provider 构建配置，其路径与内容参与对应目标身份。
 - 预算包括入口准备和最终所属进程树清理，提前预留清理余量；只有 fastcheck 的纯编译区间暂停非编译定时器。fulltest/slowtest 从入口起使用不可暂停的总时限；首失败立即收尾，硬截止在收尾期间仍保持有效，不能因等待用例、验证回调、进程关闭或清理 Promise 而无限等待。到时强制非零退出，停止全部所属子进程，不再启动后续阶段。`--budget-seconds` 只能下调 60/900/1500 秒上限。
+- Windows 所属进程树终止统一使用 `SystemRoot/System32/taskkill.exe`，按 Windows 环境变量大小写无关语义解析系统根（包括 Worker 收到的 `SYSTEMROOT`），不经可变 PATH 查找；短预算的 OS 清理预留不能被工具路径搜索消耗。独立监督者在强制终止前只能报告请求时刻及未知实际退出码，不能把“已发出终止请求”表述为“已观察到全部退出”。
 - 每个成功、失败、缺环境、超时和已处理取消路径均输出 `status / total / compile_excluded / budgeted / limit`，秒数至少一位小数。必须等编译完成且所有在范围内阶段成功才允许 PASS；缺工具/测试跳过不冒充通过。
 - 任意检查、编译、测试、启动、工具缺失、未处理异常或阶段首个非通过结果立即停止调度并终止全部门禁所属进程树，不等待并行同伴或整个嵌套测试组完成。Node 测试必须在任意文件或并发子测试首次失败时报告，不得被早先挂起用例的 TAP 顺序缓冲；TypeScript 在首个 error 诊断到达时中止编译树。保留原断言、失败内容和非零状态。失败后的阶段及快照聚合不再启动，取消的阶段不能记为 PASS。
 - 关键日志必须能区分“已准入、正在等待、已失败、正在清理”：记录组/阶段开始与结束、阶段 ID、所属 PID、耗时；运行中的长阶段周期报告当前活跃阶段、进程和已用预算。首失败在等待进程关闭或阶段 `finally` 之前立即报告阶段和原失败；一旦失败封住准入，不等到最终汇总才显示。
 - GUI 日志记录 suite/phase、隔离证据根、launcher/Electron PID，以及 fixture、模型、Renderer、引导、验收和关闭各准备点；launcher 在 READY 之前或之后异常退出均立即通知所属阶段，正常关闭不误报失败。日志不输出命令实参、环境变量、模型凭据、问题/答案或消息正文。
 - 挂起的操作、GUI 准备、verify、进程关闭及 cleanup 均受同一总截止约束，不因心跳或输出重置预算，也不添加阶段独立的提前终止时限。超时先打印活跃阶段/进程及清理开始，硬截止保留至最终报告完成；清理器失败必须记录且保持非零结果，不把“门禁已退出”当作子进程树清理成功。
+- 取消/首失败时，进程所有者须在等待客户端退出前捕获附加清理器，避免客户端关闭后注销导致 detached Bazel server 漏清理；正常成功保留 server。打包恢复失败仍必须清理本轮控制文件，并保留非零结果。原生索引取消验收须在已发起的维护操作及隔离会话后台 Repo discovery 真实完成后采集基线，完成依据须对应真实所有者的提交收据；不得以固定延时、数据库稳定采样或放宽数据库不变断言掩盖并发写入。
 
 ```mermaid
 flowchart TD
   A[原始用户指令] --> B[入口权限与总预算所有者]
   B --> C[fastcheck: 静态与编译 / 非编译 60 秒]
-  B --> D[fulltest 900 秒 / slowtest 同计划 1500 秒]
-  D --> E[静态诊断全部通过]
+  B --> D[fulltest 900 秒 / slowtest 1500 秒]
+  D --> V{fulltest 原生只读全缓存检查}
+  V -->|完整成功缓存| W[恢复声明产物 / 一次原生调用并发执行独立 no-cache 准备]
+  W --> Q
+  V -->|需执行或不适用| E[静态诊断全部通过]
   E --> F[离线行为测试]
   F --> H[Adapter 构建与 staging]
   H --> I[真实核协议与会话测试]
   I --> J[桌面构建与共享 Electron 准备]
-  J --> K[隔离组件与 GUI live]
-  K --> L[同根新进程 recovery / profile / default]
-  L --> M[分发构建与资源准备]
-  M --> N[Windows unpacked 打包]
-  C --> O[单一调度器: 有界并发与阶段日志]
+  J --> K[Bazel 原生测试: 独立组件与各 GUI 生命周期]
+  K --> L[每个 GUI 目标内: live → 退出定稿 → 同根新进程恢复]
+  L --> M[分发构建与资源准备 / 不缓存外部可变资源]
+  M --> U{入口级别}
+  U -->|fulltest| Q
+  U -->|slowtest| N[Windows unpacked 打包]
+  C --> O[Bazel 原生依赖图 / 并发 / 失败即停]
   D --> O
-  O --> P[首失败立即通知 / 超时记录活跃对象]
+  O --> S[独立 Worktree 输出根 / 共享本机内容缓存]
+  S --> T[BEP 与 execution log / profile / test.log]
+  T --> P[首失败窄通知 / 入口独立硬截止]
   P --> Q[封住准入并清理所属进程树]
   N --> Q
   Q --> R[硬截止仍有效 / 最终状态与计时]
@@ -238,7 +272,7 @@ queue 的唯一接纳/派发事实源为 ConversationEngine 既有 TurnContext �
 ## 验收
 
 1. 三个入口存在；full/slow 需要本次用户明确执行指令，未授权时在检查前拒绝；`--human-authorized` 仅为原始执行指令的软约束，不提供独立授权。不扩展到 CI、发布、Computer Use 或全局鼠标测试。
-2. fastcheck 无测试；fulltest 包含其全部原语和现存适用当前平台测试；无适用 WSL 的 slowtest 与 fulltest 计划相同且只执行一次，报告明确 WSL 不适用。
+2. fastcheck 无测试；fulltest 包含其全部原语和现存适用当前平台测试但不打包；slowtest 完整继承 fulltest 一次，再执行本地 Windows unpacked 打包。WSL 扩展单独报告不适用，不能把 WSL 不适用误写为两级覆盖相同。
 3. fastcheck 验证单一 60 秒非编译预算；fulltest/slowtest 验证单一 900/1500 秒总墙钟截止。所有退出路径均报告计时：成功、失败、缺工具、超时、已处理取消。只有 fastcheck 的纯编译可超过短预算；full/slow 的纯编译、编译与非编译重叠、连续阶段和收尾均受同一总时限约束。
 4. 临时短桩验证实际并行、依赖顺序、缓存保留、失败传播、所属孙进程终止、参数不能增加上限、未授权拒绝及禁止操作；不修改现存产品测试断言、不调用真实 CI 或全局鼠标。
    Electron 缺失时，所有并行 GUI 必须等待共享运行时准备成功；已有运行时直接复用，准备失败不得启动其消费者。组件和产品 GUI 的现有断言保持不变。
@@ -392,3 +426,13 @@ queue 的唯一接纳/派发事实源为 ConversationEngine 既有 TurnContext �
 - 随后一次运行在 Agents GUI 首发失败：目录核心的模型注册刷新阻塞后续串行命令，提前提交的 `get_state` 在 10 秒请求时限后失败，导致首屏缺少模型初值。该轮 `FAIL total=165.7s compile_excluded=9.5s budgeted=156.2s limit=900.0s`。配置加载器改为等待目录响应后再请求真实状态；不增加时限、重试、模型兜底或第二状态所有者，产品规则不变。
 - 最终 `pnpm fulltest --human-authorized` 退出 0，52 阶段通过：`PASS total=849.2s compile_excluded=19.3s budgeted=829.9s limit=900.0s`。绑定 HEAD `6795285496b0a43f2c2dae35a594ede02a2afa19`、内容指纹 `5784a9f977cd0a6ce6fa2438f0dbc9d1119a6238cf25dd5e0d569009a36e0a2b`、原有未提交改动、Node 24.20.0 / pnpm 10.33.2；源码快照核对及所属进程清理完成。该指纹在追加本段记录之前，不跨快照沿用。
 - 真实 OMP + 本地模拟模型、全部现存适用 Windows 测试、静态检查、构建及未发布 unpacked 打包通过。全部产品 GUI 阶段通过，包含 Agents live/recovery、models live/profile/default 及 native live 346.2 秒、recovery 60.2 秒；native 证据根为 `F:/Temp/User/ompcode-core-gui-RRpW3D`，Agents 为 `F:/Temp/User/ompcode-core-gui-aF7ZAx`。不宣称 Linux/CentOS、完整日志审计或正式发布已验证；没有扩大门禁时限、缩减覆盖或放宽断言。
+
+### 2026-10-19 宿主环境变量隔离修复与三级复验
+
+- 三级门禁在 ZCode 产品托管的 Agent 会话内全程授权运行。首轮 `pnpm fulltest --human-authorized` 退出 1（`FAIL total=86.1s compile_excluded=1.1s budgeted=85.0s limit=900.0s`）：宿主进程向子进程注入 `ZCODE_BUILTIN_PROVIDER_CONFIG_FILE`，指向本机安装运行时的 provider 配置（revision 31，含 `highspeed` 卡）；仓库与上游开源 schema 的 `access.mode` 枚举均无该值，`desktop-main-host-preload-build` 与 `desktop-renderer-build` 的构建期 Release 校验失败，`electron-builder` 的 `from: builtinProviderConfig.sourcePath` 同样会被该重定向影响。修复为 `regularStage` 对全部阶段统一清除宿主继承的 `ZCODE_BUILTIN_PROVIDER_CONFIG_FILE` 与 `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE`（含 Windows 大小写别名，机制与 realOmp 清理一致）；构建校验与打包统一回退仓库受控 `config/provider/zcode-builtin.json`（revision 30），GUI 不读取用户日常配置。校验、打包与全部测试断言判据不变；规则同步至上方[所有者与入口](#所有者与入口)。修改后的 `scripts/test-gates-environments.mjs` 定向 `node --check`、`oxlint`、`oxfmt --check` 均 0 失败。
+- 修复后在同一快照完整复验通过：HEAD `714878a33fda800a4b29034214e7760801bf0a31`，内容指纹 `e524597bd1ac4f186a02b00840e562895c583345182569575ca4e800a47045e0`（含原有未提交修改与本修复；该指纹为追加本段记录之前的快照），Node 24.20.0 / pnpm 10.33.2，既有暖缓存、冷缓存未验证：
+  - `pnpm fastcheck`：**PASS**，`total=2.1s compile_excluded=0.0s budgeted=2.0s limit=60.0s`；
+  - `pnpm fulltest --human-authorized`：**PASS**，`total=682.8s compile_excluded=21.1s budgeted=661.8s limit=900.0s`，52 阶段全部通过，含入口自检、真实 OMP + 本地模拟模型、七套产品 GUI live/recovery 及 Windows 未发布 unpacked 打包；源码快照核对与所属进程清理完成；
+  - `pnpm slowtest --human-authorized`：**PASS**，`total=820.3s compile_excluded=34.1s budgeted=786.1s limit=1500.0s`，与 fulltest 同计划一次执行，WSL `SKIPPED_NOT_APPLICABLE`。
+- 修复前的首次 fastcheck PASS（1.4s）绑定修复前快照，不跨快照沿用；首轮 fulltest 失败记录保留，不与最终通过合并。
+- 依赖追踪边界：本机未安装 Bazel/Bazelisk，三级门禁未实现 Bazel 依赖追踪与跨层级成功结果缓存；现有复用仅限 `tsc -b` composite/incremental、固定 dist/out 与稳定 Vite 缓存及 Electron 运行时复用，均属编译缓存纪律，不构成结果缓存等价物。该缺口记为未验证的 pending 工作，不伪称满足。

@@ -208,7 +208,7 @@ try {
     );
     assert.equal(await readFile(paths.attachment, "utf8"), values.attachment);
 
-    await deleteIndexes(page, runtime, indexIdentities);
+    await deleteIndexes(page, runtime, indexIdentities, isolatedTask);
     const deletedIndexes = await indexSnapshot(runtime);
     dialog = await panel(page, runtime, "知识与代码索引");
     await dialog

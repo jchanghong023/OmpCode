@@ -1,30 +1,32 @@
 import assert from "node:assert/strict";
-import { glob, mkdtemp, mkdir, writeFile, readFile, rm } from "node:fs/promises";
+import { glob, mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { exerciseEntryMechanisms } from "./test-gates-entry-selftest.mjs";
 import { fullPlan, slowPlan } from "./test-gates-plan.mjs";
-import {
-  commandOutput,
-  stopAll,
-  snapshot,
-  gitText,
-  runStages,
-  exists,
-} from "./test-gates-process.mjs";
+import { bazelSelfTest } from "./test-gates-bazel-selftest.mjs";
+import { commandOutput, stopAll } from "./test-gates-process.mjs";
+import { snapshot, gitText } from "./test-gates-snapshot.mjs";
 import { gateBudget } from "./test-gates-clock.mjs";
 
 async function assertCurrentTestInventory() {
   const full = await fullPlan();
+  const slow = await slowPlan();
+  assert.deepEqual(slow.slice(0, full.length), full, "Slow must inherit every full check once");
+  assert.equal(
+    full.some((stage) => stage.packaging),
+    false,
+    "Daily fulltest must not package",
+  );
   assert.deepEqual(
-    await slowPlan(),
-    full,
-    "Full and slow must execute the same current-platform plan",
+    slow.slice(full.length).map((stage) => stage.id),
+    ["desktop-windows-unpacked-packaging"],
+    "Only slowtest adds the existing local unpacked packaging validation",
   );
   const discovered = [];
   for (const pattern of [
-    "packages/*/test/*.test.ts",
-    "packages/*/test/*.test.tsx",
+    "scripts/*.test.{ts,tsx,mts,cts,js,jsx,mjs,cjs}",
+    "packages/*/test/*.test.{ts,tsx,mts,cts,js,jsx,mjs,cjs}",
     "packages/*/test/*.gui.e2e.mjs",
     "packages/*/test/*.components.e2e.mjs",
     "packages/*/test/*.windows-smoke.mjs",
@@ -41,12 +43,16 @@ async function assertCurrentTestInventory() {
     [...new Set(discovered)].sort(),
     "Every existing applicable package test entry must be scheduled, including new GUI suites",
   );
-  for (const file of discovered.filter((entry) => /\.test\.tsx?$/u.test(entry)))
-    assert.equal(
-      full.filter((stage) => stage.args.includes(file)).length,
-      1,
-      `${file} must be executed exactly once`,
+  const nodeTests = full.filter((stage) => stage.kind === "test" && stage.args.includes("--test"));
+  for (const file of discovered.filter((entry) => /\.test\.[cm]?[jt]sx?$/u.test(entry))) {
+    const owners = nodeTests.filter((stage) => stage.args.includes(file));
+    assert.equal(owners.length, 1, `${file} must be executed exactly once`);
+    assert.deepEqual(
+      owners[0].args.filter((arg) => /\.test\.[cm]?[jt]sx?$/u.test(arg)),
+      [file],
+      `${file} must not share its cached execution with another test file`,
     );
+  }
   for (const suite of ["conversation", "models", "agents", "native", "interactions"]) {
     const stages = full.filter((stage) => stage.fixture && stage.suite === suite);
     assert.deepEqual(
@@ -65,6 +71,9 @@ export async function selfTest() {
   // 修复依据：断言提前失败也必须释放本次短桩进程和临时根，不能只在成功路径清理。
   try {
     await assertCurrentTestInventory();
+    // Native fixture owns concurrency/dependency/cache assertions; the remaining
+    // short fixtures exercise only the outer lifecycle and process adapters.
+    await bazelSelfTest();
     await runSelfTest(root);
   } finally {
     await stopAll();
@@ -72,7 +81,47 @@ export async function selfTest() {
   }
 }
 
+async function assertChangedArchitectureScope(root) {
+  const workspace = join(root, "architecture-scope");
+  await mkdir(join(workspace, "src"), { recursive: true });
+  await writeFile(
+    join(workspace, "architecture-policy.yaml"),
+    JSON.stringify({
+      version: 1,
+      modules: [{ id: "fixture", roots: ["src"], managed: false }],
+      global: { managedOnly: false, maxFileLines: 2 },
+    }),
+  );
+  await writeFile(join(workspace, "src/violation.ts"), "export const a = 1;\n\n\n");
+  const control = join(workspace, "scope.json");
+  const inspect = async (changedFiles) => {
+    await writeFile(control, JSON.stringify({ stage: { changedFiles } }));
+    return commandOutput(
+      "node",
+      [
+        resolve("scripts/architecture/architecture-check.mjs"),
+        "report",
+        "--changed",
+        "--changed-files-control",
+        control,
+      ],
+      { cwd: workspace, quiet: true, stdoutOnly: true },
+    );
+  };
+  // 此根没有 Git 仓库：显式范围必须优先于 --changed，且决定实际违规过滤结果。
+  const excluded = await inspect([]);
+  assert.equal(excluded.code, 0, excluded.output);
+  assert.deepEqual(JSON.parse(excluded.output).newViolations, []);
+  const included = await inspect(["src/violation.ts"]);
+  assert.equal(included.code, 1, included.output);
+  assert.deepEqual(
+    JSON.parse(included.output).newViolations.map((item) => item.rule),
+    ["max-file-lines"],
+  );
+}
+
 async function runSelfTest(root) {
+  await assertChangedArchitectureScope(root);
   const failure = join(root, "failure.mjs");
   const sleeper = join(root, "sleeper.mjs");
   const missingTool = join(root, "no-such-tool.exe");
@@ -167,64 +216,15 @@ async function runSelfTest(root) {
     );
     assert.equal(rejected.code, 1, `${level} cannot relax its charged budget`);
     assert.match(rejected.output, /may only be lowered/u);
+    const narrowed = await commandOutput(
+      "node",
+      ["scripts/test-gates.mjs", level, "--plan", "--target", "@zcode/desktop"],
+      { quiet: true },
+    );
+    assert.equal(narrowed.code, 1, `${level} cannot narrow its test scope`);
+    assert.match(narrowed.output, /Unknown gate argument: --target/u);
   }
 
-  const events = join(root, "events.jsonl");
-  const probe = join(root, "parallel-probe.mjs");
-  // Windows 启动耗时不等，短桩先同步开始屏障，避免把真实并发误判为串行。
-  await writeFile(
-    probe,
-    `
-import assert from 'node:assert/strict';
-import {appendFile,access,writeFile} from 'node:fs/promises';
-import {join} from 'node:path';
-const [root,id,...dependencies]=process.argv.slice(2);
-for(const dependency of dependencies) await access(join(root,dependency+'.ready'));
-await appendFile(join(root,'events.jsonl'),JSON.stringify({id,event:'start'})+'\\n');
-await writeFile(join(root,id+'.started'),'started');
-const peer=id==='a'?'b':id==='b'?'a':undefined;
-const deadline=performance.now()+5000;
-if(peer) while(!await access(join(root,peer+'.started')).then(()=>true,()=>false)){
-  assert.ok(performance.now()<deadline,'Concurrent peer did not start');
-  await new Promise(done=>setTimeout(done,10));
-}
-await new Promise(done=>setTimeout(done,200));
-await writeFile(join(root,id+'.ready'),'done');
-await appendFile(join(root,'events.jsonl'),JSON.stringify({id,event:'end'})+'\\n');
-`,
-  );
-  const execute = async (stage) => {
-    const result = await commandOutput(stage.command, stage.args, { quiet: true });
-    return { status: result.code === 0 ? "PASS" : "FAIL", exitCode: result.code };
-  };
-  const prerequisites = ["a", "b", "c"].map((id) => ({
-    id,
-    parallelGroup: "offline",
-    command: "node",
-    args: [probe, root, id],
-  }));
-  const records = await runStages(
-    [
-      ...prerequisites,
-      { id: "dependent", command: "node", args: [probe, root, "dependent", "a", "b", "c"] },
-    ],
-    execute,
-    2,
-  );
-  assert.ok(
-    records.every((record) => record.status === "PASS"),
-    "Dependencies must finish before their consumer starts",
-  );
-  let active = 0;
-  let peak = 0;
-  for (const event of (await readFile(events, "utf8"))
-    .trim()
-    .split("\n")
-    .map((line) => JSON.parse(line))) {
-    active += event.event === "start" ? 1 : -1;
-    peak = Math.max(peak, active);
-  }
-  assert.equal(peak, 2, "Independent children must run in parallel without exceeding the limit");
   const obsoleteFlag = await commandOutput(
     "node",
     ["scripts/test-gates.mjs", "slowtest", "--plan", "--publish-releases"],
@@ -234,25 +234,7 @@ await appendFile(join(root,'events.jsonl'),JSON.stringify({id,event:'end'})+'\\n
   assert.match(obsoleteFlag.output, /Unknown gate argument/u);
   // 临时短桩复用真实生命周期，验证三种入口的全部退出路径和编译专用区间计费。
   await exerciseEntryMechanisms(root, { failure, tree: stub, childPid });
-  const afterFailure = join(root, "after-failure.mjs");
-  await writeFile(
-    afterFailure,
-    `import{writeFile}from'node:fs/promises';await writeFile(${JSON.stringify(join(root, "should-not-run"))},'invalid');`,
-  );
-  const failedStages = await runStages(
-    [
-      { id: "failure", command: "node", args: [failure] },
-      { id: "blocked-consumer", command: "node", args: [afterFailure] },
-    ],
-    execute,
-  );
-  assert.equal(failedStages[0].status, "FAIL");
-  assert.equal(
-    await exists(join(root, "should-not-run")),
-    false,
-    "Failed prerequisites must block subsequent stages",
-  );
   console.log(
-    "Self-tests PASS: failure propagation, bounded parallel children, dependency barrier, hard budget rejection, permissions, source fingerprint, timeout and owned grandchild cleanup",
+    "Self-tests PASS: native Bazel execution/cache/dependencies, outer budgets, permissions, source fingerprint, immediate case failures, signals and owned grandchild cleanup",
   );
 }

@@ -1,369 +1,380 @@
 import assert from "node:assert/strict";
-import { readFile, writeFile, stat, rm } from "node:fs/promises";
+import { readFile, writeFile, rm } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { commandOutput } from "./test-gates-process.mjs";
-import { exerciseHardDeadline } from "./test-gates-deadline-selftest.mjs";
-import { exerciseFirstFailure } from "./test-gates-failure-selftest.mjs";
+import { exerciseCleanupFailure } from "./test-gates-cleanup-selftest.mjs";
 
-// 只在临时目录运行短桩；和真实入口共用生命周期，不提供绕过真实计划的 CLI/env 开关。
+// Only the outer deadline, process ownership and immediate node:test adapter need
+// short stubs. Native scheduling/cache/dependency assertions live in bazelSelfTest.
 export async function exerciseEntryMechanisms(root, { failure, tree, childPid }) {
   const runner = pathToFileURL(resolve("scripts/test-gates-run.mjs")).href;
+  const fixtureEnv = { ...process.env };
+  if (process.platform === "win32") {
+    // 显式覆盖 Bazel 的大写环境边界，不能只在主线程大小写不敏感的 env 上验证清理。
+    const systemRoot = process.env.SystemRoot;
+    for (const key of Object.keys(fixtureEnv))
+      if (key.toUpperCase() === "SYSTEMROOT") delete fixtureEnv[key];
+    fixtureEnv.SYSTEMROOT = systemRoot;
+  }
   const processModule = pathToFileURL(resolve("scripts/test-gates-process.mjs")).href;
-  const fixture = join(root, "entry-fixture.mjs");
-  const cache = join(root, "build.tsbuildinfo");
-  const failingTests = join(root, "first-failure.test.mjs");
-  const laterTests = join(root, "later.test.mjs");
-  const slowTests = join(root, "earlier-slow.test.mjs");
-  const lateFailureTests = join(root, "later-failure.test.mjs");
-  const concurrentTests = join(root, "concurrent-failure.test.mjs");
-  const blocked = join(root, "blocked-after-failure");
-  const streamFirstSeen = join(root, "stream-first-seen");
-  const streamNoiseSeen = join(root, "stream-noise-seen");
-  const sourceFile = join(root, "verification-source");
-  const verifyRan = join(root, "verification-ran");
-  const streamNoise = "INTERLEAVED_STDERR\n";
-  const streamFailures = {
-    "stream-tap-failure": { first: "not o", last: "k 1 - STREAM_TAP_FAILURE\n" },
-    "stream-compiler-failure": { first: "error T", last: "S9999: STREAM_COMPILER_FAILURE\n" },
-  };
-  const streamCode = Object.fromEntries(
-    Object.entries(streamFailures).map(([scenario, { first, last }]) => [
-      scenario,
-      `import{readFile}from'node:fs/promises';const seen=async p=>{while(!await readFile(p).then(()=>true,()=>false))await new Promise(setImmediate);};await seen(${JSON.stringify(childPid)});process.stdout.write(${JSON.stringify(first)});await seen(${JSON.stringify(streamFirstSeen)});process.stderr.write(${JSON.stringify(streamNoise)});await seen(${JSON.stringify(streamNoiseSeen)});process.stdout.write(${JSON.stringify(last)});setInterval(()=>{},1000);`,
-    ]),
-  );
-  const awaitPeer = `while(!await readFile(${JSON.stringify(childPid)}).then(()=>true,()=>false)) await new Promise(r=>setTimeout(r,10));`;
+  const fixture = join(root, "outer-lifecycle.mjs");
+  const first = join(root, "first.test.mjs");
+  const slow = join(root, "slow.test.mjs");
+  const later = join(root, "later.test.mjs");
+  const nested = join(root, "nested.test.mjs");
+  const compiler = join(root, "compiler-stream.mjs");
+  const environments = pathToFileURL(resolve("scripts/test-gates-environments.mjs")).href;
+  const template = join(root, "shared-installSection.nsh");
+  const originalTemplate = Buffer.from("original NSIS template\r\n原始内容\r\n");
+  const packagingWriter = join(root, "packaging-writer.mjs");
+  const framedGui = join(root, "framed-gui.mjs");
   await writeFile(
-    failingTests,
-    `import test from 'node:test';import assert from 'node:assert/strict';import{readFile}from'node:fs/promises';test('first failure',async()=>{${awaitPeer}assert.fail('FIRST_TEST_FAILURE');});test('already scheduled work',async()=>{await new Promise(r=>setTimeout(r,10000));});`,
+    packagingWriter,
+    `import fs from 'node:fs';fs.writeFileSync(${JSON.stringify(template)},'mutated template');fs.writeFileSync(${JSON.stringify(childPid)},String(process.pid));setInterval(()=>{},1000);`,
   );
   await writeFile(
-    slowTests,
-    `import test from 'node:test';test('earlier slow file',async()=>{await new Promise(r=>setTimeout(r,10000));});`,
+    framedGui,
+    `import fs from 'node:fs';fs.writeFileSync(${JSON.stringify(childPid)},String(process.pid));process.stdout.write('GUI_OUTPUT_BEFORE_FAILURE\\n');process.stderr.write('\\u001eOMP_TEST_');setTimeout(()=>{process.stdout.write('GUI_OUTPUT_BETWEEN_FRAME_CHUNKS\\n');process.stderr.write('FAILURE '+JSON.stringify({name:'GUI live',error:'GUI_FIRST_FAILURE'})+'\\n');setInterval(()=>{},1000);},30);`,
   );
   await writeFile(
-    lateFailureTests,
-    `import test from 'node:test';import assert from 'node:assert/strict';import{readFile}from'node:fs/promises';test('later file failure',async()=>{${awaitPeer}assert.fail('UNORDERED_TEST_FAILURE');});`,
+    compiler,
+    "process.stdout.write('error T');setTimeout(()=>{process.stderr.write('COMPILER_STDERR_BETWEEN\\n');setTimeout(()=>{process.stdout.write('S9999: FIRST_COMPILER_FAILURE\\n');setInterval(()=>{},1000);},20);},20);",
+  );
+  const lifecycleFiles = {};
+  for (const [scenario, code] of Object.entries({
+    collection: "throw new Error('COLLECTION_FAILURE');",
+    setup:
+      "import test,{before} from 'node:test';before(()=>{throw new Error('SETUP_FAILURE');});test('body',()=>{});",
+    teardown:
+      "import test,{after} from 'node:test';after(()=>{throw new Error('TEARDOWN_FAILURE');});test('body',()=>{});",
+    "worker-crash": "process.exit(23);",
+  })) {
+    lifecycleFiles[scenario] = join(root, `${scenario}.test.mjs`);
+    await writeFile(lifecycleFiles[scenario], code);
+  }
+  await writeFile(
+    first,
+    "import test from 'node:test';import assert from 'node:assert/strict';test('first failure',()=>assert.fail('FIRST_CASE_FAILURE'));test('pending',async()=>{await new Promise(r=>setTimeout(r,10000));});",
   );
   await writeFile(
-    concurrentTests,
-    `import test from 'node:test';import assert from 'node:assert/strict';import{readFile}from'node:fs/promises';test('concurrent suite',{concurrency:2},async t=>{await Promise.all([t.test('earlier slow child',async()=>{await new Promise(r=>setTimeout(r,10000));}),t.test('later failing child',async()=>{${awaitPeer}assert.fail('UNORDERED_TEST_FAILURE');})]);});`,
+    slow,
+    "import test from 'node:test';test('earlier slow file',async()=>{await new Promise(r=>setTimeout(r,10000));});",
   );
   await writeFile(
-    laterTests,
-    `import{writeFile}from'node:fs/promises';await writeFile(${JSON.stringify(blocked)},'must not start');`,
+    later,
+    "import test from 'node:test';import assert from 'node:assert/strict';test('later failure',()=>assert.fail('LATER_CASE_FAILURE'));",
+  );
+  await writeFile(
+    nested,
+    "import test from 'node:test';import assert from 'node:assert/strict';test('suite',{concurrency:2},async t=>{await Promise.all([t.test('slow child',async()=>{await new Promise(r=>setTimeout(r,10000));}),t.test('later child',()=>assert.fail('NESTED_CASE_FAILURE'))]);});",
   );
   await writeFile(
     fixture,
     `
 import {createGateRun} from ${JSON.stringify(runner)};
-import {commandOutput} from ${JSON.stringify(processModule)};
-import {readFile,writeFile} from 'node:fs/promises';
-import {writeFileSync} from 'node:fs';
-const [level,scenario,root,limit]=process.argv.slice(2);
-const gate=createGateRun({level,limitSeconds:Number(limit),authorized:!['denied','unauthed-timeout'].includes(scenario),signals:['SIGTERM'],cleanup:scenario==='hung-cleanup'?()=>new Promise(()=>{}):undefined});
-const waitCode=ms=>'setTimeout(()=>{},'+ms+')';
-const node=(id,kind,ms,extra={})=>({id,kind,command:'node',args:['--eval',waitCode(ms)],...extra});
+import {commandOutput,startCommand,watchBudgetTargets,registerTreeKiller,cancelCommands,stopAll} from ${JSON.stringify(processModule)};
+import {regularStage,snapshotPackagingState,restorePackagingState} from ${JSON.stringify(environments)};
+import {readFile} from 'node:fs/promises';
+import fs from 'node:fs';
+import {syncBuiltinESMExports} from 'node:module';
+const [level,scenario,limit]=process.argv.slice(2);
+const gate=createGateRun({level,limitSeconds:Number(limit),authorized:scenario!=='denied',signals:['SIGTERM'],cleanup:scenario==='hung-cleanup'?()=>new Promise(()=>{}):scenario==='packaging-cancel'?restorePackagingState:undefined});
 const cleanupObservations=[];
-if(scenario==='compiler-cleanup'){
+if(scenario==='compiler-stream'){
  const enter=gate.clock.enter.bind(gate.clock);
- let compileActive=0;
- let checkActive=0;
  gate.clock.enter=kind=>{
   const wasCompileOnly=gate.clock.compileOnly();
   const end=enter(kind);
-  if(kind==='compile') compileActive++; else checkActive++;
-  const observation=kind!=='compile'&&compileActive>0
-   ? {compileActive,checkActive,wasCompileOnly,compileOnly:gate.clock.compileOnly(),before:gate.clock.read()}
-   : undefined;
+  const before=wasCompileOnly&&kind!=='compile'?gate.clock.read():undefined;
   return ()=>{
-   if(observation) cleanupObservations.push({...observation,after:gate.clock.read()});
+   if(before) cleanupObservations.push({before,after:gate.clock.read()});
    end();
-   if(kind==='compile') compileActive--; else checkActive--;
   };
  };
 }
-const streamFailures=${JSON.stringify(streamFailures)};
-const streamCode=${JSON.stringify(streamCode)};
-const streamSeen=[];
-const originalWrite=process.stdout.write;
-if(streamFailures[scenario]){
- process.stdout.write=function(chunk,...args){
-  const result=originalWrite.call(this,chunk,...args);
-  const text=String(chunk);
-  if(text===streamFailures[scenario].first){
-   streamSeen.push('stdout-head');
-   writeFileSync(${JSON.stringify(streamFirstSeen)},'seen');
-  }else if(text===${JSON.stringify(streamNoise)}){
-   streamSeen.push('stderr-between');
-   writeFileSync(${JSON.stringify(streamNoiseSeen)},'seen');
-  }
-  return result;
+if(scenario==='blocked-report'){
+ const original=fs.writeSync;
+ fs.writeSync=(fd,text,...rest)=>{
+  if(String(text).startsWith(level+':')) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0);
+  return original(fd,text,...rest);
  };
+ syncBuiltinESMExports();
 }
-let stages;
-// 真实入口并发为 4：先占满活跃槽位，第 5 个哨兵才能证明首失败后的禁止准入。
-switch(scenario){
- case 'success': stages=[node('check','check',100)]; break;
- case 'hung-work': stages=[{id:'hung-work',kind:'compile'}]; break;
- case 'hung-verify':
- case 'hung-cleanup': stages=[node('check','check',100)]; break;
- case 'parallel-hang': stages=[{id:'failure',kind:'check',command:'node',args:[${JSON.stringify(failure)}],parallelGroup:'failure'},{id:'hung-work',kind:'check',parallelGroup:'failure'}]; break;
- case 'unhandled': stages=[{id:'owned-tree',kind:'check',command:'node',args:[${JSON.stringify(tree)}]}]; break;
- case 'failure': stages=[{id:'failure',kind:'check',command:'node',args:[${JSON.stringify(failure)}]}]; break;
- case 'failure-late-pass': stages=[{id:'failure',kind:'check'},{id:'must-not-start',kind:'check',command:'node',args:[${JSON.stringify(laterTests)}]}]; break;
- case 'failure-finally-hang': stages=[{id:'failure',kind:'check',command:'node',args:[${JSON.stringify(failure)}]},{id:'must-not-start',kind:'check',command:'node',args:[${JSON.stringify(laterTests)}]}]; break;
- case 'missing': stages=[{id:'missing',kind:'check',command:root+'/no-such-tool.exe',args:[]}]; break;
- case 'denied': stages=[{id:'must-not-run',kind:'check',command:'node',args:['--eval',"require('node:fs').writeFileSync("+JSON.stringify(root+'/unauthorized-ran')+",'bad')"]}]; break;
- case 'timeout':
- case 'unauthed-timeout':
- case 'interruption': stages=[{id:'owned-tree',kind:'check',command:'node',args:[${JSON.stringify(tree)}]}]; break;
- case 'compile-long': stages=[node('compile','compile',2600)]; break;
- case 'compile-fail': stages=[{id:'compile-fail',kind:'compile',command:'node',args:[${JSON.stringify(failure)}]}]; break;
- case 'overlap': stages=[node('compile','compile',2600,{parallelGroup:'parallel'}),node('check','check',2600,{parallelGroup:'parallel'})]; break;
- case 'serial-budget': stages=[node('first','check',600),node('second','check',600),node('third','check',600)]; break;
- case 'mixed': stages=[node('compile-and-test','test',2600)]; break;
- case 'parallel': stages=[node('a','check',500,{parallelGroup:'parallel'}),node('b','check',500,{parallelGroup:'parallel'}),node('c','check',500,{parallelGroup:'parallel'})]; break;
- case 'cache': stages=[{id:'cached-compile',kind:'compile',command:'node',args:['--eval',"const fs=require('node:fs');const p="+JSON.stringify(${JSON.stringify(cache)})+";if(fs.existsSync(p)){console.log('CACHE_REUSED')}else{fs.writeFileSync(p,'reusable-build-artifact');console.log('CACHE_CREATED')}"]}]; break;
- case 'verify-source': stages=[node('check','check',100)]; break;
- case 'verify-failure': stages=[{id:'failure',kind:'check',command:'node',args:[${JSON.stringify(failure)}]}]; break;
- case 'compiler-cleanup': {
-  stages=[
-   {id:'first-compiler-failure',kind:'compile',command:'node',args:['--input-type=module','--eval',${JSON.stringify(`import{readFile}from'node:fs/promises';${awaitPeer}console.log('error TS9999: PURE_COMPILER_FAILURE');setInterval(()=>{},1000);`)}],parallelGroup:'failure'},
-   {id:'owned-peer-tree',kind:'compile',command:'node',args:[${JSON.stringify(tree)}],parallelGroup:'failure'},
-   node('owned-compile','compile',10000,{parallelGroup:'failure'}),
-   node('owned-compile-peer','compile',10000,{parallelGroup:'failure'}),
-   {id:'must-not-start',kind:'compile',command:'node',args:[${JSON.stringify(laterTests)}],parallelGroup:'failure'},
-  ];
-  break;
- }
- case 'stream-tap-failure':
- case 'stream-compiler-failure': {
-  const kind=scenario==='stream-tap-failure'?'test':'compile';
-  stages=[
-   {id:'first-stream-failure',kind,failFastTests:kind==='test',command:'node',args:['--input-type=module','--eval',streamCode[scenario]],parallelGroup:'failure'},
-   {id:'owned-peer-tree',kind,command:'node',args:[${JSON.stringify(tree)}],parallelGroup:'failure'},
-   node('owned-compile','compile',10000,{parallelGroup:'failure'}),
-   node('owned-compile-peer','compile',10000,{parallelGroup:'failure'}),
-   {id:'must-not-start',kind,command:'node',args:[${JSON.stringify(laterTests)}],parallelGroup:'failure'},
-  ];
-  break;
- }
- case 'parallel-failure':
- case 'compiler-output-failure':
- case 'out-of-order-files':
- case 'concurrent-test-failure':
- case 'nested-failure': {
-  const trigger=['nested-failure','out-of-order-files','concurrent-test-failure'].includes(scenario)
-   ? {id:'first-test-failure',kind:'test',command:'node',args:['--test','--test-reporter=tap',scenario==='out-of-order-files'?'--test-concurrency=2':'--test-concurrency=1',...(scenario==='out-of-order-files'?[${JSON.stringify(slowTests)},${JSON.stringify(lateFailureTests)}]:scenario==='concurrent-test-failure'?[${JSON.stringify(concurrentTests)}]:[${JSON.stringify(failingTests)},${JSON.stringify(laterTests)}])]}
-   : scenario==='compiler-output-failure'
-    ? {id:'first-compiler-failure',kind:'compile',command:'node',args:['--input-type=module','--eval',${JSON.stringify(`import{readFile}from'node:fs/promises';${awaitPeer}console.log('error TS9999: FIRST_COMPILER_FAILURE');setInterval(()=>{},1000);`)}]}
-    : {id:'first-stage-failure',kind:'check',command:'node',args:['--input-type=module','--eval',${JSON.stringify(`import{readFile}from'node:fs/promises';${awaitPeer}process.exit(7);`)}]};
-  stages=[{...trigger,parallelGroup:'failure'}, {id:'owned-peer-tree',kind:'check',command:'node',args:[${JSON.stringify(tree)}],parallelGroup:'failure'},node('owned-compile','compile',10000,{parallelGroup:'failure'}),node('owned-compile-peer','compile',10000,{parallelGroup:'failure'}),{id:'must-not-start',kind:'check',command:'node',args:[${JSON.stringify(laterTests)}],parallelGroup:'failure'}];
-  break;
- }
- default: throw new Error('Unknown fixture scenario');
-}
-if(scenario==='interruption') setTimeout(()=>process.emit('SIGTERM'),1000);
-if(scenario==='unhandled') { void (async()=>{${awaitPeer}throw new Error('UNHANDLED_FIXTURE_FAILURE');})(); }
-const verification={calls:0};
-const failureEvents=[];
-const sourceBefore=scenario.startsWith('verify-')?await readFile(${JSON.stringify(sourceFile)},'utf8'):undefined;
-const details={
- scenario,cleanupObservations,streamSeen,failureEvents,
- ...(sourceBefore===undefined?{}:{snapshot:{source:sourceBefore},tools:{node:process.version,nodePath:process.execPath},verification}),
+const wait=ms=>new Promise(r=>setTimeout(r,ms));
+const execute=async(args,onFailure,options={})=>{
+ const result=await commandOutput('node',args,{quiet:true,clock:gate.clock,failFast:true,onFailure:failure=>onFailure({...failure,id:'native-group'}),...options});
+ if(result.output) console.log(result.output);
+ return {id:'native-group',status:result.code?'FAIL':'PASS',exitCode:result.code,...(result.reason?{reason:result.reason}:{})};
 };
-const report=await gate.run(stages,async (stage,onFailure)=>{
- if(stage.id==='hung-work') return new Promise(()=>{});
- if(scenario==='failure-late-pass'){
-  onFailure({status:'FAIL',exitCode:7,reason:'FIRST_ACCEPTED_FAILURE'});
-  return {status:'PASS',exitCode:0};
- }
- try {
-  const result=await commandOutput(stage.command,stage.args,{stageId:stage.id,clock:gate.clock,onFailure:failure=>{failureEvents.push('failure-notified');onFailure(failure);},failFast:true,quiet:!streamFailures[scenario],failFastTests:stage.failFastTests||stage.kind==='test'&&stage.args.includes('--test'),failFastCompiler:stage.kind==='compile'});
-  if(result.output) console.log(result.output);
-  return {status:result.code?'FAIL':'PASS',exitCode:result.code,...(result.reason?{reason:result.reason}:{})};
- } finally {
-  if(scenario==='failure-finally-hang'){
-   failureEvents.push('finally-entered');
-   await new Promise(()=>{});
+const report=await gate.run(async(records,onFailure)=>{
+ if(scenario==='tree-killer-cancel'||scenario==='tree-killer-success'){
+  const cancelled=scenario==='tree-killer-cancel';
+  const unregister=registerTreeKiller(()=>cleanupObservations.push('cleanup'));
+  const child=startCommand('node',['--eval',cancelled?"process.stdout.write('ready');setInterval(()=>{},1000);":''],{quiet:true});
+  const closed=new Promise(resolve=>child.once('close',()=>{
+   if(cancelled){
+    unregister();
+    cleanupObservations.push('unregistered');
+   }
+   resolve();
+  }));
+  if(cancelled){
+   await new Promise(resolve=>child.stdout.once('data',resolve));
+   cancelCommands();
+   await stopAll(gate.clock);
+  } else {
+   await closed;
+   await stopAll(gate.clock);
+   unregister();
+   cleanupObservations.push('unregistered');
   }
+  await closed;
+  records.push({id:'native-group',status:cancelled?'FAIL':'PASS',exitCode:cancelled?1:0});
+  return;
  }
-},details,scenario.startsWith('verify-')?async records=>{
- verification.calls++;
- await writeFile(${JSON.stringify(verifyRan)},'verify ran');
- await writeFile(${JSON.stringify(sourceFile)},'SOURCE_AFTER');
- const sourceAfter=await readFile(${JSON.stringify(sourceFile)},'utf8');
- if(sourceBefore!==sourceAfter) records.push({
-  id:'source-snapshot',
-  status:'UNVERIFIED_MISSING_ENV',
-  reason:'Source changed during validation; results belong to different snapshots',
- });
-}:scenario==='hung-verify'?()=>new Promise(()=>{}):undefined);
-process.stdout.write=originalWrite;
+ if(scenario==='packaging-cancel'){
+  await snapshotPackagingState(${JSON.stringify(template)});
+  void (async()=>{
+   while(!await readFile(${JSON.stringify(childPid)}).then(()=>true,()=>false)) await wait(10);
+   process.emit('SIGTERM');
+  })();
+  records.push(await execute([${JSON.stringify(packagingWriter)}],onFailure));
+  return;
+ }
+ if(scenario==='framed-gui'){
+  const result=await regularStage({id:'gui-lifecycle',kind:'test',command:'node',args:[${JSON.stringify(framedGui)}]},{
+   clock:gate.clock,onFailure:failure=>onFailure({...failure,id:'native-group'}),
+  });
+  if(!records.some(record=>record.id==='native-group')) records.push({...result,id:'native-group'});
+  return;
+ }
+ if(['blocked-loop','blocked-compile','blocked-native'].includes(scenario)){
+  startCommand('node',[${JSON.stringify(tree)}],{quiet:true});
+  while(!await readFile(${JSON.stringify(childPid)}).then(()=>true,()=>false)) await wait(10);
+  if(scenario==='blocked-native'){
+   const live=${JSON.stringify(join(root, "blocked-native.live"))};
+   watchBudgetTargets([live]);
+   const code="const fs=require('node:fs');const p="+JSON.stringify(live)+";const frame=event=>'\\\\u001eOMP_GATE_KIND '+JSON.stringify({event,kind:'compile',time:Number(process.hrtime.bigint()/1_000_000n)})+'\\\\n';fs.writeFileSync(p,frame('start'));setTimeout(()=>fs.appendFileSync(p,frame('end')),500);";
+   startCommand('node',['--eval',code],{quiet:true});
+   while(!await readFile(live).then(text=>text.includes('start'),()=>false)) await wait(10);
+   gate.clock.enter('compile');
+  }
+  if(scenario==='blocked-compile') gate.clock.enter('compile');
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0);
+ }
+ if(scenario==='hung-work') return new Promise(()=>{});
+ if(scenario==='late-pass'){
+  onFailure({id:'native-group',status:'FAIL',exitCode:7,reason:'FIRST_ACCEPTED_FAILURE'});
+  return;
+ }
+ if(['timeout','interruption','unhandled'].includes(scenario)){
+  if(['interruption','unhandled'].includes(scenario)) void (async()=>{
+   while(!await readFile(${JSON.stringify(childPid)}).then(()=>true,()=>false)) await wait(10);
+   if(scenario==='interruption') process.emit('SIGTERM');
+   else throw new Error('UNHANDLED_FIXTURE_FAILURE');
+  })();
+  records.push(await execute([${JSON.stringify(tree)}],onFailure));
+  return;
+ }
+ if(scenario==='compile'||scenario==='overlap'){
+  const end=gate.clock.enter('compile');
+  const charged=scenario==='overlap'?gate.clock.enter('test'):undefined;
+  try {await wait(2600);records.push({id:'native-group',status:'PASS'});}
+  finally {charged?.();end();}
+  return;
+ }
+ if(scenario==='serial-budget'){
+  for(let i=0;i<3;i++){await wait(600);records.push({id:'group-'+i,status:'PASS'});}
+  return;
+ }
+ if(scenario==='compiler-stream'){
+  const end=gate.clock.enter('compile');
+  try {
+   const result=await execute([${JSON.stringify(compiler)}],onFailure,{failFastCompiler:true,quiet:false});
+   if(!records.some(record=>record.id===result.id)) records.push(result);
+  } finally {end();}
+  return;
+ }
+ const cases={first:['--test',${JSON.stringify(first)}],later:['--test','--test-concurrency=2',${JSON.stringify(slow)},${JSON.stringify(later)}],nested:['--test',${JSON.stringify(nested)}],...Object.fromEntries(Object.entries(${JSON.stringify(lifecycleFiles)}).map(([name,path])=>[name,['--test',path]]))};
+ const args=cases[scenario]??(scenario.startsWith('failure')?[${JSON.stringify(failure)}]:['--eval','setTimeout(()=>{},50)']);
+ const result=await execute(args,onFailure,{failFastTests:Boolean(cases[scenario])});
+ if(scenario==='failure-finally-hang') await new Promise(()=>{});
+ if(!records.some(record=>record.id===result.id)) records.push(result);
+},{scenario,cleanupObservations},scenario==='hung-verify'?()=>new Promise(()=>{}):scenario==='verify-source'?records=>records.push({id:'source-snapshot',status:'UNVERIFIED_MISSING_ENV',reason:'Source changed during validation'}):undefined);
 process.exit(report.exitCode);
 `,
   );
-  // 修复依据：Windows 启动/清理可能耗尽 1.5 秒短预算，使故意退出的桩误报 TIMEOUT。
-  // 普通状态验证留出启动余量；预算耗尽、累计及编译排除场景仍保留原短预算和全部判据。
-  const run = async (
-    level,
-    scenario,
-    limit = ["success", "failure", "missing", "denied", "compile-fail", "cache"].includes(scenario)
-      ? 6
-      : 1.5,
-  ) => {
-    if (["timeout", "interruption", "unauthed-timeout"].includes(scenario))
-      await rm(childPid, { force: true });
-    const result = await commandOutput("node", [fixture, level, scenario, root, String(limit)], {
+  const run = async (level, scenario, limit = 6) => {
+    await rm(childPid, { force: true });
+    if (scenario === "packaging-cancel") await writeFile(template, originalTemplate);
+    const result = await commandOutput("node", [fixture, level, scenario, String(limit)], {
       quiet: true,
+      env: fixtureEnv,
     });
     const report = result.output
       .split(/\r?\n/u)
       .filter((line) => line.startsWith("{"))
       .map((line) => JSON.parse(line))
       .findLast((entry) => entry.level === level && "budgeted" in entry);
-    assert.ok(report, `${level}/${scenario} must report every duration: ${result.output}`);
+    assert.ok(report, `${level}/${scenario}: ${result.output}`);
     for (const field of ["total", "compileExcluded", "budgeted", "limitSeconds"])
-      assert.ok(Number.isFinite(report[field]) && report[field] >= 0, `${scenario}: ${field}`);
+      assert.ok(Number.isFinite(report[field]) && report[field] >= 0, `${scenario}/${field}`);
     assert.equal(report.limitSeconds, limit);
-    assert.ok(Math.abs(report.total - report.compileExcluded - report.budgeted) <= 0.21);
-    assert.match(result.output, /total=\d+\.\d+s/u);
-    assert.match(result.output, /compile_excluded=\d+\.\d+s/u);
-    assert.match(result.output, /budgeted=\d+\.\d+s/u);
-    assert.match(result.output, /limit=\d+\.\d+s/u);
-    assert.equal(result.code, report.exitCode);
+    if (report.status === "TIMEOUT") assert.notEqual(result.code, 0);
+    else assert.equal(result.code, report.exitCode);
+    assert.ok(Math.abs(report.total - report.compileExcluded - report.budgeted) < 0.01);
     return { ...result, report };
   };
   for (const level of ["fastcheck", "fulltest", "slowtest"]) {
-    const success = await run(level, "success");
-    assert.equal(success.code, 0);
-    assert.equal(success.report.status, "PASS");
-    assert.equal(success.report.compileExcluded, 0);
-    for (const scenario of ["failure", "missing"]) {
-      const failed = await run(level, scenario);
-      assert.notEqual(failed.code, 0);
-      assert.equal(failed.report.status, "FAIL");
+    assert.equal((await run(level, "success")).report.status, "PASS");
+    const failed = await run(level, "failure");
+    assert.equal(failed.report.status, "FAIL", failed.output);
+    const late = await run(level, "late-pass");
+    assert.equal(late.report.stages[0].reason, "FIRST_ACCEPTED_FAILURE");
+    assert.equal(late.report.status, "FAIL");
+    const hangingFailure = await run(level, "failure-finally-hang");
+    assert.equal(hangingFailure.report.status, "FAIL", hangingFailure.output);
+    assert.ok(hangingFailure.report.total < 5, hangingFailure.output);
+    if (level !== "fastcheck") assert.equal((await run(level, "denied")).code, 2);
+    const compiled = await run(level, "compile", 1.5);
+    if (level === "fastcheck") assert.equal(compiled.code, 0, compiled.output);
+    else assert.equal(compiled.report.status, "TIMEOUT", compiled.output);
+    if (level === "fastcheck") {
+      assert.ok(compiled.report.compileExcluded > 2);
+      assert.ok(compiled.report.budgeted < 1.5);
     }
-    const latePass = await run(level, "failure-late-pass", 10);
-    assert.equal(latePass.code, 1, latePass.output);
-    assert.equal(latePass.report.status, "FAIL");
-    assert.equal(latePass.report.stages[0].status, "FAIL");
-    assert.equal(latePass.report.stages[0].exitCode, 7);
-    assert.equal(latePass.report.stages[0].reason, "FIRST_ACCEPTED_FAILURE");
-    assert.deepEqual(
-      latePass.report.stages.map((stage) => stage.id),
-      ["failure"],
-      "A late successful return must neither replace the first failure nor admit more work",
-    );
-    // fastcheck 不需要授权，其余入口必须在执行任何桩之前拒绝。
-    if (level !== "fastcheck") {
-      const denied = await run(level, "denied");
-      assert.equal(denied.code, 2);
-      await assert.rejects(
-        () => readFile(join(root, "unauthorized-ran")),
-        { code: "ENOENT" },
-        `${level}/denied must reject authorization before executing its stage`,
-      );
+    for (const scenario of [
+      "hung-work",
+      "hung-verify",
+      "hung-cleanup",
+      "overlap",
+      "serial-budget",
+      "timeout",
+    ]) {
+      const timed = await run(level, scenario, 1.5);
+      assert.notEqual(timed.code, 0, `${level}/${scenario}: ${timed.output}`);
+      assert.equal(timed.report.status, "TIMEOUT");
+      if (scenario === "hung-cleanup") assert.ok(timed.report.total <= 1.65, timed.output);
+      if (scenario === "timeout") {
+        const pid = Number(await readFile(childPid, "utf8"));
+        assert.throws(() => process.kill(pid, 0), "Deadline must remove owned grandchildren");
+      }
     }
-    for (const scenario of ["timeout", "interruption"]) {
-      // Windows taskkill 本身需要计费；留足短桩清理余量，不放宽真实门禁上限。
-      const limit = 6;
-      const ended = await run(level, scenario, limit);
-      assert.equal(ended.code, scenario === "timeout" ? 124 : 130);
-      assert.equal(ended.report.status, scenario === "timeout" ? "TIMEOUT" : "CANCELLED");
+    for (const [scenario, status, code] of [
+      ["interruption", "CANCELLED", 130],
+      ["unhandled", "FAIL", 1],
+    ]) {
+      const stopped = await run(level, scenario);
+      assert.equal(stopped.report.status, status, stopped.output);
+      assert.equal(stopped.code, code);
       const pid = Number(await readFile(childPid, "utf8"));
-      assert.throws(
-        () => process.kill(pid, 0),
-        `${level}/${scenario} must terminate its grandchild`,
-      );
+      assert.throws(() => process.kill(pid, 0), `${scenario}: owned grandchild survived`);
+    }
+    const changed = await run(level, "verify-source");
+    assert.notEqual(changed.code, 0);
+    assert.equal(changed.report.stages.at(-1).id, "source-snapshot");
+  }
+  // close 注销后仍必须执行取消时已接管的清理器；成功退出不能杀常驻 server。
+  const cancelledKiller = await run("fulltest", "tree-killer-cancel");
+  assert.equal(cancelledKiller.report.status, "FAIL", cancelledKiller.output);
+  assert.notEqual(cancelledKiller.code, 0);
+  assert.deepEqual(cancelledKiller.report.cleanupObservations, ["unregistered", "cleanup"]);
+  const successfulKiller = await run("fulltest", "tree-killer-success");
+  assert.equal(successfulKiller.report.status, "PASS", successfulKiller.output);
+  assert.deepEqual(successfulKiller.report.cleanupObservations, ["unregistered"]);
+
+  await exerciseCleanupFailure(root, fixtureEnv);
+  const framed = await run("fulltest", "framed-gui");
+  assert.equal(framed.report.status, "FAIL", framed.output);
+  assert.match(framed.report.stages[0].reason, /GUI live: GUI_FIRST_FAILURE/u);
+  assert.match(framed.output, /GUI_OUTPUT_BEFORE_FAILURE/u);
+  assert.match(framed.output, /GUI_OUTPUT_BETWEEN_FRAME_CHUNKS/u);
+  assert.ok(framed.report.total < 5, "Non-test failure frame must not wait for GUI exit");
+  const guiPid = Number(await readFile(childPid, "utf8"));
+  assert.throws(() => process.kill(guiPid, 0), "First failure must stop the GUI process");
+  const cancelledPackage = await run("slowtest", "packaging-cancel");
+  assert.equal(cancelledPackage.report.status, "CANCELLED", cancelledPackage.output);
+  assert.deepEqual(await readFile(template), originalTemplate);
+  const packagingPid = Number(await readFile(childPid, "utf8"));
+  assert.throws(() => process.kill(packagingPid, 0), "Restore must follow owned process exit");
+  for (const level of ["fulltest", "slowtest"]) {
+    for (const [scenario, evidence] of [
+      ["first", "FIRST_CASE_FAILURE"],
+      ["later", "LATER_CASE_FAILURE"],
+      ["nested", "NESTED_CASE_FAILURE"],
+      ["collection", "COLLECTION_FAILURE"],
+      ["setup", "SETUP_FAILURE"],
+      ["teardown", "TEARDOWN_FAILURE"],
+      ["worker-crash", "23"],
+    ]) {
+      const failed = await run(level, scenario);
+      assert.equal(failed.report.status, "FAIL", failed.output);
+      assert.match(failed.output, new RegExp(evidence, "u"));
+      if (["first", "later", "nested"].includes(scenario))
+        assert.match(failed.report.stages[0].reason, new RegExp(evidence, "u"));
       assert.ok(
-        ended.report.budgeted < limit,
-        `${level}/${scenario}: ${JSON.stringify(ended.report)}`,
+        failed.report.total < 5,
+        "Node failure cannot wait for ordered TAP or pending tests",
       );
     }
-    const compile = await run(level, "compile-long");
-    await exerciseHardDeadline(run, level, compile, childPid);
-    const compilerFailure = await run(level, "compile-fail");
-    assert.notEqual(compilerFailure.code, 0);
-    assert.equal(compilerFailure.report.status, "FAIL");
-    await exerciseFirstFailure(run, level, {
-      childPid,
-      blocked,
-      streamFirstSeen,
-      streamNoiseSeen,
-    });
-    for (const scenario of ["verify-source", "verify-failure"]) {
-      await writeFile(sourceFile, "SOURCE_BEFORE");
-      await rm(verifyRan, { force: true });
-      const verified = await run(level, scenario, 10);
-      assert.notEqual(verified.code, 0);
-      assert.deepEqual(verified.report.snapshot, { source: "SOURCE_BEFORE" });
-      assert.deepEqual(verified.report.tools, {
-        node: process.version,
-        nodePath: process.execPath,
+  }
+  for (const level of ["fastcheck", "fulltest", "slowtest"]) {
+    const failed = await run(level, "compiler-stream");
+    assert.equal(failed.report.status, "FAIL", failed.output);
+    assert.match(failed.report.stages[0].reason, /error TS9999: FIRST_COMPILER_FAILURE/u);
+    assert.match(failed.output, /COMPILER_STDERR_BETWEEN/u);
+    assert.ok(failed.report.total < 5, "Compiler first diagnostic must not await process exit");
+    assert.ok(
+      failed.report.cleanupObservations.some(
+        ({ before, after }) =>
+          after.budgeted > before.budgeted && after.compileExcluded === before.compileExcluded,
+      ),
+      `Cleanup while compilation is active must charge wall time: ${failed.output}`,
+    );
+  }
+  for (const level of ["fastcheck", "fulltest", "slowtest"]) {
+    for (const scenario of [
+      "blocked-loop",
+      "blocked-compile",
+      "blocked-native",
+      "blocked-report",
+    ]) {
+      await rm(childPid, { force: true });
+      await rm(join(root, "blocked-native.live"), { force: true });
+      const started = performance.now();
+      const stopped = await commandOutput("node", [fixture, level, scenario, "1.5"], {
+        quiet: true,
+        env: fixtureEnv,
       });
-      if (scenario === "verify-source") {
-        assert.equal(verified.report.status, "UNVERIFIED — REQUIRED ENVIRONMENT UNAVAILABLE");
-        assert.equal(verified.report.stages[0].status, "PASS");
-        assert.equal(verified.report.verification.calls, 1);
-        assert.equal(await readFile(verifyRan, "utf8"), "verify ran");
-        assert.equal(await readFile(sourceFile, "utf8"), "SOURCE_AFTER");
-        assert.deepEqual(verified.report.stages[1], {
-          id: "source-snapshot",
-          status: "UNVERIFIED_MISSING_ENV",
-          reason: "Source changed during validation; results belong to different snapshots",
-        });
-      } else {
-        assert.equal(verified.report.status, "FAIL");
-        assert.equal(verified.report.stages[0].status, "FAIL");
-        assert.equal(verified.report.verification.calls, 0);
-        assert.equal(await readFile(sourceFile, "utf8"), "SOURCE_BEFORE");
-        await assert.rejects(
-          () => readFile(verifyRan),
-          { code: "ENOENT" },
-          `${level}/${scenario} must not verify a failed run: ${verified.output}`,
-        );
-        assert.equal(
-          verified.report.stages.some((stage) => stage.id === "source-snapshot"),
-          false,
-        );
+      assert.notEqual(stopped.code, 0, `${level}/${scenario}: watchdog must force OS termination`);
+      const elapsed = (performance.now() - started) / 1000;
+      const forcedReport = stopped.output
+        .split(/\r?\n/u)
+        .filter((line) => line.startsWith("{"))
+        .map((line) => JSON.parse(line))
+        .findLast((entry) => entry.forcedTermination);
+      const excluded =
+        level === "fastcheck"
+          ? (forcedReport?.compileExcluded ??
+            (scenario === "blocked-native" ? 0.5 : scenario === "blocked-compile" ? 0.2 : 0))
+          : 0;
+      assert.ok(
+        elapsed - excluded <= 1.65,
+        `${level}/${scenario}: actual=${elapsed.toFixed(3)}s excluded=${excluded.toFixed(3)}s charged=${(elapsed - excluded).toFixed(3)}s limit=1.5s; ${stopped.output}`,
+      );
+      // A blocked destination cannot guarantee delivery, but any delivered final
+      // evidence must identify the independent timeout rather than a false PASS.
+      if (stopped.output.includes("Independent whole-run watchdog")) {
+        assert.match(stopped.output, /"status":"TIMEOUT"/u);
+        assert.match(stopped.output, /"exitCode":null/u);
+        assert.match(stopped.output, /"requestedExitCode":124/u);
+        assert.match(stopped.output, /"forcedTermination":true/u);
+      }
+      if (scenario !== "blocked-report") {
+        const pid = Number(await readFile(childPid, "utf8"));
+        assert.throws(() => process.kill(pid, 0), `${scenario}: owned grandchild survived`);
       }
     }
   }
-  const autonomousTimeout = await run("fastcheck", "unauthed-timeout", 6);
-  assert.equal(
-    autonomousTimeout.code,
-    124,
-    "fastcheck without a human flag still enforces its budget",
-  );
-  assert.equal(autonomousTimeout.report.status, "TIMEOUT");
-  const autonomousPid = Number(await readFile(childPid, "utf8"));
-  assert.throws(() => process.kill(autonomousPid, 0));
-  for (const scenario of ["overlap", "serial-budget", "mixed"]) {
-    // full/slow 的编译、重叠、混合和连续阶段全部使用同一总墙钟截止。
-    const timed = await run("fulltest", scenario);
-    assert.equal(timed.code, 124, `${scenario} must consume the same total wall clock`);
-    assert.equal(timed.report.status, "TIMEOUT");
-  }
-  const parallel = await run("fulltest", "parallel", 6);
-  assert.equal(parallel.code, 0);
-  assert.ok(
-    parallel.report.budgeted <
-      parallel.report.stages.reduce((sum, stage) => sum + stage.seconds, 0),
-    "Parallel wall time must not sum all child durations",
-  );
-  const initial = await run("fastcheck", "cache");
-  assert.equal(initial.code, 0);
-  assert.match(initial.output, /CACHE_CREATED/u);
-  const artifact = await stat(cache);
-  const repeated = await run("fastcheck", "cache");
-  assert.equal(repeated.code, 0);
-  assert.match(repeated.output, /CACHE_REUSED/u);
-  assert.equal((await stat(cache)).mtimeMs, artifact.mtimeMs);
-  assert.equal(await readFile(cache, "utf8"), "reusable-build-artifact");
-  console.log(
-    "Entry self-tests PASS: all-tier reports/statuses, fastcheck compile exclusion, full/slow hard wall deadlines, hung work/verification/cleanup, first failure, cancellation/tree cleanup, concurrency and reusable cache",
-  );
 }
