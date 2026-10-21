@@ -83,6 +83,24 @@ export class ProjectionRowStore {
     if (plan !== undefined) this.host.patchState({ plan });
   }
 
+  /** 未派发输入没有核心历史；只删除目标派生行，由投影 owner 触发快照重同步。 */
+  removePendingTurn(turnId: string): void {
+    const first = this.rowIds.findIndex((id) => this.rows.get(id)?.turnId === turnId);
+    if (first < 0) return;
+    let retained = first;
+    for (let index = first; index < this.rowIds.length; index += 1) {
+      const id = this.rowIds[index]!;
+      const row = this.rows.get(id);
+      if (row?.turnId === turnId) {
+        this.rows.delete(id);
+        this.pendingStreamTextByRowId.delete(id);
+      } else if (row) {
+        this.rowIds[retained++] = id;
+      }
+    }
+    this.rowIds.length = retained;
+  }
+
   /** 冷恢复：历史行直接入库（不产生 delta）；返回视图归属后的行，供 subagents/plan 水合复用。 */
   hydrate(rows: ConversationRow[]): ConversationRow[] {
     const viewRows = this.viewRows(rows);

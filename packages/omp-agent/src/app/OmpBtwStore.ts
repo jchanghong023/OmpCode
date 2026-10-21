@@ -107,6 +107,8 @@ export class OmpBtwStore {
         compact: { allowed: false, reasonCode: "fault.command.sideSessionUnsupported" },
         switchModelConfig: { allowed: false, reasonCode: "fault.command.sideSessionParentModel" },
         setFollowupMode: { allowed: false, reasonCode: "fault.command.sideSessionUnsupported" },
+        queueDelete: { allowed: false, reasonCode: "fault.command.sideSessionUnsupported" },
+        sendQueuedNow: { allowed: false, reasonCode: "fault.command.sideSessionUnsupported" },
       },
     });
     return view;

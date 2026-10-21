@@ -71,7 +71,9 @@ Host 旧进程退出 → 比对当前登记身份 → 仅清理旧登记 → 重
 - 成功 `read` 的 GUI 工具输出优先使用同次 OMP 结果持久化的 `details.displayContent.text`，并在存在 `details.meta.source.value` 时保留原来源；live 与冷恢复经同一 domain 转换写入现有 `output.text`，UI 不读取 OMP 帧或当前文件。模型上下文的压缩/替代文本不是 GUI 历史正文的唯一事实；同一路径不同调用的原版与更新版分别按各自结果保留，不能用当前内容回填旧读取。无有效 displayContent 的读取、非 read、错误或取消结果保留真实工具正文与终态，不从 display 元数据伪造成功。该转换不改变工具身份、输入、行序、序号、终结时间或会话活动时间，不新建持久层或历史 owner。
 - read 显示验收：对真实 journal 的旧原版、更新版及普通/错误工具结果，分别经 live `ConversationProjection.upsertToolCall` 和冷 `rowsFromOmpEntries` → `hydrateRows` → `buildSnapshot` 读取公开工具行；正文与来源按独立预期逐项核对，原/更新版本不得互相覆盖。缺失或畸形显示元数据、空显示正文和错误读取保持确定语义；消费快照及标准增量的客户端看到同一结果。真实 journal 只读，验收不得重读源文件重建旧正文。
 - `ConversationEngine` 及既有 `TurnContext`/队列唯一接纳应用 queue 输入，每项仅持一份完整 `text/originalText/images/modelSelection/sourceCommandId/clientId` 与实例代次；不新增平行 Map、队列日志或 Renderer 已接纳状态。运行中 queue 不预塞 native `follow_up`。上轮真实成功终态后，仅当既有 `queue.autoDrain=true` 时，经同一串行 owner 屏障派发队首的普通 `prompt`；`false` 保留所有未消费 FIFO 等待项，暂停原因沿用协议 `pauseReason: manual`。真实用户 `message_start` 才激活该项、移出等待态并关联后续输出，ACK 不等于消费。provider 失败、停止或进程退出仍先作废所有未派发 payload 与等待投影，保留原始错误；旧代次的配置/派发续体不得启动新轮。
-- 既有公开 v4 `setAutoDrain({ autoDrain: boolean })` 直接更新同一投影/owner，不改命令名、载荷、幂等 ACK 或 GUI 恢复入口。`false` 不打断已派发轮；`true` 清除暂停原因，闲态经同一串行屏障推进一项，忙态只武装成功后续派发，重复 `true`、迟到终态与旧代次不得重复领取或重启失败/停止已取消的项。native `guide` 继续使用真实 `steer`，同文输入各有独立 command ID；终态与 steer 在途/转等待竞态由同一 owner 收口，失败时不隐式重发 guide。无模型内容的本地 slash 完成按原命令身份终结一项，再按同一 `autoDrain` 策略推进下一项；附件字节与每项模型选择必须保留到该项真实派发。Desktop 连续流与 Web 可重放快照仍读取同一投影，编辑、重排、删除与立即发送的能力禁用矩阵不变。
+- 既有公开 v4 `setAutoDrain({ autoDrain: boolean })` 直接更新同一投影/owner，不改命令名、载荷、幂等 ACK 或 GUI 恢复入口。`false` 不打断已派发轮；`true` 清除暂停原因，闲态经同一串行屏障推进一项，忙态只武装成功后续派发，重复 `true`、迟到终态与旧代次不得重复领取或重启失败/停止已取消的项。native `guide` 继续使用真实 `steer`，同文输入各有独立 command ID；终态与 steer 在途/转等待竞态由同一 owner 收口，失败时不隐式重发 guide。无模型内容的本地 slash 完成按原命令身份终结一项，再按同一 `autoDrain` 策略推进下一项；附件字节与每项模型选择必须保留到该项真实派发。Desktop 连续流与 Web 可重放快照仍读取同一投影；编辑与重排继续禁用，删除与插话按下述 owner 契约开放。
+- **删除与插话（不修改 OMP）**：`deleteQueueItem` 依据稳定 `queueItemId/sourceCommandId` 同步撤销唯一 owner 中尚未派发的 payload，并移除该等待输入的派生行；不按文本删除，不停止当前轮，不改其他同文项或 FIFO 顺序。`availability.queueDelete` 独立于仍禁用的 `queueEdit`，缺失时客户端不展示删除入口。已经领取派发、进入 native guide 或消费的项拒绝操作；已不存在的项返回 noop，不能误删后续同文输入。
+- 复用 `sendQueuedNow` 表达队列项“插话”，不是“停止再发送”：忙态只把目标 pending payload 领取一次并按原命令 ID 派发 `steer`，闲态可显式派发该项普通 `prompt`；保持原文、图片、模型选择与客户端身份，不复制为新轮，也不调用 native `promote_queued_message`（应用项未预写 native 队列）。领取时发布 `dispatch=promoting/reserved` 锁定该项，仍等待真实用户消费才移出队列；ACK 只表示接纳。显式操作不改变 `autoDrain` 或其他项顺序，暂停时其他项仍等待。slash/compact 不开放插话；失败、停止、退出与晚到续体继续受同一代次 fence 约束，不兜底重发或伪报消费。两条交付链路共享同一 owner、序列和快照；未消费队列不持久化或在冷恢复重放。
 
 ```mermaid
 sequenceDiagram
@@ -80,6 +82,18 @@ sequenceDiagram
   participant Core as OMP 执行与持久化
   UI->>Adapter: queue 输入（独立 command ID / 完整 payload）
   Adapter-->>UI: 派生等待项，不发送 native follow_up
+  opt 用户删除尚未派发项
+    UI->>Adapter: deleteQueueItem(稳定队列 ID)
+    Adapter->>Adapter: 同步撤销目标 payload 与等待行
+    Adapter-->>UI: accepted / 不存在 noop / 在途 rejected
+  end
+  opt 用户将尚未派发项插话
+    UI->>Adapter: sendQueuedNow(稳定队列 ID)
+    Adapter->>Adapter: 领取原 payload 并锁定目标项
+    Adapter->>Core: 忙态 steer / 闲态 prompt，原 command ID
+    Core-->>Adapter: message_start(user)，真实消费
+    Adapter-->>UI: 移出目标项，其他项与暂停策略不变
+  end
   alt 上轮真实成功终态且 autoDrain=true
     Core-->>Adapter: terminal agent_end / 本地完成事实
     Adapter->>Core: 同代次串行派发一条普通 prompt
@@ -124,7 +138,9 @@ web: replayable ───── 快照 + 断档恢复 ───┘
 - 验收：冷恢复失败最多自动重试两次；profile 路径一致；guide/queue 的轮次归属、失败收口与文件变更统计在两种交付链路一致，缺少事实时不编造。
 - 验收：Windows 隔离 GUI 使用真实 OMP + 本地模拟模型，按[测试契约](test-gates.md#本地模拟模型契约)连续三次输入 `hello`，队列展示独立条目，消费后逐项移出且输出可关联；失败、停止、进程退出与快照重放不得留下虚假的工作中条目。Todo 写入三个内容为 1–3 的文件并删除，开启「显示待办」时界面展示真实进度；子代理返回 `hello` 时运行态、完成态和只读详情与核心记录一致。其他调用规程仅见 [e2e.md](e2e.md)。
 - queue cutover 验收：成功只逐项派发、三条同文保持独立身份和 HTTP 一一对应；provider 失败/stop/exit 后所有未派发输入均不进入模型请求，显式续发不携带残留；停止与配置/图片准备/派发交错时旧代次不得续跑。每项图片、合并文本及模型选择保持原值；本地 slash 的无内容完成推进正确一项；guide 在途 ACK、真实消费与终态交错不重复发送或假成功。原始错误、已消费历史及同根冷恢复内容不删除、不伪造。
-- autoDrain 验收：通过既有 v4 命令在当前请求期间暂停，三项独立 FIFO 输入在成功终态后均保留、无新模型请求、`autoDrain=false/pauseReason=manual` 可见；闲态恢复后逐项恰一次派发并仅由真实消费移出，忙中重复恢复不抢跑。失败、停止、退出后恢复不得重启已取消输入；Desktop 与 Web 读取相同队列状态，不启用编辑、重排、删除或立即发送。
+- autoDrain 验收：通过既有 v4 命令在当前请求期间暂停，三项独立 FIFO 输入在成功终态后均保留、无新模型请求、`autoDrain=false/pauseReason=manual` 可见；闲态恢复后逐项恰一次派发并仅由真实消费移出，忙中重复恢复不抢跑。失败、停止、退出后恢复不得重启已取消输入；Desktop 与 Web 读取相同队列状态，编辑与重排保持不可用。
+- 删除/插话验收：真实 OMP + 隔离回环模型挂住当前响应，接纳三项同文 queue 后删除中间一项，仅目标等待行消失、当前轮继续且后续 HTTP/journal 不出现已删除项；删除重复 command ID 幂等，已不存在项 noop，在途项拒绝。将非队首项插话，仅目标以原命令 ID 走原生插话并真实消费一次，重复点击不复制；其余项按原 FIFO 消费。覆盖暂停时闲态显式发送而其他项保留、图片字节及模型选择保留、slash 拒绝、与停止/失败交错不续发。公开 v4 的桌面连续流与 Web 快照/重连读取一致；GUI 核对删除和插话按钮、派发锁定、时间线不复活已删除项，冷恢复只出现真实已消费历史。
+- 上述同文归属与分页一致性还须覆盖：在首个消费事件前，按 B→A 连续提升原队列中 A→B 的同文项，真实消费和输出归属仍为 B→A，未提升项保持 FIFO；待删除项位于已加载尾窗之前时，Desktop 连续订阅、饱和后恢复及 Web 旧水位重连均保留正确的 `totalCount/firstRowId`、有界尾窗与完整流式正文，不将未加载历史重计为新增行。
 - 验收：超过 100 个会话仍可列出并按稳定 ID 恢复；超过 4000 条记录的历史能够回读较早消息；已加载和冷会话永久删除都删掉对应文件并更新索引；模拟文件删除失败时命令失败、文件和索引不被报告为已删除。
 - 验收：在 Windows 用户目录下的系统临时目录创建会话并执行子代理，关闭并重新启动桌面应用后，任务列表中的稳定 ID 能打开完整主会话及子代理记录。
 
@@ -221,3 +237,4 @@ sequenceDiagram
 
 - 2026-10-09 核心体验续作：F001 的真实 Chromium 积压/关闭/待处理 RPC 拒绝/重新连接读取通过；F010/F018 的取消 ACK 与独立同文消费身份、F013 的冷扫描失败保留、F016 的创建身份及 F027 的 ACK/有效内容恢复预算边界回归通过。OMP 全集 374/374、0 跳过，UI/Host 定向组合通过；真实桌面完成首次 UUID 迁移、旧 scope 草稿、正常退出与 R7 cold。协议模拟不冒充真实网络断线或每种中断时序的产品 GUI；完整门禁另行执行，证据见 [核心体验续作验收](../test-reports/performance-hot-paths-2026-10-09.md#核心体验续作验收)。
 - 2026-10-18 定向真实 GUI（已安装 OMP + 本地模拟模型）：`F:/Temp/User/recovery-profile-final-inter-1810` 的 interactions live→recovery 均 `SUITE_EXIT=0`；`F:/Temp/User/recovery-profile-final-models-1810` 的 models live→profile→default 均 `SUITE_EXIT=0`，证据在各根 `evidence/`。修复开发态 renderer origin 漂移、强杀前 Chromium 存储未刷盘、空启动 profile 覆盖 GUI 设置，以及 Composer 草稿/Recent 缺少运行 profile 键域。桌面定向 tsup 构建通过；没有运行门禁套件、Lint 或格式化，新增 `composerProfileStorage.test.ts` 尚未执行。本记录仅证明这两个 suite 的指定相位，不代表完整产品验收。
+- 2026-10-21 队列删除/插话：仅修改本仓库，未修改 OMP。隔离共享 React 队列组件通过真实适配器 v4 与本机 OMP `18.12.2+fork.328`、回环模型完成桌面宽度及 390px 窄屏操作：三条同文中间项删除、非队首带图项插话、在途重复提升/删除拒绝、缺失项 noop、当前 HTTP 不被 abort、暂停保持与闲态显式发送；三个实际 HTTP 请求及按稳定 UUID 卸载核心后的 journal 回读一致，Web replay 快照无已删除项。临时冒烟退出 0 并已清理；首轮恢复探针误用临时会话地址而失败，改用公开列表的稳定 UUID 后完成。新增纯投影与真实适配器回归随分级门禁维护，本次未执行 fulltest/slowtest；上述证据不等同完整 Electron Main/Host/Preload/SessionPane 产品验收、桌面新进程冷恢复或 CentOS 验收。

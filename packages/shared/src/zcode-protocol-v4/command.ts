@@ -165,6 +165,7 @@ export const commandPayloadSchemas = {
     target: conversationRowTargetSchema,
     feedback: z.enum(["like", "dislike"]).nullable(),
   }),
+  // 显式领取原队列项：忙态插话、闲态发送；不停止当前轮或恢复其他暂停项。
   sendQueuedNow: z.object({ queueItemId: z.string() }),
   editQueueItem: z.object({ queueItemId: z.string(), newText: z.string() }),
   // beforeQueueItemId = null → 移到队尾。

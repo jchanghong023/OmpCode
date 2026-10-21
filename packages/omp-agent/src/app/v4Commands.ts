@@ -170,6 +170,17 @@ export class V4CommandService {
         await this.context.registry.deleteSession(this.requireSessionId(envelope.sessionId));
         return this.ack(envelope, "accepted");
       }
+      case "deleteQueueItem":
+      case "sendQueuedNow": {
+        const { queueItemId } = envelope.payload as CommandPayloadMap["deleteQueueItem"];
+        const result = this.requireSessionEngine(envelope.sessionId).queueItemAction(
+          envelope.type === "deleteQueueItem" ? "delete" : "interject",
+          queueItemId,
+        );
+        return result === "accepted" || result === "noop"
+          ? this.ack(envelope, result)
+          : this.ack(envelope, "rejected", { reasonCode: `fault.command.queueItem.${result}` });
+      }
       case "setAutoDrain": {
         const payload = envelope.payload as CommandPayloadMap["setAutoDrain"];
         this.requireSessionEngine(envelope.sessionId).setAutoDrain(payload.autoDrain);
@@ -200,10 +211,8 @@ export class V4CommandService {
         return this.unsupportedAck(envelope, "workspace file rewind");
       case "setAssistantFeedback":
         return this.unsupportedAck(envelope, "assistant feedback");
-      case "sendQueuedNow":
       case "editQueueItem":
       case "reorderQueueItem":
-      case "deleteQueueItem":
         return this.unsupportedAck(envelope, "queue editing");
       case "respondWorkspaceHookReview":
       case "toggleWorkspaceHookReviewItem":

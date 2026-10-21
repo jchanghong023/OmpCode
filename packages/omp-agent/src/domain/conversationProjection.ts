@@ -165,7 +165,34 @@ export class ConversationProjection {
   }
   claimQueuedSubmission(generation: number): TurnSubmission | null {
     if (!this.state.queue.autoDrain) return null;
-    return claimQueuedSubmissionOf(this.queuedReconcileHost, generation);
+    const submission = claimQueuedSubmissionOf(this.queuedReconcileHost, generation);
+    publishQueuedInputsOf(this.queuedReconcileHost);
+    return submission;
+  }
+  /** 同步领取/撤销尚未派发项；真实消费仍是唯一移出已派发等待项的事实。 */
+  actOnPendingQueueItem(sourceCommandId: string, action: "delete" | "prompt" | "steer"): void {
+    const index = this.queuedTurns.findIndex((turn) => turn.sourceCommandId === sourceCommandId);
+    const turn = this.queuedTurns[index];
+    if (!turn?.submission || turn.submission.state !== "pending") return;
+    if (action === "delete") {
+      turn.submission.state = "cancelled";
+      this.queuedTurns.splice(index, 1);
+      this.inputTextByTurnId.delete(turn.turnId);
+      this.rowStore.removePendingTurn(turn.turnId);
+      // 后缀重放会重复计算尾窗外历史；沿用序号缺口触发两种订阅的现有快照重同步。
+      this.pending = [];
+      this.deltaLog = [];
+      this.sequence += 1;
+    } else {
+      turn.submission.delivery = action;
+      turn.submission.state = "dispatching";
+      // 同文消费按队列顺序匹配；提升必须接在已领取项之后，不能沿用原始入队顺序。
+      this.queuedTurns.splice(index, 1);
+      const lastDispatched = this.queuedTurns.findLastIndex((queued) => queued.submission && queued.submission.state !== "pending");
+      this.queuedTurns.splice(lastDispatched + 1, 0, turn);
+      if (!this.turn) this.patchState({ control: { ...this.state.control, phase: "running", canStop: true, stopState: "idle" } });
+    }
+    publishQueuedInputsOf(this.queuedReconcileHost);
   }
   /** 命令身份只回读同一 owner 的 payload；原生异步终态不能借当前活跃轮推断归属。 */
   submissionForCommand(sourceCommandId: string): TurnSubmission | null {

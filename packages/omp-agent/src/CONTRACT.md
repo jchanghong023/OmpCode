@@ -2,7 +2,7 @@
 
 - 模块拥有每个会话的 omp 进程、命令收口、投影序列和订阅发布；Host 只拥有窗口级进程生命周期与路由。
 - 桌面与通用 Web 订阅共享一份会话投影。桌面按原序连续交付；Web 按相同水位续传，超出保留范围后使用快照恢复；不恢复已取消的手机远控。
-- `ConversationEngine` 的既有 `TurnContext`/队列是应用 queue 输入的唯一接纳与派发 owner；每项只持一份完整 text/originalText/images/modelSelection/sourceCommandId/clientId 与实例代次 payload。运行中 queue 只在该 owner 接纳，不预写 OMP `follow_up`；真实成功终态后通过同一串行屏障派发一条普通 `prompt`，仅真实用户消费事件激活该项并关联输出。失败、停止、退出先作废未派发 payload 与等待投影，保留原失败；旧代次续体不得启动新轮。native `prompt`/`steer` 的 request ID 使用同一 `sourceCommandId`，pending、ACK 与 `prompt_result` 按真实 ID 回到同一 owner；无 ID、旧 ID 或过时代次不能终结后来输入。native guide 仍发送 `steer`，消费前复用既有 pending-guide 落位，消费时才切换输出归属，失败不隐式重派发。Renderer 只读派生 queue，不另设 Map、已接受队列或持久日志；等待项与执行中时间线互斥，原能力禁用矩阵不变。
+- `ConversationEngine` 的既有 `TurnContext`/队列是应用 queue 输入的唯一接纳与派发 owner；每项只持一份完整 text/originalText/images/modelSelection/sourceCommandId/clientId 与实例代次 payload。运行中 queue 只在该 owner 接纳，不预写 OMP `follow_up`；真实成功终态后通过同一串行屏障派发一条普通 `prompt`，仅真实用户消费事件激活该项并关联输出。失败、停止、退出先作废未派发 payload 与等待投影，保留原失败；旧代次续体不得启动新轮。native `prompt`/`steer` 的 request ID 使用同一 `sourceCommandId`，pending、ACK 与 `prompt_result` 按真实 ID 回到同一 owner；无 ID、旧 ID 或过时代次不能终结后来输入。native guide 仍发送 `steer`，消费前复用既有 pending-guide 落位，消费时才切换输出归属，失败不隐式重派发。Renderer 只读派生 queue，不另设 Map、已接受队列或持久日志；等待项与执行中时间线互斥。删除只同步撤销目标 pending payload 与等待行；插话只领取原项一次，忙态 steer、闲态 prompt，不停止当前轮或恢复其他暂停项。派发锁定由同一 payload 的 state 派生，已在途项不能删除或重复提升；编辑和重排仍禁用。产品规则及验收唯一见 [会话恢复](../../../docs/requirements/session-recovery.md#冷历史与身份连续性)。
 - Todo 的成功结果同时产出工具行清单和 v4 plan 状态，冷恢复从最后有效结果重建；子代理行、运行目录与已结束目录复用带父归属的详情地址。两者均由同一会话投影发布，UI 不另建事实状态。
 - 会话身份由 Registry 绑定；临时 ID 迁移至稳定 UUID 后，旧订阅保持可用。
 - 永久删除必须先确认 omp 会话文件删除成功，再发索引移除事件。关闭只释放进程。

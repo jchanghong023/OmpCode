@@ -1,10 +1,19 @@
 // 纯输入/轮次投影；真实派发、取消与恢复由 realOmpHarness 消费者验收。
 import assert from "node:assert/strict";
 import test from "node:test";
-import { conversationSnapshotSchema } from "@zcode/shared/zcode-protocol-v4";
+import {
+  applyConversationDeltas,
+  conversationSnapshotSchema,
+  conversationTopicFrameSchema,
+  conversationTopicWireFrameSchema,
+  PROTOCOL_V4_LIMITS,
+  TopicWireFrameAssembler,
+  type ConversationTopicFrame,
+} from "@zcode/shared/zcode-protocol-v4";
 import { ConversationProjection } from "../src/domain/conversationProjection.js";
 import { OmpEventProjector } from "../src/domain/ompProjector.js";
 import type { TurnSubmission } from "../src/domain/projectionRows.js";
+import { ConversationTopicPublisher } from "../src/app/topicPublisher.js";
 
 function begin(
   projection: ConversationProjection,
@@ -232,4 +241,168 @@ test("guide失败保留原错误，等待项取消后不能作为prompt重发", 
   assert.deepEqual(projection.lastError, originalError);
   assert.equal(headerState(projection, "guide"), "failed");
   assert.equal(projection.claimQueuedSubmission(1), null);
+});
+
+for (const historyRows of [0, 600]) {
+  test(`删除中间等待项后真实订阅保持历史计数与流式正文（历史行${historyRows}）`, () => {
+    const projection = activeProjection();
+    begin(projection, "first", "hello");
+    const removed = begin(projection, "middle", "hello");
+    begin(projection, "last", "hello");
+    for (let index = 0; index < historyRows; index++)
+      projection.upsertToolCall({
+        toolCallId: `read-${index}`,
+        toolName: "read",
+        status: "success",
+        inputText: "{}",
+        outputText: "done",
+      });
+    projection.appendAssistantText("stream-before");
+    const frames: ConversationTopicFrame[] = [];
+    const assembler = new TopicWireFrameAssembler(conversationTopicFrameSchema);
+    const publisher = new ConversationTopicPublisher(projection.sessionId, projection, {
+      emitFrame(wire) {
+        for (const event of assembler.accept(conversationTopicWireFrameSchema.parse(wire))) {
+          if (event.kind === "fault") assert.fail(JSON.stringify(event.fault));
+          frames.push(event.frame);
+        }
+      },
+      async requestUserInput() {
+        return { action: "cancel" };
+      },
+    });
+    try {
+      const desktop = publisher.subscribe({
+        connectionId: "desktop",
+        clientMode: "desktop-continuous",
+      });
+      const web = publisher.subscribe({ connectionId: "web", clientMode: "web-remote-replayable" });
+      const before = projection.buildSnapshot();
+      publisher.setConnectionFlowState("web", "saturated");
+      projection.appendAssistantText("-after");
+      projection.actOnPendingQueueItem("middle", "delete");
+      publisher.setConnectionFlowState("desktop", "drained");
+      assert.equal(removed.state, "cancelled");
+      assert.deepEqual(queuedIds(projection), ["first", "last"]);
+      assert.equal(projection.stateSnapshot.control.phase, "running");
+      const desktopFrame = frames.findLast(
+        (frame) => frame.subscriptionId === desktop.subscriptionId,
+      );
+      assert.equal(desktopFrame?.payload.kind, "snapshot");
+      if (desktopFrame?.payload.kind !== "snapshot") throw new Error("missing deletion snapshot");
+      const after = desktopFrame.payload.snapshot;
+      assert.deepEqual(after, projection.buildSnapshot());
+      assert.equal(after.rows.totalCount, before.rows.totalCount - 2);
+      assert.equal(after.rows.firstRowId, before.rows.firstRowId);
+      assert.equal(
+        after.rows.window.length,
+        Math.min(PROTOCOL_V4_LIMITS.snapshotTailWindowRows, after.rows.totalCount),
+      );
+      assert.ok(
+        after.rows.window.some(
+          (row) => row.kind === "assistantText" && row.text === "stream-before-after",
+        ),
+      );
+      assert.equal(
+        frames.findLast((frame) => frame.subscriptionId === web.subscriptionId)?.toSeq,
+        before.seq,
+      );
+      publisher.setConnectionFlowState("web", "drained");
+      assert.deepEqual(
+        frames.findLast((frame) => frame.subscriptionId === web.subscriptionId)?.payload,
+        desktopFrame.payload,
+      );
+      const reconnected = publisher.subscribe({
+        connectionId: "reconnected",
+        clientMode: "web-remote-replayable",
+        base: { logEpoch: before.logEpoch, seq: before.seq },
+      });
+      assert.equal(reconnected.mode, "snapshot");
+      assert.deepEqual(
+        frames.findLast((frame) => frame.subscriptionId === reconnected.subscriptionId)?.payload,
+        desktopFrame.payload,
+      );
+      projection.appendAssistantText("-continued");
+      publisher.setConnectionFlowState("desktop", "drained");
+      const continuation = frames.findLast(
+        (frame) => frame.subscriptionId === desktop.subscriptionId,
+      );
+      assert.equal(continuation?.payload.kind, "deltas");
+      if (continuation?.payload.kind !== "deltas") throw new Error("missing continuation");
+      const applied = applyConversationDeltas(after, continuation.payload.deltas);
+      assert.equal(applied.rows.totalCount, after.rows.totalCount);
+      assert.ok(
+        applied.rows.window.some(
+          (row) => row.kind === "assistantText" && row.text === "stream-before-after-continued",
+        ),
+      );
+    } finally {
+      publisher.dispose();
+    }
+  });
+}
+
+test("暂停队列非队首插话保留原payload，同文真实消费不误取未派发项", () => {
+  const projection = activeProjection();
+  const first = begin(projection, "first", "hello");
+  const target = begin(projection, "target", "hello", "queue", {
+    images: [{ type: "image", data: "owned-image", mimeType: "image/png" }],
+    modelSelection: { provider: "local", model: "chosen", thought: "high" },
+  });
+  projection.setAutoDrain(false);
+  projection.actOnPendingQueueItem("target", "steer");
+  assert.equal(projection.submissionForCommand("target"), target);
+  assert.equal(target.state, "dispatching");
+  assert.equal(target.delivery, "steer");
+  assert.deepEqual(target.images, [{ type: "image", data: "owned-image", mimeType: "image/png" }]);
+  assert.deepEqual(target.modelSelection, { provider: "local", model: "chosen", thought: "high" });
+  projection.actOnPendingQueueItem("target", "delete");
+  userStart(
+    new OmpEventProjector(projection),
+    "<system-notice>\nUser interjection during work: priority; supersedes conflicting prior instructions. Re-read; ensure current work reflects user intent.\n</system-notice>\nhello",
+  );
+  assert.equal(projection.activeTurnSourceCommandId(), "target");
+  assert.deepEqual(queuedIds(projection), ["first"]);
+  assert.equal(first.state, "pending");
+  assert.equal(projection.stateSnapshot.queue.autoDrain, false);
+  projection.finishTurn("success");
+  assert.equal(projection.claimQueuedSubmission(1), null, "插话不恢复暂停队列");
+  projection.setAutoDrain(true);
+  assert.equal(projection.claimQueuedSubmission(1), first);
+  assert.equal(projection.stateSnapshot.queue.items[0]?.dispatch.state, "reserved");
+});
+
+test("连续逆序提升同文项按实际派发顺序消费，未提升项仍保持FIFO", () => {
+  const projection = activeProjection();
+  const projector = new OmpEventProjector(projection);
+  const first = begin(projection, "first", "hello");
+  const untouched = begin(projection, "untouched", "hello");
+  const last = begin(projection, "last", "hello");
+  begin(projection, "already-guide", "hello", "guide");
+  projection.actOnPendingQueueItem("last", "steer");
+  projection.actOnPendingQueueItem("first", "steer");
+  for (const [id, reply] of [
+    ["already-guide", "existing-guide-reply"],
+    ["last", "last-image-reply"],
+    ["first", "first-reply"],
+  ]) {
+    userStart(
+      projector,
+      "<system-notice>\nUser interjection during work: priority; supersedes conflicting prior instructions. Re-read; ensure current work reflects user intent.\n</system-notice>\nhello",
+    );
+    assert.equal(projection.activeTurnSourceCommandId(), id);
+    projection.appendAssistantText(reply);
+    const rows = projection.buildSnapshot().rows.window;
+    const input = rows.find((row) => row.kind === "userInput" && row.sourceCommandId === id);
+    assert.ok(input);
+    assert.ok(
+      rows.some(
+        (row) => row.kind === "assistantText" && row.turnId === input.turnId && row.text === reply,
+      ),
+    );
+  }
+  assert.equal(last.state, "consumed");
+  assert.equal(first.state, "consumed");
+  assert.equal(untouched.state, "pending");
+  assert.deepEqual(queuedIds(projection), ["untouched"]);
 });

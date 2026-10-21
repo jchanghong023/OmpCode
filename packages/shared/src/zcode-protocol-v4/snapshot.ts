@@ -152,6 +152,8 @@ export const sessionActionAvailabilitySchema = z.object({
   switchModelConfig: actionAvailabilitySchema,
   setFollowupMode: actionAvailabilitySchema,
   queueEdit: actionAvailabilitySchema,
+  // 单项删除与编辑/重排独立；缺席不开放删除。
+  queueDelete: actionAvailabilitySchema.optional(),
   sendQueuedNow: actionAvailabilitySchema,
   pauseGoal: actionAvailabilitySchema,
   resumeGoal: actionAvailabilitySchema,

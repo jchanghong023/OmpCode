@@ -11,6 +11,13 @@ import { dispatchOmpText } from "./ompPromptDispatch.js";
 import { diagnostics } from "./diagnostics.js";
 import { PromptTurnClosing } from "./promptTurnClosing.js";
 
+export type QueueItemActionResult =
+  | "accepted"
+  | "noop"
+  | "inFlight"
+  | "unsupportedInput"
+  | "stopping";
+
 export class EnginePromptTurnCloser extends PromptTurnClosing {
   private dispatchTail: Promise<void> = Promise.resolve();
 
@@ -27,6 +34,45 @@ export class EnginePromptTurnCloser extends PromptTurnClosing {
     });
     this.host.flush();
     if (autoDrain) this.pumpQueue(true);
+  }
+
+  queueItemAction(action: "delete" | "interject", queueItemId: string): QueueItemActionResult {
+    const projection = this.host.projection();
+    const submission = projection.submissionForCommand(queueItemId);
+    const rejected = this.stopping
+      ? "stopping"
+      : !submission
+        ? "noop"
+        : submission.state !== "pending" || submission.generation !== this.generation
+          ? "inFlight"
+          : action === "interject" && submission.originalText.trimStart().startsWith("/")
+            ? "unsupportedInput"
+            : null;
+    if (rejected || !submission) {
+      diagnostics.debug("omp.queue.item.ignored", {
+        sessionId: projection.sessionId,
+        queueItemId,
+        action,
+        reason: rejected,
+      });
+      return rejected ?? "noop";
+    }
+    // 应用项尚未进入 native 队列：原 payload 只领取一次，不调用 native promote 或停止当前轮。
+    const delivery =
+      this.host.isStreaming() || projection.stateSnapshot.control.phase === "running"
+        ? "steer"
+        : "prompt";
+    projection.actOnPendingQueueItem(queueItemId, action === "delete" ? "delete" : delivery);
+    this.host.flush();
+    diagnostics.info("omp.queue.item.changed", {
+      sessionId: projection.sessionId,
+      queueItemId,
+      action,
+      delivery,
+      waitingCount: projection.stateSnapshot.queue.items.length,
+    });
+    if (action === "interject") void this.enqueueDispatch(submission);
+    return "accepted";
   }
 
   /** queue 的 accepted payload 只写入既有 TurnContext；成功终态之前不向核心投递。 */

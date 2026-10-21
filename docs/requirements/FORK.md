@@ -143,7 +143,7 @@
 3. **automation / Off-Peak**：见 [原生集成](integrations.md)。
 4. **会话内编辑类操作**：fork 某轮（`forkAssistant`）、重试（`retryTurn`）、编辑已发送消息（`editUserQuery`）、工作区文件回滚（`applyFileRewind`/`fileRewindPreview`）不可用。替代行为：无（omp 会话树的 `branch` 能力未进本适配层）。现有辅助对话入口接入原生 BTW，不属于编辑/分叉；唯一规则及验收见 [OMP 辅助对话](omp-core-integration.md#辅助对话原生-btw唯一需求权威)。
 5. **旧 ZCode 协作模式与 goal API**：`switchCollaborationMode`（build/edit/plan/yolo）、`sendGoalCommand`、`pauseGoal`/`resumeGoal` 不可用（v4 命令面显式拒绝）；OMP 原生 `/plan`、`/goal`、`/loop` 等通过 rpc-ui 核心接入，规则见 [核心命令需求](omp-native-commands.md)，不复活旧 ZCode 状态机。
-6. **输入队列编辑**：队列项编辑/重排/删除/立即发送（`editQueueItem` 等）不可用。替代行为：保留原有 `guide` / `queue` 输入模式与队列暂停/恢复策略，流式中发送按当前模式路由；OMP 适配、逐项消费和异常终止规则唯一见 [会话恢复](session-recovery.md#冷历史与身份连续性)，不以原生 `follow_up` 的内部队列替代产品队列所有权。
+6. **输入队列操作**：保留原有 `guide` / `queue` 输入模式与队列暂停/恢复策略，开放尚未派发项的删除与插话；编辑和重排仍不可用。唯一 owner、`deleteQueueItem` / `sendQueuedNow` 语义、失败边界及验收见 [会话恢复](session-recovery.md#冷历史与身份连续性)。这些操作由本项目适配层复用现有 OMP `prompt/steer` 完成，不修改 OMP，也不以 native `follow_up` 的内部队列替代产品队列所有权。
 7. **用量统计**：app 级用量（`v4/usage/stats`）返回合法空快照；会话级 `v4/conversation/usage` 返回本会话累计值。替代行为：历史聚合统计暂缺（数据源在 omp 会话库，未做聚合）。
 8. **MCP 状态面板**：见 [原生集成](integrations.md)。
 9. **模型连通性测试与 commit message 生成**（`provider/testModelConnectivity`、`workspace/generateText`）：均不可用（-32601）。omp v18.8.0 起 RPC 面不再提供 `test_model`（旧 v3 fork 面已随 RPC 收敛删除），替代行为：模型可用性以实际会话轮为准；commit message 生成（`workspace/generateText`）无 omp 等价物。

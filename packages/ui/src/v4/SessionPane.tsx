@@ -2799,13 +2799,14 @@ export function SessionPane({
         (ack) => {
           if (ack.status !== "accepted" && ack.status !== "noop") {
             logger.warn(`[v4-pane] deleteQueueItem 被拒绝: ${ack.status} ${ack.reasonCode ?? ""}`);
+            toast(intl.formatMessage({ id: "chat.queue.actionFailed" }));
             return;
           }
           if (sourceCommandId) pendingCommandRegistry.settle(sessionId, sourceCommandId);
         },
       );
     },
-    [dispatchCommand, sessionId],
+    [dispatchCommand, intl, sessionId],
   );
 
   const handleEditQueueItem = useCallback(
@@ -2875,18 +2876,18 @@ export function SessionPane({
     (queueItemId: string) => {
       const current = snapshotRef.current;
       if (!sessionId || current === null) return;
-      // 用户明确点击“立即发送”时，视觉意图等价于点击“滚动到底部”；command 的
-      // reserve/stop/promote 生命周期仍由 CLI 裁决，不把滚动状态混入协议。
+      // 插话只改变目标输入的派发意图；是否已领取和消费仍由唯一队列 owner 裁决。
       focusTimelineToLatest();
       void dispatchCommand("sendQueuedNow", { queueItemId }, sessionId, current.revision).then(
         (ack) => {
           if (ack.status !== "accepted" && ack.status !== "noop") {
             logger.warn(`[v4-pane] sendQueuedNow 被拒绝: ${ack.status} ${ack.reasonCode ?? ""}`);
+            toast(intl.formatMessage({ id: "chat.queue.actionFailed" }));
           }
         },
       );
     },
-    [dispatchCommand, focusTimelineToLatest, sessionId],
+    [dispatchCommand, focusTimelineToLatest, intl, sessionId],
   );
 
   const handleReorderQueueItem = useCallback(
@@ -3778,7 +3779,9 @@ export function SessionPane({
         <ConversationQueuePanel
           key="conversation-queue"
           queue={pendingGuideProjection?.visibleQueue ?? snapshot.queue}
-          onDeleteItem={snapshot.availability.queueEdit.allowed ? handleDeleteQueueItem : undefined}
+          onDeleteItem={
+            snapshot.availability.queueDelete?.allowed ? handleDeleteQueueItem : undefined
+          }
           onEditItem={snapshot.availability.queueEdit.allowed ? handleEditQueueItem : undefined}
           pendingEditQueueItemId={
             queueEditActiveForCurrentComposer ? queueEditOperation.queueItemId : null

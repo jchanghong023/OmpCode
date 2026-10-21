@@ -10,7 +10,7 @@ import { OmpInteractionProxy } from "./ompInteractionProxy.js";
 import { projectEngineContextWindow, startEngineProcess, createEngineEventHandler, refreshEngineStateAfterActivity } from "./ompEngineProcess.js";
 import { applyEngineAutoCompaction, applyEngineCompaction, applyEngineSetModel, applyEngineThoughtLevel, readEngineSkillCommands, runEngineOperation, stopEngineOperation, type EngineOperationHost } from "./engineOperationDiagnostics.js";
 import type { SlashCommandResolver } from "./ompPromptDispatch.js";
-import { EnginePromptTurnCloser } from "./promptTurnCloser.js";
+import { EnginePromptTurnCloser, type QueueItemActionResult } from "./promptTurnCloser.js";
 import { TrailingThrottle } from "./trailingThrottle.js";
 import { deriveTitle } from "../domain/titleText.js";
 import { OmpSubagentBridge } from "./ompSubagentBridge.js";
@@ -304,11 +304,12 @@ export class ConversationEngine {
     this.projection.setModelConfig({ followupMode: mode });
     this.scheduleFlush();
   }
-  /** 保留 v4 队列恢复入口；策略与派发都交给既有轮次 owner。 */
   setAutoDrain(autoDrain: boolean): void {
     this.promptTurns.setAutoDrain(autoDrain);
   }
-
+  queueItemAction(action: "delete" | "interject", queueItemId: string): QueueItemActionResult {
+    return this.promptTurns.queueItemAction(action, queueItemId);
+  }
   async setThoughtLevel(level: string): Promise<{ error?: string }> {
     return applyEngineThoughtLevel(this.operationHost, level);
   }

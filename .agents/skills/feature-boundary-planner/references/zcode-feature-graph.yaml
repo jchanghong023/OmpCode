@@ -178,6 +178,8 @@ nodes:
       - 会话
       - 引导
       - 消息队列
+      - 删除排队项
+      - 队列插话
     codeSeeds:
       - file: packages/ui/src/v4/SessionPane.tsx
         symbol: handleSendText
@@ -185,6 +187,10 @@ nodes:
         symbol: V4CommandService
       - file: packages/omp-agent/src/app/conversationEngine.ts
         symbol: ConversationEngine
+      - file: packages/ui/src/v4/ConversationQueuePanel.tsx
+        symbol: ConversationQueuePanel
+      - file: packages/omp-agent/src/app/promptTurnCloser.ts
+        symbol: EnginePromptTurnCloser
     invariants:
       - Current OMP execution enters through SessionPane and the omp-agent adapter; historical
         apps/zcode-cli seeds elsewhere in this graph are not the current native-tools execution entry.

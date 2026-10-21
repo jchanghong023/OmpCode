@@ -36,7 +36,7 @@ interface ConversationQueuePanelProps {
   onEditItem?: (queueItemId: string) => Promise<void> | void;
   /** 正在等待 delete ACK / composer restore 的目标项；仅锁该 row。 */
   pendingEditQueueItemId?: string | null;
-  /** 立即发送队列项（sendQueuedNow command，stop 当前 + 消费该项）。 */
+  /** 领取原项插话（sendQueuedNow）；不停止当前轮，不恢复其他暂停项。 */
   onSendNow?: (queueItemId: string) => void;
   /** 拖拽排序项（reorderQueueItem，移动到锚点前；null=队尾）。 */
   onMoveItem?: (queueItemId: string, beforeQueueItemId: string | null) => void;
@@ -180,23 +180,25 @@ const QueueRow = memo(function QueueRow({
       )}
       style={style}
     >
-      <ControlHintTooltip title={intl.formatMessage({ id: "chat.queue.drag" })}>
-        <Button
-          ref={setActivatorNodeRef}
-          type="button"
-          variant="ghost"
-          size="icon-md"
-          data-v4-queue-drag-handle="true"
-          data-queue-item-id={item.queueItemId}
-          aria-label={intl.formatMessage({ id: "chat.queue.drag" })}
-          className="shrink-0 cursor-grab touch-none text-foreground-subtlest active:cursor-grabbing"
-          disabled={rowLocked}
-          {...attributes}
-          {...listeners}
-        >
-          <GripVertical className="size-4" />
-        </Button>
-      </ControlHintTooltip>
+      {sortable ? (
+        <ControlHintTooltip title={intl.formatMessage({ id: "chat.queue.drag" })}>
+          <Button
+            ref={setActivatorNodeRef}
+            type="button"
+            variant="ghost"
+            size="icon-md"
+            data-v4-queue-drag-handle="true"
+            data-queue-item-id={item.queueItemId}
+            aria-label={intl.formatMessage({ id: "chat.queue.drag" })}
+            className="shrink-0 cursor-grab touch-none text-foreground-subtlest active:cursor-grabbing"
+            disabled={rowLocked || !sortable}
+            {...attributes}
+            {...listeners}
+          >
+            <GripVertical className="size-4" />
+          </Button>
+        </ControlHintTooltip>
+      ) : null}
       <span
         className={cn(
           "flex min-w-0 flex-1 items-center gap-2 truncate text-ui-base text-foreground",
@@ -206,7 +208,7 @@ const QueueRow = memo(function QueueRow({
       >
         <span className="truncate">{isCompact ? "/compact" : item.text}</span>
       </span>
-      {onSendNow ? (
+      {onSendNow && !isCompact && !item.text.trimStart().startsWith("/") ? (
         <Button
           type="button"
           variant="secondary"

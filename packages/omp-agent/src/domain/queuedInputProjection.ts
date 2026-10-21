@@ -6,6 +6,22 @@ import { runningControlPatch } from "./projectionStatePatches.js";
 
 const observedUserStarts = new WeakSet<TurnContext>();
 
+function dispatchState(turn: TurnContext): QueueItem["dispatch"]["state"] {
+  return turn.submission?.state === "pending"
+    ? "queued"
+    : turn.submission?.delivery === "steer"
+      ? "promoting"
+      : "reserved";
+}
+
+function sameItem(turn: TurnContext, item: QueueItem | undefined): boolean {
+  return (
+    turn.sourceCommandId === item?.sourceCommandId &&
+    dispatchState(turn) === item.dispatch.state &&
+    (turn.submission?.delivery === "steer" ? "guide" : "queue") === item.delivery.admitted
+  );
+}
+
 /** 修复：此前 queuedTurns 没有发布 queue，UI 把等待轮误显示为正在执行。
  * 这里只派生展示，不建立第二份接受队列；重复文本按 command ID 区分。
  */
@@ -13,7 +29,7 @@ export function publishQueuedInputsOf(host: QueuedTurnReconcileHost): void {
   const previous = host.state().queue;
   if (
     host.queuedTurns.length === previous.items.length &&
-    host.queuedTurns.every((turn, i) => turn.sourceCommandId === previous.items[i]?.sourceCommandId)
+    host.queuedTurns.every((turn, i) => sameItem(turn, previous.items[i]))
   )
     return;
   const inputs = new Map(
@@ -41,7 +57,7 @@ export function publishQueuedInputsOf(host: QueuedTurnReconcileHost): void {
             },
             order: { admissionSeq: row.createdAtSeq },
             steer: { state: "notRequested" as const },
-            dispatch: { state: "queued" as const },
+            dispatch: { state: dispatchState(turn) },
             admittedAt: row.createdAt,
           },
         ]
@@ -49,7 +65,12 @@ export function publishQueuedInputsOf(host: QueuedTurnReconcileHost): void {
   });
   if (
     items.length === previous.items.length &&
-    items.every((item, i) => item.sourceCommandId === previous.items[i]?.sourceCommandId)
+    items.every(
+      (item, i) =>
+        item.sourceCommandId === previous.items[i]?.sourceCommandId &&
+        item.dispatch.state === previous.items[i]?.dispatch.state &&
+        item.delivery.admitted === previous.items[i]?.delivery.admitted,
+    )
   )
     return;
   host.patchState({ queue: { ...previous, items } });

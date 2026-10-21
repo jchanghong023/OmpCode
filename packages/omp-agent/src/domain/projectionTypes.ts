@@ -50,7 +50,8 @@ function defaultAvailability(): SessionActionAvailability {
     switchModelConfig: { allowed: true },
     setFollowupMode: { allowed: true },
     queueEdit: { allowed: false, reasonCode: OMP_UNSUPPORTED_GUARD },
-    sendQueuedNow: { allowed: false, reasonCode: OMP_UNSUPPORTED_GUARD },
+    queueDelete: { allowed: true },
+    sendQueuedNow: { allowed: true },
     pauseGoal: { allowed: false, reasonCode: OMP_UNSUPPORTED_GUARD },
     resumeGoal: { allowed: false, reasonCode: OMP_UNSUPPORTED_GUARD },
   };

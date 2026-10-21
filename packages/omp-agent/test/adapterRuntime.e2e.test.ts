@@ -764,3 +764,162 @@ test(
     }
   },
 );
+
+test(
+  "队列按ID删除并提升非队首插话，保留图片、暂停策略和真实冷历史",
+  { skip: realOmpSkip, timeout: 180000 },
+  async () => {
+    const initial = deferred();
+    const interjection = deferred();
+    const calls: { text: string; images: number }[] = [];
+    const bytes = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAMgAAADIAQMAAACXljzdAAAABlBMVEX/AAAAAP9sof2OAAAAHElEQVR42u3BgQAAAADDoPlTX+EAVQEAAAAAfAYUUAABxFrmKwAAAABJRU5ErkJggg==",
+      "base64",
+    );
+    const harness = await startRealOmpHarness({
+      async handler(context: ModelContext, options: { signal?: AbortSignal }) {
+        const input = latestInput(context);
+        calls.push({ text: input.text, images: input.images.length });
+        if (calls.length === 1) {
+          assert.equal(input.text, "queue-actions-initial");
+          await holdUntilReleased(initial.promise, options.signal);
+          return { content: ["QUEUE_INITIAL_DONE"] };
+        }
+        if (calls.length === 2) {
+          assert.equal(input.text, steeringNotice + "hello");
+          assert.deepEqual(
+            input.images.map((block) => block.source),
+            [{ type: "base64", media_type: "image/png", data: bytes.toString("base64") }],
+          );
+          await holdUntilReleased(interjection.promise, options.signal);
+          return { content: ["QUEUE_INTERJECTION_DONE"] };
+        }
+        assert.equal(calls.length, 3, "删除或重复插话不能额外调用模型");
+        assert.equal(input.text, "hello");
+        assert.deepEqual(input.images, []);
+        return { content: ["QUEUE_FIFO_DONE"] };
+      },
+    });
+    try {
+      const sessionId = await createEmpty(harness, "queue-actions");
+      await setMode(harness, sessionId, "queue");
+      const casCommand = async (id: string, type: string, payload: unknown) => {
+        const state = harness.state(sessionId);
+        let baseRevision = z.number().parse(state.revision);
+        const baseLogEpoch = z.string().parse(state.logEpoch);
+        for (let attempt = 0; attempt < 5; attempt++) {
+          const ack = await command(harness, sessionId, `${id}-${attempt}`, type, payload, {
+            baseRevision,
+            baseLogEpoch,
+          });
+          if (ack.status !== "stale") return ack;
+          baseRevision = ack.revisionAtDecision;
+        }
+        throw new Error("queue action CAS did not converge");
+      };
+      assert.equal(
+        (
+          await command(harness, sessionId, "queue-initial", "sendText", {
+            text: "queue-actions-initial",
+          })
+        ).status,
+        "accepted",
+      );
+      await harness.waitUntil(() => calls.length === 1);
+      assert.equal(
+        (await casCommand("queue-pause", "setAutoDrain", { autoDrain: false })).status,
+        "accepted",
+      );
+      const image = await uploadImage(harness, sessionId, bytes);
+      for (let index = 0; index < 3; index++) {
+        const ack = await command(harness, sessionId, `queue-item-${index}`, "sendText", {
+          text: "hello",
+          ...(index === 2 ? { attachments: [image] } : {}),
+        });
+        assert.equal(ack.status, "accepted");
+      }
+      const act = (id: string, type: string, queueItemId: string) =>
+        casCommand(id, type, { queueItemId });
+      const removed = await act("remove-middle", "deleteQueueItem", "queue-item-1");
+      assert.equal(removed.status, "accepted");
+      assert.equal((await act("remove-again", "deleteQueueItem", "queue-item-1")).status, "noop");
+      assert.deepEqual(
+        queueStateSchema
+          .parse(harness.state(sessionId).queue)
+          .items.map((item) => item.queueItemId),
+        ["queue-item-0", "queue-item-2"],
+      );
+      assert.ok(
+        [...harness.rows(sessionId).values()].every(
+          (row) => row.sourceCommandId !== "queue-item-1",
+        ),
+      );
+      const promoted = await act("promote", "sendQueuedNow", "queue-item-2");
+      assert.equal(promoted.status, "accepted");
+      assert.equal(
+        (await act("promote-again", "sendQueuedNow", "queue-item-2")).reasonCode,
+        "fault.command.queueItem.inFlight",
+      );
+      assert.equal(
+        (await act("delete-in-flight", "deleteQueueItem", "queue-item-2")).reasonCode,
+        "fault.command.queueItem.inFlight",
+      );
+      assert.equal(calls.length, 1, "插话接纳不应中断当前模型请求");
+      initial.resolve();
+      // HTTP 请求可先于 stdio 投影到达；消费断言必须等待权威队列真正移出目标项。
+      await harness.waitUntil(
+        () =>
+          calls.length === 2 &&
+          !queueStateSchema
+            .parse(harness.state(sessionId).queue)
+            .items.some((item) => item.queueItemId === "queue-item-2"),
+      );
+      const queue = queueStateSchema.parse(harness.state(sessionId).queue);
+      assert.equal(queue.autoDrain, false);
+      assert.deepEqual(
+        queue.items.map((item) => item.queueItemId),
+        ["queue-item-0"],
+      );
+      interjection.resolve();
+      await harness.waitUntil(
+        () =>
+          sessionControlSchema.parse(harness.state(sessionId).control).phase === "completedSuccess",
+      );
+      assert.equal((await act("idle-send", "sendQueuedNow", "queue-item-0")).status, "accepted");
+      await harness.waitUntil(
+        () =>
+          calls.length === 3 &&
+          queueStateSchema.parse(harness.state(sessionId).queue).items.length === 0 &&
+          sessionControlSchema.parse(harness.state(sessionId).control).phase === "completedSuccess",
+      );
+      assert.ok(harness.mock.requests.every((request: { aborted: boolean }) => !request.aborted));
+      const listed = sessionListSchema.parse(
+        await harness.request(zcodeProtocolMethods.sessionList, {}),
+      );
+      const stableId = z.uuid().parse(listed.sessions[0]?.sessionId);
+      await harness.request("session/close", { sessionId: stableId });
+      const before = harness.conversationFrames(stableId).length;
+      await harness.subscribe(stableId);
+      const cold = await harness.waitUntil(() =>
+        harness
+          .conversationFrames(stableId)
+          .slice(before)
+          .find((frame) => frame.payload.kind === "snapshot"),
+      );
+      assert.equal(cold.payload.kind, "snapshot");
+      if (cold.payload.kind !== "snapshot") throw new Error("missing cold snapshot");
+      assert.equal(cold.payload.snapshot.queue.items.length, 0);
+      assert.equal(
+        cold.payload.snapshot.rows.window.filter(
+          (row) => row.kind === "userInput" && row.text.endsWith("hello"),
+        ).length,
+        2,
+      );
+      assert.equal(calls.length, 3, "冷恢复不能重放已删除或已消费输入");
+    } finally {
+      initial.resolve();
+      interjection.resolve();
+      await harness.close();
+    }
+  },
+);
