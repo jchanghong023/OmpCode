@@ -125,7 +125,27 @@ pnpm --config.use-node-version=24.14.0 test:unit
 - 可用 `pnpm test:unit --maxWorkers=2` 指定 worker 上限，或加 `--no-file-parallelism` 将测试文件串行执行；
   本轮最终全量没有使用这些覆盖参数。
 
-## 5. 后续需求记录规则
+## 5. FORK-002：移除推送时的自动架构门禁
+
+### 目标
+
+正常推送不再因架构合规扫描失败而被阻断，无需每次使用 `--no-verify` 绕过整个 pre-push 钩子。
+
+### 范围与规则
+
+- 从根 `verify:pre-push` 执行链删除 `pnpm run architecture:check -- --changed`。
+- 保留 Lint、SQLite schema 兼容检查、架构规则自身的单测及 push 范围的受影响 UT；这些检查失败时仍阻止推送。
+- `.husky/pre-push` 继续作为唯一推送钩子，保留 push ref 传递和 Git local env 清理，不新增旁路脚本或吞错分支。
+- 手动 `pnpm architecture:check --changed`、架构策略及模块边界规则保持不变；移除推送阻断不等于架构违规已修复。
+- 同步维护命令说明，不扩大为运行时代码或架构模块治理改造。
+
+### 验收标准
+
+1. 使用正常 `git push origin dev:dev`，不设置跳过钩子的参数或环境变量。
+2. 实际钩子执行保留的检查，不再调用架构合规扫描。
+3. 保留检查通过后推送成功，远端 `dev` 更新到本次提交。
+
+## 6. 后续需求记录规则
 
 - 新增或修改行为前，先记录对应需求，再实现代码。
 - 每项需求明确目标、产品规则、状态所有者、接口边界和验收场景。

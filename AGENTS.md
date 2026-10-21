@@ -11,18 +11,18 @@
 
 以下命令从仓库根目录执行：
 
-| 用途             | 命令                                                 |
-| ---------------- | ---------------------------------------------------- |
-| 类型检查         | `pnpm typecheck`                                     |
-| Lint             | `pnpm lint` / `pnpm lint:fix`                        |
-| 格式检查         | `pnpm fmt:check`                                     |
-| 桌面开发         | `pnpm dev:desktop`                                   |
-| Web 开发         | `pnpm dev:web`                                       |
-| 提交前检查       | `pnpm verify:pre-push`（Lint、架构检查与受影响单测） |
-| 架构检查         | `pnpm architecture:check --changed`                  |
-| 模块阅读包       | `pnpm architecture:context <module-id>`              |
-| 未使用依赖与导出 | `pnpm knip`                                          |
-| 导出引用查询     | `pnpm dep:refs --list-exports <file>`                |
+| 用途             | 命令                                                                                     |
+| ---------------- | ---------------------------------------------------------------------------------------- |
+| 类型检查         | `pnpm typecheck`                                                                         |
+| Lint             | `pnpm lint` / `pnpm lint:fix`                                                            |
+| 格式检查         | `pnpm fmt:check`                                                                         |
+| 桌面开发         | `pnpm dev:desktop`                                                                       |
+| Web 开发         | `pnpm dev:web`                                                                           |
+| 提交前检查       | `pnpm verify:pre-push`（Lint、数据库兼容、架构规则单测与受影响单测；不自动扫描架构合规） |
+| 架构检查         | `pnpm architecture:check --changed`                                                      |
+| 模块阅读包       | `pnpm architecture:context <module-id>`                                                  |
+| 未使用依赖与导出 | `pnpm knip`                                                                              |
+| 导出引用查询     | `pnpm dep:refs --list-exports <file>`                                                    |
 
 affected 使用 Vitest 官方选择，只运行选中的根 UT；选中整个套件时说明并跳过 UT，成功退出，不因此阻止 Push；不替代 CLI 测试或桌面 E2E。全量使用 `pnpm test` / `pnpm test:unit`，仅在用户明确要求时调用。范围与输出合同见 [pre-push 说明](docs/testing/pre-push-hook.md)。
 

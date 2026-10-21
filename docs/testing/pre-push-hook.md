@@ -6,7 +6,7 @@
 - `pre-push` 会执行 `pnpm run verify:pre-push`。
 - 根 `pnpm test` 现在只跑单测，不再误把桌面端 `packages/desktop/test/e2e` 当成 Vitest 用例。
 - Bugfix：单测脚本里的 E2E exclude glob 必须加引号；否则 shell 会先把 `packages/desktop/test/e2e/**/*.test.ts` 展开成真实文件列表，导致 Vitest 把多余文件当成 filters，同时又被 exclude 排除，最终报 `No test files found` 并阻止 push。
-- `verify:pre-push` 依次执行 lint、架构检查和 push 范围的受影响单测；lint、架构检查、选中测试或脚本自身失败都会阻止 push。
+- `verify:pre-push` 不再自动执行仓库架构合规扫描；保留的检查失败时仍阻止 push。`pnpm architecture:check --changed` 及架构策略继续用于手动检查，不修改或隐藏其诊断结果。
 
 这样可以在代码推到远端前，先用更快的静态检查拦住明显问题，再把单测问题拦在本地，同时保留 `pnpm test:e2e` 作为桌面端 E2E 的独立入口。
 
@@ -16,11 +16,15 @@ pre-push 直接使用当前 `PATH` 中的 pnpm / Node，不强制依赖 mise。�
 `mise exec` 虽能选择指定版本，却使已用 nvm 等方式准备好环境的开发者也必须安装 mise，
 否则检查尚未开始就会失败。
 
-```text
-开发者准备 Node / pnpm（mise、nvm 或其他方式）
-    → Git hook 保留 push ref 信息并清理 Git local env
-    → pnpm run verify:pre-push
-    → lint / 架构检查 / 受影响单测
+```mermaid
+flowchart LR
+    Tools["开发者准备 Node / pnpm"] --> Hook["Git hook<br/>传递 push refs，清理 Git local env"]
+    Hook --> Verify["verify:pre-push"]
+    Verify --> Lint["Lint"]
+    Lint --> Schema["SQLite schema 兼容"]
+    Schema --> Rules["架构规则单测"]
+    Rules --> Affected["受影响 UT"]
+    Affected --> Push["继续推送"]
 ```
 
 - 仓库负责声明工具版本和执行检查；个人环境负责让合适的 Node / pnpm 可被 Git 找到。
@@ -28,7 +32,7 @@ pre-push 直接使用当前 `PATH` 中的 pnpm / Node，不强制依赖 mise。�
 - GUI Git 客户端若找不到 Node / pnpm，可在个人 `~/.config/husky/init.sh` 中初始化自己的
   版本管理环境，参见 [Husky 官方说明](https://typicode.github.io/husky/how-to.html#node-version-managers-and-guis)。
 - 缺少命令或检查失败仍然阻止 push；hook 不自动安装工具，不静默跳过检查。
-- 本次只解除 hook 对 mise 的依赖，不新增版本检查，也不修改现有开发、CLI/SEA 或 CI 的版本要求。
+- 上述环境规则只解除 hook 对 mise 的依赖，不新增版本检查，也不修改现有开发、CLI/SEA 或 CI 的版本要求。
 
 ## Affected Unit Tests
 
@@ -71,7 +75,7 @@ Push 要求已暂存、未暂存、未跟踪改动均为空（忽略 Git 已忽�
 - 输出选中数量与基线；跳过全量时说明官方选中整个套件，列出官方 related 改动文件。dry-run 列精确规格，JSON 包含 runner/project/pool/path，不伪造逐文件关联原因。
 - Git/文件操作异步；保留 hook local env 清理和 lint-staged JSON manifest，Windows 不经 shell 展开文件名。不修改工作区和 index。
 
-全量跳过适用于工作区、任务结束、Push 和显式文件入口。Push 的 lint、架构、脏工作区、基线及实际局部测试失败仍会阻止推送；跳过全量只放行 affected UT 这一项，不代表测试已通过。
+全量跳过适用于工作区、任务结束、Push 和显式文件入口。Push 的 lint、数据库兼容、架构规则单测、脏工作区、基线及实际局部测试失败仍会阻止推送；仓库架构合规扫描不再属于推送阻断项。跳过全量只放行 affected UT 这一项，不代表测试已通过。
 
 ### 回归验收
 
