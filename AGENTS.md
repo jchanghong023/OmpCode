@@ -6,15 +6,14 @@
 - 定位问题时，未明确要求修改代码就先调查原因。结合源码、日志和运行时证据，区分已确认原因与待验证假设。
 - 保留与任务无关的本地改动，不自行恢复已移除的模块或内部依赖。
 
-## 项目定位与需求权威（Fork）
+## 项目定位与需求权威
 
-- 本仓库是持续同步上游的个人 Fork；上游来源、跟踪目标、产品目的、支持平台及平台差异边界唯一维护于 [FORK 总纲](docs/requirements/FORK.md)。同步操作只针对其中指定的上游 `main` HEAD，优先采用上游最新实现；UI、依赖与环境门控改动须先核对该总纲及所属功能域。
-- 自有改动与上游改动按 [结构隔离约定](docs/requirements/FORK.md#上游同步策略与平台范围) 组织，对上游共享文件保持最小必要 diff。
+- 本项目源自 ZCode，现独立演进，不再合并上游，ZCode 上游代码仅供参考；历史来源、演进策略、产品目的、支持平台及平台差异边界唯一维护于 [FORK 总纲](docs/requirements/FORK.md)。UI、依赖与环境门控改动须先核对该总纲及所属功能域。
+- 模块组织遵循[独立演进策略与平台范围](docs/requirements/FORK.md#独立演进策略与平台范围)及本仓库架构策略，不再以便于合并上游或缩小相对上游 diff 为约束。
 - 本项目完全由 AI Agent 实现和维护：质量不依赖用户手工读代码或人工回归，必须依靠可复现的自动化验证与文档约定。
-- 固定需求权威目录是 `docs/requirements/`，从[需求索引](docs/requirements/README.md)按功能边界定位文档；Fork 目的、差异需求、规划及验收标准只在该目录维护。根目录 `FORK.md` 仅保留跳转，不是第二份权威副本。
-- 新增、修改或取消本地差异需求，或预期用户可见行为变化时，MUST 检查并同步目录中对应文档；新独立功能域可新增文档并更新索引，每项需求只有一个维护位置。仅实现方式变化且需求不变时，不制造需求变更，也不得改写需求来合理化实现缺陷。入口、命令或开发规则变化时同步本文件。
-- 已获授权的上游同步任务中先保全本地改动和差异需求，正常优先可靠合并；冲突难以可靠解决时，可以相关冲突部分的上游当前实现为基础，按 `docs/requirements/` 重新实现仍然有效的本地需求，不执着保留旧补丁。同步后 MUST 逐项核对目录中仍然有效的本地需求，而不是只检查是否存在 Git 冲突；重建后必须通过相应 UT 和 E2E 验证，未通过不得宣称同步完成。
-- 不据此丢弃无关本地改动、覆盖唯一需求依据或擅自重置整个仓库；无法可靠保留本地功能时中止同步，不静默丢弃。
+- 固定需求权威目录是 `docs/requirements/`，从[需求索引](docs/requirements/README.md)按功能边界定位文档；项目目的、需求、规划及验收标准只在该目录维护。根目录 `FORK.md` 仅保留跳转，不是第二份权威副本。
+- 新增、修改或取消项目需求，或预期用户可见行为变化时，MUST 检查并同步目录中对应文档；新独立功能域可新增文档并更新索引，每项需求只有一个维护位置。仅实现方式变化且需求不变时，不制造需求变更，也不得改写需求来合理化实现缺陷。入口、命令或开发规则变化时同步本文件。
+- 不执行 ZCode 上游同步或合并，不将上游最新实现视为默认优先方案。借鉴上游代码时，按本项目现行需求、架构与验收标准独立评估和实现；不因上游变化恢复已取消功能、丢弃无关本地改动、覆盖需求依据或重置仓库。
 
 ## 命令与仓库结构
 
@@ -93,7 +92,7 @@ UI UT 的 `@/` 路径别名使用 `pnpm exec tsx --tsconfig packages/ui/tsconfig
 - 三级计划、计时与失败语义唯一维护于[三级测试需求](docs/requirements/test-gates.md)：fulltest 包含全部 fastcheck 原语和现存适用当前平台测试（包括隔离 GUI），不执行打包，总墙钟最多 900 秒；slowtest 包含 fulltest 一次并追加本地 Windows unpacked 打包及原 afterPack 校验，总墙钟最多 1500 秒。编译、准备与清理均不暂停 full/slow 的截止时间。项目无适用 WSL 测试扩展，单独报告 `SKIPPED_NOT_APPLICABLE`；这不取消 slowtest 的打包职责。参数只能下调预算，不能因此删改测试或打包判据。
 - 构建与三级门禁优先由 Bazel 原生图、官方规则、动作/测试缓存、并行、失败即停、测试 timeout 和 profile 接管；规则生成本身也走原生动作缓存，不维护第二份成功账本或 JS 调度器。Node 只保留权限、全程预算、用例首失败、产物物化与真实 GUI/收尾所有权所需的最小适配。生成输入、完整/局部失效、Worktree 缓存隔离及唯一验收标准统一见[三级测试需求](docs/requirements/test-gates.md#所有者与入口)，不在本文件复制规则清单。
 - 当前实现和实跑通过分开记录；以本 Worktree `output_base/diagnostics/` 的原生日志及同次外层结果为证据，不将只读查询、局部通过或历史快照当作当前完整通过；状态记录见[实现与验证状态](docs/requirements/test-gates.md#实现与验证状态)。
-- 复用原有检查定义、质量配置和测试断言。此前授权删除的 Fork 专项不恢复；上游原有测试保留。不为门禁速度缩减现存适用测试，超预算 Fork 按完整上游差异与依赖图确定受影响模块范围，逐项声明遗漏的整仓覆盖，不能跳过受影响失败项。
+- 复用原有检查定义、质量配置和测试断言。此前授权删除的 Fork 专项不恢复；上游原有测试保留。不为门禁速度缩减现存适用测试，超预算时按本次完整变更与依赖图确定受影响模块范围，逐项声明遗漏的整仓覆盖，不能跳过受影响失败项。
 - fulltest/slowtest 需要当前用户明确执行指令。历史授权、代理建议、提交/推送或“检查一下”不授权。`--human-authorized` 是软约束，只反映原始明确执行指令，不是 Agent 自行决定；不能绕过门禁执行内部长步骤。
 - 三个入口只在本机运行，不调用 CI、远端/发布流水线、Computer Use，不移动/点击全局鼠标、不抢前台焦点。不接受 `--publish-releases`，不推送、不创建 Tag、不发布；独立分发 workflow 保留不动。接管鼠标的测试保留单独入口，必须另外获得用户明确指令，状态为 `NOT_RUN_SEPARATE_USER_INSTRUCTION_REQUIRED`，不记为门禁失败或通过。
 - 每次结果绑定本次 HEAD、未提交差异摘要、内容指纹与工具版本；源码变化后旧结果不能沿用或跨快照合并。真实 OMP + 模拟模型与 GUI 必须使用专用隔离 fixture 和数据根，不连接日常实例、不读取或修改用户模型配置/凭据；历史结果、失败、跳过和未验证记录不得改写成本次通过。
@@ -132,7 +131,7 @@ UI UT 的 `@/` 路径别名使用 `pnpm exec tsx --tsconfig packages/ui/tsconfig
 - Desktop app 通过 stdio 与 Agent 通信。协议改动按接口所属边界同步维护 `packages/shared/src/zcode-protocol/index.ts`（legacy）或 `packages/shared/src/zcode-protocol-v4/index.ts`（主链路），提供严格类型与运行时校验；不把 OMP 原生帧泄漏给 UI。
 - Main 负责窗口、原生操作、进程调度和消息转发，不承载 task/session 业务状态。
 - 每个窗口使用一个 window-scoped Local Host；本地 workspace 共享该 Host。远程 workspace 由窗口内的连接注册表管理，不另建 Desktop Remote Host。
-- 涉及已取消功能或其共享边界时先核对 [FORK 总纲](docs/requirements/FORK.md)，不得在重构或同步中恢复已取消需求。
+- 涉及已取消功能或其共享边界时先核对 [FORK 总纲](docs/requirements/FORK.md)，不得在重构或参考上游实现时恢复已取消需求。
 - Desktop 的 `desktop-continuous` 实时链路与 Web 的 `web-remote-replayable` 恢复链路必须明确区分。修改 stream、snapshot、queue 或重连时，同时验证两种语义。
 - 产品输入经 omp-agent 的会话级调度与投影对接 OMP；运行中输入的接纳、消费及终态依据见[会话恢复](docs/requirements/session-recovery.md#冷历史与身份连续性)。不引用未接入产品的上游 CLI `CommandInbox` 作为运行时所有者。Renderer 只保留未提交草稿与 pending optimistic overlay，Host owner/lease 负责路由。
 - 保留 owner/lease、跨 Host 路由和 stale run 防护，不能仅根据单一路径删除边界判断。
