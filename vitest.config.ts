@@ -14,6 +14,9 @@ const forkIsolatedTests = [
   // 放入串行组保留真实进程和原时限，避免把启动排队误判为资源隔离或读锁失败。
   "packages/desktop/test/r3RemoteProcess.test.ts",
   "packages/provider-node/test/personal-config-read-lock.test.ts",
+  // Windows 全量并发曾在原重试窗口内触发 rename EPERM，独立运行通过。
+  // 沿用真实 IO 串行组，保留文件内并发读写、30 轮替换及原有重试预算。
+  "packages/provider-node/test/bundled-config-replacement.test.ts",
   // 原生 fs.watch 集成在批量并发时曾等不到通知；串行验证真实接线，去重逻辑由受控事件单测覆盖。
   "packages/services/src/gen-ui/adapters/stateStorage.test.ts",
   // electron-builder 下载 NSIS 时把进程 stdio 传给子进程，不能使用 threads 的虚拟 stdio。

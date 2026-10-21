@@ -30,7 +30,8 @@ describe("service manager adapters", () => {
           [
             "--eval",
             `const { spawn } = require("node:child_process");
-             spawn(process.execPath, ["--eval", 'process.stdout.write(String(process.pid)); setInterval(() => {}, 1000);'], { stdio: ["ignore", "inherit", "inherit"] });
+             // Bugfix：Windows 会随探测父进程终止未分离的后代；分离后仍继承管道，才能覆盖真正的阻塞条件。
+             spawn(process.execPath, ["--eval", 'process.stdout.write(String(process.pid)); setInterval(() => {}, 1000);'], { detached: process.platform === "win32", stdio: ["ignore", "inherit", "inherit"] });
              setInterval(() => {}, 1000);`,
           ],
           options,

@@ -77,10 +77,23 @@ the failure status and diagnostic, and must not publish `.ready` for a failed
 component. `installFile`/`installDirectory` must reject before copying from that
 failed component. A subsequent attempt must be able to download and install it.
 
-```text
-download / checksum / extraction fails
-  -> transaction exits nonzero -> owner cleanup
-  -> installer rejects with original diagnostic -> no component copy
+The foreground transaction owns its SSH stdio and exit status. The lock
+heartbeat and its descendants must use `/dev/null` for stdin, stdout and stderr,
+so a sleeping heartbeat descendant cannot keep the command's pipes open after
+the foreground shell exits. This does not change lock ownership or the cleanup
+transaction.
+
+```mermaid
+sequenceDiagram
+    participant Installer as Host installer
+    participant Shell as Remote foreground transaction
+    participant Heartbeat as Lock heartbeat
+    Installer->>Shell: Execute component installation
+    Shell->>Heartbeat: Start with stdio isolated to /dev/null
+    Heartbeat->>Heartbeat: Maintain this transaction's lock
+    Shell->>Heartbeat: Stop during owner cleanup
+    Shell-->>Installer: Close stdio and report original exit status
+    Note over Installer,Shell: Failure rejects without component copy; retry remains possible
 ```
 
 Regression coverage executes the actual installer-generated script in a POSIX

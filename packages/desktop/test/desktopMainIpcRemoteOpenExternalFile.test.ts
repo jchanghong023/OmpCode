@@ -1,3 +1,6 @@
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { PlatformChannels } from "@zcode/shared";
 
@@ -139,7 +142,10 @@ describe("OpenExternal 对 file URL 的分流", () => {
     const { listener } = await registerOpenExternalListener();
     const sender = { getURL: vi.fn(() => "about:blank") };
 
-    listener({ sender }, "file:///tmp/report.html#section");
+    // Windows 的 file URL 必须包含盘符，使用本机路径保留锚点剥离的真实行为验证。
+    const url = pathToFileURL(join(tmpdir(), "report.html"));
+    url.hash = "section";
+    listener({ sender }, url.href);
 
     await vi.waitFor(() => expect(h.shellOpenPath).toHaveBeenCalledTimes(1));
     expect(h.shellOpenPath).not.toHaveBeenCalledWith(expect.stringContaining("#"));
@@ -161,7 +167,8 @@ describe("OpenExternal 对 file URL 的分流", () => {
     const { listener, options } = await registerOpenExternalListener();
     const sender = { getURL: vi.fn(() => "about:blank") };
 
-    listener({ sender }, "file://server/share/page.html");
+    // UNC URL 在 Windows 合法；编码斜杠在所有平台都无法转换为文件路径。
+    listener({ sender }, "file:///C:/invalid%2Fpage.html");
 
     await vi.waitFor(() => expect(options.logger.warn).toHaveBeenCalledTimes(1));
     expect(h.shellOpenPath).not.toHaveBeenCalled();

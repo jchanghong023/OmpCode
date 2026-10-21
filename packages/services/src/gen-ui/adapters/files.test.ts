@@ -60,7 +60,12 @@ describe("Gen UI executor file reader", () => {
     await expect(readGenUiDocument({ ...target, path: oldPath }, outputRoot)).rejects.toThrow(
       "host output directory",
     );
-    await symlink(oldPath, target.path);
+    // Windows 文件 symlink 需要额外权限；junction 无需提权且同样必须被逐级链接检查拒绝。
+    await symlink(
+      process.platform === "win32" ? target.workspacePath : oldPath,
+      target.path,
+      process.platform === "win32" ? "junction" : "file",
+    );
     await expect(readGenUiDocument(target, outputRoot)).rejects.toThrow("symbolic links");
     await rm(directory, { recursive: true });
     await symlink(target.workspacePath, directory, "junction");

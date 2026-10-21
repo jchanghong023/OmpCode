@@ -405,7 +405,8 @@ describe("resolveDefaultZCodeAgentCommand", () => {
     await Promise.resolve();
     command.resolve({
       command: process.execPath,
-      args: ["-e", "setInterval(() => {}, 1000);"],
+      // 本用例验证 admission 代际；夹具遵循真实 Agent 的 EOF 退出边界，不竞速 Windows 强杀。
+      args: ["-e", "process.stdin.resume(); process.stdin.on('end', () => process.exit(0));"],
       cwd: workspacePath,
     });
     await vi.waitFor(() => expect(gate.isRecovering()).toBe(true));
@@ -544,7 +545,8 @@ require("node:readline").createInterface({ input: process.stdin }).on("line", li
     createdDirs.push(workspacePath);
     const commandResolver = vi.fn<() => ZCodeAgentCommand>(() => ({
       command: process.execPath,
-      args: ["-e", "setInterval(() => {}, 1000);"],
+      // 首次残留由下方 mock 注入；真实夹具按 EOF 收尾，保留重试和重新拉起的断言。
+      args: ["-e", "process.stdin.resume(); process.stdin.on('end', () => process.exit(0));"],
       cwd: workspacePath,
     }));
     const manager = new ZCodeAgentProcessManager({ commandResolver });
@@ -703,7 +705,9 @@ setInterval(() => {}, 1000);
         command: process.execPath,
         args: [
           "-e",
-          `setTimeout(() => process.stdout.write("not-json\\n"), 50); setInterval(() => {}, 1000);`,
+          // 验证两代进程的所有权及实际退出，不让无限计时器把它变成 CIM 强杀性能测试。
+          // 先由 Host 注册关闭监听，再以真实 stdin 通知触发非法帧，不使用启动延迟猜测顺序。
+          `process.stdin.on("end", () => process.exit(0)); require("node:readline").createInterface({ input: process.stdin }).once("line", () => process.stdout.write("not-json\\n"));`,
         ],
         cwd: workspacePath,
       }),
@@ -712,20 +716,22 @@ setInterval(() => {}, 1000);
 
     try {
       const firstClient = await manager.getClient({ workspacePath });
-      await new Promise<void>((resolve) => {
-        const disposable = firstClient.onClose(() => {
-          disposable.dispose();
-          resolve();
-        });
+      const firstClosed = Promise.withResolvers<void>();
+      const firstCloseListener = firstClient.onClose(() => {
+        firstCloseListener.dispose();
+        firstClosed.resolve();
       });
+      await firstClient.notify("workspace/readState", {});
+      await firstClosed.promise;
 
       const secondClient = await manager.getClient({ workspacePath });
-      await new Promise<void>((resolve) => {
-        const disposable = secondClient.onClose(() => {
-          disposable.dispose();
-          resolve();
-        });
+      const secondClosed = Promise.withResolvers<void>();
+      const secondCloseListener = secondClient.onClose(() => {
+        secondCloseListener.dispose();
+        secondClosed.resolve();
       });
+      await secondClient.notify("workspace/readState", {});
+      await secondClosed.promise;
 
       expect(spawnedPids).toHaveLength(2);
       expect(new Set(spawnedPids).size).toBe(2);
@@ -820,7 +826,8 @@ setInterval(() => {}, 1000);
     const manager = new ZCodeAgentProcessManager({
       commandResolver: () => ({
         command: process.execPath,
-        args: ["-e", "process.stdin.resume(); setInterval(() => {}, 1000);"],
+        // 残留故障由 dispose mock 控制；退出仍沿用真实 Agent 的 stdin EOF 协议。
+        args: ["-e", "process.stdin.resume(); process.stdin.on('end', () => process.exit(0));"],
         cwd: workspacePath,
       }),
     });
@@ -1255,7 +1262,8 @@ require("node:readline").createInterface({ input: process.stdin }).on("line", li
           cwd: workspacePath,
           args: [
             "-e",
-            `process.stderr.write(${JSON.stringify(frame)}); setInterval(() => {}, 1000);`,
+            // 诊断转发期间进程保持存活，测试结束后按 EOF 退出，避免无关强杀占满退出预算。
+            `process.stdin.resume(); process.stdin.on("end", () => process.exit(0)); process.stderr.write(${JSON.stringify(frame)});`,
           ],
         }),
         processLifecycleReporter: reporter,

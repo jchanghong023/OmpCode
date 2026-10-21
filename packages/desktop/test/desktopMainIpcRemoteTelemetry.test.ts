@@ -1,3 +1,6 @@
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { InternalChannels, PlatformChannels, type RemoteTarget } from "@zcode/shared";
 import { isAllowedExternalOpenUrl } from "../src/main/desktopMainIpcRemote.js";
@@ -169,17 +172,19 @@ describe("remote workspace connect telemetry IPC", () => {
     registerRemoteIpcHandlers(options);
     const listener = h.listeners.get(PlatformChannels.OpenExternal);
     expect(listener).toBeDefined();
+    // POSIX file URL 在 Windows 无法解码为本地路径，夹具使用本机原生绝对路径。
+    const filePath = join(tmpdir(), "secret");
 
     listener?.({}, "https://example.com/docs");
     listener?.({}, "http://localhost:3000/index.html");
-    listener?.({}, "file:///tmp/secret");
+    listener?.({}, pathToFileURL(filePath).href);
     listener?.({}, "javascript:alert(1)");
     listener?.({}, "not a url");
 
     expect(h.shellOpenExternal).toHaveBeenCalledTimes(2);
     expect(h.shellOpenExternal).toHaveBeenCalledWith("https://example.com/docs");
     expect(h.shellOpenExternal).toHaveBeenCalledWith("http://localhost:3000/index.html");
-    await vi.waitFor(() => expect(h.shellOpenPath).toHaveBeenCalledWith("/tmp/secret"));
+    await vi.waitFor(() => expect(h.shellOpenPath).toHaveBeenCalledWith(filePath));
     expect(options.logger.warn).toHaveBeenCalledTimes(2);
   });
 

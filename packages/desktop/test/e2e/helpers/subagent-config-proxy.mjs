@@ -2,13 +2,13 @@ import { spawn } from "node:child_process";
 import { appendFile, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
-import { fileURLToPath } from "node:url";
 
 // 非 CLI 进程（Electron/Host、存储准备 Worker）只加载模块，不拦截原始入口。
 if (process.argv.includes("app-server") && process.argv.includes("--stdio")) {
   // 仅由本组 WDIO 预加载的透明 stdio 代理。真实 Host/CLI 完成保存、解析和执行；
   // 故障位于传输边界，不修改业务对象，也不记录其他 RPC 的鉴权或模型凭据。
-  const preload = `--import=${JSON.stringify(fileURLToPath(import.meta.url))}`;
+  // 与调用方统一使用 file: URL，避免 Windows 盘符被 ESM 当作 URL scheme，并确保移除预加载后不会递归。
+  const preload = `--import=${JSON.stringify(import.meta.url)}`;
   const child = spawn(process.execPath, process.argv.slice(1), {
     stdio: ["pipe", "pipe", "inherit"],
     // 只移除当前代理预加载，保留覆盖采集等其他 Node 参数，防止递归启动代理。

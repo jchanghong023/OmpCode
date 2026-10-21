@@ -91,6 +91,9 @@ function compileFixture({
 }) {
   const args = [
     "/V2",
+    // 与 electron-builder 一致显式指定输入 UTF-8，避免本机代码页误解 fixture 和 include 中的中文。
+    "/INPUTCHARSET",
+    "UTF8",
     ...(buildUninstaller ? ["/WX", "/DBUILD_UNINSTALLER"] : []),
     `/DNSIS_INCLUDE_DIR=${resolve(nsisDir, "Include")}`,
     `/DELECTRON_BUILDER_NSIS_INCLUDE_DIR=${resolve(appBuilderLibDir, "templates/nsis/include")}`,

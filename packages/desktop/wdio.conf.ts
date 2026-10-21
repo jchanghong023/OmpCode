@@ -4931,7 +4931,8 @@ export const config: WebdriverIO.Config = {
           ? "packages/desktop/test/e2e/helpers/storage-worker-diagnostics.mjs"
           : "packages/desktop/test/e2e/helpers/subagent-config-proxy.mjs",
       );
-      const preload = `--import=${JSON.stringify(proxy)}`;
+      // Node 的 --import 需要 file: URL，Windows 盘符路径不是有效的模块 specifier。
+      const preload = `--import=${JSON.stringify(pathToFileURL(proxy).href)}`;
       const diagnostics = storageDiagnostics
         ? `process.env.ZCODE_E2E_STORAGE_WORKER_DIAGNOSTICS_DIR = ${JSON.stringify(resolve(e2eReporter.artifactDir, "storage-workers"))};\n`
         : "";

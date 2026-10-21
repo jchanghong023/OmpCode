@@ -1,6 +1,6 @@
 import { mkdtemp, mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { ProjectRepositoryContract, VirtualProject } from "#src/project-storage/contract.js";
 import type { IProjectService } from "#src/project/contract.js";
@@ -243,24 +243,30 @@ it("routes every foreign project operation to its existing owner and never falls
 
 it("browses owner directories without touching project storage or admitting a session", async () => {
   const repository = vi.fn();
-  const directories = { home: async () => "/owner", read: vi.fn(async () => []) };
+  // 目录由当前 Host 归一化；夹具使用本机路径，不能要求 Windows 返回 POSIX 分隔符。
+  const owner = join(tmpdir(), "owner");
+  const another = join(tmpdir(), "another");
+  const folder = join(owner, "folder");
+  const directories = { home: async () => owner, read: vi.fn(async () => []) };
   const service = createProjectService({
     repository,
-    workspaceDirectory: "/workspace",
+    workspaceDirectory: join(tmpdir(), "workspace"),
     directories,
   });
-  expect(await service.readDirectory()).toEqual({ path: "/owner", entries: [] });
-  expect(directories.read).toHaveBeenCalledWith({ path: "/owner" });
-  await service.readDirectory({ path: "/another", includeHidden: true });
-  expect(directories.read).toHaveBeenLastCalledWith({ path: "/another", includeHidden: true });
+  expect(await service.readDirectory()).toEqual({ path: owner, entries: [] });
+  expect(directories.read).toHaveBeenCalledWith({ path: owner });
+  await service.readDirectory({ path: another, includeHidden: true });
+  expect(directories.read).toHaveBeenLastCalledWith({ path: another, includeHidden: true });
   await expect(service.readDirectory({ path: "relative" })).rejects.toThrow(
     "project.absolute-path-required",
   );
-  expect(await service.readDirectory({ path: "/owner/child/../folder" })).toEqual({
-    path: "/owner/folder",
-    entries: [],
-  });
-  expect(directories.read).toHaveBeenLastCalledWith({ path: "/owner/folder" });
+  expect(await service.readDirectory({ path: [owner, "child", "..", "folder"].join(sep) })).toEqual(
+    {
+      path: folder,
+      entries: [],
+    },
+  );
+  expect(directories.read).toHaveBeenLastCalledWith({ path: folder });
   expect(repository).not.toHaveBeenCalled();
 });
 

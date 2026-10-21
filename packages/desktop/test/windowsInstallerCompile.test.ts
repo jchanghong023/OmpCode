@@ -45,6 +45,9 @@ it("compiles real UAC calls when the plugin directory follows the custom include
       // 只编译不执行：载荷复用当前文件，所有平台都能验证真实 NSIS 插件解析。
       const args = [
         "-V2",
+        // 对齐 electron-builder 的 UTF-8 输入，避免 Windows 本机代码页误解中文源码。
+        "-INPUTCHARSET",
+        "UTF8",
         ...(uninstaller ? ["-WX", "-DBUILD_UNINSTALLER"] : []),
         `-DNSIS_INCLUDE_DIR=${join(nsisDir, "Include")}`,
         `-DELECTRON_BUILDER_NSIS_INCLUDE_DIR=${join(builderDir, "templates/nsis/include")}`,

@@ -1,6 +1,6 @@
 import { access, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   SOURCE_SERVER_RELEASE_DESCRIPTOR_FILE_NAME,
@@ -57,7 +57,8 @@ describe("Source Server remote release assets", () => {
       version: "3.8.0",
     });
 
-    expect(collected.map((path) => path.split("/").at(-1))).toEqual(
+    // Bugfix：收集器返回宿主文件路径，文件名断言不能假定 Windows 也使用 POSIX 分隔符。
+    expect(collected.map((path) => basename(path))).toEqual(
       SOURCE_SERVER_REMOTE_RELEASE_TARGETS.map((target) => `zcode-server-${target}.tar.gz`),
     );
     await expect(

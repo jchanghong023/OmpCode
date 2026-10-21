@@ -3,7 +3,6 @@ import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
-import { fileURLToPath } from "node:url";
 import { afterEach, expect, it } from "vitest";
 
 const roots: string[] = [];
@@ -33,9 +32,8 @@ it.each([false, true])(
     });
   `,
     );
-    const proxy = fileURLToPath(
-      new URL("./e2e/helpers/subagent-config-proxy.mjs", import.meta.url),
-    );
+    // --import 接收模块 specifier；Windows 盘符路径会被当作不受支持的 URL scheme。
+    const proxy = new URL("./e2e/helpers/subagent-config-proxy.mjs", import.meta.url).href;
     const child = spawn(process.execPath, [entry, "app-server", "--stdio"], {
       env: {
         ...process.env,
