@@ -167,6 +167,15 @@ await new Promise(resolve=>setTimeout(resolve,700));record('end');console.log('f
         join(workspace, "gates/inputs/runtime.json"),
         JSON.stringify({ env: process.env }),
       );
+    // 分析不能越过原生执行边界；冷产物与测试记录都必须仍不存在。
+    const labels = [...targetList, "gate-product"];
+    const analysis = await invoke(first, bases[0], labels, ["--nobuild", "--keep_going"]);
+    assert.equal(analysis.code, 0, analysis.output);
+    await assert.rejects(readFile(join(first, "execution.jsonl")), { code: "ENOENT" });
+    await assert.rejects(
+      readFile(join(first, "bazel-bin/gates/artifacts/gate-product/build/product.txt")),
+      { code: "ENOENT" },
+    );
     const firstBuild = await invoke(first, bases[0], ["gate-product"]);
     assert.equal(firstBuild.code, 0, firstBuild.output);
     assert.equal(
@@ -241,9 +250,14 @@ await new Promise(resolve=>setTimeout(resolve,700));record('end');console.log('f
       "cached declared tree must restore real build product",
     );
     // 冷查询必须只报告需要执行，不能越过风险屏障执行任何测试。
-    const coldProbe = await invoke(first, bases[0], targetList, ["--check_tests_up_to_date"]);
+    const coldProbe = await invoke(first, bases[0], targetList, [
+      "--check_tests_up_to_date",
+      "--keep_going",
+    ]);
     assert.equal(await isBazelCacheMiss(coldProbe.bepPath, coldProbe.code), true, coldProbe.output);
     await assert.rejects(readFile(join(first, "execution.jsonl")), { code: "ENOENT" });
+    const invalidation = coldProbe.events.get("gate-one")?.failureDetail?.execution?.code;
+    assert.equal(invalidation, "ACTION_NOT_UP_TO_DATE");
     const cold = await invoke(first, bases[0], targetList);
     assert.equal(cold.code, 0, cold.output);
     for (const target of targetList) {

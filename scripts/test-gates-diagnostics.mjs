@@ -135,9 +135,14 @@ export async function createGateDiagnostics({
     const complete = invocations.filter((record) => record.clientEndedAt !== undefined);
     const executionInvocations = [];
     const checkInvocations = [];
+    const analysisInvocations = [];
     // 只读查询也会发出缓存 testResult；仅按本次明确旗标分组，避免重复计为真实测试。
     // 所有调用仍保留在 complete 中，完整计入耗时、加载/分析和原生证据。
     for (const record of complete) {
+      if (record.args.includes("--nobuild")) {
+        analysisInvocations.push(record);
+        continue;
+      }
       const records = record.args.includes("--check_tests_up_to_date")
         ? checkInvocations
         : executionInvocations;
@@ -192,6 +197,7 @@ export async function createGateDiagnostics({
         invocationCount: checkInvocations.length,
         ...summarizeTests(checkInvocations),
       },
+      readOnlyAnalyses: { invocationCount: analysisInvocations.length },
       phases,
       clientSeconds: sumKnown(complete.map((record) => record.elapsedSeconds)),
       pnpmWallSeconds: null,
@@ -214,7 +220,7 @@ export async function createGateDiagnostics({
     }
     updateElapsed();
     log(
-      `[gate] 总耗时 ${seconds(summary.totalSeconds)} | 启动/锁等待 ${seconds(summary.launchLockWaitSeconds)} | 加载/分析 ${seconds(summary.loadingAnalysisSeconds)} | 实际动作 ${summary.actionsExecuted ?? "待定位"} | 测试命中/重跑 ${summary.testHits ?? "待定位"}/${summary.testReruns ?? "待定位"} (本地=${summary.testLocalHits ?? "待定位"} 磁盘=${summary.testDiskHits ?? "待定位"} 远端=${summary.testRemoteHits ?? "待定位"} 来源未观察=${summary.testUnknownHits ?? "待定位"}) | 只读查询 ${summary.readOnlyTestChecks.invocationCount}次 BEP命中/非缓存结果 ${summary.readOnlyTestChecks.testHits ?? "待定位"}/${summary.readOnlyTestChecks.testReruns ?? "待定位"} (不计实际测试) | 外层耗时 ${seconds(summary.outerSeconds)}`,
+      `[gate] 总耗时 ${seconds(summary.totalSeconds)} | 启动/锁等待 ${seconds(summary.launchLockWaitSeconds)} | 加载/分析 ${seconds(summary.loadingAnalysisSeconds)} | 实际动作 ${summary.actionsExecuted ?? "待定位"} | 测试命中/重跑 ${summary.testHits ?? "待定位"}/${summary.testReruns ?? "待定位"} (本地=${summary.testLocalHits ?? "待定位"} 磁盘=${summary.testDiskHits ?? "待定位"} 远端=${summary.testRemoteHits ?? "待定位"} 来源未观察=${summary.testUnknownHits ?? "待定位"}) | 只读查询 ${summary.readOnlyTestChecks.invocationCount}次 BEP命中/非缓存结果 ${summary.readOnlyTestChecks.testHits ?? "待定位"}/${summary.readOnlyTestChecks.testReruns ?? "待定位"} (不计实际测试) | 只读分析 ${summary.readOnlyAnalyses.invocationCount}次 | 外层耗时 ${seconds(summary.outerSeconds)}`,
     );
     updateElapsed();
     return summary;

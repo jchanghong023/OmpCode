@@ -28,6 +28,7 @@
 | Windows 完整验证 | `pnpm fulltest --human-authorized`（总墙钟 900 秒，含编译与清理）      |
 | Windows 慢速门禁 | `pnpm slowtest --human-authorized`（同 fulltest 覆盖，总墙钟 1500 秒） |
 | 缓存过期只读诊断 | `pnpm fulltest --check-tests-up-to-date`（不执行测试，不作为完整验收） |
+| 构建配置只读分析 | `pnpm fulltest --analyze-only`（仅分析现有 BUILD，不生成、编译或测试） |
 | 分析缓存丢弃诊断 | `pnpm fastcheck --cache-debug`（可追加到已授权的 fulltest/slowtest）   |
 | Lint             | `pnpm lint` / `pnpm lint:fix`                                          |
 | 格式检查         | `pnpm fmt:check`                                                       |
@@ -96,7 +97,7 @@ UI UT 的 `@/` 路径别名使用 `pnpm exec tsx --tsconfig packages/ui/tsconfig
 - fulltest/slowtest 需要当前用户明确执行指令。历史授权、代理建议、提交/推送或“检查一下”不授权。`--human-authorized` 是软约束，只反映原始明确执行指令，不是 Agent 自行决定；不能绕过门禁执行内部长步骤。
 - 三个入口只在本机运行，不调用 CI、远端/发布流水线、Computer Use，不移动/点击全局鼠标、不抢前台焦点。不接受 `--publish-releases`，不推送、不创建 Tag、不发布；独立分发 workflow 保留不动。接管鼠标的测试保留单独入口，必须另外获得用户明确指令，状态为 `NOT_RUN_SEPARATE_USER_INSTRUCTION_REQUIRED`，不记为门禁失败或通过。
 - 每次结果绑定本次 HEAD、未提交差异摘要、内容指纹与工具版本；源码变化后旧结果不能沿用或跨快照合并。真实 OMP + 模拟模型与 GUI 必须使用专用隔离 fixture 和数据根，不连接日常实例、不读取或修改用户模型配置/凭据；历史结果、失败、跳过和未验证记录不得改写成本次通过。
-- 尚未授权时只执行 fastcheck 和临时短桩自检，不借专项入口执行完整门禁。保留既有质量检查及精简后有效的核心行为断言，不为通过放宽判据；删除的非核心/非 OMP/冗余/长耗时专项不能宣称已验收。
+- 尚未授权时只执行 fastcheck、临时短桩自检及 `--analyze-only` / `--check-tests-up-to-date` 只读诊断，不借专项入口执行完整门禁。只读模式不执行生成、编译或测试，不作为完整验收；具体语义见[三级测试需求](docs/requirements/test-gates.md#所有者与入口)。保留既有质量检查及精简后有效的核心行为断言，不为通过放宽判据；删除的非核心/非 OMP/冗余/长耗时专项不能宣称已验收。
 - 任意阶段或用例首个失败立即停止后续调度并终止全部所属并行任务、嵌套 runner 及进程树；保留触发失败、非零退出和最终计时，不等待整组测试结束或预算耗尽。full/slow 的硬截止在失败、验证与清理期间仍有效，到时强制非零退出。未启动/取消的工作不记为通过。
 
 ### 构建与缓存纪律

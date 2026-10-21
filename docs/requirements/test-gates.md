@@ -57,6 +57,8 @@ flowchart LR
 
 - 图生成目标自身只使用全源码 glob、工具链及本次控制输入，不依赖上一版 BUILD 枚举的 runner helper 清单。合法删除或重命名 helper 并同步 import 后，普通入口必须能先生成新图，不能因旧清单中的缺失路径阻断自举；业务目标仍各自声明实际 runner 闭包。
 - 现有 `--check-tests-up-to-date` 无需执行授权，始终只读：先以原生 `--check_tests_up_to_date` 检查图生成目标，仅当缓存有效且已有原生生成产物与根 BUILD 字节一致时继续查询其余目标。图缺失或过期报告 `DIAGNOSTIC_OUT_OF_DATE`，不得生成、物化或写根 BUILD；工具、语法、分析等真实错误保持失败，不降格为缓存 miss 或自动重试。该诊断不作为完整验收，未授权普通 full/slow 仍拒绝执行。
+- 配置迭代提供 `--analyze-only`，无需 full/slow 执行授权，使用同一 Worktree server、启动选项与构建配置，以原生 `build --nobuild --keep_going` 分析现有根 BUILD 中的图生成目标及所选计划全部目标；不执行生成、编译、测试、准备或产物物化，不要求运行时 OMP/Electron。只报告 `ANALYSIS_ONLY_NOT_RUN` 或真实分析失败，不写入成功目标集合；明确 `generatedGraphVerified=false`，分析通过不证明生成图当前有效、源码可编译或测试通过。该模式不能与 `--plan`、`--check-tests-up-to-date` 混用。
+- 过期检查使用原生 `--check_tests_up_to_date --keep_going`，不得附加 `--nobuild`；保留已有图有效性准入边界。逐目标保留原生 failureDetail 和 BEP 位置，将明确的 `ACTION_NOT_UP_TO_DATE` 标为 `OUT_OF_DATE`，被过期上游或其他缺失证据阻断的目标标为 `NOT_CHECKED`，不冒充测试失败或缓存命中。纯过期仍为 `DIAGNOSTIC_OUT_OF_DATE`；同时出现配置、工具等真实错误时整体仍失败，不因已有过期目标吞掉错误，也不自动重跑。explain 只说明原生已观察的失效原因，不把 ActionKey、未检查目标或空执行集合当作完整缓存预测。
 - 审查修正边界：构建动作和测试分别声明实际执行包装器的完整静态模块闭包（包括跨包 helper），不能把整个 `scripts/`、`gates/` 或规则生成器作为每个目标的公共输入；目标自身实际读取的脚本、配置、动态入口仍由其依赖分析单独声明。无关临时脚本或只改变生成器但生成语义不变时，不失效未消费它们的目标；包装器传递依赖变化必须失效消费者。配方声明不是产物读取，linked worktree 的 `.git` 文件不参与缓存。变更架构检查以显式、确定性的变更文件集合执行并缓存；格式检查在实际工具启动边界保留 Windows 有界参数批次。静态阶段不提前要求 Electron 可执行文件，共享准备成功后才读取其内容身份并准入消费者。
 - 通用 Node 测试/静态执行包装器只消费普通命令、环境隔离及失败监督；GUI fixture、收据定稿和窗口关闭实现仅由 GUI 生命周期入口加载和声明。不能因为普通 runner 复用执行函数就把所有 GUI helper 隐式变成每个离线测试的公共缓存输入。打包状态仍由唯一所有者保管并在取消后恢复，不引入另一条执行或隔离路径。
 - 本地 ESM 模块引用中的 query/hash 属于模块身份，不是源码文件名；声明对应本地源文件并继续追踪其依赖。仍无法证明完整的动态读取/执行入口仅对其消费者保留 `scripts/`、`gates/` 的保守候选范围；不能把该回退变成所有目标的公共输入，也不能删除回退来制造命中。全仓静态审计仍按原范围执行。
@@ -513,3 +515,11 @@ queue 的唯一接纳/派发事实源为 ConversationEngine 既有 TurnContext �
 - 恢复 `oauthStateCodec.ts` 后的缓存回归复跑 PASS：`total=40.7s`、测试命中/重跑 90/7、`incomplete=[]`。业务源码回到 HEAD 状态后仅文档作用域目标（图生成与全仓静态检查等 7 项）因本节记录本身的新增而重跑，业务测试与 GUI/components 全部回到本地缓存，证明局部失效未污染无关目标的缓存身份。一次中间复跑因本节编写与验证并发进行，被入口源码快照校验按 `Source changed during validation` 判为 UNVERIFIED，该防护行为正确、按其快照保留。本轮所有结论仅绑定上述快照；后续源码变化后不跨快照沿用。
 - 用户另行明确授权 gh 发布版本后，双平台手动发布 workflow 首轮暴露并修复四项仅在 Linux CI 全新检出可见的缺陷，均不改变 Windows 已验证行为：`gates/runner.sh` 在 git 索引中补执行位（Linux 检出上 `sh_binary` 要求可执行）；源码快照对 `git ls-files --others` 列出的空未跟踪目录跳过（Linux `readFile` 目录抛 EISDIR，CI 上 `tsc -b packages/shared` 预构建生成的空 dist 曾使 bootstrap 直接失败）；产物物化对 bazel Linux 沙箱把声明输入物化成的绝对符号链接改为解引用按内容复制（相对链接仍按原文本保留），并复制前后维护 owner 写位（沙箱源只读，cp 保留源权限曾使后续覆盖 EACCES）；并行动作把同一共享依赖产物恢复到真实工作区同一路径的竞态（ENOENT/EEXIST）改为按依赖目标的跨动作文件锁串行恢复，锁置于真实工作区可写缓存、超时抢占防陈锁。bootstrap 阶段失败原因同时补充错误堆栈输出。
 - 双平台发布最终成功：`Release Windows EXE` run `39495275585`（6 分 59 秒）产出 [v20261020-204950-39495275585-1](https://github.com/jchanghong023/OmpCode/releases/tag/v20261020-204950-39495275585-1)（`OmpCode-3.14.3-win-x64.exe` + sha256）；`Release CentOS 7 ZIP` run `39501780205`（6 分 42 秒）产出 [v20261020-213702-39501780205-1](https://github.com/jchanghong023/OmpCode/releases/tag/v20261020-213702-39501780205-1)（`OmpCode-3.14.3-centos7-x64.zip` + sha256），均为正式 Release（非 draft）。此前 CentOS7 首轮及重试的失败记录按各自快照保留；发布流水线不运行测试，不替代上述 Windows 验收结论。
+
+### 2026-10-21 Bazel 只读配置迭代
+
+- 本轮按用户要求不运行测试或编译。新增 `--analyze-only` 与逐目标过期反馈，沿用现有桥接、常驻输出根和原生诊断；根 BUILD 未重新生成，不改业务实现、测试范围或断言判据。
+- `pnpm fulltest --analyze-only` 实际分析 111 个目标，返回 `ANALYSIS_ONLY_NOT_RUN total=0.6s`、退出 0；原生输出为 `0 processes / 0 total actions`，`generatedGraphVerified=false`、成功目标集合为空。证据为本 Worktree `output_base/diagnostics/1792557956981-153736-9b32394e-c0ff-48d3-b7a5-79a58872e6c6/`，该次 server PID 前后一致。
+- `pnpm fulltest --check-tests-up-to-date` 返回 `DIAGNOSTIC_OUT_OF_DATE total=0.9s`、退出 1，实际动作 0；`bazel-graph` 明确保留 `OUT_OF_DATE`、原生 `ACTION_NOT_UP_TO_DATE`、原因及 BEP 路径，不再丢弃目标明细。生成目标过期仍阻止后续缓存结论，不执行生成或测试；证据为 `diagnostics/1792557968452-39208-7ae3abb1-bd1e-4606-9baa-2ef3d5168dd2/`。
+- 冲突的分析/过期旗标在准入前退出 1；普通未授权 fulltest 仍退出 2，均未启动目标。修改脚本的语法、定向 Lint/格式及变更架构检查通过；已有原生自检补充冷分析不产生产品/测试记录和失效分类保留场景，本轮未执行该自检或任何测试，完整功能与性能回归未验证。
+- query 与 cquery 均确认现有图中 `oauthRedirect` 测试到 `oauthStateCodec.ts` 的直接依赖。额外查询工具进程缺少门禁环境的 Java 启动项，触发 Bazel 自动重启；该查询只作依赖证据，不用于热运行或跨调用 server 复用结论。没有清缓存，不以本轮配置分析耗时宣称 fulltest 性能改善。

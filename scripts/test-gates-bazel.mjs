@@ -130,9 +130,11 @@ export async function runBazelStage(stage, context, onFailure) {
   const started = performance.now();
   const originals = stage.bazel.stages;
   const cacheOnly = stage.bazel.cacheOnly === true;
+  const analysisOnly = stage.bazel.analysisOnly === true;
+  const all = context.nativeStages ?? originals;
   if (cacheOnly && originals.some(isUncachedStage))
     return { status: "CACHE_MISS", targets: [], reason: "Required uncached stage" };
-  const missing = originals.find((s) => s.realOmp && !context.omp);
+  const missing = !analysisOnly && originals.find((s) => s.realOmp && !context.omp);
   if (missing) return { status: "FAIL", reason: `No installed omp for ${missing.id}`, targets: [] };
   if (cacheOnly) {
     // 全新 output_base 的 workspace-status 动作尚无产物，Bazel 会在目标分析前中止，
@@ -155,34 +157,29 @@ export async function runBazelStage(stage, context, onFailure) {
     for (const recipe of (context.nativeStages ?? originals).filter(needsElectron))
       if (writtenControls.has(bazelTargetName(recipe.id))) await writeControlFile(recipe, context);
   }
-  if (originals.some(needsElectron) && !runtimeToolchain.electron)
-    throw new Error("Electron runtime consumers require successful electron-runtime-prepare");
-  await mkdir(gatesInputsDir, { recursive: true });
-  inputsWritten = true;
-  // 只有普通 graph 声明准入才接管工作区传输；查询即使写了同名控件也不拥有旧产物。
-  // 此标志仅用于既有 stopAll 后的清理，不能作为生成成功或缓存命中的依据。
-  if (
-    !cacheOnly &&
-    originals.some(
-      (recipe) => recipe.id === "bazel-graph" && recipe.outputs?.includes(graphTransportOutput),
+  const targets = originals.map((recipe) => bazelTargetName(recipe.id));
+  if (!analysisOnly) {
+    if (originals.some(needsElectron) && !runtimeToolchain.electron)
+      throw new Error("Electron runtime consumers require successful electron-runtime-prepare");
+    await mkdir(gatesInputsDir, { recursive: true });
+    inputsWritten = true;
+    // 查询不接管旧产物；普通生成准入后由既有 stopAll 清理链收回传输所有权。
+    if (
+      !cacheOnly &&
+      originals.some(
+        (recipe) => recipe.id === "bazel-graph" && recipe.outputs?.includes(graphTransportOutput),
+      )
     )
-  )
-    graphTransportOwned = true;
-  await writeFile(
-    join(gatesInputsDir, "runtime.json"),
-    JSON.stringify({ env: process.env, omp: context.omp, workspace: repositoryRoot }),
-  );
-  await writeToolchainFile(context, context.nativeStages ?? originals);
-  // Dependencies can be analyzed before their risk group is invoked. Populate every
-  // declared control once up front, while still scheduling only the current group.
-  const all = context.nativeStages ?? originals;
-  for (const recipe of all)
-    if (!writtenControls.has(bazelTargetName(recipe.id))) await writeControlFile(recipe, context);
-  const targets = [];
-  for (const recipe of originals) {
-    const target = bazelTargetName(recipe.id);
-    if (!writtenControls.has(target)) await writeControlFile(recipe, context);
-    targets.push(target);
+      graphTransportOwned = true;
+    await writeFile(
+      join(gatesInputsDir, "runtime.json"),
+      JSON.stringify({ env: process.env, omp: context.omp, workspace: repositoryRoot }),
+    );
+    await writeToolchainFile(context, all);
+    // 依赖可在所属风险组之前分析，提前填充完整计划的控制输入。
+    for (const recipe of all)
+      if (!writtenControls.has(bazelTargetName(recipe.id))) await writeControlFile(recipe, context);
+    for (const target of targets) await writeFile(join(gatesInputsDir, `${target}.live`), "");
   }
   const info = await assertBazelReady();
   const paths = context.diagnostics?.createInvocationPaths(stage.id);
@@ -190,32 +187,32 @@ export async function runBazelStage(stage, context, onFailure) {
   const profilePath = paths?.profile ?? join(gatesInputsDir, `profile-${stage.id}.json.gz`);
   const executionPath = paths?.jsonexecution ?? join(gatesInputsDir, `execution-${stage.id}.json`);
   await rm(bepPath, { force: true });
-  for (const target of targets) await writeFile(join(gatesInputsDir, `${target}.live`), "");
-  const monitor = cacheOnly
-    ? undefined
-    : monitorBazelStage(targets, bepPath, context.clock, (failure) =>
-        onFailure?.({
-          ...failure,
-          targetId: originals[targets.indexOf(failure.target)]?.id,
-        }),
-      );
+  const monitor =
+    cacheOnly || analysisOnly
+      ? undefined
+      : monitorBazelStage(targets, bepPath, context.clock, (failure) =>
+          onFailure?.({
+            ...failure,
+            targetId: originals[targets.indexOf(failure.target)]?.id,
+          }),
+        );
   let code, invocation, commandArgs;
-  const stopBudgetTargets = watchBudgetTargets(
-    targets.map((target) => join(gatesInputsDir, `${target}.live`)),
-  );
+  const stopBudgetTargets = analysisOnly
+    ? () => {}
+    : watchBudgetTargets(targets.map((target) => join(gatesInputsDir, `${target}.live`)));
   try {
     commandArgs = [
       "--nohome_rc",
       "--nosystem_rc",
       `--output_base=${bazelOutputBase}`,
-      originals.every(isBuildStage) ? "build" : "test",
+      analysisOnly || originals.every(isBuildStage) ? "build" : "test",
       "--announce_rc",
       ...(context.cacheDebug ? ["--config=cache-debug"] : []),
       "--test_summary=short",
       "--test_output=errors",
       "--cache_test_results=auto",
-      ...(cacheOnly ? ["--check_tests_up_to_date"] : []),
-      "--nokeep_going",
+      ...(analysisOnly ? ["--nobuild"] : cacheOnly ? ["--check_tests_up_to_date"] : []),
+      cacheOnly || analysisOnly ? "--keep_going" : "--nokeep_going",
       "--notest_keep_going",
       "--noenable_runfiles",
       "--jobs=4",
@@ -252,6 +249,15 @@ export async function runBazelStage(stage, context, onFailure) {
     await invocation?.finish({ exitCode: code });
     context.diagnostics?.recordPhase(stage.id, "nativeEvidence", diagnosticStarted);
   }
+  if (analysisOnly)
+    return {
+      status: code === 0 ? "ANALYZED" : "FAIL",
+      targets: [],
+      generatedGraphVerified: false,
+      seconds: (performance.now() - started) / 1000,
+      bepPath,
+      profilePath,
+    };
   if (paths) {
     const invalidationStarted = performance.now();
     await recordInvalidationEvidence({
@@ -268,30 +274,31 @@ export async function runBazelStage(stage, context, onFailure) {
     });
     context.diagnostics?.recordPhase(stage.id, "invalidationEvidence", invalidationStarted);
   }
-  if (cacheOnly && (await isBazelCacheMiss(bepPath, code))) {
-    console.log("[gate] native cache check requires execution; retaining original risk groups");
-    return {
-      status: "CACHE_MISS",
-      targets: [],
-      bepPath,
-      seconds: (performance.now() - started) / 1000,
-    };
-  }
+  const cacheMiss = cacheOnly && (await isBazelCacheMiss(bepPath, code));
+  if (cacheMiss)
+    console.log("[gate] native cache is out of date; build/test execution remains prohibited");
   const events = await parseBuildEventFile(bepPath, targets, { checkTestsUpToDate: cacheOnly });
   const cacheStates = await actionCacheStates(executionPath);
   const records = originals.map((original, index) => {
     const event = events.get(targets[index]);
     const complete = event?.complete && event.status;
-    const status =
-      complete && event.status === "PASSED"
+    // 原因：过期检查曾丢弃全部目标明细；依据原生分类区分过期与未检查，不当作测试失败。
+    const outOfDate =
+      cacheOnly && event?.failureDetail?.execution?.code === "ACTION_NOT_UP_TO_DATE";
+    const status = outOfDate
+      ? "OUT_OF_DATE"
+      : complete && event.status === "PASSED"
         ? "PASS"
-        : monitor?.failure() && !complete
-          ? "CANCELLED"
-          : "FAIL";
-    const cacheState =
-      status !== "PASS"
+        : cacheMiss
+          ? "NOT_CHECKED"
+          : monitor?.failure() && !complete
+            ? "CANCELLED"
+            : "FAIL";
+    const cacheState = outOfDate
+      ? "outOfDate"
+      : status !== "PASS"
         ? "incomplete"
-        : cacheOnly && code === 0
+        : cacheOnly
           ? "upToDate"
           : isBuildStage(original)
             ? (cacheStates?.get(targets[index]) ?? "unknown")
@@ -313,14 +320,19 @@ export async function runBazelStage(stage, context, onFailure) {
             ? executionPath
             : `${bepPath} (completion only; cache provenance unobserved)`
           : bepPath,
+      ...(event?.failureDetail ? { failureDetail: event.failureDetail } : {}),
       ...(event?.previousRunSeconds !== undefined
         ? { previousRunSeconds: event.previousRunSeconds }
         : {}),
       ...(status !== "PASS"
         ? {
-            reason: complete
-              ? `Bazel ${event.status}; log=${event.logPath ?? bepPath}`
-              : `Bazel exited ${code} without complete BEP evidence`,
+            reason:
+              event?.failureDetail?.message ??
+              (status === "NOT_CHECKED"
+                ? "Not checked: an outdated dependency or incomplete native evidence blocks this target"
+                : complete
+                  ? `Bazel ${event.status}; log=${event.logPath ?? bepPath}`
+                  : `Bazel exited ${code} without complete BEP evidence`),
           }
         : {}),
     };
@@ -359,7 +371,7 @@ export async function runBazelStage(stage, context, onFailure) {
       `[${record.status}] ${record.id} ${record.seconds.toFixed(1)}s (bazel ${record.cacheState}; source=${record.evidenceSource}; log=${record.logPath ?? "unobserved"})${record.previousRunSeconds !== undefined ? ` previous-run=${record.previousRunSeconds.toFixed(1)}s` : ""}${record.reason ? `: ${record.reason}` : ""}`,
     );
   return {
-    status: passed ? "PASS" : "FAIL",
+    status: passed ? "PASS" : cacheMiss ? "CACHE_MISS" : "FAIL",
     seconds: (performance.now() - started) / 1000,
     targets: records,
     slowTargets: [...records].sort((a, b) => b.seconds - a.seconds).slice(0, 5),

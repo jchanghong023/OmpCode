@@ -31,6 +31,7 @@ const knownFlags = new Set([
   "--budget-seconds",
   "--cache-debug",
   "--check-tests-up-to-date",
+  "--analyze-only",
 ]);
 const valueFlags = new Set(["--budget-seconds"]);
 const buildOnly = ["build", "bootstrap"].includes(level);
@@ -39,10 +40,11 @@ if (buildOnly) {
   valueFlags.add("--target");
 }
 const validLevel = ["fastcheck", "fulltest", "slowtest"].includes(level);
+const analysisOnly = (validLevel || buildOnly) && args.includes("--analyze-only");
 // 同一个明确模式同时控制两层准入和执行分支，不能借只读旗标放行普通 full/slow。
 const diagnosticOnly =
   (validLevel || buildOnly) &&
-  args.includes("--check-tests-up-to-date") &&
+  (args.includes("--check-tests-up-to-date") || analysisOnly) &&
   !args.includes("--plan");
 let budget = validLevel ? gateBudget(level) : null;
 let argumentError;
@@ -111,6 +113,8 @@ try {
       if (!knownFlags.has(args[index])) throw new Error(`Unknown gate argument: ${args[index]}`);
       if (valueFlags.has(args[index]) && !args[++index]) throw new Error("Missing flag value");
     }
+    if (analysisOnly && (args.includes("--plan") || args.includes("--check-tests-up-to-date")))
+      throw new Error("--analyze-only cannot be combined with --plan or --check-tests-up-to-date");
     const planOnly = args.includes("--plan");
     if (["fulltest", "slowtest"].includes(level) && !planOnly && !diagnosticOnly && !authorized) {
       await finish("NOT RUN — HUMAN AUTHORIZATION REQUIRED", 2);
@@ -179,6 +183,31 @@ try {
         const requiredTargets = [graphStage.id];
         const report = await gate.run(
           async (records, onFailure) => {
+            if (analysisOnly) {
+              // 现有 BUILD 可独立分析；不得先执行生成，也不能把分析通过记成目标成功。
+              Object.assign(source, await prepare("snapshot", snapshot));
+              context.snapshot = source;
+              context.nativeStages = [
+                graphStage,
+                ...bazelizeStages(await plan()).flatMap((stage) => stage.bazel.stages),
+              ];
+              requiredTargets.push(...context.nativeStages.slice(1).map((stage) => stage.id));
+              progress("analyzing existing BUILD only; generated graph freshness is not verified");
+              const query = await runBazelStage(
+                {
+                  id: "bazel-analysis-only",
+                  bazel: { stages: context.nativeStages, localTestJobs: 4, analysisOnly: true },
+                },
+                context,
+              );
+              records.push({ ...query, id: "bazel-analysis-only" });
+              await finish(
+                query.status === "ANALYZED" ? "ANALYSIS_ONLY_NOT_RUN" : "FAIL",
+                query.status === "ANALYZED" ? 0 : 1,
+                { query },
+              );
+              return;
+            }
             progress(
               diagnosticOnly
                 ? "toolchain verified; checking generated Bazel graph"

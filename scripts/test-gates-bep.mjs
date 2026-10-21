@@ -58,6 +58,7 @@ export async function parseBuildEventFile(path, targets, { checkTestsUpToDate = 
         seconds: actions.get(target) ?? 0,
         cached: false,
         cacheState: "incomplete",
+        ...(event.completed.failureDetail ? { failureDetail: event.completed.failureDetail } : {}),
       });
     }
     if (event.testResult) {
