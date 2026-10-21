@@ -145,7 +145,89 @@ pnpm --config.use-node-version=24.14.0 test:unit
 2. 实际钩子执行保留的检查，不再调用架构合规扫描。
 3. 保留检查通过后推送成功，远端 `dev` 更新到本次提交。
 
-## 6. 后续需求记录规则
+## 6. FORK-003：通过 OMP app-server 替换 Agent 核心
+
+### 目标与权威边界
+
+带着 `ZCODE_AGENT_SERVER_COMMAND=omp` 启动 ZCode，由现有 Host 拉起支持 ZCode 协议的 OMP，保留 ZCode 的界面与宿主框架，以 OMP 作为实际 Agent 核心。
+
+- 外部协议及既有产品合同以本仓库的 [ZCode Protocol](docs/zcode-protocol.md)、对应 spec 和固定兼容提交中的公开 schema 为准，不通过大改协议迁就 OMP，也不把 OMP 当作原 Agent 的 Model provider。
+- OMP 入口、独立协议目录、与 AgentSession 同进程的业务 API 调用、存储准备生产端及功能／权限合同由 `F:/code2026/oh-my-pi/docs-zh-CN/requirements/rpc-ui-protocol.md` 维护；本节只维护 ZCode 侧启动消费、发行装配、宿主边界和源码保留。下文时序图是引用，不在本仓库另立一份 OMP 合同。
+- 本仓库的接入逻辑集中在启动、初始化、打包、远端分发和必要的能力展示；协议适配不散落到 UI、Host 或原 Agent 核心中。
+- [OMP 需求在线入口（浮动 main）](https://github.com/jchanghong023/oh-my-pi/blob/main/docs-zh-CN/requirements/rpc-ui-protocol.md) 仅用于发布导航，不能证明已包含本地确认的合同。未取得双方真实需求发布提交前，以各仓本地需求文件为准；发布时分别记录实际提交并更新引用，不虚构 SHA，也不把固定协议源码提交当作新需求已发布的证据。
+
+### 启动选择与发行装配
+
+- `ZCODE_AGENT_SERVER_COMMAND` 选择可执行程序，不自动转换协议。默认调用 `omp app-server --stdio`，桌面追加 `--surface desktop`；OMP 入口与桌面呈现的具体行为引用 OMP 需求，不在此重复定义。直接运行 `omp` 仍是 OMP 原生 TUI。
+- 开发／手动启动保留显式环境变量覆盖的优先级；正式发行在 `packages/desktop/src/main/desktopRuntimeEnv.ts` 的 `buildHostProcessEnv()` 中，在没有显式覆盖时将已校验的随包 OMP 绝对路径和启动参数注入对应 Window Host 的子进程环境。不是由安装器写系统环境变量，也不修改用户 PATH、shell 配置或 OMP 偏好。
+- `ZCODE_AGENT_SERVER_ARGS_JSON`、`ZCODE_AGENT_SERVER_CWD` 覆盖默认值时仍须满足同一 app-server、stdio、surface、cwd 和 profile 合同；不能因参数被清空而启动 TUI。准备与正常运行使用同一已解析产物、有效参数、profile 和执行环境。
+- 显式选择 OMP 后，版本、参数、初始化或启动失败必须报错，不能静默回退原 Agent。不新增通用多 runtime 注册框架或长期双 Agent 设置开关。
+- 本地和远端分别解析执行端路径、版本与环境；本地变量不代表 SSH、WSL 或 Docker 已部署 OMP。远端资产网络与发布接入遵守[现有远端部署说明](docs/remote/zcode-agent-remote-deployment.md)及其引用的 R3／Server CLI 规范，不重建旧 Remote Host 或平行下载策略。
+
+### 存储启动消费与监督
+
+- Host 的 tasks-index 准备继续由现有 Node Worker 执行；原配套 Node CLI 的准备路径保留。选中外部 OMP 时，`packages/desktop/src/host/database-startup/storagePreparationProcesses.ts` 必须通过子进程 spawn 执行同一 OMP 的 `app-server --stdio --prepare-storage --cwd <绝对路径>`，不得将 Bun 二进制作为 Node Worker 脚本，也不得因缺少原 Worker entry 跳过准备。
+- OMP 准备进程的参数、帧形状、写入边界和退出行为以 OMP 需求“存储准备生产端合同”为准，wire 类型复用 ZCode 公开 schema。Host 负责校验帧、真实路径观测及确认、同轮成功资源的 reuse 判定、取消、时限和自有进程回收，不直接操作 OMP journal。
+- 只有收到合法的路径与准备完成事实、进程退出码为 0 且无失败时，Host 才允许启动业务服务。非法帧、提前 EOF、超时、取消、失败状态或非零退出均阻断启动，保留原始错误；不能用 no-op 或放宽时限制造成功。
+- 正常 app-server 仍受启动状态门约束，必要初始化 ready 前不发送执行命令；其 attempt、sequence 与终态按公开合同校验。准备成功不等于模型／认证已可用，模型执行保留独立就绪检查。
+
+### 宿主所有权与事件顺序
+
+- 每个 window-scoped Host 的每个 workspaceKey 最多一个 app-server，其内由同进程 AgentSession 托管多个主会话，不另起会话 RPC 宿主。两个窗口可各有 app-server；持久会话租约仍跨进程约束，不能同时写同一 OMP 会话。独立短生命周期存储准备进程不属于会话执行架构。
+- Window Host 拥有可信连接路由、attachment、进程监督及 tasks-index 组织元数据；UI 只拥有草稿与展示态。OMP 正文／队列与 app-server 投影的所有权、`session/list` 与 `sessions-index` 的字段归属均引用 OMP 需求，不在 Host／Main／relay 重建事实。
+- 身份路由沿用 `workspaceIdentity?.trim() || workspacePath`，路径仅用于执行和展示，远端保留 `remoteSessionId`；Host 负责 `desktop-continuous` 与 `web-remote-replayable` attachment 隔离，手机只 attach 已有运行时。
+
+```mermaid
+sequenceDiagram
+    participant M as Desktop Main（环境装配）
+    participant H as Window Host（监督与组织态）
+    participant P as OMP 准备子进程
+    participant B as OMP app-server（协议投影）
+    participant R as AgentSession（同进程执行事实）
+    participant U as 桌面或手机 attachment
+    M->>H: 注入已解析的 OMP 产物和环境
+    H->>H: 现有 Worker 准备 tasks-index
+    H->>P: spawn 同一产物的 prepare-storage 入口
+    P-->>H: startup/storagePath
+    H->>P: 观测真实路径后 storagePathReady
+    P->>P: 准备真实存储并关闭准备资源
+    P-->>H: startup/storagePrepared
+    H->>P: 关闭准备通道 stdin
+    P-->>H: exit 0
+    Note over H,P: 任一失败或取消均阻断业务启动
+    H->>B: 每个 Host 的 workspaceKey 启动一次
+    B-->>H: startup/storageState ready
+    Note over B,R: 同一进程，直接业务 API，无内部 RPC
+    U->>H: hello/clientHello 与用户意图
+    H->>B: 注入可信连接上下文并转发命令
+    B->>R: 直接调用目标会话的业务 API
+    R-->>B: 接纳结果与事件回调
+    B-->>H: command ACK 与权威 projection
+    H-->>U: 按所属 attachment 投递
+```
+
+### 源码保留与持续合并
+
+- 尽量保留 `apps/zcode-cli/` 及原 runtime、工具和配套源码，继续合并 ZCode 上游；不为更换核心批量删除、搬迁或重写上游实现，也不整体回灌旧 `main`。
+- Fork 产品通过装配替换运行入口。源码保留不等于长期暴露两个 Agent；清理限于 Fork 自有临时开关和重复适配，不以删除上游源码实现切换。
+- ZCode 依赖固定版本、可校验的 OMP 发行物，不跨仓深路径引用私有实现。发布组合记录 ZCode 协议基线、OMP 版本／提交与实际能力；schema 校验不替代行为联调。
+- 合并上游、升级目标发行或修改协议、Host、启动、UI 消费链时，必须执行 OMP 需求中约定的兼容评估；只有目标合同变化才重钉基线并适配／验证，纯注释或排版变化不机械触发重钉。
+
+### 单次完整交付与验收
+
+不分阶段交付或分阶段验收。以下均为同一次完整交付的并列条件；内部工程依赖顺序不构成部分交付出口：
+
+1. 在 FORK-001 的 UT 基线上，验证开发态显式覆盖、安装包默认注入、参数／cwd 覆盖、外部 OMP 存储准备和正常启动；失败不能启动业务或回落旧 Agent。
+2. 通过真实 UI、Host 与 app-server 内同进程 AgentSession 完成全部约定功能，包括多会话隔离、消息／工具、停止／问答、历史／冷恢复、配置、命令／技能、执行中输入和队列；双方成功、失败与取消条件全部有效。
+3. 验证同一 app-server 内多个主会话的配置／cwd／代理身份／事件隔离，单会话阻塞或停止不影响另一会话；同时验证双窗口 Host 隔离与写租约、索引归属、`existing-only` 及两种 delivery profile，不通过会话子进程规避同进程验收。
+4. 桌面与远端实际运行同一兼容组合；取消、EOF、断线、版本不兼容和迟到结果均不能串会话、回落本地或遗留自有执行进程。
+5. 全部约定能力验收后才切换正式发行入口。任一必需能力或验收未完成时整体仍为未完成／未验收，不把 UT 或既有独立 RPC 接口的局部通过当作完整替换完成。
+
+### 当前状态
+
+目标方案已确认；app-server 接入、启动装配、正式发行与 ZCode GUI 整体实现及验收尚未完成。现有 UT 或 OMP `rpc-ui` 的证据不替代上述验收，需求在线发布状态不等于功能状态。
+
+## 7. 后续需求记录规则
 
 - 新增或修改行为前，先记录对应需求，再实现代码。
 - 每项需求明确目标、产品规则、状态所有者、接口边界和验收场景。
