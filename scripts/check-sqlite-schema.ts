@@ -22,6 +22,8 @@ const exec = promisify(execFile);
 await exec("git", ["rev-parse", "--verify", `${base}^{commit}`]);
 const directory = await mkdtemp(join(tmpdir(), "zcode-schema-check-"));
 const cli = new DatabaseSync(":memory:");
+// 修复原因：b19b2fda 将目录注入限制为测试；构建期 schema 校验使用临时库，等同测试夹具。
+process.env.VITEST = "true";
 setDataBaseDir(directory);
 const repos = [new AutomationRepo(), new OffPeakTaskRepo(), new TaskIndexRepo()];
 try {
