@@ -123,7 +123,11 @@ export function listDefaultFormalE2ESpecs(desktopDir, env = process.env) {
   };
   visit(e2eDir);
   if (env.ZCODE_AGENT_SERVER_COMMAND?.trim()) {
-    specs.push("./test/e2e/omp-app-server.e2e.ts");
+    specs.push(
+      "./test/e2e/omp-app-server.e2e.ts",
+      "./test/e2e/omp-subagents.e2e.ts",
+      "./test/e2e/omp-workflows.e2e.ts",
+    );
   }
   return specs;
 }

@@ -8,9 +8,12 @@ import {
   seedPersonalProviderConfig,
   seedPersonalDefaultModelSelection,
 } from "./model-provider-restart-config.js";
+import { respondOmpSubagentRequest } from "./omp-subagents-fixture.js";
+import { respondOmpWorkflowRequest } from "./omp-workflows-fixture.js";
 
 // Explicit selection keeps the original Agent's default formal suite unchanged.
 export const OMP_INTEGRATION_SPEC = "omp-app-server.e2e.ts";
+export const OMP_CORE_INTEGRATION_SPECS = ["omp-subagents.e2e.ts", "omp-workflows.e2e.ts"];
 export const OMP_PROVIDER_ID = "omp-e2e";
 export const OMP_MODEL_ID = "omp-chat";
 
@@ -71,7 +74,11 @@ export async function prepareOmpIntegrationFixture(options: {
   environment: NodeJS.ProcessEnv;
   modelSelection: { providerId: string; modelId: string };
 }): Promise<(() => Promise<void>) | undefined> {
-  const dedicatedFixture = options.specs.some((spec) => spec.endsWith(OMP_INTEGRATION_SPEC));
+  const dedicatedFixture = options.specs.some(
+    (spec) =>
+      spec.endsWith(OMP_INTEGRATION_SPEC) ||
+      OMP_CORE_INTEGRATION_SPECS.some((coreSpec) => spec.endsWith(coreSpec)),
+  );
   if (!options.environment.ZCODE_AGENT_SERVER_COMMAND?.trim()) {
     if (!dedicatedFixture) return undefined;
     throw new Error("OMP integration requires an explicit actual OMP source CLI/executable");
@@ -171,6 +178,12 @@ export async function prepareOmpIntegrationFixture(options: {
       for await (const chunk of request) raw += String(chunk);
       const body = JSON.parse(raw) as ModelRequest;
       requests.push(body);
+      const coreReply = respondOmpSubagentRequest(body) ?? respondOmpWorkflowRequest(body);
+      if (coreReply?.error) {
+        response.writeHead(coreReply.error.status, { "content-type": "application/json" });
+        response.end(JSON.stringify({ error: { message: coreReply.error.message } }));
+        return;
+      }
       const callId = `omp-call-${requests.length}`;
       const marker =
         [...body.messages]
@@ -188,18 +201,21 @@ export async function prepareOmpIntegrationFixture(options: {
         marker === "OMP_E2E_COMPACT_SEED" &&
         Array.isArray(body.tools) &&
         body.tools.length > 0;
-      const initialText = summaryRequest
-        ? OMP_COMPACT_SUMMARY
-        : archiveRequest
-          ? compactArchive
-          : `${marker}_STREAMING`;
-      const finalText = summaryRequest || archiveRequest ? "" : ` ${marker}_DONE`;
+      const initialText = coreReply
+        ? (coreReply.text ?? "")
+        : summaryRequest
+          ? OMP_COMPACT_SUMMARY
+          : archiveRequest
+            ? compactArchive
+            : `${marker}_STREAMING`;
+      const finalText = coreReply || summaryRequest || archiveRequest ? "" : ` ${marker}_DONE`;
       const toolFinished =
         last?.role === "tool" || JSON.stringify(last?.content ?? null).includes('"tool_result"');
       // Fixed public native calls exercise the real runtime without interpreting
       // declarations or translating the original Agent's tool vocabulary.
       const tool =
-        !toolFinished && marker.includes("TOOL")
+        coreReply ? coreReply.tool :
+        (!toolFinished && marker.includes("TOOL")
           ? {
               name: "write",
               args: {
@@ -222,7 +238,7 @@ export async function prepareOmpIntegrationFixture(options: {
                   ],
                 },
               }
-            : undefined;
+            : undefined);
       const responseCallId = callId;
       response.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
       activeResponses.add(response);
@@ -279,7 +295,7 @@ export async function prepareOmpIntegrationFixture(options: {
             : { content: initialText }),
         });
       }
-      if (marker.includes("STOP")) return; // deterministic cancel window, ends only when actual runtime aborts HTTP
+      if (coreReply?.hold || (!coreReply && marker.includes("STOP"))) return; // ends only when actual runtime aborts HTTP
       const timer = setTimeout(
         () => {
           if (response.destroyed) return;
@@ -316,9 +332,10 @@ export async function prepareOmpIntegrationFixture(options: {
   server.listen(0, "127.0.0.1", listening.resolve);
   await listening.promise;
   const baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  const subagentReasoning = options.specs.some((spec) => spec.endsWith("omp-subagents.e2e.ts"));
   await writeFile(
     resolve(agentDir, "models.yml"),
-    `providers:\n  ${OMP_PROVIDER_ID}:\n    baseUrl: ${baseUrl}/v1\n    auth: none\n    api: openai-completions\n    models:\n      - id: ${OMP_MODEL_ID}\n        reasoning: false\n      - id: omp-alternate\n        reasoning: false\n  omp-anthropic:\n    baseUrl: ${baseUrl}\n    auth: none\n    api: anthropic-messages\n    models:\n      - id: omp-anthropic-chat\n        reasoning: false\n`,
+    `providers:\n  ${OMP_PROVIDER_ID}:\n    baseUrl: ${baseUrl}/v1\n    auth: none\n    api: openai-completions\n    models:\n      - id: ${OMP_MODEL_ID}\n        reasoning: ${subagentReasoning}\n      - id: omp-alternate\n        reasoning: ${subagentReasoning}\n  omp-anthropic:\n    baseUrl: ${baseUrl}\n    auth: none\n    api: anthropic-messages\n    models:\n      - id: omp-anthropic-chat\n        reasoning: false\n`,
   );
   await updateFixtureConfig(agentDir, (document) => {
     const model = `${OMP_PROVIDER_ID}/${OMP_MODEL_ID}`;
@@ -366,6 +383,9 @@ export async function prepareOmpIntegrationFixture(options: {
     NO_PROXY: "127.0.0.1,localhost",
   });
   const providerFile = resolve(options.homeDir, ".zcode/v2/provider_config.json");
+  const reasoningLevel = subagentReasoning
+    ? { values: ["disabled", "low", "high"], map: '{"reasoning_effort":reasoningLevel}' }
+    : { values: ["disabled"], map: "{}" };
   await seedPersonalProviderConfig(providerFile, {
     id: OMP_PROVIDER_ID,
     label: "OMP isolated fixture",
@@ -374,8 +394,8 @@ export async function prepareOmpIntegrationFixture(options: {
     apiKey: "omp-fixture-only",
     enabled: true,
     models: [
-      { id: OMP_MODEL_ID, contextWindow: 128000 },
-      { id: "omp-alternate", contextWindow: 128000 },
+      { id: OMP_MODEL_ID, contextWindow: 128000, reasoningLevel },
+      { id: "omp-alternate", contextWindow: 128000, reasoningLevel },
     ],
   });
   await seedPersonalProviderConfig(providerFile, {

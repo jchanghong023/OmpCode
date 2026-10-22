@@ -7,6 +7,8 @@ export const MANUAL_REVIEW_SPEC_GLOB = "./test/e2e/**/manual-review/**/*.test.ts
 
 // 临时缩小 fork E2E 执行范围；保留用例实现，不将排除项记为通过。
 // 精确枚举正式用例，避免影响 manual-review 副本或同名协议/会话场景。
+// 子代理与工作流是 OMP 核心验收：显式 OMP 入口另纳入 omp-subagents.e2e.ts
+// 和 omp-workflows.e2e.ts。下列旧夹具排除不代表取消对应原生产品能力。
 export const FORK_TEMPORARY_E2E_EXCLUDES = [
   "./test/e2e/browser-empty-state-deferred-guest.test.ts",
   "./test/e2e/browser-human-viewport-preference.test.ts",
@@ -126,6 +128,8 @@ export const FORK_TEMPORARY_E2E_EXCLUDES = [
 ];
 
 // 首轮暂缓的协议/Provider 场景仍允许精确单文件定向执行，宽泛 glob 不解除排除。
+// 旧工具/私有存储夹具仅保留历史待迁移身份；子代理与工作流不能据此免验。
+// 本次适配只运行新增的 OMP-native E2E，不重跑这些旧夹具。
 export const FORK_DEFERRED_E2E_SPECS = [
   "./test/e2e/conversation-session/conversation-session-background.test.ts",
   "./test/e2e/conversation-session/conversation-session-goal-run-cases.test.ts",

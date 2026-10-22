@@ -1602,6 +1602,8 @@ nodes:
       - "agent profile"
       - "子代理"
       - "智能体配置"
+      - "OMP-native 子代理核心"
+      - "OMP child 配置与父问答"
     docs:
       - "docs/subagents-built-in-model-overrides.md"
       - "docs/subagent-session-side-tabs.md"
@@ -1609,6 +1611,9 @@ nodes:
       - "docs/working-memory/provider-refactor/design/execution/execution.md"
       - "docs/working-memory/provider-refactor/steps/04-model-execution-cutover.md"
       - "docs/superpowers/plans/2026-07-06-subagent-permission-delegation.md"
+      - "fork.md#子代理与工作流核心范围引用"
+      - "docs/conversation-session-case-catalog.md#omp-native-子代理与工作流核心验收"
+      - "docs/testing/conversation-session-e2e-coverage-matrix.md#omp-native-子代理与工作流核心验收"
     codeSeeds:
       - symbol: "AgentInputSchema"
         file: "apps/zcode-cli/packages/contracts/src/tools/agent.ts"
@@ -1622,6 +1627,9 @@ nodes:
         file: "packages/shared/src/subagent-markdown-selection.ts"
     invariants:
       - "Host and standalone Agent await offline migration of user-directory Markdown and builtin state before formal reads. Markdown keeps model/thoughtLevel; intermediate modelSelection is not consumed. Only user Markdown provider values are rewritten, preserving unrelated bytes; project/plugin files and symlinks are excluded. JSON uses builtInModelSelectionOverrides after one-way import. Ordinary readers do not remap legacy identities or fall back to old fields. Explicit execution still validates its concrete selection; Host effective-selection protocol remains a separate Todo96 decision."
+      - "OMP integration is a core capability referenced by FORK-003 in fork.md; execution and protocol facts remain authoritative in the OMP requirements cited there. Existing apps/zcode-cli seeds describe the retained upstream implementation, not the only runtime or an OMP execution dependency; do not add legacy tool aliases or a parallel runtime."
+      - "OMP AgentSession/registry/task owners hold real child derivation, model/thought isolation, parent-routed questions, messages, history, stop/resume and failure facts. Host only routes and organizes; UI only owns drafts and display. Child detail stays readOnly; control uses existing parent entry points/native tools, not a child composer."
+      - "desktop-continuous and web-remote-replayable retain separate attachment/recovery boundaries. Core subagent acceptance does not restore permission dock, plugin_reference or unrelated management surfaces; accepted cases remain unverified until new OMP-native E2E evidence exists."
 
   - id: "capability.provider-registry"
     kind: "capability"
@@ -2538,10 +2546,13 @@ nodes:
       - "Subagent detail tab"
       - "child session detail"
       - "子智能体详情"
+      - "OMP child readOnly 过程与历史"
     docs:
       - "docs/subagent-session-side-tabs.md"
       - "docs/v4-composer-api-retry-status.md"
       - "docs/chat/manual-model-switch-resolution-chain.md"
+      - "fork.md#子代理与工作流核心范围引用"
+      - "docs/conversation-session-case-catalog.md#omp-native-子代理与工作流核心验收"
     codeSeeds:
       - symbol: "SubagentSessionSidePane"
         file: "packages/ui/src/app-shell/SubagentSessionSidePane.tsx"
@@ -2551,6 +2562,9 @@ nodes:
         file: "packages/ui/src/v4/ConversationTimeline.tsx"
       - symbol: "ConversationTurnGroup"
         file: "packages/ui/src/v4/ConversationTurnGroup.tsx"
+    invariants:
+      - "OMP child process/history is core, but this detail surface remains readOnly with no child composer; messages, stop and resume originate through existing parent entry points/native tools."
+      - "Displayed execution/history comes from the native OMP owner via the same public protocol, not Host/UI reconstructed facts. desktop-continuous and web-remote-replayable subscriptions remain isolated; reading cold detail does not start model execution."
 
   - id: "surface.conversation-query-edit"
     kind: "ui-surface"
@@ -5206,10 +5220,15 @@ nodes:
       - "工作流实时运行"
       - "工作流执行引擎接线"
       - "运行工作流"
+      - "OMP-native 工作流核心"
+      - "OMP GUI actor 过程历史与恢复"
     docs:
       - "docs/dynamic-workflow/presentation.md"
       - "apps/zcode-cli/packages/dynamic-workflow/docs/execution-engine.md"
       - "apps/zcode-cli/packages/dynamic-workflow/docs/analysis.md"
+      - "fork.md#子代理与工作流核心范围引用"
+      - "docs/conversation-session-case-catalog.md#omp-native-子代理与工作流核心验收"
+      - "docs/testing/conversation-session-e2e-coverage-matrix.md#omp-native-子代理与工作流核心验收"
     codeSeeds:
       - symbol: "createWorkflowToolEntry"
         file: "apps/zcode-cli/packages/core/src/tool/handlers/create-workflow.ts"
@@ -5227,6 +5246,10 @@ nodes:
         file: "packages/shared/src/zcode-protocol-v4/delta.ts"
       - symbol: "createDwfJournalStore"
         file: "apps/zcode-cli/packages/adapters/src/storage/session-store/repositories/dwf-journal.ts"
+    invariants:
+      - "FORK-003 in fork.md references the authoritative OMP workflow contract: definition management, real native actor execution/interaction, outputs, persistent run/actor history, resume, failure and cancellation are core. Script orchestration or a static graph cannot replace GUI actor process/history."
+      - "Existing apps/zcode-cli code seeds are retained upstream implementation references, not the sole execution implementation. OMP native actor owners and workflow journal hold execution/persistence facts; Host retains only routing/organization and its existing timer scheduling, while UI retains drafts/display."
+      - "Actor transcript detail remains readOnly; preserve existing parent/native interaction paths and desktop-continuous versus web-remote-replayable recovery isolation. Do not revive permission dock/plugin_reference exclusions or claim planned OMP-native E2E cases have passed."
 
   - id: "surface.workflow-run-detail-pane"
     kind: "ui-surface"

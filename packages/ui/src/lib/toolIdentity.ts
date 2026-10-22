@@ -77,6 +77,16 @@ function normalizeLegacyToken(value: string | null | undefined): string {
   );
 }
 
+/** Native agent:// writes are communication, not file previews or file edits. */
+export function isAgentMessageWriteToolCall(toolCall: ToolIdentityLike): boolean {
+  return (
+    normalizeLegacyToken(toolCall.toolName ?? toolCall.kind) === "write" &&
+    isRecord(toolCall.input) &&
+    typeof toolCall.input.path === "string" &&
+    toolCall.input.path.startsWith("agent://")
+  );
+}
+
 function identityFromKnownToolName(
   value: string | null | undefined,
   source: ToolCallIdentitySource,
@@ -217,6 +227,8 @@ function isPlanModeExitToken(value: string): boolean {
 }
 
 export function resolveToolCallIdentity(toolCall: ToolIdentityLike): ToolCallIdentity {
+  // 原生 write 也承载消息；仅凭工具名归入文件族会把 agent:// 回执错误打开为文件。
+  if (isAgentMessageWriteToolCall(toolCall)) return UNKNOWN_TOOL_IDENTITY;
   const rawNames = readRawToolNameCandidates(toolCall.raw);
   const normalizedKind = normalizeLegacyToken(toolCall.kind);
   const normalizedTitle = normalizeLegacyToken(toolCall.title);

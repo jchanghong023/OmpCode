@@ -1,5 +1,34 @@
 # Conversation Session E2E Coverage Matrix
 
+## OMP-native 子代理与工作流核心验收
+
+本次新增范围的 setup、动作与断言见 [case catalog](../conversation-session-case-catalog.md#omp-native-子代理与工作流核心验收)，行为权威只引用 [OMP 需求](../../../oh-my-pi/docs-zh-CN/requirements/rpc-ui-protocol.md)，宿主消费见 [FORK-003](../../fork.md#子代理与工作流核心范围引用)。状态仅依据本次新增 OMP-native E2E 的实际断言，不继承本页旧 Agent E2E 的 passed 状态。
+
+| 新增 Case | 必须经过的真实边界／证据 | 当前状态 |
+| --- | --- | --- |
+| OMP-SA01 | GUI 创建配置、取消／保存读回 → 原生 child 模型／思考请求；父／兄弟／另一主会话隔离 | 新增 GUI E2E 通过（整组运行） |
+| OMP-SA02 | 原生真实 child 派生 → child 提问 → 父 GUI 回答 → child／父真实消费；并发会话不阻塞 | 新增 GUI E2E 通过（整组运行） |
+| OMP-SA03 | 原生 child 工具过程 → GUI 过程／历史 → 冷重开；只读历史零模型请求 | 新增 GUI E2E 通过（整组运行） |
+| OMP-SA04 | GUI 消息 → 原生消息总线 → child／父请求与持久关联；迟到响应不串目标 | 新增 GUI E2E 通过（整组运行，含冷重启后的 journal receipt 身份对照） |
+| OMP-SA05 | GUI 停止 → 实际取消／保存上下文 → 恢复继续；不重复派生／副作用，其他任务不受影响 | 新增 GUI E2E 通过（整组运行） |
+| OMP-SA06 | child 失败／owner 收尾 → GUI 真实错误历史；continuous／replayable 分别断线换代恢复 | 确定性 400 子失败 GUI E2E 通过；双 delivery／EOF／冷读由协议 E2E 通过；未用可重试 429 制造风暴 |
+| OMP-WF01 | GUI 定义全生命周期／目录管理 → 实际定义文件；实参拒绝零 actor、合法启动 | 新增 GUI E2E 通过（整组运行） |
+| OMP-WF02 | GUI run → 原生 actor／工具／问答消息 → actor 过程及节点状态；禁止脚本替代 | 新增 GUI E2E 通过（整组运行，含真实阶段/actor 图与只读下钻） |
+| OMP-WF03 | actor 真实输出／文件 → GUI 产物 → 从实际 run 保存定义并重开运行 | 新增 GUI E2E 通过（整组运行） |
+| OMP-WF04 | run／actor journal → GUI 历史 → OMP 重启／恢复继续或明确不可恢复；不重复副作用 | 新增 GUI E2E 通过（整组运行，含 stopped 同 journal 恢复） |
+| OMP-WF05 | 并发 run 的失败／取消／EOF → 自有 actor／沙箱回收、真实终态；双 delivery profile 隔离 | GUI 并发／取消／终态通过；双 delivery／EOF 由协议 E2E 通过 |
+
+执行规则：本次后续只运行本次新增的 OMP-native E2E，不重跑旧 fixture、UT、build、lint、formatter 或 gates。新用例必须使用真实 GUI／Host／当前 OMP app-server 与隔离本地模型，保留 Provider 原始请求、公开协议与 UI／持久事实的关联证据；不能用旧 zcode-cli、工具别名、直接 seed 运行状态或脚本调用替代。首错取消／未到达断言均为未验证，不把前置通过扩称整组通过。
+
+本次已执行证据（2026-10-22，最终整组）：
+- `packages/desktop/test/e2e/omp-subagents.e2e.ts`：SA01–SA06，run `desktop-e2e-20261022154830713-p83752-8daea6b5193e6a44`，**5 个复合 case 全部通过**（1m41.7s）。覆盖 GUI 子代理配置与真实 model/reasoning/tools 隔离、真实 task 派生、父问答、并发会话、只读详情与冷重启、native 消息 receipt 的冷持久对照、定向取消/sibling 隔离/revive 上下文、确定性 400 子失败与 owner 收尾。
+- `packages/desktop/test/e2e/omp-workflows.e2e.ts`：WF01–WF05，run `desktop-e2e-20261022162231986-p72160-4cb5a62b2b7b8107`，**7 个 case 全部通过**（1m24.5s）。覆盖定义创建/元数据/移动/删除、非法实参零 actor、真实两 actor 工具与父问答、阶段/actor 图、产物、冷重启与 stopped 同 journal 恢复、并发失败/取消/EOF 终态、删除定义后从真实 run 保存并再次运行。
+- `packages/coding-agent/test/modes/zcode-core-protocol.e2e.ts`：`bun test ./packages/coding-agent/test/modes/zcode-core-protocol.e2e.ts`，1 case／108 assertions 通过，证据目录 `runs/zcode-core-protocol/1792686264905-7652-dfab643b-4725-4192-86e0-141fd9abaab9`。覆盖真实 child／workflow actor、独立 continuous/replayable 订阅、gap snapshot、unsubscribe/reconnect、不重复执行、跨 session 隔离及 EOF 后冷读；不是手机 GUI 实测。
+- 环境：ZCode `pnpm typecheck` 通过、`pnpm lint` 0 errors（仅既有 warning）；OMP `bun run check:ts` 通过（Bazel，scope=standalone，59.2s）。
+- 已知未覆盖：手机远控实机、真实模型质量、独立发布 CI；`OMP-SA06` 采用确定性 400 子失败，未验证 429 重试风暴本身（该风暴由 fixture 重复脚本触发，非产品缺陷）。
+
+旧范围冲突的解释：FORK-003 暂缓的 `subagent-runtime-catalog-reasoning`、`subagent-prompt-assembly`、`subagent-respond-to-coordinator`、`send-message-resume-stop` 与 `subagent-interaction-delegate` 仅保留旧夹具证据，不再排除本节原生核心行为；旧 `automations-workflows-hub` 或历史脚本通过也不覆盖本节真实 actor 链路。既有 HF 专项中“工作流详情不在本轮”仍只限定该专项，不适用于本次 WF 新验收。permission dock／plugin_reference 及其他无关管理面排除维持，不外推恢复。
+
 ## 项目与任务草稿生命周期（PD，2026-10-16）
 
 PD01–PD12 定义及分层验证见 [统一生命周期规格](../ui/project-task-draft-lifecycle.md#本轮验证记录2026-10-16)。产品语义 accepted；自动化保持 manual-review/pending，未自动转正或加入 CI。

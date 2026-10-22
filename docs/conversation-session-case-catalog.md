@@ -1,5 +1,29 @@
 # Conversation Session Case Catalog
 
+## OMP-native 子代理与工作流核心验收
+
+本节是本次新增 E2E 的用例规划，不是功能／测试已完成声明；所有 ID 当前均为 **planned／未验证**。执行行为与协议事实唯一权威见 [OMP 接入需求](../../oh-my-pi/docs-zh-CN/requirements/rpc-ui-protocol.md) 的「子代理核心能力」「既有界面的工作流与记忆消费」；ZCode 宿主边界见 [FORK-003](../fork.md#子代理与工作流核心范围引用)。本节仅定义测试动作与可观察证据，不复制参数或状态协议。
+
+公共 setup：隔离项目、配置／数据根与 localhost 模型，明确选择当前 OMP app-server；真实 GUI→Host→公开协议→原生 AgentSession/registry/task owner，不启动旧 zcode-cli，不伪造子会话／run 数据，不注入 UI 状态或补旧工具别名。模型可受控，派生、工具、文件产物和持久化必须真实。捕获原始 Provider 请求、协议 ACK／投影、父子／run 身份及 GUI 断言；不采真实凭据，不把模型桩当作真实模型能力证据。
+
+子代理详情保持 readOnly，不增加 child composer；下表“GUI 向 child 消息／停止／恢复”均指从既有父会话入口／真实原生工具发起。case 需求 accepted，执行状态仍为 planned／未验证，不能把 accepted 解释为实现或测试通过。
+
+| ID | setup／动作 | 必须观察的结果 |
+| --- | --- | --- |
+| OMP-SA01 | GUI 创建／修改子代理配置并取消草稿，再保存；父、子、兄弟使用可区分模型及思考级别，另一主会话并发运行 | 取消无持久副作用；保存读回与真实 child 请求一致；父／兄弟／另一会话请求不被覆盖，目标与配置来源可关联 |
+| OMP-SA02 | 父会话通过原生工具真实派生 child；child 发起问答，用户从父界面回答；另一主会话继续发消息 | 可追溯 parent/child/task 身份及真实 child Provider 请求；问题显示一次、回答仅交给目标 child、父收到真实结果；另一会话不阻塞 |
+| OMP-SA03 | child 真实执行工具并输出；GUI 查看过程、切换历史、关闭后冷重开 | 工具／正文／终态与原生执行一致，顺序和归属稳定；持久历史可读，不新建 child、不产生模型请求、不伪造历史 |
+| OMP-SA04 | GUI 向运行 child 发消息，child 真实回传父会话；切换目标后接收迟到响应，冷重开关联发送／接收 | 原生消息身份与内容可关联、父实际请求消费正确消息且不重复；不串兄弟／其他主会话，失败投递不记成功 |
+| OMP-SA05 | GUI 停止指定 child，保留其他 child 运行；从原生保存上下文恢复／继续 | 原执行被实际取消、历史与中断状态保留；新执行身份可追溯且不重复副作用／派生；其他 child 和主会话继续完成 |
+| OMP-SA06 | 注入 child Provider／工具失败；owner 关闭或连接换代后观察终态与恢复 | GUI 保留真实错误及历史，不停留假 running；自有任务收尾、迟到事件不复活；desktop-continuous 与 web-remote-replayable 各用自身恢复语义，不重放未知命令 |
+| OMP-WF01 | GUI 创建／编辑／保存／重开定义，管理目录／元数据、移动和删除；提交错误实参后提交合法实参 | 定义持久读回一致；非法参数真实拒绝且零 actor 请求；合法启动关联实际定义版本，不以脚本代替管理界面 |
+| OMP-WF02 | GUI 启动含可区分输入输出的真实 actor／节点，actor 执行工具并问答／接收消息 | 实际 OMP actor 请求与配置、输入及身份一致；GUI 可查看 actor 过程、工具、问答／消息和节点推进；不是静态图或假状态 |
+| OMP-WF03 | actor 真实生成文件／结果，GUI 查看产物并从实际 run 保存定义 | 产物内容／路径与真实执行一致，可关联 run/actor/node；保存的定义可重开并再次合法运行，不用预置结果冒充执行 |
+| OMP-WF04 | GUI 查看已完成及中断 run 历史，关闭／重启 OMP 后重新打开并恢复可继续运行 | 持久 actor 输入输出、事件、产物和终态保留；可恢复状态沿原生 owner/journal 继续，不重复已提交副作用；不可恢复状态明确失败，不以空历史或假成功兜底 |
+| OMP-WF05 | 并发两个 run，令一方 actor 失败或 GUI 取消；覆盖取消与迟到完成竞争、owner EOF／重启 | 失败／取消原因和历史准确，自有 actor／沙箱释放；另一 run／会话不受影响；不复活终态、不把 accepted 当完成；两种 delivery profile 的恢复和归属隔离 |
+
+SA06／WF05 对 desktop-continuous、web-remote-replayable 分别取得证据，不为其他 case 机械作全笛卡尔积。新 E2E 的实际文件、运行 ID、通过／失败／未到达断言由 coverage matrix 按事实登记；本次只运行新增 E2E，不运行旧套件或 gates。旧 Agent／SendMessage／AskUserQuestion、旧 SQLite／私有日志 fixture 的暂缓不取消本节核心需求，也不能充当本节完成证据。permission dock、plugin_reference 与其他独立管理面保持排除，不为这些 case 偷开权限面板或插件协议。
+
 ## 项目与任务草稿生命周期（2026-10-16）
 
 PD01–PD12 的前置、动作、断言与证据要求见 [统一生命周期规格](ui/project-task-draft-lifecycle.md)。产品语义 accepted；自动化保持 manual-review/pending，运行证据见 coverage matrix 与规格的验证记录，不代表已转正或发布。覆盖项目/任务新建、同目录项目隔离、接纳后默认配置、目录复用、迟到回执、手机独立恢复及旧数据认领。

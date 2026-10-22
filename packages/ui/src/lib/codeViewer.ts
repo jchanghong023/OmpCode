@@ -15,6 +15,7 @@ import {
   extractStructuredDiff,
 } from "@/lib/toolDiffPreview.js";
 import {
+  isAgentMessageWriteToolCall,
   isFileContentWriteToolCall,
   isFileDiffToolCall,
   resolveToolCallIdentity,
@@ -461,6 +462,7 @@ export function getToolCallCodePreview(
   toolCall: ChatToolCall,
   workspacePath: string,
 ): CodeViewerSource | null {
+  if (isAgentMessageWriteToolCall(toolCall)) return null;
   // 结构化 diff 是工具结果的显式变更事实，优先于 input/output 中的全文预览。
   const structuredDiff = extractStructuredDiff(toolCall.raw);
   const resolvedPath = resolveViewerPath(
@@ -566,6 +568,7 @@ export function getToolCallCodeContentPreview(
   toolCall: ChatToolCall,
   workspacePath: string,
 ): TextCodeViewerSource | null {
+  if (isAgentMessageWriteToolCall(toolCall)) return null;
   const structuredDiff = extractStructuredDiff(toolCall.raw);
   const resolvedPath = resolveViewerPath(
     structuredDiff?.path ?? extractRawPath(toolCall.input) ?? extractRawPath(toolCall.output),

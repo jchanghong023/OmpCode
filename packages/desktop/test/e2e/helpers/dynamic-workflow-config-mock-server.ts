@@ -44,7 +44,9 @@ export function resolveDynamicWorkflowConfigMockScenario(
   const alwaysOn = specs.some(
     (spec) =>
       spec.includes(ALWAYS_ON_SPEC_FRAGMENT) ||
-      spec.replaceAll("\\", "/").split("/").at(-1) === "automations-workflows-hub.test.ts",
+      ["automations-workflows-hub.test.ts", "omp-workflows.e2e.ts"].includes(
+        spec.replaceAll("\\", "/").split("/").at(-1) ?? "",
+      ),
   );
   if (disabled && alwaysOn) {
     // 两个档位靠同一个 endpoint origin 区分，同一个 worker 里无法并存；

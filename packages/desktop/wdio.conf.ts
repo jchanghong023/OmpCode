@@ -565,7 +565,11 @@ const configuredE2ESpecs =
         : [
             "./test/e2e/**/*.test.ts",
             ...(EXPLICIT_AGENT_SERVER_ENV.ZCODE_AGENT_SERVER_COMMAND?.trim()
-              ? ["./test/e2e/omp-app-server.e2e.ts"]
+              ? [
+                  "./test/e2e/omp-app-server.e2e.ts",
+                  "./test/e2e/omp-subagents.e2e.ts",
+                  "./test/e2e/omp-workflows.e2e.ts",
+                ]
               : []),
           ];
 const pluginNoGitGitHubArchiveE2E = configuredE2ESpecs.some((spec) =>
