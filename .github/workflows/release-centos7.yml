@@ -7,7 +7,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: release-centos7-${{ github.run_id }}
+  # run_id 每次都不同会绕过互斥；固定组让发行排队，且不取消进行中的发布。
+  group: release-centos7
   cancel-in-progress: false
 
 jobs:
