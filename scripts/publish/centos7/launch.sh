@@ -35,9 +35,13 @@ for name in ompcode ompcode-preview; do
   fi
 done
 [[ -n $executable && -s "$app/resources/app.asar" &&
-   -s "$app/resources/omp/omp-artifact.json" && -d "$package_root/lib" &&
-   -s "$package_root/fonts/fonts.conf" ]] || incomplete 'Electron, app.asar, OMP manifest, lib or fonts/fonts.conf missing'
+   -d "$package_root/lib" && -s "$package_root/fonts/fonts.conf" ]] ||
+   incomplete 'Electron, app.asar, lib or fonts/fonts.conf missing'
 
+# ${var+x} 区分未设置和显式空值；后者必须留给当前解析器明确报错。
+# 外部命令不使用随包 OMP，不能因无关 manifest 缺失而阻止启动。
+if [[ ! ${ZCODE_AGENT_SERVER_COMMAND+x} ]]; then
+  [[ -s "$app/resources/omp/omp-artifact.json" ]] || incomplete 'OMP manifest missing'
 # 入口是 manifest 的相对 executable，不假定固定 omp/omp，也不依赖宿主现代 Node。
 # 完整摘要与闭包校验归现有装配器；这里拒绝越界/链接入口。
 # 探测 Electron 单独使用包内库，避免把宿主 IBus/总线切到另一套动态库。
@@ -68,8 +72,6 @@ try {
 } catch (error) { console.error("OmpCode: " + error.message); process.exitCode = 1; }
 ' "$app/resources/omp") || incomplete 'invalid OMP executable manifest'
 [[ -n $bundled_command ]] || incomplete 'empty OMP executable'
-# ${var+x} 区分未设置和显式空值；后者必须留给当前解析器明确报错。
-if [[ ! ${ZCODE_AGENT_SERVER_COMMAND+x} ]]; then
   export ZCODE_AGENT_SERVER_COMMAND="$bundled_command"
 fi
 
