@@ -4,6 +4,8 @@ import { pathToFileURL } from "node:url";
 import { build } from "esbuild";
 
 const packageRoot = resolve(import.meta.dirname, "..");
+const desktopManifest = JSON.parse(await readFile(resolve(packageRoot, "../../../../packages/desktop/package.json"), "utf8"));
+const runtimeTarget = desktopManifest.devDependencies?.electron === "28.3.3" ? "node18" : "node24";
 
 // 见 browser-use-plugin/scripts/build.mjs 的同名修复：esbuild 的 esm 产物里
 // __require shim 在 ESM 作用域没有 require 可用，@zcode/core 拖进来的 CJS 依赖（yaml →
@@ -54,7 +56,7 @@ export const buildNodeReplHostBundle = async ({
     legalComments: "none",
     outfile,
     platform: "node",
-    target: "node24",
+    target: runtimeTarget,
     external: ["sharp"],
   });
   // 构建期守卫：define 名一旦漂移（改名、被 createSharedDefines 之类重构吞掉），

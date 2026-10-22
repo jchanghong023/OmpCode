@@ -11,6 +11,8 @@ import { readPluginName } from "./plugin-name.mjs";
 // panel title and formats under "office" in package.json.
 // 插件名取自 .zcode-plugin/plugin.json：内置插件包目录名（如 pdf-plugin）与插件名不同。
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const desktopManifest = JSON.parse(await readFile(resolve(root, "../../../../packages/desktop/package.json"), "utf8"));
+const runtimeTarget = desktopManifest.devDependencies?.electron === "28.3.3" ? "node18" : "node24";
 const target = process.cwd();
 const pkg = JSON.parse(await readFile(join(target, "package.json"), "utf8"));
 const ALL_KINDS = ["docx", "xlsx", "pptx", "pdf"];
@@ -98,7 +100,7 @@ const xlsxWorker = has("xlsx")
       bundle: true,
       format: "esm",
       platform: "browser",
-      target: "es2022",
+      target: runtimeTarget === "node18" ? "chrome120" : "es2022",
       minify: true,
       legalComments: "none",
       define,
@@ -157,7 +159,7 @@ const app = await build({
   bundle: true,
   format: "iife",
   platform: "browser",
-  target: "es2022",
+  target: runtimeTarget === "node18" ? "chrome120" : "es2022",
   minify: true,
   legalComments: "none",
   define,
@@ -186,7 +188,7 @@ const bootstrap = await build({
   bundle: true,
   format: "iife",
   platform: "browser",
-  target: "es2022",
+  target: runtimeTarget === "node18" ? "chrome120" : "es2022",
   minify: true,
   define,
   write: false,
@@ -228,7 +230,7 @@ const server = await build({
   bundle: true,
   platform: "node",
   format: "esm",
-  target: "node24",
+  target: runtimeTarget,
   legalComments: "none",
   banner: {
     js: 'import { createRequire as __createRequire } from "node:module"; const require=__createRequire(import.meta.url);',

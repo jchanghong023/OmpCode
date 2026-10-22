@@ -8,6 +8,8 @@ import { stageThirdPartyNotices } from "../../../../../scripts/third-party-notic
 
 const cliRoot = resolve(import.meta.dirname, "..");
 const projectRoot = resolve(cliRoot, "../..");
+const desktopManifest = JSON.parse(await readFile(resolve(cliRoot, "../../../../packages/desktop/package.json"), "utf8"));
+const runtimeTarget = desktopManifest.devDependencies?.electron === "28.3.3" ? "node18" : "node22";
 const executableFileMode = 0o755;
 const packageJsonFile = "package.json";
 const rootPackageVersionError = "Root package.json must define a non-empty string version.";
@@ -201,10 +203,9 @@ export const buildCli = async ({
     outfile,
     platform: "node",
     sourcemap,
-    // target 取所有承载运行时里最低的 Node 版本：桌面用 Electron 内置 Node 24，
-    // 远端 SSH 复用已部署的独立 Node v22.16 跑同一份 zcode.cjs。降到 node22 保证这份产物
-    // 在两端都不会用到目标运行时不支持的语法/特性。
-    target: "node22",
+    // The temporary Electron 28 manifest selects the actual embedded Node 18.
+    // Normal desktop/remote bundles retain the existing Node 22 baseline.
+    target: runtimeTarget,
     alias: resolveBuildAliases({ cliDirectory, rootDirectory }),
   });
 

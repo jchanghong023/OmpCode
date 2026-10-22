@@ -101,7 +101,7 @@ stageSharpIntoBundledAgents({
   targetPlatform: { os: process.platform, arch: process.arch },
 });
 copied.push("node_modules/sharp runtime");
-stageKoffiIntoBundledAgents({
+await stageKoffiIntoBundledAgents({
   koffiPackageRoot: resolve(packageRoot, "../adapters"),
   glmDir: cacheDir,
   targetPlatform: { os: process.platform, arch: process.arch },
