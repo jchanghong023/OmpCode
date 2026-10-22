@@ -49,6 +49,8 @@
 
 共享兼容封装所需 `better-sqlite3` **9.6.0** 在源码 Desktop 中保持 **devDependencies**；不把 Windows 原生 `node:sqlite` 路径切为该驱动。准备脚本仅在 CentOS 隔离副本将它移为显式 **production dependency**，供生产闭包收集；native stage 再提供目标 `.node`。不能依赖收集器偶然保留 devDependency。新增该精确 devDependency 所需的正常 lockfile 更新可以提交；CentOS 临时覆盖及其解析结果不得回写源码工作区、提交或污染 Windows 构建。
 
+源码 manifest 另有一项经用户于 **2026-10-23 追认的例外**：`packages/services/package.json` 显式声明生产依赖 `fast-glob` **3.3.3**，用于 Node 18 的 SSH Include glob 回退。这是将已有同版本传递依赖显式化，与上述 `better-sqlite3` 例外并列允许；现代运行时仍优先使用原生 `fs.glob`，不改变当前 Electron 41 基线，也不固定其他平台后续跟随上游的 Electron 版本。
+
 Windows 保持正常 frozen-lockfile 安装；CentOS 在临时 manifest 上生成／使用精确锁定状态，必要的 `--no-frozen-lockfile` 只允许发生在该临时工作区。构建产物记录实际依赖闭包；只靠“顶层钉版”不足以证明可重现。
 
 ## 4. 当前 OMP artifact 与执行合同
