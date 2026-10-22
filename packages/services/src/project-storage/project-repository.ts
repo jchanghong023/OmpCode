@@ -158,6 +158,7 @@ export class ProjectRepository implements ProjectRepositoryContract {
   ) {}
 
   archiveInactive(input: AutoArchiveInput): ProjectTaskRef[] {
+    if (input.workspaceKeys?.length === 0) return [];
     return transaction(this.db, () => {
       const active = new Set(
         input.activeTasks.map((task) => JSON.stringify([resolveWorkspaceKey(task), task.taskId])),
@@ -167,8 +168,8 @@ export class ProjectRepository implements ProjectRepositoryContract {
       const candidates = this.db
         .prepare(`SELECT workspace_key,workspace_path,workspace_identity,task_id FROM tasks
         WHERE archived=0 AND pinned=0 AND deleted=0 AND coalesce(cli_deleted,0)=0
-        AND cli_updated_at < ? AND host_id=?`)
-        .all(input.cutoff, this.ownerHostId ?? "local");
+        AND cli_updated_at < ? AND host_id=?${input.workspaceKeys ? ` AND workspace_key IN (${input.workspaceKeys.map(() => "?").join(",")})` : ""}`)
+        .all(input.cutoff, this.ownerHostId ?? "local", ...(input.workspaceKeys ?? []));
       const result: ProjectTaskRef[] = [];
       for (const row of candidates) {
         if (active.has(JSON.stringify([row.workspace_key, row.task_id]))) continue;

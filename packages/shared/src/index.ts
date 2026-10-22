@@ -12,6 +12,7 @@ export type {
   FileStat,
   FileTextSlice,
   FileWatchEvent,
+  HostStartupWorkspaceTarget,
   WorkspaceFileEntry,
   SystemInfo,
   AppSettings,

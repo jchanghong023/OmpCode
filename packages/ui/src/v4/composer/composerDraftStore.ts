@@ -33,19 +33,28 @@ export interface V4ComposerDraft {
 
 interface V4DraftFile {
   version: 1;
-  legacyClaimed?: boolean;
   scopes: Record<string, V4ComposerDraft>;
 }
 
-const STORAGE_KEY_PREFIX = "zcode-v4-composer-drafts:v1:";
 export interface ComposerScope {
   clientNamespace: string;
   hostId: string;
   projectId: string | null;
+  /** Host/native confirmed effective OMP root + active profile; null means not yet known. */
+  storageScope?: string | null;
+  workspaceIdentity?: string;
+  remoteSessionId?: string | null;
 }
 
 export function composerScopeKey(scope: ComposerScope): string {
-  return JSON.stringify([scope.clientNamespace, scope.hostId, scope.projectId]);
+  return JSON.stringify([
+    scope.storageScope ?? null,
+    scope.clientNamespace,
+    scope.hostId,
+    scope.workspaceIdentity ?? null,
+    scope.remoteSessionId ?? null,
+    scope.projectId,
+  ]);
 }
 
 export interface PendingTaskDraft {
@@ -59,6 +68,7 @@ function pendingTaskKey(scope: ComposerScope): string {
   return `zcode-pending-task-draft:v1:${composerScopeKey(scope)}`;
 }
 export function readPendingTaskDraft(scope: ComposerScope): PendingTaskDraft | null {
+  if (!scope.storageScope) return null;
   try {
     const raw = getStorage()?.getItem(pendingTaskKey(scope));
     const value = raw ? JSON.parse(raw) : null;
@@ -75,6 +85,7 @@ export function readPendingTaskDraft(scope: ComposerScope): PendingTaskDraft | n
   }
 }
 function writePendingTaskDraft(scope: ComposerScope, value: PendingTaskDraft | null): void {
+  if (!scope.storageScope) throw new Error("composer.profile-scope-unavailable");
   const storage = getStorage();
   // 未保存身份时不得先分配目录，否则刷新又会失去草稿入口。
   if (!storage) throw new Error("composer.draft-storage-unavailable");
@@ -126,13 +137,18 @@ export function resolveComposerScope(
   projectId: string | null | undefined,
   workspaceIdentity?: string,
   clientNamespace = "desktop",
+  storageScope: string | null = null,
+  remoteSessionId?: string | null,
 ): ComposerScope {
+  const identity = workspaceIdentity?.trim() || undefined;
   return {
     clientNamespace,
-    hostId: workspaceIdentity
-      ? (remoteHostIdFromWorkspaceIdentity(workspaceIdentity) ?? workspaceIdentity)
-      : "local",
+    // 空白 identity 与省略 identity 都是本地路径 fallback，不能分出另一个 Host 域。
+    hostId: identity ? (remoteHostIdFromWorkspaceIdentity(identity) ?? identity) : "local",
     projectId: projectId ?? null,
+    storageScope,
+    workspaceIdentity: identity,
+    remoteSessionId,
   };
 }
 
@@ -140,33 +156,43 @@ function workspaceScopeKey(
   path: string,
   identity: string | undefined,
   clientNamespace: string,
+  storageScope: string,
 ): string {
-  return `zcode-composer-workspace-scope:v1:${JSON.stringify([clientNamespace, identity?.trim() || path])}`;
+  return `zcode-composer-workspace-scope:v2:${JSON.stringify([storageScope, clientNamespace, identity?.trim() || path])}`;
 }
 export function rememberComposerWorkspaceScope(
   path: string,
   identity: string | undefined,
   scope: ComposerScope,
 ): void {
+  if (!scope.storageScope) return;
   try {
     getStorage()?.setItem(
-      workspaceScopeKey(path, identity, scope.clientNamespace),
+      workspaceScopeKey(path, identity, scope.clientNamespace, scope.storageScope),
       JSON.stringify(scope),
     );
   } catch (error) {
-    warnStorageFailure(workspaceScopeKey(path, identity, scope.clientNamespace), error);
+    warnStorageFailure(
+      workspaceScopeKey(path, identity, scope.clientNamespace, scope.storageScope),
+      error,
+    );
   }
 }
 export function readComposerWorkspaceScope(
   path: string,
   identity: string | undefined,
   clientNamespace = "desktop",
+  storageScope: string | null = null,
 ): ComposerScope | undefined {
+  if (!storageScope) return undefined;
   try {
-    const raw = getStorage()?.getItem(workspaceScopeKey(path, identity, clientNamespace));
+    const raw = getStorage()?.getItem(
+      workspaceScopeKey(path, identity, clientNamespace, storageScope),
+    );
     const value = raw ? JSON.parse(raw) : null;
     if (
       value?.clientNamespace === clientNamespace &&
+      value.storageScope === storageScope &&
       value.hostId === resolveComposerScope(null, identity, clientNamespace).hostId &&
       (value.projectId === null || typeof value.projectId === "string")
     )
@@ -182,11 +208,12 @@ function draftStorageKey(
   identity: string | undefined,
   scopeId: string,
   scope?: ComposerScope,
-): string {
-  // 同目录可以属于多个项目；新建草稿按组织归属隔离，正式 session 仍按工作区隔离。
-  return scopeId === V4_DRAFT_SCOPE_ROOT && scope
-    ? `zcode-v4-composer-project-drafts:v1:${composerScopeKey(scope)}`
-    : getV4ComposerDraftStorageKey(path, identity);
+): string | null {
+  // 旧键没有可信 profile 归属，不能认领到当前任意 profile。
+  if (!scope?.storageScope) return null;
+  return scopeId === V4_DRAFT_SCOPE_ROOT
+    ? `zcode-v4-composer-project-drafts:v2:${composerScopeKey(scope)}`
+    : `${getV4ComposerDraftStorageKey(path, identity, scope.storageScope)}:${JSON.stringify([scope.clientNamespace, scope.remoteSessionId ?? null])}`;
 }
 export const V4_DRAFT_SCOPE_ROOT = "__draft__";
 const warnedStorageKeys = new Set<string>();
@@ -214,9 +241,10 @@ function getStorage(): Storage | null {
 export function getV4ComposerDraftStorageKey(
   workspacePath: string,
   workspaceIdentity?: string,
+  storageScope?: string,
 ): string {
   const workspaceKey = workspaceIdentity?.trim() || workspacePath;
-  return `${STORAGE_KEY_PREFIX}${encodeURIComponent(workspaceKey)}`;
+  return `zcode-v4-composer-drafts:v2:${JSON.stringify([storageScope, workspaceKey])}`;
 }
 
 function readDraftFile(key: string): V4DraftFile {
@@ -237,7 +265,6 @@ function readDraftFile(key: string): V4DraftFile {
     const file: V4DraftFile = {
       version: 1,
       scopes,
-      ...(parsed.legacyClaimed === true ? { legacyClaimed: true } : {}),
     };
     // 读取可发生在 React render；旧空记录只过滤，物理清理由明确写入负责。
     return file;
@@ -306,8 +333,7 @@ function writeDraftFile(key: string, file: V4DraftFile) {
     return false;
   }
   try {
-    const serialized =
-      Object.keys(file.scopes).length || file.legacyClaimed ? JSON.stringify(file) : null;
+    const serialized = Object.keys(file.scopes).length ? JSON.stringify(file) : null;
     if (storage.getItem(key) === serialized) return true;
     if (serialized === null) storage.removeItem(key);
     else storage.setItem(key, serialized);
@@ -327,17 +353,10 @@ export function readV4ComposerDraft(
   scope?: ComposerScope,
 ): V4ComposerDraft | null {
   const key = draftStorageKey(workspacePath, workspaceIdentity, scopeId, scope);
+  if (!key) return null;
   const file = readDraftFile(key);
   const draft = file.scopes[scopeId];
-  if (!draft || typeof draft.text !== "string") {
-    // 旧记录只有显式项目归属才能认领；未归类历史不能靠最近目录猜测。
-    if (!file.legacyClaimed && scopeId === V4_DRAFT_SCOPE_ROOT && scope?.projectId) {
-      const legacy = readDraftFile(getV4ComposerDraftStorageKey(workspacePath, workspaceIdentity))
-        .scopes[scopeId];
-      if (legacy?.projectId === scope.projectId) return legacy;
-    }
-    return null;
-  }
+  if (!draft || typeof draft.text !== "string") return null;
   return draft;
 }
 
@@ -349,8 +368,8 @@ export function persistV4ComposerDraft(
   scope?: ComposerScope,
 ) {
   const key = draftStorageKey(workspacePath, workspaceIdentity, scopeId, scope);
+  if (!key) return false;
   const file = readDraftFile(key);
-  const hadDraft = Boolean(file.scopes[scopeId]);
   // 正文/模型各自更新草稿时不能抹掉项目意图；显式新建传 null 才清除项目归属。
   const savedGroupId = file.scopes[scopeId]?.taskGroupId;
   const savedProjectId = file.scopes[scopeId]?.projectId;
@@ -374,16 +393,6 @@ export function persistV4ComposerDraft(
   } else {
     file.scopes[scopeId] = { ...next, updatedAt: Date.now() };
   }
-  // 新 key 首次写入即结束旧目录认领；保留旧数据，避免删除失败或换目录后复活正文。
-  if (
-    scopeId === V4_DRAFT_SCOPE_ROOT &&
-    scope?.projectId &&
-    (hadDraft ||
-      Boolean(file.scopes[scopeId]) ||
-      readDraftFile(getV4ComposerDraftStorageKey(workspacePath, workspaceIdentity)).scopes[scopeId]
-        ?.projectId === scope.projectId)
-  )
-    file.legacyClaimed = true;
   return writeDraftFile(key, file);
 }
 
@@ -394,13 +403,13 @@ export function clearV4ComposerDraftTaskGroup(
   scope?: ComposerScope,
 ) {
   const key = draftStorageKey(workspacePath, workspaceIdentity, V4_DRAFT_SCOPE_ROOT, scope);
+  if (!key) return false;
   const file = readDraftFile(key);
   const draft = readV4ComposerDraft(workspacePath, workspaceIdentity, V4_DRAFT_SCOPE_ROOT, scope);
   if (!draft || draft.taskGroupId === undefined) return true;
   // 分组只是草稿的组织意图；关闭时必须沿用项目 key，不能修改同目录的其他项目。
   delete draft.taskGroupId;
   file.scopes[V4_DRAFT_SCOPE_ROOT] = draft;
-  if (scope?.projectId) file.legacyClaimed = true;
   return writeDraftFile(key, file);
 }
 
@@ -411,18 +420,8 @@ export function clearV4ComposerDraft(
   scope?: ComposerScope,
 ) {
   const key = draftStorageKey(workspacePath, workspaceIdentity, scopeId, scope);
+  if (!key) return false;
   const file = readDraftFile(key);
-  const hadDraft = Boolean(file.scopes[scopeId]);
   delete file.scopes[scopeId];
-  // 新 key 首次写入即结束旧目录认领；保留旧数据，避免删除失败或换目录后复活正文。
-  if (
-    scopeId === V4_DRAFT_SCOPE_ROOT &&
-    scope?.projectId &&
-    (hadDraft ||
-      Boolean(file.scopes[scopeId]) ||
-      readDraftFile(getV4ComposerDraftStorageKey(workspacePath, workspaceIdentity)).scopes[scopeId]
-        ?.projectId === scope.projectId)
-  )
-    file.legacyClaimed = true;
   return writeDraftFile(key, file);
 }

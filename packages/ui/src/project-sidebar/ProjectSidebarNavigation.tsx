@@ -1,4 +1,4 @@
-import { Blocks, CalendarClock } from "lucide-react";
+import { Blocks, BookOpen, CalendarClock, Database, Network } from "lucide-react";
 import { TID_AUTOMATIONS_OPEN } from "@zcode/shared/test-ids";
 import type { ProjectSidebarProps } from "@/project-sidebar/contract.js";
 import { Button } from "@/components/ui/button.js";
@@ -18,6 +18,8 @@ export function ProjectSidebarNavigation({
     | "automationsActive"
     | "onOpenPluginStore"
     | "pluginStoreActive"
+    | "onOpenOmpPage"
+    | "ompPageActive"
     | "webRemoteControlWorkspaceSwitcher"
   >;
   onCreate(): void;
@@ -46,6 +48,28 @@ export function ProjectSidebarNavigation({
           {intl.formatMessage({ id: "workspace.openScheduledSettings" })}
         </Button>
       ) : null}
+      {props.onOpenOmpPage
+        ? (
+            [
+              { page: "wiki", label: "Wiki", Icon: BookOpen },
+              { page: "repo", label: "Repo", Icon: Database },
+              { page: "team", label: "Team", Icon: Network },
+            ] as const
+          ).map(({ page, label, Icon }) => (
+            <Button
+              key={page}
+              variant="ghost"
+              size="lg"
+              className={`w-full justify-start gap-2 ${props.ompPageActive === page ? "bg-selected text-foreground" : ""}`}
+              aria-pressed={props.ompPageActive === page}
+              data-testid={`omp-${page}-sidebar-open`}
+              onClick={() => props.onOpenOmpPage?.(page)}
+            >
+              <Icon className="size-4" />
+              {label}
+            </Button>
+          ))
+        : null}
       <Button
         variant="ghost"
         size="lg"

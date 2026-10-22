@@ -157,16 +157,26 @@ it("validates identities and current task facts before a controller write", asyn
   const group = repo.save({ title: "Target" });
   const ref = task("real");
   const service = createTaskGroupService({
-    database: async () => db,
+    database: async () => ({ database: db, storageScope: "scope-a" }),
     resolveTasks: async (refs) => refs.filter((r) => r.taskId === ref.taskId),
     afterChange: async () => {},
   });
   await expect(
-    service.move({ node: taskNode(task("missing")), sourceGroupId: null, groupId: group.id }),
+    service.move({
+      target: { workspacePath: "/repo" },
+      node: taskNode(task("missing")),
+      sourceGroupId: null,
+      groupId: group.id,
+    }),
   ).rejects.toThrow("unavailable");
   await expect(service.admit({ tasks: [{ ...ref, hostId: "wrong" }] })).rejects.toThrow("mismatch");
   await service.admit({ tasks: [ref] });
-  await service.move({ node: taskNode(ref), sourceGroupId: null, groupId: group.id });
+  await service.move({
+    target: { workspacePath: "/repo" },
+    node: taskNode(ref),
+    sourceGroupId: null,
+    groupId: group.id,
+  });
   expect(repo.read().members).toHaveLength(1);
 });
 
@@ -174,12 +184,17 @@ it("rejects a mismatched authority result even when the task count matches", asy
   const { db, repo, task } = await fixture();
   const group = repo.save({ title: "Target" });
   const service = createTaskGroupService({
-    database: async () => db,
+    database: async () => ({ database: db, storageScope: "scope-a" }),
     resolveTasks: async () => [{ ...task("requested"), workspacePath: "/wrong" }],
     afterChange: async () => {},
   });
   await expect(
-    service.move({ node: taskNode(task("requested")), sourceGroupId: null, groupId: group.id }),
+    service.move({
+      target: { workspacePath: "/repo" },
+      node: taskNode(task("requested")),
+      sourceGroupId: null,
+      groupId: group.id,
+    }),
   ).rejects.toThrow("unavailable");
   expect(repo.read().members).toEqual([]);
 });
@@ -197,4 +212,130 @@ it("initial discovery keeps newest-created tasks first without reordering known 
     { ...task("new"), createdAt: 30 },
   ]);
   expect(repo.read()).toEqual(before);
+});
+
+it("routes groups, membership, order and deletion only to actual active execution domains", async () => {
+  const a = await fixture(),
+    b = await fixture();
+  const targetA = { workspacePath: "/a" },
+    targetOtherA = { workspacePath: "/a-other" };
+  const targetB = { workspacePath: "/b" };
+  const refA = { ...a.task("same"), ...targetA };
+  const otherA = { ...a.task("other"), ...targetOtherA };
+  const refB = { ...b.task("same"), ...targetB };
+  let profileA = true;
+  let changes = 0;
+  const service = createTaskGroupService({
+    database: async (target) => {
+      if (target.workspacePath === "/a" || target.workspacePath === "/a-other")
+        return profileA
+          ? { database: a.db, storageScope: "root-a/profile-a" }
+          : { database: b.db, storageScope: "root-b/profile-b" };
+      if (target.workspacePath === "/b")
+        return { database: b.db, storageScope: "root-b/profile-b" };
+      throw new Error("unknown-workspace");
+    },
+    resolveTasks: async (refs) => refs,
+    afterChange: async () => {
+      changes++;
+    },
+  });
+  const groupA = await service.save({ target: targetA, title: "Same" });
+  const groupB = await service.save({ target: targetB, title: "Same" });
+  await service.admit({ tasks: [refA, otherA, refB] });
+  await service.move({
+    target: targetOtherA,
+    node: taskNode(refA),
+    sourceGroupId: null,
+    groupId: groupA.id,
+  });
+  await service.move({
+    target: targetA,
+    node: taskNode(otherA),
+    sourceGroupId: null,
+    groupId: groupA.id,
+    anchor: { node: taskNode(refA), side: "after" },
+  });
+  await service.move({
+    target: targetB,
+    node: taskNode(refB),
+    sourceGroupId: null,
+    groupId: groupB.id,
+  });
+  expect(a.repo.read().members.map((m) => m.taskId)).toEqual(["same", "other"]);
+  expect(b.repo.read().members.map((m) => m.taskId)).toEqual(["same"]);
+  const domains = await service.read([targetA, targetOtherA, targetB]);
+  expect(domains.map((d) => d.storageScope)).toEqual(["root-a/profile-a", "root-b/profile-b"]);
+  expect(domains).toHaveLength(2);
+  expect(domains.map((d) => d.targets)).toEqual([[targetA, targetOtherA], [targetB]]);
+  expect((await service.read([targetA]))[0]?.groups).toEqual([groupA]);
+  const beforeA = a.repo.read(),
+    beforeB = b.repo.read(),
+    beforeChanges = changes;
+  await expect(
+    service.move({
+      target: targetB,
+      node: taskNode(refA),
+      sourceGroupId: groupA.id,
+      groupId: groupB.id,
+    }),
+  ).rejects.toThrow("cross-scope");
+  await expect(
+    service.move({
+      target: targetA,
+      node: taskNode(otherA),
+      sourceGroupId: groupA.id,
+      groupId: null,
+      anchor: { node: taskNode(refB), side: "after" },
+    }),
+  ).rejects.toThrow("cross-scope");
+  await expect(service.save({ target: targetB, id: groupA.id, title: "Wrong" })).rejects.toThrow(
+    "not-found",
+  );
+  await expect(service.ungroup({ target: targetB, id: groupA.id })).rejects.toThrow("not-found");
+  expect(a.repo.read()).toEqual(beforeA);
+  expect(b.repo.read()).toEqual(beforeB);
+  expect(changes).toBe(beforeChanges);
+  profileA = false;
+  expect((await service.read([targetA]))[0]?.groups).toEqual([groupB]);
+  profileA = true;
+  expect((await service.read([targetA]))[0]).toMatchObject(beforeA);
+  await service.ungroup({ target: targetA, id: groupA.id });
+  expect(a.repo.read().groups).toEqual([]);
+  expect(a.repo.read().members).toEqual([]);
+  expect(b.repo.read()).toEqual(beforeB);
+  await expect(service.read([{ workspacePath: "/unknown" }])).rejects.toThrow("unknown-workspace");
+  await expect(
+    service.save({ target: { workspacePath: "/unknown" }, title: "No fallback" }),
+  ).rejects.toThrow("unknown-workspace");
+  expect(await service.read([])).toEqual([]);
+  // @ts-expect-error 旧的无 workspace 创建调用必须在运行时拒绝，不能落入默认数据库。
+  await expect(service.save({ title: "Missing target" })).rejects.toThrow();
+});
+
+it("keeps identical built-in group IDs separate across execution domains", async () => {
+  const a = await fixture(),
+    b = await fixture();
+  const service = createTaskGroupService({
+    database: async (target) =>
+      target.workspacePath === "/a"
+        ? { database: a.db, storageScope: "a" }
+        : { database: b.db, storageScope: "b" },
+    resolveTasks: async (refs) => refs.map((ref) => ({ ...ref, cronAutomationId: "cron" })),
+    afterChange: async () => {},
+  });
+  await service.admit({
+    tasks: [
+      { ...a.task("cron"), workspacePath: "/a" },
+      { ...b.task("cron"), workspacePath: "/b" },
+    ],
+  });
+  const domains = await service.read([{ workspacePath: "/a" }, { workspacePath: "/b" }]);
+  expect(domains.map((d) => d.groups[0]?.id)).toEqual([
+    CRON_DEFAULT_GROUP_ID,
+    CRON_DEFAULT_GROUP_ID,
+  ]);
+  await service.ungroup({ target: { workspacePath: "/a" }, id: CRON_DEFAULT_GROUP_ID });
+  expect(a.repo.read().members).toEqual([]);
+  expect(b.repo.read().members).toHaveLength(1);
 });

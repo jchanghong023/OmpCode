@@ -105,9 +105,9 @@ describe("project repository contract", () => {
     expect(pinned.pinned).toBe(true);
   });
 
-  it("archives every inactive task purely by CLI activity time, sparing only pinned and running ones", async () => {
+  it("archives inactive tasks only in admitted workspace domains, sparing pinned and running ones", async () => {
     const { db, add, context } = await fixture();
-    for (const id of [
+    const ids = [
       "stale",
       "pinned",
       "unread",
@@ -116,8 +116,9 @@ describe("project repository contract", () => {
       "failed",
       "unknown",
       "nofacts",
-    ])
-      add(id, `/outside/${id}`);
+      "inactive-scope",
+    ];
+    for (const id of ids) add(id, `/outside/${id}`);
     await port.migrate(db, context);
     // 2026-09-15 裁决：未读、error、无结果的旧任务同样归档；只有置顶、运行中、最近活动与无 CLI 事实的行例外。
     db.exec(`UPDATE tasks SET project_id=NULL,cli_updated_at=10,cli_last_outcome='completed';
@@ -128,15 +129,16 @@ describe("project repository contract", () => {
       UPDATE tasks SET cli_last_outcome=NULL WHERE task_id='unknown';
       UPDATE tasks SET cli_updated_at=NULL,cli_last_outcome=NULL WHERE task_id='nofacts'`);
     const repo = port.repository(db);
-    expect(
-      repo
-        .archiveInactive({
-          cutoff: 100,
-          activeTasks: [{ workspacePath: "/outside/running", taskId: "running" }],
-        })
-        .map((task) => task.taskId)
-        .sort(),
-    ).toEqual(["failed", "stale", "unknown", "unread"]);
+    const policy = {
+      cutoff: 100,
+      activeTasks: [{ workspacePath: "/outside/running", taskId: "running" }],
+      workspaceKeys: ids.filter((id) => id !== "inactive-scope").map((id) => `/outside/${id}`),
+    };
+    const archived = repo
+      .archiveInactive(policy)
+      .map((task) => task.taskId)
+      .sort();
+    expect(archived).toEqual(["failed", "stale", "unknown", "unread"]);
     expect(
       db
         .prepare("SELECT task_id FROM tasks WHERE archived=1 ORDER BY task_id")
@@ -146,17 +148,16 @@ describe("project repository contract", () => {
     expect(db.prepare("SELECT unread_at FROM tasks WHERE task_id='unread'").get()).toEqual({
       unread_at: 20,
     });
+    expect(db.prepare("SELECT archived FROM tasks WHERE task_id='inactive-scope'").get()).toEqual({
+      archived: 0,
+    });
+    expect(repo.archiveInactive({ cutoff: 100, activeTasks: [], workspaceKeys: [] })).toEqual([]);
     expect(
       db
         .prepare("SELECT project_id,cli_updated_at,updated_at FROM tasks WHERE task_id='stale'")
         .get(),
     ).toEqual({ project_id: null, cli_updated_at: 10, updated_at: 2 });
-    expect(
-      repo.archiveInactive({
-        cutoff: 100,
-        activeTasks: [{ workspacePath: "/outside/running", taskId: "running" }],
-      }),
-    ).toEqual([]);
+    expect(repo.archiveInactive(policy)).toEqual([]);
   });
 
   it("reserves creation before facts, keeps explicit NULL and never overwrites a later move on retry", async () => {

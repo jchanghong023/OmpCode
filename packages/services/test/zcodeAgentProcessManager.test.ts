@@ -26,7 +26,7 @@ import {
   ZCodeAgentProcessManager,
   type ZCodeAgentCommand,
 } from "../src/zcode-agent/zcodeAgentProcessManager.js";
-import { setDataBaseDir } from "../src/paths.js";
+import { getAppConfigDir, setDataBaseDir } from "../src/paths.js";
 import type {
   RuntimeProcessLifecycleReporter,
   RuntimeProcessExceptionEvent,
@@ -1640,25 +1640,21 @@ process.stdin.on("end", () => process.exit(0));
       "/repo/workspace",
     );
 
-    expect(wrapped).toEqual({
-      command: process.execPath,
-      args: [
-        realpathSync(tapScript),
-        "--workspace-key",
-        "/repo/workspace",
-        "--log-dir",
-        join(sandboxRoot, ".zcode", "v2", "dev", "stdio-traffic"),
-        "--",
-        "zcode-agent",
-        "app-server",
-        "--stdio",
-      ],
-      cwd: "/repo/workspace",
-      env: {
-        CUSTOM_ENV: "1",
-        ELECTRON_RUN_AS_NODE: "1",
-      },
-    });
+    expect(wrapped.command).toBe(process.execPath);
+    expect(wrapped.args).toEqual([
+      realpathSync(tapScript),
+      "--workspace-key",
+      "/repo/workspace",
+      "--log-dir",
+      join(getAppConfigDir(), "dev", "stdio-traffic"),
+      "--",
+      "zcode-agent",
+      "app-server",
+      "--stdio",
+    ]);
+    expect(wrapped.cwd).toBe("/repo/workspace");
+    expect(wrapped.env?.CUSTOM_ENV).toBe("1");
+    expect(wrapped.env?.ELECTRON_RUN_AS_NODE).toBe("1");
   });
 
   it.each(desktopSurfaceArgsCases)(
@@ -1688,7 +1684,7 @@ process.stdin.on("end", () => process.exit(0));
         "--workspace-key",
         "/repo/workspace",
         "--log-dir",
-        join(sandboxRoot, ".zcode", "v2", "dev", "stdio-traffic"),
+        join(getAppConfigDir(), "dev", "stdio-traffic"),
         "--",
         "zcode-agent",
         ...expected.slice(0, -2),

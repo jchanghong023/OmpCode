@@ -298,10 +298,8 @@ export class SourceServerWorkspaceAliasRepo {
 
   public constructor(options: SourceServerWorkspaceAliasRepoOptions = {}) {
     this.taskDbPath = options.taskDbPath ?? getTasksIndexDatabasePath();
-    this.sessionDbPath =
-      options.sessionDbPath ?? join(getDataBaseDir(), ".zcode", "cli", "db", "db.sqlite");
-    this.backupRoot =
-      options.backupRoot ?? join(getDataBaseDir(), ".zcode", "server", "migration-backups");
+    this.sessionDbPath = options.sessionDbPath ?? join(getDataBaseDir(), "cli", "db", "db.sqlite");
+    this.backupRoot = options.backupRoot ?? join(getDataBaseDir(), "server", "migration-backups");
     this.now = options.now ?? Date.now;
     this.createMigrationId = options.migrationId ?? randomUUID;
     this.afterPhaseCommitted = options.afterPhaseCommitted;

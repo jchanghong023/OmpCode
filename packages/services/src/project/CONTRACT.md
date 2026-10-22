@@ -6,9 +6,17 @@
 
 全局创建显式空归属，不按目录猜项目。跨 host 移动失败；同 host 缺目录时先返回错误，用户明确确认后原子追加 root 与移动。可删除容器永久保留，恢复仅由新建时明确选择同 roots 的已删项目。
 
+OMP 组织域由 workspace 实际原生 configRoot/activeProfile 事实决定，项目定义、roots、任务归属与任务索引使用同一域的 SQLite owner。
+Host 的全局读取聚合当前 workspace 的实际域，不聚合已打开过的旧 profile 域；同域可跨 workspace，跨域移动必须拒绝。
+项目 ID 操作仅在当前域定位；新建以首 root 或当前 workspace 的实际域执行。保存待重启 profile 不改变任何组织域。
+切换不复制、不迁移旧组织库，原域的 UUID、定义与排序保留供切回读取。
+生成的新草稿/空项目 cwd 在首次启动前仅经既有 profile owner 继承 sourceWorkspace 的实际根/profile；不读取 pending 偏好，不改已有 workspace，也不热切已有进程。
+getOrganizationScope 经已有项目 Host 路由返回原生根/profile；控制端按真实 Host authority 区分同字面路径的不同远端，不为远端 cwd 启动本地 Agent。
+自动归档只扫描已经确认属于活动域的 workspace，不扫描曾打开过的旧 profile，也不为后台扫描启动 Agent。
+
 远端装配器在 prepareSession 和 resolveSessionDirectories 后，通过既有 workspace identity resolver 为返回的真实 cwd 登记并返回 workspaceIdentity；不复制请求中的身份，resolver 失败直接拒绝。readTree 返回前对全部项目 roots（包括无任务的空项目）与历史任务 cwd 去重并完成同一身份准备，失败不发布树，防止侧栏动态订阅落到未映射的事件源。它只提供导航/隔离身份，不改 cwd 和附加目录；UI 不得从远端真实路径推断本机 workspace。导航继续严格比较任务与目录解析结果的 cwd 和身份，不以路径相同绕过设备隔离。
 
-readProjects 只查询项目/roots，不加载任务或触发 Agent，用于目录管理；readTree 同样只读，两者都不触发自动归档。旧 settings 集合由本机提交的项目/入口派生；窗口只写 lastActiveWorkspace。派生端口不得调用 settings 或网络，设置文件锁内重读，防止删除入口被迟到响应复活。
+readProjects 只查询项目/roots，不加载任务，用于目录管理；读取组织域前可通过原生只读控制面确认实际根/profile，但不创建会话或触发推理。readTree 同样只读，两者都不触发自动归档。旧 settings 集合由本机提交的项目/入口派生；窗口只写 lastActiveWorkspace。派生端口只消费已确认域的同步目录投影，不调用 settings 或网络；尚未解析的 workspace 仅保留既有导航线索，不能据此展示任务，防止首次域发现前清空多 workspace 列表。
 
 缺少 virtualProjects 握手能力的远端只使用单 root 读适配器。它读取远端旧 app 数据，不写本机项目，不启动 Agent，项目组织操作显式拒绝；创建/恢复只返回既有 cwd 与空附加目录。合成 ID 由 host/cwd 稳定导出，升级时只允许入口的版本 CAS 解析，不形成持久权威项目。
 

@@ -6,7 +6,7 @@ import type {
   VirtualProject,
 } from "#src/project-storage/contract.js";
 import { ServiceChannels } from "@zcode/shared";
-import type { FileEntry } from "@zcode/shared";
+import type { FileEntry, OmpStartupProfileParams } from "@zcode/shared";
 import { createServiceDescriptor } from "#src/descriptors.js";
 export { LEGACY_SINGLE_ROOT_PROJECT_PREFIX } from "#src/project-storage/contract.js";
 export type {
@@ -21,6 +21,15 @@ export type {
 
 /** 当前 Host 的权威项目服务；远端通过现有 attachment 的服务代理调用。 */
 export interface IProjectService {
+  /** 只由拥有该 workspace 的 Host 返回实际原生域；控制端不得按远端路径启动本机 Agent。 */
+  getOrganizationScope(
+    target: {
+      workspacePath: string;
+      workspaceIdentity?: string;
+      remoteSessionId?: string;
+    },
+    hostId?: string,
+  ): Promise<OmpStartupProfileParams>;
   /** 项目选目录只访问所属 Host 的文件服务；不建立 workspace 或启动 Agent。 */
   readDirectory(params?: {
     hostId?: string;
@@ -53,6 +62,11 @@ export interface IProjectService {
     hostId?: string;
     draftId?: string;
     reuseDraft?: boolean;
+    sourceWorkspace?: {
+      workspacePath: string;
+      workspaceIdentity?: string;
+      remoteSessionId?: string;
+    };
   }): Promise<ProjectDirectories>;
   /** 缺 task = []，缺 project / DB 错误必须拒绝。软删项目仍可恢复历史任务。 */
   resolveSessionDirectories(task: ProjectTaskRef, hostId?: string): Promise<ProjectDirectories>;

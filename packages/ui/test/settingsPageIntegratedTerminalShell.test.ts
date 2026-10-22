@@ -3,6 +3,35 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const selectedSection = vi.hoisted(() => ({ value: "general" }));
+const profileWorkspaceState = vi.hoisted(() => ({
+  value: {
+    activeWorkspacePath: undefined,
+    activeWorkspaceIdentity: undefined,
+    tabs: [],
+  } as Record<string, unknown>,
+}));
+const profileAgentService = vi.hoisted(() => ({}));
+const useProfileAgentService = vi.hoisted(() => vi.fn(() => profileAgentService));
+vi.mock("@/hooks/useZCodeAgentService.js", () => ({
+  useZCodeAgentService: useProfileAgentService,
+}));
+vi.mock("@/omp-configuration/module.js", () => ({
+  OmpWorkspaceProfiles: ({
+    service,
+    workspacePath,
+    workspaceIdentity,
+  }: {
+    service: unknown;
+    workspacePath: string;
+    workspaceIdentity?: string;
+  }) =>
+    createElement("section", {
+      "data-testid": "mounted-omp-workspace-profiles",
+      "data-workspace-path": workspacePath,
+      "data-workspace-identity": workspaceIdentity,
+      "data-routed-agent": service === profileAgentService,
+    }),
+}));
 vi.mock("@/components/ui/toast.js", () => ({ toast: vi.fn() }));
 
 const stateUpdates = vi.hoisted(() => [] as unknown[]);
@@ -208,11 +237,7 @@ vi.mock("@/store/StoreProvider.js", () => ({
 vi.mock("@/store/TabStoreProvider.js", () => ({
   useOptionalTabStore: () => undefined,
   useTabStore: (selector: (state: Record<string, unknown>) => unknown) =>
-    selector({
-      activeWorkspaceIdentity: undefined,
-      activeWorkspacePath: undefined,
-      tabs: [],
-    }),
+    selector(profileWorkspaceState.value),
 }));
 
 vi.mock("@/lib/settingsNavigation.js", () => ({
@@ -336,6 +361,11 @@ describe("SettingsPage integrated terminal shell", () => {
   beforeEach(() => {
     pendingEffects.length = 0;
     selectedSection.value = "general";
+    profileWorkspaceState.value = {
+      activeWorkspacePath: undefined,
+      activeWorkspaceIdentity: undefined,
+      tabs: [],
+    };
     stateUpdates.length = 0;
     localServices.settingService.get.mockReset().mockResolvedValue({});
     remoteServices.settingService.get.mockReset().mockResolvedValue({});
@@ -504,15 +534,15 @@ describe("SettingsPage integrated terminal shell", () => {
     },
   );
 
-  it("keeps native directory migration on the Desktop", async () => {
+  it("does not expose directory selection or migration while Source is active", async () => {
     const { SettingsPage } = await import("../src/SettingsPage.js");
     renderToStaticMarkup(createElement(SettingsPage, { isDesktop: true }));
-    await (generalSectionCapture.props!.onDataBaseDirChange as (dir: string) => Promise<void>)(
-      "/local/selected-folder",
-    );
-    expect(localServices.settingService.updateDataBaseDir).toHaveBeenCalledWith(
-      "/local/selected-folder",
-    );
+    flushPendingEffects();
+    await flushPromises();
+
+    expect(generalSectionCapture.props).not.toHaveProperty("onDataBaseDirChange");
+    expect(generalSectionCapture.props).not.toHaveProperty("onSelectDataBaseDir");
+    expect(localServices.settingService.updateDataBaseDir).not.toHaveBeenCalled();
     expect(remoteServices.settingService.updateDataBaseDir).not.toHaveBeenCalled();
   });
 
@@ -560,17 +590,6 @@ describe("SettingsPage integrated terminal shell", () => {
     expect(remoteServices.settingService.update).not.toHaveBeenCalled();
   });
 
-  it("propagates local migration failure without invoking Source migration", async () => {
-    localServices.settingService.updateDataBaseDir.mockRejectedValueOnce(new Error("copy denied"));
-    const { SettingsPage } = await import("../src/SettingsPage.js");
-    renderToStaticMarkup(createElement(SettingsPage, { isDesktop: true }));
-    await expect(
-      (generalSectionCapture.props!.onDataBaseDirChange as (dir: string) => Promise<void>)(
-        "/local/denied",
-      ),
-    ).rejects.toThrow("copy denied");
-    expect(remoteServices.settingService.updateDataBaseDir).not.toHaveBeenCalled();
-  });
   it("hydrates each field from its owning Environment despite conflicting snapshots", async () => {
     localServices.settingService.get.mockResolvedValueOnce({
       dataBaseDir: "/desktop/data",
@@ -593,6 +612,45 @@ describe("SettingsPage integrated terminal shell", () => {
     );
     for (const wrong of ["/source/data", "http://source-proxy:7890", "wrong local font", 91])
       expect(stateUpdates).not.toContain(wrong);
+  });
+
+  it("mounts OMP profiles in model settings using the active workspace execution route", async () => {
+    selectedSection.value = "modelProvider";
+    profileWorkspaceState.value = {
+      activeWorkspacePath: "/workspace/chip",
+      activeWorkspaceIdentity: "remote:test:/workspace/chip",
+      tabs: [
+        {
+          kind: "workspace",
+          workspacePath: "/workspace/chip",
+          workspaceIdentity: "remote:test:/workspace/chip",
+          remoteSessionId: "remote-session-test",
+          label: "chip",
+        },
+      ],
+    };
+    const { SettingsPage } = await import("../src/SettingsPage.js");
+    const html = renderToStaticMarkup(createElement(SettingsPage, { isDesktop: true }));
+
+    expect(html).toContain('data-testid="mounted-omp-workspace-profiles"');
+    expect(html).toContain('data-routed-agent="true"');
+    expect(useProfileAgentService).toHaveBeenCalledWith(
+      "/workspace/chip",
+      "remote-session-test",
+      "remote:test:/workspace/chip",
+    );
+    expect(html).not.toContain('data-testid="omp-profile-no-target"');
+  });
+
+  it("does not invent a profile execution target when no workspace is active", async () => {
+    selectedSection.value = "modelProvider";
+    const { SettingsPage } = await import("../src/SettingsPage.js");
+    const html = renderToStaticMarkup(createElement(SettingsPage, { isDesktop: true }));
+
+    expect(html).toContain('data-testid="omp-profile-no-target"');
+    expect(html).toContain("omp.profiles.noTarget");
+    expect(html).not.toContain('data-testid="mounted-omp-workspace-profiles"');
+    expect(useProfileAgentService).not.toHaveBeenCalled();
   });
 
   it("ignores pending settings reads after the owning page is detached", async () => {

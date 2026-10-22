@@ -1,5 +1,48 @@
 # Conversation Session E2E Coverage Matrix
 
+## OMP-native Skill／Provider 管理验收（2026-10-23）
+
+`packages/desktop/test/e2e/omp-management.e2e.ts` 为 dedicated OMP spec，复用隔离 HOME/profile 与 localhost provider；当前均 **待验证**，未声明 GUI 已通过。
+
+| Case | GUI 与真实边界 | 状态／证据名 |
+| --- | --- | --- |
+| OMP-M01 | Settings Skill 页面发现临时 workspace `.agents/skills/omp-management-e2e/SKILL.md`；显示 profile 用户层作用范围；禁用→原生 config.yml `disabledExtensions`→刷新仍禁用→启用；旧 `.zcode` Skill 配置不变 | 待父级运行；`omp-management-skill-disabled.png`、`omp-management-skill-refreshed.png`、`omp-management-skill-enabled.png` |
+| OMP-M02 | Settings 模型行连接按钮→Host→原生 `provider/testModelConnectivity`→localhost SSE 成功与 HTTP 401 认证失败；UI 分别显示成功／错误，服务端记录真实 probe | 待父级运行；`omp-management-provider-success.png`、`omp-management-provider-auth-error.png`、`omp-management-provider-requests.json` |
+
+```powershell
+$env:ZCODE_AGENT_SERVER_COMMAND = (Get-Command bun -ErrorAction Stop).Source
+$env:ZCODE_AGENT_SERVER_ARGS_JSON = '["run","F:/code2026/oh-my-pi/packages/coding-agent/src/cli.ts","app-server","--stdio","--surface","desktop"]'
+Remove-Item Env:ZCODE_AGENT_SERVER_CWD -ErrorAction SilentlyContinue
+pnpm --filter @zcode/desktop test:e2e --spec test/e2e/omp-management.e2e.ts
+```
+
+证据位于 runner 的 `ZCODE_E2E_ARTIFACT_DIR`。只使用真实 GUI 控件，不通过 renderer 服务调用替代；Skill 文件是合法测试输入，Provider 响应只在 localhost，不访问真实模型、不 seed 运行状态，不改变 permission 分支。原生 profile 是开关持久化唯一 owner，workspace 仅承担 Skill 发现；本节不宣称 workspace 层写入或手机链路通过。父级实跑后登记实际 run ID、失败或通过与未到达断言。
+
+## OMP-native 工具权限闭环验收（2026-10-23）
+
+本节仅新增 `packages/desktop/test/e2e/omp-permissions.e2e.ts`，不恢复旧 Agent permission 夹具或扩大 formal suite。行为权威见 [OMP 接入需求](../../../oh-my-pi/docs-zh-CN/requirements/rpc-ui-protocol.md) 与 [FORK-003](../../fork.md)；动作定义见 [case catalog](../conversation-session-case-catalog.md#omp-native-工具权限闭环验收2026-10-23)。
+
+| Case | 真实边界／验收证据 | 当前状态 |
+| --- | --- | --- |
+| OMP-P01 | GUI→Host→当前 OMP 源码→广告中的原生 write；批准前零文件，Allow once 只执行当前写入，第二次写入重新询问；拒绝第二次后首文件内容／mtime 不变且零第二文件 | 新增，待父级执行；未验证 |
+| OMP-P02 | 真实 permission dock 的拒绝按钮→原生 tool result→终态；零文件 | 新增，待父级执行；未验证 |
+| OMP-P03 | GUI Esc Stop→取消等待；保留的旧 DOM 批准按钮迟到点击不写入，另一会话可完成 | 新增，待父级执行；未验证 |
+| OMP-P04 | A 等待时 B 正常完成；切回 A 请求身份不变；刷新后保留同请求或出现明确取消终态，不静默执行 | 新增，待父级执行；未验证 |
+
+专用 localhost provider 与 OMP profile／数据根复用 `omp-integration-fixture.ts`，仅该 spec 显式设置原生 `tools.approval.write/_write: prompt`（原生配置的 ask 值为 `prompt`），GUI 选择 guarded。根据实际广告名调用 `_write`／`write`；不生成旧 `Write` 别名、不 seed 会话／permission、不通过服务替 GUI 应答。GUI 迟到点击不等于伪造协议应答；未知 optionId、伪造内容、连接关闭及迟到协议应答由 OMP 协议 E2E 单独取证。
+
+从仓库根目录启动（父级执行；本节未运行）：
+
+```powershell
+$env:ZCODE_AGENT_SERVER_COMMAND = (Get-Command bun -ErrorAction Stop).Source
+$env:ZCODE_AGENT_SERVER_ARGS_JSON = '["run","F:/code2026/oh-my-pi/packages/coding-agent/src/cli.ts","app-server","--stdio","--surface","desktop"]'
+Remove-Item Env:ZCODE_AGENT_SERVER_CWD -ErrorAction SilentlyContinue
+pnpm --filter @zcode/desktop test:e2e --spec test/e2e/omp-permissions.e2e.ts
+```
+
+在 `packages/desktop` 目录可直接使用 `pnpm test:e2e --spec test/e2e/omp-permissions.e2e.ts`。不得指向旧 CLI、真实模型或共享桌面。证据写入 runner 的 `ZCODE_E2E_ARTIFACT_DIR`：`omp-permission-*-pending.png`、每项末态截图与 `*-provider-requests.json`；运行 ID、真实通过／失败与未到达断言由父级执行后登记，不预填 PASS。
+
+
 ## OMP-native 子代理与工作流核心验收
 
 本次新增范围的 setup、动作与断言见 [case catalog](../conversation-session-case-catalog.md#omp-native-子代理与工作流核心验收)，行为权威只引用 [OMP 需求](../../../oh-my-pi/docs-zh-CN/requirements/rpc-ui-protocol.md)，宿主消费见 [FORK-003](../../fork.md#子代理与工作流核心范围引用)。状态仅依据本次新增 OMP-native E2E 的实际断言，不继承本页旧 Agent E2E 的 passed 状态。

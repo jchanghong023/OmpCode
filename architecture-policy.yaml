@@ -246,6 +246,13 @@ modules:
       app: .
     owner: conversation
 
+  - id: omp-index-protocol
+    roots: [packages/shared/src/omp-index-protocol]
+    managed: true
+    requires: []
+    publicEntrypoints: [packages/shared/src/omp-index-protocol/contract.ts]
+    layers: { domain: "." }
+    owner: configuration
   - id: gen-ui-protocol
     roots: [packages/shared/src/gen-ui]
     managed: true
@@ -402,6 +409,7 @@ modules:
       - project-storage
       - shared
       - desktop
+      - services
     publicEntrypoints:
       - packages/desktop/src/host/database-startup/contract.ts
       - packages/desktop/src/host/database-startup/tasksStorageWorker.ts
@@ -766,7 +774,7 @@ modules:
     roots:
       - packages/ui/src/omp-configuration
     managed: true
-    requires: [shared, ui]
+    requires: [shared, ui, services, omp-index-protocol]
     publicEntrypoints:
       - packages/ui/src/omp-configuration/contract.ts
       - packages/ui/src/omp-configuration/module.ts

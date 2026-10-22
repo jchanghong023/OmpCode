@@ -16,10 +16,15 @@ import {
   captureComposerRecentSubmission as captureScopedRecent,
   readComposerRecent,
 } from "@/lib/composerRecent.js";
+const STORAGE_SCOPE_A = "opaque-native-root-profile-a";
+const STORAGE_SCOPE_B = "opaque-native-root-profile-b";
+let actualStorageScope: string | null = STORAGE_SCOPE_A;
 function testScope(path: string, identity?: string) {
   return resolveComposerScope(
     useZCodeSessionStore.getState().getWorkspaceState(path, identity).draftProjectId,
     identity,
+    "desktop",
+    actualStorageScope,
   );
 }
 function persistV4ComposerDraft(...args: Parameters<typeof persistScopedDraft>) {
@@ -51,8 +56,15 @@ function activateImportedSession(result: Parameters<typeof resolveImportedCompos
       result.workspacePath,
       result.sessionId,
       result.workspaceIdentity,
-      resolveImportedComposerConfig(result),
+      resolveImportedComposerConfig(result, "desktop", actualStorageScope),
     );
+  const key = result.workspaceIdentity?.trim() || result.workspacePath;
+  useZCodeSessionStore.setState((state) => ({
+    workspaces: {
+      ...state.workspaces,
+      [key]: { ...state.workspaces[key]!, draftStorageScope: actualStorageScope },
+    },
+  }));
 }
 function readImportInitialization(
   workspacePath: string,
@@ -125,7 +137,11 @@ const CUSTOM_COMMANDS = [
 const selectionServices = new Map<string, IModelSelectionService>();
 // 用真实纯解析算法模拟 Host，只省略 RPC；同内容的 fixture 保持同一 Service owner。
 function useDraftConfigControl(
-  params: Omit<Parameters<typeof useActualDraftConfigControl>[0], "modelSelectionService"> & {
+  params: Omit<
+    Parameters<typeof useActualDraftConfigControl>[0],
+    "modelSelectionService" | "storageScope"
+  > & {
+    storageScope?: string | null;
     modelSelectionView: ModelSelectionView | null;
   },
 ) {
@@ -147,6 +163,7 @@ function useDraftConfigControl(
     });
   return useActualDraftConfigControl({
     ...params,
+    storageScope: params.storageScope === undefined ? actualStorageScope : params.storageScope,
     modelSelectionService: view ? selectionServices.get(key)! : null,
   });
 }
@@ -253,6 +270,87 @@ function installMinimalDom() {
 }
 
 describe("useDraftConfigControl slash command hydration", () => {
+  it("同 workspace 实际 root/profile 切换隔离正文模型，迟到回调不越域，切回恢复", async () => {
+    const workspacePath = "/actual-profile-switch";
+    const root = createRoot(installMinimalDom());
+    const view = modelSelectionView(1, ["A", "B"], "A");
+    let control: ReturnType<typeof useDraftConfigControl>;
+    function Probe() {
+      control = useDraftConfigControl({
+        workspacePath,
+        sessionId: null,
+        modelSelectionView: view,
+        agentStartupAllowed: false,
+      });
+      return null;
+    }
+    await act(async () => root.render(createElement(Probe)));
+    await act(async () => {
+      control!.updateComposerContent({ text: "profile A" });
+      control!.handleDraftSelectModel("provider", "A");
+    });
+    const lateContent = control!.updateComposerContent;
+    const lateAccepted = control!.captureAcceptedModelSelection(
+      control!.draftConfig.modelSelection!,
+    );
+    actualStorageScope = STORAGE_SCOPE_B;
+    await act(async () => root.render(createElement(Probe)));
+    expect(control!.composerDraft.text).toBe("");
+    await act(async () => {
+      control!.updateComposerContent({ text: "profile B" });
+      control!.handleDraftSelectModel("provider", "B");
+    });
+    act(() => {
+      lateContent({ text: "late profile A debounce" });
+      lateAccepted();
+    });
+    expect(control!.composerDraft.text).toBe("profile B");
+    expect(control!.draftConfig.modelSelection?.modelId).toBe("B");
+    actualStorageScope = STORAGE_SCOPE_A;
+    await act(async () => root.render(createElement(Probe)));
+    expect(control!.composerDraft.text).toBe("profile A");
+    expect(control!.draftConfig.modelSelection?.modelId).toBe("A");
+    actualStorageScope = STORAGE_SCOPE_B;
+    await act(async () => root.render(createElement(Probe)));
+    expect(control!.composerDraft.text).toBe("profile B");
+    expect(control!.draftConfig.modelSelection?.modelId).toBe("B");
+    act(() => root.unmount());
+  });
+
+  it("断连或连接换代的未知 actual scope 不写盘，也不把未知正文带入重连域", async () => {
+    const workspacePath = "/unknown-profile-scope";
+    const root = createRoot(installMinimalDom());
+    const view = modelSelectionView(1, ["A"], "A");
+    let control: ReturnType<typeof useDraftConfigControl>;
+    function Probe() {
+      control = useDraftConfigControl({
+        workspacePath,
+        sessionId: null,
+        modelSelectionView: view,
+        agentStartupAllowed: false,
+      });
+      return null;
+    }
+    await act(async () => root.render(createElement(Probe)));
+    act(() => control!.updateComposerContent({ text: "known A" }));
+    const lateKnown = control!.updateComposerContent;
+    actualStorageScope = null;
+    await act(async () => root.render(createElement(Probe)));
+    const write = vi.spyOn(window.localStorage, "setItem");
+    act(() => {
+      control!.updateComposerContent({ text: "unknown connection generation" });
+      lateKnown({ text: "late disconnected edit" });
+    });
+    expect(write).not.toHaveBeenCalled();
+    actualStorageScope = STORAGE_SCOPE_B;
+    await act(async () => root.render(createElement(Probe)));
+    expect(control!.composerDraft.text).toBe("");
+    actualStorageScope = STORAGE_SCOPE_A;
+    await act(async () => root.render(createElement(Probe)));
+    expect(control!.composerDraft.text).toBe("known A");
+    act(() => root.unmount());
+  });
+
   it("PD03 同目录切项目恢复各自正文；旧 Hook 回调不能写新项目", async () => {
     const workspacePath = "/shared-project-root";
     const root = createRoot(installMinimalDom());
@@ -270,7 +368,10 @@ describe("useDraftConfigControl slash command hydration", () => {
     act(() =>
       useZCodeSessionStore
         .getState()
-        .startDraft(workspacePath, undefined, undefined, { projectId: "p" }),
+        .startDraft(workspacePath, undefined, undefined, {
+          projectId: "p",
+          draftStorageScope: actualStorageScope,
+        }),
     );
     await act(async () => root.render(createElement(Probe)));
     act(() => {
@@ -281,7 +382,10 @@ describe("useDraftConfigControl slash command hydration", () => {
     act(() =>
       useZCodeSessionStore
         .getState()
-        .startDraft(workspacePath, undefined, undefined, { projectId: "q" }),
+        .startDraft(workspacePath, undefined, undefined, {
+          projectId: "q",
+          draftStorageScope: actualStorageScope,
+        }),
     );
     expect(control!.composerDraft.text).toBe("");
     act(() => {
@@ -292,7 +396,10 @@ describe("useDraftConfigControl slash command hydration", () => {
     act(() =>
       useZCodeSessionStore
         .getState()
-        .startDraft(workspacePath, undefined, undefined, { projectId: "p" }),
+        .startDraft(workspacePath, undefined, undefined, {
+          projectId: "p",
+          draftStorageScope: actualStorageScope,
+        }),
     );
     expect(control!.composerDraft.text).toBe("P");
     expect(control!.draftConfig.mode).toBe("yolo");
@@ -341,7 +448,11 @@ describe("useDraftConfigControl slash command hydration", () => {
     await act(async () => root.render(createElement(Probe, { sessionId: null })));
     expect(control!.draftConfig).toMatchObject({ mode: "build", model: "B" });
     act(() => control!.handleDraftSwitchMode("yolo"));
-    await act(async () => useZCodeSessionStore.getState().startDraft(workspacePath));
+    await act(async () =>
+      useZCodeSessionStore
+        .getState()
+        .startDraft(workspacePath, undefined, undefined, { draftStorageScope: actualStorageScope }),
+    );
     expect(control!.draftConfig).toMatchObject({ mode: "build", model: "B" });
     expect(readV4ComposerDraft(workspacePath, undefined, "__draft__")).toBeNull();
     act(() => root.unmount());
@@ -393,8 +504,11 @@ describe("useDraftConfigControl slash command hydration", () => {
       // 同一路径的另一远端身份没有被写入；补选不冒充已接纳提交更新 Recent。
       expect(readV4ComposerDraft(workspacePath, "remote:other", "__draft__")).toBeNull();
       expect(
-        window.localStorage.getItem(
-          `zcode-model-selection-recent-v1:${workspaceIdentity ?? workspacePath}`,
+        readComposerRecent(
+          workspacePath,
+          workspaceIdentity,
+          undefined,
+          testScope(workspacePath, workspaceIdentity),
         ),
       ).toBeNull();
       act(() => root.unmount());
@@ -478,8 +592,11 @@ describe("useDraftConfigControl slash command hydration", () => {
           ...(source === "root" ? { modelSelection: selection } : {}),
         });
       const originalRoot = readV4ComposerDraft(workspacePath, undefined, "__draft__");
-      const recentBefore = window.localStorage.getItem(
-        `zcode-model-selection-recent-v1:${workspacePath}`,
+      const recentBefore = readComposerRecent(
+        workspacePath,
+        undefined,
+        undefined,
+        testScope(workspacePath),
       );
       activateImportedSession({ workspacePath, sessionId: "imported", reused: false });
       let control: ReturnType<typeof useDraftConfigControl>;
@@ -511,9 +628,9 @@ describe("useDraftConfigControl slash command hydration", () => {
             }
           : imported,
       );
-      expect(window.localStorage.getItem(`zcode-model-selection-recent-v1:${workspacePath}`)).toBe(
-        recentBefore,
-      );
+      expect(
+        readComposerRecent(workspacePath, undefined, undefined, testScope(workspacePath)),
+      ).toEqual(recentBefore);
       act(() => root.unmount());
     },
   );
@@ -600,6 +717,7 @@ describe("useDraftConfigControl slash command hydration", () => {
   });
 
   beforeEach(() => {
+    actualStorageScope = STORAGE_SCOPE_A;
     selectionServices.clear();
     prepareWorkspaceMock.mockReset();
     toastMock.mockReset();
@@ -750,7 +868,7 @@ describe("useDraftConfigControl slash command hydration", () => {
     const store = useZCodeSessionStore.getState();
     store.setActiveTaskId(workspacePath, taskId);
     store.setTaskConfigOptions(workspacePath, taskId, inheritedOptions);
-    store.startDraft(workspacePath, "glm");
+    store.startDraft(workspacePath, "glm", undefined, { draftStorageScope: actualStorageScope });
     prepareWorkspaceMock.mockResolvedValue({
       configOptions: inheritedOptions,
       slashCommands: CUSTOM_COMMANDS,
@@ -838,7 +956,9 @@ describe("useDraftConfigControl slash command hydration", () => {
     });
 
     act(() => {
-      useZCodeSessionStore.getState().startDraft(workspacePath, "glm");
+      useZCodeSessionStore
+        .getState()
+        .startDraft(workspacePath, "glm", undefined, { draftStorageScope: actualStorageScope });
       root.render(createElement(Probe, { sessionId: null }));
     });
 
@@ -930,6 +1050,7 @@ describe("useDraftConfigControl slash command hydration", () => {
     function Probe({ sessionId }: { sessionId: string }) {
       control = useActualDraftConfigControl({
         workspacePath,
+        storageScope: actualStorageScope,
         sessionId,
         sessionConfig: { mode: "build" },
         agentStartupAllowed: false,
@@ -1118,6 +1239,7 @@ describe("useDraftConfigControl slash command hydration", () => {
     function Probe() {
       control = useActualDraftConfigControl({
         workspacePath,
+        storageScope: actualStorageScope,
         sessionId: null,
         agentStartupAllowed: false,
         modelSelectionService: service,
@@ -1182,6 +1304,7 @@ describe("useDraftConfigControl slash command hydration", () => {
     function Probe() {
       control = useActualDraftConfigControl({
         workspacePath,
+        storageScope: actualStorageScope,
         sessionId: null,
         agentStartupAllowed: false,
         modelSelectionService: service,
@@ -1568,7 +1691,9 @@ describe("useDraftConfigControl slash command hydration", () => {
     await act(async () => root.render(createElement(Probe)));
     const oldPromotion = control!.promoteComposerDraft;
     act(() => {
-      useZCodeSessionStore.getState().startDraft(workspacePath);
+      useZCodeSessionStore
+        .getState()
+        .startDraft(workspacePath, undefined, undefined, { draftStorageScope: actualStorageScope });
       persistV4ComposerDraft(workspacePath, undefined, "__draft__", {
         text: "new page text",
         mode: "build",
@@ -1612,11 +1737,16 @@ describe("useDraftConfigControl slash command hydration", () => {
     const workspacePath = "/scoped-import";
     const root = createRoot(installMinimalDom());
     const store = useZCodeSessionStore.getState();
+    store.startDraft(workspacePath, undefined, undefined, {
+      draftStorageScope: actualStorageScope,
+    });
     store.setActiveTaskId(workspacePath, "cancelled", undefined, { mode: "yolo" });
     store.setActiveTaskId(workspacePath, "other");
     expect(readImportInitialization(workspacePath, undefined, "cancelled")).toBeUndefined();
     store.setActiveTaskId(workspacePath, "cancelled", undefined, { mode: "yolo" });
-    store.startDraft(workspacePath);
+    store.startDraft(workspacePath, undefined, undefined, {
+      draftStorageScope: actualStorageScope,
+    });
     expect(readImportInitialization(workspacePath, undefined, "cancelled")).toBeUndefined();
     store.setActiveTaskId(workspacePath, "imported", undefined, {
       mode: "yolo",

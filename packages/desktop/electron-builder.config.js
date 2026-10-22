@@ -292,7 +292,7 @@ async function runTimedAsync(label, fn) {
 
 function resolveAppAsarPath(context) {
   if (context.electronPlatformName === "darwin") {
-    const appName = `${context.packager?.appInfo?.productFilename ?? "ZCode"}.app`;
+    const appName = `${context.packager?.appInfo?.productFilename ?? desktopProductIdentity.productName}.app`;
     return resolve(context.appOutDir, appName, "Contents", "Resources", "app.asar");
   }
 
@@ -301,7 +301,7 @@ function resolveAppAsarPath(context) {
 
 function resolvePackagedResourcesDir(context) {
   if (context.electronPlatformName === "darwin") {
-    const appName = `${context.packager?.appInfo?.productFilename ?? "ZCode"}.app`;
+    const appName = `${context.packager?.appInfo?.productFilename ?? desktopProductIdentity.productName}.app`;
     return resolve(context.appOutDir, appName, "Contents", "Resources");
   }
 
@@ -566,6 +566,9 @@ export default {
   extraMetadata: {
     version: buildMetadata.appVersion,
     zcodeProductFlavor: desktopProductIdentity.flavor,
+    name: desktopProductIdentity.linuxPackageName,
+    // electron-updater 的下载缓存也必须与上游及另一 flavor 隔离。
+    updaterCacheDirName: `${desktopProductIdentity.linuxPackageName}-updater`,
     homepage: "https://zcode.z.ai",
     author: {
       name: "ZCode",
@@ -816,10 +819,9 @@ export default {
   // OAuth deep link 协议注册（macOS 打包后需要 Info.plist 中声明 CFBundleURLTypes）
   protocols: [
     {
-      // 协议处理器的展示名之前使用小写 scheme，打包产物里的协议描述无法体现产品名。
-      // 展示名跟随安装包身份；scheme 仍保持 zcode，因此两个应用中最后注册者会成为默认 handler。
+      // 独立 scheme 避免双装时覆盖上游或另一 flavor 的系统协议注册。
       name: desktopProductIdentity.productName,
-      schemes: ["zcode"],
+      schemes: [desktopProductIdentity.protocolScheme],
     },
   ],
   mac: {
@@ -884,6 +886,7 @@ export default {
     // hicolor 图标，最终回退成系统齿轮。这里固定成稳定的小写名称，让 Icon=zcode
     // 与 /usr/share/icons/hicolor/*/apps/zcode.png 保持一致。
     executableName: desktopProductIdentity.linuxExecutableName,
+    desktop: { entry: { StartupWMClass: desktopProductIdentity.productName } },
     category: "Development",
     maintainer: "ZCode <dev@zcode.z.ai>",
   },

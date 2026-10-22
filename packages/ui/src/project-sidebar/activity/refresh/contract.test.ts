@@ -14,7 +14,6 @@ import type {
 import { useProjectTree } from "@/project-sidebar/useProjectTree.js";
 import { useTaskGroups } from "@/project-sidebar/useTaskGroups.js";
 import { getTaskListRowActivity } from "@/v4/taskListRowActivity.js";
-
 const mocks = vi.hoisted(() => ({
   services: {} as Record<string, unknown>,
   tabs: [],
@@ -27,6 +26,7 @@ vi.mock("@/hooks/useWorkspaceServices.js", () => ({
 }));
 vi.mock("@/store/TabStoreProvider.js", () => ({
   useTabStore: () => mocks.tabs,
+  useOptionalTabStore: () => mocks.tabs,
   useTabStoreApi: () => ({ subscribe: () => () => {} }),
 }));
 vi.mock("@/store/zcodeSessionStore.js", () => ({
@@ -93,7 +93,27 @@ function activityFixture() {
       }),
       unsubscribeControllerV4: async () => undefined,
     },
-    taskGroupService: { read: async () => ({ groups: [], members: [], order: [] }), admit },
+    zcodeAgentService: {
+      getOmpProfiles: async () => ({ storageScope: "actual-root/default" }),
+      onAgentRuntimeRestarted: () => ({ dispose() {} }),
+      onAgentRuntimeLifecycle: () => ({ dispose() {} }),
+    },
+    taskGroupService: {
+      read: async (targets: Array<{ workspacePath: string }>) =>
+        targets.length
+          ? [
+              {
+                storageScope: "actual-root/default",
+                target: targets[0],
+                targets,
+                groups: [],
+                members: [],
+                order: [],
+              },
+            ]
+          : [],
+      admit,
+    },
     broadcastService: { onMessage: () => ({ dispose() {} }) },
   };
   const row = (time = 10): WindowHostControllerTaskRow => ({
@@ -104,7 +124,7 @@ function activityFixture() {
     liveStatus: "running" as const,
     activity: { phase: "running" as const, lastActivityAt: time, hasBackgroundWork: false },
   });
-  const send = async (next: ReturnType<typeof row>, snapshot = false) =>
+  const send = async (next: WindowHostControllerTaskRow, snapshot = false, removed = false) =>
     act(async () => {
       const fromSeq = seq;
       if (!snapshot) seq++;
@@ -115,22 +135,11 @@ function activityFixture() {
         fromSeq,
         toSeq: seq,
         sentAt: seq,
-        payload: snapshot
-          ? { kind: "snapshot", snapshot: { protocolVersion: 1, logEpoch: "e", tasks: [next] } }
-          : { kind: "deltas", deltas: [{ op: "task.upserted", task: next }] },
-      });
-    });
-  const remove = async () =>
-    act(async () => {
-      const fromSeq = seq++;
-      receive({
-        topic: CONTROLLER_TASKS_INDEX_TOPIC,
-        subscriptionId: CONTROLLER_TASKS_INDEX_TOPIC,
-        logEpoch: "e",
-        fromSeq,
-        toSeq: seq,
-        sentAt: seq,
-        payload: { kind: "deltas", deltas: [{ op: "task.removed", address: row().address }] },
+        payload: removed
+          ? { kind: "deltas", deltas: [{ op: "task.removed", address: next.address }] }
+          : snapshot
+            ? { kind: "snapshot", snapshot: { protocolVersion: 1, logEpoch: "e", tasks: [next] } }
+            : { kind: "deltas", deltas: [{ op: "task.upserted", task: next }] },
       });
     });
   const reconnect = async () =>
@@ -158,7 +167,6 @@ function activityFixture() {
     task,
     row,
     send,
-    remove,
     reconnect,
     list,
     admit,
@@ -178,6 +186,7 @@ it("1000 次纯活动不重读目录、不重建观察、不重算分组，仍�
   await waitFor(() => expect(f.list).toHaveBeenCalled());
   await f.send(f.row(), true);
   await waitFor(() => expect(result.current.loading).toBe(false));
+  await waitFor(() => expect(f.admit).toHaveBeenCalled());
   mocks.readTree.mockClear();
   f.list.mockClear();
   f.admit.mockClear();
@@ -292,6 +301,6 @@ it("新增与明确删除仍刷新权威行集合，活动自身不补行", asyn
     expect(result.current.tree.tasks.map((t) => t.taskId)).toEqual(["task", "second"]),
   );
   f.setTree({ projects: [], tasks: [second] });
-  await f.remove();
+  await f.send(f.row(), false, true);
   await waitFor(() => expect(result.current.tree.tasks.map((t) => t.taskId)).toEqual(["second"]));
 });

@@ -3704,9 +3704,11 @@ parentPort.on("message", async (e: Electron.MessageEvent) => {
     databaseStartup = createHostDatabaseStartup({
       startupId: msg.databaseStartupId,
       cwd: msg.agentSpawnFallbackCwd ?? process.cwd(),
-      workingDirectories:
-        msg.agentWarmupTargets?.map((target) => target.workspacePath) ??
-        (msg.workspacePath ? [msg.workspacePath] : []),
+      workspaceTargets: msg.agentWarmupTargets?.length
+        ? msg.agentWarmupTargets
+        : msg.workspacePath
+          ? [{ workspacePath: msg.workspacePath, workspaceIdentity: msg.workspaceIdentity }]
+          : [],
       env: msg.runtimeProcessEnvPatch,
       publish: (state) => {
         parentPort?.postMessage({ type: HostResponseTypes.DatabaseStartupState, state });

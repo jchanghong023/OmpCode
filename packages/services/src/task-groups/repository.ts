@@ -160,7 +160,8 @@ export class TaskGroupRepository {
   }
   ungroup(id: string): void {
     this.transaction(() => {
-      if (!this.hasGroup(id)) return;
+      // 错误执行域中的同名操作必须失败，不能把找不到组伪装成删除成功。
+      if (!this.hasGroup(id)) throw new Error("task-group.not-found");
       const members = this.children(id);
       const root = this.children(null).flatMap((node) =>
         node.type === "group" && node.key === id ? members : [node],

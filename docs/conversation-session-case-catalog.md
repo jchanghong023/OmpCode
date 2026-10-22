@@ -1,5 +1,47 @@
 # Conversation Session Case Catalog
 
+## OMP-native Skill／Provider 管理验收（2026-10-23）
+
+新增 dedicated `omp-management.e2e.ts`，两项均 **planned／待验证**。只消费 OMP 已有原生能力，不改 core，不扩展 MCP；权威见 [OMP 协议需求](../../oh-my-pi/docs-zh-CN/requirements/rpc-ui-protocol.md)。测试输入为隔离 workspace 中合法 Skill 与 localhost 模型响应，不伪造运行状态。
+
+```text
+Settings Skill GUI → Host → skills/manage → 原生 profile config.yml（唯一开关 owner）
+                                              ↓ list/refresh 投影
+Settings 模型连接按钮 → Host → provider/testModelConnectivity → localhost probe ledger
+```
+
+| ID | Setup／GUI 动作 | 必须观察的结果 |
+| --- | --- | --- |
+| OMP-M01 | 临时 workspace `.agents/skills/omp-management-e2e/SKILL.md`；Settings Skill 页面选工作区、禁用、刷新、启用 | 原生列表显示真实文件；profile 用户层且影响同 profile 工作区的提示可见；禁用写 `disabledExtensions`，刷新后仍禁用，启用移除禁用项；旧 workspace／user `.zcode` Skill 配置无持久变更 |
+| OMP-M02 | Settings 选择已有隔离 provider 模型行并点击连接测试；本地 provider 分别返回最小有效 SSE 与明确 401 | UI 分别成功／失败，服务端确有原生 `Reply OK.` probe、目标 model 和 stream 请求；不直接调用服务，不发真实模型请求 |
+
+精确单 spec 命令与截图／ledger 名见 [coverage matrix](testing/conversation-session-e2e-coverage-matrix.md#omp-native-skillprovider-管理验收2026-10-23)。本节新增时未执行 checks、tests、build、lint 或 formatter；父级实跑后记录真实结果。
+
+## OMP-native 工具权限闭环验收（2026-10-23）
+
+本节为新增权限验收定义，状态均为 **planned／待验证**，不预填通过结果。行为权威见 [OMP 接入需求](../../oh-my-pi/docs-zh-CN/requirements/rpc-ui-protocol.md) 与 [FORK-003](../fork.md)。仅本节显式替换此前 native permission“不支持”的裁定；不恢复旧 CLI fixture 或大范围解除其他排除。
+
+公共 setup：`omp-permissions.e2e.ts` 加入专用 `OMP_CORE_INTEGRATION_SPECS`，复用隔离 localhost provider、独立 OMP config/profile 和现有 response 分发。启动当前 OMP 源码 app-server，GUI 选择 guarded，隔离配置显式 `tools.approval.write/_write: prompt`。模型按实际广告名发送原生文件工具调用；会话、执行、permission request 和文件工具都来自真实运行，不 seed 状态，不直接调用服务替 GUI 回答。
+
+```text
+GUI prompt → Host → 当前 OMP session（唯一执行／权限 owner）
+                         → 原生 write 审批等待 → v4 permission dock
+GUI option button → resolveInteraction → 原生选项映射 → 本次工具执行／拒绝
+GUI Esc Stop → 原生取消等待；旧请求／旧按钮不得使工具复活
+```
+
+| ID | GUI 动作／前置 | 必须观察的结果 |
+| --- | --- | --- |
+| OMP-P01 | 连续两个不同路径的真实 write；首个 dock 点 Allow once，第二个 dock 点拒绝 | 批准前两个文件均不存在；首个文件生成且内容准确；第二个请求有不同 requestId，证明 once 不升级为 session；拒绝后第二文件不存在，第一文件 mtime 不变，实际 provider transcript 仅一条首文件 assistant tool call |
+| OMP-P02 | 真实 write 触发 dock 后点拒绝按钮 | 文件始终不存在，原生 tool result 回到 localhost provider 并输出终态，不挂起 |
+| OMP-P03 | 审批等待时按正式 GUI Esc Stop，再触发保留的旧 DOM Allow once 按钮点击，启动另一会话 | 等待消失且可停执行结束；另一会话正常完成；旧文件不存在。此处只证明迟到 GUI 点击，不冒充伪造协议应答验收 |
+| OMP-P04 | A 审批等待时 GUI 新建 B 并完成；切回 A，再刷新 renderer | B 不受阻；普通换视图不取消 A，requestId 不变；刷新保持原请求或呈现明确取消／中断终态；拒绝仍保留的请求后零文件，无静默放行 |
+
+GUI 使用现有 permission dock、`allowOnce`／`reject*` 选项语义与真实 requestId 摘要；由生产 UI 将其绑定的原生 optionId 走现有 resolveInteraction。未知 optionId、伪造 content/action、无原生 toolCall、连接关闭与迟到协议响应的拒绝由 OMP 协议测试另行验证，不把旧 DOM 点击当作已发出的协议命令。desktop-continuous 的 renderer 刷新是本节边界，不冒充手机 replayable 实机验证。
+
+精确命令、隔离环境与截图／Provider ledger 路径见 [coverage matrix](testing/conversation-session-e2e-coverage-matrix.md#omp-native-工具权限闭环验收2026-10-23)。父级执行后按事实记录；新增时未运行 tests、build、lint、formatter 或 gates。
+
+
 ## OMP-native 子代理与工作流核心验收
 
 本节是本次新增 E2E 的用例规划，不是功能／测试已完成声明；所有 ID 当前均为 **planned／未验证**。执行行为与协议事实唯一权威见 [OMP 接入需求](../../oh-my-pi/docs-zh-CN/requirements/rpc-ui-protocol.md) 的「子代理核心能力」「既有界面的工作流与记忆消费」；ZCode 宿主边界见 [FORK-003](../fork.md#子代理与工作流核心范围引用)。本节仅定义测试动作与可观察证据，不复制参数或状态协议。

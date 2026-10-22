@@ -3,6 +3,30 @@
  *
  * This subpath must not be imported by renderer/browser bundles.
  */
+import { homedir } from "node:os";
+import { basename, dirname, isAbsolute, join, normalize } from "node:path";
+
+/** OmpCode 应用根独立于 OMP 自身配置；不修改传给 OMP 的原始环境。 */
+export function resolveOmpCodeDataRoot(
+  env: Readonly<Record<string, string | undefined>> = process.env,
+  homePath: string = env.ZCODE_DESKTOP_HOME_DIR?.trim() ||
+    env.HOME?.trim() ||
+    env.USERPROFILE?.trim() ||
+    homedir(),
+): string {
+  const value = env.OMP_CONFIG_ROOT?.trim();
+  const expanded =
+    value === "~"
+      ? homePath
+      : value?.startsWith("~/") || value?.startsWith("~\\")
+        ? join(homePath, value.slice(2))
+        : value;
+  // 原因：相对路径、空值及含 NUL 的路径不能成为随 cwd 漂移的持久化事实。
+  return expanded && !expanded.includes("\0") && isAbsolute(expanded)
+    ? join(dirname(normalize(expanded)), `${basename(normalize(expanded))}_ompcode`)
+    : join(homePath, ".ompcode");
+}
+
 export { acquireFileLock } from "./node/atomicFileLock.js";
 export { createNodeNetworkCapture, withoutNetworkCapture } from "./node/networkCapture.js";
 export {

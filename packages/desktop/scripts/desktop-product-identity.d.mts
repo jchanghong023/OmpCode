@@ -14,7 +14,9 @@ export interface DesktopProductIdentity {
   readonly productName: string;
   readonly linuxExecutableName: string;
   readonly linuxPackageName: string;
-  readonly cuaHelperInstallVariant: "preview" | null;
+  readonly protocolScheme: string;
+  readonly autoUpdateEnabled: boolean;
+  readonly cuaHelperInstallVariant: "ompcode" | "ompcode-preview";
 }
 
 export const ZCODE_PREVIEW_IDENTITY_ENV: "ZCODE_PREVIEW_IDENTITY";

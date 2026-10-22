@@ -10,6 +10,7 @@ import {
   ZCODE_REMOTE_NO_PROXY_ENV_KEY,
   ZCODE_REMOTE_RUNTIME_NETWORK_AUTHORITY_ENV_KEY,
 } from "@zcode/shared";
+import { resolveOmpCodeDataRoot } from "@zcode/shared/node";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createStdioServices, resolveRemoteAgentNetworkFromEnv } from "../src/stdioServices.js";
 
@@ -60,14 +61,16 @@ describe("stdio Desktop presentation surface", () => {
     const home = await mkdtemp(join(tmpdir(), "zcode-stdio-desktop-surface-"));
     tempHomes.push(home);
     process.env.HOME = home;
-    setDataBaseDir(home);
+    const dataRoot = resolveOmpCodeDataRoot({ HOME: home });
+    setDataBaseDir(dataRoot);
     // Bugfix: 开发机可能导出 ZCODE_DESKTOP_CONTEXT_PROMPT_ENABLED=0（如本机 ZCode 安装的 shell 集成），
     // 会把 desktop-attached-remote 推导出的 presentationSurface 灭成 undefined，
     // 让「surface 贯穿装配」断言变成环境敏感；显式置 1 恢复用例封闭性。
     process.env[ZCODE_DESKTOP_CONTEXT_PROMPT_ENABLED_ENV] = "1";
     const zcodeBuiltinProviderConfigFilePath = join(home, "zcode-builtin.json");
-    const personalConfigFilePath = join(home, ".zcode", "v2", "provider_config.json");
-    await mkdir(join(home, ".zcode", "v2"), { recursive: true });
+    // 注入的是 OmpCode 应用根，provider seed 必须与真实读取路径一致，不能再追加上游 .zcode。
+    const personalConfigFilePath = join(dataRoot, "v2", "provider_config.json");
+    await mkdir(join(dataRoot, "v2"), { recursive: true });
     await writeFile(
       personalConfigFilePath,
       JSON.stringify({

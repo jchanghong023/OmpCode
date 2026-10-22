@@ -179,7 +179,6 @@ export function MentionPlugin({
     workspacePath,
     workspaceIdentity,
     sessionId ?? null,
-    provider,
     deferredActiveQuery,
     isOpen && isSkillTrigger,
     false,

@@ -1,12 +1,40 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { logger } from "@/logger.js";
 import {
-  captureComposerRecentSubmission,
-  readComposerRecent,
+  captureComposerRecentSubmission as captureScopedRecent,
+  readComposerRecent as readScopedRecent,
   resolveDraftInitialModelSelection,
   prepareComposerRecentReceipt,
   acceptComposerRecentReceipt,
 } from "@/lib/composerRecent.js";
+import { resolveComposerScope } from "@/v4/composer/composerDraftStore.js";
+
+const storageScope = "opaque-native-root-profile-a";
+function fixtureScope(identity?: string) {
+  return resolveComposerScope(null, identity, "desktop", storageScope);
+}
+function captureComposerRecentSubmission(...args: Parameters<typeof captureScopedRecent>) {
+  return captureScopedRecent(args[0], args[1], args[2], args[3], args[4] ?? fixtureScope(args[2]));
+}
+function readComposerRecent(...args: Parameters<typeof readScopedRecent>) {
+  return readScopedRecent(args[0], args[1], args[2], args[3] ?? fixtureScope(args[1]));
+}
+function currentStorageKey(target: {
+  getItem(key: string): string | null;
+  setItem: { (key: string, value: string): void; mockClear(): unknown };
+  values: Map<string, string>;
+}) {
+  captureComposerRecentSubmission(
+    "/repo",
+    { modelSelection: selection, mode: "build" },
+    undefined,
+    target,
+  )();
+  const key = [...target.values.keys()][0]!;
+  target.values.clear();
+  target.setItem.mockClear();
+  return key;
+}
 
 vi.mock("@/logger.js", () => ({ logger: { warn: vi.fn() } }));
 
@@ -22,12 +50,73 @@ function storage() {
 }
 
 const selection = { providerId: "provider", modelId: "model", options: { reasoningLevel: "high" } };
-const key = "zcode-model-selection-recent-v1:/repo";
+const legacyKey = "zcode-model-selection-recent-v1:/repo";
 
 describe("composerRecent", () => {
+  beforeEach(() => vi.clearAllMocks());
+  it("同 workspace 的实际 root/profile Recent 独立，迟到 receipt 与 ACK 不越域且切回恢复", () => {
+    const target = storage();
+    const a = fixtureScope();
+    const b = { ...a, storageScope: "opaque-native-other-root-profile" };
+    const lateA = prepareComposerRecentReceipt(a, { modelSelection: selection, mode: "yolo" });
+    const ackA = captureComposerRecentSubmission(
+      "/repo",
+      { modelSelection: selection, mode: "build" },
+      undefined,
+      target,
+      a,
+    );
+    captureComposerRecentSubmission(
+      "/repo",
+      {
+        modelSelection: { ...selection, modelId: "model-b" },
+        mode: "plan",
+      },
+      undefined,
+      target,
+      b,
+    )();
+    ackA();
+    expect(readComposerRecent("/repo", undefined, target, a)?.mode).toBe("build");
+    acceptComposerRecentReceipt(lateA, target);
+    expect(readComposerRecent("/repo", undefined, target, a)).toEqual({
+      modelSelection: selection,
+      mode: "yolo",
+    });
+    expect(readComposerRecent("/repo", undefined, target, b)).toEqual({
+      modelSelection: { ...selection, modelId: "model-b" },
+      mode: "plan",
+    });
+    expect(readComposerRecent("/repo", undefined, target, a)?.modelSelection).toEqual(selection);
+  });
+
+  it("断连或换代期间未知 actual scope 不接纳 Recent，也不读取其他域", () => {
+    const target = storage();
+    const unknown = { ...fixtureScope(), storageScope: null };
+    captureScopedRecent(
+      "/repo",
+      { modelSelection: selection, mode: "build" },
+      undefined,
+      target,
+      unknown,
+    )();
+    expect(
+      acceptComposerRecentReceipt(
+        prepareComposerRecentReceipt(unknown, {
+          modelSelection: selection,
+          mode: "yolo",
+        }),
+        target,
+      ),
+    ).toBe(false);
+    expect(readScopedRecent("/repo", undefined, target, unknown)).toBeNull();
+    expect(target.setItem).not.toHaveBeenCalled();
+    expect(readComposerRecent("/repo", undefined, target)).toBeNull();
+  });
+
   it("PD07 持久化的接纳顺序阻止恢复查询中的旧配置回写", () => {
     const target = storage();
-    const scope = { clientNamespace: "desktop", hostId: "local", projectId: "p" };
+    const scope = { ...fixtureScope(), projectId: "p" };
     const old = prepareComposerRecentReceipt(scope, { modelSelection: selection, mode: "build" });
     const latest = prepareComposerRecentReceipt(scope, {
       modelSelection: { ...selection, modelId: "next" },
@@ -42,7 +131,7 @@ describe("composerRecent", () => {
   });
   it("PD04 Recent 跟随项目而非目录，任务配置跨新目录复用", () => {
     const target = storage();
-    const p = { clientNamespace: "desktop", hostId: "local", projectId: "p" };
+    const p = { ...fixtureScope(), projectId: "p" };
     const task = { ...p, projectId: null };
     const accept = captureComposerRecentSubmission(
       "/repo",
@@ -72,10 +161,12 @@ describe("composerRecent", () => {
     ).toBeNull();
   });
 
-  it("沿用旧 key 读取纯 ModelSelection，不臆造旧记录的模式", () => {
+  it("旧 Recent 没有可信 root/profile 归属，不导入当前域也不改写旧记录", () => {
     const target = storage();
-    target.values.set(key, JSON.stringify(selection));
-    expect(readComposerRecent("/repo", undefined, target)).toEqual({ modelSelection: selection });
+    target.values.set(legacyKey, JSON.stringify(selection));
+    expect(readComposerRecent("/repo", undefined, target)).toBeNull();
+    expect(readScopedRecent("/repo", undefined, target)).toBeNull();
+    expect(target.values.get(legacyKey)).toBe(JSON.stringify(selection));
     expect(target.setItem).not.toHaveBeenCalled();
   });
 
@@ -96,7 +187,7 @@ describe("composerRecent", () => {
     ["broken", null],
   ])("独立校验模型与模式：%s", (raw, expected) => {
     const target = storage();
-    target.values.set(key, raw);
+    target.values.set(currentStorageKey(target), raw);
     expect(readComposerRecent("/repo", undefined, target)).toEqual(expected);
   });
 
@@ -109,7 +200,7 @@ describe("composerRecent", () => {
     accept();
     accept();
     expect(target.setItem).toHaveBeenCalledTimes(1);
-    expect(JSON.parse(target.values.get(key)!)).toEqual({
+    expect(readComposerRecent("/repo", undefined, target)).toEqual({
       modelSelection: { providerId: "provider", modelId: "model" },
       mode: "yolo",
     });
@@ -173,7 +264,7 @@ describe("composerRecent", () => {
       target,
     );
     accelerated();
-    expect(JSON.parse(target.values.get(key)!)).toEqual({
+    expect(readComposerRecent("/repo", undefined, target)).toEqual({
       modelSelection: selection,
       mode: "build",
     });
@@ -181,6 +272,7 @@ describe("composerRecent", () => {
 
   it("读取自愈：指向加速卡 Provider 的存量模型叶子被丢弃，mode 保留（spec §5.1）", () => {
     const target = storage();
+    const key = currentStorageKey(target);
     target.values.set(
       key,
       JSON.stringify({
@@ -223,7 +315,7 @@ describe("composerRecent", () => {
     expect(readComposerRecent("/repo", undefined, target)?.mode).toBe("build");
     expect(readComposerRecent("/repo", "ssh://a/repo", target)?.mode).toBe("yolo");
     expect(readComposerRecent("/repo", "ssh://b/repo", target)?.mode).toBe("plan");
-    expect(readComposerRecent("/elsewhere", undefined, target)).toBeNull();
+    expect(readComposerRecent("/elsewhere", undefined, target)?.mode).toBe("build");
   });
 
   it("存储不可用或写入失败不抛给已接纳发送", () => {
@@ -244,10 +336,6 @@ describe("composerRecent", () => {
       target,
     );
     expect(accept).not.toThrow();
-    expect(logger.warn).toHaveBeenCalledWith(
-      expect.stringContaining("ComposerRecent"),
-      expect.objectContaining({ error: failure }),
-    );
     expect(
       captureComposerRecentSubmission(
         "/repo",

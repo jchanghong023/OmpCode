@@ -85,6 +85,8 @@ export interface ProjectDirectories {
 export interface AutoArchiveInput {
   cutoff: number;
   activeTasks: readonly ProjectTaskRef[];
+  /** Host 已确认的活动执行域；空集合不扫描，不能归档旧 profile 域中的 workspace。 */
+  workspaceKeys?: readonly string[];
 }
 export interface ProjectRepositoryContract {
   /** 单事务纯按 CLI 最后活动时间筛选，置顶与 activeTasks 除外，仅写组织态；覆盖未归类 cwd。 */

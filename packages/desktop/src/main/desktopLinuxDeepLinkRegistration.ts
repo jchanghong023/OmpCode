@@ -1,3 +1,5 @@
+import { ZCODE_PRODUCT_FLAVOR } from "@zcode/shared";
+import { desktopProductIdentities } from "../../scripts/desktop-product-identity.mjs";
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { installLinuxAppImageDesktopIconBestEffort } from "./desktopLinuxAppImageIcon.js";
@@ -8,10 +10,10 @@ import {
   type LinuxDeepLinkRegistrationLogger,
 } from "./desktopLinuxXdg.js";
 
-const LINUX_DEEP_LINK_DESKTOP_FILE = "zcode.desktop";
-const LINUX_DEEP_LINK_MIME_TYPE = "x-scheme-handler/zcode";
-// 归属标记：用于识别用户级 zcode.desktop 是否由本应用写入（历史所有版本都带这行 Comment）。
-const LINUX_DESKTOP_ENTRY_OWNERSHIP_MARKER = "Comment=ZCode Desktop App";
+const LINUX_DEEP_LINK_DESKTOP_FILE = `${desktopProductIdentities[ZCODE_PRODUCT_FLAVOR].linuxExecutableName}.desktop`;
+const LINUX_DEEP_LINK_MIME_TYPE = `x-scheme-handler/${desktopProductIdentities[ZCODE_PRODUCT_FLAVOR].protocolScheme}`;
+// 只识别本 fork 所写条目，不能清理或覆盖上游 ZCode 的桌面注册。
+const LINUX_DESKTOP_ENTRY_OWNERSHIP_MARKER = "Comment=OmpCode Desktop App";
 
 type LinuxDesktopEnv = {
   APPIMAGE?: string;
@@ -109,8 +111,10 @@ export function createLinuxDeepLinkDesktopEntry(params: {
   productName?: string;
   iconName?: string;
 }): string {
-  const productName = params.productName ?? "ZCode";
-  const iconName = params.iconName ?? "zcode";
+  const productName =
+    params.productName ?? desktopProductIdentities[ZCODE_PRODUCT_FLAVOR].productName;
+  const iconName =
+    params.iconName ?? desktopProductIdentities[ZCODE_PRODUCT_FLAVOR].linuxExecutableName;
   const command = {
     executablePath: params.executablePath,
     args: params.args ?? [],

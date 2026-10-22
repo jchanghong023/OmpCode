@@ -277,15 +277,21 @@ describe("OMP configuration draft contract", () => {
     controller.invalidate();
     pending.resolve({ operation: "get_team_config", data: snapshot("old-generation") });
     await request;
-    expect(controller.getSnapshot().team?.revision).toBe("r1");
-    expect(controller.getSnapshot().requiresReadback).toBe(true);
+    expect(controller.getSnapshot().team).toBeNull();
+    const staleProfile = Promise.withResolvers<ZCodeSessionConfigureResult>();
+    configureOmpSession.mockReturnValueOnce(staleProfile.promise);
+    const staleRequest = controller.refresh();
     configureOmpSession.mockResolvedValueOnce({
       operation: "get_team_config",
       data: { ...snapshot("other-profile"), profile: "other" },
     });
     await controller.refresh();
-    expect(controller.getSnapshot().team?.profile).toBeNull();
+    staleProfile.resolve({ operation: "get_team_config", data: snapshot("late-old-profile") });
+    await staleRequest;
+    expect(controller.getSnapshot().team?.profile).toBe("other");
+    expect(controller.getSnapshot().team?.revision).toBe("other-profile");
+    await controller.refresh();
+    expect(controller.getSnapshot().team).toBeNull();
     expect(controller.getSnapshot().requiresReadback).toBe(true);
-    expect(controller.getSnapshot().busy).toBe(false);
   });
 });

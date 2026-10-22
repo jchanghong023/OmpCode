@@ -23,14 +23,14 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-async function scheduleThroughWdioCli(spec: string) {
+async function scheduleThroughWdioCli(spec?: string) {
   vi.resetModules();
   vi.stubEnv("ZCODE_E2E_RUN_ID", "spec-admission-regression");
   vi.stubEnv("ZCODE_E2E_PACKAGED_APP_PATH", process.execPath);
   vi.stubEnv("ZCODE_E2E_SPEC", "");
   // CLI 路径相对调用者 cwd 解析；使用 desktop 的绝对路径，避免把不存在的根目录文件当成排除成功。
   const cli = {
-    spec: [resolve("packages/desktop", spec).replaceAll("\\", "/")],
+    ...(spec ? { spec: [resolve("packages/desktop", spec).replaceAll("\\", "/")] } : {}),
     exclude: [resolve("packages/desktop/test/e2e/smoke.test.ts").replaceAll("\\", "/")],
   };
   const originalArgv = process.argv;
@@ -40,8 +40,7 @@ async function scheduleThroughWdioCli(spec: string) {
     "wdio",
     "run",
     "wdio.conf.ts",
-    "--spec",
-    cli.spec[0]!,
+    ...(cli.spec?.length ? ["--spec", cli.spec[0]!] : []),
     "--exclude",
     cli.exclude[0]!,
   ];
@@ -94,6 +93,40 @@ const deferredSpecs = [
 ];
 
 describe("desktop E2E environment-gated formal spec admission", () => {
+  it("includes all restored and native OMP cases in the real WDIO default selection", async () => {
+    vi.stubEnv("ZCODE_AGENT_SERVER_COMMAND", process.execPath);
+    const scheduled = await scheduleThroughWdioCli();
+    for (const spec of [
+      "omp-app-server.e2e.ts",
+      "omp-subagents.e2e.ts",
+      "omp-workflows.e2e.ts",
+      "omp-permissions.e2e.ts",
+      "omp-management.e2e.ts",
+      "omp-team.e2e.ts",
+      "omp-indexes.e2e.ts",
+      "omp-profiles.e2e.ts",
+      "conversation-session/conversation-session-model-switch-restore-repro.test.ts",
+      "conversation-session/conversation-session-v4-mention.test.ts",
+    ]) {
+      expect(scheduled.some((file) => file.endsWith(`/test/e2e/${spec}`))).toBe(true);
+    }
+  });
+
+  it.each([
+    "conversation-session/conversation-session-model-switch-restore-repro.test.ts",
+    "conversation-session/conversation-session-v4-mention.test.ts",
+    "omp-permissions.e2e.ts",
+    "omp-management.e2e.ts",
+    "omp-team.e2e.ts",
+    "omp-indexes.e2e.ts",
+    "omp-profiles.e2e.ts",
+  ])("admits exact restored/native --spec %s through WDIO", async (spec) => {
+    vi.stubEnv("ZCODE_AGENT_SERVER_COMMAND", process.execPath);
+    const scheduled = await scheduleThroughWdioCli(`./test/e2e/${spec}`);
+    expect(scheduled).toHaveLength(1);
+    expect(scheduled[0]).toMatch(new RegExp(`/test/e2e/${spec.replaceAll(".", "\\.")}$`, "u"));
+  });
+
   it("keeps a hard-excluded CLI spec excluded after an unrelated CLI exclude replaces config excludes", async () => {
     const scheduled = await scheduleThroughWdioCli("./test/e2e/browser-tab-residency.test.ts");
     expect(scheduled).toEqual([]);
@@ -268,7 +301,6 @@ describe("desktop E2E environment-gated formal spec admission", () => {
       "v4-load-older",
       "v4-input-control",
       "v4-scroll",
-      "v4-mention",
       "v4-turn-navigator",
       "native-search-setting",
       "plan-approval-primary-submit",
@@ -286,7 +318,6 @@ describe("desktop E2E environment-gated formal spec admission", () => {
       "pasted-image-path-edge-cases",
       "model-trajectory-viewer",
       "model-switch-image-strip",
-      "model-switch-restore-repro",
       "composer-provider-identity",
       "toolsearch-local",
       "toolsearch-cli",

@@ -1,3 +1,51 @@
+import {
+  ompTanStartParamsSchema,
+  ompTanListParamsSchema,
+  ompTanStopParamsSchema,
+  ompTanStartResultSchema,
+  ompTanListResultSchema,
+  ompTanStopResultSchema,
+} from "@zcode/shared";
+import {
+  ompProfilesListResultSchema,
+  ompProfilesPrepareSwitchResultSchema,
+  ompProfilesCancelSwitchResultSchema,
+  type OmpProfileId,
+  type OmpProfileState,
+  ompProfilesListParamsSchema,
+  ompProfilesPrepareSwitchParamsSchema,
+  ompProfilesCancelSwitchParamsSchema,
+} from "@zcode/shared";
+import {
+  wikiRequestSchema,
+  repoRequestSchema,
+  wikiListSchema,
+  wikiBuildSchema,
+  wikiQuerySchema,
+  repoStatusSchema,
+  repoQuerySchema,
+  removedIndexSchema,
+  cancelledIndexSchema,
+  indexProgressSchema,
+  type IndexProgress,
+  type WikiRequest,
+  type RepoRequest,
+  type WikiResult,
+  type RepoResult,
+} from "@zcode/shared/omp-indexes";
+import {
+  ompTeamRequestSchema,
+  ompTeamListResultSchema,
+  ompTeamReadResultSchema,
+  ompTeamStopResultSchema,
+} from "@zcode/shared";
+import { z } from "zod";
+import { zcodeRuntimeCapabilitiesSchema } from "@zcode/shared";
+import {
+  nativeSkillsManageParamsSchema,
+  nativeSkillsManageResultSchema,
+  type NativeSkillsManageParams,
+} from "../skills/skills.js";
 import { zcodeSessionConfigureResultSchema } from "@zcode/shared";
 import { isAuxiliarySessionKind } from "@zcode/shared";
 import {
@@ -368,7 +416,11 @@ import { AutomationService } from "#src/session/automationService.js";
 import { AutomationRepo } from "#src/session/automationRepo.js";
 import { TaskIndexRepo } from "#src/session/taskIndexRepo.js";
 import { ZCodeAgentMcpStatusModeUnsupportedError } from "#src/zcode-agent/zcodeAgentErrors.js";
-import { ZCodeAgentProcessManager } from "./zcodeAgentProcessManager.js";
+import {
+  ZCodeAgentProcessManager,
+  applyOmpProfileToCommand,
+  resolveDefaultZCodeAgentCommand,
+} from "./zcodeAgentProcessManager.js";
 import type { ZCodeAgentProcessManagerOptions } from "./zcodeAgentProcessManager.js";
 import type { IOffPeakTaskService } from "#src/session/offPeakTask.js";
 import {
@@ -548,7 +600,7 @@ function savedWorkflowScopeParam(params: ZCodeAgentSavedWorkflowTarget): {
 }
 
 function ensurePluginManagementWorkspacePath(): string {
-  const workspacePath = join(getDataBaseDir(), ".zcode", PLUGIN_MANAGEMENT_WORKSPACE_DIR_NAME);
+  const workspacePath = join(getDataBaseDir(), PLUGIN_MANAGEMENT_WORKSPACE_DIR_NAME);
   // 插件管理是控制面能力，不能复用可能因真实 workspace 被删而 EPIPE 的会话进程。
   // 这里给它固定一个内部 cwd；真实 workspace 仍通过协议参数传给 CLI 做 workspace-scope 判定。
   mkdirSync(workspacePath, { recursive: true });
@@ -999,6 +1051,11 @@ interface CreateZCodeAgentServiceOptions extends Omit<
   ZCodeAgentProcessManagerOptions,
   "idleTimeoutMs"
 > {
+  saveOmpProfile?: (target: ZCodeAgentWorkspaceTarget, profile: OmpProfileId) => Promise<void>;
+  prepareNewWorkspaceOmpProfilePreference?: (
+    destination: ZCodeAgentWorkspaceTarget,
+    inherited: { profile: OmpProfileId; configRoot: string },
+  ) => Promise<void>;
   /** 仅供 MCP 状态探测进程使用，不能把空闲回收传给 chat。 */
   mcpStatusIdleTimeoutMs?: number;
   accountProviderConfigSource?: ProviderSource<AccountProviderConfigSnapshot>;
@@ -1223,10 +1280,26 @@ export function resolveOffPeakToolSelection(
     ? selection
     : { ...selection, options: { reasoningLevel: thoughtLevel } };
 }
+type LocalZCodeAgentService = IZCodeAgentService & {
+  disposeAllAndWait(): Promise<void>;
+  /** Host-only fresh generated cwd preparation; deliberately not an Agent RPC method. */
+  prepareNewWorkspaceOmpProfile(
+    source: ZCodeAgentWorkspaceTarget,
+    destination: ZCodeAgentWorkspaceTarget,
+  ): Promise<void>;
+};
+
 export function createZCodeAgentService(
   options?: CreateZCodeAgentServiceOptions,
-): IZCodeAgentService & { disposeAllAndWait(): Promise<void> } {
-  const processManager = new ZCodeAgentProcessManager(options);
+): LocalZCodeAgentService {
+  const workspaceProfilePreparations = new Map<string, Promise<void>>();
+  const processManager = new ZCodeAgentProcessManager({
+    ...options,
+    waitForSpawnAdmission: async (context) => {
+      await workspaceProfilePreparations.get(context.workspaceKey);
+      await options?.waitForSpawnAdmission?.(context);
+    },
+  });
   // Windows indicator 与 macOS producer lifecycle client 共用已校验、去重的 sideband facts。
   const cuaOperationTurnTracker =
     options?.cuaOperationStateReporter || options?.onCuaPipSessionLifecycle
@@ -1248,6 +1321,197 @@ export function createZCodeAgentService(
   const automationRepo = new AutomationRepo();
   const automationService = new AutomationService(automationRepo, options?.prepareProjectExecution);
   const automationTaskIndexRepo = new TaskIndexRepo();
+  const profileSelections = new Map<string, Promise<OmpProfileState>>();
+  const profileFacts = new WeakMap<
+    ZCodeProtocolClient,
+    Promise<z.infer<typeof ompProfilesListResultSchema> | undefined>
+  >();
+
+  function readNativeProfileFacts(client: ZCodeProtocolClient, target: ZCodeAgentWorkspaceTarget) {
+    let fact = profileFacts.get(client);
+    if (!fact) {
+      fact = (async () => {
+        const capabilities = await client
+          .request(
+            zcodeProtocolMethods.runtimeCapabilities,
+            {},
+            zcodeRuntimeCapabilitiesSchema.extend({ ompProfiles: z.boolean().optional() }),
+          )
+          .catch((error: unknown) => {
+            if (isProtocolMethodNotFoundError(error)) return { ompProfiles: false };
+            throw error;
+          });
+        if (capabilities.ompProfiles !== true) return undefined;
+        return client.request(
+          "omp/profiles/list",
+          ompProfilesListParamsSchema.parse({ workspace: buildWorkspaceRef(target) }),
+          ompProfilesListResultSchema,
+        );
+      })();
+      profileFacts.set(client, fact);
+      void fact.catch(() => profileFacts.delete(client));
+    }
+    return fact;
+  }
+
+  async function bindListedProfiles(
+    client: ZCodeProtocolClient,
+    target: ZCodeAgentWorkspaceTarget,
+    ids: string[],
+  ) {
+    if (!options?.resolveOmpProfile) return;
+    const facts = await readNativeProfileFacts(client, target);
+    if (!facts) return;
+    const profile = facts.activeProfile;
+    const taskIndexRepo = automationTaskIndexRepo.forOmpScope({
+      configRoot: facts.configRoot,
+      profileId: profile,
+    });
+    for (const taskId of ids) {
+      const task = { ...target, taskId };
+      if (await taskIndexRepo.getTaskMeta(task))
+        await taskIndexRepo.bindTaskOmpProfile(task, profile);
+    }
+  }
+
+  async function admitProfileRequest(
+    client: ZCodeProtocolClient,
+    workspace: ZCodeAgentWorkspaceTarget,
+    method: string,
+    raw: unknown,
+  ) {
+    if (!options?.resolveOmpProfile) return;
+    if (!raw || typeof raw !== "object" || method.startsWith("omp/profiles/")) return;
+    const params = z
+      .object({
+        type: z.string().optional(),
+        sessionId: z.string().nullable().optional(),
+        operation: z.string().optional(),
+        envelope: z
+          .object({
+            type: z.string().optional(),
+            sessionId: z.string().optional(),
+            target: z.object({ sessionId: z.string().optional() }).passthrough().optional(),
+          })
+          .passthrough()
+          .optional(),
+      })
+      .passthrough()
+      .parse(raw);
+    const sessionId =
+      params.sessionId ?? params.envelope?.sessionId ?? params.envelope?.target?.sessionId;
+    if (!sessionId) return;
+    const facts = await readNativeProfileFacts(client, workspace);
+    if (!facts) return;
+    const profile = facts.activeProfile;
+    const taskIndexRepo = automationTaskIndexRepo.forOmpScope({
+      configRoot: facts.configRoot,
+      profileId: profile,
+    });
+    if (method === zcodeProtocolMethods.sessionConfigure && params.operation === "set_model_role") {
+      const selected = await options.resolveOmpProfile(workspace);
+      // 选择新 profile 后旧进程仍持有旧配置；持久角色写入必须等待真实重启，临时模型不受此限制。
+      if (selected !== undefined && selected !== profile)
+        throw Object.assign(
+          new Error(
+            "Profile selection is pending restart; restart before saving persistent model roles",
+          ),
+          { code: "omp.profileRestartRequired" },
+        );
+    }
+    const task = { ...workspace, taskId: sessionId };
+    if (
+      method === zcodeProtocolMethods.sessionRead ||
+      method === zcodeProtocolMethods.sessionCreate ||
+      params.type === "createSession" ||
+      params.envelope?.type === "createSession"
+    ) {
+      if ((await taskIndexRepo.readTaskOmpProfile(task)) !== undefined)
+        await taskIndexRepo.assertTaskOmpProfile(task, profile);
+      return;
+    }
+    if ((await taskIndexRepo.readTaskOmpProfile(task)) === undefined) {
+      // 旧任务的 undefined 不是 default；只有同一个原生进程的真实 read 才能补绑定。
+      try {
+        const snapshot = await client.request(
+          zcodeProtocolMethods.sessionRead,
+          { workspace: buildWorkspaceRef(workspace), sessionId },
+          zcodeSessionStateSnapshotSchema,
+        );
+        if (snapshot.session.sessionId !== sessionId)
+          throw new Error("Native session identity mismatch");
+        await taskIndexRepo.bindTaskOmpProfile(task, profile);
+      } catch (cause) {
+        throw Object.assign(
+          new Error("Task profile cannot be confirmed by the active native profile", { cause }),
+          { code: "omp.profileUnknown" },
+        );
+      }
+    }
+    await taskIndexRepo.assertTaskOmpProfile(task, profile);
+  }
+
+  async function getTanClient(target: ZCodeAgentSessionTarget) {
+    const client = await getClient(target);
+    const capabilities = await client.request(
+      zcodeProtocolMethods.runtimeCapabilities,
+      {},
+      zcodeRuntimeCapabilitiesSchema.extend({ ompTan: z.boolean().optional() }),
+    );
+    if (capabilities.ompTan !== true)
+      throw Object.assign(
+        new Error("This Agent does not support native OMP background delegation (Tan)"),
+        { code: "omp.tanUnsupported" },
+      );
+    return client;
+  }
+
+  async function readProfileState(target: ZCodeAgentWorkspaceTarget): Promise<OmpProfileState> {
+    const client = await getReadOnlyClient(target);
+    const profile = (await readNativeProfileFacts(client, target))?.activeProfile;
+    const selected = await options?.resolveOmpProfile?.(target);
+    const runtimeIdentity = (await processManager.getRuntimeIdentity(target)).identity;
+    if (profile === undefined)
+      return {
+        selectedProfile: selected ?? null,
+        activeProfile: null,
+        configRoot: null,
+        storageScope: null,
+        profiles: [],
+        runtimeIdentity,
+        blockers: [],
+        pending: false,
+        supported: false,
+        reason: "This Agent does not support native OMP profiles",
+      };
+    const facts = await client.request(
+      "omp/profiles/list",
+      ompProfilesListParamsSchema.parse({ workspace: buildWorkspaceRef(target) }),
+      ompProfilesListResultSchema,
+    );
+    const pinned = processManager.getLaunchFacts(target).profilePinned;
+    return {
+      selectedProfile: selected === undefined ? profile : selected,
+      activeProfile: facts.activeProfile,
+      configRoot: facts.configRoot,
+      storageScope: facts.storageScope,
+      profiles: facts.profiles,
+      runtimeIdentity,
+      blockers: [],
+      pending: selected !== undefined && selected !== facts.activeProfile,
+      supported: true,
+      ...(pinned
+        ? {
+            reason:
+              "Profile is pinned by explicit --profile/-P launch arguments; edit the launch configuration to switch",
+            supported: false,
+          }
+        : {}),
+      ...(!options?.saveOmpProfile
+        ? { reason: "Host profile preference storage is unavailable", supported: false }
+        : {}),
+    };
+  }
   const pluginProcessManager = new ZCodeAgentProcessManager({
     commandResolver: options?.commandResolver,
     presentationSurface: options?.presentationSurface,
@@ -1303,6 +1567,7 @@ export function createZCodeAgentService(
   }
   const sessionRuntimePreferencesRequestEmitter =
     new Emitter<ZCodeAgentSessionRuntimePreferencesRequest>();
+  const ompIndexProgressEmitter = new Emitter<IndexProgress>();
   const processResourceSampleEmitter = new Emitter<AgentLaneResourceSample>();
   const toolExecResourceEmitter = new Emitter<ZCodeToolExecResource>();
   const mcpResourceSamplesEmitter = new Emitter<ZCodeMcpResourceSample[]>();
@@ -2102,6 +2367,9 @@ export function createZCodeAgentService(
       return;
     }
     wiredClients.add(client);
+    if (lane === "chat")
+      client.requestAdmission = (method, params) =>
+        admitProfileRequest(client, workspace, method, params);
     const topicResources = createTopicResourceBridge(() => {
       // 预热可能没有 remoteSessionId；不能永久捕获 wireClient 首次参数。
       // 从同一个实际 CLI 的当前可信入口取路由，并在一次资源操作内保持不变。
@@ -2136,6 +2404,35 @@ export function createZCodeAgentService(
     const disposables = [
       topicResources,
       client.onNotification((message) => {
+        if (message.method === "omp/wiki/progress" || message.method === "omp/repo/progress") {
+          const envelope = z
+            .object({
+              workspace: z.object({
+                workspacePath: z.string(),
+                workspaceIdentity: z.string().optional(),
+                workspaceKey: z.string(),
+                remoteSessionId: z.string().optional(),
+              }),
+              operationId: z.string(),
+              progress: z.unknown(),
+            })
+            .safeParse(message.params);
+          if (
+            !envelope.success ||
+            resolveWorkspaceKey(envelope.data.workspace) !== resolveWorkspaceKey(workspace)
+          )
+            return;
+          const parsed = indexProgressSchema.safeParse({
+            operationId: envelope.data.operationId,
+            workspacePath: envelope.data.workspace.workspacePath,
+            workspaceIdentity: envelope.data.workspace.workspaceIdentity,
+            remoteSessionId: envelope.data.workspace.remoteSessionId,
+            kind: message.method === "omp/wiki/progress" ? "wiki" : "repo",
+            progress: envelope.data.progress,
+          });
+          if (parsed.success) ompIndexProgressEmitter.fire(parsed.data);
+          return;
+        }
         if (message.method === zcodeProtocolNotifications.providerRuntimeHeadersCancelled) {
           const parsed = zcodeProviderRuntimeHeadersCancelledSchema.safeParse(message.params);
           if (
@@ -3602,6 +3899,7 @@ export function createZCodeAgentService(
     for (const emitter of providerRuntimeHeadersCancelledEmitters.values()) emitter.dispose();
     providerRuntimeHeadersCancelledEmitters.clear();
     sessionRuntimePreferencesRequestEmitter.dispose();
+    ompIndexProgressEmitter.dispose();
     processResourceSampleEmitter.dispose();
     mcpTelemetryEmitter.dispose();
     toolExecResourceEmitter.dispose();
@@ -3836,7 +4134,43 @@ export function createZCodeAgentService(
     return envelope;
   }
 
-  return {
+  const service: LocalZCodeAgentService = {
+    async prepareNewWorkspaceOmpProfile(source, destination) {
+      const key = resolveWorkspaceKey(destination);
+      if (key === resolveWorkspaceKey(source) || processManager.hasWorkspaceStarted(destination))
+        return;
+      const existing = workspaceProfilePreparations.get(key);
+      if (existing) return existing;
+      const preparation = (async () => {
+        const [selected, root] = await Promise.all([
+          options?.resolveOmpProfile?.(destination),
+          options?.resolveOmpConfigRoot?.(destination),
+        ]);
+        // 只继承全新生成 cwd；已有 workspace 的偏好、进程和任务不因创建另一个任务而迁移。
+        if (selected !== undefined || root !== undefined) return;
+        const client = await getReadOnlyClient(source, "existing-only");
+        const facts = await readNativeProfileFacts(client, source);
+        if (!facts) return;
+        if (client.isDisposed || processManager.getExistingClient(source) !== client)
+          throw Object.assign(
+            new Error("Source runtime changed before inheriting its profile launch context"),
+            { code: "omp.profileStaleRuntime" },
+          );
+        if (!options?.prepareNewWorkspaceOmpProfilePreference)
+          throw new Error("Host cannot persist a new workspace's inherited profile launch context");
+        await options.prepareNewWorkspaceOmpProfilePreference(destination, {
+          profile: facts.activeProfile,
+          configRoot: facts.configRoot,
+        });
+      })();
+      workspaceProfilePreparations.set(key, preparation);
+      try {
+        await preparation;
+      } finally {
+        if (workspaceProfilePreparations.get(key) === preparation)
+          workspaceProfilePreparations.delete(key);
+      }
+    },
     async prepareStorage(params) {
       const client = await processManager.getClient(params);
       wireClient(client, params, "chat");
@@ -3932,6 +4266,94 @@ export function createZCodeAgentService(
       );
     },
 
+    getOmpProfiles: readProfileState,
+    async selectOmpProfile(params) {
+      const key = resolveWorkspaceKey(params);
+      if (profileSelections.has(key))
+        throw Object.assign(new Error("Profile selection is already in progress"), {
+          code: "omp.profileSwitchPending",
+        });
+      const selection = (async () => {
+        const state = await readProfileState(params);
+        if (!state.supported || !options?.saveOmpProfile) throw new Error(state.reason);
+        if (state.runtimeIdentity !== params.expectedRuntimeIdentity)
+          throw Object.assign(
+            new Error("Agent runtime changed; refresh profiles before switching"),
+            { code: "omp.profileStaleRuntime" },
+          );
+        const client = await getReadOnlyClient(params, "existing-only");
+        const validated = await client.request(
+          "omp/profiles/list",
+          ompProfilesListParamsSchema.parse({
+            workspace: buildWorkspaceRef(params),
+            candidate: params.profile,
+          }),
+          ompProfilesListResultSchema,
+        );
+        const profile = validated.candidate;
+        if (profile === undefined)
+          throw new Error("Native profile validation returned no normalized candidate");
+        const command = await (options?.commandResolver ?? resolveDefaultZCodeAgentCommand)({
+          ...params,
+          workspaceKey: key,
+          env: {
+            ...process.env,
+            ...(await options?.resolveSpawnEnv?.({ ...params, workspaceKey: key })),
+          },
+        });
+        if (command) applyOmpProfileToCommand(command, profile);
+        if (params.apply === "next-start") {
+          await options.saveOmpProfile(params, profile);
+          return readProfileState(params);
+        }
+        const listed = await client.request(
+          zcodeProtocolMethods.sessionList,
+          { workspace: buildWorkspaceRef(params) },
+          zcodeSessionListResultSchema,
+        );
+        await bindListedProfiles(
+          client,
+          params,
+          listed.sessions.map((session) => session.sessionId),
+        );
+        const barrier = await client.request(
+          "omp/profiles/prepareSwitch",
+          ompProfilesPrepareSwitchParamsSchema.parse({
+            workspace: buildWorkspaceRef(params),
+            expectedProfile: state.activeProfile,
+          }),
+          ompProfilesPrepareSwitchResultSchema,
+        );
+        if (!barrier.ready) return { ...state, blockers: barrier.blockers };
+        if (!barrier.token) throw new Error("Native profile switch barrier returned no token");
+        try {
+          if ((await processManager.getRuntimeIdentity(params)).identity !== state.runtimeIdentity)
+            throw Object.assign(new Error("Agent runtime changed during profile switch"), {
+              code: "omp.profileStaleRuntime",
+            });
+          await options.saveOmpProfile(params, profile);
+          await service.disposeWorkspace(params);
+          return await readProfileState(params);
+        } catch (error) {
+          if (processManager.getExistingClient(params) === client && !client.isDisposed)
+            await client.request(
+              "omp/profiles/cancelSwitch",
+              ompProfilesCancelSwitchParamsSchema.parse({
+                workspace: buildWorkspaceRef(params),
+                token: barrier.token,
+              }),
+              ompProfilesCancelSwitchResultSchema,
+            );
+          throw error;
+        }
+      })();
+      profileSelections.set(key, selection);
+      try {
+        return await selection;
+      } finally {
+        if (profileSelections.get(key) === selection) profileSelections.delete(key);
+      }
+    },
     async getWorkspaceRuntimeIdentity(params: ZCodeAgentWorkspaceTarget) {
       // 查询 runtime identity 只能观察现有进程，不能把 dormant workspace 变成活动进程。
       await getReadOnlyClient(params, "existing-only");
@@ -4162,6 +4584,11 @@ export function createZCodeAgentService(
         },
         zcodeSessionListResultSchema,
       );
+      await bindListedProfiles(
+        client,
+        params,
+        result.sessions.map((session) => session.sessionId),
+      );
       for (const session of result.sessions) {
         if (session.traceId) {
           sessionTraceIdBySessionKey.set(
@@ -4235,6 +4662,7 @@ export function createZCodeAgentService(
         },
         zcodeSessionStateSnapshotSchema,
       );
+      await bindListedProfiles(client, params, [snapshot.session.sessionId]);
       rememberSessionTrace(params, snapshot);
       return snapshot;
     },
@@ -4469,6 +4897,83 @@ export function createZCodeAgentService(
         },
         zcodeSkillsReferenceCatalogResultSchema,
       );
+    },
+
+    async manageNativeSkills(params: NativeSkillsManageParams) {
+      const client = await getReadOnlyClient(params);
+      const capabilities = await client.request(
+        zcodeProtocolMethods.runtimeCapabilities,
+        {},
+        zcodeRuntimeCapabilitiesSchema.extend({ ompSkillManagement: z.boolean().optional() }),
+      );
+      if (capabilities.ompSkillManagement !== true) {
+        throw new Error("Native OMP skill management is unsupported by this Agent");
+      }
+      const { workspaceIdentity: _workspaceIdentity, ...wire } = params;
+      return client.request(
+        "skills/manage",
+        nativeSkillsManageParamsSchema.parse(wire),
+        nativeSkillsManageResultSchema,
+      );
+    },
+
+    onOmpIndexProgress: ompIndexProgressEmitter.event,
+    async queryOmpWiki(raw: WikiRequest): Promise<WikiResult> {
+      const params = wikiRequestSchema.parse(raw);
+      const client = await getReadOnlyClient(params);
+      const capabilities = await client.request(
+        zcodeProtocolMethods.runtimeCapabilities,
+        {},
+        zcodeRuntimeCapabilitiesSchema.extend({ ompIndexes: z.boolean().optional() }),
+      );
+      if (capabilities.ompIndexes !== true)
+        throw new Error("Native OMP indexes are unavailable in this Agent");
+      const {
+        action,
+        workspacePath: _path,
+        workspaceIdentity: _identity,
+        remoteSessionId: _remoteSessionId,
+        ...fields
+      } = params;
+      const result = await client.request(
+        `omp/wiki/${action}`,
+        { workspace: buildWorkspaceRef(params), ...fields },
+        undefined,
+        { timeoutMs: 60 * 60 * 1000 },
+      );
+      if (action === "list") return wikiListSchema.parse(result);
+      if (action === "init") return wikiBuildSchema.parse(result);
+      if (action === "remove") return removedIndexSchema.parse(result);
+      if (action === "cancel") return cancelledIndexSchema.parse(result);
+      return wikiQuerySchema.parse(result);
+    },
+    async queryOmpRepo(raw: RepoRequest): Promise<RepoResult> {
+      const params = repoRequestSchema.parse(raw);
+      const client = await getReadOnlyClient(params);
+      const capabilities = await client.request(
+        zcodeProtocolMethods.runtimeCapabilities,
+        {},
+        zcodeRuntimeCapabilitiesSchema.extend({ ompIndexes: z.boolean().optional() }),
+      );
+      if (capabilities.ompIndexes !== true)
+        throw new Error("Native OMP indexes are unavailable in this Agent");
+      const {
+        action,
+        workspacePath: _path,
+        workspaceIdentity: _identity,
+        remoteSessionId: _remoteSessionId,
+        ...fields
+      } = params;
+      const result = await client.request(
+        `omp/repo/${action}`,
+        { workspace: buildWorkspaceRef(params), ...fields },
+        undefined,
+        { timeoutMs: 60 * 60 * 1000 },
+      );
+      if (action === "cancel") return cancelledIndexSchema.parse(result);
+      if (action === "remove") return removedIndexSchema.parse(result);
+      if (action === "text" || action === "symbol") return repoQuerySchema.parse(result);
+      return repoStatusSchema.parse(result);
     },
 
     async openMcpUiInstance(params) {
@@ -5506,6 +6011,65 @@ export function createZCodeAgentService(
       );
       // 兼容尚未返回 closed 字段、但已成功执行普通 close 的 Agent。
       return result.closed ?? true;
+    },
+
+    async startOmpTan(params) {
+      const client = await getTanClient(params);
+      return client.request(
+        "omp/tan/start",
+        ompTanStartParamsSchema.parse({
+          workspace: buildWorkspaceRef(params),
+          sessionId: params.sessionId,
+          work: params.work,
+        }),
+        ompTanStartResultSchema,
+      );
+    },
+
+    async listOmpTan(params) {
+      const client = await getTanClient(params);
+      return client.request(
+        "omp/tan/list",
+        ompTanListParamsSchema.parse({
+          workspace: buildWorkspaceRef(params),
+          sessionId: params.sessionId,
+        }),
+        ompTanListResultSchema,
+      );
+    },
+
+    async stopOmpTan(params) {
+      const client = await getTanClient(params);
+      return client.request(
+        "omp/tan/stop",
+        ompTanStopParamsSchema.parse({
+          workspace: buildWorkspaceRef(params),
+          sessionId: params.sessionId,
+          jobId: params.jobId,
+        }),
+        ompTanStopResultSchema,
+      );
+    },
+
+    async observeOmpTeam(params) {
+      const client = await getReadOnlyClient(params);
+      const capabilities = await client.request(
+        zcodeProtocolMethods.runtimeCapabilities,
+        {},
+        zcodeRuntimeCapabilitiesSchema.extend({ ompTeam: z.boolean().optional() }),
+      );
+      if (capabilities.ompTeam !== true)
+        throw new Error("Native OMP Team observation is unavailable");
+      const request = ompTeamRequestSchema.parse({
+        action: params.action,
+        sessionId: params.sessionId,
+        ...("jobId" in params ? { jobId: params.jobId } : {}),
+      });
+      if (request.action === "list")
+        return client.request("omp/team", request, ompTeamListResultSchema);
+      if (request.action === "read")
+        return client.request("omp/team", request, ompTeamReadResultSchema);
+      return client.request("omp/team", request, ompTeamStopResultSchema);
     },
 
     async configureOmpSession(params) {
@@ -6795,4 +7359,5 @@ export function createZCodeAgentService(
       disposeLocalState();
     },
   };
+  return service;
 }

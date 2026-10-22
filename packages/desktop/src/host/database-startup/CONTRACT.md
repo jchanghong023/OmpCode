@@ -8,6 +8,8 @@ Host Worker 是 app 库启动准备的唯一执行者。宿主验证 progress/do
 
 Session 库准备按已解析命令的 `storagePreparation` 判别：`node-worker` 保留配套 Node bundle，`command` spawn 同一外部可执行文件与正常启动参数／profile／环境，仅追加准备标志。覆盖环境在解析命令前生效，不以缺少 Worker entry 跳过外部 OMP。
 
+准备目标沿 Main 的 warmup target 原样保留 `workspacePath` 与 `workspaceIdentity`，身份键与正常启动一致为 `workspaceIdentity?.trim() || workspacePath`；只按该键去重和读取已保存 profile。解析后的 fallback cwd 只用于执行，不得覆盖原路径或身份后再选择 profile。命令解析、显式 profile 优先级及环境合入复用正常启动规则；services 公开入口负责读取设置和应用 profile，Host 不维护另一份偏好状态。
+
 Host 是准备监督的唯一状态所有者：先接收合法绝对路径，完成真实路径观测后才确认；非 reuse 必须同一 attempt／database 的递增 sequence 到 ready 后才能接受 prepared。仅 prepared、完整 LF 帧、退出 0、清理屏障完成且无失败或取消可记入本轮 reuse 集合并允许业务初始化；取消监听保持至清理屏障结束，成功结算前再次核对 signal。异常、失败、提前 EOF、取消和原有 30 秒首帧超时阻断启动，回收本次自有进程树；不改正常 app-server 独立的启动状态门。
 
 外部进程清理沿用正常 stdio transport 的归属语义：先捕获生前快照／独立进程组或按实际生命周期发现已退出 root 的后代，再关闭 stdin 请求 EOF 并调用既有进程树等待器。Windows 身份查询不可用时显式保留 `identityVerification: unavailable` 快照，由等待器观察原 ChildProcess 并报告存活 root；禁止把空 identities 当作成功清理或向未验证 PID 发信号，不另加超时策略。

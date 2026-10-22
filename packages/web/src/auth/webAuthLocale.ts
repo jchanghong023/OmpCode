@@ -17,7 +17,7 @@ interface WebAuthPageCopy {
 
 const WEB_AUTH_COPY = {
   "zh-CN": {
-    brand: "ZCode",
+    brand: "OmpCode",
     loginTitle: "登录后继续使用 Web 远程控制",
     loginDescription: "请选择与电脑端相同的登录平台，并使用同一账号。",
     loginAction: { zai: "连接 Z.ai 继续使用", bigmodel: "连接 BigModel 继续使用" },
@@ -29,7 +29,7 @@ const WEB_AUTH_COPY = {
     retryAction: "重新登录",
   },
   "en-US": {
-    brand: "ZCode",
+    brand: "OmpCode",
     loginTitle: "Sign In To Continue",
     loginDescription: "Choose the same sign-in provider and account as on your computer.",
     loginAction: { zai: "Connect to Z.ai", bigmodel: "Connect to BigModel" },

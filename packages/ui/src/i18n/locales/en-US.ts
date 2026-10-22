@@ -1,8 +1,88 @@
 import { requestSecurityMessagesEnUS } from "@/request-security-edition/messages.js";
 /** English translations */
 const enUS: Record<string, string> = {
+  "common.ompStorageScopeUnavailable":
+    "The active OMP configuration root/profile is not available yet.",
+  "chat.tan.title": "Background delegation (Tan)",
+  "chat.tan.checking": "Connect the session to check native background delegation support.",
+  "chat.tan.description":
+    "Delegate from the current checkpoint. The parent conversation stays available; closing a viewer does not stop the job.",
+  "chat.tan.work": "Delegated work",
+  "chat.tan.start": "Delegate in background",
+  "chat.tan.history": "View conversation history",
+  "chat.tan.stop": "Stop delegation",
+  "chat.tan.stopRejected": "Native cancellation was not accepted. Refresh the job status.",
+  "chat.tan.status.pending": "Pending",
+  "chat.tan.status.running": "Running",
+  "chat.tan.status.completed": "Completed",
+  "chat.tan.status.failed": "Failed",
+  "chat.tan.status.cancelled": "Cancelled",
+  "chat.tan.status.unavailable": "Status unavailable",
+  "omp.indexes.notReady":
+    "Open a workspace and connect its execution host to use native indexes. Controls remain visible while unavailable.",
+  "omp.indexes.localScope": "Native OMP profile indexes · current local workspace",
+  "omp.indexes.remoteScope":
+    "Native OMP profile indexes · current execution host (paths are remote, not this computer)",
+  "omp.indexes.noWorkspace": "Open a workspace to manage indexes.",
+  "omp.indexes.working": "Working…",
+  "omp.indexes.cancel": "Cancel",
+  "omp.indexes.confirm": "Confirm",
+  "omp.indexes.sourcesUnchanged": "Only index data is changed. Source files are never removed.",
+  "omp.indexes.indexes": "Document indexes",
+  "omp.indexes.refresh": "Refresh",
+  "omp.indexes.directory": "Absolute source directory on execution host",
+  "omp.indexes.name": "Index name",
+  "omp.indexes.add": "Add index",
+  "omp.indexes.directoryHint":
+    "Enter the complete execution-side directory. Confirm the directory and index name before building.",
+  "omp.indexes.documents": "documents",
+  "omp.indexes.sections": "sections",
+  "omp.indexes.remove": "Remove index",
+  "omp.indexes.empty": "No document indexes.",
+  "omp.indexes.query": "Query",
+  "omp.indexes.mode": "Mode",
+  "omp.indexes.technicalSearch": "Technical-name search",
+  "omp.indexes.index": "Index",
+  "omp.indexes.all": "All",
+  "omp.indexes.pageSize": "Page size",
+  "omp.indexes.caseSensitive": "Case sensitive",
+  "omp.indexes.search": "Search",
+  "omp.indexes.matches": "matches",
+  "omp.indexes.exactMatches": "exact-name matches",
+  "omp.indexes.source": "Source",
+  "omp.indexes.next": "Load next page",
+  "omp.indexes.status": "Repository index status",
+  "omp.indexes.init": "Initialize",
+  "omp.indexes.update": "Update",
+  "omp.indexes.rebuild": "Rebuild",
+  "omp.indexes.root": "Full repository root",
+  "omp.indexes.indexed": "Indexed",
+  "omp.indexes.missing": "Index missing",
+  "omp.indexes.files": "files",
+  "omp.indexes.symbols": "Symbols",
+  "omp.indexes.generation": "Generation",
+  "omp.indexes.lastCheck": "Last full check",
+  "omp.indexes.failures": "Failures",
+  "omp.indexes.pending": "Pending",
+  "omp.indexes.uncertainties": "Uncertainties",
+  "omp.indexes.incomplete":
+    "Coverage is incomplete or needs reconciliation. Review details and update the index.",
+  "omp.indexes.truncated": "The native response was truncated; more details may exist.",
+  "omp.indexes.exclusions": "Excluded paths",
+  "omp.indexes.text": "Text",
+  "omp.indexes.path": "Path filter",
+  "omp.indexes.category": "Category",
+  "omp.indexes.confirmRoot":
+    "Confirm this entire repository root, not just the active subdirectory:",
   "omp.configuration.open": "Model / Team configuration",
   "omp.configuration.title": "OMP model and Team configuration",
+  "omp.profiles.title": "Workspace OMP profiles",
+  "omp.profiles.saveNext": "Save for full app restart",
+  "omp.profiles.disconnected": "Execution target disconnected; reload before saving.",
+  "omp.profiles.noTarget":
+    "Open a workspace to view and select profiles on its OMP execution target.",
+  "omp.configuration.profileRestartRequired":
+    "The saved profile takes effect after restart. Persistent role saves to the old profile are disabled until the selected profile is active.",
   "omp.configuration.description":
     "Session {sessionId} · profile {profile}. Switching the main model affects only this session; saving here writes user configuration.",
   "omp.configuration.unreadable": "Unreadable / not applicable",
@@ -157,8 +237,8 @@ const enUS: Record<string, string> = {
   "project.hasUnread": "Project has unread tasks",
   "project.projectOrder": "Project order",
   "project.taskOrder": "Task order",
-  "project.browseHint": "ZCode can read and edit these folders",
-  "project.connectAndBrowseHint": "Device status: {status}. ZCode connects first.",
+  "project.browseHint": "OmpCode can read and edit these folders",
+  "project.connectAndBrowseHint": "Device status: {status}. OmpCode connects first.",
   "project.selectHost": "Choose a remote connection",
   "project.back": "Back",
   "project.next": "Next",
@@ -171,7 +251,7 @@ const enUS: Record<string, string> = {
   "project.trustFolderTitle": "Trust this folder?",
   "project.trustFoldersTitle": "Trust these folders?",
   "project.trustFoldersDescription":
-    "ZCode can read and edit files in these folders and run commands within your current permission settings. Continue only if you trust every folder listed.",
+    "OmpCode can read and edit files in these folders and run commands within your current permission settings. Continue only if you trust every folder listed.",
   "project.trustFoldersAndCreate": "Trust folders and create",
   "project.trustFoldersAndRestore": "Trust folders and restore",
   "project.existingOnDeviceHint": "Already have projects on this device?",
@@ -432,7 +512,7 @@ const enUS: Record<string, string> = {
   "startPlan.recommendation.dismiss": "Don’t show again",
   "occupationOnboarding.stepMode": "UI mode",
   "occupationOnboarding.modeTitle": "Choose your UI mode",
-  "occupationOnboarding.modeDescription": "How would you like ZCode to show its work?",
+  "occupationOnboarding.modeDescription": "How would you like OmpCode to show its work?",
   "occupationOnboarding.coding": "Coding mode",
   "occupationOnboarding.codingDescription":
     "I want to see code, command output, and change details throughout the development process.",
@@ -483,27 +563,28 @@ const enUS: Record<string, string> = {
   "occupationOnboarding.migration": "Migrate conversations",
   "occupationOnboarding.migrationDescription": "Migrate conversation history from Claude Code",
   "occupationOnboarding.memory": "Enable Workspace Memory",
-  "occupationOnboarding.memoryDescription": "Let ZCode remember your preferences and work context.",
+  "occupationOnboarding.memoryDescription":
+    "Let OmpCode remember your preferences and work context.",
   "occupationOnboarding.suggestions": "Enable proactive task suggestions",
   "occupationOnboarding.suggestionsDescription":
     "Show suggestions in new conversations. Click to fill the composer.",
   "occupationOnboarding.close": "Exit onboarding",
-  "startup.global.silent": "Starting ZCode",
+  "startup.global.silent": "Starting OmpCode",
   "startup.global.upgrading": "Upgrading local data",
   "startup.global.initializing": "Initializing local data",
   "startup.global.waiting": "Waiting for database preparation",
   "startup.global.saving": "Saving updates",
   "startup.global.finishing": "Finishing startup",
   "startup.global.servicesFailed":
-    "Local data is ready, but app services failed to start. Copy the diagnostics, then exit and reopen ZCode.",
+    "Local data is ready, but app services failed to start. Copy the diagnostics, then exit and reopen OmpCode.",
   "startup.global.starting": "Preparing local data",
   "startup.global.preparing_host_storage": "Preparing task index",
   "startup.global.preparing_session_storage": "Preparing chat history",
-  "startup.global.starting_services": "Starting ZCode",
+  "startup.global.starting_services": "Starting OmpCode",
   "startup.global.ready": "Local data is ready",
   "startup.global.failed": "Startup preparation failed",
   "startup.global.help":
-    "ZCode will open when preparation finishes. Large histories may take longer. Please keep the app running.",
+    "OmpCode will open when preparation finishes. Large histories may take longer. Please keep the app running.",
   "startup.global.diagnostic": "Diagnostic ID",
   "startup.global.copy": "Copy diagnostics",
   "startup.global.exit": "Exit",
@@ -524,15 +605,15 @@ const enUS: Record<string, string> = {
   "startup.global.error.open_failed":
     "The database could not be opened. Check that the data directory exists and is accessible, then retry.",
   "startup.global.error.lock_timeout":
-    "Waiting for the database write lock timed out. Another ZCode or CLI process may be updating data. Retry after it finishes.",
+    "Waiting for the database write lock timed out. Another OmpCode or CLI process may be updating data. Retry after it finishes.",
   "startup.global.error.sql_failed":
     "Preparation did not finish. Copy the diagnostics and check the logs. Resolve the issue, then retry manually. The app will not retry automatically.",
   "startup.global.error.startup_status_timeout":
-    "No startup status was received. Exit and reopen ZCode. If it fails again, provide the diagnostics to support.",
+    "No startup status was received. Exit and reopen OmpCode. If it fails again, provide the diagnostics to support.",
   "startup.global.error.transport_closed":
-    "The preparation process exited or disconnected. Exit and reopen ZCode to check the migration records again.",
+    "The preparation process exited or disconnected. Exit and reopen OmpCode to check the migration records again.",
   "startup.global.error.unsupported_runtime":
-    "The configured Agent does not support storage preparation. Restore the bundled Agent, then reopen ZCode.",
+    "The configured Agent does not support storage preparation. Restore the bundled Agent, then reopen OmpCode.",
 
   "startup.database.checking": "Checking history",
   "startup.database.waiting_for_lock": "Waiting for another window to prepare data",
@@ -588,7 +669,7 @@ const enUS: Record<string, string> = {
   "offPeak.chatCreated.queuedAt": "#{position} in queue",
   "offPeak.chatCreated.open": "Go to idle-time tasks",
   "settings.computerUse.disabledToast":
-    "Computer Use is disabled. Existing conversations require a ZCode restart to take effect.",
+    "Computer Use is disabled. Existing conversations require a OmpCode restart to take effect.",
   "settings.modelProvider.connectionUnavailableNotice": "The current plan is unavailable.",
   "settings.modelProvider.switchConnection": "Switch to “{connection}”",
   "settings.modelProvider.connectionSuggestionStale":
@@ -751,7 +832,7 @@ const enUS: Record<string, string> = {
   "conversationShare.readonly.artifactPreview": "Download file",
   "conversationShare.readonly.markerCompact": "Context compacted",
   "conversationShare.readonly.markerModelChange": "Model switched",
-  "conversationShare.readonly.unsupportedRows": "Some content requires a newer version of ZCode",
+  "conversationShare.readonly.unsupportedRows": "Some content requires a newer version of OmpCode",
   "conversationShare.workflowSnapshot": "Snapshot at tool execution; does not update live",
   "conversationShare.shareTitle": "Share title",
   "conversationShare.permissionLabel": "Access",
@@ -782,7 +863,8 @@ const enUS: Record<string, string> = {
   "conversationShare.error.preparationExpired": "Share preparation expired. Generate a new link.",
   "conversationShare.import.notAllowed":
     "This share is view-only. Ask the author to enable importing.",
-  "conversationShare.import.unsupportedVersion": "This share format is unsupported. Update ZCode.",
+  "conversationShare.import.unsupportedVersion":
+    "This share format is unsupported. Update OmpCode.",
   "conversationShare.issue.ruleLabel": "Validation rule",
   "conversationShare.issue.pathLabel": "Field path",
   "conversationShare.issue.fieldLabel": "Field",
@@ -790,7 +872,7 @@ const enUS: Record<string, string> = {
   "conversationShare.issue.rowKindLabel": "Content type",
   "conversationShare.publishFailed": "Could not generate the share link. Try again.",
   "conversationShare.error.authenticationRequired":
-    "Sign in to ZCode before sharing. If you're already signed in, sign in again and retry.",
+    "Sign in to OmpCode before sharing. If you're already signed in, sign in again and retry.",
   "conversationShare.error.featureDisabled": "Sharing is currently unavailable. Try again later.",
   "conversationShare.error.artifactNotAllowed":
     "A previewed file type is not supported for sharing. Deselect that conversation and retry.",
@@ -800,7 +882,7 @@ const enUS: Record<string, string> = {
   "conversationShare.error.invalidContractHttp":
     "The share service returned HTTP {status}. Retry, and provide the error details if the problem persists.",
   "conversationShare.error.invalidContract":
-    "ZCode could not read the share service’s response, so sharing could not finish. Try again later. If it still fails, copy the request ID from Error details and contact support.",
+    "OmpCode could not read the share service’s response, so sharing could not finish. Try again later. If it still fails, copy the request ID from Error details and contact support.",
   "conversationShare.issue.clientRequestIdLabel": "Client request ID",
   "conversationShare.issue.codeLabel": "Error code",
   "conversationShare.error.network":
@@ -1002,7 +1084,7 @@ const enUS: Record<string, string> = {
   "conversationShare.import.committing": "Creating the shared conversation",
   "conversationShare.import.complete": "Share import complete",
   "conversationShare.import.loginRequired":
-    "This share cannot be imported anonymously. Sign in to ZCode and try again",
+    "This share cannot be imported anonymously. Sign in to OmpCode and try again",
   "conversationShare.import.notFound":
     "Share not found or access denied. Check the link and your account.",
   "conversationShare.import.expired": "The share expired. Ask the author to create a new one",
@@ -1126,7 +1208,7 @@ const enUS: Record<string, string> = {
   "confirmDialog.taskArchiveDescription":
     "Task “{taskTitle}” will move to the archive list and can still be restored later.",
   "bots.title": "Bots",
-  "bots.description": "Connect external chats and webhooks to ZCode bots.",
+  "bots.description": "Connect external chats and webhooks to OmpCode bots.",
   "bots.listTitle": "Bots",
   "bots.addBot": "New bot",
   "bots.addBinding": "Add binding",
@@ -1180,9 +1262,9 @@ const enUS: Record<string, string> = {
   "bots.setup.guide.weixin.create.1":
     "Start Weixin QR login, scan the QR code with Weixin, then confirm on your phone.",
   "bots.setup.guide.weixin.create.2":
-    "ZCode saves the bot_token returned by iLink automatically; after scanning, send any message to the bot in Weixin to activate the chat.",
+    "OmpCode saves the bot_token returned by iLink automatically; after scanning, send any message to the bot in Weixin to activate the chat.",
   "bots.setup.guide.weixin.create.3":
-    "ZCode uses a built-in iLink client: `/ilink/bot/getupdates` for long polling and `/ilink/bot/sendmessage` for replies.",
+    "OmpCode uses a built-in iLink client: `/ilink/bot/getupdates` for long polling and `/ilink/bot/sendmessage` for replies.",
   "bots.setup.guide.weixin.bind.1": "Open the Weixin direct chat you want to bind.",
   "bots.setup.guide.weixin.bind.2": "Send {command}.",
   "bots.setup.guide.weixin.bind.3":
@@ -1199,13 +1281,13 @@ const enUS: Record<string, string> = {
   "bots.setup.guide.feishu.bind.3":
     "Return here after the bind succeeds to finish the workspace and CLI defaults.",
   "bots.setup.guide.webhook.create.1":
-    "Webhook mode does not require a native bot in the third-party product; your integration only needs to POST messages to ZCode.",
+    "Webhook mode does not require a native bot in the third-party product; your integration only needs to POST messages to OmpCode.",
   "bots.setup.guide.webhook.create.2":
     "Set a shared secret first; add an outbound webhook URL as well if you want asynchronous replies pushed back.",
   "bots.setup.guide.webhook.create.3":
     "Keep one stable userId per external user so binding and future context resolve to the same person.",
   "bots.setup.guide.webhook.bind.1":
-    "POST a private-message callback to ZCode's `/api/bots/webhook` endpoint.",
+    "POST a private-message callback to OmpCode's `/api/bots/webhook` endpoint.",
   "bots.setup.guide.webhook.bind.2":
     'The payload should at least include this botId, a stable userId, `chatType: "private"`, and set text to {command}.',
   "bots.setup.guide.webhook.bind.3":
@@ -1344,7 +1426,7 @@ const enUS: Record<string, string> = {
   "bots.runtime.telegramLongPollingStarting": "Telegram long polling is starting.",
   "bots.runtime.telegramLongPollingStopped": "Telegram long polling is stopped.",
   "bots.runtime.telegramLongPollingHandledElsewhere":
-    "Telegram long polling is handled by another ZCode window.",
+    "Telegram long polling is handled by another OmpCode window.",
   "bots.runtime.telegramTokenMissing": "Telegram bot credential is missing.",
   "bots.runtime.telegramPollingFailedRetrying": "Telegram polling failed; retrying.",
   "bots.runtime.feishuWebSocketStarting": "Feishu WebSocket is starting.",
@@ -2211,7 +2293,7 @@ const enUS: Record<string, string> = {
   "titleBar.menu.view.actualSize": "Actual size",
   "titleBar.menu.view.zoomIn": "Zoom in",
   "titleBar.menu.view.zoomOut": "Zoom out",
-  "titleBar.menu.help.about": "About ZCode",
+  "titleBar.menu.help.about": "About OmpCode",
   "titleBar.menu.help.checkForUpdates": "Check for updates",
   "titleBar.menu.help.feedback": "Feedback",
   "sidebar.menu.community": "Community",
@@ -2266,9 +2348,10 @@ const enUS: Record<string, string> = {
   "update.toast.downloading": "Downloading new version v{version}",
   "update.toast.alreadyDownloading": "Downloading new version ({progress}%)",
   "update.toast.ready": "v{version} downloaded, restart to install",
-  "update.toast.devSkipped": "Updates are disabled in dev builds",
+  "update.toast.devSkipped":
+    "OmpCode updates are unavailable: no dedicated update source is configured",
   "update.toast.error": "Update check failed: {error}",
-  "forceUpdate.title": "Update ZCode to continue",
+  "forceUpdate.title": "Update OmpCode to continue",
   "forceUpdate.description":
     "Your current version v{currentVersion} is below the minimum supported version v{minimalVersion}. Update first before continuing with this client.",
   "forceUpdate.currentVersion": "Current version",
@@ -2357,7 +2440,7 @@ const enUS: Record<string, string> = {
   "remote.error.credentialsRequired":
     "No usable SSH password or private-key credential is available. Return to settings to add one.",
   "remote.error.sourceServerUpgradeRequired":
-    "remote device is incompatible with this ZCode Desktop version and must be upgraded.",
+    "remote device is incompatible with this OmpCode Desktop version and must be upgraded.",
   "remote.error.sourceServerRunningTasks":
     "remote device still has running tasks. Wait for them to finish or confirm a forced update.",
   "remote.error.workspaceTaskIdentityConflict":
@@ -2391,7 +2474,7 @@ const enUS: Record<string, string> = {
   "remote.error.retryableHint": "You can try again later.",
   "remote.error.connectionClosed": "The remote connection was closed",
   "workspaceSidebar.unavailableLocalDirectory":
-    "The workspace directory does not exist or cannot be accessed. You can only view history for now. Restore the directory and restart ZCode to continue.",
+    "The workspace directory does not exist or cannot be accessed. You can only view history for now. Restore the directory and restart OmpCode to continue.",
   "workspaceSidebar.toggleSidebar": "Toggle sidebar",
   "workspaceSidebar.resizeSidebar": "Resize sidebar",
   "workspaceSidebar.showFileTree": "Show files",
@@ -2428,7 +2511,7 @@ const enUS: Record<string, string> = {
   "ssh.assetInstallMode.local-download-upload": "Download locally, then upload",
   "ssh.assetInstallMode.remote-download": "Download on remote server",
   "ssh.assetInstallModeDescription":
-    "Remote server download reduces upload waiting, but the server must reach the ZCode CDN and have download, extract, and checksum tools.",
+    "Remote server download reduces upload waiting, but the server must reach the OmpCode CDN and have download, extract, and checksum tools.",
   "ssh.password": "Password",
   "ssh.passwordPlaceholder": "Enter your SSH password",
   "ssh.privateKey": "Private key",
@@ -2520,7 +2603,7 @@ const enUS: Record<string, string> = {
     "Connection failed · retry, or adjust the configuration and try again",
   "remote.phase.channel": "Connect to device",
   "remote.phase.identify": "Identify device",
-  "remote.phase.deploy": "Install ZCode Server",
+  "remote.phase.deploy": "Install OmpCode Server",
   "remote.phase.handshake": "Start and check compatibility",
   "remote.progress.step": "Step {current}/{total}",
   "remote.progress.elapsedSeconds": "{seconds}s elapsed",
@@ -2528,7 +2611,7 @@ const enUS: Record<string, string> = {
   "remote.progress.copyError": "Copy error details",
   "remote.progress.copied": "Copied",
   "remote.link.local": "This device",
-  "remote.link.localVersion": "ZCode v{version}",
+  "remote.link.localVersion": "OmpCode v{version}",
   "remote.link.deviceHint": "Device details appear after connecting",
   "remote.link.devicePending": "Remote device",
   "remote.recognizedDevice": "Connected to device {device}",
@@ -2560,7 +2643,7 @@ const enUS: Record<string, string> = {
   "remote.phaseSub.channelEstablished.docker": "Connected to the container",
   "remote.phaseSub.channelEstablished": "Connected to device",
   "remote.phaseSub.identifyExisting": "Connected to device {device}",
-  "remote.phaseSub.identifyNew": "New device · ZCode Server not installed",
+  "remote.phaseSub.identifyNew": "New device · OmpCode Server not installed",
   "remote.phaseSub.deploySkipped": "Remote already on v{version} · deployment skipped",
   "remote.phaseSub.deployWaitingConfirm": "Waiting for install confirmation…",
   "remote.phaseSub.deployUploading": "Uploading {file} · {sent} / {total}",
@@ -3051,7 +3134,7 @@ const enUS: Record<string, string> = {
   "chat.changeSummary.reverted": "Undone",
   "chat.changeSummary.rewindDialog.title": "Undo file changes",
   "chat.changeSummary.rewindDialog.description":
-    "ZCode checks current file content again before writing. If another process changed a file, no files will be written.",
+    "OmpCode checks current file content again before writing. If another process changed a file, no files will be written.",
   "chat.changeSummary.rewindDialog.loading": "Checking reversible files…",
   "chat.changeSummary.rewindDialog.safeTitle": "Safe to undo {count}",
   "chat.changeSummary.rewindDialog.unsafeTitle": "Unsafe to undo {count}",
@@ -3230,7 +3313,7 @@ const enUS: Record<string, string> = {
     "When launching the built-in terminal, inherit login shell environment, proxy, Kubernetes variables, and local terminal font when possible.",
   "settings.terminalFontFamily": "Terminal font",
   "settings.terminalFontFamilyDescription":
-    "Leave blank to auto-detect system terminal settings; set a value to override the ZCode terminal font.",
+    "Leave blank to auto-detect system terminal settings; set a value to override the OmpCode terminal font.",
   "settings.terminalFontFamilyPlaceholder": "Leave blank to inherit, e.g. MesloLGS NF, monospace",
   "settings.integratedTerminalShell": "Integrated terminal shell",
   "settings.integratedTerminalShellDescription":
@@ -3359,7 +3442,7 @@ const enUS: Record<string, string> = {
     "Group consecutive Write, Edit, and ApplyPatch calls into a Changes section.",
   "settings.zcodeInteractionBehavior": "Interaction behavior",
   "settings.zcodeInteractionBehaviorDescription":
-    "While ZCode is running, add follow-up actions to the queue or guide them to run after the next tool call.",
+    "While OmpCode is running, add follow-up actions to the queue or guide them to run after the next tool call.",
   "settings.zcodeInteractionBehavior.option.queue": "Queue",
   "settings.zcodeInteractionBehavior.option.guide": "Guide",
   "settings.askUserQuestionAutoResolution": "Automatically continue questions",
@@ -3396,15 +3479,17 @@ const enUS: Record<string, string> = {
   "settings.taskAutoArchiveDays.option.30": "Archive after 30 days",
   "settings.dataBaseDir": "Data storage path",
   "settings.dataBaseDirDescription":
-    "Root directory for app data (defaults to user home directory). Existing data will be copied to the new location. The .zcode/v2 suffix cannot be changed.",
-  "settings.dataBaseDirPlaceholder": "Default: user home directory",
-  "settings.dataBaseDirBrowse": "Choose folder",
+    "Actual OmpCode application data root, determined at startup. This path is read-only.",
+  "settings.dataBaseDirPlaceholder": "Waiting for the application data root",
   "settings.dataBaseDirSave": "Save",
-  "settings.dataBaseDirCopying": "Copying data, please do not close the app...",
-  "settings.dataBaseDirCopyFailed": "Data copy failed. Path was not changed.",
-  "settings.dataBaseDirForbiddenInstallDir":
-    "The data directory cannot be the ZCode installation folder on Windows. Choose a folder outside the app install location.",
-  "settings.dataBaseDirRestartRequired": "Data saved. Please restart the app to take effect.",
+  "settings.dataBaseDirEnvironment":
+    "To change the root, set OMP_CONFIG_ROOT to an absolute path (~ is supported). OmpCode appends _ompcode; for example, /data/omp becomes /data/omp_ompcode. Without a valid override, the root is ~/.ompcode. PI_CONFIG_DIR does not change this application root.",
+  "settings.dataBaseDirWindows":
+    'Windows (PowerShell): $env:OMP_CONFIG_ROOT = "C:\\data\\omp"; then launch OmpCode from the same shell.',
+  "settings.dataBaseDirLinux":
+    'Linux: export OMP_CONFIG_ROOT="/data/omp"; then launch OmpCode from the same shell.',
+  "settings.dataBaseDirEnvironmentRestart":
+    "Environment changes take effect only after fully quitting and restarting OmpCode. Existing data is not automatically migrated or copied.",
   "settings.locale.system": "System default",
   "settings.locale.zh-CN": "中文简体",
   "settings.locale.en-US": "English",
@@ -3419,7 +3504,7 @@ const enUS: Record<string, string> = {
   "settings.migration.title": "Migration",
   "settings.migration.sectionTitle": "Claude History Migration",
   "settings.migration.sectionDescription":
-    "Scan native Claude Code history on this machine, optionally filter by workspace and activity window, then import the selected sessions into their matching ZCode task lists.",
+    "Scan native Claude Code history on this machine, optionally filter by workspace and activity window, then import the selected sessions into their matching OmpCode task lists.",
   "settings.migration.badge.localOnly": "Local Claude records",
   "settings.migration.badge.manualOnly": "Manual only",
   "settings.migration.currentWorkspace": "Current workspace",
@@ -3473,14 +3558,14 @@ const enUS: Record<string, string> = {
   "settings.usageTitle": "Usage stats",
   "settings.usageDescription":
     "Review rough activity and model usage aggregated from local sessions.",
-  "resourceManager.storage.summaryTotal": "Total used by ZCode",
+  "resourceManager.storage.summaryTotal": "Total used by OmpCode",
   "resourceManager.storage.scanning": "Calculating…",
   "resourceManager.storage.lastScanned": "Last calculated {time}",
   "resourceManager.storage.idle": "Not calculated yet",
   "resourceManager.storage.failed": "Calculation failed",
   "resourceManager.storage.rescan": "Recalculate",
   "resourceManager.storage.disk": "Disk",
-  "resourceManager.storage.diskUsage": "ZCode uses {used}",
+  "resourceManager.storage.diskUsage": "OmpCode uses {used}",
   "resourceManager.storage.diskFree": "{free} free of {total}",
   "resourceManager.storage.diskUnknown": "Disk capacity unavailable",
   "resourceManager.storage.roots": "Data directories",
@@ -3548,7 +3633,7 @@ const enUS: Record<string, string> = {
   "settings.embeddedBrowserAllowInsecureCertificatesSavedHint":
     "Certificate setting saved. Restart the app to take effect.",
   "settings.browser.data.section": "Browser data",
-  "settings.browser.desktopOnly": "Browser data can only be managed in the ZCode desktop app.",
+  "settings.browser.desktopOnly": "Browser data can only be managed in the OmpCode desktop app.",
   "settings.browser.import.title": "Import Chrome sign-in state",
   "settings.browser.import.description":
     "Bring your Chrome sign-in state into the built-in browser once, so the AI can open sites you are already signed in to and work more smoothly.",
@@ -3566,13 +3651,13 @@ const enUS: Record<string, string> = {
   "settings.browser.import.elevationCancelled":
     "Windows administrator access was canceled. No cookies were imported.",
   "settings.browser.import.helperVerificationFailed":
-    "ZCode could not verify its Windows secure import component. Reinstall or update ZCode before importing cookies.",
+    "OmpCode could not verify its Windows secure import component. Reinstall or update OmpCode before importing cookies.",
   "settings.browser.import.appBoundFailed":
     "Windows could not unlock Chrome's App-Bound cookies. No cookies were imported.",
   "settings.browser.import.adminConfirmTitle":
     "Allow administrator access to import Chrome cookies?",
   "settings.browser.import.adminConfirmDescription":
-    "Chrome protects cookies with App-Bound encryption on Windows. For this import only, ZCode will request administrator access, start a temporary system service, and delete it immediately afterward. Chrome passwords are never read or imported.",
+    "Chrome protects cookies with App-Bound encryption on Windows. For this import only, OmpCode will request administrator access, start a temporary system service, and delete it immediately afterward. Chrome passwords are never read or imported.",
   "settings.browser.import.adminConsent":
     "I confirm administrator access for this cookie import only",
   "settings.browser.import.adminConfirmAction": "Continue and request access",
@@ -3708,7 +3793,7 @@ const enUS: Record<string, string> = {
     "This plugin MCP server is loaded but not currently connected.",
   "settings.mcp.host.active": "Host built-in",
   "settings.mcp.host.activeDescription":
-    "ZCode provides this MCP server for the {pluginName} plugin. Its runtime identity is managed by the host.",
+    "OmpCode provides this MCP server for the {pluginName} plugin. Its runtime identity is managed by the host.",
   "settings.mcp.plugin.disabled": "Plugin disabled",
   "settings.mcp.plugin.disabledDescription":
     "This MCP server is built into a plugin. Enable the plugin to load it.",
@@ -3747,7 +3832,7 @@ const enUS: Record<string, string> = {
   "settings.mcp.failure.official_origin_untrusted":
     "The MCP server URL failed the security check. The connection was blocked.",
   "settings.mcp.failure.not_authenticated":
-    "You are not signed in. Sign in to ZCode to use this MCP server.",
+    "You are not signed in. Sign in to OmpCode to use this MCP server.",
   "settings.mcp.failure.coding_plan_required":
     "This account has no Coding Plan. Purchase or configure a Coding Plan to use this MCP server.",
   "settings.mcp.failure.server_not_found":
@@ -3817,7 +3902,7 @@ const enUS: Record<string, string> = {
   "settings.mcpServers.import.targetLabel": "Import target",
   "settings.mcpServers.import.target.global": "Import to Global",
   "settings.mcpServers.import.target.project": "Import to Project",
-  "settings.mcpServers.import.importing": "Importing MCP servers into ZCode",
+  "settings.mcpServers.import.importing": "Importing MCP servers into OmpCode",
   "settings.mcpServers.import.imported": "Imported",
   "settings.mcpServers.import.skipped": "Skipped",
   "settings.mcpServers.import.failed": "Failed",
@@ -3953,7 +4038,7 @@ const enUS: Record<string, string> = {
   "settings.modelProvider.startPlan.highlight.trial.label": "Trial period",
   "settings.modelProvider.startPlan.highlight.trial.value": "5 calendar days",
   "settings.modelProvider.startPlan.highlight.trial.description":
-    "Timing starts after signing in to ZCode 3.x.",
+    "Timing starts after signing in to OmpCode 3.x.",
   "settings.modelProvider.startPlan.highlight.quota.label": "Daily quota",
   "settings.modelProvider.startPlan.highlight.quota.value": "3M tokens daily",
   "settings.modelProvider.startPlan.highlight.quota.description":
@@ -3963,7 +4048,7 @@ const enUS: Record<string, string> = {
   "settings.modelProvider.startPlan.highlight.metering.description":
     "Metered only after using platform GLM flagship models.",
   "settings.modelProvider.startPlan.compatibility":
-    "Supports BYOK and BYOA. Base URL, API format, and API Key are maintained by ZCode automatically.",
+    "Supports BYOK and BYOA. Base URL, API format, and API Key are maintained by OmpCode automatically.",
   "settings.modelProvider.codingPlan.title": "{provider} - Coding Plan",
   "settings.modelProvider.codingPlan.webview.title": "Upgrade Plan",
   "settings.modelProvider.codingPlan.webview.authInjectFailed":
@@ -4102,7 +4187,7 @@ const enUS: Record<string, string> = {
   "settings.modelProvider.codingPlan.purchase.teamMemberNoticeTitle":
     "Assign members to your team plan",
   "settings.modelProvider.codingPlan.purchase.teamMemberNoticeDescription":
-    "Add yourself or other members on the BigModel team plan management page. Once assigned, the team quota will be available in ZCode.",
+    "Add yourself or other members on the BigModel team plan management page. Once assigned, the team quota will be available in OmpCode.",
   "settings.modelProvider.codingPlan.purchase.manageTeamPlan": "Manage team plan",
   "settings.modelProvider.codingPlan.manage": "Manage",
   "settings.modelProvider.planCard.codingPlan": "Coding Plan",
@@ -4485,7 +4570,7 @@ const enUS: Record<string, string> = {
   "settings.modelProvider.resetForm": "Reset form",
   "settings.modelProvider.fieldHelp": "About {field}",
   "settings.modelProvider.help.contextWindow":
-    "The context capacity the model can process at once, in tokens. ZCode uses this to manage context.\nDo not exceed the model's actual limit.",
+    "The context capacity the model can process at once, in tokens. OmpCode uses this to manage context.\nDo not exceed the model's actual limit.",
   "settings.modelProvider.help.maxOutputTokens":
     "The maximum number of tokens a single model request may generate.\nDo not exceed the model's actual limit.",
   "settings.modelProvider.help.inputModalities":
@@ -4501,7 +4586,7 @@ const enUS: Record<string, string> = {
   "settings.modelProvider.help.advanced":
     "**MFJS tool schema**: Enables Moonshot Flavored JSON Schema compatibility, commonly used by Moonshot's Kimi model API. Enable only when the model API requires this format.",
   "settings.modelProvider.help.followRecommendedConfig":
-    "Matches recommended configuration using the model ID, Base URL, and API format. ZCode continually updates recommendations and automatically syncs them to you.\nWhen you manually change a setting, that setting becomes manually managed and stops following recommendation updates; other settings remain managed by smart configuration.",
+    "Matches recommended configuration using the model ID, Base URL, and API format. OmpCode continually updates recommendations and automatically syncs them to you.\nWhen you manually change a setting, that setting becomes manually managed and stops following recommendation updates; other settings remain managed by smart configuration.",
   "settings.modelProvider.modelDefaultsLoaded": "Smart configuration matched for this model",
   "settings.modelProvider.modelConfigIncomplete": "Model configuration is incomplete",
   "settings.modelProvider.models": "Model list",
@@ -4579,7 +4664,7 @@ const enUS: Record<string, string> = {
   "settings.usage.sourceProvider": "Source: {provider}",
   "settings.usage.billingBanner.title": "{provider} Coding Plan",
   "settings.usage.billingBanner.description":
-    "Connect your {provider} account to query Coding Plan entitlement, then keep coding in ZCode after purchase or setup.",
+    "Connect your {provider} account to query Coding Plan entitlement, then keep coding in OmpCode after purchase or setup.",
   "settings.usage.billingBanner.compactDescription":
     "Connect your {provider} account to sync usage.",
   "settings.usage.billingBanner.buy": "Buy Coding Plan",
@@ -4638,7 +4723,7 @@ const enUS: Record<string, string> = {
   "settings.usage.entitlementFiveHourUsage": "5-hour remaining",
   "settings.usage.entitlementWeeklyUsage": "Weekly remaining",
   "settings.usage.entitlementMonthlyMcpUsage": "Tool calls",
-  "settings.usage.entitlementServerMcpUsage": "ZCode MCP",
+  "settings.usage.entitlementServerMcpUsage": "OmpCode MCP",
   "settings.usage.entitlementResetAt": "Resets {time}",
   "settings.usage.entitlementUsageDetails": "Tool usage detail",
   "settings.usage.entitlementPromptCap": "5-hour prompt pool",
@@ -4696,9 +4781,10 @@ const enUS: Record<string, string> = {
   "sidebar.usage.plan.fiveHour": "5 hours",
   "sidebar.usage.plan.weekly": "Weekly",
   "sidebar.usage.plan.toolCalls": "Tool calls",
-  "sidebar.usage.plan.mcp": "ZCode MCP",
-  "sidebar.usage.plan.zcodeMcp": "ZCode MCP",
-  "sidebar.usage.plan.zcodeMcpDescription": "Daily aggregate quota for ZCode built-in plugin MCPs",
+  "sidebar.usage.plan.mcp": "OmpCode MCP",
+  "sidebar.usage.plan.zcodeMcp": "OmpCode MCP",
+  "sidebar.usage.plan.zcodeMcpDescription":
+    "Daily aggregate quota for OmpCode built-in plugin MCPs",
   "chat.planUsage.title": "Plan usage",
   "chat.planUsage.titleWithPlan": "{plan} Plan usage",
   "chat.planUsage.providerFallback": "Current provider",
@@ -4924,10 +5010,10 @@ const enUS: Record<string, string> = {
   "settings.skills.import.mode.copy": "Copy",
   "settings.skills.import.mode.symlink": "Symlink",
   "settings.skills.import.mode.copy.description":
-    "Copy the full skill directory into ZCode. Later changes in the external agent directory will not sync automatically.",
+    "Copy the full skill directory into OmpCode. Later changes in the external agent directory will not sync automatically.",
   "settings.skills.import.mode.symlink.description":
-    "Create a directory link to the external agent skill. ZCode follows later source changes, but the skill depends on that source path remaining available.",
-  "settings.skills.import.importing": "Importing skills into ZCode",
+    "Create a directory link to the external agent skill. OmpCode follows later source changes, but the skill depends on that source path remaining available.",
+  "settings.skills.import.importing": "Importing skills into OmpCode",
   "settings.skills.import.imported": "Imported",
   "settings.skills.import.skipped": "Skipped",
   "settings.skills.import.failed": "Failed",
@@ -4968,6 +5054,17 @@ const enUS: Record<string, string> = {
     "Sync failed: the extracted Skill content is about {actualSize}, exceeding the {maxSize} remote limit. Deselect some Skills and try again.",
   "settings.skills.userScopeDesktopOnly":
     "User-level skills are available on desktop only in this phase.",
+  "settings.skills.profileToggleNotice":
+    "Skill switches are saved in the current OMP profile’s user settings and affect all workspaces using that profile. They are not workspace-specific.",
+  "settings.skills.nativeManagementNotice":
+    "OMP supports discovery and profile-level switches here. Creating, importing, deleting, copying, and syncing skills are not available. Shared source files and OMP_SKILLS_DIR are read-only in this interface.",
+  "settings.skills.nativePathUnavailable":
+    "Opening files on the OMP execution host is not supported here. The actual source path is shown read-only.",
+  "settings.skills.source.shared": "Shared · Read-only source",
+  "settings.skills.source.executionHost": "Execution host: {host}",
+  "settings.skills.source.localHost": "Local",
+  "settings.skills.source.sharedDirectory":
+    "Execution host shared directory (OMP_SKILLS_DIR, read-only)",
   "settings.skills.detail.description": "Description",
   "settings.skills.detail.path": "File path",
   "settings.skills.detail.openPath": "Open",
@@ -5370,10 +5467,10 @@ const enUS: Record<string, string> = {
   "settings.plugins.import.mode.copy": "Copy",
   "settings.plugins.import.mode.symlink": "Symlink",
   "settings.plugins.import.mode.copy.description":
-    "Copy the full plugin directory into ZCode and register it in plugins.dirs. Later changes in the external agent directory will not sync automatically.",
+    "Copy the full plugin directory into OmpCode and register it in plugins.dirs. Later changes in the external agent directory will not sync automatically.",
   "settings.plugins.import.mode.symlink.description":
-    "Create a directory link to the external agent plugin and register it in plugins.dirs. ZCode follows later source changes, but the plugin depends on that source path remaining available.",
-  "settings.plugins.import.importing": "Importing plugins into ZCode",
+    "Create a directory link to the external agent plugin and register it in plugins.dirs. OmpCode follows later source changes, but the plugin depends on that source path remaining available.",
+  "settings.plugins.import.importing": "Importing plugins into OmpCode",
   "settings.plugins.import.imported": "Imported",
   "settings.plugins.import.skipped": "Skipped",
   "settings.plugins.import.failed": "Failed",
@@ -5444,10 +5541,10 @@ const enUS: Record<string, string> = {
   "settings.commands.import.mode.copy": "Copy",
   "settings.commands.import.mode.symlink": "Symlink",
   "settings.commands.import.mode.copy.description":
-    "Copy the command file into ZCode. Later changes in the external agent file will not sync automatically.",
+    "Copy the command file into OmpCode. Later changes in the external agent file will not sync automatically.",
   "settings.commands.import.mode.symlink.description":
-    "Create a file link to the external agent command. ZCode follows later source changes, but the command depends on that source path remaining available.",
-  "settings.commands.import.importing": "Importing commands into ZCode",
+    "Create a file link to the external agent command. OmpCode follows later source changes, but the command depends on that source path remaining available.",
+  "settings.commands.import.importing": "Importing commands into OmpCode",
   "settings.commands.import.imported": "Imported",
   "settings.commands.import.skipped": "Skipped",
   "settings.commands.import.failed": "Failed",
@@ -5544,7 +5641,7 @@ const enUS: Record<string, string> = {
   "settingsSync.action.rescanning": "Scanning...",
   "settingsSync.action.importSelected": "Import selected",
   "settingsSync.action.importing": "Importing...",
-  "settingsSync.action.finish": "Start using ZCode",
+  "settingsSync.action.finish": "Start using OmpCode",
   "settingsSync.agent.zcode": "ZCode Agent",
   "settingsSync.agent.claudeCode": "Claude Code",
   "settingsSync.agent.codexCli": "Codex CLI",
@@ -5594,17 +5691,17 @@ const enUS: Record<string, string> = {
   "settingsSync.discovery.description":
     "Importable agent settings are no longer scanned automatically.",
   "settingsSync.discovery.helper":
-    "Only missing items will be imported and your current ZCode settings will not be overwritten.",
+    "Only missing items will be imported and your current OmpCode settings will not be overwritten.",
   "settingsSync.discovery.agentCount": "Agents found: {count}",
   "settingsSync.discovery.categoryCount": "Categories found: {count}",
   "settingsSync.discovery.error": "Scan failed: {error}",
   "settingsSync.discovery.continue": "Continue",
-  "onboarding.dialog.title": "Welcome to ZCode",
+  "onboarding.dialog.title": "Welcome to OmpCode",
   "onboarding.dialog.description": "Choose how to start your first session.",
   "onboarding.wizard.label": "Migration guide",
   "onboarding.welcome.eyebrow": "First run setup",
-  "onboarding.welcome.title": "Welcome to ZCode",
-  "onboarding.welcome.start": "Start ZCode",
+  "onboarding.welcome.title": "Welcome to OmpCode",
+  "onboarding.welcome.start": "Start OmpCode",
   "onboarding.welcome.migrate": "Migration Guide",
   "onboarding.welcome.helper":
     "Import existing tool settings now, or skip and continue later from Settings.",
@@ -5628,7 +5725,7 @@ const enUS: Record<string, string> = {
     "Import selected commands from external agents before the final migration.",
   "onboarding.stepDescription.agentSettings": "Choose which agents' providers to bring in.",
   "onboarding.stepDescription.migration":
-    "Start migration and wait while ZCode imports your selections.",
+    "Start migration and wait while OmpCode imports your selections.",
   "onboarding.sessions.empty":
     "No workspaces yet. Scan local history, then pick workspaces to migrate.",
   "onboarding.sessions.count": "{count} sessions",
@@ -5647,7 +5744,7 @@ const enUS: Record<string, string> = {
   "onboarding.agentsFile.error": "Could not check AGENTS.md migration status: {error}",
   "onboarding.agentsFile.confirmTitle": "Overwrite default AGENTS.md?",
   "onboarding.agentsFile.confirmDescription":
-    "ZCode will copy {source} to {target}.\nIf the target file already exists, the ZCode default AGENTS configuration will be overwritten.",
+    "OmpCode will copy {source} to {target}.\nIf the target file already exists, the OmpCode default AGENTS configuration will be overwritten.",
   "onboarding.agentsFile.confirmAction": "Overwrite and migrate",
   "onboarding.finish.summary.label.imported": "Imported",
   "onboarding.finish.summary.label.skipped": "Skipped",
@@ -5735,8 +5832,8 @@ const enUS: Record<string, string> = {
   "chat.emptyResult.description":
     "This task finished without any chat content. It may have been stopped before the model produced a response.",
   "chat.placeholder.newTask":
-    "Ask ZCode anything, @ to add context, / for commands or capabilities",
-  "chat.placeholder.newTaskMobile": "Ask ZCode anything…",
+    "Ask OmpCode anything, @ to add context, / for commands or capabilities",
+  "chat.placeholder.newTaskMobile": "Ask OmpCode anything…",
   "chat.placeholder.followUpAsk": "Ask for follow-up changes",
   "chat.placeholder.followUpQueue": "Keep typing to queue follow-up changes",
   "chat.placeholder.loading": "Initializing task...",
@@ -6012,7 +6109,7 @@ const enUS: Record<string, string> = {
   "chat.compact.duplicateBlocked": "A compaction is already running or queued.",
   "chat.modelSwitch.contextWindowGuard.title": "Compress context before switching models",
   "chat.modelSwitch.contextWindowGuard.description":
-    "This conversation has used {used} tokens, which exceeds {modelName}'s available context of {target} tokens after reserving maximum output.\nCompress the current conversation with the current model first. If the compressed context fits, ZCode will continue switching models.",
+    "This conversation has used {used} tokens, which exceeds {modelName}'s available context of {target} tokens after reserving maximum output.\nCompress the current conversation with the current model first. If the compressed context fits, OmpCode will continue switching models.",
   "chat.modelSwitch.contextWindowGuard.compress": "Compress",
   "chat.modelSwitch.contextWindowGuard.runningBlocked":
     "This conversation has used more context than the target model's available context after reserving maximum output. The conversation must be compressed before switching models, but the current task is still running and context compression cannot run now. Wait for the task to finish, then switch models again.",
@@ -6025,11 +6122,11 @@ const enUS: Record<string, string> = {
     "Computer Use is idle — it will start automatically on first use",
   "chat.toolbar.computerUse.tooltip.starting": "Enabling Computer Use plugin…",
   "chat.toolbar.computerUse.tooltip.ready":
-    "Computer Use ready — just describe what you want ZCode to do",
+    "Computer Use ready — just describe what you want OmpCode to do",
   "chat.toolbar.computerUse.tooltip.permissionRequired":
     "Missing macOS permissions — click to grant",
   "chat.toolbar.computerUse.tooltip.error":
-    "Computer Use enablement failed. Please restart ZCode app and retry, or ask ZCode to investigate the logs",
+    "Computer Use enablement failed. Please restart OmpCode app and retry, or ask OmpCode to investigate the logs",
   "chat.toolbar.computerUse.tooltip.sessionBusy":
     "A conversation is running. Computer Use can't be toggled right now — try again after it finishes.",
   "chat.toolbar.mode.description":
@@ -6381,7 +6478,7 @@ const enUS: Record<string, string> = {
     "Could not reach the local agent; global workflows are unavailable.",
   "workflows.hub.empty.title": "No saved workflows in your open projects yet",
   "workflows.hub.empty.hint":
-    "Design a workflow with ZCode in chat, then have it save the workflow to a project once it works. Projects that aren't open don't appear here.",
+    "Design a workflow with OmpCode in chat, then have it save the workflow to a project once it works. Projects that aren't open don't appear here.",
   "workflows.hub.noWorkspace": "Open a workspace to see its workflows.",
   "workflows.hub.loadError": "Could not read workflows: {error}",
   "workflows.hub.invalid": "{count} files could not be read",
@@ -6444,7 +6541,7 @@ const enUS: Record<string, string> = {
   "workflows.hub.detail.description": "Description",
   "workflows.hub.detail.whenToUse": "When to use",
   "workflows.hub.detail.whenToUse.help":
-    "A routing hint for ZCode: when this workflow is the right pick.",
+    "A routing hint for OmpCode: when this workflow is the right pick.",
   "workflows.hub.detail.args": "Arguments",
   "workflows.hub.detail.args.name": "Name",
   "workflows.hub.detail.args.type": "Type",
@@ -6465,7 +6562,7 @@ const enUS: Record<string, string> = {
   "workflows.hub.detail.meta.descriptionRequired": "Description is required",
   "workflows.hub.detail.script": "Script",
   "workflows.hub.detail.script.note":
-    "The script is read-only. To change it, revise it with ZCode in chat and save a new version.",
+    "The script is read-only. To change it, revise it with OmpCode in chat and save a new version.",
   "workflows.hub.detail.script.copy": "Copy script",
   "workflows.hub.detail.loadError": "Could not read this workflow: {reason}",
   "workflows.hub.detail.notFound": "This workflow is no longer in the project.",
@@ -6653,7 +6750,7 @@ const enUS: Record<string, string> = {
   // 「配置」弹层（docs/dynamic-workflow/presentation.md「The settings popover」）：改子代理模型与最大并发数，
   // 应用即一次 GUI 修订（新 run 接着跑，旧 run 停下，已完成的步骤作缓存带过去）。
   // 完成卡与 run 侧板上的「保存 / 再次运行」（docs/dynamic-workflow/transcript-and-notifications.md
-  // 「Saving the run, and running it again」）。两条路：交给 ZCode 提炼，或按原样直接写下去。
+  // 「Saving the run, and running it again」）。两条路：交给 OmpCode 提炼，或按原样直接写下去。
   "chat.toolCall.workflow.saveRun.action": "Save",
   "chat.toolCall.workflow.saveRun.runAgain": "Run again",
   "chat.toolCall.workflow.saveRun.starting": "Starting…",
@@ -6662,10 +6759,10 @@ const enUS: Record<string, string> = {
   "chat.toolCall.workflow.saveRun.announce.project": "Saved to the project",
   "chat.toolCall.workflow.saveRun.announce.global": "Saved as a global workflow",
   "chat.toolCall.workflow.saveRun.title": "Save workflow",
-  "chat.toolCall.workflow.saveRun.lead": "Let ZCode refine and save it",
+  "chat.toolCall.workflow.saveRun.lead": "Let OmpCode refine and save it",
   "chat.toolCall.workflow.saveRun.lead.hint":
-    "ZCode distills a reusable workflow for you, then asks you to confirm.",
-  "chat.toolCall.workflow.saveRun.lead.sending": "Handed to ZCode…",
+    "OmpCode distills a reusable workflow for you, then asks you to confirm.",
+  "chat.toolCall.workflow.saveRun.lead.sending": "Handed to OmpCode…",
   "chat.toolCall.workflow.saveRun.lead.unsupported": "This agent cannot save directly.",
   "chat.toolCall.workflow.saveRun.or": "or save it as is",
   "chat.toolCall.workflow.saveRun.name": "Name",
@@ -7073,9 +7170,9 @@ const enUS: Record<string, string> = {
   "chat.quota.startPlan.concurrentLimit.switchModel":
     "The current model request concurrency limit has been reached. Switch models to continue your current task.",
   "chat.quota.mcp.quotaExhausted":
-    'ZCode MCP "{server}" has used up today\'s quota. It resets tomorrow.',
+    'OmpCode MCP "{server}" has used up today\'s quota. It resets tomorrow.',
   "chat.quota.mcp.codingPlanRequired":
-    'No ZCode MCP "{server}" quota. Sign in or get a Coding Plan to use it.',
+    'No OmpCode MCP "{server}" quota. Sign in or get a Coding Plan to use it.',
   "chat.quota.providerLimited":
     "The current account quota or plan limit has been reached. Upgrade or adjust the plan to continue.",
   "chat.quota.action.upgrade": "Upgrade",
@@ -7571,7 +7668,7 @@ const enUS: Record<string, string> = {
   "feedback.submit.template.section.errorSummaryLine": "Error Summary: {message}",
   "feedback.submit.template.section.errorDetail": "Error Details",
   "feedback.submit.template.section.errorTraceId": "TraceID: {traceId}",
-  "feedback.submit.template.section.copyErrorHeading": "ZCode Error Info",
+  "feedback.submit.template.section.copyErrorHeading": "OmpCode Error Info",
   "feedback.submit.template.section.notProvided": "Not provided",
   "feedback.submit.template.section.remoteLogEmpty": "No connection logs captured",
   "feedback.submit.template.section.taskFeedbackTitle": "Feedback about task: {title}",
@@ -7731,7 +7828,7 @@ const enUS: Record<string, string> = {
   "automations.statusFilter.completed": "Completed",
   "automations.statusFilter.failed": "Failed",
   "automations.statusFilter.empty": "No tasks match this filter",
-  "offPeak.keepAwakeBanner": "Keep your computer awake while ZCode is running a chat.",
+  "offPeak.keepAwakeBanner": "Keep your computer awake while OmpCode is running a chat.",
   "offPeak.sectionTitle": "Idle-time tasks",
   "offPeak.createButton": "Create idle-time task",
   "offPeak.templates.sectionTitle": "Idle-time task template",
@@ -7788,7 +7885,7 @@ const enUS: Record<string, string> = {
   "offPeak.form.titlePlaceholder": "e.g. Nightly refactor",
   "offPeak.form.instructionsLabel": "Instructions",
   "offPeak.form.instructionsPlaceholder":
-    "Describe a task ZCode can work on in the background, including the expected result and any constraints…",
+    "Describe a task OmpCode can work on in the background, including the expected result and any constraints…",
   "offPeak.form.permissionWarning":
     "Idle-time runs are unattended. Actions that need confirmation will pause the task until you respond.",
   "offPeak.form.modelLabel": "Model",
@@ -7983,9 +8080,9 @@ const enUS: Record<string, string> = {
   "automations.runs.nextPage": "Next",
   // CUA (Computer Use)
   "chat.cuaReadiness.toolsNotLoaded":
-    "ZCode Computer Use is still preparing — its tools aren't loaded yet ({count} loaded). Grant the permissions below; tools appear once the helper is ready.",
+    "OmpCode Computer Use is still preparing — its tools aren't loaded yet ({count} loaded). Grant the permissions below; tools appear once the helper is ready.",
   "chat.cuaReadiness.toolsPreparing":
-    "ZCode Computer Use is still preparing — its tools aren't loaded yet. Grant the permissions below; tools appear once the helper is ready.",
+    "OmpCode Computer Use is still preparing — its tools aren't loaded yet. Grant the permissions below; tools appear once the helper is ready.",
   "chat.toolCall.cua.requestAccess": "Check Computer Use access",
   "chat.toolCall.cua.appName": "Computer Use",
   "chat.toolCall.cua.group.completedLabel": "Computer Use",
@@ -8113,9 +8210,9 @@ const enUS: Record<string, string> = {
   "cuaPermission.modal.restartButton": "Restart Helper",
   "cuaPermission.modal.restarting": "Restarting Helper…",
   "cuaPermission.modal.restartFailed": "Couldn't restart Helper: {error}",
-  "cuaPermission.modal.relaunchAppButton": "Restart ZCode",
+  "cuaPermission.modal.relaunchAppButton": "Restart OmpCode",
   "cuaPermission.modal.relaunchAppHint":
-    "Still not working after restarting Helper? Restart ZCode to fully reload the Helper process.",
+    "Still not working after restarting Helper? Restart OmpCode to fully reload the Helper process.",
   "cuaPermission.status.granted": "Granted",
   "cuaPermission.status.missing": "Missing",
   "cuaPermission.status.unknown": "Unknown",
@@ -8129,7 +8226,7 @@ const enUS: Record<string, string> = {
   "cuaPermission.tools.agentUpdateRequired":
     "The connected Agent is too old for a safe readiness check. Update or restart it, then check again.",
   "cuaPermission.tools.untrustedRuntime":
-    "Computer Use tools were found, but they did not come from the verified ZCode plugin. Review the plugin installation, then check again.",
+    "Computer Use tools were found, but they did not come from the verified OmpCode plugin. Review the plugin installation, then check again.",
   "cuaPermission.perm.accessibility": "Accessibility",
   "cuaPermission.perm.accessibility.purpose": "Read/drive UI elements + synthesize input",
   "cuaPermission.perm.screenRecording": "Screen Recording",
@@ -8140,7 +8237,7 @@ const enUS: Record<string, string> = {
     "Please upgrade macOS before using it. Permission setup cannot be completed on older versions.",
   "cuaPermission.ready": "Permissions ready",
   "cuaPermission.ready.sessionValidationHint":
-    "ZCode will verify the Computer Use tools against the exact session when your first session starts.",
+    "OmpCode will verify the Computer Use tools against the exact session when your first session starts.",
   "settings.computerUse.title": "Computer Use",
   "settings.computerUse.toggleLabel": "Enable Computer Use",
   "settings.computerUse.toggleDescription":
@@ -8191,13 +8288,13 @@ const enUS: Record<string, string> = {
   "globalNotice.highspeed.textCopied": "Share text copied",
   "globalNotice.highspeed.textCopyFailed": "Could not copy share text. Try again.",
   "globalNotice.highspeed.copyImage": "Copy image",
-  "globalNotice.highspeed.badge": "ZCode & Coding Plan Exclusive Benefits",
+  "globalNotice.highspeed.badge": "OmpCode & Coding Plan Exclusive Benefits",
   "globalNotice.highspeed.standardTaskSpeed": "Standard generation speed",
   "globalNotice.highspeed.relativeTaskDuration": "Relative generation time",
   "globalNotice.highspeed.speedSummary": "HighSpeed · {duration}",
   "globalNotice.highspeed.lessWaiting": "{percent}% less waiting",
   "globalNotice.highspeed.copySummary":
-    "I used the ZCode Highspeed card and saved {duration}s. Give it a try. Download ZCode https://zcode.z.ai",
+    "I used the OmpCode Highspeed card and saved {duration}s. Give it a try. Download OmpCode https://zcode.z.ai",
   "globalNotice.highspeed.imageSummary": "{tokens} tokens · {duration}s saved",
   "globalNotice.highspeed.close": "Close Highspeed share card",
   ...requestSecurityMessagesEnUS,

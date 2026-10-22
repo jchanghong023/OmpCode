@@ -70,6 +70,14 @@ export type ZCodeAgentCommandResolver = (
 ) => Promise<ZCodeAgentCommand | null> | ZCodeAgentCommand | null;
 
 export interface ZCodeAgentProcessManagerOptions {
+  resolveOmpProfile?: (context: {
+    workspacePath: string;
+    workspaceIdentity?: string;
+  }) => Promise<string | null | undefined>;
+  resolveOmpConfigRoot?: (context: {
+    workspacePath: string;
+    workspaceIdentity?: string;
+  }) => Promise<string | undefined>;
   commandResolver?: ZCodeAgentCommandResolver;
   presentationSurface?: ZCodeAgentPresentationSurface;
   requestTimeoutMs?: number;
@@ -127,6 +135,7 @@ interface ManagedZCodeAgentProcess {
   readyReported: boolean;
   runtimeIdentity: ZCodeAgentRuntimeIdentity;
   runtimeInstanceId: string;
+  launchFacts: { profilePinned: boolean; configRoot: string | null };
   spawned: boolean;
   startedAt: number;
   terminationIntent?: AgentProcessTerminationIntent;
@@ -471,6 +480,31 @@ export function buildZCodeAgentCommandEnv(
   };
 }
 
+/** Explicit argv owns precedence; a saved Host preference must never silently replace it. */
+export function applyOmpProfileToCommand(
+  command: ZCodeAgentCommand,
+  profile: string | null | undefined,
+): ZCodeAgentCommand {
+  if (profile === undefined) return command;
+  const args = command.args ?? [];
+  let pinned: string | undefined;
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index]!;
+    if (arg === "--profile" || arg === "-P") pinned = args[++index];
+    else if (arg.startsWith("--profile=")) pinned = arg.slice("--profile=".length);
+  }
+  if (pinned !== undefined) {
+    if (pinned !== (profile ?? "default"))
+      throw Object.assign(
+        new Error(
+          `Explicit profile ${pinned} conflicts with saved profile ${profile ?? "default"}`,
+        ),
+        { code: "omp.profilePinned" },
+      );
+    return command;
+  }
+  return { ...command, args: [...args, "--profile", profile ?? "default"] };
+}
 export function resolveDefaultZCodeAgentCommand(
   context: ZCodeAgentCommandResolverContext,
 ): ZCodeAgentCommand | null {
@@ -638,6 +672,8 @@ export class ZCodeAgentProcessManager {
   private readonly requestTimeoutMs: number | undefined;
   private readonly processLifecycleReporter: RuntimeProcessLifecycleReporter | undefined;
   private readonly resolveSpawnEnv: ZCodeAgentProcessManagerOptions["resolveSpawnEnv"];
+  private readonly resolveOmpProfile: ZCodeAgentProcessManagerOptions["resolveOmpProfile"];
+  private readonly resolveOmpConfigRoot: ZCodeAgentProcessManagerOptions["resolveOmpConfigRoot"];
   private readonly waitForSpawnAdmission: ZCodeAgentProcessManagerOptions["waitForSpawnAdmission"];
   private readonly spawnFallbackCwd: string | undefined;
   private readonly lane: string | undefined;
@@ -658,6 +694,8 @@ export class ZCodeAgentProcessManager {
     this.requestTimeoutMs = options?.requestTimeoutMs;
     this.processLifecycleReporter = options?.processLifecycleReporter;
     this.resolveSpawnEnv = options?.resolveSpawnEnv;
+    this.resolveOmpProfile = options?.resolveOmpProfile;
+    this.resolveOmpConfigRoot = options?.resolveOmpConfigRoot;
     this.waitForSpawnAdmission = options?.waitForSpawnAdmission;
     this.spawnFallbackCwd = options?.spawnFallbackCwd;
     this.lane = options?.lane?.trim() || undefined;
@@ -972,6 +1010,10 @@ export class ZCodeAgentProcessManager {
     const managed = this.processesByWorkspaceKey.get(resolveWorkspaceKey(params));
     return managed && !managed.child.killed ? managed.client : undefined;
   }
+  hasWorkspaceStarted(params: { workspacePath: string; workspaceIdentity?: string }): boolean {
+    const key = resolveWorkspaceKey(params);
+    return this.startingByWorkspaceKey.has(key) || this.runtimeGenerationByWorkspaceKey.has(key);
+  }
 
   /** 资源管理器：当前仍存活的受管 runtime（pid + workspace + client） */
   listManagedProcesses(): Array<{
@@ -1030,13 +1072,29 @@ export class ZCodeAgentProcessManager {
     const startStartedAt = Date.now();
     const resolveCommandStartedAt = Date.now();
     await this.waitForSpawnAdmission?.({ ...params, workspaceKey, signal: admissionSignal });
-    const spawnEnv = (await this.resolveSpawnEnv?.({ ...params, workspaceKey })) ?? {};
-    const command = await this.commandResolver({
+    const inheritedRoot = await this.resolveOmpConfigRoot?.(params);
+    const spawnEnv = {
+      ...(await this.resolveSpawnEnv?.({ ...params, workspaceKey })),
+      ...(inheritedRoot ? { OMP_CONFIG_ROOT: inheritedRoot } : {}),
+    };
+    const resolvedCommand = await this.commandResolver({
       ...params,
       ...(this.presentationSurface ? { presentationSurface: this.presentationSurface } : {}),
       workspaceKey,
       env: { ...process.env, ...spawnEnv },
     });
+    const command = resolvedCommand
+      ? applyOmpProfileToCommand(resolvedCommand, await this.resolveOmpProfile?.(params))
+      : resolvedCommand;
+    if (
+      inheritedRoot &&
+      command?.env?.OMP_CONFIG_ROOT &&
+      resolve(command.env.OMP_CONFIG_ROOT) !== resolve(inheritedRoot)
+    )
+      throw Object.assign(
+        new Error("Explicit launch root conflicts with inherited workspace profile root"),
+        { code: "omp.profileRootPinned" },
+      );
     const resolveCommandDurationMs = Date.now() - resolveCommandStartedAt;
     if (!command) {
       throw new Error(
@@ -1091,17 +1149,20 @@ export class ZCodeAgentProcessManager {
       spawnPreflight,
     });
     const spawnRequestedAt = Date.now();
+    const commandEnv = buildZCodeAgentCommandEnv(
+      process.env,
+      { ...spawnEnv, ...effectiveCommand.env },
+      params.workspaceIdentity,
+    );
+    const profilePinned = (resolvedCommand?.args ?? []).some(
+      (arg) => arg === "--profile" || arg === "-P" || arg.startsWith("--profile="),
+    );
     const child = spawn(effectiveCommand.command, spawnPreflight.args, {
       cwd: spawnPreflight.cwd,
       // agent 可能再派生实际 runtime/MCP 子进程。POSIX 下让 wrapper 进入独立进程组，
       // 关闭时才能按进程树整体回收；Windows 保持非 detached，交给 taskkill /T 处理。
       detached: shouldSpawnInDetachedProcessGroup(),
-      env: buildZCodeAgentCommandEnv(
-        // 只清洗继承环境；Host 可信补丁随后合入，避免代理、CA 与 broker 等配置被误删。
-        process.env,
-        { ...spawnEnv, ...effectiveCommand.env },
-        params.workspaceIdentity,
-      ),
+      env: commandEnv,
       stdio: ["pipe", "pipe", "pipe"],
     });
     const startedAt = Date.now();
@@ -1184,6 +1245,7 @@ export class ZCodeAgentProcessManager {
       readyReported: false,
       runtimeIdentity,
       runtimeInstanceId,
+      launchFacts: { profilePinned, configRoot: commandEnv.OMP_CONFIG_ROOT?.trim() || null },
       spawned: false,
       startedAt,
       workspace: {
@@ -1416,6 +1478,13 @@ export class ZCodeAgentProcessManager {
       }
     });
     return client;
+  }
+
+  getLaunchFacts(params: { workspacePath: string; workspaceIdentity?: string }) {
+    const managed = this.processesByWorkspaceKey.get(resolveWorkspaceKey(params));
+    if (!managed || managed.exited || managed.child.killed)
+      throw new Error("ZCode agent launch facts are unavailable.");
+    return { ...managed.launchFacts };
   }
 
   async getRuntimeIdentity(params: {

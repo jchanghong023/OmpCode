@@ -1,7 +1,8 @@
 /* eslint-disable max-lines -- desktop runtime/env 解析需要集中维护 main/host/remote assets 的启动边界，拆分会扩大远程连接回归面。 */
-import { existsSync, readFileSync } from "node:fs";
+import { constants, existsSync, readFileSync } from "node:fs";
+import { access, stat } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join, resolve, win32 } from "node:path";
+import { join, posix, resolve, win32 } from "node:path";
 import { verifyOmpArtifact } from "../../../../scripts/omp-artifact.mjs";
 import type { ConnectOptions } from "@zcode/server/remote";
 import { listSSHConfigAliasesFromLocalConfig } from "@zcode/services/node";
@@ -28,6 +29,7 @@ import {
   type ZCodeRuntimeEnv,
 } from "@zcode/shared";
 import { resolvePlatformKeyForPackagedApp } from "../../scripts/target-platform.mjs";
+import { desktopProductIdentities } from "../../scripts/desktop-product-identity.mjs";
 import {
   getAppConfigDir,
   getDataBaseDir,
@@ -65,7 +67,11 @@ function isTruthyRuntimeEnvOverride(name: string): boolean {
 // 这里允许测试显式隔离运行时身份，正常桌面/远控路径保持原来的默认值。
 export const runtimeApplicationName =
   readRuntimeEnvOverride("ZCODE_DESKTOP_APPLICATION_NAME") ??
-  (isLocalDevelopmentRuntime ? "ZCode Dev" : isPreviewPackagedRuntime ? "ZCode Preview" : "ZCode");
+  (isLocalDevelopmentRuntime
+    ? "OmpCode Dev"
+    : isPreviewPackagedRuntime
+      ? "OmpCode Preview"
+      : "OmpCode");
 // Electron 的 app.getPath("home") 不一定跟随测试进程里的 HOME 覆盖。
 // e2e 默认工作区依赖 home 路径，因此提供显式覆盖，避免测试写到开发者真实 ~/ZCodeProject。
 export const runtimeHomePath = readRuntimeEnvOverride("ZCODE_DESKTOP_HOME_DIR");
@@ -77,7 +83,7 @@ export const runtimeUserDataPath =
   readRuntimeEnvOverride("ZCODE_DESKTOP_USER_DATA_DIR") ??
   (shouldUseElectronDefaultUserDataPath
     ? undefined
-    : join(getElectronAppPath("appData"), runtimeApplicationName));
+    : join(getDataBaseDir(), "electron", runtimeApplicationName));
 export const runtimeSessionDataPath =
   readRuntimeEnvOverride("ZCODE_DESKTOP_SESSION_DATA_DIR") ??
   (runtimeUserDataPath ? join(runtimeUserDataPath, "session") : undefined);
@@ -97,6 +103,19 @@ export type RemoteAssetDirs = Pick<
   sourceServerArtifactPolicy?: SourceServerArtifactPolicy;
 };
 type LocalRuntimeEnv = Record<string, string | undefined>;
+// Main 与 Host 使用同一启动环境事实；本地 .env 不能令 Host 漂移到另一应用根。
+const applicationRootEnvKeys = [
+  "OMP_CONFIG_ROOT",
+  "PI_CONFIG_DIR",
+  "HOME",
+  "USERPROFILE",
+  "ZCODE_DESKTOP_HOME_DIR",
+] as const;
+const applicationRootEnv = Object.fromEntries(
+  applicationRootEnvKeys.flatMap((key) =>
+    process.env[key] === undefined ? [] : [[key, process.env[key]!]],
+  ),
+);
 
 export async function isDockerDaemonAvailable(): Promise<boolean> {
   const { isDockerAvailable } = await import("@zcode/server/remote");
@@ -511,21 +530,98 @@ export async function resolveBundledOmpHostEnv(
   };
 }
 
-let preparedOmpHostEnv: Readonly<{ command: string; root: string; target: string }> | undefined;
-
-/** Main initializes this before creating any Window Host; only real verification publishes a result. */
-export async function prepareBundledOmpHostEnv(
-  env: Record<string, string | undefined>,
-): Promise<void> {
-  preparedOmpHostEnv = undefined;
-  const verified = await resolveBundledOmpHostEnv(env, isElectronAppPackaged());
-  if (verified.ZCODE_AGENT_SERVER_COMMAND) {
-    preparedOmpHostEnv = Object.freeze({
-      command: verified.ZCODE_AGENT_SERVER_COMMAND,
-      root: join(process.resourcesPath ?? "", "omp"),
-      target: `${process.platform}-${process.arch}`,
-    });
+async function isOmpExecutable(path: string, platform: NodeJS.Platform): Promise<boolean> {
+  try {
+    if (!(await stat(path)).isFile()) return false;
+    await access(path, platform === "win32" ? constants.F_OK : constants.X_OK);
+    return true;
+  } catch {
+    return false;
   }
+}
+
+/** Discover only installed/current-PATH OMP; never execute a shell or require a bundled manifest. */
+export async function resolveOmpHostEnv(
+  env: Record<string, string | undefined>,
+  options: {
+    platform?: NodeJS.Platform;
+    homeDir?: string;
+    isExecutable?: (path: string) => Promise<boolean>;
+  } = {},
+): Promise<Record<string, string>> {
+  if (env.ZCODE_AGENT_SERVER_COMMAND !== undefined) {
+    if (!env.ZCODE_AGENT_SERVER_COMMAND.trim())
+      throw new Error("ZCODE_AGENT_SERVER_COMMAND must not be empty");
+    return {};
+  }
+  const platform = options.platform ?? process.platform;
+  const paths = platform === "win32" ? win32 : posix;
+  const executable = platform === "win32" ? "omp.exe" : "omp";
+  const candidates: string[] = [];
+  if (platform === "win32") {
+    if (env.PI_INSTALL_DIR?.trim()) {
+      candidates.push(win32.resolve(env.PI_INSTALL_DIR.trim(), executable));
+    }
+    candidates.push(
+      win32.resolve(
+        env.LOCALAPPDATA?.trim() || win32.join(options.homeDir ?? homedir(), "AppData", "Local"),
+        "omp",
+        executable,
+      ),
+    );
+  }
+  const inheritedPath =
+    platform === "win32"
+      ? Object.entries(env).find(([key]) => key.toUpperCase() === "PATH")?.[1]
+      : env.PATH;
+  const pathDirectories =
+    inheritedPath === undefined ? [] : inheritedPath.split(platform === "win32" ? ";" : ":");
+  for (const directory of pathDirectories) {
+    // 空 PATH 段表示当前目录；保留系统原有查找语义，不改写环境变量。
+    const pathDirectory = platform === "win32" ? directory.replace(/^"(.*)"$/, "$1") : directory;
+    candidates.push(paths.resolve(pathDirectory, executable));
+  }
+  const isExecutable = options.isExecutable ?? ((path: string) => isOmpExecutable(path, platform));
+  for (const candidate of candidates) {
+    if (await isExecutable(candidate)) {
+      return {
+        ZCODE_AGENT_SERVER_COMMAND: candidate,
+        ZCODE_AGENT_SERVER_ARGS_JSON:
+          env.ZCODE_AGENT_SERVER_ARGS_JSON ??
+          JSON.stringify(["app-server", "--stdio", "--surface", "desktop"]),
+      };
+    }
+  }
+  throw new Error(
+    `OMP executable not found in ${platform === "win32" ? "the installation directories or " : ""}PATH; install OMP or set ZCODE_AGENT_SERVER_COMMAND`,
+  );
+}
+
+function ompDiscoveryEnvKey(env: Record<string, string | undefined>): string {
+  return JSON.stringify([
+    process.platform,
+    process.cwd(),
+    process.platform === "win32"
+      ? Object.entries(env).find(([key]) => key.toUpperCase() === "PATH")?.[1]
+      : env.PATH,
+    process.platform === "win32" ? env.PI_INSTALL_DIR?.trim() : undefined,
+    process.platform === "win32" ? env.LOCALAPPDATA?.trim() : undefined,
+  ]);
+}
+
+let preparedOmpHostEnv: Readonly<{ command: string | undefined; envKey: string }> | undefined;
+
+/** Main completes asynchronous executable discovery before creating Window Hosts. */
+export async function prepareOmpHostEnv(env: Record<string, string | undefined>): Promise<void> {
+  preparedOmpHostEnv = undefined;
+  const discoveryEnv = { ...env };
+  const envKey = ompDiscoveryEnvKey(discoveryEnv);
+  const resolvedEnv = await resolveOmpHostEnv(discoveryEnv);
+  // 缓存仅属于本次 Main 环境；新窗口改变 PATH/安装目录时必须先重新异步准备。
+  preparedOmpHostEnv = Object.freeze({
+    command: resolvedEnv.ZCODE_AGENT_SERVER_COMMAND,
+    envKey,
+  });
 }
 
 function readPreparedOmpHostEnv(
@@ -536,13 +632,14 @@ function readPreparedOmpHostEnv(
       throw new Error("ZCODE_AGENT_SERVER_COMMAND must not be empty");
     return {};
   }
-  if (!isElectronAppPackaged()) return {};
-  if (
-    !preparedOmpHostEnv ||
-    preparedOmpHostEnv.root !== join(process.resourcesPath ?? "", "omp") ||
-    preparedOmpHostEnv.target !== `${process.platform}-${process.arch}`
-  ) {
-    throw new Error("Bundled OMP artifact has not completed asynchronous verification");
+  // 同步构建只读取 Main 已完成的异步查找，避免开发态回退旧 Agent、打包态强依赖 manifest。
+  if (!preparedOmpHostEnv?.command) {
+    throw new Error("OMP executable discovery has not completed asynchronous preparation");
+  }
+  if (preparedOmpHostEnv.envKey !== ompDiscoveryEnvKey(env)) {
+    throw new Error(
+      "OMP executable discovery environment changed; repeat asynchronous preparation",
+    );
   }
   return {
     ZCODE_AGENT_SERVER_COMMAND: preparedOmpHostEnv.command,
@@ -552,7 +649,9 @@ function readPreparedOmpHostEnv(
   };
 }
 
-export function buildHostProcessEnv(hostProcessLocalEnv: Record<string, string>) {
+export function buildHostProcessEnv(
+  hostProcessLocalEnv: Record<string, string>,
+): Record<string, string> {
   const glmBinaryPath = resolveBundledGlmBinaryPath();
   const larkCliBinaryPath = resolveBundledLarkCliBinaryPath();
   const resolvedGlmBinaryPath = resolveHostProcessBinaryEnv(
@@ -565,13 +664,12 @@ export function buildHostProcessEnv(hostProcessLocalEnv: Record<string, string>)
     hostProcessLocalEnv,
     larkCliBinaryPath,
   );
-  const dataBaseDir = getDataBaseDir();
   const rawInheritedEnv = {
     ...hostProcessLocalEnv,
     ...readDefinedProcessEnv(),
   };
   const packagedDesktop = isElectronAppPackaged();
-  // 随包产物只注入当前 Window Host；显式开发覆盖优先，绝不改写用户 PATH。
+  // 已发现的本机 OMP 只注入当前 Window Host；显式覆盖优先，不改写用户 PATH。
   const ompHostEnv = readPreparedOmpHostEnv(rawInheritedEnv);
   const bundledCuaHelperAppPath =
     process.platform !== "darwin"
@@ -586,7 +684,7 @@ export function buildHostProcessEnv(hostProcessLocalEnv: Record<string, string>)
             )
           ? rawInheritedEnv.ZCODE_CUA_BUNDLED_HELPER_APP_PATH?.trim() ||
             join(
-              rawInheritedEnv.ZCODE_HOME?.trim() || join(homedir(), ".zcode"),
+              rawInheritedEnv.ZCODE_HOME?.trim() || getDataBaseDir(),
               "computer-use",
               "dev",
               DEV_HELPER_APP_NAME,
@@ -624,6 +722,8 @@ export function buildHostProcessEnv(hostProcessLocalEnv: Record<string, string>)
   // 三层里有两层不写这个键，空对象无法覆盖 inheritedEnv，所以先无条件删掉继承值再按决策 spread 回去。
   // 少了这一行，production 包和 dev 的非法取值都会原样穿透到 Host。
   delete inheritedEnv[ZCODE_DYNAMIC_WORKFLOW_MODE_ENV];
+  for (const key of applicationRootEnvKeys) delete inheritedEnv[key];
+  delete inheritedEnv.ZCODE_DATA_BASE_DIR;
 
   return {
     ...inheritedEnv,
@@ -637,9 +737,10 @@ export function buildHostProcessEnv(hostProcessLocalEnv: Record<string, string>)
     // 显式注入编译期产品身份，保证主进程与 host 的身份语义一致；地址独立解析。
     // inheritedEnv 从 .env 通用变量补齐 ZCode/ZAI 链接，未覆盖时统一使用线上默认值。
     ZCODE_ENV,
-    // Preview 与生产版共享任务、配置和凭据，但不同版本的 Helper 不能互相覆盖或触发降级保护。
-    // 只隔离 computer-use 下的运行组件，不改写 ZCODE_HOME / ZCODE_DATA_BASE_DIR 业务数据根。
-    ...(isPreviewPackagedRuntime ? { ZCODE_CUA_HELPER_INSTALL_VARIANT: "preview" } : {}),
+    // 原因：上游默认/preview Helper 安装槽也属于 OS 可变状态；fork 各运行身份不得复用。
+    ZCODE_CUA_HELPER_INSTALL_VARIANT: isLocalDevelopmentRuntime
+      ? "ompcode-development"
+      : desktopProductIdentities[ZCODE_PRODUCT_FLAVOR].cuaHelperInstallVariant,
     // Dynamic Workflow 灰度的本地覆盖：Main 决策后写入，production 包为空对象（继承值已在上面删除）。
     ...dynamicWorkflowModeHostEnv,
     // 模型请求默认 header 由 agent 进程构造，过去只继承 shell env 导致桌面启动时拿不到 app 版本。
@@ -648,7 +749,7 @@ export function buildHostProcessEnv(hostProcessLocalEnv: Record<string, string>)
     // Telemetry 的构建身份必须来自 Desktop 编译期元数据，不能让 Agent 在运行时读取
     // 工作树或根据安装路径猜测；否则同一产品版本的不同修复包无法在 ARMS 中区分。
     [ZCODE_BUILD_COMMIT_ID_ENV]: ZCODE_COMMIT,
-    ...(dataBaseDir !== homedir() ? { ZCODE_DATA_BASE_DIR: dataBaseDir } : {}),
+    ...applicationRootEnv,
     ...(windowsAppInstallDir ? { [ZCODE_WINDOWS_APP_INSTALL_DIR_ENV]: windowsAppInstallDir } : {}),
     ...(bundledCuaHelperAppPath
       ? { [ZCODE_CUA_BUNDLED_HELPER_APP_PATH_ENV]: bundledCuaHelperAppPath }

@@ -1,15 +1,13 @@
 import { existsSync, readFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { getAppConfigDir } from "@zcode/services/node";
 import { join } from "node:path";
 
 interface ChromiumHardwareAccelerationApp {
   disableHardwareAcceleration(): void;
 }
 
-export function resolveChromiumHardwareAccelerationSettingsFile(
-  homePath: string = homedir(),
-): string {
-  return join(homePath, ".zcode", "v2", "setting.json");
+export function resolveChromiumHardwareAccelerationSettingsFile(): string {
+  return join(getAppConfigDir(), "setting.json");
 }
 
 export function extractBootstrapChromiumHardwareAccelerationEnabled(rawValue: unknown): boolean {

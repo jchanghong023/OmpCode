@@ -103,6 +103,7 @@ import { usePromptEditorDragState } from "@/prompt-editor/usePromptEditorDragSta
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
 import { advanceComposerDraftRevision } from "@/v4/composer/composerDraftRevision.js";
 import type { AppSlashCommand } from "@/slashCommandHelpers.js";
+import { isRegisteredNativeSlashCommand } from "@/v4/slashCommands.js";
 import { useOptionalServices } from "@/hooks/useServices.js";
 import { logger } from "@/logger.js";
 import { runUserAction, startUserAction } from "@/lib/userActionTelemetry.js";
@@ -406,6 +407,7 @@ export interface ConversationComposerProps {
   /** SessionPane 注入的完整 Draft owner；生产路径不再由编辑器直接覆盖持久记录。 */
   composerDraft: V4ComposerDraft;
   rootDraftScopeKey?: string;
+  storageScope?: string | null;
   updateComposerContent: (
     content: Pick<V4ComposerDraft, "text" | "editorStateJson" | "mention">,
   ) => void;
@@ -534,6 +536,8 @@ export interface ConversationComposerProps {
   suppressGoalCommands?: boolean;
   /** App 层本地斜杠命令（如 `/side`），由 SessionPane 按门禁组装后透传。 */
   appSlashCommands?: readonly AppSlashCommand[];
+  /** 当前 OMP 注册名与别名；null 表示原生已知但目录未就绪，[] 保留旧 Agent 路径。 */
+  nativeSlashCommandNames?: readonly string[] | null;
   /** 把 composer 的 drop 路由暴露给整个对话 pane / 桌面草稿标题栏。 */
   onDropTargetControllerChange?: (controller: ConversationDropTargetController | null) => void;
 }
@@ -551,6 +555,7 @@ function ConversationComposerImpl({
   draftConfig,
   composerDraft,
   rootDraftScopeKey,
+  storageScope,
   updateComposerContent,
   replaceComposerDraft,
   submissionReady = true,
@@ -607,6 +612,7 @@ function ConversationComposerImpl({
   onComposerRestoreApplied,
   suppressGoalCommands = false,
   appSlashCommands,
+  nativeSlashCommandNames,
   onDropTargetControllerChange,
 }: ConversationComposerProps) {
   const remoteAvailable = useRemoteConversationAvailable();
@@ -634,9 +640,7 @@ function ConversationComposerImpl({
     ...(workspaceIdentity ? { workspaceIdentity } : {}),
     ...(remoteSessionId ? { remoteSessionId } : {}),
   });
-  const draftScopeId =
-    sessionId ??
-    (rootDraftScopeKey ? `${V4_DRAFT_SCOPE_ROOT}:${rootDraftScopeKey}` : V4_DRAFT_SCOPE_ROOT);
+  const draftScopeId = `${sessionId ?? V4_DRAFT_SCOPE_ROOT}:${rootDraftScopeKey ?? "unresolved"}`;
   const workspaceKey = workspaceIdentity?.trim() || workspacePath;
   const configPickerScopeKey = `${workspaceKey}\0${draftScopeId}`;
   const [text, setText] = useState("");
@@ -933,11 +937,15 @@ function ConversationComposerImpl({
   useEffect(() => {
     // 新建 scope 已包含项目身份；不能只匹配旧的裸 __draft__ 而漏掉当前编辑器。
     if (!draftScopeId.startsWith(V4_DRAFT_SCOPE_ROOT)) return;
-    return registerV4ComposerDraftReader(workspaceKey, () => ({
-      draft: { ...ownerDraftRef.current.draft, ...snapshotDraftOfEditor() },
-      attachments: attachmentsApi.attachments,
-    }));
-  }, [draftScopeId, workspaceKey, snapshotDraftOfEditor, attachmentsApi.attachments]);
+    return registerV4ComposerDraftReader(
+      workspaceKey,
+      () => ({
+        draft: { ...ownerDraftRef.current.draft, ...snapshotDraftOfEditor() },
+        attachments: attachmentsApi.attachments,
+      }),
+      storageScope,
+    );
+  }, [draftScopeId, workspaceKey, snapshotDraftOfEditor, attachmentsApi.attachments, storageScope]);
 
   const persistDraftNow = useCallback(
     (scopeId: string) => {
@@ -956,11 +964,13 @@ function ConversationComposerImpl({
     if (draftPersistTimerRef.current !== null) {
       window.clearTimeout(draftPersistTimerRef.current);
     }
+    // 捕获安排时的域，不能在计时器触发时改读新 profile 的 ref。
+    const scheduledScopeId = draftScopeId;
     draftPersistTimerRef.current = window.setTimeout(() => {
       draftPersistTimerRef.current = null;
-      persistDraftNow(draftScopeRef.current);
+      persistDraftNow(scheduledScopeId);
     }, 350);
-  }, [persistDraftNow]);
+  }, [persistDraftNow, draftScopeId]);
 
   // ── 自动聚焦（新建任务 / 切会话 / 挂载后把光标交还输入框）──
   // 触发源：startDraft 递增的 draftFocusVersion（覆盖 Cmd/Ctrl+N 与所有「新建任务」入口）、
@@ -971,9 +981,19 @@ function ConversationComposerImpl({
   );
   useEffect(() => {
     if (!draftScopeId.startsWith(V4_DRAFT_SCOPE_ROOT)) return;
-    const attachments = consumeV4ComposerDraftAttachments(workspaceKey, draftFocusVersion);
+    const attachments = consumeV4ComposerDraftAttachments(
+      workspaceKey,
+      draftFocusVersion,
+      storageScope,
+    );
     if (attachments) attachmentsApi.restoreDraftAttachments(attachments);
-  }, [draftFocusVersion, draftScopeId, workspaceKey, attachmentsApi.restoreDraftAttachments]);
+  }, [
+    draftFocusVersion,
+    draftScopeId,
+    workspaceKey,
+    attachmentsApi.restoreDraftAttachments,
+    storageScope,
+  ]);
   const pendingFocusRef = useRef(false);
   // 本次 focus 是否由程序触发（见 flushPendingFocus），供 send_input_focus 过滤非用户动作。
   const programmaticFocusRef = useRef(false);
@@ -1154,6 +1174,7 @@ function ConversationComposerImpl({
     };
     let unsubscribeSettled: (() => void) | null = null;
     const applyDraft = () => {
+      if (draftScopeRef.current !== draftScopeId) return;
       const api = inputApiRef.current;
       if (!api) return;
       restoreDraftInto(api);
@@ -1166,6 +1187,7 @@ function ConversationComposerImpl({
       unsubscribeSettled = subscribeComposerSubmissionSettled(
         `${workspaceKey}\0${draftScopeId}`,
         (submission) => {
+          if (draftScopeRef.current !== draftScopeId) return;
           // 只清"确实是那次提交、且用户还没在其上继续编辑"的正文；编辑器把回填正文
           // 重新序列化后若与提交原文一致，也视为未编辑。
           if (submission.text !== restoredText) return;
@@ -1347,7 +1369,9 @@ function ConversationComposerImpl({
       existingTelemetrySeed?: ConversationPromptTelemetrySeed,
       requestedDelivery?: "startNow" | "queue" | "guide",
     ) => {
-      const trimmed = textRef.current.trim();
+      const rawText = textRef.current;
+      const trimmed = rawText.trim();
+      const nativeCommand = isRegisteredNativeSlashCommand(rawText, nativeSlashCommandNames);
       const submittedQueueItemIds =
         snapshotRef.current?.queue.items.map((item) => item.queueItemId) ?? [];
       const hasPendingAttachments = attachmentsApi.attachments.length > 0;
@@ -1572,13 +1596,16 @@ function ConversationComposerImpl({
         // 里没有任何东西解析它），唯一作用是驱动一个已被产品裁掉的 chip，代价却是把一个
         // share URL 塞进发给模型的正文。模型侧内容由隐藏的 shared_context 消息经
         // inputIntent.sharedContextRefs 注入，与正文无关。
-        const promptText = serializeComposerPromptContexts(trimmed, {
-          codeComments: currentCodeCommentContexts,
-          conversationSelections: [],
-          webElements: currentWebElementContexts,
-          pptxElements: currentPptxElementReferences,
-          pluginUiContexts: currentPluginUiContexts,
-        });
+        // 原生命令参数必须原样交给 OMP，不能被 trim 或模型上下文尾块改写。
+        const promptText = nativeCommand
+          ? rawText
+          : serializeComposerPromptContexts(trimmed, {
+              codeComments: currentCodeCommentContexts,
+              conversationSelections: [],
+              webElements: currentWebElementContexts,
+              pptxElements: currentPptxElementReferences,
+              pluginUiContexts: currentPluginUiContexts,
+            });
         const contextAttachmentCount =
           countComposerPromptContexts({
             codeComments: currentCodeCommentContexts,
@@ -1718,6 +1745,7 @@ function ConversationComposerImpl({
       telemetryDraftConfig,
       modelSelectionView,
       onSendText,
+      nativeSlashCommandNames,
       pendingShareContext,
       provider,
       readPlanIdentitySnapshot,
@@ -2673,9 +2701,14 @@ function ConversationComposerImpl({
           promptHistory={promptHistory}
           avoidIosInputFocusZoom={avoidIosInputFocusZoom}
           compactPlaceholder={compactMobilePlaceholder}
-          // Bugfix 原因：命令目录必须完整来自 CLI workspace slash catalog；UI 只在
-          // secondary pane 按产品能力隐藏 goal，不再追加任何内建命令或别名。
-          excludedSlashCommandNames={suppressGoalCommands ? ["goal"] : undefined}
+          // 只有旧 Agent 的副屏保留本地 goal 门禁；OMP 命令的可用性由原生处理器决定。
+          excludedSlashCommandNames={
+            suppressGoalCommands &&
+            nativeSlashCommandNames !== null &&
+            !nativeSlashCommandNames?.includes("goal")
+              ? ["goal"]
+              : undefined
+          }
           appSlashCommands={runtimeBlocked ? [] : appSlashCommands}
           enableMentionPanel
           leadingActions={leadingActionsNode}

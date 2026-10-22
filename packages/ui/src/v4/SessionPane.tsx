@@ -1,3 +1,13 @@
+import type { OmpTanJob } from "@zcode/shared";
+import { Button } from "@/components/ui/button.js";
+import { Textarea } from "@/components/ui/textarea.js";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from "@/components/ui/dialog.js";
 import { remoteHostIdFromWorkspaceIdentity } from "@zcode/shared";
 import { useRemoteConversationAvailable } from "@/v4/RemoteConversationAvailability.js";
 import {
@@ -148,7 +158,9 @@ import {
   readPendingTaskDraft,
   resolveComposerScope,
   composerScopeKey,
+  readComposerWorkspaceScope,
 } from "@/v4/composer/composerDraftStore.js";
+import { useOmpStorageScope } from "@/hooks/useZCodeAgentService.js";
 import { resolveProviderLabel } from "@/lib/registryProviderView.js";
 import { resolveEntitledAccountProviderAccess } from "@/lib/accountProviderAccess.js";
 import { getProviderSettingsSnapshot } from "@/lib/providerSettingsSnapshot.js";
@@ -291,6 +303,7 @@ import { useSessionOpenArmsTelemetry } from "@/v4/telemetry/useSessionOpenArmsTe
 import {
   parseV4VisibleSlashCommand,
   parseSelectionSideSlashCommand,
+  isRegisteredNativeSlashCommand,
   v4QueuedCommandText,
   type V4VisibleSlashCommand,
 } from "@/v4/slashCommands.js";
@@ -593,6 +606,204 @@ export function useSessionPaneLease(sessionId: string | null, layer: object) {
   return [binding.lease, setBinding] as const;
 }
 
+/** 可替换的原生任务读投影；卸载和关闭历史视图从不取消 owner 的后台任务。 */
+function TanDelegationControls({
+  target,
+  ready,
+  onOpen,
+}: {
+  target: {
+    workspacePath: string;
+    workspaceIdentity?: string;
+    remoteSessionId?: string;
+    sessionId: string;
+  };
+  ready: boolean;
+  onOpen?: (job: OmpTanJob) => void;
+}) {
+  const { zcodeAgentService } = useServices();
+  const { intl } = useZCodeIntl();
+  const [jobs, setJobs] = useState<OmpTanJob[]>([]);
+  const [reason, setReason] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [supported, setSupported] = useState(false);
+  const [open, setOpen] = useState(false);
+  const [work, setWork] = useState("");
+  const [busy, setBusy] = useState(false);
+  const alive = useRef(false);
+  const readSequence = useRef(0);
+  const refresh = useCallback(async () => {
+    const sequence = ++readSequence.current;
+    try {
+      const result = await zcodeAgentService.listOmpTan(target);
+      if (!alive.current || sequence !== readSequence.current) return;
+      setJobs(result.jobs);
+      setSupported(true);
+      setReason(null);
+    } catch (error) {
+      if (!alive.current || sequence !== readSequence.current) return;
+      setJobs([]);
+      setSupported(false);
+      setReason(error instanceof Error ? error.message : String(error));
+    }
+  }, [zcodeAgentService, target]);
+  useEffect(() => {
+    alive.current = true;
+    if (!ready) {
+      setSupported(false);
+      return () => {
+        alive.current = false;
+        readSequence.current++;
+      };
+    }
+    void refresh();
+    // 仅观察 native list；计时器不接受任务、不推断执行状态，也不在重连时重新派发。
+    const timer = setInterval(() => {
+      void refresh();
+    }, 1500);
+    return () => {
+      alive.current = false;
+      readSequence.current++;
+      clearInterval(timer);
+    };
+  }, [ready, refresh]);
+  const start = async () => {
+    if (busy || !work.trim()) return;
+    setBusy(true);
+    setActionError(null);
+    try {
+      await zcodeAgentService.startOmpTan({ ...target, work });
+      if (!alive.current) return;
+      setWork("");
+      setOpen(false);
+      await refresh();
+    } catch (error) {
+      if (alive.current) setActionError(error instanceof Error ? error.message : String(error));
+    } finally {
+      if (alive.current) setBusy(false);
+    }
+  };
+  const stop = async (jobId: string) => {
+    if (busy) return;
+    setBusy(true);
+    setActionError(null);
+    try {
+      const result = await zcodeAgentService.stopOmpTan({ ...target, jobId });
+      if (!result.accepted) throw new Error(intl.formatMessage({ id: "chat.tan.stopRejected" }));
+      await refresh();
+    } catch (error) {
+      if (alive.current) setActionError(error instanceof Error ? error.message : String(error));
+    } finally {
+      if (alive.current) setBusy(false);
+    }
+  };
+  return (
+    <section
+      className="mx-4 mb-2 space-y-2"
+      aria-label={intl.formatMessage({ id: "chat.tan.title" })}
+    >
+      <Button
+        variant="ghost"
+        size="sm"
+        data-testid="omp-tan-open"
+        data-omp-tan-open=""
+        disabled={!ready || !supported}
+        title={reason ?? undefined}
+        onClick={() => setOpen(true)}
+      >
+        {intl.formatMessage({ id: "chat.tan.title" })}
+      </Button>
+      {!supported && !reason ? (
+        <p className="text-ui-sm text-foreground-subtlest">
+          {intl.formatMessage({ id: "chat.tan.checking" })}
+        </p>
+      ) : null}
+      {reason ? (
+        <p role="status" className="text-ui-sm text-foreground-subtlest">
+          {reason}
+        </p>
+      ) : null}
+      {actionError ? <p role="alert">{actionError}</p> : null}
+      {jobs.map((job) => (
+        <article
+          key={job.jobId}
+          data-testid="omp-tan-job"
+          data-job-id={job.jobId}
+          data-job-status={job.status}
+          data-omp-tan-job={job.jobId}
+          data-omp-tan-status={job.status}
+          className="rounded-lg border border-border p-3 text-ui-sm"
+        >
+          <div className="flex items-center justify-between gap-2">
+            <span>{job.label}</span>
+            <span>{intl.formatMessage({ id: `chat.tan.status.${job.status}` })}</span>
+          </div>
+          <p className="whitespace-pre-wrap">{job.work}</p>
+          {job.output ? (
+            <pre className="max-h-48 overflow-auto whitespace-pre-wrap">{job.output}</pre>
+          ) : null}
+          {job.error ? <p role="alert">{job.error}</p> : null}
+          {job.unavailable.map((message) => (
+            <p key={message}>{message}</p>
+          ))}
+          <div className="flex gap-2">
+            <Button
+              variant="ghost"
+              size="sm"
+              data-testid="omp-tan-history"
+              disabled={!job.childSessionId || !onOpen}
+              onClick={() => onOpen?.(job)}
+            >
+              {intl.formatMessage({ id: "chat.tan.history" })}
+            </Button>
+            {job.status === "running" || job.status === "pending" ? (
+              <Button
+                variant="ghost"
+                size="sm"
+                data-testid="omp-tan-stop"
+                disabled={busy}
+                onClick={() => {
+                  void stop(job.jobId);
+                }}
+              >
+                {intl.formatMessage({ id: "chat.tan.stop" })}
+              </Button>
+            ) : null}
+          </div>
+        </article>
+      ))}
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{intl.formatMessage({ id: "chat.tan.title" })}</DialogTitle>
+            <DialogDescription>
+              {intl.formatMessage({ id: "chat.tan.description" })}
+            </DialogDescription>
+          </DialogHeader>
+          <Textarea
+            data-testid="omp-tan-work"
+            data-omp-tan-input=""
+            value={work}
+            aria-label={intl.formatMessage({ id: "chat.tan.work" })}
+            onChange={(event) => setWork(event.target.value)}
+          />
+          {reason || actionError ? <p role="alert">{actionError ?? reason}</p> : null}
+          <Button
+            data-testid="omp-tan-start"
+            data-omp-tan-submit=""
+            disabled={busy || !work.trim() || !supported}
+            onClick={() => {
+              void start();
+            }}
+          >
+            {intl.formatMessage({ id: "chat.tan.start" })}
+          </Button>
+        </DialogContent>
+      </Dialog>
+    </section>
+  );
+}
+
 /**
  * 单 pane 竖切：订阅 → 渲染 rows → composer 发送 / stop（06-ui §SessionPane）。
  *
@@ -684,12 +895,41 @@ export function SessionPane({
   const slashCommands = useSlashCommands(workspacePath, workspaceIdentity);
   const baseWorkspaceServices = useBaseWorkspaceServices();
   const composerClientNamespace = useComposerClientNamespace();
-  const composerProjectId = useZCodeSessionStore(
-    (store) => store.getWorkspaceState(workspacePath, workspaceIdentity).draftProjectId,
+  const composerStorageScope = useOmpStorageScope(
+    workspacePath,
+    workspaceIdentity,
+    remoteSessionId,
   );
+  const composerProjectId = useZCodeSessionStore((store) => {
+    const workspace = store.getWorkspaceState(workspacePath, workspaceIdentity);
+    return composerStorageScope && workspace.draftStorageScope === composerStorageScope
+      ? workspace.draftProjectId
+      : undefined;
+  });
   const newTaskComposerScope = useMemo(
-    () => resolveComposerScope(composerProjectId, workspaceIdentity, composerClientNamespace),
-    [composerProjectId, workspaceIdentity, composerClientNamespace],
+    () =>
+      resolveComposerScope(
+        composerProjectId !== undefined
+          ? composerProjectId
+          : readComposerWorkspaceScope(
+              workspacePath,
+              workspaceIdentity,
+              composerClientNamespace,
+              composerStorageScope,
+            )?.projectId,
+        workspaceIdentity,
+        composerClientNamespace,
+        composerStorageScope,
+        remoteSessionId,
+      ),
+    [
+      composerProjectId,
+      workspacePath,
+      workspaceIdentity,
+      composerClientNamespace,
+      composerStorageScope,
+      remoteSessionId,
+    ],
   );
   const composerDraftGeneration = useZCodeSessionStore(
     (store) => store.getWorkspaceState(workspacePath, workspaceIdentity).draftFocusVersion,
@@ -707,6 +947,15 @@ export function SessionPane({
     workspaceIdentity,
     remoteSessionId,
   });
+  const tanTarget = useMemo(
+    () => ({
+      workspacePath,
+      workspaceIdentity: workspaceIdentity ?? undefined,
+      remoteSessionId: remoteSessionId ?? undefined,
+      sessionId: sessionId ?? "",
+    }),
+    [workspacePath, workspaceIdentity, remoteSessionId, sessionId],
+  );
   // SessionPane 已位于目标 Workspace 的 ServiceProvider 内，直接订阅该 Host Service；
   // 不再从展示组件二次解析 workspace/remote 路由。
   const conversationTelemetry = useScopedConversationTelemetrySupervisor({
@@ -1276,7 +1525,7 @@ export function SessionPane({
   const workspaceKey = workspaceIdentity?.trim() || workspacePath;
   // pane 每次重新绑定 Task / 工作区时递增代次：A → B → A 后 sessionId 相同但代次不同。
   // 与 sessionIdRef 一样在渲染期同步，供跨 await 的发送回调读取最新绑定。
-  const paneBindingKey = `${workspaceKey}\u0000${sessionId ?? ""}`;
+  const paneBindingKey = `${workspaceKey}\u0000${sessionId ?? ""}\u0000${composerScopeKey(newTaskComposerScope)}`;
   const paneBindingRef = useRef({ key: paneBindingKey, generation: 0 });
   if (paneBindingRef.current.key !== paneBindingKey) {
     paneBindingRef.current = {
@@ -1768,6 +2017,8 @@ export function SessionPane({
   } = useDraftConfigControl({
     workspacePath,
     workspaceIdentity,
+    remoteSessionId,
+    storageScope: composerStorageScope,
     provider,
     sessionId,
     sessionConfig: runtimeReady && snapshot?.sessionId === sessionId ? snapshot.config : null,
@@ -1963,6 +2214,7 @@ export function SessionPane({
                 taskId: createdSessionId,
                 workspacePath,
                 ...(workspaceIdentity ? { workspaceIdentity } : {}),
+                ...(remoteSessionId ? { remoteSessionId } : {}),
                 hostId: remoteHostIdFromWorkspaceIdentity(workspaceIdentity ?? "") ?? "local",
               };
               const attempt = async () => {
@@ -2016,6 +2268,7 @@ export function SessionPane({
       onSessionCreated,
       promoteComposerDraft,
       workspaceIdentity,
+      remoteSessionId,
       workspacePath,
     ],
   );
@@ -2848,6 +3101,16 @@ export function SessionPane({
       ),
     [slashCommands],
   );
+  const nativeSlashCommandNames = useMemo(
+    // 目录没有 readiness 字段；原生事实先到时，空目录不能被误判成旧 Agent。
+    () =>
+      composerStorageScope
+        ? cliSlashCommandNames.size > 0
+          ? [...cliSlashCommandNames]
+          : null
+        : [],
+    [composerStorageScope, cliSlashCommandNames],
+  );
   const availableSelectionSideSlashCommandNames = useMemo(
     () => ["side", "btw"].filter((name) => !cliSlashCommandNames.has(name)),
     [cliSlashCommandNames],
@@ -2855,7 +3118,7 @@ export function SessionPane({
 
   // Plan 选中即开启标准 Composer 开关，不能等发送时解析文本；与 /side 共用本地操作入口。
   const appSlashCommands = useMemo<AppSlashCommand[] | undefined>(() => {
-    if (readOnly) return undefined;
+    if (readOnly || nativeSlashCommandNames === null) return undefined;
     const planAction: AppSlashCommand = {
       value: "plan",
       label: intl.formatMessage({ id: "chat.slash.app.plan.label" }),
@@ -2863,6 +3126,7 @@ export function SessionPane({
       keywords: ["plan", "计划", "计划模式"],
       run: () => handleDraftSwitchMode("plan"),
     };
+    const planActions = nativeSlashCommandNames.includes("plan") ? [] : [planAction];
     if (
       !sessionId ||
       !onOpenSelectionSideChat ||
@@ -2873,7 +3137,7 @@ export function SessionPane({
         isMobileViewport: isMobileTextInputViewport,
       })
     ) {
-      return [planAction];
+      return planActions;
     }
     const openNewSelectionSideChat = () => {
       void handleOpenSelectionSideConversation(undefined, true);
@@ -2883,7 +3147,7 @@ export function SessionPane({
     const sharedKeywords = ["side", "btw", "side chat", "auxiliary", "辅助对话", "辅助", "侧边"];
     const description = intl.formatMessage({ id: "chat.slash.app.side.description" });
     return [
-      planAction,
+      ...planActions,
       ...[
         { value: "side", description, keywords: sharedKeywords, run: openNewSelectionSideChat },
         { value: "btw", description, keywords: sharedKeywords, run: openNewSelectionSideChat },
@@ -2891,6 +3155,7 @@ export function SessionPane({
     ];
   }, [
     cliSlashCommandNames,
+    nativeSlashCommandNames,
     handleDraftSwitchMode,
     handleOpenSelectionSideConversation,
     intl,
@@ -3557,6 +3822,7 @@ export function SessionPane({
       highspeedOriginAtSend: HighspeedPaneOrigin,
       taskGroupIdAtSend?: string | null,
     ) => {
+      const nativeCommand = isRegisteredNativeSlashCommand(text, nativeSlashCommandNames);
       let onAcceptedSelection: (() => void) | undefined;
       const prepareHighspeedTurn = prepareHighspeedTurnFrom(highspeedOriginAtSend);
       const dispatchSubmissionCommand = async (...args: Parameters<typeof dispatchCommand>) => {
@@ -3564,6 +3830,7 @@ export function SessionPane({
         args[11] = taskGroupIdAtSend;
         args[12] = options?.submittedDraftText ?? text;
         if (
+          !nativeCommand &&
           args[0] === "sendText" &&
           args[2] &&
           baseWorkspaceServices.genUiService &&
@@ -3598,6 +3865,7 @@ export function SessionPane({
       const contextAttachmentCount = options?.contextAttachmentCount ?? 0;
       const slashCommand = parseV4VisibleSlashCommand(text, readyAttachments, {
         contextAttachmentCount,
+        nativeCommandNames: nativeSlashCommandNames,
       });
 
       if (!(await ensureDraftModelReadyForSend())) {
@@ -3647,7 +3915,7 @@ export function SessionPane({
         return "confirmationRequired" as const;
       }
       // slash 命令优先：已有 session 直接消费；draft 首发 /goal 复用同一个预热会话。
-      if (slashCommand === null || slashCommand.kind === "sendGoalCommand") {
+      if (!nativeCommand && (slashCommand === null || slashCommand.kind === "sendGoalCommand")) {
         const original = submission.modelSelection;
         const chosen = await recommendStartPlan(original);
         if (!chosen) return "blocked" as const;
@@ -3822,6 +4090,7 @@ export function SessionPane({
       ensureDraftModelReadyForSend,
       availableSelectionSideSlashCommandNames,
       appSlashCommands,
+      nativeSlashCommandNames,
       handleDraftSessionCreated,
       reportDraftCreated,
       handleOpenSelectionSideConversationWithPrompt,
@@ -5415,9 +5684,12 @@ export function SessionPane({
       draftMode={isDraft}
       draftConfig={draftConfig}
       composerDraft={composerDraft}
+      storageScope={composerStorageScope}
       rootDraftScopeKey={composerScopeKey(newTaskComposerScope)}
       replaceComposerDraft={replaceComposerDraft}
-      submissionReady={composerSubmissionReady && runtimeReady && !recoveringDraft}
+      submissionReady={
+        Boolean(composerStorageScope) && composerSubmissionReady && runtimeReady && !recoveringDraft
+      }
       updateComposerContent={updateComposerContent}
       createSubmissionFromComposer={createSubmissionFromComposer}
       telemetryDraftConfig={telemetryDraftConfig}
@@ -5442,6 +5714,7 @@ export function SessionPane({
       isWebRemoteControl={compactForRemoteControl}
       workspacePath={workspacePath}
       workspaceIdentity={workspaceIdentity}
+      nativeSlashCommandNames={nativeSlashCommandNames}
       remoteSessionId={remoteSessionId ?? undefined}
       modelSelectionView={
         modelSelectionView ??
@@ -5628,6 +5901,26 @@ export function SessionPane({
         />
       ) : null}
       {composerNode}
+      {!readOnly && !selectionSideChat && sessionId ? (
+        <TanDelegationControls
+          key={`${workspaceKey}\u0000${remoteSessionId ?? ""}\u0000${sessionId}`}
+          target={tanTarget}
+          ready={runtimeReady}
+          onOpen={
+            onOpenSubagentSession
+              ? (job) => {
+                  if (job.childSessionId)
+                    handleOpenSubagentSession({
+                      parentSessionId: sessionId,
+                      childSessionId: job.childSessionId,
+                      subagentType: "tan",
+                      title: job.label,
+                    });
+                }
+              : undefined
+          }
+        />
+      ) : null}
       {/* 办公模式显示主动任务推荐；编程模式保留原有小型场景入口。 */}
       {/* 完整视图浮窗只露出输入框，草稿推荐提示不进入浮窗。 */}
       {isDraft &&

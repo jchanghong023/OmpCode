@@ -3,7 +3,7 @@ import {
   markTasksStoragePrepared,
   resolveZCodeAgentSpawnCwd,
 } from "@zcode/services/storage-startup";
-import type { DatabaseStartupState } from "@zcode/shared";
+import type { DatabaseStartupState, HostStartupWorkspaceTarget } from "@zcode/shared";
 import { DatabaseStartupCoordinator } from "../databaseStartupCoordinator.js";
 import { StartupDiskSampler } from "../startupDiskSampler.js";
 import { prepareHostStorage, prepareSessionStorage } from "./storagePreparationProcesses.js";
@@ -12,7 +12,7 @@ const BASELINE_BUDGET_MS = 250;
 export function createHostDatabaseStartup(options: {
   startupId?: string;
   cwd: string;
-  workingDirectories?: string[];
+  workspaceTargets?: HostStartupWorkspaceTarget[];
   env?: Record<string, string>;
   publish: (state: DatabaseStartupState) => void;
   initializeServices: () => Promise<void>;
@@ -55,24 +55,26 @@ export function createHostDatabaseStartup(options: {
         );
         markTasksStoragePrepared(tasksPath);
         report("preparing_session_storage", "checking");
-        const candidates = options.workingDirectories?.length
-          ? options.workingDirectories
-          : [options.cwd];
-        const directories = new Set<string>();
-        for (const candidate of candidates) {
-          // 历史项目 ENOTDIR/无权限不是数据库失败；与普通 Agent 使用同一 cwd 选择规则。
+        const candidates = options.workspaceTargets?.length
+          ? options.workspaceTargets
+          : [{ workspacePath: options.cwd }];
+        const targets = new Map<string, HostStartupWorkspaceTarget>();
+        for (const target of candidates) {
+          // 同一 cwd 可属于不同身份／profile；只能按原始 workspace 身份去重。
+          const key = target.workspaceIdentity?.trim() || target.workspacePath;
+          if (!targets.has(key)) targets.set(key, target);
+        }
+        const pendingTargets = [...targets.values()];
+        for (const [index, workspaceTarget] of pendingTargets.entries()) {
+          // 历史项目 ENOTDIR/无权限不是数据库失败；fallback 只改变执行 cwd，不改变 profile 归属。
           const { cwd } = await resolveZCodeAgentSpawnCwd({
-            requestedCwd: candidate,
-            workspacePath: candidate,
+            requestedCwd: workspaceTarget.workspacePath,
+            workspacePath: workspaceTarget.workspacePath,
             spawnFallbackCwd: options.cwd,
           });
-          directories.add(cwd);
-        }
-        // 相对 sessionDbPath 按实际进程 cwd 解析；不能先准备 fallback 下的另一个空库。
-        const pendingDirectories = [...directories];
-        for (const [index, cwd] of pendingDirectories.entries())
           await prepareSessionStorage({
             cwd,
+            workspaceTarget,
             env: options.env,
             signal: abort.signal,
             preparedPaths,
@@ -80,10 +82,11 @@ export function createHostDatabaseStartup(options: {
               report("preparing_session_storage", phase, {
                 databaseId: details?.databaseId ?? "session",
                 migration: details?.migration,
-                finalDatabase: index === pendingDirectories.length - 1,
+                finalDatabase: index === pendingTargets.length - 1,
               }),
             observePath,
           });
+        }
         report("starting_services");
         await options.initializeServices();
       } catch (error) {

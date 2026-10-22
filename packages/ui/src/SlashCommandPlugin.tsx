@@ -25,9 +25,9 @@ import {
 import { useSubagents } from "@/hooks/useSubagents.js";
 import { useSkills } from "@/hooks/useSkills.js";
 import { buildSlashApplyMentionPayload } from "@/lib/slashApplyMentionPayload.js";
-import { filterSkillsForProvider } from "@/lib/skillSourceFilter.js";
 import { useZCodeIntl } from "./i18n/IntlProvider.js";
 import { useSlashCommands } from "./hooks/useSlashCommands.js";
+import { useOmpStorageScope } from "./hooks/useZCodeAgentService.js";
 import { $createPromptMentionNode } from "./mentions/nodes/PromptMentionNode.js";
 import {
   extractActivePromptInputTrigger,
@@ -74,6 +74,7 @@ export function SlashCommandPlugin({
   // 远程 workspace 的 slashCommands 写在 workspaceIdentity 桶。
   // 这里只按 workspacePath 读取会落到 path 桶，表现为 ZCode Agent 已收到 available_commands_update 但 / 面板为空。
   const commands = useSlashCommands(workspacePath, workspaceIdentity);
+  const nativeRuntime = Boolean(useOmpStorageScope(workspacePath, workspaceIdentity));
   const {
     agents,
     loading: subagentsLoading,
@@ -95,24 +96,26 @@ export function SlashCommandPlugin({
   const activeTokenRef = useRef<ActivePromptInputTokenSnapshot | null>(null);
   const commandSuggestions = useMemo(() => {
     const excluded = new Set((excludedCommandNames ?? []).map(normalizeSlashCommandValue));
-    const cliSuggestions = buildSlashSuggestions(commands).filter(
+    const cliSuggestions = buildSlashSuggestions(commands, nativeRuntime).filter(
       (item) => !excluded.has(item.value),
     );
     // App 层命令追加在 CLI catalog 之后展示；CLI 已提供同名命令时以 CLI 为准，避免遮蔽。
     const cliValues = new Set(cliSuggestions.map((item) => item.value));
-    const appSuggestions = buildAppSlashCommandSuggestions(appCommands ?? []).filter(
-      (item) => !cliValues.has(item.value) && !excluded.has(item.value),
-    );
+    // 原生启动事实可能先于目录；未知归属期间不能暴露会截获原生命令的本地 action。
+    const appSuggestions = buildAppSlashCommandSuggestions(
+      nativeRuntime && commands.length === 0 ? [] : (appCommands ?? []),
+    ).filter((item) => !cliValues.has(item.value) && !excluded.has(item.value));
     return [...cliSuggestions, ...appSuggestions];
-  }, [appCommands, commands, excludedCommandNames]);
+  }, [appCommands, commands, excludedCommandNames, nativeRuntime]);
   const subagentSuggestions = useMemo(() => buildSubagentSuggestions(agents), [agents]);
   const skillSuggestions = useMemo(
     () =>
       buildSkillSuggestions(
-        filterSkillsForProvider(skills, provider).filter((skill) => skill.enabled),
+        // 原生 catalog 已确定执行身份与 enabled，不能再按旧 Agent 路径丢弃条目。
+        skills.filter((skill) => skill.enabled),
         locale,
       ),
-    [locale, provider, skills],
+    [locale, skills],
   );
   const filteredCommandSuggestions = useMemo(
     () => filterPromptInputSuggestions(commandSuggestions, activeTrigger?.query ?? null),

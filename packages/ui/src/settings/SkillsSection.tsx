@@ -114,11 +114,13 @@ function SkillPathDetailField({
   path,
   openLabel,
   onOpen,
+  disabledReason,
 }: {
   label: string;
   path: string;
   openLabel: string;
   onOpen: () => void;
+  disabledReason?: string;
 }) {
   return (
     <div className="min-w-0 col-span-2">
@@ -129,9 +131,10 @@ function SkillPathDetailField({
           variant="link"
           size="sm"
           aria-label={openLabel}
-          title={openLabel}
+          title={disabledReason ?? openLabel}
+          disabled={Boolean(disabledReason)}
           className="inline-flex h-auto max-w-full items-baseline gap-1.5 whitespace-normal break-all px-0 py-0 text-left align-baseline font-mono text-ui-base font-normal text-foreground-subtle underline-offset-2 hover:text-foreground hover:underline"
-          onClick={onOpen}
+          onClick={disabledReason ? undefined : onOpen}
         >
           <span>{path}</span>
           <ExternalLink className="relative top-px size-3 shrink-0" aria-hidden="true" />
@@ -208,6 +211,7 @@ export function SkillsSection({
     targetServiceResolution.services;
   const [skills, setSkills] = useState<SkillSummary[]>([]);
   const [capability, setCapability] = useState<SkillsCapability | null>(null);
+  const nativeManagement = capability?.toggleScope === "profile";
   const [loadedSkillTargetKey, setLoadedSkillTargetKey] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -220,6 +224,7 @@ export function SkillsSection({
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
   const [importDialogOpen, setImportDialogOpen] = useState(false);
   const [remoteSkillSyncOpen, setRemoteSkillSyncOpen] = useState(false);
+  const [sharedDirectory, setSharedDirectory] = useState<string | null>(null);
   const latestRequestIdRef = useRef(0);
   const activeSkillTargetKey = buildSourceSettingsProjectionKey(
     activeWorkspacePath,
@@ -307,6 +312,7 @@ export function SkillsSection({
       if (!activeWorkspacePath) {
         setSkills([]);
         setCapability(null);
+        setSharedDirectory(null);
         setDiagnostics([]);
         setError(null);
         setLoading(false);
@@ -332,6 +338,7 @@ export function SkillsSection({
         }
         setSkills(result.skills);
         setCapability(result.capability);
+        setSharedDirectory(result.sharedDirectory?.path ?? null);
         setDiagnostics(result.diagnostics);
         setLoadedSkillTargetKey(requestTargetKey);
         setLoading(false);
@@ -392,7 +399,8 @@ export function SkillsSection({
           workspacePath: activeWorkspacePath,
           workspaceIdentity: activeWorkspaceIdentity,
           provider: effectiveProvider,
-          scope: targetSkill?.scope,
+          // 原生 OMP 只持久化 profile 用户层；发现来源不是启停设置的写入范围。
+          scope: capability?.toggleScope === "profile" ? "user" : targetSkill?.scope,
           skillId,
           enabled,
         });
@@ -411,6 +419,7 @@ export function SkillsSection({
     [
       activeWorkspaceIdentity,
       activeWorkspacePath,
+      capability?.toggleScope,
       loadSkills,
       refreshSharedSkillStoreForCurrentWorkspace,
       skills,
@@ -422,7 +431,7 @@ export function SkillsSection({
   // 复用应用根部已挂载的确认弹窗 store（useConfirmDialog），与子智能体删除流程保持一致。
   const handleDeleteSkill = useCallback(
     async (skill: SkillSummary) => {
-      if (!activeWorkspacePath || skill.scope === "plugin") {
+      if (nativeManagement || !activeWorkspacePath || skill.scope === "plugin") {
         return;
       }
       const confirmed = await confirmDialog({
@@ -461,6 +470,7 @@ export function SkillsSection({
       activeWorkspacePath,
       confirmDialog,
       intl,
+      nativeManagement,
       loadSkills,
       selectedSkill,
       skillsService,
@@ -468,7 +478,10 @@ export function SkillsSection({
   );
 
   const scopedProviderSkills = useMemo(() => {
-    const allProviderSkills = filterSkillsForProvider(skills, ZCODE_AGENT_PROVIDER);
+    // 原生列表由执行端完成发现，不再按旧 Agent 的 .zcode 路径过滤真实来源。
+    const allProviderSkills = nativeManagement
+      ? skills
+      : filterSkillsForProvider(skills, ZCODE_AGENT_PROVIDER);
     const pluginStoreMatchesTarget =
       (pluginWorkspaceIdentity?.trim() || pluginWorkspacePath || "") ===
         (activeWorkspaceIdentity?.trim() || activeWorkspacePath || "") &&
@@ -483,6 +496,7 @@ export function SkillsSection({
     activeWorkspacePath,
     installedPlugins,
     pluginWorkspaceIdentity,
+    nativeManagement,
     pluginWorkspacePath,
     pluginConfigScope,
     plugins,
@@ -521,13 +535,11 @@ export function SkillsSection({
     onVisibleCountChange?.(filteredSkillCount);
   }, [filteredSkillCount, onVisibleCountChange]);
   const handleCreateSkill = () => {
-    if (!activeWorkspacePath || !onCreateTask) {
+    if (nativeManagement || !activeWorkspacePath || !onCreateTask) {
       return;
     }
     const effectiveProvider: ZCodeProvider = ZCODE_AGENT_PROVIDER;
-    const skillCreator = filterSkillsForProvider(skills, effectiveProvider).find(
-      (skill) => skill.name === "skill-creator",
-    );
+    const skillCreator = skills.find((skill) => skill.name === "skill-creator" && skill.enabled);
     const markdown = buildSkillMentionMarkdown("skill-creator", skillCreator?.path);
 
     // v4 迁移删除旧 pendingComposerPrefill 后，这个入口仍手工操作 session
@@ -630,6 +642,27 @@ export function SkillsSection({
                 id: "settings.skills.noDescription",
               })}
           </div>
+          {skill.source?.providerName === "Shared" ? (
+            <div
+              data-skill-source="shared"
+              className="mt-1 min-w-0 break-all text-ui-sm text-foreground-subtle"
+            >
+              <span className="font-medium">
+                {intl.formatMessage({ id: "settings.skills.source.shared" })}
+              </span>
+              {" · "}
+              {intl.formatMessage(
+                { id: "settings.skills.source.executionHost" },
+                {
+                  host:
+                    remoteSkillSyncTargetLabel ||
+                    activeWorkspaceIdentity ||
+                    intl.formatMessage({ id: "settings.skills.source.localHost" }),
+                },
+              )}
+              <div>{skill.source.path}</div>
+            </div>
+          ) : null}
         </div>
         <div className="flex shrink-0 items-center gap-2">
           {skill.scope === "plugin" ? null : (
@@ -644,9 +677,12 @@ export function SkillsSection({
                 type="button"
                 variant="ghost"
                 size="icon-sm"
+                disabled={nativeManagement}
                 className="shrink-0 text-foreground-subtle hover:bg-destructive/10 hover:text-destructive"
                 aria-label={intl.formatMessage({ id: "common.delete" })}
-                title={intl.formatMessage({ id: "common.delete" })}
+                title={intl.formatMessage({
+                  id: nativeManagement ? "settings.skills.nativeManagementNotice" : "common.delete",
+                })}
                 onClick={() => void handleDeleteSkill(skill)}
               >
                 <Trash2 className="size-3.5" aria-hidden="true" />
@@ -669,15 +705,24 @@ export function SkillsSection({
   const skillHeaderActions = (
     <SettingsResourceHeaderActions
       onRefresh={() => void Promise.all([refresh(), refreshSharedSkillStoreForCurrentWorkspace()])}
-      onImport={() => setImportDialogOpen(true)}
+      onImport={() => {
+        if (!nativeManagement) setImportDialogOpen(true);
+      }}
       onNew={handleCreateSkill}
-      importDisabled={!capability?.userScopeAvailable}
+      newDisabled={nativeManagement}
+      importDisabled={nativeManagement || !capability?.userScopeAvailable}
       importActionId="settings.skills.import.open"
       newActionId="settings.skills.create.open"
     />
   );
   const remoteSyncAction = connectedRemoteSyncTarget ? (
-    <ControlHintTooltip title={intl.formatMessage({ id: "settings.skills.remoteSync.open" })}>
+    <ControlHintTooltip
+      title={intl.formatMessage({
+        id: nativeManagement
+          ? "settings.skills.nativeManagementNotice"
+          : "settings.skills.remoteSync.open",
+      })}
+    >
       <Button
         type="button"
         variant="outline"
@@ -685,7 +730,15 @@ export function SkillsSection({
         aria-label={intl.formatMessage({
           id: "settings.skills.remoteSync.open",
         })}
-        onClick={() => setRemoteSkillSyncOpen(true)}
+        disabled={nativeManagement}
+        title={
+          nativeManagement
+            ? intl.formatMessage({ id: "settings.skills.nativeManagementNotice" })
+            : undefined
+        }
+        onClick={() => {
+          if (!nativeManagement) setRemoteSkillSyncOpen(true);
+        }}
       >
         <UploadCloud className="size-3.5" aria-hidden="true" />
       </Button>
@@ -723,6 +776,26 @@ export function SkillsSection({
             { id: "settings.skills.remoteContext" },
             { target: remoteSkillSyncTargetLabel },
           )}
+        </div>
+      ) : null}
+
+      {targetServiceResolution.rpcReady &&
+      projectionMatchesTarget &&
+      capability?.toggleScope === "profile" ? (
+        <div
+          data-skill-toggle-scope="profile"
+          className="min-w-0 break-words rounded-lg border border-border bg-card px-3 py-2 text-ui-base text-foreground-subtle"
+        >
+          {intl.formatMessage({ id: "settings.skills.profileToggleNotice" })}
+          <p className="mt-1">
+            {intl.formatMessage({ id: "settings.skills.nativeManagementNotice" })}
+          </p>
+          {sharedDirectory ? (
+            <div data-skill-shared-directory="true" className="mt-2 break-all">
+              {intl.formatMessage({ id: "settings.skills.source.sharedDirectory" })}
+              <div className="font-mono">{sharedDirectory}</div>
+            </div>
+          ) : null}
         </div>
       ) : null}
 
@@ -815,7 +888,14 @@ export function SkillsSection({
       ) : (
         <div className="space-y-6">
           <section className={hideInstalledGroup ? "hidden" : "space-y-4"}>
-            <div data-skills-plugin-direct-actions="true">
+            <div
+              data-skills-plugin-direct-actions="true"
+              title={
+                nativeManagement
+                  ? intl.formatMessage({ id: "settings.skills.nativeManagementNotice" })
+                  : undefined
+              }
+            >
               <SettingsResourceGroupHeader
                 actions={skillHeaderActions}
                 count={groupedSkills.local.length}
@@ -832,11 +912,19 @@ export function SkillsSection({
                   id: "settings.plugin.skills.emptyInstalledTitle",
                 })}
                 description={intl.formatMessage({
-                  id: "settings.plugin.skills.emptyInstalledDescription",
+                  id: nativeManagement
+                    ? "settings.skills.nativeManagementNotice"
+                    : "settings.plugin.skills.emptyInstalledDescription",
                 })}
                 actions={
                   <>
-                    <Button type="button" variant="default" size="lg" onClick={handleCreateSkill}>
+                    <Button
+                      type="button"
+                      variant="default"
+                      size="lg"
+                      disabled={nativeManagement}
+                      onClick={handleCreateSkill}
+                    >
                       <Plus data-icon="inline-start" aria-hidden="true" />
                       {intl.formatMessage({
                         id: "settings.plugin.skills.newSkill",
@@ -846,8 +934,10 @@ export function SkillsSection({
                       type="button"
                       variant="outline"
                       size="lg"
-                      disabled={!capability?.userScopeAvailable}
-                      onClick={() => setImportDialogOpen(true)}
+                      disabled={nativeManagement || !capability?.userScopeAvailable}
+                      onClick={() => {
+                        if (!nativeManagement) setImportDialogOpen(true);
+                      }}
                     >
                       <Import data-icon="inline-start" aria-hidden="true" />
                       {intl.formatMessage({
@@ -959,13 +1049,14 @@ export function SkillsSection({
                     className="col-span-2"
                   />
                   <SkillPathDetailField
-                    label={intl.formatMessage({
-                      id: "settings.skills.detail.path",
-                    })}
-                    path={detailSkill.path}
-                    openLabel={intl.formatMessage({
-                      id: "settings.skills.detail.openPath",
-                    })}
+                    label={intl.formatMessage({ id: "settings.skills.detail.path" })}
+                    path={detailSkill.source?.path ?? detailSkill.path}
+                    openLabel={intl.formatMessage({ id: "settings.skills.detail.openPath" })}
+                    disabledReason={
+                      nativeManagement
+                        ? intl.formatMessage({ id: "settings.skills.nativePathUnavailable" })
+                        : undefined
+                    }
                     onOpen={() => void openSkillFilePath(detailSkill.path)}
                   />
                 </div>
@@ -975,7 +1066,7 @@ export function SkillsSection({
         </DialogContent>
       </Dialog>
       <SkillsImportDialog
-        open={importDialogOpen && targetServiceResolution.rpcReady}
+        open={!nativeManagement && importDialogOpen && targetServiceResolution.rpcReady}
         workspacePath={activeWorkspacePath}
         workspaceIdentity={activeWorkspaceIdentity}
         settingsSyncService={targetServiceResolution.services.settingsSyncService}
@@ -991,10 +1082,13 @@ export function SkillsSection({
       />
       <RemoteSyncDialogs
         canSyncSkills={Boolean(
-          targetServiceResolution.rpcReady && connectedRemoteSyncTarget && activeWorkspacePath,
+          !nativeManagement &&
+          targetServiceResolution.rpcReady &&
+          connectedRemoteSyncTarget &&
+          activeWorkspacePath,
         )}
         canSyncMcp={false}
-        skillOpen={remoteSkillSyncOpen && targetServiceResolution.rpcReady}
+        skillOpen={!nativeManagement && remoteSkillSyncOpen && targetServiceResolution.rpcReady}
         mcpOpen={false}
         onSkillOpenChange={setRemoteSkillSyncOpen}
         onMcpOpenChange={() => {}}

@@ -28,7 +28,7 @@ import type {
   UserInfo,
   ZCodeInteractionBehavior,
 } from "@zcode/shared";
-import { BUILTIN_MODEL_PROVIDER_IDS } from "@zcode/shared";
+import { BUILTIN_MODEL_PROVIDER_IDS, resolveWorkspaceKey } from "@zcode/shared";
 import {
   TID_SETTINGS_BACK_BUTTON,
   TID_SETTINGS_PAGE,
@@ -108,13 +108,14 @@ import { WorkspaceHelpMenuButton } from "@/WorkspaceHelpMenuButton.js";
 import { WorkspaceSidebarFooter } from "@/WorkspaceSidebarFooter.js";
 import { ControlHintTooltip } from "@/ControlHintTooltip.js";
 import { cn } from "@/components/lib/utils.js";
-import { useSelectDirectory } from "@/hooks/usePlatform.js";
 import { ServiceProvider, useServices } from "@/hooks/useServices.js";
 import type { AppToolSearchMode } from "@zcode/shared";
 import { useSettings } from "@/hooks/useSettingService.js";
 import type { CreateTaskRequest, RemoteConnectionOpenPreference } from "@/app-shell/types.js";
 import { useBaseWorkspaceServices } from "@/hooks/useWorkspaceServices.js";
 import { resolveModelProviderConnectivityWorkspacePath } from "@/lib/modelProviderConnectivityTarget.js";
+import { useZCodeAgentService } from "@/hooks/useZCodeAgentService.js";
+import { OmpWorkspaceProfiles } from "@/omp-configuration/module.js";
 import {
   createSettingsPageConfig,
   GeneralSectionContent,
@@ -136,6 +137,25 @@ import {
   type UserActionTrigger,
 } from "@/lib/userActionTelemetry.js";
 import type { SettingsUserActionFeatureId } from "@/lib/userActionTraceCatalog.js";
+
+function SettingsWorkspaceProfiles({
+  workspacePath,
+  workspaceIdentity,
+  remoteSessionId,
+}: {
+  workspacePath: string;
+  workspaceIdentity?: string;
+  remoteSessionId?: string;
+}) {
+  const service = useZCodeAgentService(workspacePath, remoteSessionId, workspaceIdentity);
+  return (
+    <OmpWorkspaceProfiles
+      service={service}
+      workspacePath={workspacePath}
+      workspaceIdentity={workspaceIdentity}
+    />
+  );
+}
 
 function runSettingsActionAsync<T>(options: {
   featureId: SettingsUserActionFeatureId;
@@ -744,7 +764,6 @@ export function SettingsPage({
     activeWorkspaceTab?.remoteSessionId?.trim() ||
     activeWorkspaceTab?.remoteTarget,
   );
-  const selectDirectory = useSelectDirectory();
   const services = useServices();
   const onboardingRecordService = services.onboardingRecordService;
   const localHostServices = useBaseWorkspaceServices();
@@ -817,7 +836,6 @@ export function SettingsPage({
   const [toolGroupingChangesEnabled, setToolGroupingChangesEnabled] = useState(false);
   const [zcodeInteractionBehavior, setZCodeInteractionBehavior] =
     useState<ZCodeInteractionBehavior>("queue");
-  const [defaultHomeDir, setDefaultHomeDir] = useState("");
   const [hostPlatform, setHostPlatform] = useState("");
 
   useEffect(() => {
@@ -902,7 +920,6 @@ export function SettingsPage({
       .info()
       .then((info) => {
         if (!active) return;
-        setDefaultHomeDir(info.homedir);
         setHostPlatform(info.platform);
         if (info.platform !== "win32") {
           setIntegratedTerminalShellOptions([]);
@@ -1150,21 +1167,6 @@ export function SettingsPage({
       toast(intl.formatMessage({ id: "settings.httpProxySavedHint" }));
     },
     [localHostServices.settingService, intl],
-  );
-  const handleDataBaseDirChange = useCallback(
-    async (dir: string) => {
-      await runSettingsActionAsync({
-        featureId: "settings.storage",
-        action: "change_data_directory",
-        trigger: "button",
-        operation: () => localHostServices.settingService.updateDataBaseDir(dir || undefined),
-        completed: { resultSource: "setting_service", requiresRestart: true },
-        failureStage: "data_directory_update",
-      });
-      // Bugfix: 迁移失败时不能先把本地状态改成失败路径，否则设置页会误显示为已切换。
-      setDataBaseDir(dir);
-    },
-    [localHostServices.settingService],
   );
   const handleTaskAutoArchiveEnabledChange = useCallback(
     async (enabled: boolean) => {
@@ -1841,7 +1843,6 @@ export function SettingsPage({
                               httpProxy={httpProxy}
                               httpProxyNoProxy={httpProxyNoProxy}
                               httpProxyCaCertPath={httpProxyCaCertPath}
-                              defaultHomeDir={defaultHomeDir}
                               showIntegratedTerminalShell={hostPlatform === "win32"}
                               setLocalePreference={handleFooterLocaleChange}
                               setNotificationEnabled={(enabled) =>
@@ -1884,8 +1885,6 @@ export function SettingsPage({
                                 askUserQuestionAutoResolutionEnabled
                               }
                               modelIoFullRetentionEnabled={modelIoFullRetentionEnabled}
-                              onDataBaseDirChange={handleDataBaseDirChange}
-                              onSelectDataBaseDir={selectDirectory}
                               onTerminalInheritSystemProfileChange={
                                 handleTerminalInheritSystemProfileChange
                               }
@@ -2082,20 +2081,40 @@ export function SettingsPage({
                           ) : activeSection === "shortcuts" ? (
                             <ShortcutSettingsSection isDesktop={Boolean(isDesktop)} />
                           ) : activeSection === "modelProvider" ? (
-                            <ServiceProvider services={localHostServices}>
-                              {/* 模型配置属于本机全局事实源；激活远端 workspace 时也不能注入远端 Host。 */}
-                              <ModelProviderSection
-                                workspacePath={activeWorkspacePath ?? captionWorkspacePath ?? ""}
-                                connectivityWorkspacePath={
-                                  localModelProviderConnectivityWorkspacePath
-                                }
-                                connectivityWorkspaceRequired={isRemoteModelProviderWorkspace}
-                                pendingModelProviderTarget={pendingModelProviderTarget}
-                                onConsumePendingModelProviderTarget={() =>
-                                  setPendingModelProviderTarget(undefined)
-                                }
-                              />
-                            </ServiceProvider>
+                            <>
+                              {activeWorkspacePath ? (
+                                <SettingsWorkspaceProfiles
+                                  key={resolveWorkspaceKey({
+                                    workspacePath: activeWorkspacePath,
+                                    workspaceIdentity: activeWorkspaceIdentity,
+                                  })}
+                                  workspacePath={activeWorkspacePath}
+                                  workspaceIdentity={activeWorkspaceIdentity}
+                                  remoteSessionId={activeWorkspaceTab?.remoteSessionId}
+                                />
+                              ) : (
+                                <p
+                                  data-testid="omp-profile-no-target"
+                                  className="text-ui-base text-foreground-subtle"
+                                >
+                                  {intl.formatMessage({ id: "omp.profiles.noTarget" })}
+                                </p>
+                              )}
+                              <ServiceProvider services={localHostServices}>
+                                {/* 模型配置属于本机全局事实源；激活远端 workspace 时也不能注入远端 Host。 */}
+                                <ModelProviderSection
+                                  workspacePath={activeWorkspacePath ?? captionWorkspacePath ?? ""}
+                                  connectivityWorkspacePath={
+                                    localModelProviderConnectivityWorkspacePath
+                                  }
+                                  connectivityWorkspaceRequired={isRemoteModelProviderWorkspace}
+                                  pendingModelProviderTarget={pendingModelProviderTarget}
+                                  onConsumePendingModelProviderTarget={() =>
+                                    setPendingModelProviderTarget(undefined)
+                                  }
+                                />
+                              </ServiceProvider>
+                            </>
                           ) : activeSection === "memory" ? (
                             <ServiceProvider services={localHostServices}>
                               {/* Memory catalog 始终使用本地 Host，避免远程 workspace 误读本机数据。 */}

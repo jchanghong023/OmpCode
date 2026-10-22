@@ -20,7 +20,8 @@ import {
 } from "@/v4/composer/composerDraftStore.js";
 
 import { useComposerClientNamespace } from "@/hooks/useServices.js";
-import { useZCodeSessionStore } from "@/store/zcodeSessionStore.js";
+import { useOmpStorageScope } from "@/hooks/useZCodeAgentService.js";
+import { useResolvedRemoteWorkspaceSessionId } from "@/hooks/useResolvedRemoteWorkspaceSessionId.js";
 
 interface Scope {
   workspacePath: string;
@@ -96,18 +97,30 @@ export function RemoteConversationBanner(scope: Scope) {
 export function RemoteConversationDisconnected(scope: Scope) {
   const { intl } = useZCodeIntl();
   const clientNamespace = useComposerClientNamespace();
-  const projectId = useZCodeSessionStore(
-    (state) =>
-      state.workspaces[scope.workspaceIdentity?.trim() || scope.workspacePath]?.draftProjectId,
+  const remoteSessionId = useResolvedRemoteWorkspaceSessionId(
+    scope.workspacePath,
+    undefined,
+    scope.workspaceIdentity,
   );
-  const draftScope =
-    projectId !== undefined
-      ? resolveComposerScope(projectId, scope.workspaceIdentity, clientNamespace)
-      : (readComposerWorkspaceScope(
-          scope.workspacePath,
-          scope.workspaceIdentity,
-          clientNamespace,
-        ) ?? resolveComposerScope(null, scope.workspaceIdentity, clientNamespace));
+  const storageScope = useOmpStorageScope(
+    scope.workspacePath,
+    scope.workspaceIdentity,
+    remoteSessionId,
+  );
+  // 断连时不能从无域标签的导航内存或 legacy key 猜测草稿归属。
+  const rememberedScope = readComposerWorkspaceScope(
+    scope.workspacePath,
+    scope.workspaceIdentity,
+    clientNamespace,
+    storageScope,
+  );
+  const draftScope = resolveComposerScope(
+    rememberedScope?.projectId,
+    scope.workspaceIdentity,
+    clientNamespace,
+    storageScope,
+    remoteSessionId,
+  );
   const draft = readV4ComposerDraft(
     scope.workspacePath,
     scope.workspaceIdentity,

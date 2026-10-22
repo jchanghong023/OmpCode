@@ -1,0 +1,13 @@
+.omp-team-flow {
+  stroke-dasharray: 5 4;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .omp-team-flow[data-active="true"] {
+    animation: omp-team-edge-flow 1.2s linear infinite;
+  }
+}
+@keyframes omp-team-edge-flow {
+  to {
+    stroke-dashoffset: -18;
+  }
+}

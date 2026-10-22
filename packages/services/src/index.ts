@@ -391,6 +391,8 @@ export type {
   TaskGroup,
   TaskGroupColor,
   TaskGroupStructure,
+  TaskGroupDomainStructure,
+  TaskGroupWorkspaceTarget,
   GroupTaskRef,
   GroupNode,
   MoveGroupNode,

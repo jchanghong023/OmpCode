@@ -266,6 +266,8 @@ export function createZCodeTaskIndexSyncer(
   options: CreateZCodeTaskIndexSyncerOptions,
 ): ZCodeTaskIndexSyncer {
   const { agentService, taskIndexRepo } = options;
+  if (typeof agentService.getOmpProfiles === "function")
+    taskIndexRepo.configureNativeOmpScope((target) => agentService.getOmpProfiles(target));
   // task index 的事件摄入从旧协议 shadow 订阅（session/subscribe +
   // session/event + state.updated）整体迁到 v4 帧——sessions-index topic 提供
   // status(phase)/title/lastActivity 的 workspace 级 conflated 最新态，
@@ -532,7 +534,37 @@ export function createZCodeTaskIndexSyncer(
   }
 
   const taskFacts = createTaskFacts({
-    store: taskIndexRepo,
+    store: {
+      getTaskMeta: (target) => taskIndexRepo.getTaskMeta(target),
+      applyCliDeletion: (target) => taskIndexRepo.applyCliDeletion(target),
+      markCliOrphan: (target) => taskIndexRepo.markCliOrphan(target),
+      async listReconciliationRows(target) {
+        const rows = await taskIndexRepo.listReconciliationRows(target);
+        const profiles = await agentService.getOmpProfiles?.(target);
+        if (!profiles?.supported) return rows;
+        // profile 专属列表缺席不是其它 profile（或旧未知行）的删除/交接证据。
+        return rows.filter((row) => row.meta.ompProfile === profiles.activeProfile);
+      },
+      async applyCliFacts(facts) {
+        const profiles = await agentService.getOmpProfiles?.(facts.meta);
+        if (profiles?.supported) {
+          const bound = await taskIndexRepo.readTaskOmpProfile(facts.meta);
+          if (bound !== undefined) {
+            await taskIndexRepo.assertTaskOmpProfile(facts.meta, profiles.activeProfile);
+          }
+        }
+        const meta = await taskIndexRepo.applyCliFacts(facts);
+        if (!profiles?.supported || meta.ompProfile !== undefined) return meta;
+        // 先有索引行，再由同一原生 client 的成功 list 精确确认并绑定；偏好不能作事实。
+        await agentService.listSessions({
+          workspacePath: meta.workspacePath,
+          workspaceIdentity: meta.workspaceIdentity,
+          sessionIds: [meta.taskId],
+          runtimePolicy: "existing-only",
+        });
+        return (await taskIndexRepo.getTaskMeta(meta)) ?? meta;
+      },
+    },
     source: {
       reconcile: async (target, sessionIds) => {
         if (!agentService.reconcileSessionsIndexV4)

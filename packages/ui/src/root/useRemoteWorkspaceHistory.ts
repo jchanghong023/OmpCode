@@ -13,6 +13,14 @@ import { getWorkspaceSourceServerId } from "@/conversation-workspace-target/sour
 /* eslint-disable max-lines -- Bugfix: 远端 workspace 历史目前需要在一个 hook 内同时收口恢复、重连、持久化和清理流程，先保留同文件协作边界，避免为过 lint 临时拆分后引入状态回归。 */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Dispatch, SetStateAction } from "react";
+import { useComposerClientNamespace } from "@/hooks/useServices.js";
+import {
+  persistV4ComposerDraft,
+  readV4ComposerDraft,
+  rememberComposerWorkspaceScope,
+  resolveComposerScope,
+  V4_DRAFT_SCOPE_ROOT,
+} from "@/v4/composer/composerDraftStore.js";
 import type {
   AppSettings,
   BindRemoteWorkspaceSessionContextResult,
@@ -1094,6 +1102,14 @@ export function useRemoteWorkspaceHistory({
   }) => void;
   manuallyOpeningWorkspaceTabId?: string;
 }) {
+  const composerClientNamespace = useComposerClientNamespace();
+  const remoteDraftGeneration = useRef(0);
+  useEffect(
+    () => () => {
+      remoteDraftGeneration.current++;
+    },
+    [],
+  );
   const showRemoteConnectionEntry = useRemoteConnectionEntryVisibility();
   const canUseRemoteWorkspace = allowRemoteWorkspace && showRemoteConnectionEntry;
   const allowRemoteWorkspaceRestore = canUseRemoteWorkspace;
@@ -1787,6 +1803,7 @@ export function useRemoteWorkspaceHistory({
       preparedWorkspaceIdentity?: string,
       isCurrent?: () => boolean | Promise<boolean>,
     ) => {
+      const generation = ++remoteDraftGeneration.current;
       try {
         await selectRemoteWorkspaceProjectFromDialog({
           canUseRemoteWorkspace,
@@ -1817,11 +1834,94 @@ export function useRemoteWorkspaceHistory({
             (draftProjectId === undefined
               ? undefined
               : ({ workspacePath, workspaceIdentity }) => {
-                  useZCodeSessionStore
-                    .getState()
-                    .startDraft(workspacePath, undefined, workspaceIdentity, {
-                      projectId: draftProjectId,
-                    });
+                  void (async () => {
+                    const state = tabStoreApi.getState();
+                    const targetTab = state.tabs
+                      .filter(isWorkspaceTab)
+                      .find((tab) => tab.workspaceIdentity === workspaceIdentity);
+                    const ownerSessionId = targetTab?.remoteSessionId ?? sessionId;
+                    const owner = getRemoteWorkspaceSession(ownerSessionId);
+                    if (!owner?.services) {
+                      toast(intl.formatMessage({ id: "common.ompStorageScopeUnavailable" }), {
+                        variant: "info",
+                      });
+                      return;
+                    }
+                    let stale = false;
+                    const key = workspaceIdentity.trim() || workspacePath;
+                    const restarted = owner.services.zcodeAgentService.onAgentRuntimeRestarted(
+                      (event) => {
+                        if (event.workspaceKey === key) stale = true;
+                      },
+                    );
+                    const lifecycle = owner.services.zcodeAgentService.onAgentRuntimeLifecycle?.(
+                      (event) => {
+                        if (event.workspaceKey === key && event.state !== "available") stale = true;
+                      },
+                    );
+                    try {
+                      const profile = await owner.services.zcodeAgentService.getOmpProfiles({
+                        workspacePath,
+                        workspaceIdentity,
+                      });
+                      if (isCurrent && !(await isCurrent())) return;
+                      // 原因：异步读取实际域期间 attachment/profile 可能重绑；旧 owner 不能提交新域草稿。
+                      if (
+                        stale ||
+                        generation !== remoteDraftGeneration.current ||
+                        tabStoreApi.getState().activeTabId !== state.activeTabId ||
+                        getRemoteWorkspaceSession(ownerSessionId)?.services !== owner.services
+                      )
+                        return;
+                      if (!profile.storageScope) {
+                        toast(intl.formatMessage({ id: "common.ompStorageScopeUnavailable" }), {
+                          variant: "info",
+                        });
+                        return;
+                      }
+                      const scope = resolveComposerScope(
+                        draftProjectId,
+                        workspaceIdentity,
+                        composerClientNamespace,
+                        profile.storageScope,
+                        ownerSessionId,
+                      );
+                      const draft = readV4ComposerDraft(
+                        workspacePath,
+                        workspaceIdentity,
+                        V4_DRAFT_SCOPE_ROOT,
+                        scope,
+                      );
+                      rememberComposerWorkspaceScope(workspacePath, workspaceIdentity, scope);
+                      persistV4ComposerDraft(
+                        workspacePath,
+                        workspaceIdentity,
+                        V4_DRAFT_SCOPE_ROOT,
+                        {
+                          text: "",
+                          ...draft,
+                          projectId: draftProjectId,
+                        },
+                        scope,
+                      );
+                      useZCodeSessionStore
+                        .getState()
+                        .startDraft(workspacePath, undefined, workspaceIdentity, {
+                          projectId: draftProjectId,
+                          taskGroupId: draft?.taskGroupId ?? null,
+                          draftStorageScope: profile.storageScope,
+                        });
+                    } finally {
+                      restarted.dispose();
+                      lifecycle?.dispose();
+                    }
+                  })().catch((error) => {
+                    logger.warn("[Root] 远程草稿实际域读取失败，未提交草稿", error);
+                    if (generation === remoteDraftGeneration.current)
+                      toast(intl.formatMessage({ id: "common.ompStorageScopeUnavailable" }), {
+                        variant: "info",
+                      });
+                  });
                 }),
         });
       } finally {
@@ -1839,6 +1939,7 @@ export function useRemoteWorkspaceHistory({
       resolveRemoteWorkspaceCanonicalPath,
       bindRemoteWorkspaceScope,
       canUseRemoteWorkspace,
+      composerClientNamespace,
     ],
   );
 

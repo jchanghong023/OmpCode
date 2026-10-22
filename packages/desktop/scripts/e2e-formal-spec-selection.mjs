@@ -5,6 +5,20 @@ export const SSH_FORMAL_SPEC_GLOB =
 // Bug 根因：逐领域枚举漏掉新增候选目录，导致单进程全量与分片正式集合不一致。
 export const MANUAL_REVIEW_SPEC_GLOB = "./test/e2e/**/manual-review/**/*.test.ts";
 
+// 同一 OMP 默认集合同时供 WDIO 和分片入口消费，避免 .e2e.ts 漏过 .test.ts 扫描。
+export const OMP_DEFAULT_E2E_SPECS = [
+  "./test/e2e/omp-app-server.e2e.ts",
+  "./test/e2e/omp-subagents.e2e.ts",
+  "./test/e2e/omp-workflows.e2e.ts",
+  "./test/e2e/omp-permissions.e2e.ts",
+  "./test/e2e/omp-management.e2e.ts",
+  "./test/e2e/omp-team.e2e.ts",
+  "./test/e2e/omp-indexes.e2e.ts",
+  "./test/e2e/omp-profiles.e2e.ts",
+  "./test/e2e/omp-tan.e2e.ts",
+  "./test/e2e/omp-commands.e2e.ts",
+];
+
 // 临时缩小 fork E2E 执行范围；保留用例实现，不将排除项记为通过。
 // 精确枚举正式用例，避免影响 manual-review 副本或同名协议/会话场景。
 // 子代理与工作流是 OMP 核心验收：显式 OMP 入口另纳入 omp-subagents.e2e.ts
@@ -82,7 +96,6 @@ export const FORK_TEMPORARY_E2E_EXCLUDES = [
   "./test/e2e/conversation-session/conversation-session-v4-load-older.test.ts",
   "./test/e2e/conversation-session/conversation-session-v4-input-control.test.ts",
   "./test/e2e/conversation-session/conversation-session-v4-scroll.test.ts",
-  "./test/e2e/conversation-session/conversation-session-v4-mention.test.ts",
   "./test/e2e/conversation-session/conversation-session-v4-turn-navigator.test.ts",
   "./test/e2e/conversation-session/conversation-session-native-search-setting.test.ts",
   "./test/e2e/conversation-session/conversation-session-plan-approval-primary-submit.test.ts",
@@ -100,7 +113,6 @@ export const FORK_TEMPORARY_E2E_EXCLUDES = [
   "./test/e2e/conversation-session/conversation-session-pasted-image-path-edge-cases.test.ts",
   "./test/e2e/conversation-session/conversation-session-model-trajectory-viewer.test.ts",
   "./test/e2e/conversation-session/conversation-session-model-switch-image-strip.test.ts",
-  "./test/e2e/conversation-session/conversation-session-model-switch-restore-repro.test.ts",
   "./test/e2e/conversation-session/conversation-session-composer-provider-identity.test.ts",
   "./test/e2e/conversation-session/conversation-session-toolsearch-local.test.ts",
   "./test/e2e/conversation-session/conversation-session-toolsearch-cli.test.ts",

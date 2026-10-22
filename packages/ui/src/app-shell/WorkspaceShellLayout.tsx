@@ -58,6 +58,7 @@ import type {
 } from "@/settings/saved-workflows/SavedWorkflowsSection.js";
 import { AutomationsMainBreadcrumbFrame } from "@/settings/AutomationsMainBreadcrumbFrame.js";
 import { PluginStorePage } from "@/settings/PluginStorePage.js";
+import { WikiPage, RepoPage, TeamPage } from "@/omp-configuration/module.js";
 import { TaskFindDialog } from "@/quickpick/TaskFindDialog.js";
 import { WebRemoteControlMobileShell } from "@/WebRemoteControlMobileShell.js";
 import { resolveTopOverlayLeadingPaddingClass, WorkspaceHeader } from "@/WorkspaceHeader.js";
@@ -1199,8 +1200,11 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
     onWorkspaceMainViewChange("chat");
   }, [onWorkspaceMainViewChange]);
   const primaryNavigationBack =
-    workspaceMainView === "plugin-store" ? showChatMainView : handleTaskNavBack;
-  const canPrimaryNavigationBack = workspaceMainView === "plugin-store" || canTaskNavBack;
+    workspaceMainView !== "chat" && workspaceMainView !== "automations"
+      ? showChatMainView
+      : handleTaskNavBack;
+  const canPrimaryNavigationBack =
+    (workspaceMainView !== "chat" && workspaceMainView !== "automations") || canTaskNavBack;
   useEffect(() => {
     if (
       isWebRemoteControlShell &&
@@ -1982,6 +1986,12 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
       automationsActive={workspaceMainView === "automations"}
       onOpenPluginStore={handleOpenPluginStore}
       pluginStoreActive={workspaceMainView === "plugin-store"}
+      onOpenOmpPage={onWorkspaceMainViewChange}
+      ompPageActive={
+        workspaceMainView === "wiki" || workspaceMainView === "repo" || workspaceMainView === "team"
+          ? workspaceMainView
+          : undefined
+      }
       // 桌面没有 mobile 导航动作；内联包装曾让右侧开关穿透侧栏 memo，重复渲染全部项目。
       onWebRemoteTaskOpen={
         mobile
@@ -2002,6 +2012,32 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
       }
     />
   );
+
+  const ompPageKey = `${workspaceIdentity?.trim() || workspaceAbsPath}:${workspaceRemoteSessionId ?? ""}`;
+  const ompPageContent =
+    workspaceMainView === "wiki" ? (
+      <WikiPage
+        key={`wiki:${ompPageKey}`}
+        workspacePath={workspaceAbsPath}
+        workspaceIdentity={workspaceIdentity}
+        remoteSessionId={workspaceRemoteSessionId}
+      />
+    ) : workspaceMainView === "repo" ? (
+      <RepoPage
+        key={`repo:${ompPageKey}`}
+        workspacePath={workspaceAbsPath}
+        workspaceIdentity={workspaceIdentity}
+        remoteSessionId={workspaceRemoteSessionId}
+      />
+    ) : workspaceMainView === "team" ? (
+      <TeamPage
+        key={`team:${ompPageKey}`}
+        workspacePath={workspaceAbsPath}
+        workspaceIdentity={workspaceIdentity}
+        remoteSessionId={workspaceRemoteSessionId}
+        sessionId={activeTaskId ?? undefined}
+      />
+    ) : null;
 
   // 断点切换曾卸载查看 Reporter，伪造离开后返回并清掉手动未读。
   // 同一 Shell 持有查看与手机导航，只替换布局内容；真实 Home/后台仍立即撤销查看。
@@ -2088,7 +2124,9 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
         }
         chatOverlay={workspaceMainView === "chat" ? renderChatFindDialog() : undefined}
         chatContent={
-          workspaceMainView === "automations" && !isWebRemoteControlShell ? (
+          ompPageContent ? (
+            ompPageContent
+          ) : workspaceMainView === "automations" && !isWebRemoteControlShell ? (
             <main
               id={AUTOMATIONS_TOAST_ANCHOR_ID}
               className="flex h-full min-h-0 flex-1 flex-col bg-background"
@@ -2525,7 +2563,9 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
                         </Button>
                       ) : null}
                       <div className="min-h-0 flex-1 overflow-hidden">
-                        {workspaceMainView === "automations" && !isWebRemoteControlShell ? (
+                        {ompPageContent ? (
+                          ompPageContent
+                        ) : workspaceMainView === "automations" && !isWebRemoteControlShell ? (
                           <main
                             id={AUTOMATIONS_TOAST_ANCHOR_ID}
                             className="flex h-full min-h-0 flex-1 flex-col bg-background"
@@ -2785,7 +2825,7 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
   );
   return (
     <DesktopWindowFrame
-      title={`ZCode / ${getPathLeaf(workspaceAbsPath)}`}
+      title={`OmpCode / ${getPathLeaf(workspaceAbsPath)}`}
       showHeader
       isDesktop={isDesktop}
       isMacDesktop={isMacDesktop}

@@ -7,6 +7,7 @@
   },
   "exports": {
     ".": "./src/index.ts",
+    "./omp-indexes": "./src/omp-index-protocol/contract.ts",
     "./runtime-env": "./src/runtimeEnv.ts",
     "./test-ids": "./src/test-ids.ts",
     "./mcp": "./src/mcp.ts",

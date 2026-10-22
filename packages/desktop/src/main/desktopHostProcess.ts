@@ -11,6 +11,7 @@ import {
   type HostMcpTelemetryResponse,
   type HostSessionCreateTelemetryResponse,
   type HostPluginTelemetryResponse,
+  type HostStartupWorkspaceTarget,
   type RemoteTarget,
   type TaskRealtimeHostDeliveryKind,
   type WorkspacePurpose,
@@ -82,10 +83,7 @@ export interface HostInitMessage {
   feedbackApiBase?: string;
   workspacePath?: string;
   workspaceIdentity?: string;
-  agentWarmupTargets?: Array<{
-    workspacePath: string;
-    workspaceIdentity?: string;
-  }>;
+  agentWarmupTargets?: HostStartupWorkspaceTarget[];
   agentSpawnFallbackCwd?: string;
   remoteAssets?: RemoteAssetDirs;
   /** Main 解析后的 ZCode Built-in Provider Config 路径；Host/Services 不感知 Electron 安装布局。 */

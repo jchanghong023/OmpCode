@@ -482,22 +482,30 @@ describe("SkillsSection", () => {
     expect(findButton("Sync Skill")).toBeTruthy();
   });
 
-  it("connected WSL workspace shows remote skill sync entry", async () => {
-    activeWorkspacePath = "/home/alice/project";
-    activeWorkspaceIdentity = "remote:wsl:Ubuntu:/home/alice/project";
-    activeRemoteSessionId = "remote-session-wsl";
-    activeRemoteTarget = {
-      kind: "wsl",
-      distro: "Ubuntu",
-      user: "alice",
-    };
+  it.each([false, true])(
+    "connected WSL workspace keeps sync entry (native: %s)",
+    async (native) => {
+      mockCapabilityState = {
+        userScopeAvailable: true,
+        ...(native ? { toggleScope: "profile" } : {}),
+      };
+      activeWorkspacePath = "/home/alice/project";
+      activeWorkspaceIdentity = "remote:wsl:Ubuntu:/home/alice/project";
+      activeRemoteSessionId = "remote-session-wsl";
+      activeRemoteTarget = {
+        kind: "wsl",
+        distro: "Ubuntu",
+        user: "alice",
+      };
 
-    const html = await renderSkillsSection();
+      const html = await renderSkillsSection();
 
-    expect(html).toContain("WSL");
-    expect(html).toContain("Ubuntu");
-    expect(findButton("Sync Skill")).toBeTruthy();
-  });
+      expect(html).toContain("WSL");
+      expect(html).toContain("Ubuntu");
+      expect(findButton("Sync Skill")).toBeTruthy();
+      expect(findButton("Sync Skill")?.disabled).toBe(native);
+    },
+  );
 
   it("技能详情弹窗会展示完整长描述和路径", async () => {
     const skill = {

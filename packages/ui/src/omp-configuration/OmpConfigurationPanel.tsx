@@ -216,14 +216,19 @@ export function OmpConfigurationPanel({
     const restart = service.onAgentRuntimeRestarted((event) => {
       if (event.workspaceKey !== resolveWorkspaceKey({ workspacePath, workspaceIdentity })) return;
       controller.invalidate();
+      setQuery("");
+      setCustomRole("");
       void controller.refresh();
     });
     const lifecycle = service.onAgentRuntimeLifecycle?.((event) => {
       if (
         event.workspaceKey === resolveWorkspaceKey({ workspacePath, workspaceIdentity }) &&
         event.state === "unavailable"
-      )
+      ) {
         controller.invalidate();
+        setQuery("");
+        setCustomRole("");
+      }
     });
     return () => {
       window.removeEventListener("focus", focus);
@@ -301,328 +306,347 @@ export function OmpConfigurationPanel({
           </p>
         ) : null}
         {state.supported === false ? (
-          <p>{intl.formatMessage({ id: "omp.configuration.unsupported" })}</p>
-        ) : (
-          <>
-            <section className="grid gap-2" data-testid="omp-team-panel">
-              <h2 className="text-ui-lg font-medium">
-                {intl.formatMessage({ id: "omp.configuration.teamModels" })}
-              </h2>
-              <p className="text-ui-caption">
-                {intl.formatMessage({ id: "omp.configuration.mainModel" })}:
-                {state.team?.sessionModel
-                  ? `${state.team.sessionModel.name} (${state.team.sessionModel.model.provider}/${state.team.sessionModel.model.modelId}) · ${intl.formatMessage({ id: state.team.sessionModel.available ? "omp.configuration.available" : "omp.configuration.unavailable" })}`
-                  : intl.formatMessage({ id: "omp.configuration.none" })}{" "}
-                · {intl.formatMessage({ id: "omp.configuration.effectiveSource" })}:{" "}
-                {state.team?.source
-                  ? intl.formatMessage({ id: `omp.configuration.source.${state.team.source}` })
-                  : intl.formatMessage({ id: "omp.configuration.unknown" })}{" "}
-                · {intl.formatMessage({ id: "omp.configuration.sync" })}:
-                {intl.formatMessage({
-                  id: `omp.configuration.status.${state.team?.storage.syncState ?? "unknown"}`,
-                })}
+          <p role="status" data-testid="omp-config-unsupported">
+            {intl.formatMessage({ id: "omp.configuration.unsupported" })}
+          </p>
+        ) : null}
+        {/* 原生未提供配置接口时保留原控件，仅禁用写入，避免把“不支持”误呈现为功能已删除。 */}
+        <fieldset
+          disabled={state.supported === false}
+          className="min-w-0 space-y-4 border-0 p-0"
+          data-testid="omp-config-controls"
+        >
+          <section className="grid gap-2" data-testid="omp-team-panel">
+            <h2 className="text-ui-lg font-medium">
+              {intl.formatMessage({ id: "omp.configuration.teamModels" })}
+            </h2>
+            <p className="text-ui-caption">
+              {intl.formatMessage({ id: "omp.configuration.mainModel" })}:
+              {state.team?.sessionModel
+                ? `${state.team.sessionModel.name} (${state.team.sessionModel.model.provider}/${state.team.sessionModel.model.modelId}) · ${intl.formatMessage({ id: state.team.sessionModel.available ? "omp.configuration.available" : "omp.configuration.unavailable" })}`
+                : intl.formatMessage({ id: "omp.configuration.none" })}{" "}
+              · {intl.formatMessage({ id: "omp.configuration.effectiveSource" })}:{" "}
+              {state.team?.source
+                ? intl.formatMessage({ id: `omp.configuration.source.${state.team.source}` })
+                : intl.formatMessage({ id: "omp.configuration.unknown" })}{" "}
+              · {intl.formatMessage({ id: "omp.configuration.sync" })}:
+              {intl.formatMessage({
+                id: `omp.configuration.status.${state.team?.storage.syncState ?? "unknown"}`,
+              })}
+            </p>
+            <div className="grid gap-2 sm:grid-cols-3" data-testid="omp-team-saved-lists">
+              <SavedMembers
+                title={intl.formatMessage({ id: "omp.configuration.userActive" })}
+                members={state.team?.userMembers}
+                readState={state.team?.storage.active.readState}
+              />
+              <SavedMembers
+                title={intl.formatMessage({ id: "omp.configuration.nfsPersistent" })}
+                members={state.team?.persistentMembers}
+                readState={state.team?.storage.persistent.readState}
+              />
+              <SavedMembers
+                title={intl.formatMessage(
+                  { id: "omp.configuration.currentEffective" },
+                  {
+                    source: state.team?.source
+                      ? intl.formatMessage({
+                          id: `omp.configuration.source.${state.team.source}`,
+                        })
+                      : intl.formatMessage({ id: "omp.configuration.unknown" }),
+                  },
+                )}
+                members={state.team?.effectiveMembers}
+              />
+            </div>
+            {state.team?.issues.map((issue, index) => (
+              <p key={index} className="text-ui-caption">
+                {issue.list ?? issue.target} {issue.index !== undefined ? `[${issue.index}]` : ""}{" "}
+                {issue.side ?? issue.source}: {issue.message}
               </p>
-              <div className="grid gap-2 sm:grid-cols-3" data-testid="omp-team-saved-lists">
-                <SavedMembers
-                  title={intl.formatMessage({ id: "omp.configuration.userActive" })}
-                  members={state.team?.userMembers}
-                  readState={state.team?.storage.active.readState}
-                />
-                <SavedMembers
-                  title={intl.formatMessage({ id: "omp.configuration.nfsPersistent" })}
-                  members={state.team?.persistentMembers}
-                  readState={state.team?.storage.persistent.readState}
-                />
-                <SavedMembers
-                  title={intl.formatMessage(
-                    { id: "omp.configuration.currentEffective" },
+            ))}
+            <h3 className="text-ui-caption font-medium">
+              {intl.formatMessage({ id: "omp.configuration.userDraft" })}{" "}
+              {state.dirty ? intl.formatMessage({ id: "omp.configuration.unsaved" }) : ""}
+            </h3>
+            <input
+              aria-label={intl.formatMessage({ id: "omp.configuration.searchCatalog" })}
+              data-testid="omp-team-model-search"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              className={selectClass}
+              placeholder={intl.formatMessage({ id: "omp.configuration.searchPlaceholder" })}
+            />
+            <div
+              className="max-h-36 overflow-auto rounded border border-popover-border p-2"
+              data-testid="omp-team-model-catalog"
+            >
+              {candidates.map((item, index) => (
+                <div
+                  key={index}
+                  className="flex flex-wrap items-center justify-between gap-2 text-ui-caption"
+                >
+                  <span className="min-w-0 break-words">
+                    {item.name} · {item.model.provider}/{item.model.modelId} {item.reason}
+                  </span>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    disabled={!item.selectable || state.busy}
+                    onClick={() => controller.setMembers([...(state.members ?? []), item.model])}
+                  >
+                    {intl.formatMessage({ id: "omp.configuration.add" })}
+                  </Button>
+                </div>
+              ))}
+            </div>
+            {state.members === undefined ? (
+              <p>{intl.formatMessage({ id: "omp.configuration.draftUnreadable" })}</p>
+            ) : state.members === null ? (
+              <p>{intl.formatMessage({ id: "omp.configuration.draftInherit" })}</p>
+            ) : state.members.length === 0 ? (
+              <p>{intl.formatMessage({ id: "omp.configuration.draftEmpty" })}</p>
+            ) : (
+              state.members.map((member, index) => (
+                <div
+                  key={index}
+                  className="flex flex-wrap items-center gap-1"
+                  data-testid={`omp-team-member-${index}`}
+                >
+                  <span className="text-ui-caption">{index + 1}</span>
+                  <select
+                    className={selectClass}
+                    aria-label={intl.formatMessage(
+                      { id: "omp.configuration.member" },
+                      { index: index + 1 },
+                    )}
+                    value={JSON.stringify(member)}
+                    onChange={(event) =>
+                      setMember(index, JSON.parse(event.target.value) as OmpModelRef)
+                    }
+                  >
+                    <option value={JSON.stringify(member)}>
+                      {"rawSelector" in member
+                        ? intl.formatMessage(
+                            { id: "omp.configuration.needsRepair" },
+                            { selector: member.rawSelector },
+                          )
+                        : `${member.provider}/${member.modelId}`}
+                    </option>
+                    {state.models.map((item, candidate) => (
+                      <option
+                        key={candidate}
+                        value={JSON.stringify(item.model)}
+                        disabled={!item.selectable}
+                      >
+                        {item.name} · {item.model.provider}/{item.model.modelId} {item.reason}
+                      </option>
+                    ))}
+                  </select>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    disabled={index === 0}
+                    aria-label={intl.formatMessage(
+                      { id: "omp.configuration.moveUp" },
+                      { index: index + 1 },
+                    )}
+                    onClick={() => move(index, -1)}
+                  >
+                    ↑
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    disabled={index === (state.members?.length ?? 0) - 1}
+                    aria-label={intl.formatMessage(
+                      { id: "omp.configuration.moveDown" },
+                      { index: index + 1 },
+                    )}
+                    onClick={() => move(index, 1)}
+                  >
+                    ↓
+                  </Button>
+                  <Button
+                    data-testid={`omp-team-copy-${index}`}
+                    type="button"
+                    variant="ghost"
+                    onClick={() => {
+                      const members = [...(state.members ?? [])];
+                      members.splice(index + 1, 0, member);
+                      controller.setMembers(members);
+                    }}
+                  >
+                    {intl.formatMessage({ id: "omp.configuration.copy" })}
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    onClick={() =>
+                      controller.setMembers(
+                        state.members?.filter((_, slot) => slot !== index) ?? [],
+                      )
+                    }
+                  >
+                    {intl.formatMessage({ id: "common.delete" })}
+                  </Button>
+                </div>
+              ))
+            )}
+            <p data-testid="omp-current-session-model" className="text-ui-caption">
+              {intl.formatMessage({ id: "omp.configuration.temporarySessionModel" })}:{" "}
+              {state.team?.sessionModel
+                ? `${state.team.sessionModel.model.provider}/${state.team.sessionModel.model.modelId}`
+                : intl.formatMessage({ id: "omp.configuration.unknown" })}
+            </p>
+            <label className="flex flex-wrap gap-2 text-ui-caption">
+              {intl.formatMessage({ id: "omp.configuration.temporarySessionModel" })}
+              <select
+                aria-label={intl.formatMessage({ id: "omp.configuration.temporaryModel" })}
+                data-testid="omp-temporary-model"
+                className={selectClass}
+                disabled={state.busy || state.requiresReadback || temporaryModelDisabled}
+                value=""
+                onChange={(event) => {
+                  if (event.target.value)
+                    void controller.switchTemporaryModel(
+                      JSON.parse(event.target.value) as OmpModelRef,
+                    );
+                }}
+              >
+                <option value="">
+                  {intl.formatMessage({ id: "omp.configuration.chooseTemporary" })}
+                </option>
+                {(
+                  state.roles.find((role) => role.roleId === "default")?.candidateModels ??
+                  state.models.map((item) => item.model)
+                ).map((model, index) => (
+                  <option key={index} value={JSON.stringify(model)}>
+                    {model.provider}/{model.modelId}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                data-testid="omp-team-default"
+                onClick={() => controller.setMembers([])}
+              >
+                {intl.formatMessage({ id: "omp.configuration.restoreDefaultDraft" })}
+              </Button>
+              <Button type="button" variant="outline" onClick={() => controller.setMembers(null)}>
+                {intl.formatMessage({ id: "omp.configuration.clearUserDraft" })}
+              </Button>
+            </div>
+            {state.preview ? (
+              <section data-testid="omp-team-preview" className="grid gap-2">
+                <p className="text-ui-caption">
+                  {intl.formatMessage(
+                    { id: "omp.configuration.previewSummary" },
                     {
-                      source: state.team?.source
+                      revision: state.preview.clientRevision,
+                      source: state.preview.source
                         ? intl.formatMessage({
-                            id: `omp.configuration.source.${state.team.source}`,
+                            id: `omp.configuration.source.${state.preview.source}`,
                           })
                         : intl.formatMessage({ id: "omp.configuration.unknown" }),
                     },
                   )}
-                  members={state.team?.effectiveMembers}
-                />
-              </div>
-              {state.team?.issues.map((issue, index) => (
-                <p key={index} className="text-ui-caption">
-                  {issue.list ?? issue.target} {issue.index !== undefined ? `[${issue.index}]` : ""}{" "}
-                  {issue.side ?? issue.source}: {issue.message}
                 </p>
-              ))}
-              <h3 className="text-ui-caption font-medium">
-                {intl.formatMessage({ id: "omp.configuration.userDraft" })}{" "}
-                {state.dirty ? intl.formatMessage({ id: "omp.configuration.unsaved" }) : ""}
-              </h3>
-              <input
-                aria-label={intl.formatMessage({ id: "omp.configuration.searchCatalog" })}
-                data-testid="omp-team-model-search"
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
-                className={selectClass}
-                placeholder={intl.formatMessage({ id: "omp.configuration.searchPlaceholder" })}
-              />
-              <div
-                className="max-h-36 overflow-auto rounded border border-popover-border p-2"
-                data-testid="omp-team-model-catalog"
-              >
-                {candidates.map((item, index) => (
-                  <div
-                    key={index}
-                    className="flex flex-wrap items-center justify-between gap-2 text-ui-caption"
-                  >
-                    <span className="min-w-0 break-words">
-                      {item.name} · {item.model.provider}/{item.model.modelId} {item.reason}
-                    </span>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      disabled={!item.selectable || state.busy}
-                      onClick={() => controller.setMembers([...(state.members ?? []), item.model])}
-                    >
-                      {intl.formatMessage({ id: "omp.configuration.add" })}
-                    </Button>
-                  </div>
+                <SavedMembers
+                  title={intl.formatMessage({ id: "omp.configuration.previewMembers" })}
+                  members={state.preview.effectiveMembers}
+                />
+                <p>
+                  {intl.formatMessage({ id: "omp.configuration.runtimeSlots" })}:
+                  {state.preview.participants.map((item) => item.label).join(", ") ||
+                    intl.formatMessage({ id: "omp.configuration.none" })}
+                </p>
+                {state.preview.issues.map((issue, index) => (
+                  <p key={index}>
+                    {issue.list ?? issue.target}: {issue.message}
+                  </p>
                 ))}
-              </div>
-              {state.members === undefined ? (
-                <p>{intl.formatMessage({ id: "omp.configuration.draftUnreadable" })}</p>
-              ) : state.members === null ? (
-                <p>{intl.formatMessage({ id: "omp.configuration.draftInherit" })}</p>
-              ) : state.members.length === 0 ? (
-                <p>{intl.formatMessage({ id: "omp.configuration.draftEmpty" })}</p>
-              ) : (
-                state.members.map((member, index) => (
-                  <div
-                    key={index}
-                    className="flex flex-wrap items-center gap-1"
-                    data-testid={`omp-team-member-${index}`}
-                  >
-                    <span className="text-ui-caption">{index + 1}</span>
-                    <select
-                      className={selectClass}
-                      aria-label={intl.formatMessage(
-                        { id: "omp.configuration.member" },
-                        { index: index + 1 },
-                      )}
-                      value={JSON.stringify(member)}
-                      onChange={(event) =>
-                        setMember(index, JSON.parse(event.target.value) as OmpModelRef)
-                      }
-                    >
-                      <option value={JSON.stringify(member)}>
-                        {"rawSelector" in member
-                          ? intl.formatMessage(
-                              { id: "omp.configuration.needsRepair" },
-                              { selector: member.rawSelector },
-                            )
-                          : `${member.provider}/${member.modelId}`}
-                      </option>
-                      {state.models.map((item, candidate) => (
-                        <option
-                          key={candidate}
-                          value={JSON.stringify(item.model)}
-                          disabled={!item.selectable}
-                        >
-                          {item.name} · {item.model.provider}/{item.model.modelId} {item.reason}
-                        </option>
-                      ))}
-                    </select>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      disabled={index === 0}
-                      aria-label={intl.formatMessage(
-                        { id: "omp.configuration.moveUp" },
-                        { index: index + 1 },
-                      )}
-                      onClick={() => move(index, -1)}
-                    >
-                      ↑
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      disabled={index === (state.members?.length ?? 0) - 1}
-                      aria-label={intl.formatMessage(
-                        { id: "omp.configuration.moveDown" },
-                        { index: index + 1 },
-                      )}
-                      onClick={() => move(index, 1)}
-                    >
-                      ↓
-                    </Button>
-                    <Button
-                      data-testid={`omp-team-copy-${index}`}
-                      type="button"
-                      variant="ghost"
-                      onClick={() => {
-                        const members = [...(state.members ?? [])];
-                        members.splice(index + 1, 0, member);
-                        controller.setMembers(members);
-                      }}
-                    >
-                      {intl.formatMessage({ id: "omp.configuration.copy" })}
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      onClick={() =>
-                        controller.setMembers(
-                          state.members?.filter((_, slot) => slot !== index) ?? [],
-                        )
-                      }
-                    >
-                      {intl.formatMessage({ id: "common.delete" })}
-                    </Button>
-                  </div>
-                ))
-              )}
-              <label className="flex flex-wrap gap-2 text-ui-caption">
-                {intl.formatMessage({ id: "omp.configuration.temporarySessionModel" })}
-                <select
-                  aria-label={intl.formatMessage({ id: "omp.configuration.temporaryModel" })}
-                  data-testid="omp-temporary-model"
-                  className={selectClass}
-                  disabled={state.busy || temporaryModelDisabled}
-                  value=""
-                  onChange={(event) => {
-                    if (event.target.value)
-                      void controller.switchTemporaryModel(
-                        JSON.parse(event.target.value) as OmpModelRef,
-                      );
-                  }}
-                >
-                  <option value="">
-                    {intl.formatMessage({ id: "omp.configuration.chooseTemporary" })}
-                  </option>
-                  {(
-                    state.roles.find((role) => role.roleId === "default")?.candidateModels ??
-                    state.models.map((item) => item.model)
-                  ).map((model, index) => (
-                    <option key={index} value={JSON.stringify(model)}>
-                      {model.provider}/{model.modelId}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <div className="flex flex-wrap gap-2">
-                <Button
-                  type="button"
-                  variant="outline"
-                  data-testid="omp-team-default"
-                  onClick={() => controller.setMembers([])}
-                >
-                  {intl.formatMessage({ id: "omp.configuration.restoreDefaultDraft" })}
-                </Button>
-                <Button type="button" variant="outline" onClick={() => controller.setMembers(null)}>
-                  {intl.formatMessage({ id: "omp.configuration.clearUserDraft" })}
-                </Button>
-              </div>
-              {state.preview ? (
-                <section data-testid="omp-team-preview" className="grid gap-2">
-                  <p className="text-ui-caption">
-                    {intl.formatMessage(
-                      { id: "omp.configuration.previewSummary" },
-                      {
-                        revision: state.preview.clientRevision,
-                        source: state.preview.source
-                          ? intl.formatMessage({
-                              id: `omp.configuration.source.${state.preview.source}`,
-                            })
-                          : intl.formatMessage({ id: "omp.configuration.unknown" }),
-                      },
-                    )}
-                  </p>
-                  <SavedMembers
-                    title={intl.formatMessage({ id: "omp.configuration.previewMembers" })}
-                    members={state.preview.effectiveMembers}
-                  />
-                  <p>
-                    {intl.formatMessage({ id: "omp.configuration.runtimeSlots" })}:
-                    {state.preview.participants.map((item) => item.label).join(", ") ||
-                      intl.formatMessage({ id: "omp.configuration.none" })}
-                  </p>
-                  {state.preview.issues.map((issue, index) => (
-                    <p key={index}>
-                      {issue.list ?? issue.target}: {issue.message}
-                    </p>
-                  ))}
-                </section>
-              ) : null}
-              {state.receipt ? (
-                <section data-testid="omp-team-receipt" data-save-state={state.receipt.saveState}>
-                  <p>
-                    {intl.formatMessage({ id: "omp.configuration.saveResult" })}:{" "}
-                    {intl.formatMessage({
-                      id: `omp.configuration.status.${state.receipt.saveState}`,
-                    })}
-                  </p>
-                  <p>
-                    {intl.formatMessage({ id: "omp.configuration.active" })}:{" "}
-                    {intl.formatMessage({
-                      id: `omp.configuration.status.${state.receipt.writes.active.status}`,
-                    })}{" "}
-                    {state.receipt.writes.active.message} ·{" "}
-                    {intl.formatMessage({ id: "omp.configuration.persistent" })}:
-                    {intl.formatMessage({
-                      id: `omp.configuration.status.${state.receipt.writes.persistent.status}`,
-                    })}{" "}
-                    {state.receipt.writes.persistent.message}
-                  </p>
-                </section>
-              ) : null}
+              </section>
+            ) : null}
+            {state.receipt ? (
+              <section data-testid="omp-team-receipt" data-save-state={state.receipt.saveState}>
+                <p>
+                  {intl.formatMessage({ id: "omp.configuration.saveResult" })}:{" "}
+                  {intl.formatMessage({
+                    id: `omp.configuration.status.${state.receipt.saveState}`,
+                  })}
+                </p>
+                <p>
+                  {intl.formatMessage({ id: "omp.configuration.active" })}:{" "}
+                  {intl.formatMessage({
+                    id: `omp.configuration.status.${state.receipt.writes.active.status}`,
+                  })}{" "}
+                  {state.receipt.writes.active.message} ·{" "}
+                  {intl.formatMessage({ id: "omp.configuration.persistent" })}:
+                  {intl.formatMessage({
+                    id: `omp.configuration.status.${state.receipt.writes.persistent.status}`,
+                  })}{" "}
+                  {state.receipt.writes.persistent.message}
+                </p>
+              </section>
+            ) : null}
+            <Button
+              type="button"
+              data-testid="omp-team-save"
+              disabled={
+                state.busy ||
+                !state.dirty ||
+                !state.expectedRevision ||
+                !state.team?.writableScopes.includes("user") ||
+                state.requiresReadback ||
+                Boolean(state.members?.some((item) => "rawSelector" in item))
+              }
+              onClick={() => void controller.saveTeam()}
+            >
+              {intl.formatMessage({ id: "omp.configuration.saveTeam" })}
+            </Button>
+          </section>
+          <section className="grid gap-2" data-testid="omp-role-panel">
+            <h2 className="text-ui-lg font-medium">
+              {intl.formatMessage({ id: "omp.configuration.persistentRoles" })}
+            </h2>
+            {state.roleWritesBlocked && (
+              <p data-testid="omp-role-profile-pending" role="status">
+                {intl.formatMessage({ id: "omp.configuration.profileRestartRequired" })}
+              </p>
+            )}
+            {state.roles.map((role) => (
+              <RoleRow
+                key={role.roleId}
+                role={role}
+                controller={controller}
+                disabled={state.busy || state.requiresReadback || state.roleWritesBlocked}
+              />
+            ))}
+            <div className="flex flex-wrap gap-2">
+              <input
+                data-testid="omp-custom-role-id"
+                className={selectClass}
+                aria-label={intl.formatMessage({ id: "omp.configuration.newRole" })}
+                value={customRole}
+                onChange={(event) => setCustomRole(event.target.value)}
+                placeholder={intl.formatMessage({ id: "omp.configuration.customRoleId" })}
+              />
               <Button
                 type="button"
-                data-testid="omp-team-save"
-                disabled={
-                  state.busy ||
-                  !state.dirty ||
-                  !state.expectedRevision ||
-                  !state.team?.writableScopes.includes("user") ||
-                  state.requiresReadback ||
-                  Boolean(state.members?.some((item) => "rawSelector" in item))
-                }
-                onClick={() => void controller.saveTeam()}
+                data-testid="omp-custom-role-add"
+                variant="outline"
+                disabled={!customRole.trim() || state.busy || state.requiresReadback}
+                onClick={() => void controller.addRole(customRole.trim())}
               >
-                {intl.formatMessage({ id: "omp.configuration.saveTeam" })}
+                {intl.formatMessage({ id: "omp.configuration.addRole" })}
               </Button>
-            </section>
-            <section className="grid gap-2" data-testid="omp-role-panel">
-              <h2 className="text-ui-lg font-medium">
-                {intl.formatMessage({ id: "omp.configuration.persistentRoles" })}
-              </h2>
-              {state.roles.map((role) => (
-                <RoleRow
-                  key={role.roleId}
-                  role={role}
-                  controller={controller}
-                  disabled={state.busy || state.requiresReadback}
-                />
-              ))}
-              <div className="flex flex-wrap gap-2">
-                <input
-                  className={selectClass}
-                  aria-label={intl.formatMessage({ id: "omp.configuration.newRole" })}
-                  value={customRole}
-                  onChange={(event) => setCustomRole(event.target.value)}
-                  placeholder={intl.formatMessage({ id: "omp.configuration.customRoleId" })}
-                />
-                <Button
-                  type="button"
-                  variant="outline"
-                  disabled={!customRole.trim() || state.busy}
-                  onClick={() => void controller.addRole(customRole.trim())}
-                >
-                  {intl.formatMessage({ id: "omp.configuration.addRole" })}
-                </Button>
-              </div>
-            </section>
-          </>
-        )}
+            </div>
+          </section>
+        </fieldset>
         {state.externalChange || state.requiresReadback ? (
           <p role="status" data-testid="omp-config-external-change">
             {intl.formatMessage({ id: "omp.configuration.externalChange" })}
@@ -640,7 +664,7 @@ export function OmpConfigurationPanel({
           <Button
             type="button"
             variant="outline"
-            disabled={!state.team || state.requiresReadback}
+            disabled={state.supported === false || !state.team || state.requiresReadback}
             data-testid="omp-config-rebase"
             onClick={() => controller.rebase()}
           >

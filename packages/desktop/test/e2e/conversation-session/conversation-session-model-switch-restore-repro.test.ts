@@ -2,6 +2,11 @@ import { clearAppData, waitForDefaultWorkspaceReady } from "../helpers/desktop-a
 import { getTaskStoreSnapshot } from "../helpers/conversation-session-store.js";
 import { getToastMessages } from "../helpers/conversation-session-toast.js";
 import {
+  OMP_MODEL_ID,
+  OMP_PROVIDER_ID,
+  type ModelRequest,
+} from "../helpers/omp-integration-fixture.js";
+import {
   UPSTREAM_SECONDARY_MODEL,
   UPSTREAM_SECONDARY_THOUGHT_LEVEL,
   ensureUpstreamModelForE2E,
@@ -12,6 +17,8 @@ import {
   getV4ComposerText,
   getV4ConversationState,
   getV4Messages,
+  getV4ModelConfig,
+  switchV4Model,
   prepareV4ConversationE2E,
   selectV4TaskById,
   sendV4Prompt,
@@ -23,6 +30,42 @@ import {
 const FAIL_MARKER = "E2E_MODEL_SWITCH_RESTORE_REPRO_FAIL";
 const SUCCESS_MARKER = "E2E_MODEL_SWITCH_RESTORE_REPRO_SUCCESS";
 const ASSISTANT_TOKEN = "E2E_MODEL_SWITCH_RESTORE_REPRO_ASSISTANT_VISIBLE";
+const nativeOmp = Boolean(process.env.ZCODE_AGENT_SERVER_COMMAND?.trim());
+const secondaryModel = nativeOmp ? "omp-alternate" : UPSTREAM_SECONDARY_MODEL;
+
+async function prepareConversation() {
+  // 旧 fixture 的 Provider/模型不属于原生 profile；原生分支只选择隔离 models.yml 的真实模型。
+  await prepareV4ConversationE2E({ skipProvider: nativeOmp });
+  if (nativeOmp) await switchV4Model(OMP_PROVIDER_ID, OMP_MODEL_ID, "disabled");
+}
+
+async function selectSecondaryModel() {
+  if (nativeOmp) await switchV4Model(OMP_PROVIDER_ID, secondaryModel, "disabled");
+  else {
+    await ensureUpstreamModelForE2E(secondaryModel);
+    await selectUpstreamModelById(secondaryModel);
+  }
+}
+
+async function assertNativeModelRequest(prompt: string, model: string | null) {
+  if (!nativeOmp) return;
+  if (!model) throw new Error("Native session model ownership missing");
+  const url = process.env.OMP_E2E_PROVIDER_URL;
+  if (!url || new URL(url).hostname !== "127.0.0.1")
+    throw new Error("Local native OMP fixture required");
+  const response = await fetch(`${url}/__requests`);
+  if (!response.ok) throw new Error(`Native fixture ledger failed: ${response.status}`);
+  const requests = (await response.json()) as ModelRequest[];
+  const matching = requests.filter(
+    (request) =>
+      Boolean(request.tools?.length) &&
+      request.messages.some(
+        (message) => message.role === "user" && JSON.stringify(message.content).includes(prompt),
+      ),
+  );
+  expect(matching.length).toBeGreaterThan(0);
+  expect(matching.every((request) => request.model === model)).toBe(true);
+}
 
 describe("会话区模型配置恢复吞消息复现探针", () => {
   after(async () => {
@@ -33,7 +76,7 @@ describe("会话区模型配置恢复吞消息复现探针", () => {
   it("失败态后不切配置直接发送成功，确认 429 后续消息是否会被吞", async function () {
     this.timeout(180000);
 
-    await prepareV4ConversationE2E();
+    await prepareConversation();
 
     const runId = Date.now();
     const failingPrompt = `${FAIL_MARKER}_${runId}: trigger quota-like failure.`;
@@ -48,14 +91,16 @@ describe("会话区模型配置恢复吞消息复现探针", () => {
   it("失败态后切思考深度发送成功，renderer reload 后 assistant 应仍可见", async function () {
     this.timeout(180000);
 
-    await prepareV4ConversationE2E();
+    await prepareConversation();
 
     const runId = Date.now();
     const failingPrompt = `${FAIL_MARKER}_${runId}: trigger quota-like failure.`;
     await sendPromptAndRequireUser(failingPrompt, "restore repro switch: 失败态 prompt");
     await waitForSessionSettled("restore repro: 失败态没有收口");
 
-    if (UPSTREAM_SECONDARY_THOUGHT_LEVEL) {
+    if (nativeOmp) {
+      await selectUpstreamThoughtLevelValue("high");
+    } else if (UPSTREAM_SECONDARY_THOUGHT_LEVEL) {
       await selectUpstreamThoughtLevelValue(UPSTREAM_SECONDARY_THOUGHT_LEVEL);
     }
 
@@ -67,9 +112,8 @@ describe("会话区模型配置恢复吞消息复现探针", () => {
   it("切模型配置成功回复后 renderer 重建并选择 task 仍应显示 assistant", async function () {
     this.timeout(180000);
 
-    await prepareV4ConversationE2E();
-    await ensureUpstreamModelForE2E(UPSTREAM_SECONDARY_MODEL);
-    await selectUpstreamModelById(UPSTREAM_SECONDARY_MODEL);
+    await prepareConversation();
+    await selectSecondaryModel();
 
     const runId = Date.now();
     const successPrompt = `${SUCCESS_MARKER}_${runId}: reply with the repro token.`;
@@ -80,9 +124,8 @@ describe("会话区模型配置恢复吞消息复现探针", () => {
   it("切模型配置成功回复后 WDIO session 重建并选择 task 仍应显示 assistant", async function () {
     this.timeout(180000);
 
-    await prepareV4ConversationE2E();
-    await ensureUpstreamModelForE2E(UPSTREAM_SECONDARY_MODEL);
-    await selectUpstreamModelById(UPSTREAM_SECONDARY_MODEL);
+    await prepareConversation();
+    await selectSecondaryModel();
 
     const runId = Date.now();
     const successPrompt = `${SUCCESS_MARKER}_${runId}: reply with the repro token.`;
@@ -134,6 +177,10 @@ async function assertAssistantSurvivesRendererReload(successPrompt: string) {
   expect(beforeReload.messages.some((message) => message.text.includes(ASSISTANT_TOKEN))).toBe(
     true,
   );
+  const modelBeforeReload = await getV4ModelConfig();
+  if (nativeOmp) {
+    await assertNativeModelRequest(successPrompt, modelBeforeReload.model);
+  }
 
   // 复现原因：用户日志里 provider/runtime 已经产出并持久化回复，疑点在 renderer
   // 重建后的 desktop-continuous 历史恢复/投影。先用 renderer reload 触发同一类 UI 重建路径。
@@ -144,21 +191,23 @@ async function assertAssistantSurvivesRendererReload(successPrompt: string) {
     messages: await getV4Messages(),
     store: await getTaskStoreSnapshot(sessionId),
   };
-  await browser.waitUntil(
-    async () => {
-      afterReload = {
-        root: await getV4ConversationState(),
-        messages: await getV4Messages(),
-        store: await getTaskStoreSnapshot(sessionId),
-      };
-      return afterReload.messages.some((message) => message.text.includes(ASSISTANT_TOKEN));
-    },
-    {
-      timeout: 30000,
-      interval: 500,
-      timeoutMsg: "restore repro: reload 后等待 assistant token 超时",
-    },
-  ).catch(() => undefined);
+  await browser
+    .waitUntil(
+      async () => {
+        afterReload = {
+          root: await getV4ConversationState(),
+          messages: await getV4Messages(),
+          store: await getTaskStoreSnapshot(sessionId),
+        };
+        return afterReload.messages.some((message) => message.text.includes(ASSISTANT_TOKEN));
+      },
+      {
+        timeout: 30000,
+        interval: 500,
+        timeoutMsg: "restore repro: reload 后等待 assistant token 超时",
+      },
+    )
+    .catch(() => undefined);
   const visibleText = afterReload.messages.map((message) => message.text).join("\n");
   if (!visibleText.includes(ASSISTANT_TOKEN)) {
     throw new Error(
@@ -171,6 +220,9 @@ async function assertAssistantSurvivesRendererReload(successPrompt: string) {
       ].join("\n"),
     );
   }
+  const modelAfterReload = await getV4ModelConfig();
+  expect(modelAfterReload.model).toBe(modelBeforeReload.model);
+  expect(modelAfterReload.provider).toBe(modelBeforeReload.provider);
 }
 
 async function waitForSessionSettled(timeoutMsg: string) {
@@ -216,6 +268,10 @@ async function assertAssistantSurvivesAppSessionReload(successPrompt: string) {
   expect(beforeReload.messages.some((message) => message.text.includes(ASSISTANT_TOKEN))).toBe(
     true,
   );
+  const modelBeforeReload = await getV4ModelConfig();
+  if (nativeOmp) {
+    await assertNativeModelRequest(successPrompt, modelBeforeReload.model);
+  }
 
   await browser.reloadSession();
   await waitForAnyRendererReadyAfterReloadSession();
@@ -234,21 +290,23 @@ async function assertAssistantSurvivesAppSessionReload(successPrompt: string) {
     messages: await getV4Messages(),
     store: await getTaskStoreSnapshot(sessionId),
   };
-  await browser.waitUntil(
-    async () => {
-      afterReload = {
-        root: await getV4ConversationState(),
-        messages: await getV4Messages(),
-        store: await getTaskStoreSnapshot(sessionId),
-      };
-      return afterReload.messages.some((message) => message.text.includes(ASSISTANT_TOKEN));
-    },
-    {
-      timeout: 30000,
-      interval: 500,
-      timeoutMsg: "restore repro: app session 重建后等待 assistant token 超时",
-    },
-  ).catch(() => undefined);
+  await browser
+    .waitUntil(
+      async () => {
+        afterReload = {
+          root: await getV4ConversationState(),
+          messages: await getV4Messages(),
+          store: await getTaskStoreSnapshot(sessionId),
+        };
+        return afterReload.messages.some((message) => message.text.includes(ASSISTANT_TOKEN));
+      },
+      {
+        timeout: 30000,
+        interval: 500,
+        timeoutMsg: "restore repro: app session 重建后等待 assistant token 超时",
+      },
+    )
+    .catch(() => undefined);
   const visibleText = afterReload.messages.map((message) => message.text).join("\n");
   if (!visibleText.includes(ASSISTANT_TOKEN)) {
     throw new Error(
@@ -261,6 +319,9 @@ async function assertAssistantSurvivesAppSessionReload(successPrompt: string) {
       ].join("\n"),
     );
   }
+  const modelAfterReload = await getV4ModelConfig();
+  expect(modelAfterReload.model).toBe(modelBeforeReload.model);
+  expect(modelAfterReload.provider).toBe(modelBeforeReload.provider);
 }
 
 async function waitForAnyRendererReadyAfterReloadSession() {

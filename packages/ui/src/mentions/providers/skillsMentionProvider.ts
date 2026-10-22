@@ -1,10 +1,9 @@
 import { useMemo } from "react";
-import type { Locale, SkillScope, ZCodeProvider } from "@zcode/shared";
+import type { Locale, SkillScope } from "@zcode/shared";
 import type { MentionCategoryResult, MentionItem } from "@/mentions/mentionTypes.js";
 import { filterMentionItemsWithOptions } from "@/mentions/mentionSearch.js";
 import { buildSkillMentionMarkdown } from "@/mentions/mentionMarkdown.js";
 import { useSkills } from "@/hooks/useSkills.js";
-import { filterSkillsForProvider } from "@/lib/skillSourceFilter.js";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
 import { resolveSkillDisplayDescription, resolveSkillSourceLabel } from "@/lib/builtinSkillI18n.js";
 
@@ -60,7 +59,6 @@ export function useSkillsMentionProvider(
   workspacePath: string,
   workspaceIdentity: string | undefined,
   sessionId: string | null,
-  provider: ZCodeProvider,
   query: string,
   enabled: boolean,
   requireQuery: boolean,
@@ -78,10 +76,11 @@ export function useSkillsMentionProvider(
   const allItems = useMemo(
     () =>
       mapSkillsToMentionItemsForTest(
-        filterSkillsForProvider(skills, provider).filter((skill) => skill.enabled),
+        // 执行端 catalog 是来源权威；真实路径不要求位于旧 .zcode 目录。
+        skills.filter((skill) => skill.enabled),
         locale,
       ),
-    [locale, provider, skills],
+    [locale, skills],
   );
 
   const items = useMemo(

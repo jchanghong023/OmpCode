@@ -113,6 +113,47 @@ describe("skillStore", () => {
     expect(useSkillStore.getState().skills[0]?.enabled).toBe(false);
   });
 
+  it.each([
+    { toggleScope: "profile" as const, expectedScope: "user" },
+    { toggleScope: undefined, expectedScope: "workspace" },
+  ])(
+    "setEnabled 按 capability 决定写入范围：$toggleScope",
+    async ({ toggleScope, expectedScope }) => {
+      const setEnabled = vi.fn(async () => {});
+      const service = createSkillsServiceMock({ setEnabled });
+      useSkillStore.setState({
+        workspacePath: "/tmp/scope-workspace",
+        workspaceIdentity: null,
+        capability: { userScopeAvailable: true, ...(toggleScope ? { toggleScope } : {}) },
+      });
+
+      await useSkillStore.getState().setEnabled("skill-1", "glm", "workspace", false, service);
+
+      expect(setEnabled).toHaveBeenCalledWith({
+        workspacePath: "/tmp/scope-workspace",
+        workspaceIdentity: undefined,
+        provider: "glm",
+        scope: expectedScope,
+        skillId: "skill-1",
+        enabled: false,
+      });
+    },
+  );
+
+  it("profile capability 在旧调用形式中也显式写 user 范围", async () => {
+    const setEnabled = vi.fn(async () => {});
+    const service = createSkillsServiceMock({ setEnabled });
+    useSkillStore.setState({
+      workspacePath: "/tmp/profile-legacy-workspace",
+      workspaceIdentity: null,
+      capability: { userScopeAvailable: true, toggleScope: "profile" },
+    });
+
+    await useSkillStore.getState().setEnabled("skill-1", false, service);
+
+    expect(setEnabled).toHaveBeenCalledWith(expect.objectContaining({ scope: "user" }));
+  });
+
   it("并发 initialize 同一工作区时会复用同一个 list 请求", async () => {
     let resolveList: ((value: Awaited<ReturnType<ISkillsService["list"]>>) => void) | null = null;
     const list = vi.fn<ISkillsService["list"]>(

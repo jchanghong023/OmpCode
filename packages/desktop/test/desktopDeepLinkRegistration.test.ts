@@ -16,7 +16,7 @@ vi.mock("electron", () => ({
   app: {
     setAsDefaultProtocolClient: mocks.register,
     isPackaged: true,
-    name: "ZCode",
+    name: "OmpCode",
     getPath: () => "/test-home",
   },
   BrowserWindow: {},
@@ -51,8 +51,8 @@ describe("Windows Deep Link 启动参数边界", () => {
     registerDeepLinkProtocol(logger);
 
     expect(mocks.register.mock.calls).toEqual([
-      ["zcode", process.execPath, ["--"]],
-      ["zcode", process.execPath, ["--"]],
+      ["ompcode-preview", process.execPath, ["--"]],
+      ["ompcode-preview", process.execPath, ["--"]],
     ]);
   });
 
@@ -64,7 +64,7 @@ describe("Windows Deep Link 启动参数边界", () => {
 
     registerDeepLinkProtocol(logger);
 
-    expect(mocks.register).toHaveBeenCalledWith("zcode", process.execPath, [entry, "--"]);
+    expect(mocks.register).toHaveBeenCalledWith("ompcode-preview", process.execPath, [entry, "--"]);
   });
 
   it("安全注册失败仍记录警告", () => {
@@ -73,15 +73,17 @@ describe("Windows Deep Link 启动参数边界", () => {
 
     registerDeepLinkProtocol(logger);
 
-    expect(logger.warn).toHaveBeenCalledWith("[deep-link] 注册协议失败", { scheme: "zcode" });
+    expect(logger.warn).toHaveBeenCalledWith("[deep-link] 注册协议失败", {
+      scheme: "ompcode-preview",
+    });
     expect(logger.info).not.toHaveBeenCalled();
   });
 
   it.each([
-    "zcode://oauth/callback?code=code%20value&state=state",
-    "zcode://payment/callback?provider=zai&status=return",
-    "zcode://workspace/open?path=C%3A%5CProject%20A%26B",
-    "zcode://share/import?code=abc_DEF-123",
+    "ompcode-preview://oauth/callback?code=code%20value&state=state",
+    "ompcode-preview://payment/callback?provider=zai&status=return",
+    "ompcode-preview://workspace/open?path=C%3A%5CProject%20A%26B",
+    "ompcode-preview://share/import?code=abc_DEF-123",
   ])("分隔符保留冷启动和单实例投递中的正常 URL：%s", (url) => {
     const argv = [process.execPath, "--", url];
     expect(extractDeepLinkUrlFromArgs(argv)).toBe(url);
@@ -97,7 +99,7 @@ describe("非 Windows 注册兼容性", () => {
 
     registerDeepLinkProtocol(logger);
 
-    expect(mocks.register).toHaveBeenCalledWith("zcode");
+    expect(mocks.register).toHaveBeenCalledWith("ompcode-preview");
     expect(mocks.registerLinux).toHaveBeenCalledTimes(platform === "linux" ? 1 : 0);
   });
 
@@ -109,7 +111,7 @@ describe("非 Windows 注册兼容性", () => {
 
     registerDeepLinkProtocol(logger);
 
-    expect(mocks.register).toHaveBeenCalledWith("zcode", process.execPath, [entry]);
+    expect(mocks.register).toHaveBeenCalledWith("ompcode-preview", process.execPath, [entry]);
     expect(mocks.registerLinux).not.toHaveBeenCalled();
   });
 });

@@ -1,5 +1,6 @@
 import { captureV4ComposerDraftHandoff } from "@/v4/composer/composerDraftWorkspaceTransfer.js";
 import { useComposerClientNamespace } from "@/hooks/useServices.js";
+import { useOmpStorageScope } from "@/hooks/useZCodeAgentService.js";
 import { useOptionalTabStore } from "@/store/TabStoreProvider.js";
 import { useZCodeSessionStore } from "@/store/zcodeSessionStore.js";
 import { useEffect, useRef, useState } from "react";
@@ -65,6 +66,9 @@ export function ProjectCreation({
   }, [snapshot]);
   const sidebar = useOptionalProjectDirectory();
   const composerClientNamespace = useComposerClientNamespace();
+  const storageScope = useOmpStorageScope(workspacePath, workspaceIdentity);
+  const storageScopeRef = useRef(storageScope);
+  storageScopeRef.current = storageScope;
   const activeTabId = useOptionalTabStore((state) => state.activeTabId);
   const originTabId = useRef(activeTabId);
   const workspaceKey = workspaceIdentity?.trim() || workspacePath;
@@ -141,6 +145,7 @@ export function ProjectCreation({
     return host;
   };
   const saved = async (project: VirtualProject) => {
+    const sourceStorageScope = storageScope;
     if (!active.current) return;
     if (project.hostId !== "local") {
       const host = admittedHosts.current.get(project.hostId);
@@ -160,6 +165,9 @@ export function ProjectCreation({
     // 创建原来只刷新列表，草稿仍绑定旧项目；复用项目选择入口，并拒绝保存期间已失效的草稿。
     if (
       active.current &&
+      sourceStorageScope !== null &&
+      storageScopeRef.current === sourceStorageScope &&
+      draft.draftStorageScope === sourceStorageScope &&
       currentScope.current.activeTabId === originTabId.current &&
       currentScope.current.workspaceKey === originDraft.workspaceKey &&
       !originDraft.activeTaskId &&
@@ -179,6 +187,7 @@ export function ProjectCreation({
           workspacePath,
           workspaceIdentity,
           composerClientNamespace,
+          sourceStorageScope,
         ),
       });
     }

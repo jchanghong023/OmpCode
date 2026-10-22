@@ -219,7 +219,7 @@ describe("desktopApplicationMenu endpoint submenu", () => {
     expect(findMenuItem(template, "ZCode Endpoint")).toBeUndefined();
   });
 
-  it("Preview 隐藏更新入口，生产版继续显示", async () => {
+  it("Preview 和正式版均保留更新不可用说明入口", async () => {
     const { rebuildApplicationMenu } = await import("../src/main/desktopApplicationMenu.js");
 
     envMock.value = "test";
@@ -230,7 +230,7 @@ describe("desktopApplicationMenu endpoint submenu", () => {
     let template = buildFromTemplateMock.mock.calls.at(
       -1,
     )?.[0] as Electron.MenuItemConstructorOptions[];
-    expect(findMenuItem(template, undefined, "check-for-update")).toBeUndefined();
+    expect(findMenuItem(template, undefined, "check-for-update")).toBeTruthy();
 
     envMock.value = "production";
     rebuildApplicationMenu({

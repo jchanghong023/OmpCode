@@ -15,6 +15,7 @@ import {
   setInputValueByTestIdDom,
 } from "../helpers/desktop-app.js";
 import { TID_CHAT_ATTACHMENT_BUTTON, TID_V4_COMPOSER_INPUT } from "@zcode/shared/test-ids";
+import { OMP_MODEL_ID, OMP_PROVIDER_ID } from "../helpers/omp-integration-fixture.js";
 import {
   clickV4SlashOption,
   getV4ComposerText,
@@ -23,18 +24,20 @@ import {
   prepareV4ConversationE2E,
   selectV4TaskById,
   sendV4Prompt,
+  switchV4Model,
   waitForV4MentionOptionPrefix,
   waitForV4Pane,
   waitForV4TimelineContaining,
 } from "../helpers/v4-conversation.js";
 
 const SESSION_SKILL_NAME = "e2e-session-skill-catalog";
-const SESSION_SKILL_DIRECTORY = join(
-  getE2EAppDataPaths().workspace,
-  ".zcode",
-  "skills",
-  SESSION_SKILL_NAME,
-);
+const nativeOmp = Boolean(process.env.ZCODE_AGENT_SERVER_COMMAND?.trim());
+// 原生 session 必须发现其真实 profile catalog，不能继续向旧 .zcode 目录写夹具。
+const skillRoot = nativeOmp
+  ? process.env.PI_CODING_AGENT_DIR
+  : join(getE2EAppDataPaths().workspace, ".zcode");
+if (!skillRoot) throw new Error("Isolated native OMP profile required for mention E2E");
+const SESSION_SKILL_DIRECTORY = join(skillRoot, "skills", SESSION_SKILL_NAME);
 const SESSION_SKILL_PATH = join(SESSION_SKILL_DIRECTORY, "SKILL.md");
 
 function isSessionSkillOption(optionId: string) {
@@ -112,7 +115,8 @@ describe("S01 / S05 / S08：composer 候选入口与 Session Skill catalog", () 
   });
 
   it("@ 与 # 共用 sessions-index，+ 菜单突出 @、/ 和 $", async () => {
-    await prepareV4ConversationE2E();
+    await prepareV4ConversationE2E({ skipProvider: nativeOmp });
+    if (nativeOmp) await switchV4Model(OMP_PROVIDER_ID, OMP_MODEL_ID, "disabled");
 
     // 1) 建立一个 session（供 @ / # 目录共同命中）
     await sendV4Prompt("E2E_V4_MENTION_SEED 建立可被 mention 的会话");
@@ -175,10 +179,14 @@ describe("S01 / S05 / S08：composer 候选入口与 Session Skill catalog", () 
     let expectedSkillOptionId: string | undefined;
     let expectedSkillMarkdown: string | undefined;
     for (const skillTrigger of ["$", "¥", "￥"] as const) {
-      await setInputValueByTestIdDom(TID_V4_COMPOSER_INPUT, skillTrigger, {
-        timeout: 15000,
-        timeoutMsg: `无法输入 Skills 兼容触发器 ${skillTrigger}`,
-      });
+      await setInputValueByTestIdDom(
+        TID_V4_COMPOSER_INPUT,
+        `${skillTrigger}${nativeOmp ? "e2e-mention-execution" : ""}`,
+        {
+          timeout: 15000,
+          timeoutMsg: `无法输入 Skills 兼容触发器 ${skillTrigger}`,
+        },
+      );
       const skillOptionId = await waitForV4MentionOptionPrefix("skill:");
       expect(skillOptionId.startsWith("skill:")).toBe(true);
       if (expectedSkillOptionId) {
@@ -209,6 +217,18 @@ describe("S01 / S05 / S08：composer 候选入口与 Session Skill catalog", () 
         timeout: 15000,
         timeoutMsg: `选中 ${skillTrigger} Skill 候选后面板没有关闭`,
       });
+    }
+
+    if (nativeOmp) {
+      if (!expectedSkillMarkdown)
+        throw new Error("Selected native skill canonical mention missing");
+      await sendV4Prompt(`${expectedSkillMarkdown} E2E_V4_MENTION_EXECUTE`);
+      await waitForV4TimelineContaining("V4_MENTION_SKILL_EXECUTED", 45000);
+      await waitForV4Pane(
+        (pane) => !pane.canStop,
+        "Selected native skill execution did not settle",
+        45000,
+      );
     }
 
     // 6) + 菜单以底部提示介绍快捷输入；提示不再是可点击的菜单项。

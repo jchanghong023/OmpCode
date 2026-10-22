@@ -134,15 +134,9 @@ describe("WindowsCaptionMenuButton", () => {
     );
   }
 
-  it("Preview 隐藏更新入口，生产版继续保留", async () => {
-    const { shouldShowDesktopUpdateEntry } = await import("@/WindowsCaptionMenuButton.js");
-
-    // 更新入口跟随产品身份：生产后端的 Preview 同样隐藏。
-    expect(shouldShowDesktopUpdateEntry("preview")).toBe(false);
-    expect(shouldShowDesktopUpdateEntry("production")).toBe(true);
-
+  it("没有 fork feed 时仍保留更新说明入口", async () => {
     const html = await renderButton("header");
-    expect(html).not.toContain("titleBar.menu.help.checkForUpdates");
+    expect(html).toContain("titleBar.menu.help.checkForUpdates");
   });
 
   it("includes help actions migrated from the shared question-mark menu", async () => {

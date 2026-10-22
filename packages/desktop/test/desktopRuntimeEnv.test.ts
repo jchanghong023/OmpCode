@@ -1,5 +1,6 @@
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -9,7 +10,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, sep, win32 } from "node:path";
 
 const { verifyOmpArtifactMock } = vi.hoisted(() => ({
   verifyOmpArtifactMock: vi.fn(async (root: string) => ({ command: join(root, "omp") })),
@@ -21,7 +22,7 @@ vi.mock("../../../scripts/omp-artifact.mjs", () => ({
 async function loadRuntimeEnv() {
   // Tests intentionally reload Electron module constants after resetModules.
   const runtime = await import("../src/main/desktopRuntimeEnv.js");
-  await runtime.prepareBundledOmpHostEnv({ ...process.env });
+  await runtime.prepareOmpHostEnv({ ...process.env });
   return runtime;
 }
 
@@ -184,6 +185,19 @@ const originalDesktopUseElectronDefaultUserData =
   process.env["ZCODE_DESKTOP_USE_ELECTRON_DEFAULT_USER_DATA"];
 const originalCwd = process.cwd();
 const originalResourcesPathDescriptor = Object.getOwnPropertyDescriptor(process, "resourcesPath");
+const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+const ompInstallEnvKeys = [
+  "ZCODE_AGENT_SERVER_COMMAND",
+  "ZCODE_AGENT_SERVER_ARGS_JSON",
+  "ZCODE_AGENT_SERVER_CWD",
+  "PI_INSTALL_DIR",
+  "LOCALAPPDATA",
+  "PATH",
+  "Path",
+] as const;
+const originalOmpInstallEnv = Object.fromEntries(
+  ompInstallEnvKeys.map((key) => [key, process.env[key]]),
+);
 const createdDirs: string[] = [];
 
 function restoreEnvValue(key: string, value: string | undefined) {
@@ -436,6 +450,16 @@ describe("desktopRuntimeEnv resolveRemoteAssetDirs", () => {
 });
 
 describe("desktopRuntimeEnv buildHostProcessEnv", () => {
+  let discoveryFixtureDir: string;
+
+  function executableFixture(...segments: string[]): string {
+    const directory = join(discoveryFixtureDir, ...segments.slice(0, -1));
+    mkdirSync(directory, { recursive: true });
+    const executable = join(directory, segments.at(-1)!);
+    writeFileSync(executable, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    return executable;
+  }
+
   beforeEach(() => {
     vi.resetModules();
     verifyOmpArtifactMock
@@ -451,8 +475,27 @@ describe("desktopRuntimeEnv buildHostProcessEnv", () => {
     delete process.env["ZCODE_BASE_URL"];
     delete process.env["ZCODE_ENDPOINT_ORIGIN"];
     delete process.env["ZCODE_DYNAMIC_WORKFLOW_MODE"];
+    for (const key of ompInstallEnvKeys) {
+      delete process.env[key];
+    }
+    // 默认发现使用独立真实文件，不能依赖开发机已经安装 OMP 或继承的 PATH。
+    discoveryFixtureDir = mkdtempSync(join(tmpdir(), "zcode-omp-discovery-"));
+    executableFixture("bin", "omp");
+    executableFixture("bin", "omp.exe");
+    process.env["PI_INSTALL_DIR"] = join(discoveryFixtureDir, "bin");
+    process.env["PATH"] = join(discoveryFixtureDir, "bin");
     productFlavorMock.value = "preview";
     process.chdir(originalCwd);
+  });
+
+  afterEach(() => {
+    if (originalPlatformDescriptor) {
+      Object.defineProperty(process, "platform", originalPlatformDescriptor);
+    }
+    for (const key of ompInstallEnvKeys) {
+      restoreEnvValue(key, originalOmpInstallEnv[key]);
+    }
+    rmSync(discoveryFixtureDir, { recursive: true, force: true });
   });
 
   afterAll(() => {
@@ -488,24 +531,301 @@ describe("desktopRuntimeEnv buildHostProcessEnv", () => {
     }
   });
 
-  it("异步校验完成前拒绝启动，成功后只消费已校验产物", async () => {
-    appMock.isPackaged = true;
-    Object.defineProperty(process, "resourcesPath", {
-      value: "/mock/resources",
-      configurable: true,
+  describe.skipIf(originalPlatformDescriptor?.value !== "win32")("Windows 当前可找到的 OMP", () => {
+    let resourcesPathDescriptor: PropertyDescriptor | undefined;
+
+    // resetModules 后需重新加载 Electron/platform 常量，静态 import 无法覆盖开发与打包分支。
+    beforeEach(() => {
+      Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+      // 这些用例专门通过 localEnv 提供发现输入；清掉外层 shell 默认夹具，
+      // 使 prepare 输入与生产 build 的 {...localEnv, ...process.env} 有效发现值一致。
+      for (const key of ["PI_INSTALL_DIR", "LOCALAPPDATA", "PATH", "Path"]) {
+        delete process.env[key];
+      }
+      resourcesPathDescriptor = Object.getOwnPropertyDescriptor(process, "resourcesPath");
+      // 打包态会先解析随包 GLM 路径；补齐 Electron 属性，避免在 OMP 断言前因缺失路径失败。
+      Object.defineProperty(process, "resourcesPath", {
+        value: "/mock/resources",
+        configurable: true,
+      });
     });
-    // Intentionally load without the prepared-module helper to test the startup boundary.
+
+    afterEach(() => {
+      if (resourcesPathDescriptor) {
+        Object.defineProperty(process, "resourcesPath", resourcesPathDescriptor);
+      } else {
+        Reflect.deleteProperty(process, "resourcesPath");
+      }
+    });
+
+    it.each([false, true])("isPackaged=%s 使用安装版且无需 manifest", async (packaged) => {
+      appMock.isPackaged = packaged;
+      const localAppData = join(discoveryFixtureDir, "local-appdata");
+      executableFixture("local-appdata", "omp", "omp.exe");
+      const localEnv = { LOCALAPPDATA: `  ${localAppData}  `, PI_INSTALL_DIR: "   " };
+      const runtime = await import("../src/main/desktopRuntimeEnv.js");
+
+      await runtime.prepareOmpHostEnv(localEnv);
+      const env = runtime.buildHostProcessEnv(localEnv);
+
+      expect(env.ZCODE_AGENT_SERVER_COMMAND).toBe(win32.resolve(localAppData, "omp", "omp.exe"));
+      expect(JSON.parse(env.ZCODE_AGENT_SERVER_ARGS_JSON ?? "null")).toEqual([
+        "app-server",
+        "--stdio",
+        "--surface",
+        "desktop",
+      ]);
+      expect(verifyOmpArtifactMock).not.toHaveBeenCalled();
+    });
+
+    it("PI_INSTALL_DIR 优先于 LOCALAPPDATA 并保留独立参数覆盖", async () => {
+      appMock.isPackaged = true;
+      const installDir = join(discoveryFixtureDir, "custom-install");
+      executableFixture("custom-install", "omp.exe");
+      executableFixture("local-appdata", "omp", "omp.exe");
+      const localEnv = {
+        PI_INSTALL_DIR: `  ${installDir}  `,
+        LOCALAPPDATA: join(discoveryFixtureDir, "local-appdata"),
+        ZCODE_AGENT_SERVER_ARGS_JSON: "[]",
+        ZCODE_AGENT_SERVER_CWD: discoveryFixtureDir,
+      };
+      const runtime = await import("../src/main/desktopRuntimeEnv.js");
+
+      await runtime.prepareOmpHostEnv(localEnv);
+
+      expect(runtime.buildHostProcessEnv(localEnv)).toMatchObject({
+        ZCODE_AGENT_SERVER_COMMAND: win32.resolve(installDir, "omp.exe"),
+        ZCODE_AGENT_SERVER_ARGS_JSON: "[]",
+        ZCODE_AGENT_SERVER_CWD: discoveryFixtureDir,
+      });
+      expect(verifyOmpArtifactMock).not.toHaveBeenCalled();
+    });
+
+    it.each([undefined, "", "   "])("LOCALAPPDATA=%s 回退用户目录", async (localAppData) => {
+      executableFixture("home", "AppData", "Local", "omp", "omp.exe");
+      const localEnv: Record<string, string> = {};
+      if (localAppData !== undefined) localEnv.LOCALAPPDATA = localAppData;
+      const { resolveOmpHostEnv } = await import("../src/main/desktopRuntimeEnv.js");
+
+      const env = await resolveOmpHostEnv(localEnv, {
+        platform: "win32",
+        homeDir: join(discoveryFixtureDir, "home"),
+      });
+
+      expect(env.ZCODE_AGENT_SERVER_COMMAND).toBe(
+        win32.resolve(discoveryFixtureDir, "home", "AppData", "Local", "omp", "omp.exe"),
+      );
+      expect(verifyOmpArtifactMock).not.toHaveBeenCalled();
+    });
+
+    it("显式 COMMAND 和 ARGS 优先于 Windows 安装路径", async () => {
+      appMock.isPackaged = true;
+      const localEnv = {
+        ZCODE_AGENT_SERVER_COMMAND: join(discoveryFixtureDir, "custom-agent.exe"),
+        ZCODE_AGENT_SERVER_ARGS_JSON: '["custom-server","--stdio"]',
+        ZCODE_AGENT_SERVER_CWD: discoveryFixtureDir,
+        PI_INSTALL_DIR: join(discoveryFixtureDir, "missing-install"),
+      };
+      const runtime = await import("../src/main/desktopRuntimeEnv.js");
+
+      await runtime.prepareOmpHostEnv(localEnv);
+
+      expect(runtime.buildHostProcessEnv(localEnv)).toMatchObject({
+        ZCODE_AGENT_SERVER_COMMAND: localEnv.ZCODE_AGENT_SERVER_COMMAND,
+        ZCODE_AGENT_SERVER_ARGS_JSON: localEnv.ZCODE_AGENT_SERVER_ARGS_JSON,
+        ZCODE_AGENT_SERVER_CWD: localEnv.ZCODE_AGENT_SERVER_CWD,
+      });
+      expect(verifyOmpArtifactMock).not.toHaveBeenCalled();
+    });
+
+    it("安装器目录缺文件时继续查标准安装目录，再查继承 PATH", async () => {
+      executableFixture("local-appdata", "omp", "omp.exe");
+      const runtime = await import("../src/main/desktopRuntimeEnv.js");
+      const localEnv = {
+        PI_INSTALL_DIR: join(discoveryFixtureDir, "missing-install"),
+        LOCALAPPDATA: join(discoveryFixtureDir, "local-appdata"),
+        Path: join(discoveryFixtureDir, "bin"),
+      };
+      await runtime.prepareOmpHostEnv(localEnv);
+      expect(runtime.buildHostProcessEnv(localEnv).ZCODE_AGENT_SERVER_COMMAND).toBe(
+        win32.resolve(discoveryFixtureDir, "local-appdata", "omp", "omp.exe"),
+      );
+      rmSync(join(discoveryFixtureDir, "local-appdata", "omp", "omp.exe"));
+      await runtime.prepareOmpHostEnv(localEnv);
+      expect(runtime.buildHostProcessEnv(localEnv).ZCODE_AGENT_SERVER_COMMAND).toBe(
+        win32.resolve(discoveryFixtureDir, "bin", "omp.exe"),
+      );
+      expect(verifyOmpArtifactMock).not.toHaveBeenCalled();
+    });
+
+    it("所有安装候选与 PATH 缺失时明确失败而不使用随包或旧 Agent", async () => {
+      const runtime = await import("../src/main/desktopRuntimeEnv.js");
+      const localEnv = {
+        PI_INSTALL_DIR: join(discoveryFixtureDir, "missing-install"),
+        LOCALAPPDATA: join(discoveryFixtureDir, "missing-appdata"),
+        PATH: join(discoveryFixtureDir, "missing-path"),
+      };
+      await expect(runtime.prepareOmpHostEnv(localEnv)).rejects.toThrow(/OMP executable not found/);
+      expect(() => runtime.buildHostProcessEnv(localEnv)).toThrow(/asynchronous preparation/);
+      expect(verifyOmpArtifactMock).not.toHaveBeenCalled();
+    });
+
+    it.each(["", "   "])("显式空 COMMAND=%j 不回退安装版", async (command) => {
+      appMock.isPackaged = true;
+      const localEnv = { ZCODE_AGENT_SERVER_COMMAND: command };
+      const runtime = await import("../src/main/desktopRuntimeEnv.js");
+
+      await expect(runtime.prepareOmpHostEnv(localEnv)).rejects.toThrow(
+        /ZCODE_AGENT_SERVER_COMMAND must not be empty/,
+      );
+      expect(() => runtime.buildHostProcessEnv(localEnv)).toThrow(
+        /ZCODE_AGENT_SERVER_COMMAND must not be empty/,
+      );
+      expect(verifyOmpArtifactMock).not.toHaveBeenCalled();
+    });
+  });
+
+  it("发现准备完成前拒绝启动，完成后 Host 使用同一可执行入口", async () => {
     const runtime = await import("../src/main/desktopRuntimeEnv.js");
-    const verified = Promise.withResolvers<{ command: string }>();
-    verifyOmpArtifactMock.mockReturnValue(verified.promise);
-    const preparation = runtime.prepareBundledOmpHostEnv({});
-    expect(() => runtime.buildHostProcessEnv({})).toThrow(/asynchronous verification/);
-    verified.resolve({ command: join(tmpdir(), "verified-omp") });
-    await preparation;
+    expect(() => runtime.buildHostProcessEnv({})).toThrow(/asynchronous preparation/);
+    await runtime.prepareOmpHostEnv({ ...process.env });
     expect(runtime.buildHostProcessEnv({}).ZCODE_AGENT_SERVER_COMMAND).toBe(
-      join(tmpdir(), "verified-omp"),
+      join(discoveryFixtureDir, "bin", process.platform === "win32" ? "omp.exe" : "omp"),
     );
-    expect(verifyOmpArtifactMock).toHaveBeenCalledTimes(1);
+    expect(verifyOmpArtifactMock).not.toHaveBeenCalled();
+  });
+
+  // 模拟平台只验证选择规则，不代表已在真实 Linux/macOS 完成发布验收。
+  it.skipIf(originalPlatformDescriptor?.value === "win32").each(["linux", "darwin"] as const)(
+    "%s 在开发态与打包态均消费继承 PATH 的 OMP，不使用随包默认",
+    async (platform) => {
+      Object.defineProperty(process, "platform", { value: platform, configurable: true });
+      Object.defineProperty(process, "resourcesPath", {
+        value: join(discoveryFixtureDir, "resources"),
+        configurable: true,
+      });
+      for (const packaged of [false, true]) {
+        appMock.isPackaged = packaged;
+        vi.resetModules();
+        const runtime = await import("../src/main/desktopRuntimeEnv.js");
+        const localEnv = {
+          PATH: join(discoveryFixtureDir, "bin"),
+          ZCODE_AGENT_SERVER_ARGS_JSON: '["app-server","--stdio","--surface","desktop"]',
+          ZCODE_AGENT_SERVER_CWD: discoveryFixtureDir,
+        };
+        await runtime.prepareOmpHostEnv(localEnv);
+        expect(runtime.buildHostProcessEnv(localEnv)).toMatchObject({
+          ZCODE_AGENT_SERVER_COMMAND: join(discoveryFixtureDir, "bin", "omp"),
+          ZCODE_AGENT_SERVER_ARGS_JSON: localEnv.ZCODE_AGENT_SERVER_ARGS_JSON,
+          ZCODE_AGENT_SERVER_CWD: discoveryFixtureDir,
+        });
+      }
+      expect(verifyOmpArtifactMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["linux", "darwin"] as const)(
+    "%s 按继承 PATH 顺序选择当前可找到的 OMP",
+    async (platform) => {
+      const executable = executableFixture("path-choice", "omp");
+      const { resolveOmpHostEnv } = await import("../src/main/desktopRuntimeEnv.js");
+      const env = await resolveOmpHostEnv(
+        { PATH: "/missing:/available", ZCODE_AGENT_SERVER_ARGS_JSON: "[]" },
+        {
+          platform,
+          // Windows 上仅模拟 POSIX 查找命名；可用性仍来自本用例自己的真实文件。
+          isExecutable: async (candidate) =>
+            candidate === "/available/omp" && existsSync(executable),
+        },
+      );
+      expect(env).toEqual({
+        ZCODE_AGENT_SERVER_COMMAND: "/available/omp",
+        ZCODE_AGENT_SERVER_ARGS_JSON: "[]",
+      });
+      expect(verifyOmpArtifactMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["linux", "darwin"] as const)("%s PATH 缺失或没有 OMP 时明确失败", async (platform) => {
+    const { resolveOmpHostEnv } = await import("../src/main/desktopRuntimeEnv.js");
+    for (const localEnv of [{}, { PATH: "" }, { PATH: join(discoveryFixtureDir, "missing") }]) {
+      await expect(resolveOmpHostEnv(localEnv, { platform })).rejects.toThrow(
+        /OMP executable not found/,
+      );
+    }
+    expect(verifyOmpArtifactMock).not.toHaveBeenCalled();
+  });
+
+  it.each(["linux", "darwin"] as const)(
+    "%s 显式命令优先，显式空值不能触发自动发现",
+    async (platform) => {
+      const { resolveOmpHostEnv } = await import("../src/main/desktopRuntimeEnv.js");
+      await expect(
+        resolveOmpHostEnv({ ZCODE_AGENT_SERVER_COMMAND: "/custom/omp" }, { platform }),
+      ).resolves.toEqual({});
+      for (const command of ["", "   "]) {
+        await expect(
+          resolveOmpHostEnv({ ZCODE_AGENT_SERVER_COMMAND: command }, { platform }),
+        ).rejects.toThrow(/ZCODE_AGENT_SERVER_COMMAND must not be empty/);
+      }
+      expect(verifyOmpArtifactMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it.skipIf(originalPlatformDescriptor?.value === "win32")(
+    "POSIX PATH 中非可执行文件不被选中",
+    async () => {
+      const nonExecutable = executableFixture("not-executable", "omp");
+      chmodSync(nonExecutable, 0o644);
+      const { resolveOmpHostEnv } = await import("../src/main/desktopRuntimeEnv.js");
+      await expect(
+        resolveOmpHostEnv(
+          { PATH: join(discoveryFixtureDir, "not-executable") },
+          { platform: "linux" },
+        ),
+      ).rejects.toThrow(/OMP executable not found/);
+    },
+  );
+
+  it("发现与 Host 注入不修改传入环境或当前 shell 环境", async () => {
+    const runtime = await import("../src/main/desktopRuntimeEnv.js");
+    const localEnv = Object.freeze({
+      PI_INSTALL_DIR: join(discoveryFixtureDir, "missing-install"),
+      LOCALAPPDATA: join(discoveryFixtureDir, "missing-appdata"),
+      PATH: join(discoveryFixtureDir, "bin"),
+    });
+    // 生产中 shell 优先于 localEnv；准备同一真实快照，并由 afterEach 恢复 shell。
+    for (const [key, value] of Object.entries(localEnv)) process.env[key] = value;
+    const shellEnv = { ...process.env };
+    await runtime.prepareOmpHostEnv({ ...localEnv, ...process.env });
+    runtime.buildHostProcessEnv(localEnv);
+    expect(localEnv).toEqual({
+      PI_INSTALL_DIR: join(discoveryFixtureDir, "missing-install"),
+      LOCALAPPDATA: join(discoveryFixtureDir, "missing-appdata"),
+      PATH: join(discoveryFixtureDir, "bin"),
+    });
+    expect(process.env).toEqual(shellEnv);
+  });
+
+  it("shell PATH 变化后拒绝复用发现结果，重新准备后使用当前 OMP", async () => {
+    const runtime = await import("../src/main/desktopRuntimeEnv.js");
+    delete process.env["PI_INSTALL_DIR"];
+    process.env["LOCALAPPDATA"] = join(discoveryFixtureDir, "missing-appdata");
+    await runtime.prepareOmpHostEnv({ ...process.env });
+    expect(runtime.buildHostProcessEnv({}).ZCODE_AGENT_SERVER_COMMAND).toBe(
+      join(discoveryFixtureDir, "bin", process.platform === "win32" ? "omp.exe" : "omp"),
+    );
+
+    const currentOmp = executableFixture(
+      "new-path",
+      process.platform === "win32" ? "omp.exe" : "omp",
+    );
+    process.env["PATH"] = join(discoveryFixtureDir, "new-path");
+    expect(() => runtime.buildHostProcessEnv({})).toThrow(/discovery environment changed/);
+
+    await runtime.prepareOmpHostEnv({ ...process.env });
+    expect(runtime.buildHostProcessEnv({}).ZCODE_AGENT_SERVER_COMMAND).toBe(currentOmp);
+    expect(verifyOmpArtifactMock).not.toHaveBeenCalled();
   });
 
   // Main 的模块级 Electron/env 身份必须在每个 resetModules 后重新加载，不能静态 import。
@@ -864,7 +1184,7 @@ describe("desktopRuntimeEnv buildHostProcessEnv", () => {
     expect(env.ZAI_OAUTH_ORIGIN).toBe("https://chat.z.ai");
     expect(env.ZAI_BUSINESS_BASE_URL).toBe("https://api.z.ai");
     expect(env.ZAI_OAUTH_CLIENT_ID).toBe("client_P8X5CMWmlaRO9gyO-KSqtg");
-    expect(env.ZCODE_CUA_HELPER_INSTALL_VARIANT).toBe("preview");
+    expect(env.ZCODE_CUA_HELPER_INSTALL_VARIANT).toBe("ompcode-preview");
   });
 
   // DWG-05（docs/dynamic-workflow/launch.md「Gray release」）：Main 对
@@ -1037,21 +1357,14 @@ describe("desktopRuntimeEnv runtime identity", () => {
   it("打包测试环境使用 Preview 应用名和独立 Electron 数据目录", async () => {
     appMock.isPackaged = true;
 
-    const {
-      isPreviewPackagedRuntime,
-      runtimeApplicationName,
-      runtimeSessionDataPath,
-      runtimeUserDataPath,
-    } = await loadRuntimeEnv();
+    const { isPreviewPackagedRuntime, runtimeSessionDataPath, runtimeUserDataPath } =
+      await loadRuntimeEnv();
 
     expect(isPreviewPackagedRuntime).toBe(true);
-    expect(runtimeApplicationName).toBe("ZCode Preview");
-    // Bugfix：这两条路径由实现用宿主 path.join 从 app.getPath("appData") 拼出，
-    // Windows 上是 `\mock\appData\ZCode Preview`，写死 POSIX 字面量必然失败。
-    // 用例要断言的是「Preview 单独占一个 Electron 数据目录」的目录结构，与分隔符无关，
-    // 所以用同样的 join 表达；在 POSIX 上是恒等变换。
-    expect(runtimeUserDataPath).toBe(join("/mock/appData", "ZCode Preview"));
-    expect(runtimeSessionDataPath).toBe(join("/mock/appData", "ZCode Preview", "session"));
+    // Preview 的 Electron 数据必须独立于上游应用，session 数据保留在同一自有根下。
+    expect(runtimeUserDataPath).not.toBe(join("/mock/appData", "ZCode Preview"));
+    expect(runtimeUserDataPath?.startsWith(join("/mock/appData") + sep)).toBe(true);
+    expect(runtimeSessionDataPath).toBe(join(runtimeUserDataPath!, "session"));
   });
 
   it("e2e 可保留 Chromedriver 注入的 Electron userData 目录", async () => {

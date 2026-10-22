@@ -251,7 +251,13 @@ export const useSkillStore = create<SkillStoreState>((set, get) => ({
     const provider = normalizeAgentProviderToZCodeAgent(
       legacyCall ? get().provider : providerOrEnabled,
     );
-    const scope = legacyCall ? undefined : (scopeOrSkillsService as SkillSummary["scope"]);
+    // 原生技能发现仍按 workspace 返回，但启停仅写当前 OMP profile 用户层。
+    const scope =
+      get().capability?.toggleScope === "profile"
+        ? "user"
+        : legacyCall
+          ? undefined
+          : (scopeOrSkillsService as SkillSummary["scope"]);
     const enabled = legacyCall ? providerOrEnabled : (enabledOrSkillsService as boolean);
     const skillsService = legacyCall
       ? (scopeOrSkillsService as ISkillsService)

@@ -196,6 +196,11 @@ it("routes every foreign project operation to its existing owner and never falls
     throw new Error("must not read local storage");
   });
   const remote = {
+    getOrganizationScope: vi.fn(async () => ({
+      configRoot: "/remote-omp",
+      activeProfile: "work",
+      storageScope: "remote-work",
+    })),
     readDirectory: vi.fn(async () => ({ path: "/remote-home", entries: [] })),
     readProjects: vi.fn(async () => [] as VirtualProject[]),
     readTree: vi.fn(async () => ({ projects: [], tasks: [] })),
@@ -235,6 +240,13 @@ it("routes every foreign project operation to its existing owner and never falls
     workspacePath: "/remote",
   });
   await service.resolveSessionDirectories({ workspacePath: "/remote", taskId: "s" }, "source");
+  await expect(
+    service.getOrganizationScope({ workspacePath: "/remote" }, "source"),
+  ).resolves.toMatchObject({
+    configRoot: "/remote-omp",
+    activeProfile: "work",
+    storageScope: "remote-work",
+  });
   for (const method of Object.values(remote)) expect(method).toHaveBeenCalledTimes(1);
   expect(repository).not.toHaveBeenCalled();
   await expect(service.readTree({ hostId: "offline" })).rejects.toThrow("project.host-offline");

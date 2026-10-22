@@ -10,6 +10,12 @@ import type { AppToolSearchMode } from "./app-runtime-preferences.js";
 
 // ── Domain types ──
 
+/** Host 启动准备与 Agent warmup 共用的原始 workspace 目标；cwd fallback 不改变身份。 */
+export interface HostStartupWorkspaceTarget {
+  workspacePath: string;
+  workspaceIdentity?: string;
+}
+
 export interface FileEntry {
   name: string;
   path: string;
@@ -256,6 +262,10 @@ export interface AppSettings {
   /** 当前 App/Host 不再显示提交前体验套餐推荐；不改变任何入口的模型选择。 */
   startPlanRecommendationDismissed?: boolean;
   recentProjects: string[]; // 最近项目列表，最多保留 10 个
+  /** workspace identity key 对应的下次原生启动偏好；不证明已有会话所属 profile。 */
+  ompProfileSelections?: Record<string, string | null>;
+  /** 仅新建 workspace 从可信源进程继承的原生根；与 profile 偏好由同一 Host 原子保存。 */
+  ompProfileLaunchRoots?: Record<string, string>;
   locale: Locale; // 界面语言
   /**
    * 用户覆盖的快捷键绑定（命令 ID → 绑定串数组，格式见 shortcutCommands.ts）。

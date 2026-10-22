@@ -61,7 +61,7 @@ let autoUpdaterSettingService: SettingServiceLike | undefined;
 // initAutoUpdater({ enabled: false }) 只清轮询并 return，electron-updater 实例保持未配置
 // （占位 feed、autoDownload 默认值）。任何漏改成按身份判断的入口若仍调用手动检查，
 // 都会对占位 feed 发真实请求。这里记住“本 flavor 已禁用”，让手动检查在模块内部 fail-closed。
-let autoUpdaterDisabledForProductFlavor = false;
+let autoUpdaterDisabledForProductFlavor = true;
 
 type SettingServiceLike = Pick<ISettingService, "get" | "update">;
 

@@ -1,8 +1,4 @@
 import { TaskGroupRepository } from "#src/task-groups/index.js";
-import {
-  isTasksStorageMigrated,
-  isTasksStoragePrepared,
-} from "#src/session/tasksDatabase/prepared.js";
 /* eslint-disable max-lines -- task 索引仓库集中维护 sqlite schema、查询和状态写入，迁移稳定后再按读写职责拆分。 */
 import { mkdir } from "node:fs/promises";
 import { createRequire } from "node:module";
@@ -23,7 +19,11 @@ import type {
 
 import { createServiceLogger } from "#src/logger/serviceLogger.js";
 import { getTasksIndexDatabasePath, getZCodeDataRootDir } from "#src/paths.js";
-import { projectStorage, type ProjectMigrationContext } from "#src/project-storage/index.js";
+import {
+  projectStorage,
+  type ProjectMigrationContext,
+  type ProjectRepositoryContract,
+} from "#src/project-storage/index.js";
 import { runTasksDatabaseMigrations } from "#src/session/tasksDatabase/migrations.js";
 
 const require = createRequire(import.meta.url);
@@ -322,7 +322,25 @@ export class TaskIndexRepo {
   private db: DatabaseSyncInstance | null = null;
   private dbPath: string | null = null;
   private initializePromise: Promise<void> | null = null;
+  private projectRepository: ProjectRepositoryContract | null = null;
   private readonly writeChains = new Map<string, Promise<void>>();
+  private readonly ompScopeRepositories = new Map<string, TaskIndexRepo>();
+  private readonly workspaceTargets = new Map<
+    string,
+    {
+      workspacePath: string;
+      workspaceIdentity?: string;
+      remoteSessionId?: string;
+    }
+  >();
+  private readonly activeWorkspaceRepositories = new Map<string, TaskIndexRepo>();
+  private readonly scopeResolutionGenerations = new Map<string, number>();
+  private scopeEpoch = 0;
+  private ompScopeResolver?: (target: {
+    workspacePath: string;
+    workspaceIdentity?: string;
+    remoteSessionId?: string;
+  }) => Promise<{ configRoot: string; profileId: string | null } | null>;
 
   constructor(
     private readonly migrationSettings?: ProjectMigrationContext["settings"],
@@ -330,6 +348,99 @@ export class TaskIndexRepo {
     private readonly startupDbPath?: string,
     private readonly startupBusyTimeoutMs = 5000,
   ) {}
+
+  /** 原生启动事实选库；pending preference 不得传入。一个 Host 可同时服务多个实际域。 */
+  forOmpScope(scope: {
+    configRoot: string;
+    profileId: string | null;
+    authority?: string;
+  }): TaskIndexRepo {
+    const path = getTasksIndexDatabasePath(scope);
+    if (path === this.startupDbPath) return this;
+    let repository = this.ompScopeRepositories.get(path);
+    if (!repository) {
+      repository = new TaskIndexRepo(
+        undefined,
+        this.storageHostId,
+        path,
+        this.startupBusyTimeoutMs,
+      );
+      this.ompScopeRepositories.set(path, repository);
+    }
+    return repository;
+  }
+
+  setOmpScopeResolver(resolver: NonNullable<TaskIndexRepo["ompScopeResolver"]>): void {
+    this.ompScopeResolver = resolver;
+  }
+
+  configureNativeOmpScope(
+    resolveFacts: (target: {
+      workspacePath: string;
+      workspaceIdentity?: string;
+      remoteSessionId?: string;
+    }) => Promise<{ configRoot: string | null; activeProfile: string | null }>,
+  ): void {
+    // 装配层可能已注入 owning-Host 路由；standalone adapter/syncer 不得覆盖它。
+    this.ompScopeResolver ??= async (target) => {
+      const facts = await resolveFacts(target);
+      if (!facts.configRoot)
+        throw Object.assign(new Error("Native OMP organization scope is unavailable"), {
+          code: "omp.storageScopeUnavailable",
+        });
+      return { configRoot: facts.configRoot, profileId: facts.activeProfile };
+    };
+  }
+
+  async forWorkspace(target: {
+    workspacePath: string;
+    workspaceIdentity?: string;
+    remoteSessionId?: string;
+  }): Promise<TaskIndexRepo> {
+    const epoch = this.scopeEpoch;
+    const key = workspaceKey(target);
+    const generation = (this.scopeResolutionGenerations.get(key) ?? 0) + 1;
+    this.scopeResolutionGenerations.set(key, generation);
+    this.workspaceTargets.set(key, { ...target });
+    try {
+      const scope = await this.ompScopeResolver?.(target);
+      if (epoch !== this.scopeEpoch)
+        throw Object.assign(new Error("OMP storage owner was closed"), {
+          code: "omp.storageScopeChanged",
+        });
+      const repository = scope ? this.forOmpScope(scope) : this;
+      // 原因：runtime 换代后的新事实不能被较早请求的迟到结果回写成旧活动域。
+      if (this.scopeResolutionGenerations.get(key) === generation)
+        this.activeWorkspaceRepositories.set(key, repository);
+      return repository;
+    } catch (error) {
+      if (epoch === this.scopeEpoch && this.scopeResolutionGenerations.get(key) === generation)
+        this.activeWorkspaceRepositories.delete(key);
+      throw error;
+    }
+  }
+
+  getWorkspaceTargets() {
+    return [...this.workspaceTargets.values()];
+  }
+
+  /** 已解析原生事实的同步投影，设置 owner 的锁内不得回调 runtime 或设置服务。 */
+  getActiveRepositories(): TaskIndexRepo[] {
+    return [...new Set(this.activeWorkspaceRepositories.values())];
+  }
+
+  hasWorkspaceScope(target: { workspacePath: string; workspaceIdentity?: string }): boolean {
+    return this.activeWorkspaceRepositories.has(workspaceKey(target));
+  }
+
+  isActiveProjectOwner(
+    target: { workspacePath: string; workspaceIdentity?: string },
+    repository: ProjectRepositoryContract,
+  ): boolean {
+    return (
+      this.activeWorkspaceRepositories.get(workspaceKey(target))?.projectRepository === repository
+    );
+  }
 
   /** Host 装配层共用迁移后的组织库；UI 只能通过 project/remote-projects 服务访问。 */
   private admitTaskGroup(meta: ZCodeTaskMeta, archived: boolean, deleted: boolean) {
@@ -341,14 +452,31 @@ export class TaskIndexRepo {
     ]);
   }
 
-  async getOrganizationDatabase() {
+  async getOrganizationDatabase(target?: {
+    workspacePath: string;
+    workspaceIdentity?: string;
+    remoteSessionId?: string;
+  }): Promise<DatabaseSyncInstance> {
+    if (target) {
+      const repository = await this.forWorkspace(target);
+      if (repository !== this) return repository.getOrganizationDatabase();
+    }
     await this.ensureReady();
     return this.getDatabase();
   }
 
-  async getProjectRepository() {
+  async getProjectRepository(target?: {
+    workspacePath: string;
+    workspaceIdentity?: string;
+    remoteSessionId?: string;
+  }): Promise<ProjectRepositoryContract> {
+    if (target) {
+      const repository = await this.forWorkspace(target);
+      if (repository !== this) return repository.getProjectRepository();
+    }
     await this.ensureReady();
-    return projectStorage.repository(this.getDatabase(), this.storageHostId);
+    this.projectRepository ??= projectStorage.repository(this.getDatabase(), this.storageHostId);
+    return this.projectRepository;
   }
 
   async ensureReady(): Promise<void> {
@@ -367,6 +495,13 @@ export class TaskIndexRepo {
   }
 
   close(options?: { throwOnError?: boolean }): void {
+    this.scopeEpoch++;
+    this.scopeResolutionGenerations.clear();
+    for (const repository of this.ompScopeRepositories.values()) repository.close(options);
+    this.ompScopeRepositories.clear();
+    this.activeWorkspaceRepositories.clear();
+    this.workspaceTargets.clear();
+    this.projectRepository = null;
     let closeError: unknown;
     try {
       this.db?.close();
@@ -765,6 +900,13 @@ export class TaskIndexRepo {
         taskId: record.meta.taskId,
       });
       const searchableText = existing?.searchable_text ?? "";
+      // 原生 profile 是会话身份，不是展示配置；旧快照遗漏字段不得抹除已确认绑定。
+      if (existing) {
+        const profile = rowToMeta(existing).ompProfile;
+        this.assertMatchingOmpProfile(profile, record.meta.ompProfile);
+        if (profile !== undefined)
+          record = { ...record, meta: { ...record.meta, ompProfile: profile } };
+      }
       this.getDatabase()
         .prepare(
           `INSERT INTO tasks (
@@ -887,10 +1029,77 @@ export class TaskIndexRepo {
     }
   }
 
+  private assertMatchingOmpProfile(
+    existing: string | null | undefined,
+    incoming: string | null | undefined,
+  ): void {
+    if (existing !== undefined && incoming !== undefined && existing !== incoming) {
+      throw Object.assign(new Error("Task belongs to a different OMP profile"), {
+        code: "omp.profileMismatch",
+        expectedProfile: existing,
+        activeProfile: incoming,
+      });
+    }
+  }
+
+  async readTaskOmpProfile(target: {
+    workspacePath: string;
+    workspaceIdentity?: string;
+    taskId: string;
+  }): Promise<string | null | undefined> {
+    return (await this.getTaskMeta(target))?.ompProfile;
+  }
+
+  async assertTaskOmpProfile(
+    target: { workspacePath: string; workspaceIdentity?: string; taskId: string },
+    profile: string | null,
+  ): Promise<void> {
+    const bound = await this.readTaskOmpProfile(target);
+    if (bound === undefined) {
+      throw Object.assign(new Error("Task OMP profile has not been confirmed by native facts"), {
+        code: "omp.profileUnknown",
+      });
+    }
+    this.assertMatchingOmpProfile(bound, profile);
+  }
+
+  /** 仅在同一原生 runtime 成功 list/read/create 后由 Host 确认；选择偏好不是绑定证据。 */
+  async bindTaskOmpProfile(
+    target: { workspacePath: string; workspaceIdentity?: string; taskId: string },
+    profile: string | null,
+  ): Promise<ZCodeTaskMeta> {
+    const repository = await this.forWorkspace(target);
+    if (repository !== this) return repository.bindTaskOmpProfile(target, profile);
+    await this.ensureReady();
+    return this.enqueueWrite(target, () => {
+      const db = this.getDatabase();
+      db.exec("BEGIN IMMEDIATE");
+      try {
+        const row = this.getTaskRow(target);
+        if (!row) throw new Error(`task index 中不存在 task: ${target.taskId}`);
+        const meta = rowToMeta(row);
+        this.assertMatchingOmpProfile(meta.ompProfile, profile);
+        const bound = { ...meta, ompProfile: profile };
+        db.prepare("UPDATE tasks SET meta_json=? WHERE workspace_key=? AND task_id=?").run(
+          serializeMetaJson(bound),
+          workspaceKey(target),
+          target.taskId,
+        );
+        db.exec("COMMIT");
+        return bound;
+      } catch (error) {
+        if (db.isTransaction) db.exec("ROLLBACK");
+        throw error;
+      }
+    });
+  }
+
   async listReconciliationRows(target: {
     workspacePath: string;
     workspaceIdentity?: string;
   }): Promise<Array<{ meta: ZCodeTaskMeta; handoffPending: number }>> {
+    const repository = await this.forWorkspace(target);
+    if (repository !== this) return repository.listReconciliationRows(target);
     await this.ensureReady();
     const rows = this.getDatabase()
       .prepare("SELECT * FROM tasks WHERE workspace_key=?")
@@ -904,6 +1113,8 @@ export class TaskIndexRepo {
     workspaceIdentity?: string;
     taskId: string;
   }): Promise<void> {
+    const repository = await this.forWorkspace(target);
+    if (repository !== this) return repository.removeSubagentIndexRow(target);
     await this.ensureReady();
     return this.enqueueWrite(target, () => {
       this.getDatabase()
@@ -917,6 +1128,8 @@ export class TaskIndexRepo {
     workspaceIdentity?: string;
     taskId: string;
   }): Promise<void> {
+    const repository = await this.forWorkspace(target);
+    if (repository !== this) return repository.markCliOrphan(target);
     await this.ensureReady();
     return this.enqueueWrite(target, () => {
       this.getDatabase()
@@ -933,6 +1146,8 @@ export class TaskIndexRepo {
     workspaceIdentity?: string;
     taskId: string;
   }): Promise<void> {
+    const repository = await this.forWorkspace(target);
+    if (repository !== this) return repository.applyCliDeletion(target);
     await this.ensureReady();
     return this.enqueueWrite(target, () => {
       const db = this.getDatabase();
@@ -958,12 +1173,23 @@ export class TaskIndexRepo {
     lastOutcome?: "completed" | "interrupted" | "error";
     deleted?: boolean;
   }): Promise<ZCodeTaskMeta> {
+    const repository = await this.forWorkspace(params.meta);
+    if (repository !== this) return repository.applyCliFacts(params);
     await this.ensureReady();
     return this.enqueueWrite(params.meta, () => {
       const db = this.getDatabase();
       db.exec("BEGIN IMMEDIATE");
       try {
         const existing = this.getTaskRow(params.meta);
+        const existingProfile = existing ? rowToMeta(existing).ompProfile : undefined;
+        this.assertMatchingOmpProfile(existingProfile, params.meta.ompProfile);
+        if (existing && params.meta.ompProfile !== undefined && existingProfile === undefined) {
+          db.prepare("UPDATE tasks SET meta_json=? WHERE workspace_key=? AND task_id=?").run(
+            serializeMetaJson({ ...rowToMeta(existing), ompProfile: params.meta.ompProfile }),
+            workspaceKey(params.meta),
+            params.meta.taskId,
+          );
+        }
         // 预留行尚无 CLI 事实。首条事实补齐 provider/展示基线，保留预留后发生的组织操作。
         if (!existing || (existing.cli_created_at == null && existing.created_at === 0))
           this.writeRecord({
@@ -1029,6 +1255,8 @@ export class TaskIndexRepo {
     taskId: string;
     expectedUnreadAt: number;
   }): Promise<{ meta: ZCodeTaskMeta; cleared: boolean }> {
+    const repository = await this.forWorkspace(params);
+    if (repository !== this) return repository.clearTaskUnreadIfMatches(params);
     await this.ensureReady();
     return this.enqueueWrite(params, () => {
       const db = this.getDatabase();
@@ -1057,6 +1285,8 @@ export class TaskIndexRepo {
     workspaceIdentity?: string;
     taskId: string;
   }): Promise<ZCodeTaskMeta | null> {
+    const repository = await this.forWorkspace(params);
+    if (repository !== this) return repository.deleteArchivedTask(params);
     await this.ensureReady();
     return this.enqueueWrite(params, () => {
       const database = this.getDatabase();
@@ -1097,6 +1327,8 @@ export class TaskIndexRepo {
     taskId: string;
     patch: TaskIndexStatePatch;
   }): Promise<ZCodeTaskMeta> {
+    const repository = await this.forWorkspace(params);
+    if (repository !== this) return repository.updateTaskState(params);
     await this.ensureReady();
     return this.enqueueWrite(params, () => {
       const db = this.getDatabase();
@@ -1153,6 +1385,8 @@ export class TaskIndexRepo {
     >;
     searchableText?: string;
   }): Promise<ZCodeTaskMeta | null> {
+    const repository = await this.forWorkspace(params);
+    if (repository !== this) return repository.updateTaskPresentation(params);
     await this.ensureReady();
     return this.enqueueWrite(params, () => {
       const db = this.getDatabase();
@@ -1198,6 +1432,21 @@ export class TaskIndexRepo {
     archived?: boolean;
     includeDeleted?: boolean;
   }): Promise<ZCodeTaskMeta[]> {
+    if (params.workspacePath) {
+      const repository = await this.forWorkspace({
+        ...params,
+        workspacePath: params.workspacePath,
+      });
+      if (repository !== this) return repository.listTaskMetas(params);
+    } else if (this.ompScopeResolver) {
+      const results = await Promise.all(
+        this.getWorkspaceTargets().map(async (target) => {
+          const repository = await this.forWorkspace(target);
+          return repository.listTaskMetas({ ...params, ...target });
+        }),
+      );
+      return results.flat().sort((left, right) => right.updatedAt - left.updatedAt);
+    }
     await this.ensureReady();
     // listTaskMetas 支持不传 workspacePath 查询全部任务，但 workspaceKey 只接受必填路径。
     // 先把可选入参收窄成明确的 workspace target，避免类型层把全量查询和 workspace 查询混在一起。
@@ -1263,6 +1512,8 @@ export class TaskIndexRepo {
     workspaceIdentity?: string;
     provider?: ZCodeProvider;
   }): Promise<string[]> {
+    const repository = await this.forWorkspace(params);
+    if (repository !== this) return repository.listDeletedTaskIds(params);
     await this.ensureReady();
     const workspaceKeyValue = workspaceKey({
       workspacePath: params.workspacePath,
@@ -1285,6 +1536,43 @@ export class TaskIndexRepo {
   }
 
   async queryTaskList(
+    params: ZCodeTaskListQuery & { provider?: ZCodeProvider },
+  ): Promise<ZCodeTaskListResult> {
+    if (this.ompScopeResolver) {
+      const groups = new Map<TaskIndexRepo, ZCodeTaskListQuery["workspaceScopes"]>();
+      for (const target of params.workspaceScopes) {
+        const repository = await this.forWorkspace(target);
+        const scopes = groups.get(repository) ?? [];
+        scopes.push(target);
+        groups.set(repository, scopes);
+      }
+      const results = await Promise.all(
+        [...groups].map(([repository, workspaceScopes]) =>
+          repository.queryTaskListInDatabase({ ...params, workspaceScopes, limit: undefined }),
+        ),
+      );
+      const items = results.flatMap((result) => result.items);
+      items.sort((left, right) =>
+        params.sortBy === "created"
+          ? right.createdAt - left.createdAt ||
+            right.updatedAt - left.updatedAt ||
+            right.taskId.localeCompare(left.taskId)
+          : right.updatedAt - left.updatedAt ||
+            right.createdAt - left.createdAt ||
+            right.taskId.localeCompare(left.taskId),
+      );
+      const total = results.reduce((sum, result) => sum + result.total, 0);
+      const limit = normalizeLimit(params.limit);
+      return {
+        items: limit === null ? items : items.slice(0, limit),
+        total,
+        hasMore: limit !== null && total > limit,
+      };
+    }
+    return this.queryTaskListInDatabase(params);
+  }
+
+  private async queryTaskListInDatabase(
     params: ZCodeTaskListQuery & { provider?: ZCodeProvider },
   ): Promise<ZCodeTaskListResult> {
     await this.ensureReady();
@@ -1391,6 +1679,8 @@ export class TaskIndexRepo {
     workspaceIdentity?: string;
     taskId: string;
   }): Promise<ZCodeTaskMeta | null> {
+    const repository = await this.forWorkspace(params);
+    if (repository !== this) return repository.getTaskMeta(params);
     await this.ensureReady();
     const row = this.getTaskRow(params);
     if (!row || row.deleted === 1) {

@@ -1,3 +1,15 @@
+import type { OmpTanJob } from "@zcode/shared";
+import type { OmpTeamRequest, OmpTeamRun } from "@zcode/shared";
+import type { OmpProfileId, OmpProfileState } from "@zcode/shared";
+import type {
+  WikiRequest,
+  WikiResult,
+  RepoRequest,
+  RepoResult,
+  IndexProgress,
+} from "@zcode/shared/omp-indexes";
+import type { NativeSkillsManageParams } from "../skills/skills.js";
+import type { SkillsListResult } from "@zcode/shared";
 import type { ZCodeSessionConfigureParams, ZCodeSessionConfigureResult } from "@zcode/shared";
 import type { PluginUiToolResultNotification } from "@zcode/shared/mcp-apps";
 import type {
@@ -619,6 +631,14 @@ export interface ZCodeAgentStorageStartupSnapshot {
 }
 
 export interface IZCodeAgentService {
+  getOmpProfiles(params: ZCodeAgentWorkspaceTarget): Promise<OmpProfileState>;
+  selectOmpProfile(
+    params: ZCodeAgentWorkspaceTarget & {
+      profile: OmpProfileId;
+      expectedRuntimeIdentity: string | null;
+      apply: "next-start" | "now";
+    },
+  ): Promise<OmpProfileState>;
   /** 控制面不需要账号或模型，且不发送普通协议请求。 */
   prepareStorage(params: ZCodeAgentWorkspaceTarget): Promise<void>;
   getStorageStartupState(
@@ -675,6 +695,11 @@ export interface IZCodeAgentService {
   getSkillReferenceCatalog(
     params: ZCodeAgentSkillReferenceCatalogParams,
   ): Promise<ZCodeSkillsReferenceCatalogResult>;
+  /** Native OMP profile skill management; workspace-scoped discovery without Session activation. */
+  manageNativeSkills(params: NativeSkillsManageParams): Promise<SkillsListResult>;
+  queryOmpWiki(params: WikiRequest): Promise<WikiResult>;
+  queryOmpRepo(params: RepoRequest): Promise<RepoResult>;
+  readonly onOmpIndexProgress: Event<IndexProgress>;
   /** 插件 UI：读取插件 MCP 的 `ui://` 资源；走 session 所在 workspace agent 进程。 */
   openMcpUiInstance(
     params: import("../plugin-ui-bridge/contract.js").PluginUiPrepareSandboxParams & {
@@ -827,6 +852,14 @@ export interface IZCodeAgentService {
     params: ZCodeAgentSessionTarget & { expectedPersistence?: "deferred" | "immediate" },
   ): Promise<boolean>;
   setModel(params: ZCodeAgentSetModelParams): Promise<ZCodeSessionStateSnapshot>;
+  startOmpTan(params: ZCodeAgentSessionTarget & { work: string }): Promise<{ job: OmpTanJob }>;
+  listOmpTan(params: ZCodeAgentSessionTarget): Promise<{ jobs: OmpTanJob[] }>;
+  stopOmpTan(
+    params: ZCodeAgentSessionTarget & { jobId: string },
+  ): Promise<{ accepted: boolean; job: OmpTanJob }>;
+  observeOmpTeam(
+    params: ZCodeAgentWorkspaceTarget & OmpTeamRequest,
+  ): Promise<{ runs?: OmpTeamRun[]; run?: OmpTeamRun; accepted?: boolean }>;
   configureOmpSession(
     params: ZCodeAgentSessionTarget & ZCodeSessionConfigureParams,
   ): Promise<ZCodeSessionConfigureResult>;

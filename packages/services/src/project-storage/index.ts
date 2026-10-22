@@ -19,6 +19,7 @@ import {
 
 export type {
   ProjectMigrationContext,
+  ProjectRepositoryContract,
   ProjectStorageContract,
 } from "#src/project-storage/contract.js";
 export const projectStorage: ProjectStorageContract = {

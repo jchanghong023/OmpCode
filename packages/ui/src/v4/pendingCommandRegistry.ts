@@ -370,12 +370,14 @@ export class PendingCommandRegistry {
               workspace.workspacePath,
               workspace.workspaceIdentity,
               entry.sessionId,
+              composer.scope,
             ) &&
             !persistV4ComposerDraft(
               workspace.workspacePath,
               workspace.workspaceIdentity,
               entry.sessionId,
               draft,
+              composer.scope,
             )
           )
             return false;

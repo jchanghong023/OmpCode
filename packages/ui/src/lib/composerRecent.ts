@@ -5,9 +5,6 @@ import type { ModelSelectionView } from "@zcode/services";
 import { logger } from "@/logger.js";
 import { composerScopeKey, type ComposerScope } from "@/v4/composer/composerDraftStore.js";
 
-// 沿用旧 key，读取时兼容只保存 ModelSelection 的历史记录。
-const COMPOSER_RECENT_KEY_PREFIX = "zcode-model-selection-recent-v1";
-
 interface StorageLike {
   getItem(key: string): string | null;
   setItem(key: string, value: string): void;
@@ -39,12 +36,13 @@ export function acceptComposerRecentReceipt(
   receipt: ComposerRecentReceipt,
   storage: StorageLike | null = browserStorage(),
 ): boolean {
-  if (!storage) return false;
+  if (!storage || !receipt.scope.storageScope) return false;
   const selection = modelSelectionSchema.safeParse(receipt.selection.modelSelection);
   const mode = submissionModeSchema.safeParse(receipt.selection.mode);
   if (!selection.success || !mode.success || isHighspeedProviderId(selection.data.providerId))
     return true;
   const key = resolveComposerRecentKey("", undefined, receipt.scope);
+  if (!key) return false;
   try {
     let previous: { order?: number } | null = null;
     try {
@@ -69,13 +67,12 @@ let submissionSequence = 0;
 const acceptedSequences = new WeakMap<StorageLike, Map<string, number>>();
 
 function resolveComposerRecentKey(
-  workspacePath: string,
-  workspaceIdentity?: string,
+  _workspacePath: string,
+  _workspaceIdentity?: string,
   scope?: ComposerScope,
-): string {
-  if (scope) return `zcode-composer-recent:v2:${composerScopeKey(scope)}`;
-  const workspaceKey = workspaceIdentity?.trim() || workspacePath;
-  return `${COMPOSER_RECENT_KEY_PREFIX}:${workspaceKey}`;
+): string | null {
+  // 未域化历史不能推断为任何实际 profile 的偏好。
+  return scope?.storageScope ? `zcode-composer-recent:v3:${composerScopeKey(scope)}` : null;
 }
 
 export function readComposerRecent(
@@ -85,8 +82,10 @@ export function readComposerRecent(
   scope?: ComposerScope,
 ): ComposerRecent | null {
   if (!storage) return null;
+  const key = resolveComposerRecentKey(workspacePath, workspaceIdentity, scope);
+  if (!key) return null;
   try {
-    const raw = storage.getItem(resolveComposerRecentKey(workspacePath, workspaceIdentity, scope));
+    const raw = storage.getItem(key);
     if (!raw) return null;
     const record: unknown = JSON.parse(raw);
     if (!record || typeof record !== "object" || Array.isArray(record)) return null;
@@ -122,6 +121,7 @@ export function captureComposerRecentSubmission(
 ): () => void {
   if (!storage) return () => {};
   const key = resolveComposerRecentKey(workspacePath, workspaceIdentity, scope);
+  if (!key) return () => {};
   const mode = submissionModeSchema.safeParse(submission.mode);
   const modelSelection = normalizeSparseModelSelection(submission.modelSelection);
   if (modelSelection && isHighspeedProviderId(modelSelection.providerId)) {
