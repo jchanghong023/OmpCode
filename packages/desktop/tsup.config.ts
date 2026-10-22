@@ -1,6 +1,4 @@
 import { readFileSync, existsSync } from "node:fs";
-import { mkdir, writeFile } from "node:fs/promises";
-import type { Plugin as EsbuildPlugin } from "esbuild";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { defineConfig } from "tsup";
@@ -28,23 +26,6 @@ const desktopElectronVersion = JSON.parse(
   readFileSync(new URL("./package.json", import.meta.url), "utf8"),
 ).devDependencies.electron;
 const legacyDesktopRuntime = desktopElectronVersion === "28.3.3";
-
-function runtimeAuditMetafile(name: string): EsbuildPlugin {
-  return {
-    name: `runtime-audit-${name}`,
-    setup(build) {
-      build.onEnd(async (result) => {
-        if (!result.metafile || result.errors.length) return;
-        const directory = resolve(import.meta.dirname, "out");
-        await mkdir(directory, { recursive: true });
-        await writeFile(
-          resolve(directory, `runtime-metafile-${name}.json`),
-          JSON.stringify(result.metafile, null, 2),
-        );
-      });
-    },
-  };
-}
 
 function resolveZCodeEnv(value: string | undefined): "test" | "production" {
   return value?.trim().toLowerCase() === "production" ? "production" : "test";
@@ -206,14 +187,12 @@ type DesktopTsupEsbuildOptions = {
   legalComments?: "none" | "inline" | "eof" | "linked" | "external";
   define?: Record<string, string>;
   banner?: { js?: string };
-  metafile?: boolean;
 };
 
 export function applyDesktopTsupEsbuildSecurityOptions(options: DesktopTsupEsbuildOptions) {
   // 生产压缩时 esbuild 默认可能保留 license/legal 注释，
   // 发布包不应在 main/host/preload 里留下源码注释或 sourcemap 入口注释。
   options.legalComments = "none";
-  options.metafile = true;
   // Node18 无 import.meta.dirname；使用产物自身 URL，不能嵌入构建机的绝对源码路径。
   if (legacyDesktopRuntime) {
     options.define = {
@@ -286,7 +265,6 @@ function createDevReadyMarkerHook(target: "main" | "host" | "preload"): string {
 export default defineConfig([
   {
     name: "main",
-    esbuildPlugins: [runtimeAuditMetafile("main")],
     entry: {
       "main/index": "src/main/index.ts",
       "main/browserWebmRecorder": "src/main/browserView/electronBrowserWebmRecorder.ts",
@@ -333,7 +311,6 @@ export default defineConfig([
   },
   {
     name: "preload",
-    esbuildPlugins: [runtimeAuditMetafile("preload")],
     entry: {
       "preload/embeddedBrowserJavaScriptDialog": "src/preload/embeddedBrowserJavaScriptDialog.ts",
       "preload/codingPlanWebview": "src/preload/codingPlanWebview.ts",
@@ -358,7 +335,6 @@ export default defineConfig([
     esbuildOptions(options) {
       // sandbox preload 是 CJS，不能注入 ESM banner。
       options.legalComments = "none";
-      options.metafile = true;
     },
     onSuccess: createDevReadyMarkerHook("preload"),
     ...desktopTsupBundleSecurityOptions,
@@ -367,7 +343,6 @@ export default defineConfig([
     // 插件 iframe 内的 window.zcode / window.openai 别名脚本（官方 ext-apps `App` 上的薄封装）：IIFE、浏览器平台，
     // 由 zcode-sandbox:// protocol handler 同源服务。
     name: "plugin-sandbox-alias",
-    esbuildPlugins: [runtimeAuditMetafile("plugin-sandbox-alias")],
     loader: { ".css": "text" },
     entry: {
       "plugin-sandbox-alias": "src/renderer/src/plugin-sandbox/alias.ts",
@@ -386,13 +361,11 @@ export default defineConfig([
     define: createSharedDefines(),
     esbuildOptions(options) {
       options.legalComments = "none";
-      options.metafile = true;
     },
     ...desktopTsupBundleSecurityOptions,
   },
   {
     name: "host",
-    esbuildPlugins: [runtimeAuditMetafile("host")],
     entry: {
       "host/index": "src/host/index.ts",
       "host/tasksStorageWorker": "src/host/database-startup/tasksStorageWorker.ts",
@@ -428,7 +401,6 @@ export default defineConfig([
   },
   {
     name: "scheduler",
-    esbuildPlugins: [runtimeAuditMetafile("scheduler")],
     entry: { "scheduler/index": "src/scheduler/index.ts" },
     outDir: "out",
     format: "esm",

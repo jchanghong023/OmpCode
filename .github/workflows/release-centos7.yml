@@ -7,8 +7,9 @@ permissions:
   contents: read
 
 concurrency:
-  # run_id 每次都不同会绕过互斥；固定组让发行排队，且不取消进行中的发布。
+  # 默认单 pending 会被后来的请求取消；多 pending 队列保留等待中的手动发布。
   group: release-centos7
+  queue: max
   cancel-in-progress: false
 
 jobs:
@@ -110,17 +111,8 @@ jobs:
           pnpm --filter @zcode/desktop build:no-runtime-assets
           pnpm prepare:desktop-runtime
           [[ -s packages/desktop/out/renderer/index.html ]]
-          node scripts/audit-centos7-runtime-apis.mjs --check --desktop-out packages/desktop/out --report "$RUNNER_TEMP/centos7-runtime-api-report.json"
           pnpm --filter @zcode/desktop exec electron-builder --config electron-builder.config.js --linux --x64 --dir --publish never
           tar -C packages/desktop/dist -cf "$RUNNER_TEMP/linux-unpacked.tar" linux-unpacked
-      - name: Retain static compatibility admission report
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: centos7-runtime-api-report
-          path: ${{ runner.temp }}/centos7-runtime-api-report.json
-          if-no-files-found: warn
-          retention-days: 7
       - uses: actions/upload-artifact@v4
         with:
           name: centos7-desktop-stage

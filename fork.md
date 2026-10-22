@@ -419,14 +419,14 @@ flowchart LR
 
 - 唯一 CentOS 分发格式为可重定位的自包含 ZIP 及 SHA256 校验文件；非 root 用户无需联网、安装宿主包或修改既有 OMP 即可使用。产物不包含 PRoot、Ubuntu userspace 或替换宿主 glibc 的方案，不恢复旧 RPM／安装器路径。
 - Electron 及 Node 18 兼容依赖的精确版本切换只在 CentOS 临时构建工作区进行，不持久改写根 manifest、lockfile 或其他平台 runtime。此次不修改源码 Electron `41.0.3` 的值，但不增加阻止未来上游正常升级的固定版本检查或版本配置框架。复用现有构建与发布约定，兼容清单、资产来源与构建期检查由详细规范维护。
-- 提供真实等价的 Electron 28／Node 18 API 兼容实现，包括文件附件路径、浏览器历史、`node:sqlite` 和 `fs/promises.glob` 等差异；现代 runtime 优先使用原生能力，仅缺少所需能力时走兼容路径，不通过删除功能、吞错或空实现获得兼容。完整机械库存及目标检查固定对照 28.3.3／18.18.2／120，不建立通用多版本审计框架，也不以源码哈希审批代替实际 API 检查。
+- 提供真实等价的 Electron 28／Node 18 API 兼容实现，包括文件附件路径、浏览器历史、`node:sqlite` 和 `fs/promises.glob` 等差异；现代 runtime 优先使用原生能力，仅缺少所需能力时走兼容路径，不通过删除功能、吞错或空实现获得兼容。按用户 2026-10-23 要求删除 CentOS runtime API audit 功能及其发布门禁、报告、专用构建元数据与配套文件，不保留替代审计入口；既有运行时兼容实现不变。
 - 打包 glibc 2.17 兼容原生模块、搜索工具、所需 C++／GUI 库、可再分发中文字体及许可；保持 `app.asar`／`app.asar.unpacked`／`resources/tools` 的既有资源职责，保留符号链接与可执行权限。不分发可选 `sshcrypto.node`，SSH 使用 `ssh2` 与 Electron 内置 crypto；高于目标 GLIBC 的二进制、缺失必需资源和损坏归档在构建期阻断。
 - OMP 继续遵循 FORK-003：由 Host 启动外部 `omp app-server --stdio`，app-server 内同进程 AgentSession 执行业务；不恢复旧随包 OMP 适配器、旧 Agent 回退或会话子进程架构。启动器对所有继承的 `OMP_*` 及 `PI_CONFIG_DIR` 原样透传，不解析或改写 `OMP_OFFLINE`，离线语义完全由 OMP 自身解析。
 - 启动器负责安装目录解析、进程局部库路径、必要的私有 XDG 环境、参数／profile 转发及直接启动 Electron；帮助先于资源检查和目录创建。不恢复 `--home`／`--offline`、数据迁移或根目录重定向。默认软件渲染及 `--no-sandbox` 的安全限制须明确记录，仍要求可用图形会话。
 - P0 输入法合同保留旧规范的完整 IBus 算法：按当前 UID 与初始 DISPLAY 查找，NUL 分隔 `/proc/<pid>/environ` 只作数据读取；仅本地 Unix 总线，经 `gdbus --session` 查询 IBus owner PID，每次限时 2 秒。保留已验证调用者总线，否则仅选唯一有效候选；显式地址、歧义、当前显示已有或归属未知的守护进程不得被替换。自动启动须先 `flock` 等待最多 5 秒并重查，创建总线最多 3 秒、启动最多 5 秒、就绪窗口 5 秒；保留其他 DISPLAY 的进程，不使用 `--replace`／`--xim`，不 `eval` 总线输出。选定环境仅传给应用子进程，原 HOME／XDG 下先发现地址再隔离；缺工具或失败具体告警后继续 Electron，只清理本次失败的新建总线，不更改父 shell、持久配置或已有守护进程。
 - 不修改 UI，不删除或隐藏入口，不迁移默认语言、不增加离线门控／网络策略、不改变性能标记、shm 活动根、流式输出或动画。既有身份、数据根和 profile 合同保持原状，不借发行迁移扩大改造范围。
-- 最终验收保留 Windows 可执行的受影响共享逻辑测试及必要质量检查，按实际命令、选中测试与结果记录；此前阶段性“不执行测试”不构成永久禁测政策。代码编辑子任务不自行运行检查，由主执行者在整合后执行 Windows 受影响测试。不新增 CentOS 7 专项测试，不执行 Linux／WSL／VM／Citrix 运行，不触发、等待或验证发布 workflow；目标平台由用户在内网测试，未取得实际结果前保持未验收。构建期 API、ELF、原生资产、归档及校验和约束属于静态兼容／打包完整性检查，不等于运行测试，也不表示已完成实际产物检查。
-- 迁移旧 main 的 Windows 与 CentOS 7 两条 GitHub 构建流水线；两者只构建、打包及发布，不运行 UT、E2E、类型检查、Lint 或运行时 SSH 握手测试。流水线适配当前分支和 FORK-003 资产合同，不照搬旧路径。
+- 最终验收保留 Windows 可执行的受影响共享逻辑测试及必要质量检查，按实际命令、选中测试与结果记录；此前阶段性“不执行测试”不构成永久禁测政策。代码编辑子任务不自行运行检查，由主执行者在整合后执行 Windows 受影响测试。不新增 CentOS 7 专项测试，不执行 Linux／WSL／VM／Citrix 运行，不触发、等待或验证发布 workflow；目标平台由用户在内网测试，未取得实际结果前保持未验收。构建期 ELF、原生资产、归档及校验和约束属于打包完整性检查，不等于运行测试，也不表示已完成实际产物检查。
+- 迁移旧 main 的 Windows 与 CentOS 7 两条 GitHub 构建流水线；两者只构建、打包及发布，不运行 UT、E2E、类型检查、Lint 或运行时 SSH 握手测试。流水线适配当前分支和 FORK-003 资产合同，不照搬旧路径。CentOS 手动发布由 GitHub 固定并发组串行调度，使用多 pending 队列，不因后来请求取消已等待的请求；队列上限遵循 GitHub 的 100 个 pending 限制。
 
 ### 验收标准
 
@@ -439,6 +439,6 @@ flowchart LR
 
 迁移代码已落地：启动器／IBus 与环境透传、共享 SQLite 驱动门面及调用方、Electron／Node／CSS 兼容分支、原生资产与临时构建工作区、Windows／CentOS 两条手动 GitHub 仅打包发布流水线均已实现。本次源码 Electron `41.0.3` 与 React `19.2.7` override 保持不变，此处记录当前事实而非未来上游版本约束；CentOS 的 Electron `28.3.3` 等精确覆盖仅作用于源码外的新建构建工作区。实现、资产版本与证据边界详见[详细规范](docs/centos7-desktop-release.md)，不将代码落地等同于完整发行验收。
 
-已记录的 Windows 本机证据：依赖安装成功；代码合并后的 typecheck 通过，lint 为 100 warnings／0 errors（此前为 98 warnings／0 errors）；原生 SQLite 操作命令输出 `{ value: 'native runtime', sqliteVersion: '3.51.2' }`；打包脚本 `--help`／status、所改打包脚本 `node --check` 与三份 shell 脚本 `bash -n` 已执行并通过。架构检查相对 `b19b2fda` 仍因三个既有 contract 文件超行数失败，未放宽阈值或更新 baseline；最初默认检查的 26 项既有违规不记为本轮新增。此前阶段性禁测前，affected UT 选择结果为 0／92、没有选中测试，不能写成测试通过；该阶段此后未执行 UT／E2E。旧通用 API 审计框架报告的 6381 项误报不能记作 6381 个运行时缺陷或审计通过；固定目标机械库存与检查、整合后的 Windows 受影响测试结果仍待主执行者补充，不能以 typecheck 或已实现的兼容分支代替全量审计通过。
+已记录的 Windows 本机证据：依赖安装成功；代码合并后的 typecheck 通过，lint 为 100 warnings／0 errors（此前为 98 warnings／0 errors）；原生 SQLite 操作命令输出 `{ value: 'native runtime', sqliteVersion: '3.51.2' }`；打包脚本 `--help`／status、所改打包脚本 `node --check` 与三份 shell 脚本 `bash -n` 已执行并通过。架构检查相对 `b19b2fda` 仍因三个既有 contract 文件超行数失败，未放宽阈值或更新 baseline；最初默认检查的 26 项既有违规不记为本轮新增。此前阶段性禁测前，affected UT 选择结果为 0／92、没有选中测试，不能写成测试通过；该阶段此后未执行 UT／E2E。旧通用 API 审计框架报告的 6381 项误报不能记作 6381 个运行时缺陷或审计通过；2026-10-23 用户要求删除整个 CentOS runtime API audit 功能，不再要求其库存、报告或门禁通过。整合后的 Windows 受影响检查结果按实际执行记录。
 
 尚无实际 ZIP／EXE 构建产物、GitHub dispatch／发布或 Linux／CentOS／WSL／VM／Citrix 运行证据；GUI、中文输入、SSH 及内网目标宿主仍由用户验收。Electron 28 的历史兼容保留现存原生条目，并提供进程内完整 URL／title／index 导航栈；不宣称能导入／导出 Chromium 的不透明 POST／表单／子框架 pageState，也不宣称已有持久化浏览器恢复存储。静态 ELF 检查代码不能证明 OMP 内嵌 native／内核兼容，旧 main 的历史验证同样不计为本次通过证据。

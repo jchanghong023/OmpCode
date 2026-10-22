@@ -6,7 +6,7 @@
 
 根 [fork.md](../fork.md) 是需求入口。根文档已有 **FORK-004：OmpCode 产品身份、独立数据与 profile 隔离**，其编号、正文和效力不变；本次用户请求的 **FORK-004：CentOS 7 桌面发行** 是另一项同号请求，以根文档显式锚点 `fork-004-centos7-desktop-release` 和本文路径区分，不能默默重编号或覆盖原要求。现有 FORK-005 同样保留。
 
-当前状态：启动器／IBus、环境透传、共享 SQLite 驱动、Electron／Node／CSS 兼容、原生资产装配、隔离构建工作区及两个手动 package-only workflow 的代码已落地。**代码存在不等于发行验证完成：尚未实际构建新 ZIP／EXE、运行新 workflow 或完成 CentOS／内网 GUI 验收。** 完整 API 库存检查仍在优化执行，尚无可宣称通过的全量扫描结果；第 9 节区分已执行证据与未验证边界。本文修订本身不执行命令或检查。
+当前状态：启动器／IBus、环境透传、共享 SQLite 驱动、Electron／Node／CSS 兼容、原生资产装配、隔离构建工作区及两个手动 package-only workflow 的代码已落地。**代码存在不等于发行验证完成：尚未实际构建新 ZIP／EXE、运行新 workflow 或完成 CentOS／内网 GUI 验收。** 按用户 2026-10-23 要求删除 CentOS runtime API audit 功能；第 9 节区分已执行证据与未验证边界。
 
 ### 1.1 不变基线与明确排除
 
@@ -28,7 +28,7 @@
 | 1     | P0 启动器与 IBus                    | 安装目录重定位、帮助／参数转发及完整 IBus 选择／启动算法；不改变数据根                                                                                |
 | 2     | 环境原样透传与共享兼容断言          | 启动器、Main、Host、OMP 准备／业务进程原样继承 `OMP_*` 与 `PI_CONFIG_DIR`；Windows 受影响共享逻辑断言由主执行者整合后验证                              |
 | 3a    | SQLite 兼容                         | 共享 SQLite 单一驱动门面，保留 Windows 原生驱动及现有数据行为                                                                                         |
-| 3b    | Electron／Node API 兼容             | 完整运行闭包 API 库存与固定 28.3.3／18.18.2／120 检查、真实等价回退；其他平台继续跟随上游 manifest／lockfile                                         |
+| 3b    | Electron／Node API 兼容             | 保留固定 28.3.3／18.18.2／120 所需的真实等价回退；其他平台继续跟随上游 manifest／lockfile，不再提供 runtime API audit                                  |
 | 3c    | Host stdio 兼容                     | 无效描述符不终止 Host、RPC、业务与结构化日志                                                                                                          |
 | 4     | 原生资产、打包与双平台发布 workflow | 新鲜构建 glibc 2.17 native、完整资源／库／字体／许可及静态 ELF／manifest／ZIP 检查；重新实现 Windows 与 CentOS 两个入口，不运行测试、不实际触发／发布 |
 
@@ -74,7 +74,7 @@ CentOS 输入不仅需标为 linux-x64，还必须实际满足 glibc 2.17、Linu
 
 启动器 → Electron Main → Host → OMP 准备／业务子进程传递**全部继承的 `OMP_*` 与 `PI_CONFIG_DIR` 原值**，包括未知／未来 OMP 变量、空值、大小写与空白。不使用变量白名单，不去除前后空白，不映射别名，不重设配置根，不派生离线状态。除显式用户覆盖且符合现有启动合同外，各阶段不得过滤这些值。`OMP_OFFLINE` 仅由 OMP 解释，桌面不新增网络限制。
 
-## 5. 运行时兼容与完整 API 扫描（slice 3a／3b）
+## 5. 运行时兼容（slice 3a／3b）
 
 ### 5.1 单一 SQLite 门面（slice 3a）
 
@@ -92,17 +92,13 @@ CentOS 输入不仅需标为 linux-x64，还必须实际满足 glibc 2.17、Linu
 - JS／Chromium：实际使用的语言语法、内建方法和浏览器 API 在 Node 18.18.2／Chromium 120 的可用性，包括仅较新 runtime 提供的 Promise、Array、String 方法；按真实使用审查，不能因 TS 编译成功认定运行兼容。CSS 检查涵盖源码与实际生成 CSS 的属性、值、选择器及 at-rule：保留 field-sizing、retained planes 和 Pierre 样式的既有等价回退；GenUI 主题仅在目标支持时启用相应新 CSS，不能无条件注入不兼容样式。PDF 使用实际打包的 legacy alias／worker，不因依赖中同时安装 modern 入口就将未选中的 modern 实现计入运行闭包。
 - 全部 Electron imports／属性／方法／事件／选项及返回值合同，Main、Host、preload、worker、scheduler、renderer 和实际打包工具子运行时；检查启动阶段副作用和间接依赖。Node 24 纯构建脚本与应用 runtime 明确分区，前者无需无理由降级。Host 无效 stdio 的真实处理仍按第 7.3 节要求保留。
 
-### 5.3 完整运行闭包扫描（slice 3b）
+### 5.3 删除 runtime API audit（2026-10-23）
 
-检查器只服务固定 CentOS 目标 **Electron 28.3.3／Node 18.18.2／Chromium 120**。完整机械库存覆盖全部应用源码及实际运行闭包，不限于已知差异或本次 diff：Main、Host、preload、worker、scheduler、renderer、相关 workspace 包及实际打包的传递依赖。纯构建／测试工具与应用运行域分开记录，不能将工具所用 Node 24 API 判作应用 Node 18 缺陷。
+按用户要求整体删除 CentOS runtime API audit，而不是继续修补安全能力探测的误报。删除专用扫描入口、分析器、API／浏览器元数据解析、策略文件、tsup／Vite 的专用闭包报告生成，以及 workflow 的审计命令和报告 artifact；不保留替代命令、开关或空实现。
 
-入口为 **`node scripts/audit-centos7-runtime-apis.mjs --check`**。`scripts/centos7-runtime-apis.json` 仅保存固定目标和具体兼容差异／回退所有者，不保存现代平台版本钉死规则或逐文件源码摘要。完整机器可读报告默认写入 **`node_modules/.cache/centos7-runtime-apis/report.json`**，不提交为版本化库存；workflow 传入 `--desktop-out packages/desktop/out --report <report.json>` 并保留报告 artifact。
+此变更不删除第 5.1／5.2 节已有的 SQLite、Electron、Node、JS／CSS 兼容实现，不改变固定目标 runtime 或其他平台依赖。第 6 节的 ELF／ABI、manifest、资产／许可、归档与 SHA256 完整性约束继续保留。删除审计不构成运行时兼容或发行验收通过的证据。
 
-机械库存使用 TypeScript AST 收集全源码 imports、别名、动态导入、Electron 实际成员和 Node builtin／具名 API 调用位置；以全部实际 bundle metafiles、生成 CSS 和 Node external 传递闭包确定发行范围。报告记录文件、位置、运行域、入口、精确依赖版本／来源、bundle 实际输入与 alias 选择，不能用“依赖已安装”代替“依赖被打包”。Electron 表面对照 28.3.3 声明；Node builtin 与具名 API 对照精确 18.18.2 元数据；JS／浏览器 API 和 CSS 特征／候选对照 Chromium 120 的可用性资料。不能用几个名字的黑名单冒充完整扫描，也不建立多版本后端、双全仓 TypeChecker、AST 解释引擎或整个依赖树类型检查框架。
-
-每个已发现的目标缺失能力必须有具体调用位置、实际回退所有者和适用条件；新增未处理的缺失 API 阻断检查。CSS 的真实不支持项必须对应现存等价回退、目标构建降级或明确非运行上下文；未知项如实列出而非默认为通过，也不能把每个未知属性都宣布为运行时故障。浏览器厂商专属分支与转义的 Tailwind 冒号不能误报为目标缺失特征。动态用户／站点脚本不属于应用 runtime 证明范围；应用自身可信生成脚本仍须归属实际运行域并检查，不以逐文件 SHA 审批、人工 review JSON、缓存指纹基线或结构化脚本审批注册表代替能力判断。
-
-`--source-only` 仅为开发中间态，报告必须显式标注**库存不完整、缺少 bundle 证据**。发行 `--check` 要求全部实际 metafiles 与生成 CSS，缺失时失败，不能用源码扫描宣称发行闭包通过。固定目标检查结果、Windows 受影响测试及 CentOS 实机验收是不同证据：本文不宣称任何尚未执行的检查通过，实际结果由主执行者更新第 9 节；不得把构建期静态检查冒充运行时测试。
+验收：构建／发布调用链不再调用或生成 runtime API audit 报告；专用实现及无人消费的构建插件全部删除；源码和当前需求不再要求该 audit 门禁通过。现有打包完整性检查仍为发行前置条件。
 
 ## 6. 原生资产、库与 ZIP（slice 4）
 
@@ -230,7 +226,7 @@ Main 创建 Host／工具子进程时使用自有 stdout／stderr 管道及既�
 - 两个 workflow 都保持手动 `workflow_dispatch`。只接受 **`refs/heads/dev-centos7`**；错误分支立即失败，不继续从 main 构建。每个 checkout／构建／打包 job 固定 **触发的 `github.sha`**，不能再次解析移动分支头；发布 `--target` 使用同一 SHA。
 - OMP 外部输入由 repository variables **`OMP_ARTIFACT_REPOSITORY`、`OMP_ARTIFACT_RUN_ID`、`OMP_ARTIFACT_COMMIT`** 和 secret **`OMP_ARTIFACT_TOKEN`** 提供：固定生产仓库、已成功完成的 producer run ID 及完整源码提交，从该 run 下载对应平台 **`omp-zcode-<target>`** artifact，`<target>` 沿用现有 OMP artifact 平台合同。下载前核对 producer run 成功状态及源码提交，验证 manifest 时将该提交传为 `expectedSHA`，确保真实来源与预期一致。token 仅用于读取该生产 artifact，不代替发布用的默认 token。这些真实固定输入是打包前提；缺失或不匹配明确失败，不取 latest、不虚构值、不从移动分支推导替代提交。
 - 使用 Node 24.14.0／pnpm 10.33.2。生成日期时间 tag `v<UTC yyyyMMdd-HHmmss>-<run_id>-<run_attempt>`，校验 ref 格式、远端不存在同 tag；网络检查失败不当作不存在。tag 由校验／构建 job 单次生成并输出，发布 job 精确消费，重跑全部 jobs 不复用旧 tag。
-- GitHub **不运行 UT、E2E、GUI／启动器／SSH 握手或其他执行测试，也不单独运行 typecheck、lint 或 architecture 质量门禁**。这不是禁止所有静态检查：构建期 API 库存及第 6 节产物约束必须保留。安装使用 `--ignore-scripts` 避免生命周期间接执行占位 CUA 包的 standalone `tsc --noEmit`，随后显式运行生成真实 JS／声明文件的编译步骤；不能用 standalone `pnpm typecheck`／`tsc --noEmit` 冒充打包必需项。检查打包脚本调用链，不能顶层删除 test step 后仍由 bundle hook 间接运行测试。
+- GitHub **不运行 UT、E2E、GUI／启动器／SSH 握手或其他执行测试，也不单独运行 typecheck、lint 或 architecture 质量门禁**。这不是禁止所有静态检查：第 6 节产物约束必须保留，但不再执行 runtime API audit。安装使用 `--ignore-scripts` 避免生命周期间接执行占位 CUA 包的 standalone `tsc --noEmit`，随后显式运行生成真实 JS／声明文件的编译步骤；不能用 standalone `pnpm typecheck`／`tsc --noEmit` 冒充打包必需项。检查打包脚本调用链，不能顶层删除 test step 后仍由 bundle hook 间接运行测试。
 - 保留纯产物完整性约束：必需资产／大小、运行闭包、manifest／SHA256、ELF／ABI 静态信息、asar／ZIP 布局、权限／链接、CRC 与许可。这些是打包失败条件，不是测试通过证据。**旧 `verify-ssh.mjs` 回环握手即使曾称为完整性约束，本轮也不得执行或间接调用。**
 - 最小权限：构建／装配 job `contents: read`，发布 job `contents: write`，使用 workflow 默认 `GITHUB_TOKEN`；不写死 PAT，不把 main 与默认 token 的历史关系当作 dev-centos7 已有权限证明。若仓库政策不允许触发提交／tag 的发布，应明确失败，不偷偷改发布目标或放宽规则。
 - 各平台独立 artifact 与发布链，仅发布其校验通过的唯一成品及 sidecar。先创建 draft，核对上传资产名与大小／checksum，再取消 draft；失败不宣布正式发行。日期 tag 不改变应用 semver 文件名。发行说明如实记录未签名、安全限制及未验目标。
@@ -245,6 +241,23 @@ Main 创建 Host／工具子进程时使用自有 stdout／stderr 管道及既�
 ### 8.3 CentOS workflow
 
 `preflight` 输出应用版本和 tag；通过后 `desktop` 与 `native` 在不同 runner 并行，新鲜构建。前者在临时依赖工作区产出 Electron 28 desktop，后者在 glibc 2.17／GCC 11 环境产出 native 和库。所有阶段固定触发 SHA、同一 OMP release 输入与精确依赖计划。
+
+CentOS 手动发布的唯一调度所有者为 GitHub Actions：固定 `release-centos7` 并发组，`cancel-in-progress: false`，并设置 `queue: max`。默认单 pending 会让 C 取消等待中的 B；多 pending 队列须保留这些请求，每个请求仍固定其触发 SHA。最多 100 个 pending，超过上限由 GitHub 取消新增请求；不另建队列、重试或状态存储。
+
+```mermaid
+sequenceDiagram
+    participant U as 手动触发者
+    participant G as GitHub 并发组（队列所有者）
+    participant W as CentOS 发布链
+    U->>G: A（固定 SHA）
+    G->>W: 执行 A
+    U->>G: B、C（各自固定 SHA）
+    Note over G: B、C 均等待，不互相替换
+    W-->>G: A 结束
+    G->>W: 执行 B
+    W-->>G: B 结束
+    G->>W: 执行 C
+```
 
 `CENTOS7_NATIVE_IMAGE` 是可选 repository variable：非空时必须为不可变 `image@sha256:<64 hex>`；未设置时 workflow 自行从 `scripts/publish/centos7/Dockerfile` 构建，使用固定 manylinux digest 与 CentOS **7.9.2009 vault** 配方。因此“必须另行提供自定义镜像”不是前置条件。必填的三个 OMP variables 和读 artifact 的 token 见 8.1；其真实值未由本轮伪造，必须指向同一成功 producer run、精确 head SHA 和对应平台命名 artifact。构建 runner 需能取得锁定依赖、镜像／vault／源码与 Electron headers；这些是构建输入，不是用户宿主安装要求。
 
@@ -264,9 +277,17 @@ Main 创建 Host／工具子进程时使用自有 stdout／stderr 管道及既�
 | architecture          | 默认全量曾报告 26 个既有违规；当前 `--base b19b2fda` 仅剩 3 个既有 max-contract-lines 违规：project 302、task-groups 342、project-sidebar/activity/refresh 307 行的 contract.test | 三项均在初始 26 项中；没有提高阈值或改 baseline。SQLite module deps、preload managed boundary 与精确既有路径 admission 已声明 |
 | SQLite 单条运行观察   | 经 tsx 调用原生驱动输出 `{ value: 'native runtime', sqliteVersion: '3.51.2' }`                                                                                                    | 现代原生路径观察，不是 better-sqlite3／Electron 28 兼容测试                                                                   |
 | 打包 CLI／语法        | 已执行 help／status：源码 Electron 41.0.3、better-sqlite3 dev 9.6.0／runtime null、React override 19.2.7 未变；新 packaging 脚本 `node --check` 和 3 个 shell 脚本 `bash -n` 通过 | 未实际装配 ZIP／EXE                                                                                                           |
-| 完整 API 扫描         | 旧通用框架首次默认堆 OOM；后续约 9 分钟的双全仓 TypeChecker 扫描产生 6381 项误报，现已废弃该审计设计                                                                                     | 不是 6381 个已证实运行时缺陷，也不是通过；固定目标机械库存／检查的实际结果待主执行者更新                                        |
+| runtime API audit（已撤销） | 历史框架曾 OOM／产生误报；2026-10-23 用户要求删除整个功能及发布门禁                                                                                                              | 不再提供该审计或要求报告通过；不据此宣称目标 runtime 已兼容                                                                  |
 
 此前记录没有可用语言服务器，不宣称 LSP 已检查。Windows 共享逻辑的适用断言仍包括：现代及缺能力 API 分支、真实 SQLite 行为、环境逐字节继承（含未知 OMP 变量和空白值）、profile 转发和无效 stdio 后结构化日志持续；由主执行者整合后运行受影响测试并记录真实结果，不新增 CentOS 专属运行测试。已有架构失败和未执行项如实记录，不能放宽规则制造全绿。GitHub 仅打包政策与本机检查证据分别成立。
+
+2026-10-23 删除审计与发布队列最小修复的本机验证：
+
+- `pnpm typecheck` 通过；`pnpm lint` 为 **99 warnings／0 errors**。
+- 实际加载 Desktop 的 tsup／Vite 构建配置并执行五组 tsup 的 esbuild options hook；配置加载成功，未再启用审计插件或其 metafile 选项。解析真实 CentOS workflow，确认固定组、`queue: max` 和 `cancel-in-progress: false`。
+- 全仓定向引用检查未发现已删除扫描入口、配套模块、报告 artifact 或专用构建插件的残留调用。
+- `pnpm architecture:check --changed` 在修改前后均报告相同的 **29 项 unmanaged-new-file 违规**；本次未新增违规，也未改阈值或 baseline。
+- 未新增永久测试，未运行 UT／E2E、实际应用打包或 workflow dispatch；本机配置 smoke 不证明 GitHub 队列调度或 CentOS 实机运行已验收。
 
 ### 9.2 历史材料不等于新验证
 
@@ -282,6 +303,6 @@ Main 创建 Host／工具子进程时使用自有 stdout／stderr 管道及既�
 - 安装目录搬迁、真实 HOME 空格路径、全部 target 图形依赖和用户环境组合；
 - Windows 新 EXE 安装／双装、签名，以及 CentOS 安全限制之外的任何安全保证；
 - 两个新 workflow 的 GitHub 运行、默认 token／分支策略、artifact 传输、tag 生成、draft 到发布及最终线上资产；
-- 固定目标完整 API 库存／报告与整合后 Windows 受影响测试的实际执行结果；不能将第 9.1 节已有静态结果重复列作“全部尚未执行”，也不能推导每个 slice 的完整四项均已通过。
+- 整合后 Windows 受影响检查的实际执行结果；不能将第 9.1 节已有静态结果重复列作“全部尚未执行”，也不能推导每个 slice 的完整四项均已通过。runtime API audit 已按第 5.3 节撤销，不再列为待执行项。
 
-这些是准确的证据边界，不是新增 Linux 测试计划，也不能把“不要求执行”写成“已通过”。**不新增 CentOS 7 专项测试；中文输入、GUI、SSH 与 CentOS 实机运行由用户自行在内网验证，不作为本次代码交付的自动验收阻塞项。** Windows 受影响测试由主执行者整合后执行；构建期静态兼容与 package-only 完整性约束继续保留。本文保留的历史记录没有本轮 Linux／WSL／VM／Citrix、实际 ZIP／EXE 打包、workflow dispatch、release 或 push 证据，后续只能凭实际结果更新。缺少 OMP 真实兼容产物、许可来源或静态闭包证据时仍阻断对应发行产物装配，并指出具体缺项；这些静态打包约束不同于用户实机验收，不能给占位文件或宣称完整发行已验收。
+这些是准确的证据边界，不是新增 Linux 测试计划，也不能把“不要求执行”写成“已通过”。**不新增 CentOS 7 专项测试；中文输入、GUI、SSH 与 CentOS 实机运行由用户自行在内网验证，不作为本次代码交付的自动验收阻塞项。** Windows 受影响测试由主执行者整合后执行；package-only 产物完整性约束继续保留，runtime API audit 不再保留。本文保留的历史记录没有本轮 Linux／WSL／VM／Citrix、实际 ZIP／EXE 打包、workflow dispatch、release 或 push 证据，后续只能凭实际结果更新。缺少 OMP 真实兼容产物、许可来源或静态闭包证据时仍阻断对应发行产物装配，并指出具体缺项；这些静态打包约束不同于用户实机验收，不能给占位文件或宣称完整发行已验收。

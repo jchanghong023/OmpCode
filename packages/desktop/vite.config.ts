@@ -179,27 +179,6 @@ export default defineConfig(({ mode }) => {
     env.VITE_CODING_PLAN_WEBVIEW_ORIGIN ?? process.env.VITE_CODING_PLAN_WEBVIEW_ORIGIN ?? "";
   const plugins = [
     ...(e2eCoverageEnabled ? [createE2EUIRendererCoveragePlugin(repoRoot)] : []),
-    {
-      name: "desktop-runtime-closure",
-      generateBundle(_options, bundle) {
-        // 记录真实 Rollup 模块闭包，API 审计不能仅凭源码目录猜测运行范围。
-        this.emitFile({
-          type: "asset",
-          fileName: "runtime-modules.json",
-          source: JSON.stringify(
-            [
-              ...new Set(
-                Object.values(bundle).flatMap((entry) =>
-                  entry.type === "chunk" ? Object.keys(entry.modules) : [],
-                ),
-              ),
-            ].sort(),
-            null,
-            2,
-          ),
-        });
-      },
-    } satisfies Plugin,
     pdfJsCMapsPlugin(),
     react(),
     tailwindcss(),
