@@ -69,7 +69,8 @@ type BetterConstructor = new (
   path: string,
   options: { readonly: boolean; timeout: number },
 ) => BetterDatabase;
-const require = createRequire(import.meta.url);
+// CLI 打成 CJS 后 import.meta 为空；复用实际模块文件名，避免驱动选择前就在 createRequire 崩溃。
+const require = createRequire(typeof __filename === "string" ? __filename : import.meta.url);
 let betterConstructor: BetterConstructor | undefined;
 function pathString(path: PathLike): string {
   return path instanceof URL

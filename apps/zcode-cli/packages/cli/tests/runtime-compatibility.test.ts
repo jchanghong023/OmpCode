@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
+import { access, mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
@@ -96,4 +99,33 @@ test("modern CLI keeps native WebCrypto and SQLite storage behavior", async () =
     console.log(JSON.stringify({ nativeCrypto: true, nativeSqlite: true }));
   `);
   assert.deepEqual(result, { nativeCrypto: true, nativeSqlite: true });
+});
+
+test("built CJS CLI starts and prints help without import.meta loader failures", async () => {
+  const bundle = fileURLToPath(new URL("../dist/zcode.cjs", import.meta.url));
+  await assert.doesNotReject(
+    access(bundle),
+    "Build prerequisite missing: run the CLI build (including workspace dependencies) before this test.",
+  );
+  const directory = await mkdtemp(join(tmpdir(), "zcode-cli-cjs-help-"));
+  try {
+    // 源码加载不能覆盖 CJS 将 import.meta.url 清空的问题；必须消费真正构建的 CLI 产物。
+    const { stdout } = await execute(process.execPath, [bundle, "--help"], {
+      cwd: directory,
+      env: {
+        ...process.env,
+        HOME: directory,
+        USERPROFILE: directory,
+        ZCODE_DESKTOP_HOME_DIR: directory,
+        ZCODE_DATA_BASE_DIR: directory,
+        ZCODE_SESSION_DB_PATH: join(directory, "sessions.sqlite"),
+        OMP_CONFIG_ROOT: join(directory, "omp"),
+      },
+      timeout: 30_000,
+      maxBuffer: 4 * 1024 * 1024,
+    });
+    assert.match(stdout, /--help/);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 });
