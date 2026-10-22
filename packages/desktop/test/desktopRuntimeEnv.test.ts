@@ -1,4 +1,5 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createHash } from "node:crypto";
 import {
   chmodSync,
   existsSync,
@@ -13,7 +14,7 @@ import { tmpdir } from "node:os";
 import { join, sep, win32 } from "node:path";
 
 const { verifyOmpArtifactMock } = vi.hoisted(() => ({
-  verifyOmpArtifactMock: vi.fn(async (root: string) => ({ command: join(root, "omp") })),
+  verifyOmpArtifactMock: vi.fn(async (root: string, _target: string) => ({ command: join(root, "omp") })),
 }));
 vi.mock("../../../scripts/omp-artifact.mjs", () => ({
   verifyOmpArtifact: verifyOmpArtifactMock,
@@ -826,6 +827,149 @@ describe("desktopRuntimeEnv buildHostProcessEnv", () => {
     await runtime.prepareOmpHostEnv({ ...process.env });
     expect(runtime.buildHostProcessEnv({}).ZCODE_AGENT_SERVER_COMMAND).toBe(currentOmp);
     expect(verifyOmpArtifactMock).not.toHaveBeenCalled();
+  });
+
+  it.each([" \tTrUe \n", " \tFaLsE \n", "0", ""])(
+    "OMP 环境原值 %j 优先于本地 env，未知变量与空值不被过滤",
+    async (offline) => {
+      vi.stubEnv("OMP_OFFLINE", offline);
+      vi.stubEnv("OMP_FUTURE_RAW_OPTION", " \tMiXeD value \n");
+      vi.stubEnv("OMP_FUTURE_EMPTY_OPTION", "");
+      try {
+        const runtime = await loadRuntimeEnv();
+        expect(runtime.buildHostProcessEnv({
+          OMP_OFFLINE: "true",
+          OMP_FUTURE_RAW_OPTION: "local",
+          OMP_FUTURE_EMPTY_OPTION: "local",
+        })).toMatchObject({
+          OMP_OFFLINE: offline,
+          OMP_FUTURE_RAW_OPTION: " \tMiXeD value \n",
+          OMP_FUTURE_EMPTY_OPTION: "",
+        });
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    },
+  );
+
+  it("OMP 与 PI 根保持 Main 启动快照，不采用后续 shell 或本地 env 的根", async () => {
+    const root = join(discoveryFixtureDir, "original-root");
+    vi.stubEnv("OMP_CONFIG_ROOT", root);
+    vi.stubEnv("PI_CONFIG_DIR", " \t.pi-original ");
+    try {
+      const runtime = await loadRuntimeEnv();
+      process.env.OMP_CONFIG_ROOT = join(discoveryFixtureDir, "later-root");
+      process.env.PI_CONFIG_DIR = ".pi-later";
+      expect(runtime.buildHostProcessEnv({
+        OMP_CONFIG_ROOT: join(discoveryFixtureDir, "local-root"),
+        PI_CONFIG_DIR: ".pi-local",
+      })).toMatchObject({ OMP_CONFIG_ROOT: root, PI_CONFIG_DIR: " \t.pi-original " });
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it.each([undefined, ""])("未设置或空的启动根 %j 不从本地 env 补入", async (root) => {
+    vi.stubEnv("OMP_CONFIG_ROOT", root);
+    vi.stubEnv("PI_CONFIG_DIR", root);
+    try {
+      const runtime = await loadRuntimeEnv();
+      const env = runtime.buildHostProcessEnv({
+        OMP_CONFIG_ROOT: join(discoveryFixtureDir, "local-root"),
+        PI_CONFIG_DIR: ".pi-local",
+      });
+      expect(env.OMP_CONFIG_ROOT).toBe(root);
+      expect(env.PI_CONFIG_DIR).toBe(root);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it.each(["entry", "asset", "target", "missing"] as const)(
+    "打包入口必须异步验证完整封存字节，%s 损坏后不接受已准备缓存",
+    async (damage) => {
+      const resourcesDescriptor = Object.getOwnPropertyDescriptor(process, "resourcesPath");
+      const root = join(discoveryFixtureDir, "resources", "omp");
+      const entryName = "bin/omp-entry.js";
+      const command = join(root, "bin", "omp-entry.js");
+      const entryBytes = "sealed executable";
+      const assetBytes = "sealed runtime asset";
+      mkdirSync(join(root, "bin"), { recursive: true });
+      writeFileSync(command, entryBytes);
+      writeFileSync(join(root, "runtime.dat"), assetBytes);
+      const manifest = {
+        schemaVersion: 1,
+        version: "1.2.3",
+        commit: "a".repeat(40),
+        protocolBaseline: "c7c190724f3a00a2de998a0a5511201d5a2ba1a0",
+        target: `${process.platform}-${process.arch}`,
+        executable: entryName,
+        files: {
+          [entryName]: createHash("sha256").update(entryBytes).digest("hex"),
+          "runtime.dat": createHash("sha256").update(assetBytes).digest("hex"),
+        },
+      };
+      const manifestPath = join(root, "omp-artifact.json");
+      writeFileSync(manifestPath, JSON.stringify(manifest));
+      Object.defineProperty(process, "resourcesPath", {
+        value: join(discoveryFixtureDir, "resources"),
+        configurable: true,
+      });
+      appMock.isPackaged = true;
+      const actual = await vi.importActual<{
+        verifyOmpArtifact: (root: string, target: string) => Promise<{ command: string }>;
+      }>("../../../scripts/omp-artifact.mjs");
+      verifyOmpArtifactMock.mockImplementation(actual.verifyOmpArtifact);
+      vi.stubEnv("ZCODE_AGENT_SERVER_COMMAND", command);
+      try {
+        const runtime = await import("../src/main/desktopRuntimeEnv.js");
+        expect(() => runtime.buildHostProcessEnv({})).toThrow(/asynchronous preparation/);
+        await runtime.prepareOmpHostEnv({ ...process.env });
+        expect(runtime.buildHostProcessEnv({}).ZCODE_AGENT_SERVER_COMMAND).toBe(command);
+        expect(verifyOmpArtifactMock).toHaveBeenCalledWith(root, manifest.target);
+        if (damage === "entry") writeFileSync(command, "changed executable");
+        if (damage === "asset") writeFileSync(join(root, "runtime.dat"), "changed runtime");
+        if (damage === "target")
+          writeFileSync(manifestPath, JSON.stringify({ ...manifest, target: "wrong-target" }));
+        if (damage === "missing") rmSync(manifestPath);
+        await expect(runtime.prepareOmpHostEnv({ ...process.env })).rejects.toThrow();
+        expect(() => runtime.buildHostProcessEnv({})).toThrow(/asynchronous preparation/);
+      } finally {
+        vi.unstubAllEnvs();
+        if (resourcesDescriptor)
+          Object.defineProperty(process, "resourcesPath", resourcesDescriptor);
+        else Reflect.deleteProperty(process, "resourcesPath");
+      }
+    },
+  );
+
+  it("打包态显式外部命令不依赖随包 manifest，开发态随包路径也不改变发现合同", async () => {
+    const resourcesDescriptor = Object.getOwnPropertyDescriptor(process, "resourcesPath");
+    Object.defineProperty(process, "resourcesPath", {
+      value: join(discoveryFixtureDir, "resources"),
+      configurable: true,
+    });
+    try {
+      appMock.isPackaged = true;
+      const runtime = await import("../src/main/desktopRuntimeEnv.js");
+      const external = { ZCODE_AGENT_SERVER_COMMAND: join(discoveryFixtureDir, "external-omp") };
+      await runtime.prepareOmpHostEnv(external);
+      expect(runtime.buildHostProcessEnv(external).ZCODE_AGENT_SERVER_COMMAND).toBe(
+        external.ZCODE_AGENT_SERVER_COMMAND,
+      );
+      appMock.isPackaged = false;
+      const development = {
+        ZCODE_AGENT_SERVER_COMMAND: join(process.resourcesPath, "omp", "unsealed-entry"),
+      };
+      await runtime.prepareOmpHostEnv(development);
+      expect(runtime.buildHostProcessEnv(development).ZCODE_AGENT_SERVER_COMMAND).toBe(
+        development.ZCODE_AGENT_SERVER_COMMAND,
+      );
+      expect(verifyOmpArtifactMock).not.toHaveBeenCalled();
+    } finally {
+      if (resourcesDescriptor) Object.defineProperty(process, "resourcesPath", resourcesDescriptor);
+      else Reflect.deleteProperty(process, "resourcesPath");
+    }
   });
 
   // Main 的模块级 Electron/env 身份必须在每个 resetModules 后重新加载，不能静态 import。

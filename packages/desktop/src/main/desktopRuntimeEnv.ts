@@ -1,8 +1,9 @@
 /* eslint-disable max-lines -- desktop runtime/env 解析需要集中维护 main/host/remote assets 的启动边界，拆分会扩大远程连接回归面。 */
 import { constants, existsSync, readFileSync } from "node:fs";
-import { access, stat } from "node:fs/promises";
+import { access, readFile, stat } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join, posix, resolve, win32 } from "node:path";
+import { dirname, isAbsolute, join, posix, relative, resolve, sep, win32 } from "node:path";
+import { fileURLToPath } from "node:url";
 import { verifyOmpArtifact } from "../../../../scripts/omp-artifact.mjs";
 import type { ConnectOptions } from "@zcode/server/remote";
 import { listSSHConfigAliasesFromLocalConfig } from "@zcode/services/node";
@@ -43,6 +44,9 @@ import {
 import { getElectronAppPath, isElectronAppPackaged } from "./desktopElectronApp.js";
 
 declare const __ZCODE_PACKAGED_AGENT_TELEMETRY_ENV__: Readonly<Record<string, string>> | undefined;
+
+// Electron 28 内嵌 Node 18 尚无 import.meta.dirname，现代运行时保持原生路径。
+const moduleDirname = import.meta.dirname ?? dirname(fileURLToPath(import.meta.url));
 
 const isLocalDevelopmentRuntime = !isElectronAppPackaged();
 export const desktopRuntimeEnv: ZCodeRuntimeEnv = isLocalDevelopmentRuntime
@@ -90,8 +94,8 @@ export const runtimeSessionDataPath =
 // Chromedriver 会注入临时 --user-data-dir，并在该目录等待 DevToolsActivePort。
 // e2e 如果再用 app.setPath 覆盖 userData/sessionData，端口文件会被写到另一个目录，
 // 导致 Electron 已启动但 WebDriver session 一直创建失败。测试态打开该开关后保留 Chromedriver 的目录。
-export const hostModulePath = join(import.meta.dirname, "../host/index.js");
-export const schedulerModulePath = join(import.meta.dirname, "../scheduler/index.js");
+export const hostModulePath = join(moduleDirname, "../host/index.js");
+export const schedulerModulePath = join(moduleDirname, "../scheduler/index.js");
 export function getCredentialsDir() {
   return getAppConfigDir();
 }
@@ -171,7 +175,7 @@ function parseDotenv(content: string): Record<string, string> {
 }
 
 function resolveWorkspaceRootForEnvFiles(): string | null {
-  const workspaceRootCandidate = resolve(import.meta.dirname, "../../../..");
+  const workspaceRootCandidate = resolve(moduleDirname, "../../../..");
   return existsSync(join(workspaceRootCandidate, "pnpm-workspace.yaml"))
     ? workspaceRootCandidate
     : null;
@@ -182,7 +186,7 @@ export function loadHostProcessEnvFromLocalFiles(): Record<string, string> {
     return resolvePackagedAgentTelemetryEnv();
   }
 
-  const desktopRoot = resolve(import.meta.dirname, "../..");
+  const desktopRoot = resolve(moduleDirname, "../..");
   const workspaceRoot = resolveWorkspaceRootForEnvFiles();
   const fileCandidates = [
     ...(workspaceRoot
@@ -247,7 +251,7 @@ export function resolvePackagedAgentTelemetryEnv(
 }
 
 function resolveDevelopmentMockCdnDir(): string {
-  return join(import.meta.dirname, "../../mock-cdn");
+  return join(moduleDirname, "../../mock-cdn");
 }
 
 function resolveAvailableDevelopmentMockCdnDir(): string | undefined {
@@ -406,7 +410,7 @@ function resolveBundledZCodeAgentBinaryPath(): string | undefined {
       ...entrySegments,
     ),
     join(
-      import.meta.dirname,
+      moduleDirname,
       "../../bundled-agents",
       platformKey,
       runtime.bundledResourceDir,
@@ -427,7 +431,7 @@ function resolveBundledRuntimeToolBinaryPath(
       ? join(process.resourcesPath, "tools", toolDir, candidateBinaryName)
       : null,
     join(
-      import.meta.dirname,
+      moduleDirname,
       "../../bundled-tools",
       resolvePlatformKeyForPackagedApp(),
       toolDir,
@@ -609,7 +613,19 @@ function ompDiscoveryEnvKey(env: Record<string, string | undefined>): string {
   ]);
 }
 
-let preparedOmpHostEnv: Readonly<{ command: string | undefined; envKey: string }> | undefined;
+function packagedOmpCommandPath(env: Record<string, string | undefined>): string | undefined {
+  const command = env.ZCODE_AGENT_SERVER_COMMAND?.trim();
+  if (!isElectronAppPackaged() || !command || !isAbsolute(command)) return undefined;
+  const root = join(process.resourcesPath ?? "", "omp");
+  const path = relative(root, command);
+  return path && path !== ".." && !path.startsWith(`..${sep}`) && !isAbsolute(path)
+    ? resolve(command)
+    : undefined;
+}
+
+let preparedOmpHostEnv:
+  | Readonly<{ command: string | undefined; envKey: string; verifiedBundledCommand?: string }>
+  | undefined;
 
 /** Main completes asynchronous executable discovery before creating Window Hosts. */
 export async function prepareOmpHostEnv(env: Record<string, string | undefined>): Promise<void> {
@@ -617,10 +633,32 @@ export async function prepareOmpHostEnv(env: Record<string, string | undefined>)
   const discoveryEnv = { ...env };
   const envKey = ompDiscoveryEnvKey(discoveryEnv);
   const resolvedEnv = await resolveOmpHostEnv(discoveryEnv);
+  let verifiedBundledCommand: string | undefined;
+  const bundledCandidate = packagedOmpCommandPath({ ...discoveryEnv, ...resolvedEnv });
+  if (bundledCandidate) {
+    const artifactRoot = join(process.resourcesPath ?? "", "omp");
+    const manifest = JSON.parse(await readFile(join(artifactRoot, "omp-artifact.json"), "utf8"));
+    if (
+      typeof manifest.executable === "string" &&
+      resolve(artifactRoot, manifest.executable) === bundledCandidate
+    ) {
+      // 启动器只选择入口；Main 必须异步校验封存字节，成功后才允许 Host 消费缓存。
+      const { command } = await verifyOmpArtifact(
+        artifactRoot,
+        `${process.platform}-${process.arch}`,
+      );
+      if (resolve(command) !== bundledCandidate)
+        throw new Error("Bundled OMP entry changed during verification");
+      verifiedBundledCommand = bundledCandidate;
+    } else {
+      throw new Error("Bundled OMP command does not match the artifact manifest entry");
+    }
+  }
   // 缓存仅属于本次 Main 环境；新窗口改变 PATH/安装目录时必须先重新异步准备。
   preparedOmpHostEnv = Object.freeze({
     command: resolvedEnv.ZCODE_AGENT_SERVER_COMMAND,
     envKey,
+    verifiedBundledCommand,
   });
 }
 
@@ -630,6 +668,10 @@ function readPreparedOmpHostEnv(
   if (env.ZCODE_AGENT_SERVER_COMMAND !== undefined) {
     if (!env.ZCODE_AGENT_SERVER_COMMAND.trim())
       throw new Error("ZCODE_AGENT_SERVER_COMMAND must not be empty");
+    const bundledCommand = packagedOmpCommandPath(env);
+    if (bundledCommand && preparedOmpHostEnv?.verifiedBundledCommand !== bundledCommand) {
+      throw new Error("Bundled OMP artifact has not completed asynchronous preparation");
+    }
     return {};
   }
   // 同步构建只读取 Main 已完成的异步查找，避免开发态回退旧 Agent、打包态强依赖 manifest。
