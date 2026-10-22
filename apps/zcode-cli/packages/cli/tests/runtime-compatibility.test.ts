@@ -36,12 +36,13 @@ test("Node 18 CLI entry avoids node:sqlite and reaches the shared lazy legacy dr
     import assert from "node:assert/strict";
     import { registerHooks } from "node:module";
     Object.defineProperty(process.versions, "node", { value: "18.18.2", configurable: true });
+    Object.defineProperty(process, "getBuiltinModule", { value: undefined, configurable: true });
     Reflect.deleteProperty(globalThis, "crypto");
     const loads = [];
     const unavailable = new Error("injected legacy addon unavailable");
     registerHooks({ resolve(specifier, context, nextResolve) {
-      if (specifier === "node:sqlite" || specifier === "sqlite") {
-        throw new Error("Node 18 must never resolve node:sqlite");
+      if (specifier === "node:sqlite" || specifier === "sqlite" || specifier === "node:sea") {
+        throw new Error("Node 18 must never resolve unavailable SQLite/SEA builtins");
       }
       if (specifier === "better-sqlite3") { loads.push(specifier); throw unavailable; }
       return nextResolve(specifier, context);
