@@ -3,7 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { DatabaseSync } from "./driver.js";
+import type { DatabaseSync, SQLInputValue } from "./driver.js";
 
 const desktopRequire = createRequire(new URL("../../../desktop/package.json", import.meta.url));
 const currentNodeVersion = process.versions.node;
@@ -188,6 +188,7 @@ describe("SQLite driver boundary", () => {
         const names = db.prepare(
           "select @x as a, $x as b, ? as c, '@ignored ?' as literal /* :ignored */",
         );
+        names.setAllowBareNamedParameters(false);
         expect(names.get({ "@x": 2, $x: 3 }, 4)).toMatchObject({
           a: 2,
           b: 3,
@@ -210,6 +211,42 @@ describe("SQLite driver boundary", () => {
         db.exec("insert into sample values(2, null, 'after iterator')");
         expect(db.prepare("select * from sample").all()).toHaveLength(2);
       });
+
+      it.each(["positional", "bare named", "prefixed named"] as const)(
+        "rejects explicit undefined %s bindings without changing missing/NULL semantics",
+        async (binding) => {
+          const { driver } = await loadDriver(version);
+          const db = new driver.DatabaseSync(":memory:");
+          resources.push(db);
+          db.exec("create table bindings(value)");
+          for (const method of ["run", "get", "all", "iterate"] as const) {
+            db.exec("delete from bindings");
+            const statement = db.prepare(
+              `insert into bindings(value) values(${binding === "positional" ? "?" : "@value"}) returning value`,
+            );
+            const execute = (...args: Parameters<typeof statement.run>) =>
+              method === "iterate" ? [...statement.iterate(...args)] : statement[method](...args);
+            // 故意越过 TS 输入类型，覆盖 JS 调用者显式传 undefined 与省略参数的差别。
+            const invalid = undefined as unknown as SQLInputValue;
+            const key = binding === "bare named" ? "value" : "@value";
+            let caught: unknown;
+            try {
+              execute(binding === "positional" ? invalid : { [key]: invalid });
+            } catch (error) {
+              caught = error;
+            }
+            expect(caught).toBeInstanceOf(TypeError);
+            expect(caught).toMatchObject({ code: "ERR_INVALID_ARG_TYPE" });
+            expect(db.prepare("select * from bindings").all()).toEqual([]);
+            execute();
+            if (binding !== "positional") execute({});
+            execute(binding === "positional" ? null : { [key]: null });
+            expect(db.prepare("select * from bindings").all()).toEqual(
+              Array.from({ length: binding === "positional" ? 2 : 3 }, () => ({ value: null })),
+            );
+          }
+        },
+      );
 
       it("performs asynchronous online WAL and attached backups with consumed options and read-only reopen", async () => {
         const { driver } = await loadDriver(version);
@@ -244,8 +281,9 @@ describe("SQLite driver boundary", () => {
         await expect(
           driver.backup(db, join(directory, "invalid.sqlite"), { source: "missing" }),
         ).rejects.toThrow();
-        await expect(
-          driver.backup(db, join(directory, "invalid-rate.sqlite"), { rate: 0 }),
+        // Node 22.16 accepts any int32 rate (0 makes no progress); a fraction is invalid.
+        await expect(async () =>
+          driver.backup(db, join(directory, "invalid-rate.sqlite"), { rate: 1.5 }),
         ).rejects.toThrow();
       });
     });

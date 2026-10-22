@@ -222,9 +222,9 @@ class CompatibleStatement implements StatementSync {
     const consumed = new Set<string>();
     let count = 0;
     for (const [index, slot] of this.slots.entries()) {
-      let value: SQLInputValue = null;
+      let value: SQLInputValue | undefined = null;
       if (typeof slot === "number") {
-        value = (positional[slot] as SQLInputValue | undefined) ?? null;
+        value = slot < positional.length ? (positional[slot] as SQLInputValue | undefined) : null;
         count = Math.max(count, slot + 1);
       } else if (named) {
         const bare = slot.slice(1);
@@ -245,6 +245,12 @@ class CompatibleStatement implements StatementSync {
           value = named[slot]!;
           consumed.add(slot);
         }
+      }
+      // ?? 会把显式 undefined 吞成 NULL；只给缺失参数补 NULL，非法绑定保持原生 TypeError/code。
+      if (value === undefined) {
+        throw Object.assign(new TypeError("Provided value cannot be bound to SQLite parameter"), {
+          code: "ERR_INVALID_ARG_TYPE",
+        });
       }
       // node:sqlite 接受所有 TypedArray/DataView，better-sqlite3 只接受 Buffer。
       result[`__zcode_${index}`] = ArrayBuffer.isView(value)
