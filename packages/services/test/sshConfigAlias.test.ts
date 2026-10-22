@@ -1,4 +1,5 @@
 import { chmod, mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import * as fsPromises from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -43,6 +44,11 @@ async function createTempHome(): Promise<string> {
   const homeDir = await mkdtemp(join(tmpdir(), "zcode-ssh-alias-test-"));
   tempDirs.push(homeDir);
   await mkdir(join(homeDir, ".ssh"), { recursive: true });
+  // Windows 的 os.homedir() 不由 HOME 决定；统一指向真实临时目录，避免读到用户配置。
+  vi.doMock("node:os", async (importOriginal) => ({
+    ...(await importOriginal<typeof Os>()),
+    homedir: () => homeDir,
+  }));
   return homeDir;
 }
 
@@ -213,6 +219,50 @@ describe("sshConfigAlias fallback parser", () => {
     testTimeout,
   );
 
+  for (const nativeGlobAvailable of [true, false]) {
+    it.skipIf(nativeGlobAvailable && typeof fsPromises.glob !== "function")(
+      `${nativeGlobAvailable ? "存在" : "缺少"}原生 glob 时，纯花括号 Include 只读取字面文件`,
+      async () => {
+        const homeDir = await createTempHome();
+        process.env["PATH"] = "";
+        vi.doMock("node:fs/promises", async (importOriginal) => {
+          const original = await importOriginal<typeof FsPromises>();
+          return {
+            ...original,
+            glob: nativeGlobAvailable ? original.glob : undefined,
+          };
+        });
+        vi.doMock("node:child_process", async (importOriginal) => {
+          const original = await importOriginal<typeof ChildProcess>();
+          return {
+            ...original,
+            // Windows 上同步抛错不等价于找不到 ssh；保留真实子进程、流和异步 ENOENT。
+            spawn: (_command: string, args: readonly string[], options: ChildProcess.SpawnOptions) =>
+              original.spawn(join(homeDir, "missing-ssh-fixture"), args, options),
+          };
+        });
+
+        const includeDir = join(homeDir, ".ssh", "includes");
+        await mkdir(includeDir, { recursive: true });
+        const literalPath = join(includeDir, "brace-{one,two}.conf");
+        await writeFile(literalPath, "Host literal-brace\n  HostName literal.example\n");
+        await writeFile(join(includeDir, "brace-one.conf"), "Host expanded-one\n");
+        await writeFile(join(includeDir, "brace-two.conf"), "Host expanded-two\n");
+        await writeFile(join(homeDir, ".ssh", "config"), "Include includes/brace-{one,two}.conf\n");
+
+        const listAliases = await loadAliasParser();
+        const aliases = await listAliases();
+        expect(aliases).toHaveLength(1);
+        expect(aliases[0]).toMatchObject({
+          alias: "literal-brace",
+          host: "literal.example",
+          source: literalPath,
+        });
+      },
+      testTimeout,
+    );
+  }
+
   // Unix shell 脚本在 Windows 上无法执行（chmod 不生效，ssh 命令不可用），直接跳过
   if (process.platform === "win32") {
     return;
@@ -333,24 +383,22 @@ describe("sshConfigAlias fallback parser", () => {
     testTimeout,
   );
   it(
-    "缺少原生 glob 时保留嵌套、字符类、brace、home token 和去重语义",
+    "缺少原生 glob 时保留嵌套、字符类、通配模式中的 brace、home token 和去重语义",
     async () => {
       const homeDir = await createTempHome();
       process.env["PATH"] = "";
-      vi.doMock("node:os", async (importOriginal) => ({
-        ...(await importOriginal<typeof Os>()),
-        homedir: () => homeDir,
-      }));
       vi.doMock("node:fs/promises", async (importOriginal) => ({
         ...(await importOriginal<typeof FsPromises>()),
         glob: undefined,
       }));
-      vi.doMock("node:child_process", async (importOriginal) => ({
-        ...(await importOriginal<typeof ChildProcess>()),
-        spawn: () => {
-          throw new Error("ssh unavailable in parser fixture");
-        },
-      }));
+      vi.doMock("node:child_process", async (importOriginal) => {
+        const original = await importOriginal<typeof ChildProcess>();
+        return {
+          ...original,
+          spawn: (_command: string, args: readonly string[], options: ChildProcess.SpawnOptions) =>
+            original.spawn(join(homeDir, "missing-ssh-fixture"), args, options),
+        };
+      });
       const includeDir = join(homeDir, ".ssh", "includes", "nested");
       await mkdir(includeDir, { recursive: true });
       const aliasesByFile = [
@@ -366,7 +414,7 @@ describe("sshConfigAlias fallback parser", () => {
         join(homeDir, ".ssh", "config"),
         [
           "Include includes/*/node-?[12].conf",
-          "Include includes/nested/brace-{one,two}.conf",
+          "Include includes/*/brace-{one,two}.conf",
           "Include ~/.ssh/includes/nested/home.conf",
           "Include %d/.ssh/includes/nested/home.conf",
           "Include includes/missing/*.conf includes/nested",
@@ -400,20 +448,18 @@ describe("sshConfigAlias fallback parser", () => {
       const nativeGlob = vi.fn(async function* (_pattern: string) {
         yield includePath;
       });
-      vi.doMock("node:os", async (importOriginal) => ({
-        ...(await importOriginal<typeof Os>()),
-        homedir: () => homeDir,
-      }));
       vi.doMock("node:fs/promises", async (importOriginal) => ({
         ...(await importOriginal<typeof FsPromises>()),
         glob: nativeGlob,
       }));
-      vi.doMock("node:child_process", async (importOriginal) => ({
-        ...(await importOriginal<typeof ChildProcess>()),
-        spawn: () => {
-          throw new Error("ssh unavailable in parser fixture");
-        },
-      }));
+      vi.doMock("node:child_process", async (importOriginal) => {
+        const original = await importOriginal<typeof ChildProcess>();
+        return {
+          ...original,
+          spawn: (_command: string, args: readonly string[], options: ChildProcess.SpawnOptions) =>
+            original.spawn(join(homeDir, "missing-ssh-fixture"), args, options),
+        };
+      });
       await writeFile(includePath, "Host native-alias\n  HostName native.example\n");
       await writeFile(join(homeDir, ".ssh", "config"), "Include native*.conf\n");
 

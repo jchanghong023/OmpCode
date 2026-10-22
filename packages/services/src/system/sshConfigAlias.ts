@@ -166,8 +166,8 @@ function splitSshTokens(line: string): string[] {
 
 function hasGlobPattern(value: string): boolean {
   // Windows 绝对路径天然包含 `\`，但这不代表 Include 是 glob。
-  // Include 同时支持字符通配符和 brace 展开，Windows 路径分隔符不算元字符。
-  return /[*?[\]{}]/.test(value);
+  // 旧基线只识别 *?[]；把花括号算作元字符会误展开原本应按字面读取的文件名。
+  return /[*?[\]]/.test(value);
 }
 
 function expandHomeToken(rawPath: string): string {
