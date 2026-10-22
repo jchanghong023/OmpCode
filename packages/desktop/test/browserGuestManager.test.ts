@@ -174,6 +174,15 @@ function makeGuest(id: number, spy: GuestSpy) {
           spy.viewport = { width: metrics.width, height: metrics.height };
         } else if (method === "Emulation.clearDeviceMetricsOverride") {
           spy.viewport = { width: 800, height: 600 };
+        } else if (method === "Page.getNavigationHistory") {
+          return {
+            currentIndex: spy.historyActiveIndex,
+            entries: spy.historyEntries.map((entry, index) => ({
+              id: index + 1,
+              url: entry.url,
+              title: entry.title ?? "",
+            })),
+          };
         } else if (method === "Page.getLayoutMetrics") {
           return {
             visualViewport: {
@@ -408,6 +417,95 @@ describe("BrowserGuestManager", () => {
     expect(r.state?.title).toBe("Example");
     // attach 时调 debugger.attach。
     expect(spy.attached).toBe(true);
+  });
+
+  it("history capability preserves the modern native branch and legacy live back/forward", async () => {
+    const { guest } = registerGuest(901);
+    const modernBack = vi.spyOn(guest.navigationHistory, "goBack");
+    const legacyBack = vi.fn();
+    const legacyForward = vi.fn();
+    Object.assign(guest, {
+      canGoBack: () => true,
+      canGoForward: () => true,
+      goBack: legacyBack,
+      goForward: legacyForward,
+    });
+    const manager = new BrowserGuestManager();
+    manager.attachGuest("modern-history", 901);
+    await manager.execute("modern-history", { method: "back" });
+    expect(modernBack).toHaveBeenCalledOnce();
+    expect(legacyBack).not.toHaveBeenCalled();
+
+    const legacy = registerGuest(902);
+    Reflect.deleteProperty(legacy.guest, "navigationHistory");
+    Object.assign(legacy.guest, {
+      canGoBack: () => true,
+      canGoForward: () => true,
+      goBack: legacyBack,
+      goForward: legacyForward,
+    });
+    manager.attachGuest("legacy-history", 902);
+    expect((await manager.execute("legacy-history", { method: "back" })).ok).toBe(true);
+    expect((await manager.execute("legacy-history", { method: "forward" })).ok).toBe(true);
+    expect(legacyBack).toHaveBeenCalledOnce();
+    expect(legacyForward).toHaveBeenCalledOnce();
+  });
+
+  it("legacy restore retains every URL/title/index without replaying unselected entries", async () => {
+    const { guest, spy } = registerGuest(903);
+    Reflect.deleteProperty(guest, "navigationHistory");
+    vi.spyOn(guest, "loadURL").mockImplementation(async (url) => {
+      spy.url = url;
+      spy.loadedUrl = url;
+      spy.historyEntries = [{ url, title: "Selected" }];
+      spy.historyActiveIndex = 0;
+    });
+    const manager = new BrowserGuestManager();
+    manager.attachGuest("restored-history", 903);
+    // 只在 UT 中访问 manager 的私有适配器，不扩大产品导出接口。
+    const historyAccess = manager as unknown as {
+      guestHistory(contents: unknown): {
+        restore(snapshot: {
+          entries: Array<{ url: string; title: string; pageState?: string }>;
+          index: number;
+        }): Promise<void>;
+        getAllEntries(): Array<{ url: string; title?: string; pageState?: string }>;
+        getActiveIndex(): number;
+        canGoBack(): boolean;
+        canGoForward(): boolean;
+        goBack(): void;
+        goForward(): void;
+      };
+    };
+    const history = historyAccess.guestHistory(guest);
+    await history.restore({
+      entries: [
+        { url: "https://first.example", title: "First" },
+        { url: "https://selected.example", title: "Selected", pageState: "opaque-native-state" },
+        { url: "https://last.example", title: "Last" },
+      ],
+      index: 1,
+    });
+    expect(guest.loadURL).toHaveBeenCalledExactlyOnceWith("https://selected.example");
+    expect(history.getAllEntries()).toEqual([
+      { url: "https://first.example", title: "First" },
+      { url: "https://selected.example", title: "Selected" },
+      { url: "https://last.example", title: "Last" },
+    ]);
+    expect(history.getActiveIndex()).toBe(1);
+    expect(history.canGoBack()).toBe(true);
+    expect(history.canGoForward()).toBe(true);
+    history.goBack();
+    await vi.waitFor(() => expect(history.getActiveIndex()).toBe(0));
+    expect(spy.loadedUrl).toBe("https://first.example");
+    expect(history.getAllEntries().map((entry) => entry.url)).toEqual([
+      "https://first.example",
+      "https://selected.example",
+      "https://last.example",
+    ]);
+    history.goForward();
+    await vi.waitFor(() => expect(history.getActiveIndex()).toBe(1));
+    expect(spy.loadedUrl).toBe("https://selected.example");
   });
 
   it("BVR01: 同一 WebView 异步录制动作并在 status 返回 WebM 元数据", async () => {

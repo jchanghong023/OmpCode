@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { PROJECT_MIGRATION_TABLES } from "#src/project-storage/schema.js";
-import { DatabaseSync } from "node:sqlite";
+import { DatabaseSync } from "@zcode/shared/sqlite-migrations";
 import { describe, expect, it } from "vitest";
 import { fixture, port } from "#src/project-storage/test-fixture.js";
 

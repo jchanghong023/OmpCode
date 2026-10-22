@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createCipheriv, pbkdf2Sync } from "node:crypto";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { backup, DatabaseSync } from "node:sqlite";
+import { backup, DatabaseSync } from "@zcode/shared/sqlite-migrations";
 
 const lockedChromeSidecars = vi.hoisted(() => new Set<string>());
 
@@ -174,16 +174,6 @@ describe("browserDataManager", () => {
       name: "Error",
       code: "ENOTEMPTY",
     });
-  });
-
-  it("使用 createRequire 加载 node:sqlite，避免桌面 bundle 丢失 node: 前缀", async () => {
-    const source = await readFile(
-      join(import.meta.dirname, "../src/main/chromeCookieManager.ts"),
-      "utf8",
-    );
-
-    expect(source).toMatch(/nodeRequire\(\s*"node:sqlite",?\s*\)/);
-    expect(source).not.toContain('await import("node:sqlite")');
   });
 
   it("按操作系统定位 Chrome Default Profile", () => {

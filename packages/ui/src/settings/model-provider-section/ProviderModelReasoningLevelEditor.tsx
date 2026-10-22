@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type DragEvent, type KeyboardEvent } from "react";
 import { PlusIcon, XIcon } from "lucide-react";
 import { Button } from "@/components/ui/button.js";
+import { FieldSizingInput } from "@/components/ui/textarea.js";
 import { cn } from "@/components/lib/utils.js";
 import { TECHNICAL_INPUT_ATTRIBUTES } from "@/lib/technicalInputAttributes.js";
 import { modelEditorControlStyle } from "@/settings/model-provider-section/modelEditorControlStyle.js";
@@ -108,7 +109,7 @@ export function ProviderModelReasoningLevelEditor({
           )}
         >
           {editingIndex === index ? (
-            <input
+            <FieldSizingInput
               {...TECHNICAL_INPUT_ATTRIBUTES}
               ref={inputRef}
               value={editingValue}
@@ -152,7 +153,7 @@ export function ProviderModelReasoningLevelEditor({
         </div>
       ))}
       {editingIndex === values.length ? (
-        <input
+        <FieldSizingInput
           {...TECHNICAL_INPUT_ATTRIBUTES}
           ref={inputRef}
           value={editingValue}

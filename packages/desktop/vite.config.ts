@@ -1,5 +1,5 @@
 import { createRequire } from "node:module";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { dirname, extname, isAbsolute, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { defineConfig, loadEnv, type Plugin } from "vite";
@@ -21,6 +21,9 @@ const buildTimeConfigDefines = createBuildTimeConfigDefines(
 
 const buildMetadata = getBuildMetadata();
 const desktopRequire = createRequire(import.meta.url);
+const legacyDesktopRuntime =
+  JSON.parse(readFileSync(resolve(__dirname, "package.json"), "utf8")).devDependencies.electron ===
+  "28.3.3";
 
 interface IstanbulInstrumenter {
   instrumentSync(sourceCode: string, filename: string): string;
@@ -176,6 +179,27 @@ export default defineConfig(({ mode }) => {
     env.VITE_CODING_PLAN_WEBVIEW_ORIGIN ?? process.env.VITE_CODING_PLAN_WEBVIEW_ORIGIN ?? "";
   const plugins = [
     ...(e2eCoverageEnabled ? [createE2EUIRendererCoveragePlugin(repoRoot)] : []),
+    {
+      name: "desktop-runtime-closure",
+      generateBundle(_options, bundle) {
+        // 记录真实 Rollup 模块闭包，API 审计不能仅凭源码目录猜测运行范围。
+        this.emitFile({
+          type: "asset",
+          fileName: "runtime-modules.json",
+          source: JSON.stringify(
+            [
+              ...new Set(
+                Object.values(bundle).flatMap((entry) =>
+                  entry.type === "chunk" ? Object.keys(entry.modules) : [],
+                ),
+              ),
+            ].sort(),
+            null,
+            2,
+          ),
+        });
+      },
+    } satisfies Plugin,
     pdfJsCMapsPlugin(),
     react(),
     tailwindcss(),
@@ -185,18 +209,35 @@ export default defineConfig(({ mode }) => {
     root: "src/renderer",
     plugins,
     resolve: {
-      alias: {
-        // 修复 UI 组件库中的 @ 别名解析失败。
-        // 问题原因：desktop 会直接打包 packages/ui 的源码，但当前 Vite 配置不知道 @ 应该指向 packages/ui/src，
-        // 导致 spinner、alert 等组件里的内部导入在构建时全部失效。
-        // 这里在消费端补齐别名，比逐个改组件导入更稳，也能和 web 端保持一致。
-        "@": resolve(__dirname, "../ui/src"),
-        ...desktopRendererDependencyAliases,
-        // Recharts 通过 d3-shape 读取 d3-path 的 Path 导出；hoisted node_modules
-        // 里可能残留 d3-shape/node_modules/d3-path@1.x，Vite 预构建会优先命中旧包并报 Missing export。
-        // 这里把 d3-path 固定到根部 3.x 入口，确保桌面端依赖优化和运行时解析一致。
-        "d3-path": resolve(__dirname, "../../node_modules/d3-path/src/index.js"),
-      },
+      alias: [
+        // Electron 28 / Chromium 120 needs PDF.js's bundled compatibility modules
+        // in both realms. Keep the installed version and the modern Windows path;
+        // the ?url import still makes Vite emit the matching legacy worker asset.
+        ...(legacyDesktopRuntime
+          ? [
+              {
+                find: /^pdfjs-dist$/,
+                replacement: desktopRequire.resolve("pdfjs-dist/legacy/build/pdf.mjs"),
+              },
+              {
+                find: /^pdfjs-dist\/build\/pdf\.worker\.min\.mjs(?=\?|$)/,
+                replacement: desktopRequire.resolve("pdfjs-dist/legacy/build/pdf.worker.min.mjs"),
+              },
+            ]
+          : []),
+        ...Object.entries({
+          // 修复 UI 组件库中的 @ 别名解析失败。
+          // 问题原因：desktop 会直接打包 packages/ui 的源码，但当前 Vite 配置不知道 @ 应该指向 packages/ui/src，
+          // 导致 spinner、alert 等组件里的内部导入在构建时全部失效。
+          // 这里在消费端补齐别名，比逐个改组件导入更稳，也能和 web 端保持一致。
+          "@": resolve(__dirname, "../ui/src"),
+          ...desktopRendererDependencyAliases,
+          // Recharts 通过 d3-shape 读取 d3-path 的 Path 导出；hoisted node_modules
+          // 里可能残留 d3-shape/node_modules/d3-path@1.x，Vite 预构建会优先命中旧包并报 Missing export。
+          // 这里把 d3-path 固定到根部 3.x 入口，确保桌面端依赖优化和运行时解析一致。
+          "d3-path": resolve(__dirname, "../../node_modules/d3-path/src/index.js"),
+        }).map(([find, replacement]) => ({ find, replacement })),
+      ],
       dedupe: ["react", "react-dom", "lucide-react"],
     },
     server: { port: 5174, strictPort: true },
@@ -213,7 +254,9 @@ export default defineConfig(({ mode }) => {
       // 兼容旧 renderer 读取名；新代码统一读 VITE_ZCODE_BASE_URL。
       "import.meta.env.VITE_ZCODE_ENDPOINT_ORIGIN": JSON.stringify(zcodeEndpointOrigin),
       "import.meta.env.VITE_CODING_PLAN_WEBVIEW_ORIGIN": JSON.stringify(codingPlanWebviewOrigin),
-      "import.meta.env.VITE_REWARDS_WEBVIEW_ORIGIN": JSON.stringify(env.VITE_REWARDS_WEBVIEW_ORIGIN ?? process.env.VITE_REWARDS_WEBVIEW_ORIGIN ?? ""),
+      "import.meta.env.VITE_REWARDS_WEBVIEW_ORIGIN": JSON.stringify(
+        env.VITE_REWARDS_WEBVIEW_ORIGIN ?? process.env.VITE_REWARDS_WEBVIEW_ORIGIN ?? "",
+      ),
       // Bugfix: E2E store bridge 只能由 WDIO 专用变量打开，避免把 ZCODE_ENV=test 产品环境误当成测试运行态。
       "import.meta.env.VITE_ZCODE_E2E_STORE_BRIDGE": JSON.stringify(
         e2eStoreBridgeEnabled ? "1" : "",
@@ -231,6 +274,13 @@ export default defineConfig(({ mode }) => {
     },
     build: {
       outDir: "../../out/renderer",
+      ...(legacyDesktopRuntime
+        ? {
+            target: "chrome120",
+            cssTarget: "chrome120",
+            cssMinify: "lightningcss" as const,
+          }
+        : {}),
       emptyOutDir: true,
       // 生产包若直接暴露 sourceMappingURL，攻击者可在客户端侧还原业务源码。
       // 生产使用 hidden sourcemap：本地/发布流程保留 .map，不在产物里暴露映射入口。

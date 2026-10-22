@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from "electron";
 import { PlatformChannels } from "@zcode/shared";
 import { installEmbeddedBrowserWheelForwarding } from "./embeddedBrowserWheel.js";
+import { installPreloadMainWorldScript } from "./runtime-compat/mainWorld.js";
 
 const BRIDGE_KEY = "__zcodeEmbeddedBrowserJavaScriptDialog__";
 
@@ -36,7 +37,7 @@ contextBridge.exposeInMainWorld(BRIDGE_KEY, {
   },
 });
 
-contextBridge.executeInMainWorld({
+installPreloadMainWorldScript({
   func: (bridgeKey: string) => {
     type Bridge = {
       show: (type: "alert" | "confirm", message: string) => DialogBridgeResult;
@@ -115,7 +116,7 @@ contextBridge.executeInMainWorld({
  * 初始按未决定（default）呈现，requestPermission 的真实结果回写状态。
  * new Notification 的显示行为仍由 Chromium 内部判定，不受本 override 影响。
  */
-contextBridge.executeInMainWorld({
+installPreloadMainWorldScript({
   func: () => {
     try {
       if (typeof Notification === "undefined") return;
@@ -125,12 +126,12 @@ contextBridge.executeInMainWorld({
         this: typeof Notification,
         deprecatedCallback?: NotificationPermissionCallback | undefined,
       ): Promise<NotificationPermission> {
-        const settled = Promise.resolve(
-          nativeRequestPermission.call(Notification),
-        ).then((status: NotificationPermission) => {
-          permissionState = status;
-          return status;
-        });
+        const settled = Promise.resolve(nativeRequestPermission.call(Notification)).then(
+          (status: NotificationPermission) => {
+            permissionState = status;
+            return status;
+          },
+        );
         if (typeof deprecatedCallback === "function") {
           void settled.then(
             (status) => deprecatedCallback(status),

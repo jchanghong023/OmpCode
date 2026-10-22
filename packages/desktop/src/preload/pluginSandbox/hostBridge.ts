@@ -5,6 +5,7 @@ import { enableSandboxRetainedMoves } from "./retainedMoves.js";
 
 export function installPluginSandboxHostBridge(): void {
   const supportsRetainedMove =
+    typeof contextBridge.executeInMainWorld === "function" &&
     contextBridge.executeInMainWorld({ func: enableSandboxRetainedMoves }) === true;
   /**
    * 插件 UI 沙箱：独立命名空间，不进 window.zcode。只暴露明确的沙箱操作；

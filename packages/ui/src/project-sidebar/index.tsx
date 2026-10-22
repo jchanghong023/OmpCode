@@ -2,7 +2,7 @@ import { SidebarTooltipProvider } from "@/ControlHintTooltip.js";
 export { readProjectSidebarView } from "@/project-sidebar/view-preference.js";
 import { SortableProjects } from "@/project-sidebar/SortableProjects.js";
 export { ArchiveManagement } from "@/project-sidebar/ArchiveManagement.js";
-import { memo, useCallback, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ScrollFadeViewport } from "@/components/ui/scroll-fade-viewport.js";
 import { TID_SIDEBAR } from "@zcode/shared/test-ids";
 import { remoteHostIdFromWorkspaceIdentity } from "@/project-sidebar/contract.js";
@@ -87,6 +87,46 @@ export const ProjectSidebar = memo(function ProjectSidebar(props: ProjectSidebar
   const { openCodingPlanUpgrade } = useCodingPlanUpgradeDialog();
   const { view, setView } = preferences;
   const scrollRef = useRef<HTMLDivElement>(null);
+  const dividerRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    if (
+      typeof CSS !== "undefined" &&
+      CSS.supports("left", "anchor(--sidebar-task-list-divider right)")
+    )
+      return;
+    const divider = dividerRef.current;
+    const shell = divider?.closest<HTMLElement>("[data-workspace-shell]");
+    if (!divider || !shell) return;
+    // Chromium 120 没有 anchor 定位；仍由侧栏真实分隔区域提供几何，
+    // 监听其布局祖先尺寸，避免拖拽或导航区域变化后装饰线停留在旧位置。
+    const update = () => {
+      const bounds = divider.getBoundingClientRect();
+      const container = shell.getBoundingClientRect();
+      shell.style.setProperty(
+        "--sidebar-divider-left",
+        `${bounds.right - container.left - shell.clientLeft + shell.scrollLeft}px`,
+      );
+      shell.style.setProperty(
+        "--sidebar-divider-top",
+        `${bounds.top - container.top - shell.clientTop + shell.scrollTop}px`,
+      );
+    };
+    const observer = new ResizeObserver(update);
+    for (let ancestor: HTMLElement | null = divider; ancestor; ancestor = ancestor.parentElement) {
+      observer.observe(ancestor);
+      if (ancestor === shell) break;
+    }
+    shell.addEventListener("scroll", update, true);
+    window.addEventListener("resize", update);
+    update();
+    return () => {
+      observer.disconnect();
+      shell.removeEventListener("scroll", update, true);
+      window.removeEventListener("resize", update);
+      shell.style.removeProperty("--sidebar-divider-left");
+      shell.style.removeProperty("--sidebar-divider-top");
+    };
+  });
   const [groupedToolbar, setGroupedToolbar] = useState<HTMLDivElement | null>(null);
   const [groupedSticky, setGroupedSticky] = useState<HTMLDivElement | null>(null);
   const [editor, setEditor] = useState<{ project: VirtualProject | null } | null>(null);
@@ -230,6 +270,7 @@ export const ProjectSidebar = memo(function ProjectSidebar(props: ProjectSidebar
               {/* 原因：顶层新建显式传 null 会抹掉当前项目；省略归属，让 Root 与快捷键共用继承路径。 */}
               <ProjectSidebarNavigation props={props} onCreate={() => props.onCreateTask()} />
               <div
+                ref={dividerRef}
                 data-testid="sidebar-task-list-region"
                 className="flex min-h-0 flex-1 flex-col border-t border-border/50 pt-3 [anchor-name:--sidebar-task-list-divider]"
               >

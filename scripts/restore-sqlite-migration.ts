@@ -2,8 +2,7 @@
 // 工程恢复入口：先停止使用目标库的应用/CLI；恢复逻辑只有共享 migration 模块这一份。
 import { stat } from "node:fs/promises";
 import { resolve } from "node:path";
-import { DatabaseSync } from "node:sqlite";
-import { sqliteMigrations } from "../packages/shared/src/sqlite-migrations/index.js";
+import { DatabaseSync, sqliteMigrations } from "../packages/shared/src/sqlite-migrations/index.js";
 
 const args = process.argv.slice(2);
 if (args.length !== 2 || args.some((arg) => arg.startsWith("-"))) {

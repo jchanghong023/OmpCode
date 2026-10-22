@@ -120,7 +120,7 @@ html>body{{padding:0}}</style>
 <meta name="referrer" content="no-referrer">
 <meta http-equiv="Content-Security-Policy" content="{_SHELL_CSP}">
 <title>{document_title}</title>
-<style>:root{{color-scheme:light dark;background:light-dark(rgb(255 255 255), rgb(24 24 24))}}html,body{{margin:0}}body{{box-sizing:border-box;padding:1rem;background:inherit}}iframe{{display:block;width:100%;height:calc(100vh - 2rem);margin:0 auto;border:0}}</style>
+<style>:root{{color-scheme:light dark;background:light-dark(rgb(255 255 255), rgb(24 24 24))}}html,body{{margin:0}}body{{box-sizing:border-box;padding:1rem;background:inherit}}iframe{{display:block;width:100%;height:calc(100vh - 2rem);margin:0 auto;border:0}}@supports not (color:light-dark(white,black)){{:root{{background:rgb(255 255 255)}}@media(prefers-color-scheme:dark){{:root{{background:rgb(24 24 24)}}}}}}</style>
 </head>
 <body>
 <iframe id="zcode-visualization" sandbox="allow-scripts" referrerpolicy="no-referrer" title="{document_title}" data-srcdoc="{escape(frame_html)}"></iframe>

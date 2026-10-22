@@ -1,6 +1,5 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseSync, MigrationResult } from "@zcode/shared/sqlite-migrations";
 import type { AppSettings } from "@zcode/shared";
-import type { MigrationResult } from "@zcode/shared/sqlite-migrations";
 
 export interface ProjectMigrationContext {
   /** 可信持库 Server 身份；不受客户端请求或旧 canonical route 影响。 */

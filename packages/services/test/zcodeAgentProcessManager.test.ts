@@ -415,6 +415,30 @@ describe("resolveDefaultZCodeAgentCommand", () => {
     await manager.disposeAllAndWait();
   });
 
+  it("缺少 Promise.withResolvers 时仍等待子进程退出诊断并完成回收", async () => {
+    const workspacePath = mkdtempSync(join(tmpdir(), "zcode-agent-manager-exit-diagnostics-"));
+    createdDirs.push(workspacePath);
+    const manager = new ZCodeAgentProcessManager({
+      commandResolver: () => ({
+        command: process.execPath,
+        args: ["-e", "process.stdin.resume(); process.stdin.on('end', () => process.exit(0));"],
+        cwd: workspacePath,
+      }),
+    });
+    const descriptor = Object.getOwnPropertyDescriptor(Promise, "withResolvers");
+    Object.defineProperty(Promise, "withResolvers", { configurable: true, value: undefined });
+    try {
+      await manager.getClient({ workspacePath });
+      expect(manager.listManagedProcesses()).toHaveLength(1);
+      await manager.disposeAllAndWait();
+      expect(manager.listManagedProcesses()).toHaveLength(0);
+    } finally {
+      if (descriptor) Object.defineProperty(Promise, "withResolvers", descriptor);
+      else Reflect.deleteProperty(Promise, "withResolvers");
+      await manager.disposeAllAndWait();
+    }
+  });
+
   it("Helper 恢复期不会 spawn，commit 后只允许同一 pending start 继续", async () => {
     const workspacePath = mkdtempSync(join(tmpdir(), "zcode-agent-manager-cua-admission-"));
     createdDirs.push(workspacePath);

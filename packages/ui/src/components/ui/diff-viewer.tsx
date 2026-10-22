@@ -1,13 +1,15 @@
 "use client";
 
 import type { CSSProperties, HTMLAttributes } from "react";
-import { memo, useMemo } from "react";
+import { memo, useEffect, useMemo, useState } from "react";
 import type { BundledTheme } from "shiki";
 import type { FileContents, FileDiffOptions } from "@pierre/diffs";
+import { getResolvedOrResolveTheme, ResolvedThemes } from "@pierre/diffs";
 import { MultiFileDiff, PatchDiff } from "@pierre/diffs/react";
 
 import { cn } from "@/components/lib/utils.js";
 import { DIFFS_PREFERRED_HIGHLIGHTER } from "@/lib/diffsHighlighterEngine.js";
+import { getDiffsCompatibilityCSS, resolveCodeViewerColorScheme } from "./code-viewer.js";
 
 type DiffViewerStyle = CSSProperties & {
   "--diffs-bg"?: string;
@@ -63,6 +65,55 @@ function DiffViewerComponent(props: DiffViewerProps) {
     className,
     style,
   } = props;
+  const singleTheme =
+    typeof optionsOverride?.theme === "string" ? optionsOverride.theme : undefined;
+  const [resolvedTheme, setResolvedTheme] = useState<{
+    name: string;
+    scheme: "light" | "dark";
+  }>();
+  const loadedThemeScheme =
+    singleTheme === undefined
+      ? undefined
+      : (ResolvedThemes.get(singleTheme)?.type ??
+        (resolvedTheme?.name === singleTheme ? resolvedTheme.scheme : undefined));
+  useEffect(() => {
+    if (
+      singleTheme === undefined ||
+      loadedThemeScheme !== undefined ||
+      typeof CSS === "undefined" ||
+      CSS.supports("color", "light-dark(white, black)")
+    )
+      return;
+    let active = true;
+    const theme = getResolvedOrResolveTheme(singleTheme);
+    if ("then" in theme) {
+      void theme.then(
+        (loadedTheme) => {
+          if (active) setResolvedTheme({ name: singleTheme, scheme: loadedTheme.type });
+        },
+        () => {
+          // Theme loading errors remain owned by @pierre/diffs; do not invent a replacement theme.
+        },
+      );
+    } else {
+      setResolvedTheme({ name: singleTheme, scheme: theme.type });
+    }
+    return () => {
+      active = false;
+    };
+  }, [loadedThemeScheme, singleTheme]);
+  const requestedScheme = optionsOverride?.themeType ?? themeType;
+  // Custom themes carry their own light/dark metadata, including asynchronously registered themes.
+  const compatibilityScheme =
+    singleTheme !== undefined
+      ? loadedThemeScheme
+      : requestedScheme === "light" || requestedScheme === "dark"
+        ? requestedScheme
+        : resolveCodeViewerColorScheme();
+  const compatibilityCSS =
+    compatibilityScheme === undefined
+      ? ""
+      : getDiffsCompatibilityCSS(compatibilityScheme, singleTheme !== undefined);
   const viewerStyle = useMemo<DiffViewerStyle>(
     () => ({
       "--diffs-bg": "var(--color-background)",
@@ -98,8 +149,13 @@ function DiffViewerComponent(props: DiffViewerProps) {
       themeType,
       preferredHighlighter: DIFFS_PREFERRED_HIGHLIGHTER,
       ...optionsOverride,
+      ...(compatibilityCSS
+        ? {
+            unsafeCSS: compatibilityCSS + (optionsOverride?.unsafeCSS ?? DIFF_VIEWER_UNSAFE_CSS),
+          }
+        : {}),
     }),
-    [darkTheme, lightTheme, optionsOverride, rendersPatch, themeType],
+    [compatibilityCSS, darkTheme, lightTheme, optionsOverride, rendersPatch, themeType],
   );
 
   const diffNode = rendersPatch ? (

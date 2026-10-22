@@ -2,6 +2,14 @@ import type { SqliteMigrationsContract } from "./contract.js";
 import { migrate } from "./runner.js";
 import { restore } from "./restore.js";
 
+export { DatabaseSync, backup } from "./driver.js";
+export type {
+  StatementSync,
+  SQLInputValue,
+  SQLOutputValue,
+  DatabaseSyncOptions,
+  BackupOptions,
+} from "./driver.js";
 export type {
   MigrationBackup,
   MigrationOptions,

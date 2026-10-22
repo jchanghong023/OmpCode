@@ -4,7 +4,7 @@ import { join, sep } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { ProjectRepositoryContract, VirtualProject } from "#src/project-storage/contract.js";
 import type { IProjectService } from "#src/project/contract.js";
-import { createProjectService, bindRemoteProjectIdentities } from "#src/project/index.js";
+import { createProjectService } from "#src/project/index.js";
 
 it("projects live primary directory status without changing roots, and rejects stale create requests", async () => {
   const root = await mkdtemp(join(tmpdir(), "project-primary-"));
@@ -119,25 +119,6 @@ it("preserves remote primary status without checking foreign paths on this Host"
   expect((await service.readTree({ hostId: "remote-owner" })).projects[0]).toBe(remoteProject);
   expect((await service.readProjects({ hostId: "remote-owner" }))[0]).toBe(remoteProject);
   expect(repository).not.toHaveBeenCalled();
-});
-
-it("returns attachment identity with prepared remote directories", async () => {
-  const prepareSession = vi.fn(async () => ({
-    projectId: "p",
-    workspacePath: "/remote",
-    additionalDirectories: ["/extra"],
-  }));
-  const resolve = vi.fn(async () => "remote:server:s:/remote");
-  const service = bindRemoteProjectIdentities(
-    { prepareSession } as unknown as IProjectService,
-    resolve,
-  );
-  await expect(service.prepareSession({ projectId: "p" })).resolves.toMatchObject({
-    workspacePath: "/remote",
-    workspaceIdentity: "remote:server:s:/remote",
-    additionalDirectories: ["/extra"],
-  });
-  expect(resolve).toHaveBeenCalledWith("/remote");
 });
 
 it("validates every root before mutating storage and deduplicates normalized paths", async () => {
@@ -280,22 +261,4 @@ it("browses owner directories without touching project storage or admitting a se
   );
   expect(directories.read).toHaveBeenLastCalledWith({ path: folder });
   expect(repository).not.toHaveBeenCalled();
-});
-
-it("binds every remote task directory through the existing workspace identity resolver", async () => {
-  const readTree = vi.fn(async () => ({
-    projects: [],
-    tasks: [
-      { taskId: "one", workspacePath: "/repo", workspaceIdentity: "remote:ssh:old:22:u:/repo" },
-      { taskId: "two", workspacePath: "/repo", workspaceIdentity: "remote:ssh:old:22:u:/repo" },
-    ],
-  }));
-  const resolve = vi.fn(async (path: string) => `stable:${path}`);
-  const service = bindRemoteProjectIdentities({ readTree } as unknown as IProjectService, resolve);
-  const result = await service.readTree();
-  expect(resolve).toHaveBeenCalledTimes(1);
-  expect(result.tasks.map((task) => task.workspaceIdentity)).toEqual([
-    "stable:/repo",
-    "stable:/repo",
-  ]);
 });

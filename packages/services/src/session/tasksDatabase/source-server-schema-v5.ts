@@ -1,4 +1,4 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseSync } from "@zcode/shared/sqlite-migrations";
 
 function hasTable(db: DatabaseSync, table: string): boolean {
   return Boolean(

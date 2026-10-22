@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import { DatabaseSync } from "./driver.js";
 import { afterEach, describe, expect, it } from "vitest";
 import type { MigrationBackup, SqliteMigration, SqliteMigrationsContract } from "./contract.js";
 import { sqliteMigrations } from "./index.js";

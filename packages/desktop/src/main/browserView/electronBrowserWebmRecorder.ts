@@ -2,10 +2,12 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, open, rm, writeFile, type FileHandle } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   BrowserWindow,
   MessageChannelMain,
   session,
+  webFrameMain,
   type MessagePortMain,
   type Session,
   type WebFrameMain,
@@ -16,6 +18,8 @@ import type {
   BrowserWebmRecorderSession,
 } from "./browserVideoRecorder.js";
 
+// Node 18 没有 import.meta.dirname；preload 继续相对输出模块定位。
+const moduleDirname = dirname(fileURLToPath(import.meta.url));
 const RECORDER_PORT_CHANNEL = "zcode-browser-video-recorder:port";
 const RECORDER_START_TIMEOUT_MS = 15_000;
 const RECORDER_STOP_TIMEOUT_MS = 15_000;
@@ -239,9 +243,22 @@ function recorderHtml(): string {
 </html>`;
 }
 
+function isTargetFrameAlive(frame: WebFrameMain): boolean {
+  // Only probe Electron frame state here: disposed wrappers can throw when reading IDs.
+  // Electron 41 keeps its native liveness check; 28 resolves the same live frame by ID.
+  try {
+    if (typeof frame.isDestroyed === "function") {
+      return !frame.isDestroyed() && !("detached" in frame && frame.detached);
+    }
+    return webFrameMain.fromId(frame.processId, frame.routingId) === frame;
+  } catch {
+    return false;
+  }
+}
+
 function asTargetFrame(value: unknown): WebFrameMain {
   const frame = value as WebFrameMain | undefined;
-  if (!frame || typeof frame.isDestroyed !== "function" || frame.isDestroyed() || frame.detached) {
+  if (!frame || !isTargetFrameAlive(frame)) {
     throw recorderError("target WebFrameMain is unavailable");
   }
   return frame;
@@ -290,7 +307,7 @@ export async function createElectronBrowserWebmRecorder(
     height: Math.max(1, input.viewport.height),
     webPreferences: {
       session: recorderSession,
-      preload: join(import.meta.dirname, "../preload/browserVideoRecorder.cjs"),
+      preload: join(moduleDirname, "../preload/browserVideoRecorder.cjs"),
       sandbox: true,
       contextIsolation: true,
       nodeIntegration: false,
@@ -424,8 +441,7 @@ export async function createElectronBrowserWebmRecorder(
         request.frame !== recorderWindow.webContents.mainFrame ||
         !request.videoRequested ||
         request.audioRequested ||
-        targetFrame.isDestroyed() ||
-        targetFrame.detached
+        !isTargetFrameAlive(targetFrame)
       ) {
         callback({});
         return;
@@ -436,7 +452,11 @@ export async function createElectronBrowserWebmRecorder(
     await recorderWindow.loadFile(recorderDocumentPath);
     await rm(recorderDocumentPath, { force: true }).catch(() => undefined);
     recorderWindow.webContents.postMessage(RECORDER_PORT_CHANNEL, null, [rendererPort]);
-    await withTimeout(ready.promise, RECORDER_START_TIMEOUT_MS, "recorder renderer did not become ready");
+    await withTimeout(
+      ready.promise,
+      RECORDER_START_TIMEOUT_MS,
+      "recorder renderer did not become ready",
+    );
     mainPort.postMessage({
       type: "start",
       fps: input.fps,

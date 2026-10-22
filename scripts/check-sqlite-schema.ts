@@ -4,7 +4,6 @@ import { execFile } from "node:child_process";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { TaskIndexRepo } from "../packages/services/src/session/taskIndexRepo.js";
@@ -12,7 +11,7 @@ import { AutomationRepo } from "../packages/services/src/session/automationRepo.
 import { OffPeakTaskRepo } from "../packages/services/src/session/offPeakTaskRepo.js";
 import { getTasksIndexDatabasePath, setDataBaseDir } from "../packages/services/src/paths.js";
 import { SQLITE_MIGRATIONS } from "../apps/zcode-cli/packages/adapters/src/storage/session-store/migrations.js";
-import { sqliteMigrations } from "../packages/shared/src/sqlite-migrations/index.js";
+import { DatabaseSync, sqliteMigrations } from "../packages/shared/src/sqlite-migrations/index.js";
 import { assertAdditiveSchema, dumpSqliteSchema } from "./sqlite-schema-contract.mjs";
 
 process.chdir(fileURLToPath(new URL("..", import.meta.url)));

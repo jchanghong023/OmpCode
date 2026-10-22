@@ -49,8 +49,11 @@ import {
 import { randomUUID } from "node:crypto";
 import type { UtilityProcess as ElectronUtilityProcess } from "electron";
 import { spawn } from "node:child_process";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { homedir, hostname } from "node:os";
+// Node 18 没有 import.meta.dirname；以输出模块 URL 为资源路径权威。
+const moduleDirname = dirname(fileURLToPath(import.meta.url));
 import {
   createCredentialService,
   createSettingService,
@@ -316,15 +319,15 @@ const iconPath =
   process.platform === "win32"
     ? app.isPackaged
       ? join(process.resourcesPath, "icon_windows.png")
-      : join(import.meta.dirname, "../../build/icon_windows.png")
+      : join(moduleDirname, "../../build/icon_windows.png")
     : app.isPackaged
       ? join(process.resourcesPath, "icon.png")
-      : join(import.meta.dirname, "../../build/icon.png");
+      : join(moduleDirname, "../../build/icon.png");
 const linuxDesktopIntegrationIconPath =
   process.platform === "linux"
     ? app.isPackaged
       ? join(process.resourcesPath, "icon_512x512.png")
-      : join(import.meta.dirname, "../../build/icons/512x512.png")
+      : join(moduleDirname, "../../build/icons/512x512.png")
     : iconPath;
 let currentApplicationLocale: Locale = DEFAULT_LOCALE;
 let closeToTrayOnWindows = true;
@@ -571,7 +574,7 @@ async function runBrowserCommandOnView(params: {
 }
 let currentDesktopZoomLevel = 0;
 let currentDesktopWindowSize: DesktopWindowSize | undefined;
-const preloadPath = join(import.meta.dirname, "../preload/index.cjs");
+const preloadPath = join(moduleDirname, "../preload/index.cjs");
 const settingsFile = join(getZCodeDataRootDir(), "v2", "setting.json");
 let activeAppShutdownPolicy = resolveAppShutdownPolicy("normal", process.platform);
 let activeAppShutdownKind: AppShutdownKind | null = null;
@@ -2077,9 +2080,9 @@ app.whenReady().then(async () => {
   });
   // 插件 UI 沙箱：注册表 + renderer 可调 IPC；scheme 的 privileged 注册已随 zcode-media 在 ready 前完成。
   installPluginSandboxHost({
-    preloadPath: join(import.meta.dirname, "../preload/pluginSandbox.cjs"),
-    rendererDir: join(import.meta.dirname, "../renderer"),
-    aliasDir: join(import.meta.dirname, "../plugin-sandbox"),
+    preloadPath: join(moduleDirname, "../preload/pluginSandbox.cjs"),
+    rendererDir: join(moduleDirname, "../renderer"),
+    aliasDir: join(moduleDirname, "../plugin-sandbox"),
     // 开发模式 out/renderer 没有 shell 产物，从 renderer dev server 代理（同 cua-permission-panel 的做法）。
     ...(!app.isPackaged && process.env["ELECTRON_RENDERER_URL"]
       ? { devServerUrl: process.env["ELECTRON_RENDERER_URL"] }

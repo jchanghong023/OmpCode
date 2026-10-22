@@ -1,4 +1,4 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseSync } from "@zcode/shared/sqlite-migrations";
 import type { ModelSelection } from "@zcode/shared";
 
 // 冻结 0002 的发布前已裁决编码；不能调用将来可能修改的运行时 parser/身份表。

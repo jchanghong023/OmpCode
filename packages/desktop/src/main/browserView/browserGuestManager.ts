@@ -63,7 +63,7 @@ interface GuestWebContents {
   stop(): void;
   capturePage(): Promise<{ toPNG(): Buffer }>;
   executeJavaScript(script: string, userGesture?: boolean): Promise<unknown>;
-  navigationHistory: {
+  navigationHistory?: {
     canGoBack(): boolean;
     canGoForward(): boolean;
     goBack(): void;
@@ -75,6 +75,10 @@ interface GuestWebContents {
       index: number;
     }): Promise<void>;
   };
+  canGoBack?(): boolean;
+  canGoForward?(): boolean;
+  goBack?(): void;
+  goForward?(): void;
   close(options?: { waitForBeforeUnload?: boolean }): void;
   isCurrentlyAudible?(): boolean;
   isBeingCaptured?(): boolean;
@@ -102,6 +106,191 @@ interface GuestWebContents {
       listener: (event: unknown, item: GuestDownloadItem, contents: GuestWebContents) => void,
     ): void;
   };
+}
+
+type GuestHistory = NonNullable<GuestWebContents["navigationHistory"]>;
+interface GuestHistoryEntry {
+  url: string;
+  title?: string;
+  pageState?: string;
+}
+interface LegacyHistorySnapshot {
+  entries: GuestHistoryEntry[];
+  index: number;
+}
+interface CdpHistory {
+  currentIndex: number;
+  entries: Array<{ id: number; url: string; title: string }>;
+}
+
+/**
+ * Electron 28 没有原生 history 导入/导出。活 guest 仍以 Chromium/CDP 为唯一历史所有者；
+ * 只有恢复外部快照后才由此适配器拥有应用级 URL/title/index 栈，避免重放整栈产生网络副作用。
+ * CDP 不提供原生 pageState（POST、表单、子 frame 等）的序列化，不能伪造该字段。
+ */
+class LegacyGuestHistory implements GuestHistory {
+  private entries: GuestHistoryEntry[] = [];
+  private index = -1;
+  private restored = false;
+  private nativeIds = new Map<number, number>();
+  private revision = 0;
+  private navigating = false;
+
+  constructor(
+    private readonly guest: GuestWebContents,
+    private readonly send: (method: string, params?: unknown) => Promise<unknown>,
+    private readonly assertCurrent: () => void,
+    private readonly warn: (error: unknown) => void,
+    private readonly onSnapshot: (snapshot: LegacyHistorySnapshot) => void,
+  ) {}
+
+  canGoBack(): boolean {
+    return this.restored ? this.index > 0 : (this.guest.canGoBack?.() ?? false);
+  }
+
+  canGoForward(): boolean {
+    return this.restored
+      ? this.index >= 0 && this.index < this.entries.length - 1
+      : (this.guest.canGoForward?.() ?? false);
+  }
+
+  goBack(): void {
+    if (!this.restored) return this.guest.goBack?.();
+    if (this.canGoBack()) void this.navigate(this.index - 1).catch(this.warn);
+  }
+
+  goForward(): void {
+    if (!this.restored) return this.guest.goForward?.();
+    if (this.canGoForward()) void this.navigate(this.index + 1).catch(this.warn);
+  }
+
+  getAllEntries(): GuestHistoryEntry[] {
+    return this.entries.map((entry) => ({ ...entry }));
+  }
+
+  getActiveIndex(): number {
+    return this.index;
+  }
+
+  async refresh(): Promise<void> {
+    const revision = ++this.revision;
+    const history = (await this.send("Page.getNavigationHistory")) as CdpHistory;
+    this.assertCurrent();
+    // 迟到的 CDP 响应不得覆盖后续导航/恢复，恢复中的 loadURL 也不能当作新 entry。
+    if (revision !== this.revision || this.navigating) return;
+    if (!this.restored) {
+      this.entries = history.entries.map(({ url, title }) => ({ url, title }));
+      this.index = history.currentIndex;
+      this.publishSnapshot();
+      return;
+    }
+    const active = history.entries[history.currentIndex];
+    if (!active) return;
+    const knownIndex = this.nativeIds.get(active.id);
+    if (knownIndex !== undefined) {
+      this.index = knownIndex;
+      this.entries[this.index] = { url: active.url, title: active.title };
+      this.publishSnapshot();
+      return;
+    }
+    // replaceState/location.replace 可能产生新 native id，但不能追加应用历史。
+    for (const [id, position] of this.nativeIds) {
+      if (position === this.index && !history.entries.some((entry) => entry.id === id)) {
+        this.nativeIds.delete(id);
+        this.nativeIds.set(active.id, this.index);
+        this.entries[this.index] = { url: active.url, title: active.title };
+        this.publishSnapshot();
+        return;
+      }
+    }
+    // 新的 Chromium entry 截断 forward 分支；同 URL 的不同 entry 不能按 URL 合并。
+    this.entries.splice(this.index + 1);
+    this.entries.push({ url: active.url, title: active.title });
+    this.index = this.entries.length - 1;
+    for (const [id, index] of this.nativeIds) {
+      if (index >= this.index) this.nativeIds.delete(id);
+    }
+    this.nativeIds.set(active.id, this.index);
+    this.publishSnapshot();
+  }
+
+  async restore(options: LegacyHistorySnapshot): Promise<void> {
+    this.assertCurrent();
+    if (!options.entries[options.index]) throw new RangeError("invalid browser history index");
+    this.entries = options.entries.map(({ url, title }) => ({ url, title }));
+    this.index = options.index;
+    this.restored = true;
+    this.nativeIds.clear();
+    await this.navigate(options.index);
+  }
+
+  private async navigate(index: number): Promise<void> {
+    this.assertCurrent();
+    if (this.navigating) throw new Error("browser history navigation is already pending");
+    const entry = this.entries[index];
+    if (!entry) throw new RangeError("invalid browser history index");
+    this.navigating = true;
+    ++this.revision;
+    try {
+      let nativeId: number | undefined;
+      for (const [id, position] of this.nativeIds) {
+        if (position === index) {
+          nativeId = id;
+          break;
+        }
+      }
+      if (nativeId !== undefined) {
+        if (!this.guest.on) throw new Error("browser history commit events are unavailable");
+        let onCommit!: () => void;
+        let timer!: ReturnType<typeof setTimeout>;
+        const committed = new Promise<void>((resolve, reject) => {
+          onCommit = resolve;
+          timer = setTimeout(
+            () => reject(new Error("browser history navigation timed out")),
+            30_000,
+          );
+          this.guest.on!("navigation-entry-committed", onCommit);
+        });
+        // CDP 自身可能先失败；事件等待仍须清理，不能产生未处理的 rejection。
+        void committed.catch(() => undefined);
+        try {
+          await this.send("Page.navigateToHistoryEntry", { entryId: nativeId });
+          await committed;
+        } finally {
+          clearTimeout(timer);
+          this.guest.removeListener?.("navigation-entry-committed", onCommit);
+        }
+      } else {
+        // 仅选中项首次访问需要真实导航；已有 native entry 保留 Chromium 页状态。
+        await this.guest.loadURL(entry.url);
+      }
+      this.assertCurrent();
+      const history = (await this.send("Page.getNavigationHistory")) as CdpHistory;
+      this.assertCurrent();
+      const active = history.entries[history.currentIndex];
+      if (
+        !active ||
+        active.url !== this.guest.getURL() ||
+        (nativeId !== undefined && active.id !== nativeId)
+      ) {
+        throw new Error("browser history navigation did not commit");
+      }
+      this.index = index;
+      this.entries[index] = { url: active.url, title: active.title };
+      this.nativeIds.set(active.id, index);
+      const liveIds = new Set(history.entries.map((item) => item.id));
+      for (const id of this.nativeIds.keys()) {
+        if (!liveIds.has(id)) this.nativeIds.delete(id);
+      }
+      this.publishSnapshot();
+    } finally {
+      this.navigating = false;
+    }
+  }
+
+  private publishSnapshot(): void {
+    this.onSnapshot({ entries: this.getAllEntries(), index: this.index });
+  }
 }
 
 interface GuestDownloadItem {
@@ -191,6 +380,8 @@ interface ManagedTab {
   cachedFaviconUrl: string | null;
   openedAt: number;
   restoredFromStore?: boolean;
+  /** 仅进程内 crash/rebind 补偿；不另建持久历史，快照从唯一活 history 所有者派生。 */
+  legacyHistorySnapshot?: LegacyHistorySnapshot;
 }
 
 interface PendingWaiter {
@@ -427,6 +618,7 @@ function safeNumber(read: () => number | undefined): number | undefined {
 
 export class BrowserGuestManager {
   private readonly tabs = new Map<string, ManagedTab>();
+  private readonly legacyHistories = new WeakMap<GuestWebContents, LegacyGuestHistory>();
 
   /** 资源管理器：当前仍活着的浏览器 guest webContents id，用于把其 renderer 归到内置插件 browser-use */
   listGuestWebContentsIds(): number[] {
@@ -703,6 +895,32 @@ export class BrowserGuestManager {
     tab.hasAttachedGuest = true;
     tab.attachFailure = undefined;
     tab.rebindRequested = false;
+    if (!guest.navigationHistory && !this.legacyHistories.has(guest)) {
+      this.legacyHistories.set(
+        guest,
+        new LegacyGuestHistory(
+          guest,
+          async (method, params) => {
+            if (!guest.debugger.isAttached() || tab.guestCdpRestoreFlight) {
+              await this.ensureGuestCdpAttached(tab, guest);
+            }
+            if (tab.guest !== guest || tab.guestLifecycle !== "attached") {
+              throw new Error("browser history guest is stale");
+            }
+            return this.sendGuestCdpCommandRaw(tab, guest, method, params);
+          },
+          () => {
+            if (tab.guest !== guest || tab.lifecycle === "closed") {
+              throw new Error("browser history guest is stale");
+            }
+          },
+          (error) => this.warn(`browser tab history navigation failed tabId=${tab.tabId}`, error),
+          (snapshot) => {
+            tab.legacyHistorySnapshot = snapshot;
+          },
+        ),
+      );
+    }
     if (cdpAttached) this.scheduleGuestCdpIdleRelease(tab);
     // 恢复期新 guest 的初始 URL 是 about:blank。若在 pageState/restoreUrl 消费前
     // 覆盖 logical cache，损坏快照会错误降级到空白页，三类事实全缺失的 orphan 也无法识别。
@@ -3576,19 +3794,19 @@ export class BrowserGuestManager {
         },
         canGoBack: () => {
           assertCurrent();
-          return guest.navigationHistory.canGoBack();
+          return this.guestHistory(guest).canGoBack();
         },
         canGoForward: () => {
           assertCurrent();
-          return guest.navigationHistory.canGoForward();
+          return this.guestHistory(guest).canGoForward();
         },
         goBack: () => {
           assertCurrent();
-          return guest.navigationHistory.goBack();
+          return this.guestHistory(guest).goBack();
         },
         goForward: () => {
           assertCurrent();
-          return guest.navigationHistory.goForward();
+          return this.guestHistory(guest).goForward();
         },
         reload: () => {
           assertCurrent();
@@ -3776,8 +3994,26 @@ export class BrowserGuestManager {
     await this.persistShell(tab);
     return guest;
   }
+  private guestHistory(guest: GuestWebContents): GuestHistory {
+    const history = guest.navigationHistory ?? this.legacyHistories.get(guest);
+    if (!history) throw new Error("browser guest history is unavailable");
+    return history;
+  }
 
   private async restoreGuestState(tab: ManagedTab, guest: GuestWebContents): Promise<boolean> {
+    if (!guest.navigationHistory && tab.legacyHistorySnapshot?.entries.length) {
+      const snapshot = tab.legacyHistorySnapshot;
+      try {
+        await this.guestHistory(guest).restore(snapshot);
+        if (tab.guest !== guest || tab.lifecycle === "closed") return false;
+        tab.cachedUrl = guest.getURL();
+        tab.cachedTitle = guest.getTitle();
+        return true;
+      } catch (error) {
+        this.warn(`browser tab legacy history restore failed tabId=${tab.tabId}`, error);
+        return false;
+      }
+    }
     const pageState = await this.residencyOptions.recoveryStore?.getPageState(tab.tabId);
     if (pageState && pageState.entries.length > 0) {
       const activePageState = pageState.entries[pageState.activeIndex];
@@ -3799,21 +4035,30 @@ export class BrowserGuestManager {
           this.log?.(
             `[browser-use] restore page-state start tabId=${tab.tabId} index=${pageState.activeIndex} entries=${JSON.stringify(pageState.entries.map((entry) => entry.url))}`,
           );
-          await guest.navigationHistory.restore({
+          await this.guestHistory(guest).restore({
             entries: pageState.entries.map((entry) => ({ ...entry })),
             index: pageState.activeIndex,
           });
           this.log?.(
-            `[browser-use] restore page-state complete tabId=${tab.tabId} url=${safeStr(() => guest.getURL(), "")} index=${safeStr(() => String(guest.navigationHistory.getActiveIndex()), "unknown")} entries=${safeStr(() => JSON.stringify(guest.navigationHistory.getAllEntries().map((entry) => entry.url)), "unknown")}`,
+            `[browser-use] restore page-state complete tabId=${tab.tabId} url=${safeStr(() => guest.getURL(), "")} index=${safeStr(() => String(this.guestHistory(guest).getActiveIndex()), "unknown")} entries=${safeStr(
+              () =>
+                JSON.stringify(
+                  this.guestHistory(guest)
+                    .getAllEntries()
+                    .map((entry) => entry.url),
+                ),
+              "unknown",
+            )}`,
           );
           return acceptRestoredPageState();
         } catch (error) {
           const restoreAppliedDespiteAbort =
+            Boolean(guest.navigationHistory) &&
             String(error).includes("ERR_ABORTED") &&
             safeBool(() => {
-              const actualEntries = guest.navigationHistory.getAllEntries();
+              const actualEntries = this.guestHistory(guest).getAllEntries();
               return (
-                guest.navigationHistory.getActiveIndex() === pageState.activeIndex &&
+                this.guestHistory(guest).getActiveIndex() === pageState.activeIndex &&
                 actualEntries.length === pageState.entries.length &&
                 actualEntries.every((entry, index) => entry.url === pageState.entries[index]?.url)
               );
@@ -3864,13 +4109,17 @@ export class BrowserGuestManager {
     tab.cachedTitle = safeStr(() => guest.getTitle(), tab.cachedTitle);
     await this.persistShell(tab);
     try {
-      const entries = guest.navigationHistory.getAllEntries().map((entry) => ({ ...entry }));
+      await this.legacyHistories.get(guest)?.refresh();
+      if (tab.guest !== guest || tab.lifecycle === "closed") return;
+      const entries = this.guestHistory(guest)
+        .getAllEntries()
+        .map((entry) => ({ ...entry }));
       if (entries.length === 0) return;
       const pageState: BrowserTabPageStateRecord = {
         schemaVersion: 1,
         tabId: tab.tabId,
         entries,
-        activeIndex: guest.navigationHistory.getActiveIndex(),
+        activeIndex: this.guestHistory(guest).getActiveIndex(),
         updatedAt: this.now(),
       };
       await this.residencyOptions.recoveryStore?.upsertPageState(pageState);
@@ -3942,6 +4191,17 @@ export class BrowserGuestManager {
   private setupActivityTracking(tab: ManagedTab, guest: GuestWebContents): void {
     tab.activityCleanup?.();
     if (!guest.on || !guest.removeListener) return;
+    const refreshLegacyHistory = () => {
+      if (tab.guest !== guest || this.guestRecoveryFlights.has(tab.tabId)) return;
+      const history = this.legacyHistories.get(guest);
+      if (history) {
+        void history
+          .refresh()
+          .catch((error) =>
+            this.warn(`browser tab history refresh failed tabId=${tab.tabId}`, error),
+          );
+      }
+    };
     const onLoadingStarted = () => {
       if (tab.guest !== guest) return;
       tab.loading = true;
@@ -3956,6 +4216,7 @@ export class BrowserGuestManager {
       }
       this.refreshRuntimeProtection(tab.tabId);
       void this.persistShell(tab);
+      refreshLegacyHistory();
     };
     const onAudioChanged = () => this.refreshRuntimeProtection(tab.tabId);
     const onMediaStarted = () => {
@@ -3969,6 +4230,10 @@ export class BrowserGuestManager {
       this.refreshRuntimeProtection(tab.tabId);
     };
     guest.on("did-start-loading", onLoadingStarted);
+    if (!guest.navigationHistory) {
+      guest.on("navigation-entry-committed", refreshLegacyHistory);
+      if (!tab.legacyHistorySnapshot) refreshLegacyHistory();
+    }
     guest.on("did-stop-loading", onLoadingStopped);
     guest.on("audio-state-changed", onAudioChanged);
     guest.on("media-started-playing", onMediaStarted);
@@ -3976,6 +4241,7 @@ export class BrowserGuestManager {
     tab.activityCleanup = () => {
       guest.removeListener?.("did-start-loading", onLoadingStarted);
       guest.removeListener?.("did-stop-loading", onLoadingStopped);
+      guest.removeListener?.("navigation-entry-committed", refreshLegacyHistory);
       guest.removeListener?.("audio-state-changed", onAudioChanged);
       guest.removeListener?.("media-started-playing", onMediaStarted);
       guest.removeListener?.("media-paused", onMediaPaused);

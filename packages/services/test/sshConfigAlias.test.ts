@@ -2,6 +2,9 @@ import { chmod, mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type * as FsPromises from "node:fs/promises";
+import type * as Os from "node:os";
+import type * as ChildProcess from "node:child_process";
 
 const originalHome = process.env["HOME"];
 const originalPath = process.env["PATH"];
@@ -13,6 +16,9 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  vi.doUnmock("node:fs/promises");
+  vi.doUnmock("node:os");
+  vi.doUnmock("node:child_process");
   if (originalHome == null) {
     delete process.env["HOME"];
   } else {
@@ -323,6 +329,100 @@ describe("sshConfigAlias fallback parser", () => {
         username: "include-user",
         source: includeFilePath,
       });
+    },
+    testTimeout,
+  );
+  it(
+    "缺少原生 glob 时保留嵌套、字符类、brace、home token 和去重语义",
+    async () => {
+      const homeDir = await createTempHome();
+      process.env["PATH"] = "";
+      vi.doMock("node:os", async (importOriginal) => ({
+        ...(await importOriginal<typeof Os>()),
+        homedir: () => homeDir,
+      }));
+      vi.doMock("node:fs/promises", async (importOriginal) => ({
+        ...(await importOriginal<typeof FsPromises>()),
+        glob: undefined,
+      }));
+      vi.doMock("node:child_process", async (importOriginal) => ({
+        ...(await importOriginal<typeof ChildProcess>()),
+        spawn: () => {
+          throw new Error("ssh unavailable in parser fixture");
+        },
+      }));
+      const includeDir = join(homeDir, ".ssh", "includes", "nested");
+      await mkdir(includeDir, { recursive: true });
+      const aliasesByFile = [
+        ["node-a1.conf", "class-match"],
+        ["brace-one.conf", "brace-one"],
+        ["brace-two.conf", "brace-two"],
+        ["home.conf", "home-match"],
+      ] as const;
+      for (const [filename, alias] of aliasesByFile) {
+        await writeFile(join(includeDir, filename), `Host ${alias}\n  HostName ${alias}.example\n`);
+      }
+      await writeFile(
+        join(homeDir, ".ssh", "config"),
+        [
+          "Include includes/*/node-?[12].conf",
+          "Include includes/nested/brace-{one,two}.conf",
+          "Include ~/.ssh/includes/nested/home.conf",
+          "Include %d/.ssh/includes/nested/home.conf",
+          "Include includes/missing/*.conf includes/nested",
+          "Host root-alias",
+          "  HostName root.example",
+        ].join("\n"),
+      );
+
+      const listAliases = await loadAliasParser();
+      const aliases = await listAliases();
+      expect(aliases.map((item) => item.alias).sort()).toEqual([
+        "brace-one",
+        "brace-two",
+        "class-match",
+        "home-match",
+        "root-alias",
+      ]);
+      expect(aliases.find((item) => item.alias === "class-match")?.source).toBe(
+        join(includeDir, "node-a1.conf"),
+      );
+    },
+    testTimeout,
+  );
+
+  it(
+    "存在原生 glob 时继续使用原生异步迭代",
+    async () => {
+      const homeDir = await createTempHome();
+      process.env["PATH"] = "";
+      const includePath = join(homeDir, ".ssh", "native.conf");
+      const nativeGlob = vi.fn(async function* (_pattern: string) {
+        yield includePath;
+      });
+      vi.doMock("node:os", async (importOriginal) => ({
+        ...(await importOriginal<typeof Os>()),
+        homedir: () => homeDir,
+      }));
+      vi.doMock("node:fs/promises", async (importOriginal) => ({
+        ...(await importOriginal<typeof FsPromises>()),
+        glob: nativeGlob,
+      }));
+      vi.doMock("node:child_process", async (importOriginal) => ({
+        ...(await importOriginal<typeof ChildProcess>()),
+        spawn: () => {
+          throw new Error("ssh unavailable in parser fixture");
+        },
+      }));
+      await writeFile(includePath, "Host native-alias\n  HostName native.example\n");
+      await writeFile(join(homeDir, ".ssh", "config"), "Include native*.conf\n");
+
+      const listAliases = await loadAliasParser();
+      expect(await listAliases()).toMatchObject([
+        { alias: "native-alias", host: "native.example" },
+      ]);
+      expect(nativeGlob).toHaveBeenCalledOnce();
+      expect(nativeGlob).toHaveBeenCalledWith(join(homeDir, ".ssh", "native*.conf"));
     },
     testTimeout,
   );

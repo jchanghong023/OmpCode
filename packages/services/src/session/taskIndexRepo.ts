@@ -1,7 +1,7 @@
 import { TaskGroupRepository } from "#src/task-groups/index.js";
 /* eslint-disable max-lines -- task 索引仓库集中维护 sqlite schema、查询和状态写入，迁移稳定后再按读写职责拆分。 */
 import { mkdir } from "node:fs/promises";
-import { createRequire } from "node:module";
+import { DatabaseSync, type SQLInputValue } from "@zcode/shared/sqlite-migrations";
 import { dirname, join } from "node:path";
 import {
   isRemoteWorkspaceIdentity,
@@ -26,9 +26,6 @@ import {
 } from "#src/project-storage/index.js";
 import { runTasksDatabaseMigrations } from "#src/session/tasksDatabase/migrations.js";
 
-const require = createRequire(import.meta.url);
-const { DatabaseSync } = require("node:sqlite") as typeof import("node:sqlite");
-
 function appendZCodeAgentIndexedProviderFilter(
   where: string[],
   args: Array<string | number>,
@@ -40,7 +37,6 @@ function appendZCodeAgentIndexedProviderFilter(
   args.push(provider);
 }
 type DatabaseSyncInstance = InstanceType<typeof DatabaseSync>;
-type SQLInputValue = import("node:sqlite").SQLInputValue;
 
 interface TaskIndexRow {
   cli_title?: string | null;

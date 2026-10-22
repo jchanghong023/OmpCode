@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseSync } from "./driver.js";
 
 export interface SqliteSchemaMigration {
   id: string;

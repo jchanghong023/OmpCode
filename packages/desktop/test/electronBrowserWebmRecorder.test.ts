@@ -118,6 +118,7 @@ let renderer: RendererScript = {};
 let loadFileError: Error | null = null;
 /** 打开后让输出文件的 write 失败，模拟磁盘写入中途出错。 */
 let failOutputWrites = false;
+const liveFrames = new Map<string, object>();
 
 // 只包装输出文件句柄的 write/close，其余 fs 行为保持真实，chunk 落盘仍写真实磁盘。
 vi.mock("node:fs/promises", async (importOriginal) => {
@@ -165,6 +166,9 @@ function createFakeWebContents(): FakeWebContents {
 }
 
 vi.mock("electron", () => ({
+  webFrameMain: {
+    fromId: (processId: number, routingId: number) => liveFrames.get(`${processId}:${routingId}`),
+  },
   BrowserWindow: class {
     webContents = createFakeWebContents();
     loadFile = vi.fn(async () => {
@@ -212,9 +216,8 @@ vi.mock("electron", () => ({
   },
 }));
 
-const { createElectronBrowserWebmRecorder } = await import(
-  "../src/main/browserView/electronBrowserWebmRecorder.js"
-);
+const { createElectronBrowserWebmRecorder } =
+  await import("../src/main/browserView/electronBrowserWebmRecorder.js");
 
 const tempRoots: string[] = [];
 
@@ -290,6 +293,7 @@ beforeEach(() => {
   renderer = {};
   loadFileError = null;
   failOutputWrites = false;
+  liveFrames.clear();
 });
 
 afterEach(async () => {
@@ -342,9 +346,9 @@ describe("createElectronBrowserWebmRecorder", () => {
     const root = await createTempRoot();
     renderer = { startedMimeType: "video/mp4;codecs=avc1" };
 
-    await expect(
-      startRecorder({ outputPath: join(root, "mime.webm") }),
-    ).rejects.toThrow(/unexpected MediaRecorder MIME type: video\/mp4;codecs=avc1/u);
+    await expect(startRecorder({ outputPath: join(root, "mime.webm") })).rejects.toThrow(
+      /unexpected MediaRecorder MIME type: video\/mp4;codecs=avc1/u,
+    );
 
     expect(windows.at(-1)?.isDestroyed()).toBe(true);
     expect(ports.at(-1)?.port1.closed).toBe(true);
@@ -476,6 +480,79 @@ describe("createElectronBrowserWebmRecorder", () => {
     expect(windows).toHaveLength(0);
   });
 
+  it("Electron 28 以 process/routing 身份录制，frame 移除或替换后拒绝再次授权", async () => {
+    const root = await createTempRoot();
+    const frame = { processId: 17, routingId: 23 };
+    liveFrames.set("17:23", frame);
+    const recorder = await startRecorder({ outputPath: join(root, "electron28.webm"), frame });
+    const handler = sessions.at(-1)?.handler;
+    const recorderMainFrame = windows.at(-1)?.webContents.mainFrame;
+    if (!handler || !recorderMainFrame) throw new Error("display media handler was not installed");
+    const ask = (): unknown => {
+      let granted: unknown;
+      handler(
+        { frame: recorderMainFrame, videoRequested: true, audioRequested: false },
+        (result) => {
+          granted = result;
+        },
+      );
+      return granted;
+    };
+
+    expect(ask()).toEqual({ video: frame });
+    liveFrames.delete("17:23");
+    expect(ask()).toEqual({});
+    liveFrames.set("17:23", { processId: 17, routingId: 23 });
+    expect(ask()).toEqual({});
+    await recorder.cancel();
+  });
+
+  it("Electron 28 不存在或已 disposed 的 frame 在创建 window 前被拒绝", async () => {
+    const root = await createTempRoot();
+    await expect(
+      startRecorder({
+        outputPath: join(root, "missing-frame.webm"),
+        frame: { processId: 17, routingId: 23 },
+      }),
+    ).rejects.toThrow(/target WebFrameMain is unavailable/u);
+    await expect(
+      startRecorder({
+        outputPath: join(root, "disposed-frame.webm"),
+        frame: {
+          get processId(): number {
+            throw new Error("Render frame was disposed");
+          },
+          routingId: 23,
+        },
+      }),
+    ).rejects.toThrow(/target WebFrameMain is unavailable/u);
+    expect(windows).toHaveLength(0);
+  });
+
+  it("Electron 28 frame 在录制期间 disposed 后拒绝授权而不泄漏属性异常", async () => {
+    const root = await createTempRoot();
+    let disposed = false;
+    const frame = {
+      get processId(): number {
+        if (disposed) throw new Error("Render frame was disposed");
+        return 17;
+      },
+      routingId: 23,
+    };
+    liveFrames.set("17:23", frame);
+    const recorder = await startRecorder({ outputPath: join(root, "disposed-later.webm"), frame });
+    const handler = sessions.at(-1)?.handler;
+    const recorderMainFrame = windows.at(-1)?.webContents.mainFrame;
+    if (!handler || !recorderMainFrame) throw new Error("display media handler was not installed");
+    disposed = true;
+    let granted: unknown;
+    handler({ frame: recorderMainFrame, videoRequested: true, audioRequested: false }, (result) => {
+      granted = result;
+    });
+    expect(granted).toEqual({});
+    await recorder.cancel();
+  });
+
   it("只把目标 guest frame 交给自己的 recorder 文档，其它 display media 请求一律拒绝", async () => {
     const root = await createTempRoot();
     const frame = targetFrame();
@@ -496,13 +573,21 @@ describe("createElectronBrowserWebmRecorder", () => {
       video: frame,
     });
     // 其它 renderer 冒用同一个 session、索要音频、或只声明非视频请求，都不得拿到 guest 画面。
-    expect(ask({ frame: { id: "someone-else" }, videoRequested: true, audioRequested: false })).toEqual({});
-    expect(ask({ frame: recorderMainFrame, videoRequested: true, audioRequested: true })).toEqual({});
-    expect(ask({ frame: recorderMainFrame, videoRequested: false, audioRequested: false })).toEqual({});
+    expect(
+      ask({ frame: { id: "someone-else" }, videoRequested: true, audioRequested: false }),
+    ).toEqual({});
+    expect(ask({ frame: recorderMainFrame, videoRequested: true, audioRequested: true })).toEqual(
+      {},
+    );
+    expect(ask({ frame: recorderMainFrame, videoRequested: false, audioRequested: false })).toEqual(
+      {},
+    );
 
     await recorder.cancel();
     // 回收之后即使 handler 仍被持有，也不再授予画面。
-    expect(ask({ frame: recorderMainFrame, videoRequested: true, audioRequested: false })).toEqual({});
+    expect(ask({ frame: recorderMainFrame, videoRequested: true, audioRequested: false })).toEqual(
+      {},
+    );
   });
 
   it("目标 frame 在录制期间销毁后不再授予画面", async () => {
@@ -556,4 +641,3 @@ describe("createElectronBrowserWebmRecorder", () => {
     });
   });
 });
-

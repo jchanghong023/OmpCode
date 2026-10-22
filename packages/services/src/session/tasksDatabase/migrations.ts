@@ -2,8 +2,11 @@ import { TASK_GROUP_ADMISSIONS_SQL } from "#src/task-groups/migration-v6.js";
 import { basename, dirname, join } from "node:path";
 import { createHash } from "node:crypto";
 import { databaseMigrationIdSchema, type DatabaseMigrationFacts } from "@zcode/shared";
-import type { DatabaseSync } from "node:sqlite";
-import { sqliteMigrations, type SqliteMigration } from "@zcode/shared/sqlite-migrations";
+import {
+  sqliteMigrations,
+  type DatabaseSync,
+  type SqliteMigration,
+} from "@zcode/shared/sqlite-migrations";
 import {
   AUTOMATION_SCHEMA,
   OFF_PEAK_SCHEMA,

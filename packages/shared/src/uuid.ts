@@ -5,7 +5,8 @@ function byteToHex(byte: number): string {
 /** 普通 main command 与 background wake 共用 UUID v7（48-bit 时间戳 + 随机位）。 */
 export function uuidv7(now: number = Date.now()): string {
   const bytes = new Uint8Array(16);
-  crypto.getRandomValues(bytes);
+  // Node-only 入口补齐 WebCrypto；UUID v7 必须使用安全随机源，不能降为 Math.random。
+  globalThis.crypto.getRandomValues(bytes);
   const ts = BigInt(now);
   bytes[0] = Number((ts >> 40n) & 0xffn);
   bytes[1] = Number((ts >> 32n) & 0xffn);

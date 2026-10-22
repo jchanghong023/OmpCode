@@ -2,7 +2,7 @@ import { discoverBackupVolumes } from "./backup-volumes.js";
 import { randomUUID } from "node:crypto";
 import { mkdir, readdir, readFile, rm, statfs, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import { DatabaseSync } from "./driver.js";
 import type { MigrationBackup, MigrationOptions, SqliteMigration } from "./contract.js";
 import { identifier, insertSnapshot, snapshotTable, type TableSnapshot } from "./table-snapshot.js";
 

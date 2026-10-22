@@ -1,5 +1,5 @@
 import { OFF_PEAK_TERMINAL_STATUSES } from "@zcode/shared";
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseSync } from "@zcode/shared/sqlite-migrations";
 
 const terminalStatuses = OFF_PEAK_TERMINAL_STATUSES.map((status) => `'${status}'`).join(", ");
 

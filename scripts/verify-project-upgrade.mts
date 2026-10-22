@@ -1,5 +1,5 @@
 import { strict as assert } from "node:assert";
-import { DatabaseSync } from "node:sqlite";
+import { DatabaseSync } from "../packages/shared/src/sqlite-migrations/index.js";
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";

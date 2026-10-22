@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { DatabaseSync, SQLInputValue } from "node:sqlite";
+import type { DatabaseSync, SQLInputValue } from "./driver.js";
 import type { MigrationBackupTable } from "./contract.js";
 
 export interface TableSnapshot extends MigrationBackupTable {

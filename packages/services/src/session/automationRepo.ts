@@ -6,7 +6,7 @@ import {
 /* eslint-disable max-lines -- automation 仓库集中维护 automations / automation_runs 的 sqlite schema、
    调度状态机写入与运行历史，稳定后再按读写职责拆分。 */
 import { mkdir } from "node:fs/promises";
-import { createRequire } from "node:module";
+import { DatabaseSync } from "@zcode/shared/sqlite-migrations";
 import { dirname } from "node:path";
 import { randomUUID } from "node:crypto";
 import {
@@ -31,8 +31,6 @@ import {
 import { getTasksIndexDatabasePath } from "#src/paths.js";
 import { runTasksDatabaseMigrations } from "#src/session/tasksDatabase/migrations.js";
 
-const require = createRequire(import.meta.url);
-const { DatabaseSync } = require("node:sqlite") as typeof import("node:sqlite");
 type DatabaseSyncInstance = InstanceType<typeof DatabaseSync>;
 
 /** 派发失败退避常量。 */
