@@ -400,3 +400,41 @@ flowchart LR
 - 每项需求明确目标、产品规则、状态所有者、接口边界和验收场景。
 - 涉及已有模块时，复用并更新对应需求文档，在本文件引用，避免形成相互冲突的两份定义。
 - 实现和验证状态以实际结果记录；未运行的验证不得标记为通过。
+
+<a id="fork-004-centos7-desktop-release"></a>
+
+## 10. FORK-004：CentOS 7 桌面发布迁移
+
+### 标识与需求依据
+
+本节按本次任务要求保留 `FORK-004` 标识，与第 7 节既有的「FORK-004：OmpCode 产品身份、独立数据与 profile 隔离」发生编号冲突；二者是不同需求，不替代、不合并，也不重编号既有 FORK-004 或 FORK-005。引用本节时使用唯一锚点 [`fork-004-centos7-desktop-release`](#fork-004-centos7-desktop-release)，避免仅用编号区分。
+
+详细合同见 [CentOS 7 桌面发布迁移规范](docs/centos7-desktop-release.md)。旧 `main:docs/requirements/centos7-release.md` 仅作为迁移需求依据；与本节及新规范冲突的旧 UI、离线策略、内嵌 Agent 和平台基线不沿用。
+
+### 目标
+
+在 `dev-centos7` 以当前上游派生代码重新实现 CentOS 7 x64 桌面发行，不 merge、cherry-pick 或 rebase 旧 `main`。目标宿主为 Linux 3.10／glibc 2.17，CentOS 构建采用 Electron `28.3.3`（内嵌 Node `18.18.2`），Windows 基线仍为 Electron `41.0.3`。两平台复用既有界面、协议与功能，只迁移必要的底层兼容、启动和发行装配。
+
+### 范围与边界
+
+- 唯一 CentOS 分发格式为可重定位的自包含 ZIP 及 SHA256 校验文件；非 root 用户无需联网、安装宿主包或修改既有 OMP 即可使用。产物不包含 PRoot、Ubuntu userspace 或替换宿主 glibc 的方案，不恢复旧 RPM／安装器路径。
+- Electron 及 Node 18 兼容依赖的精确版本切换只在 CentOS 临时构建工作区进行，不持久改写根 manifest、lockfile 或 Windows Electron `41.0.3` 基线。复用现有构建与发布约定，兼容清单、资产来源与构建期检查由详细规范维护。
+- 提供真实等价的 Electron 28／Node 18 API 兼容实现，包括文件附件路径、浏览器历史、`node:sqlite` 和 `fs/promises.glob` 等差异；不通过删除功能、吞错或空实现获得兼容。
+- 打包 glibc 2.17 兼容原生模块、搜索工具、所需 C++／GUI 库、可再分发中文字体及许可；保持 `app.asar`／`app.asar.unpacked`／`resources/tools` 的既有资源职责，保留符号链接与可执行权限。不分发可选 `sshcrypto.node`，SSH 使用 `ssh2` 与 Electron 内置 crypto；高于目标 GLIBC 的二进制、缺失必需资源和损坏归档在构建期阻断。
+- OMP 继续遵循 FORK-003：由 Host 启动外部 `omp app-server --stdio`，app-server 内同进程 AgentSession 执行业务；不恢复旧随包 OMP 适配器、旧 Agent 回退或会话子进程架构。启动器对所有继承的 `OMP_*` 及 `PI_CONFIG_DIR` 原样透传，不解析或改写 `OMP_OFFLINE`，离线语义完全由 OMP 自身解析。
+- 启动器负责安装目录解析、进程局部库路径、必要的私有 XDG 环境、参数／profile 转发及直接启动 Electron；帮助先于资源检查和目录创建。不恢复 `--home`／`--offline`、数据迁移或根目录重定向。默认软件渲染及 `--no-sandbox` 的安全限制须明确记录，仍要求可用图形会话。
+- P0 输入法合同保留旧规范的完整 IBus 算法：按当前 UID 与初始 DISPLAY 查找，NUL 分隔 `/proc/<pid>/environ` 只作数据读取；仅本地 Unix 总线，经 `gdbus --session` 查询 IBus owner PID，每次限时 2 秒。保留已验证调用者总线，否则仅选唯一有效候选；显式地址、歧义、当前显示已有或归属未知的守护进程不得被替换。自动启动须先 `flock` 等待最多 5 秒并重查，创建总线最多 3 秒、启动最多 5 秒、就绪窗口 5 秒；保留其他 DISPLAY 的进程，不使用 `--replace`／`--xim`，不 `eval` 总线输出。选定环境仅传给应用子进程，原 HOME／XDG 下先发现地址再隔离；缺工具或失败具体告警后继续 Electron，只清理本次失败的新建总线，不更改父 shell、持久配置或已有守护进程。
+- 不修改 UI，不删除或隐藏入口，不迁移默认语言、不增加离线门控／网络策略、不改变性能标记、shm 活动根、流式输出或动画。既有身份、数据根和 profile 合同保持原状，不借发行迁移扩大改造范围。
+- 按最新执行要求，本轮只实现代码，不运行任何测试、门禁或格式化；Windows 共享兼容 UT 可补实现但不执行，原先本地每片四项检查的执行要求在本轮不再适用。父级仅可进行必要的 Windows 静态检查与构建 smoke。不新增 CentOS 7 相关 E2E 或其他 CentOS 专项测试，不执行 Linux／WSL／VM／Citrix 运行，不触发、等待或验证发布 workflow；目标平台由用户在内网测试，未取得实际结果前保持未验收。构建期 ELF、原生资产、归档及校验和约束属于打包完整性检查，不表示本轮已经执行。
+- 迁移旧 main 的 Windows 与 CentOS 7 两条 GitHub 构建流水线；两者只构建、打包及发布，不运行 UT、E2E、类型检查、Lint 或运行时 SSH 握手测试。流水线适配当前分支和 FORK-003 资产合同，不照搬旧路径。
+
+### 验收标准
+
+1. 新规范覆盖依赖精确版本、兼容 API、启动器、P0 IBus、外部 OMP、原生资产、ZIP 布局、构建与发布职责，并逐项区分继承要求和本轮排除项。
+2. 后续实现按上述边界完成真实兼容与装配，根 Electron `41.0.3` 及 Windows 基线不被 CentOS 构建降级；无旧 Agent 适配器或平台专属 UI 分叉。
+3. 双平台流水线仅打包、不测试；CentOS 发行流程仅发布满足目标 GLIBC、必需资产、权限／链接、归档和 SHA256 完整性约束的 ZIP；任何未执行的构建或发布检查不得写成通过。
+4. Windows 可执行的检查如实记录命令、结果与范围；Windows 检查、历史主机记录及本次规范编写均不能证明 CentOS 包、中文输入或目标宿主已验收。不以取消 Linux 测试要求冒充目标平台验证成功。
+
+### 当前状态
+
+本轮仅补充需求登记和详细规范，尚未完成迁移实现、构建发行或目标宿主验证；未运行门禁、测试、格式化或发布 workflow。旧 main 的实现与历史验证仅供需求参考，不计为本次完成证据。
