@@ -15,7 +15,7 @@
  * 整段进 JavaScript。
  */
 
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseSync } from "@zcode/shared/sqlite-migrations";
 
 /** 像整数的段超过这个数的路径不取（2^6 = 64 个候选已远超任何看板 spec 的需要）。 */
 const MAX_INDEX_LIKE_SEGMENTS = 6;

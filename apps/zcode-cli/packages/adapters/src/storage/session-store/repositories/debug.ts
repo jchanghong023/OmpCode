@@ -1,4 +1,4 @@
-import type { DatabaseSync, SQLInputValue } from "node:sqlite";
+import type { DatabaseSync, SQLInputValue } from "@zcode/shared/sqlite-migrations";
 import type { SessionId } from "@zcode/contracts";
 import type { SessionStoreDebugCounts } from "../options.js";
 

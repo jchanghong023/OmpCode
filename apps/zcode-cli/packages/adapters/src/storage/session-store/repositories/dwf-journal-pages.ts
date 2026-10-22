@@ -14,7 +14,7 @@
  * 连同它可能 1 MiB 的 item 一个字节都不读。
  */
 
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseSync } from "@zcode/shared/sqlite-migrations";
 import type { StoredEvent } from "@zcode/dynamic-workflow";
 import { decodeEvent } from "./dwf-journal-codecs.js";
 

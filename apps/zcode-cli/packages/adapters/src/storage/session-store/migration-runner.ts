@@ -8,7 +8,7 @@ import {
   type DatabaseMigrationFacts,
 } from "@zcode/shared";
 import { createHash } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseSync } from "@zcode/shared/sqlite-migrations";
 import {
   ensureSqliteSchemaMigrationTable,
   SqliteSchemaMigrationChecksumError,

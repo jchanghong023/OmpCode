@@ -2,7 +2,7 @@
 // 语义：admitted（已接受）→ promoted（与 user message/parts 同事务落 transcript）
 // / cancelled / discarded / failed。promotion 的原子性是硬要求：杜绝
 // 「queue 已消费但 transcript 无 user message」的孤儿窗口（旧 drain 跨 store 无事务）。
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseSync } from "@zcode/shared/sqlite-migrations";
 import type {
   MessageInfo,
   MessagePart,

@@ -9,7 +9,7 @@
  * 键，所以「没读」与「读到 NULL」在行上同形，解码器不必知道这次读选了哪些列。
  */
 
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseSync } from "@zcode/shared/sqlite-migrations";
 import type {
   ActorRecord,
   GetNodeOptions,

@@ -3,7 +3,7 @@
 // ============================================================
 
 import { randomUUID } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseSync } from "@zcode/shared/sqlite-migrations";
 import type { SessionId, SessionGoal, GoalStatus } from "@zcode/contracts";
 
 interface TargetRow {
