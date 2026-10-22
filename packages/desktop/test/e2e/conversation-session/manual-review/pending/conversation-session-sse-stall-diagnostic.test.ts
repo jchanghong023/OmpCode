@@ -1,3 +1,6 @@
+import { writeFile } from "node:fs/promises";
+import { resolve } from "node:path";
+import { TID_CHAT_ERROR_BANNER, TID_CHAT_ERROR_DETAILS_BUTTON } from "@zcode/shared/test-ids";
 import { clearAppData } from "../../../helpers/desktop-app.js";
 import {
   getUpstreamRequestEvidence,
@@ -143,16 +146,65 @@ describe("SSE event 中途停发的真实 Desktop E2E diagnostic", () => {
 async function runStallScenario(scenario: StallScenario): Promise<void> {
   await sendV4Prompt(`${scenario.marker}: observe the provider stream without adding assumptions.`);
   const stallRequestIndex = scenario.stallRequestIndex ?? 0;
-  await browser.waitUntil(
-    async () => {
-      const evidence = await getUpstreamRequestEvidence({ includes: [scenario.marker] });
-      return evidence[stallRequestIndex]?.fixtureId === scenario.firstFixtureId;
-    },
-    {
-      timeout: 30_000,
-      timeoutMsg: `${scenario.id} 目标 stall 请求没有进入 replay server`,
-    },
-  );
+  await browser
+    .waitUntil(
+      async () => {
+        const evidence = await getUpstreamRequestEvidence({ includes: [scenario.marker] });
+        return evidence[stallRequestIndex]?.fixtureId === scenario.firstFixtureId;
+      },
+      {
+        timeout: 30_000,
+        timeoutMsg: `${scenario.id} 目标 stall 请求没有进入 replay server`,
+      },
+    )
+    .catch(async (error: unknown) => {
+      // Preserve the actual first-send failure before Electron teardown discards
+      // its bounded ACK buffer and pane-local error detail. Never resubmit input.
+      try {
+        const admission = await browser.execute(
+          (bannerId, detailsId) => {
+            const banner = document.querySelector<HTMLElement>(`[data-testid="${bannerId}"]`);
+            const details = banner?.querySelector<HTMLButtonElement>(
+              `[data-testid="${detailsId}"]`,
+            );
+            const commandAcks =
+              (window as Window & { __zcodeV4CommandAcksE2E?: unknown[] })
+                .__zcodeV4CommandAcksE2E ?? [];
+            const failure = {
+              commandAcks: commandAcks.slice(-40),
+              errorCode: banner?.dataset.errorCode ?? null,
+              errorMessage: banner?.textContent ?? null,
+            };
+            details?.click();
+            return failure;
+          },
+          TID_CHAT_ERROR_BANNER,
+          TID_CHAT_ERROR_DETAILS_BUTTON,
+        );
+        const errorDetail = await browser.execute(() =>
+          Array.from(document.querySelectorAll('[role="dialog"] pre'))
+            .map((element) => element.textContent)
+            .join("\n"),
+        );
+        const diagnostic = {
+          case: scenario.id,
+          ...admission,
+          errorDetail,
+          pane: await getV4PaneSnapshot(),
+        };
+        console.error(`[sse-stall-admission-failure] ${JSON.stringify(diagnostic)}`);
+        const artifactDir = process.env.ZCODE_E2E_ARTIFACT_DIR;
+        if (artifactDir) {
+          await writeFile(
+            resolve(artifactDir, `${scenario.marker}-admission-failure.json`),
+            JSON.stringify(diagnostic, null, 2),
+          );
+        }
+      } catch (diagnosticError) {
+        console.error("[sse-stall-admission-failure] evidence capture failed", diagnosticError);
+      }
+      throw error;
+    });
 
   if (scenario.cutoffMarker === "E2E_SSE_STALL_TEXT_PARTIAL") {
     // 正文 cutoff 必须先真实投影到 live UI，不能只凭 fixture 声称越过 visible boundary。

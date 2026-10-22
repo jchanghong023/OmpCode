@@ -374,8 +374,13 @@ describe("全局工作流中枢 E2E", () => {
     );
     const order = await browser.execute(
       (globalTid: string, projectTid: string) => {
-        const globalEl = document.querySelector<HTMLElement>(`[data-testid="${globalTid}"]`);
-        const projectEl = document.querySelector<HTMLElement>(`[data-testid="${projectTid}"]`);
+        // Windows 项目路径含反斜杠，作为 CSS 属性值前必须转义，否则已存在的分组也会查不到。
+        const globalEl = document.querySelector<HTMLElement>(
+          `[data-testid="${CSS.escape(globalTid)}"]`,
+        );
+        const projectEl = document.querySelector<HTMLElement>(
+          `[data-testid="${CSS.escape(projectTid)}"]`,
+        );
         if (!globalEl || !projectEl) return null;
         // Node.DOCUMENT_POSITION_FOLLOWING = 4：project 在 global 之后。
         return (globalEl.compareDocumentPosition(projectEl) & 4) !== 0
@@ -1222,9 +1227,20 @@ describe("直接启动 E2E", () => {
     expect((await readTestIdText(TID_WORKFLOW_DETAIL)) ?? "").toContain(LAUNCH_SAVE_NAME);
 
     // 4) 在中枢把它删掉：中枢刷新会作废卡片的读缓存，这次 run 不再「已保存」。
-    await clickTestIdByWebDriver(TID_WORKFLOW_DETAIL_MENU, {
-      timeoutMsg: "详情页没有「更多操作」菜单",
-    });
+    // 失败现场在菜单点击后又创建了 direct-launch-save 会话，而非打开菜单。
+    // 直接定位并聚焦可见 trigger，再走 Radix 的真实键盘入口，避免页面切换时指针误点「运行」。
+    await browser.waitUntil(
+      async () =>
+        browser.execute((tid) => {
+          const trigger = Array.from(document.querySelectorAll<HTMLButtonElement>("button")).find(
+            (item) => item.dataset.testid === tid && item.checkVisibility() && !item.disabled,
+          );
+          trigger?.focus();
+          return trigger !== undefined && document.activeElement === trigger;
+        }, TID_WORKFLOW_DETAIL_MENU),
+      { timeout: 10000, timeoutMsg: "详情页没有可聚焦的「更多操作」菜单" },
+    );
+    await browser.keys("ArrowDown");
     await clickTestIdByDom(testId(TID_WORKFLOW_ACTION_DELETE, LAUNCH_SAVE_NAME), {
       timeoutMsg: "详情页菜单没有「删除工作流」项",
     });

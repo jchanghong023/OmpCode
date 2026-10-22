@@ -9,9 +9,12 @@ import { dirname, join, resolve } from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { spawnCancellableStep, startStepExecution } from "./e2e-step-process.mjs";
+import { loadE2ELocalEnv } from "./e2e-local-env.mjs";
 import {
+  FORK_DEFERRED_E2E_SPECS,
   hasRequiredSshE2EEnvironment,
   isSshFormalSpec,
+  isTemporarilyExcludedFormalSpec,
 } from "./e2e-formal-spec-selection.mjs";
 
 const RUNNER_SHARD_ARG_PREFIX = "--shards=";
@@ -110,6 +113,8 @@ export function listDefaultFormalE2ESpecs(desktopDir, env = process.env) {
         entry.isFile() &&
         entry.name.endsWith(".test.ts") &&
         relativePath !== "upstream-provider.test.ts" &&
+        !isTemporarilyExcludedFormalSpec(`./test/e2e/${relativePath}`) &&
+        !FORK_DEFERRED_E2E_SPECS.includes(`./test/e2e/${relativePath}`) &&
         (includeSshSpecs || !isSshFormalSpec(`./test/e2e/${relativePath}`))
       ) {
         specs.push(`./test/e2e/${relativePath}`);
@@ -117,6 +122,9 @@ export function listDefaultFormalE2ESpecs(desktopDir, env = process.env) {
     }
   };
   visit(e2eDir);
+  if (env.ZCODE_AGENT_SERVER_COMMAND?.trim()) {
+    specs.push("./test/e2e/omp-app-server.e2e.ts");
+  }
   return specs;
 }
 
@@ -220,14 +228,18 @@ export function createWindowsE2EShardPlan({
           cwd: repoRoot,
           env: buildEnv,
         },
-        {
-          id: "build-agent",
-          kind: "build",
-          command: process.execPath,
-          args: [join(repoRoot, "scripts/build-desktop-agent-cli.mjs")],
-          cwd: repoRoot,
-          env: buildEnv,
-        },
+        ...(env.ZCODE_AGENT_SERVER_COMMAND?.trim()
+          ? []
+          : [
+              {
+                id: "build-agent",
+                kind: "build",
+                command: process.execPath,
+                args: [join(repoRoot, "scripts/build-desktop-agent-cli.mjs")],
+                cwd: repoRoot,
+                env: buildEnv,
+              },
+            ]),
       ]
     : [];
 
@@ -339,12 +351,15 @@ export async function executeWindowsE2EShardPlan(
   const startedAtMs = now();
   const activeExecutions = new Set();
   const terminationRequestedExecutions = new WeakSet();
+  const cleanupBarriers = [];
+  const cleanupErrors = [];
+  const failurePrefix = `ZCODE_E2E_FAILURE_${randomBytes(16).toString("hex")}:`;
   let interruptedBySignal;
+  let firstFailure;
 
-  const terminateActiveExecutions = (excludedExecution) => {
+  const terminateActiveExecutions = () => {
     for (const execution of activeExecutions) {
       if (
-        execution === excludedExecution ||
         terminationRequestedExecutions.has(execution) ||
         typeof execution.terminate !== "function"
       ) {
@@ -352,25 +367,76 @@ export async function executeWindowsE2EShardPlan(
       }
       terminationRequestedExecutions.add(execution);
       try {
-        execution.terminate();
-      } catch {
-        // 等待对应 result 进入 close/error 终态，不能因清理调用失败提前跳出。
+        cleanupBarriers.push(
+          Promise.resolve(execution.terminate()).catch((error) => {
+            cleanupErrors.push(error instanceof Error ? error.message : String(error));
+          }),
+        );
+      } catch (error) {
+        cleanupErrors.push(error instanceof Error ? error.message : String(error));
       }
     }
   };
 
-  const runTrackedStep = (step, { terminatePeersOnStartFailure = false } = {}) => {
-    const execution = startStepExecution(runStep, step);
+  const recordFailure = (step, payload) => {
+    if (firstFailure) return;
+    firstFailure = {
+      stepId: step.id,
+      ...(step.shardId ? { shardId: step.shardId } : {}),
+      ...payload,
+    };
+    console.error(`[e2e-shards] ${payload.title}: ${payload.error}`);
+    // 发出失败通知的 worker 也必须终止，不能等待它的截图、after hook 或报告。
+    terminateActiveExecutions();
+  };
+
+  const runTrackedStep = async (step) => {
+    if (firstFailure || interruptedBySignal) {
+      return { exitCode: 1, cancelled: true, error: "cancelled before start" };
+    }
+    let reportedFailure;
+    const execution = startStepExecution(runStep, {
+      ...step,
+      env: { ...step.env, ZCODE_E2E_FAIL_FAST_PREFIX: failurePrefix },
+      onFailure: (payload) => {
+        reportedFailure ??= payload;
+        recordFailure(step, payload);
+      },
+    });
     activeExecutions.add(execution);
-    const result = execution.result
-      .then((stepResult) => {
-        if (terminatePeersOnStartFailure && stepResult.error) {
-          terminateActiveExecutions(execution);
+    // 自定义启动器可能在返回 execution 前同步通知失败。
+    if (firstFailure || interruptedBySignal) terminateActiveExecutions();
+    try {
+      let result = await execution.result;
+      const cancelled = terminationRequestedExecutions.has(execution);
+      if (reportedFailure) {
+        result = { ...result, exitCode: result.exitCode || 1, error: reportedFailure.error };
+      } else if (!firstFailure && !interruptedBySignal) {
+        if (result.error || result.signal || result.exitCode !== 0) {
+          recordFailure(step, {
+            kind: step.kind === "build" ? "prepare" : "runner",
+            title: step.shardId ? `shard ${step.shardId}` : step.id,
+            error: result.error
+              ? `failed to start: ${result.error}`
+              : result.signal
+                ? `terminated by signal ${result.signal}`
+                : `exited with code ${result.exitCode}`,
+          });
+        } else if (step.kind === "child" && !summaryExists(step.summaryPath)) {
+          // 零退出但没有 summary 不是成功；立即取消尚在运行的分片。
+          result = { exitCode: 1, error: `missing shard summary: ${step.summaryPath}` };
+          recordFailure(step, {
+            kind: "runner",
+            title: `shard ${step.shardId}`,
+            error: result.error,
+          });
         }
-        return stepResult;
-      })
-      .finally(() => activeExecutions.delete(execution));
-    return result;
+      }
+      return { ...result, ...(cancelled ? { cancelled: true } : {}) };
+    } finally {
+      // 已完成的 shard 仍拥有其 HOME 下的孤儿；后续 peer 首错时也必须回收。
+      if (step.kind !== "child") activeExecutions.delete(execution);
+    }
   };
 
   const signalHandlers = new Map(
@@ -386,35 +452,19 @@ export async function executeWindowsE2EShardPlan(
 
   try {
     for (const buildStep of plan.buildSteps) {
-      const result = await runTrackedStep(buildStep);
-      if (interruptedBySignal) {
-        throw new Error(`parent received ${interruptedBySignal} during ${buildStep.id}`);
-      }
-      if (result.error) {
-        throw new Error(`${buildStep.id} failed to start: ${result.error}`);
-      }
-      if (result.exitCode !== 0) {
-        throw new Error(`${buildStep.id} exited with code ${result.exitCode}`);
-      }
+      await runTrackedStep(buildStep);
+      if (firstFailure || interruptedBySignal) break;
     }
 
-    // 每项内部吸收 reject，保证所有已启动 shard 都进入 close/error 终态后才写 manifest。
+    // 各 result 只等进程关闭，首错由同步通知或单个退出结果立即触发，不能等 Promise.all。
     const childResults = await Promise.all(
       plan.children.map(async (child) => ({
         child,
-        result: await runTrackedStep(child, { terminatePeersOnStartFailure: true }),
+        result: await runTrackedStep(child),
       })),
     );
-    for (const childResult of childResults) {
-      if (childResult.result.exitCode === 0 && !summaryExists(childResult.child.summaryPath)) {
-        // 修复原因：onPrepare 的 unref timer 曾让 shard 在未运行任何 spec 时静默退出 0；
-        // summary 是执行覆盖的权威证据，缺失时必须让父 runner 失败。
-        childResult.result = {
-          exitCode: 1,
-          error: `missing shard summary: ${childResult.child.summaryPath}`,
-        };
-      }
-    }
+    // 首错通知与取消已即时发出；只等自有进程回收，不等 afterAll/报告。
+    await Promise.all(cleanupBarriers);
     const finishedAtMs = now();
     const manifest = {
       runId: plan.runId,
@@ -422,12 +472,15 @@ export async function executeWindowsE2EShardPlan(
       distributionKind: plan.distributionKind,
       wallDurationMs: finishedAtMs - startedAtMs,
       manifestPath: plan.manifestPath,
+      ...(firstFailure ? { firstFailure } : {}),
+      ...(cleanupErrors.length ? { cleanupErrors } : {}),
       ...(interruptedBySignal ? { interruptedBySignal } : {}),
       children: childResults.map(({ child, result }) => ({
         shardId: child.shardId,
         exitCode: result.exitCode,
         ...(result.signal ? { signal: result.signal } : {}),
         ...(result.error ? { error: result.error } : {}),
+        ...(result.cancelled ? { cancelled: true } : {}),
         artifactDir: child.artifactDir,
         summaryPath: child.summaryPath,
         ...(child.specs ? { specs: child.specs } : {}),
@@ -438,17 +491,11 @@ export async function executeWindowsE2EShardPlan(
     await writeManifest(plan.manifestPath, manifest);
     printManifest(manifest);
 
-    const failures = manifest.children.filter(
-      (child) => child.exitCode !== 0 || child.error || child.signal,
-    );
-    if (interruptedBySignal || failures.length > 0) {
-      const failureMessages = failures.map((child) => {
-        if (child.error) return `shard ${child.shardId} failed to start: ${child.error}`;
-        if (child.signal) return `shard ${child.shardId} terminated by signal ${child.signal}`;
-        return `shard ${child.shardId} exited with code ${child.exitCode}`;
-      });
-      if (interruptedBySignal) failureMessages.unshift(`parent received ${interruptedBySignal}`);
-      throw new WindowsE2EShardRunError(failureMessages.join("; "), manifest);
+    if (firstFailure || interruptedBySignal) {
+      const message = firstFailure
+        ? `${firstFailure.title} ${firstFailure.error}`
+        : `parent received ${interruptedBySignal}`;
+      throw new WindowsE2EShardRunError(message, manifest);
     }
 
     return manifest;
@@ -464,6 +511,10 @@ export async function runWindowsE2EShards({
   platform = process.platform,
   repoRoot = resolve(desktopDir, "../.."),
 } = {}) {
+  // 修复原因：父级必须先采用与 WDIO 相同的本地环境优先级，再发现分片和选择共享构建，
+  // 否则仅在 env 文件配置的 OMP 专项会被配平列表静默遗漏。
+  env = { ...env };
+  loadE2ELocalEnv({ desktopDir, repoRoot, env });
   const shardTotal = resolveWindowsE2EShardTotal({ args, env, platform });
   const useHistoricalWeights =
     shardTotal > 1 &&

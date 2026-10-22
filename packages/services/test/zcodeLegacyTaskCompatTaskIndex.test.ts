@@ -241,6 +241,9 @@ function createAgentMock() {
     };
   };
   const agent: IZCodeAgentService = {
+    configureOmpSession: vi.fn(async () => {
+      throw new Error("OMP configuration is outside this task-index fixture");
+    }),
     reconcileSessionsIndexV4: vi.fn(async ({ sessionIds }) => ({
       sessions: sessionIds.map((sessionId) => {
         const snapshot = snapshots.get(sessionId);

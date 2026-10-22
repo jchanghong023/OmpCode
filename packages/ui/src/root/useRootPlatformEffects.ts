@@ -16,6 +16,10 @@ import { matchesPrimaryShortcut } from "@/lib/keyboardShortcuts.js";
 import { isShortcutRecordingActive } from "@/shortcuts/bindings.js";
 import { isRendererReloadNavigation } from "@/lib/rendererNavigation.js";
 import {
+  readPersistedPaneSession,
+  shouldRestorePersistedPaneSession,
+} from "@/v4/usePaneSessionPersistence.js";
+import {
   useWebRemoteControlWorkspaceSync,
   shouldPublishCompleteWorkspaceSnapshot,
 } from "@/root/rootPlatformWorkspaceSync.js";
@@ -151,11 +155,33 @@ export function useRootPlatformEffects({
         useZCodeSessionStore
           .getState()
           .setActiveTaskId(initialWorkspaceAbsPath, initialTaskId, initialWorkspaceIdentity);
-      } else if (draftIntent || !isRendererReloadNavigation()) {
-        // 修复原因：main 注入 initial workspace 只表达工作区入口；没有显式 taskId
-        // 的 app 冷启动必须进入草稿，不能让 renderer-local last-session/group/pane
-        // 抢回历史会话；同一 renderer reload 则保留当前 session 续流资格。
-        startDraftInWorkspace(initialWorkspaceAbsPath, initialWorkspaceIdentity, draftIntent);
+      } else {
+        const workspaceKey = initialWorkspaceIdentity?.trim() || initialWorkspaceAbsPath;
+        const workspace = useZCodeSessionStore
+          .getState()
+          .getWorkspaceState(initialWorkspaceAbsPath, initialWorkspaceIdentity);
+        const rendererReload = isRendererReloadNavigation();
+        const restoreOnStartup = tabs.some(
+          (tab) =>
+            isWorkspaceTab(tab) &&
+            (tab.workspaceIdentity?.trim() || tab.workspacePath) === workspaceKey &&
+            tab.restorePaneSession === true,
+        );
+        const hasSessionToRestore =
+          (isDesktop === true && rendererReload && workspace.activeTaskId !== null) ||
+          (shouldRestorePersistedPaneSession({
+            activeSessionId: workspace.activeTaskId,
+            draftFocusVersion: workspace.draftFocusVersion,
+            enabled: isDesktop === true,
+            rendererReload,
+            restoreOnStartup,
+          }) &&
+            Boolean(readPersistedPaneSession(workspaceKey)));
+        // 缓存项目归属不是显式新任务意图；抢先 startDraft 会提升 draftFocusVersion，
+        // 使 Layout 拒绝恢复并清除原会话。只让显式草稿覆盖恢复，无目标时仍恢复项目草稿。
+        if (initialTaskDraft || !hasSessionToRestore) {
+          startDraftInWorkspace(initialWorkspaceAbsPath, initialWorkspaceIdentity, draftIntent);
+        }
       }
     }
     // Dock 最近项目会通过 initialWorkspaceAbsPath 直达工作区。
@@ -173,6 +199,8 @@ export function useRootPlatformEffects({
     initialWorkspaceAbsPath,
     initialWorkspaceIdentity,
     initialWorkspacePurpose,
+    isDesktop,
+    tabs,
     setIsBootstrappingInitialWorkspace,
     startDraftInWorkspace,
   ]);

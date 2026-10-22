@@ -32,6 +32,11 @@ import {
   V4_DRAFT_SCOPE_ROOT,
 } from "@/v4/composer/composerDraftStore.js";
 import {
+  readPersistedPaneSession,
+  shouldRestorePersistedPaneSession,
+} from "@/v4/usePaneSessionPersistence.js";
+import { isRendererReloadNavigation } from "@/lib/rendererNavigation.js";
+import {
   useDynamicWorkflowAvailabilityLoader,
   useDynamicWorkflowUserModeSync,
 } from "@/hooks/useDynamicWorkflowAvailability.js";
@@ -547,7 +552,6 @@ function RootInner({
         });
       } finally {
         if (!disposed) {
-          setProviderFamilyDomainMigrationComplete(true);
           try {
             await refreshAppSettings();
             await refreshProviderState();
@@ -556,6 +560,9 @@ function RootInner({
               error: refreshError,
             });
           }
+          // 原因：一次性登录判定不能早于设置刷新，否则迟到的有效 domain 无法纠正登录态，
+          // workspace/pane 恢复会一直被关在门外。刷新后仅由仍有效的启动代次发布完成。
+          if (!disposed) setProviderFamilyDomainMigrationComplete(true);
         }
       }
     })();
@@ -877,14 +884,28 @@ function RootInner({
     async (...args: Parameters<typeof restoreWorkspaceTabs>) => {
       const restored = await restoreWorkspaceTabs(...args);
       const restoreDraftIntents = () => {
-        // 桌面刷新通过历史 tab 恢复，不经过 initialWorkspace 入口。先恢复项目意图，
-        // 再打开首屏门禁，避免 Composer 按未归类范围读取并预热同目录的项目草稿。
+        // 无会话恢复目标时先恢复项目范围，再打开首屏门禁，避免 Composer
+        // 按未归类范围读取并预热同目录的项目草稿。
         for (const tab of tabStoreApi.getState().tabs) {
           if (!isWorkspaceTab(tab)) continue;
           const workspace = useZCodeSessionStore
             .getState()
             .getWorkspaceState(tab.workspacePath, tab.workspaceIdentity);
           if (workspace.activeTaskId || workspace.draftProjectId !== undefined) continue;
+          // 保存的编辑器范围不是显式新任务意图；先 startDraft 会递增代次并清掉会话恢复键。
+          // 符合恢复条件时只让路，由 Layout 的 pane 持久化 owner 校验并恢复原会话。
+          if (
+            shouldRestorePersistedPaneSession({
+              activeSessionId: workspace.activeTaskId,
+              draftFocusVersion: workspace.draftFocusVersion,
+              enabled: isDesktop === true,
+              rendererReload: isRendererReloadNavigation(),
+              restoreOnStartup: tab.restorePaneSession,
+            }) &&
+            readPersistedPaneSession(tab.workspaceIdentity?.trim() || tab.workspacePath)
+          ) {
+            continue;
+          }
           const scope = readComposerWorkspaceScope(
             tab.workspacePath,
             tab.workspaceIdentity,
@@ -923,7 +944,7 @@ function RootInner({
           : {}),
       };
     },
-    [restoreWorkspaceTabs, composerClientNamespace, tabStoreApi],
+    [restoreWorkspaceTabs, composerClientNamespace, tabStoreApi, isDesktop],
   );
 
   const { isRestoring, hasCompletedInitialRestore, hasCompletedFullRestore } = useTabPersistence({

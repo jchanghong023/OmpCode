@@ -107,7 +107,13 @@ vi.mock("@/store/StoreProvider.js", () => ({
   useZCodeStoreWithDefault: (selector: (state: typeof mocks.auth) => unknown) =>
     selector(mocks.auth),
 }));
-vi.mock("@/hooks/useWorkspaceServices.js", () => ({ useBaseWorkspaceServices: () => ({}) }));
+vi.mock("@/hooks/useWorkspaceServices.js", () => {
+  const services = { zcodeAgentService: {} };
+  return {
+    useBaseWorkspaceServices: () => services,
+    useWorkspaceServices: () => services,
+  };
+});
 vi.mock("@/hooks/useComposerConnectionSwitch.js", () => ({
   useComposerConnectionSwitch: () => ({
     pending: false,

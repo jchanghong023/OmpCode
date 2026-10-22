@@ -33,7 +33,7 @@ import { CrashBudget } from "./crashBudget.js";
 const log = createServiceLogger("server-supervisor");
 
 export interface CoreLauncher {
-  launch(generation: number, release?: ReleaseManifest | null): ChildProcess;
+  launch(generation: number, release?: ReleaseManifest | null): Promise<ChildProcess>;
 }
 
 export interface SupervisorOptions {
@@ -60,6 +60,7 @@ export class Supervisor {
   private readonly crashBudget: CrashBudget;
   private readonly releaseManager: ReleaseManager;
   private core: ChildProcess | undefined;
+  private pendingCoreLaunch: Promise<void> | undefined;
   private control: Awaited<ReturnType<typeof createControlServer>> | undefined;
   private state: LifecycleState = "stopped";
   private generation = 0;
@@ -117,7 +118,7 @@ export class Supervisor {
         serverRoot: this.layout.serverRoot,
         version: this.options.version,
       });
-      this.launchCore();
+      await this.launchCore();
       await this.persistStatusSnapshot();
       return this.status();
     } catch (error) {
@@ -175,6 +176,8 @@ export class Supervisor {
   }
 
   private async stopInternal(reason: string): Promise<ServerStatus> {
+    if (this.pendingCoreLaunch) ++this.generation;
+    await this.pendingCoreLaunch;
     if (!this.core) {
       this.state = "stopped";
       await this.persistStatusSnapshot();
@@ -203,6 +206,8 @@ export class Supervisor {
   }
 
   private async stopCore(reason: string): Promise<void> {
+    if (this.pendingCoreLaunch) ++this.generation;
+    await this.pendingCoreLaunch;
     if (!this.core) return;
     this.state = "stopping";
     this.lastExitReason = reason;
@@ -295,7 +300,7 @@ export class Supervisor {
       await this.releaseManager.applyPendingWithTransaction(previous);
       this.activeRelease = pending;
       this.state = "starting";
-      this.launchCore();
+      await this.launchCore();
       await waitForUpdateReady(
         () => this.state,
         this.options.coreReadyTimeoutMs ?? CORE_READY_TIMEOUT_MS,
@@ -333,7 +338,7 @@ export class Supervisor {
       this.state = "stopped";
       if (previous) {
         this.state = "starting";
-        this.launchCore();
+        await this.launchCore();
         try {
           await waitForUpdateReady(
             () => this.state,
@@ -384,9 +389,42 @@ export class Supervisor {
     };
   }
 
-  private launchCore(): void {
+  private async launchCore(): Promise<void> {
     const generation = ++this.generation;
-    const child = this.options.launcher.launch(generation, this.activeRelease);
+    const pending = this.completeCoreLaunch(generation);
+    this.pendingCoreLaunch = pending;
+    try {
+      await pending;
+    } finally {
+      if (this.pendingCoreLaunch === pending) this.pendingCoreLaunch = undefined;
+    }
+  }
+
+  private async completeCoreLaunch(generation: number): Promise<void> {
+    const child = await this.options.launcher.launch(generation, this.activeRelease);
+    if (generation !== this.generation || this.state !== "starting") {
+      // 校验发行物期间 stop/update 可以撤销代际；迟到的自有进程必须先回收再释放锁。
+      if (!this.core) this.core = child;
+      const { promise, resolve, reject } = Promise.withResolvers<void>();
+      const timer = setTimeout(() => {
+        this.state = "stop-failed";
+        reject(new Error("Timed out stopping stale asynchronous Core launch"));
+      }, this.options.coreKillTimeoutMs ?? CORE_KILL_TIMEOUT_MS);
+      const done = () => {
+        clearTimeout(timer);
+        child.removeListener("exit", done);
+        child.removeListener("close", done);
+        if (this.core === child) this.core = undefined;
+        resolve();
+      };
+      child.once("exit", done);
+      child.once("close", done);
+      child.on("error", (error: Error) => log.error("stale Core process error", error));
+      if (child.exitCode != null || child.signalCode != null) done();
+      else child.kill("SIGKILL");
+      await promise;
+      return;
+    }
     this.core = child;
     this.clearCoreScopedStatus();
     log.info("launching server core", { generation, pid: child.pid });
@@ -427,7 +465,12 @@ export class Supervisor {
       setTimeout(() => {
         if (this.state !== "crashed") return;
         this.state = "starting";
-        this.launchCore();
+        void this.launchCore().catch((error) => {
+          this.state = "crash-loop-stopped";
+          this.lastExitReason = `core launch failed: ${updateErrorMessage(error)}`;
+          log.error("server core restart failed", error);
+          void this.persistStatusSnapshot();
+        });
       }, decision.delayMs).unref();
     };
     // fork 的 execPath 不存在/不可执行时 Node 只发 error + close，不发 exit。

@@ -28,11 +28,15 @@ import type { AddressInfo } from "node:net";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
+import E2EFailFastReporter, {
+  hasReportedE2EFailure,
+  notifyE2EFailure,
+} from "./test/e2e/reporting/e2e-fail-fast-reporter.js";
 import {
   captureWorkspaceSources,
   withE2ESourceEvidence,
 } from "./test/e2e/reporting/e2e-source-evidence.js";
-import { config as loadDotenv } from "dotenv";
+import { loadE2ELocalEnv } from "./scripts/e2e-local-env.mjs";
 import {
   PROVIDER_RESPONSIVE_TEAM_NAME,
   buildProviderResponsiveStartBalance,
@@ -128,8 +132,10 @@ import {
   type CodingPlanUpgradeMockServer,
 } from "./test/e2e/helpers/coding-plan-upgrade-mock-server.js";
 import {
+  FORK_TEMPORARY_E2E_EXCLUDES,
   MANUAL_REVIEW_SPEC_GLOB,
   hasRequiredSshE2EEnvironment,
+  resolveDeferredFormalSpecExcludes,
   resolveEnvironmentGatedFormalSpecExcludes,
 } from "./scripts/e2e-formal-spec-selection.mjs";
 import {
@@ -189,6 +195,7 @@ import { seedTaskIndexRowAuthorityFixture } from "./test/e2e/helpers/task-list-r
 import { seedDeleteAllArchivedTasksFixture } from "./test/e2e/helpers/delete-all-archived-tasks-fixture.js";
 import { seedTaskTitleMarqueeFixture } from "./test/e2e/helpers/task-title-marquee-fixture.js";
 import { seedAppUsageE2EFixture } from "./test/e2e/helpers/usage-stats-app-usage-fixture.js";
+import { prepareOmpIntegrationFixture } from "./test/e2e/helpers/omp-integration-fixture.js";
 
 const DESKTOP_DIR = import.meta.dirname;
 const execFileAsync = promisify(execFile);
@@ -197,14 +204,22 @@ const E2E_ELECTRON_SERVICE_MODULE_PATH = resolve(
   DESKTOP_DIR,
   "test/e2e/helpers/e2e-electron-service.ts",
 );
-const E2E_LOCAL_ENV_FILES = [
-  resolve(DESKTOP_DIR, ".env.e2e.local"),
-  resolve(REPO_ROOT, ".env.e2e.local"),
-  // 仓库不再提供共享 key：.env.e2e.local.example 只列变量名、值留空，不作为 fallback 读取。
-];
 // Bug 根因：Electron 二进制预检曾早于本地 E2E env 加载，缺包修复因此绕过镜像、
 // 代理、证书和缓存配置。所有读取 process.env 的 runner 初始化都必须位于该调用之后。
-loadE2ELocalEnv();
+loadE2ELocalEnv({ desktopDir: DESKTOP_DIR, repoRoot: REPO_ROOT, env: process.env });
+// 未提供覆盖时必须省略变量；空串会被 Main 按显式非法命令拒绝，导致原 Agent 基线无法开窗。
+const EXPLICIT_AGENT_SERVER_ENV = {
+  ...(process.env.ZCODE_AGENT_SERVER_COMMAND !== undefined
+    ? { ZCODE_AGENT_SERVER_COMMAND: process.env.ZCODE_AGENT_SERVER_COMMAND }
+    : {}),
+  ...(process.env.ZCODE_AGENT_SERVER_ARGS_JSON !== undefined
+    ? { ZCODE_AGENT_SERVER_ARGS_JSON: process.env.ZCODE_AGENT_SERVER_ARGS_JSON }
+    : {}),
+  ...(process.env.ZCODE_AGENT_SERVER_CWD !== undefined
+    ? { ZCODE_AGENT_SERVER_CWD: process.env.ZCODE_AGENT_SERVER_CWD }
+    : {}),
+};
+let stopOmpIntegrationFixture: (() => Promise<void>) | undefined;
 const BUILD_DESKTOP_AGENT_SCRIPT = resolve(REPO_ROOT, "scripts/build-desktop-agent-cli.mjs");
 const ZCODE_CLI_ENTRYPOINT = resolve(REPO_ROOT, "apps/zcode-cli/packages/cli/dist/zcode.cjs");
 const E2E_HOME_DIR = resolve(
@@ -504,6 +519,10 @@ const E2E_RENDERER_BRIDGE_REQUIRED_STATE_METHODS = [
 ];
 
 const requestedE2ESpecs = readRequestedE2ESpecs();
+const mandatoryE2ESpecExcludes = [
+  ...FORK_TEMPORARY_E2E_EXCLUDES,
+  ...resolveDeferredFormalSpecExcludes({ requestedSpecs: requestedE2ESpecs }),
+];
 const requestedE2EExcludeSpecs = readRequestedE2EExcludeSpecs();
 const configuredModelRetryMaxRetries = process.env.ZCODE_MODEL_RETRY_MAX_RETRIES;
 const configuredE2EWorkerNetworkEnv = {
@@ -543,7 +562,12 @@ const configuredE2ESpecs =
       ? [MANUAL_REVIEW_SPEC_GLOB]
       : upstreamProviderSpecRequested
         ? [UPSTREAM_PROVIDER_SPEC]
-        : ["./test/e2e/**/*.test.ts"];
+        : [
+            "./test/e2e/**/*.test.ts",
+            ...(EXPLICIT_AGENT_SERVER_ENV.ZCODE_AGENT_SERVER_COMMAND?.trim()
+              ? ["./test/e2e/omp-app-server.e2e.ts"]
+              : []),
+          ];
 const pluginNoGitGitHubArchiveE2E = configuredE2ESpecs.some((spec) =>
   spec.includes(PLUGIN_NO_GIT_GITHUB_ARCHIVE_SPEC),
 );
@@ -659,31 +683,6 @@ async function runE2EDiagnosticWithTimeout<T>(
   } finally {
     if (timeout) {
       clearTimeout(timeout);
-    }
-  }
-}
-
-function loadE2ELocalEnv() {
-  for (const envFile of E2E_LOCAL_ENV_FILES) {
-    if (!existsSync(envFile)) {
-      continue;
-    }
-
-    const parsedEnv: Record<string, string> = {};
-    const result = loadDotenv({
-      path: envFile,
-      processEnv: parsedEnv,
-      quiet: true,
-    });
-    if (result.error) {
-      throw new Error(`Failed to load e2e env file: ${envFile}`, {
-        cause: result.error,
-      });
-    }
-    for (const [key, value] of Object.entries(parsedEnv)) {
-      if (!process.env[key]?.trim()) {
-        process.env[key] = value;
-      }
     }
   }
 }
@@ -1049,6 +1048,15 @@ function createPnpmChildEnv() {
 }
 
 function prepareZCodeAgentServer() {
+  if (EXPLICIT_AGENT_SERVER_ENV.ZCODE_AGENT_SERVER_COMMAND?.trim()) {
+    if (E2E_PACKAGED_APP_BINARY_PATH) {
+      throw new Error(
+        "Packaged E2E must exercise its bundled Agent, not an explicit source override",
+      );
+    }
+    configureZCodeAgentServerEnv();
+    return;
+  }
   if (E2E_PACKAGED_APP_BINARY_PATH) {
     // 真正的 Preview 包必须使用随包 Agent，禁止测试 runner 注入源码入口掩盖漏打包。
     configureZCodeAgentServerEnv();
@@ -1083,11 +1091,9 @@ function prepareZCodeAgentServer() {
 }
 
 function configureZCodeAgentServerEnv() {
-  // 数据库准备只信任 bundled resolver 确认的入口。E2E 即使把本轮 bundle 填进自定义
-  // command，也会按 unsupported_runtime 拒绝；清除继承的覆盖，复用正式桌面解析链。
-  delete process.env.ZCODE_AGENT_SERVER_COMMAND;
-  delete process.env.ZCODE_AGENT_SERVER_ARGS_JSON;
-  delete process.env.ZCODE_AGENT_SERVER_CWD;
+  // Source integration must preserve the exact public command/args/cwd through both
+  // launcher and worker. No override keeps the original bundled Agent suite intact.
+  Object.assign(process.env, EXPLICIT_AGENT_SERVER_ENV);
 }
 
 function assertUpstreamCaptureConfig() {
@@ -2196,7 +2202,7 @@ async function readDataPlaneTurnFixtures(path: string): Promise<DataPlaneTurnFix
  */
 function createDataPlaneTurnResponder(
   fixtures: readonly DataPlaneTurnFixture[],
-  options: { fallbackBody: string; title: { id: string; text: string } },
+  options: { fallbackBody?: string; title: { id: string; text: string } },
 ) {
   return (requestBody: string) => {
     const request = JSON.parse(requestBody) as {
@@ -2217,11 +2223,12 @@ function createDataPlaneTurnResponder(
     const lastUser = JSON.stringify(
       messages.findLast((message) => message.role === "user")?.content,
     );
-    return (
+    const body =
       fixtures.find((fixture) =>
         fixture.match.lastUserMessageIncludes.every((marker) => lastUser?.includes(marker)),
-      )?.response.body ?? options.fallbackBody
-    );
+      )?.response.body ?? options.fallbackBody;
+    if (body === undefined) throw new Error("Missing Fixture: no matching Account turn");
+    return body;
   };
 }
 
@@ -2276,6 +2283,7 @@ async function startCodingPlanDataPlaneProxy(specs: readonly string[]) {
   codingPlanDataPlaneProxy = await startE2ENetworkCaptureProxy({
     artifactPath: CODING_PLAN_DATA_PLANE_ARTIFACT_PATH,
     caDir: E2E_CODING_PLAN_DATA_PLANE_CA_DIR,
+    rejectUnmatchedRequests: true,
     responseMocks: [
       // 签名默认开启后，Account 用例的测试凭据也会发起握手；本地响应避免访问线上。
       {
@@ -2301,7 +2309,6 @@ async function startCodingPlanDataPlaneProxy(specs: readonly string[]) {
       {
         body: highspeedFixtures
           ? createDataPlaneTurnResponder(highspeedFixtures, {
-              fallbackBody: modelResponseBody,
               title: { id: "highspeed-title", text: '{"title":"Highspeed draw"}' },
             })
           : modelResponseBody,
@@ -3420,6 +3427,8 @@ function seedE2EStartupState(specs: string[] = []) {
   const providerReadinessColdStartFixture = usesProviderReadinessColdStartFixture(specs);
   const shouldUseBigmodelAuth = codingPlanTeamSpec || codingPlanUpgradeE2E;
   const authProviderId = shouldUseBigmodelAuth ? BIGMODEL_PROVIDER_ID : E2E_AUTH_PROVIDER_ID;
+  // Account HTTPS requests use their case-local MITM, not the direct HTTP replay URL.
+  const explicitNetworkProxy = codingPlanDataPlaneProxy ?? upstreamCaptureProxy;
   writeFileSync(
     E2E_APP_SETTINGS_FILE,
     JSON.stringify(
@@ -3471,13 +3480,11 @@ function seedE2EStartupState(specs: string[] = []) {
         providerFamilyConnectionSelections: shouldUseBigmodelAuth
           ? { bigmodel: { kind: "individual-coding-plan" } }
           : {},
-        ...(upstreamCaptureProxy
+        ...(explicitNetworkProxy
           ? {
-              // 修复原因：agent 子进程只信任设置页显式代理配置，不读取
-              // WDIO 进程里的标准 HTTPS_PROXY；capture 模式必须预设这里才能抓到真实请求。
-              httpProxy: upstreamCaptureProxy.proxyUrl,
-              httpProxyCaCertPath: upstreamCaptureProxy.caCertPath,
-              httpProxyNoProxy: DEFAULT_E2E_NETWORK_CAPTURE_NO_PROXY,
+              httpProxy: explicitNetworkProxy.proxyUrl,
+              httpProxyCaCertPath: explicitNetworkProxy.caCertPath,
+              httpProxyNoProxy: explicitNetworkProxy.env.ZCODE_NO_PROXY,
             }
           : {}),
       },
@@ -4602,13 +4609,14 @@ export const config: WebdriverIO.Config = {
   runner: "local",
   // 修复原因：waitUntil 的 timeout 无法中断内部已经发出的 WebDriver HTTP 请求；
   // 坏 ContextId 在 hook 中会按默认 120 秒和 3 次重试卡数分钟，必须在协议层设硬边界。
-  connectionRetryCount: E2E_WEBDRIVER_REQUEST_LIMITS.retryCount,
+  connectionRetryCount: 0,
   // executeAsyncScript 的浏览器内 script timeout 与 WDIO 到 Chromedriver 的 HTTP timeout
   // 是两层独立门限；公网 Archive case 两层都必须覆盖 Agent 的 180 秒下载上限。
   connectionRetryTimeout: pluginNoGitGitHubArchiveE2E
     ? 300_000
     : E2E_WEBDRIVER_REQUEST_LIMITS.timeoutMs,
   runnerEnv: {
+    ZCODE_E2E_FAIL_FAST_PREFIX: process.env.ZCODE_E2E_FAIL_FAST_PREFIX ?? "",
     E2E_PROVIDER_ALTERNATE_MODEL: E2E_PROVIDER_SECONDARY_MODEL,
     E2E_PROVIDER_ALTERNATE_PROVIDER_ID,
     E2E_PROVIDER_ALTERNATE_PROVIDER_NAME,
@@ -4636,8 +4644,7 @@ export const config: WebdriverIO.Config = {
         }
       : {}),
     VITE_ZCODE_E2E_STORE_BRIDGE: "1",
-    ZCODE_AGENT_SERVER_ARGS_JSON: "",
-    ZCODE_AGENT_SERVER_COMMAND: "",
+    ...EXPLICIT_AGENT_SERVER_ENV,
     ZCODE_DATA_BASE_DIR: E2E_HOME_DIR,
     ZCODE_BUILTIN_PROVIDER_CONFIG_FILE:
       INITIAL_ZCODE_BUILTIN_PROVIDER_CONFIG_FILE ?? E2E_DEFAULT_ZCODE_BUILTIN_PROVIDER_CONFIG_FILE,
@@ -4665,7 +4672,9 @@ export const config: WebdriverIO.Config = {
       : {}),
   },
   framework: "mocha",
-  reporters: ["spec"],
+  reporters: [[E2EFailFastReporter, {}], "spec"],
+  bail: 1,
+  specFileRetries: 0,
   maxInstances: Number(process.env.ZCODE_E2E_MAX_INSTANCES ?? "1"),
   maxInstancesPerCapability: Number(process.env.ZCODE_E2E_MAX_INSTANCES ?? "1"),
   ...(containerE2E
@@ -4693,6 +4702,9 @@ export const config: WebdriverIO.Config = {
     {
       browserName: "electron",
       browserVersion: ELECTRON_VERSION,
+      // 修复原因：CLI --exclude 会替换全局 exclude；能力级排除在最终调度时合并，
+      // 保证硬屏蔽和未精确点名的暂缓用例不能被无关 CLI 排除重新纳入。
+      "wdio:exclude": mandatoryE2ESpecExcludes,
       "wdio:electronServiceOptions": {
         appArgs: [
           ...(E2E_PACKAGED_APP_BINARY_PATH ? [] : [`--app=${E2E_APP_ENTRY_POINT}`]),
@@ -4726,6 +4738,7 @@ export const config: WebdriverIO.Config = {
   // 修复原因：上游 provider e2e 需要真实上游 key，默认全量 e2e 不应启动一个“跳过但仍占用浏览器”的 worker。
   // 否则它会和 smoke 共用并重置 .e2e-home，表现为临时测试窗口白屏或一直等不到默认工作区。
   exclude: [
+    ...mandatoryE2ESpecExcludes,
     ...(upstreamProviderSpecRequested ? [] : [UPSTREAM_PROVIDER_SPEC]),
     ...(turnSteerProbeSpecRequested ? [] : [TURN_STEER_PROBE_SPEC]),
     ...(manualReviewE2E ? [] : [MANUAL_REVIEW_SPEC_GLOB]),
@@ -4738,6 +4751,8 @@ export const config: WebdriverIO.Config = {
     ...requestedE2EExcludeSpecs,
   ],
   mochaOpts: {
+    bail: true,
+    retries: 0,
     // Bug 根因：WDIO config beforeSuite 通过 executeHooksWithArgs 执行，普通异常会被
     // 记录后 resolve，坏 session 仍会进入产品 case。Mocha 原生 root hook 才会把
     // preflight rejection 计为 hook failure，并在 test body 前停止。
@@ -4866,6 +4881,7 @@ export const config: WebdriverIO.Config = {
         prepareZCodeAgentServer();
       });
     } catch (error) {
+      notifyE2EFailure({ kind: "prepare", title: "onPrepare", error });
       // 修复原因：WDIO 会把 onPrepare 异常记录成 hook error 后继续派发 worker，
       // 构建失败时会演变成几十个 DevToolsActivePort/bridge timeout 噪音，掩盖真正原因。
       console.error("[e2e] fatal onPrepare failure", error);
@@ -4977,6 +4993,15 @@ export const config: WebdriverIO.Config = {
           startPluginCdnZipFixtureIfNeeded,
           startOffPeakMockIfNeeded: startOffPeakE2EMock,
         });
+        stopOmpIntegrationFixture = await prepareOmpIntegrationFixture({
+          specs,
+          homeDir: E2E_HOME_DIR,
+          environment: process.env,
+          modelSelection: {
+            providerId: resolveActiveE2EProviderEnv().providerId,
+            modelId: resolveActiveE2EProviderEnv().model,
+          },
+        });
         // Client Scenes 是布局 case 的远端目录依赖；必须在 resetHome 完成、Electron
         // 启动前覆盖 endpoint，确保 Main → Host 首次 import 时拿到 case-local fixture。
         await startClientScenesE2EMockIfNeeded(specs);
@@ -5006,6 +5031,12 @@ export const config: WebdriverIO.Config = {
       // 失败并交给 Mocha root hook 抛出，确保产品 test body 不在残缺环境里继续跑。
       currentE2EBeforeSessionError =
         error ?? new Error("beforeSession setup rejected without an error value");
+      notifyE2EFailure({
+        kind: "prepare",
+        title: "beforeSession",
+        error: currentE2EBeforeSessionError,
+        cid,
+      });
     }
   },
   async before(_capabilities, specs) {
@@ -5043,6 +5074,15 @@ export const config: WebdriverIO.Config = {
     }
   },
   async after(_result, _capabilities, specs) {
+    // WDIO 在 session 初始化失败时先调用 after(1)，runner:end 在其后；不能先等待收尾。
+    if (_result > 0) {
+      notifyE2EFailure({
+        kind: "runner",
+        title: "WDIO worker",
+        error: `worker reported ${_result} failure(s)`,
+      });
+    }
+    if (hasReportedE2EFailure()) return;
     await measureE2ELifecyclePhase("after", { specs }, async () => {
       try {
         await e2eReporter.stopProcessSampling(browser, specs);
@@ -5070,8 +5110,10 @@ export const config: WebdriverIO.Config = {
           }
           // Electron/Host/CLI 都已退出，V8 JSON 此时完整封口；趁下一 worker 启动前
           // 就地归一化，避免全量 manual-review 把重复 source map 累积到磁盘上限。
-          e2eReporter.compactNodeCoverage();
+          if (!hasReportedE2EFailure()) e2eReporter.compactNodeCoverage();
         } finally {
+          await stopOmpIntegrationFixture?.();
+          stopOmpIntegrationFixture = undefined;
           await stopRequestSecurityFixture();
           await stopModelContextBudgetConfigE2EMock();
           await stopDynamicWorkflowConfigE2EMock();
@@ -5110,6 +5152,14 @@ export const config: WebdriverIO.Config = {
     });
   },
   async afterTest(test, _context, result) {
+    // 修复原因：WDIO 的动态 this.skip() 返回 passed=false、skipped=true，不属于首错。
+    if (!result.passed && !("skipped" in result && result.skipped === true)) {
+      notifyE2EFailure({ kind: "test", title: test.fullTitle || test.title, error: result.error });
+    }
+    if (hasReportedE2EFailure()) {
+      e2eReporter.recordTestResult(test, result);
+      return;
+    }
     let failureArtifacts;
     const collectionErrors: string[] = [];
     try {
@@ -5144,6 +5194,11 @@ export const config: WebdriverIO.Config = {
       );
     }
     e2eReporter.recordTestResult(test, result, failureArtifacts, collectionErrors);
+  },
+  afterHook(hook, _context, result) {
+    if (result.error) {
+      notifyE2EFailure({ kind: "hook", title: hook.title, error: result.error });
+    }
   },
   async onComplete(exitCode) {
     e2eRunnerFinalizationGuard.disarm();

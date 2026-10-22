@@ -83,10 +83,7 @@ describe("automation run keeps the first-input session title", () => {
       timeoutMsg: "定时任务创建按钮不可点击",
     });
 
-    const initialCardText = await waitForAutomationCardText(
-      AUTOMATION_TITLE,
-      "已运行 0 次",
-    );
+    const initialCardText = await waitForAutomationCardText(AUTOMATION_TITLE, "已运行 0 次");
     expect(initialCardText).toContain("下次运行");
     expect(initialCardText).not.toMatch(/已运行\s*0\s*\/\s*\d+\s*次/);
     await clickAutomationCardByTitle(AUTOMATION_TITLE);
@@ -113,10 +110,7 @@ describe("automation run keeps the first-input session title", () => {
     // automation 执行轮只能读取任务定义；写工具必须在发给 provider 前被 turn-scoped
     // denylist 移除，避免任务在运行时自改、自删或递归创建新任务。
     const runRequest = { lastUserMessageIncludes: [RUN_PROMPT] };
-    await waitForUpstreamRequest(
-      runRequest,
-      "没有捕获到定时任务立即运行的 provider 请求",
-    );
+    await waitForUpstreamRequest(runRequest, "没有捕获到定时任务立即运行的 provider 请求");
     const runToolNames = await getUpstreamRequestToolNames(runRequest);
     expect(runToolNames).toContain("CronList");
     expect(runToolNames).not.toContain("CronCreate");
@@ -135,10 +129,7 @@ describe("automation run keeps the first-input session title", () => {
     await clickTestIdByDom(TID_AUTOMATIONS_OPEN, {
       timeoutMsg: "执行完成后无法返回定时任务列表",
     });
-    const dispatchedCardText = await waitForAutomationCardText(
-      AUTOMATION_TITLE,
-      "已运行 1 次",
-    );
+    const dispatchedCardText = await waitForAutomationCardText(AUTOMATION_TITLE, "已运行 1 次");
     expect(dispatchedCardText).toContain("下次运行");
     expect(dispatchedCardText).not.toMatch(/已运行\s*1\s*\/\s*\d+\s*次/);
   });
@@ -149,24 +140,56 @@ async function waitForAutomationSessionTelemetry(
   taskId: string,
 ): Promise<JsonRecord[]> {
   let latest: JsonRecord[] = [];
-  await browser.waitUntil(
-    async () => {
-      await telemetryFetch.update();
-      latest = telemetryFetch.mock.calls
-        .map((call) => parseTelemetryRequest(call))
-        .filter((request): request is JsonRecord => request !== null)
-        .filter((request) => request.talk_id === taskId);
-      return (
-        latest.some((request) => request.element_name === "agent_step") &&
-        latest.some((request) => request.element_name === "session_create") &&
-        latest.some((request) => request.element_name === "message_completion")
+  let observed: JsonRecord[] = [];
+  await browser
+    .waitUntil(
+      async () => {
+        await telemetryFetch.update();
+        observed = telemetryFetch.mock.calls
+          .map((call) => parseTelemetryRequest(call))
+          .filter((request): request is JsonRecord => request !== null);
+        latest = observed.filter((request) => request.talk_id === taskId);
+        return (
+          latest.some((request) => request.element_name === "agent_step") &&
+          latest.some((request) => request.element_name === "session_create") &&
+          latest.some((request) => request.element_name === "message_completion")
+        );
+      },
+      {
+        timeout: 30000,
+        timeoutMsg: "新建定时任务立即运行后没有捕获到 agent_step / message_completion",
+      },
+    )
+    .catch((error: unknown) => {
+      const detailKeys = [
+        "message_source",
+        "task_trigger",
+        "automation_id",
+        "status",
+        "create_source",
+        "client_kind",
+        "workspace_kind",
+        "remote_kind",
+        "agent_step_cnt",
+        "memory_enabled",
+      ];
+      const reports = observed.map((request) => ({
+        element_name: request.element_name,
+        talk_id: request.talk_id,
+        message_id: request.message_id,
+        event_extra_detail: isRecord(request.event_extra_detail)
+          ? Object.fromEntries(
+              detailKeys
+                .filter((key) => Object.hasOwn(request.event_extra_detail as JsonRecord, key))
+                .map((key) => [key, (request.event_extra_detail as JsonRecord)[key]]),
+            )
+          : {},
+      }));
+      throw new Error(
+        `${error instanceof Error ? error.message : "等待定时任务遥测失败"}; taskId=${taskId}; reports=${JSON.stringify(reports)}`,
+        { cause: error },
       );
-    },
-    {
-      timeout: 30000,
-      timeoutMsg: "新建定时任务立即运行后没有捕获到 agent_step / message_completion",
-    },
-  );
+    });
   return latest;
 }
 
@@ -199,6 +222,7 @@ function assertAutomationSessionTelemetry(telemetry: JsonRecord[], taskId: strin
   expect(completionDetail).toMatchObject({
     message_source: "scheduled_task",
     task_trigger: "manual",
+    status: "success",
   });
   const automationId = String(completionDetail.automation_id ?? "");
   const messageId = String(completion.message_id ?? "");
@@ -240,13 +264,9 @@ async function clickAutomationCardByTitle(title: string): Promise<void> {
       const result = await browser.execute(
         (cardTestId, expectedTitle) => {
           const cards = Array.from(
-            document.querySelectorAll<HTMLElement>(
-              `[data-testid="${cardTestId}"]`,
-            ),
+            document.querySelectorAll<HTMLElement>(`[data-testid="${cardTestId}"]`),
           );
-          const target = cards.find((card) =>
-            card.innerText.includes(expectedTitle),
-          );
+          const target = cards.find((card) => card.innerText.includes(expectedTitle));
           target?.click();
           return {
             clicked: Boolean(target),
@@ -293,60 +313,57 @@ async function waitForAutomationCardText(title: string, expectedText: string): P
 async function waitForTaskItemContaining(title: string): Promise<string> {
   let taskId: string | null = null;
   let latestTitles: string[] = [];
-  await browser.waitUntil(
-    async () => {
-      const result = await browser.execute(
-        (baseTestId, expectedTitle) => {
-          const prefix = `${baseTestId}-`;
-          const items = Array.from(
-            document.querySelectorAll<HTMLElement>(
-              `[data-testid^="${prefix}"]`,
-            ),
-          );
-          const target = items.find((item) =>
-            item.innerText.includes(expectedTitle),
-          );
-          return {
-            taskId: target?.dataset.testid?.slice(prefix.length) ?? null,
-            titles: items.map((item) => item.innerText),
-          };
-        },
-        TID_TASK_ITEM,
-        title,
+  await browser
+    .waitUntil(
+      async () => {
+        const result = await browser.execute(
+          (baseTestId, expectedTitle) => {
+            const prefix = `${baseTestId}-`;
+            const items = Array.from(
+              document.querySelectorAll<HTMLElement>(`[data-testid^="${prefix}"]`),
+            );
+            const target = items.find((item) => item.innerText.includes(expectedTitle));
+            return {
+              taskId: target?.dataset.testid?.slice(prefix.length) ?? null,
+              titles: items.map((item) => item.innerText),
+            };
+          },
+          TID_TASK_ITEM,
+          title,
+        );
+        taskId = result.taskId;
+        latestTitles = result.titles;
+        return Boolean(taskId);
+      },
+      {
+        // 回归边界：run_now 必须由当前 host 直接派发，不能重新等待 20 秒 scheduler tick。
+        timeout: 12000,
+        timeoutMsg: `立即运行后 12 秒内未找到首条 prompt 标题的执行会话：${title}`,
+      },
+    )
+    .catch((error: unknown) => {
+      // waitUntil 的 options 在首次轮询前求值；失败时才读取最新标题，避免误报为空列表或未派发。
+      throw new Error(
+        `立即运行后 12 秒内未找到首条 prompt 标题的执行会话：${title}; latest=${latestTitles.join(" | ")}`,
+        { cause: error },
       );
-      taskId = result.taskId;
-      latestTitles = result.titles;
-      return Boolean(taskId);
-    },
-    {
-      // 回归边界：run_now 必须由当前 host 直接派发，不能重新等待 20 秒 scheduler tick。
-      timeout: 12000,
-      timeoutMsg: `立即运行未直接派发，12 秒内侧栏没有出现执行会话：${title}; latest=${latestTitles.join(" | ")}`,
-    },
-  );
+    });
   if (!taskId) throw new Error("立即运行后缺少执行会话 taskId");
   return taskId;
 }
 
 async function expectHeaderTitle(expectedTitle: string): Promise<void> {
   const actual = await browser.execute((titleTestId) => {
-    const header = document.querySelector<HTMLElement>(
-      `[data-testid="${titleTestId}"]`,
-    );
+    const header = document.querySelector<HTMLElement>(`[data-testid="${titleTestId}"]`);
     return header?.getAttribute("title") ?? header?.innerText.trim() ?? null;
   }, TID_WORKSPACE_TITLE);
   expect(actual).toBe(expectedTitle);
 }
 
-async function expectTaskItemTitle(
-  taskId: string,
-  expectedTitle: string,
-): Promise<void> {
+async function expectTaskItemTitle(taskId: string, expectedTitle: string): Promise<void> {
   const actual = await browser.execute(
     (taskItemTestId) => {
-      const item = document.querySelector<HTMLElement>(
-        `[data-testid="${taskItemTestId}"]`,
-      );
+      const item = document.querySelector<HTMLElement>(`[data-testid="${taskItemTestId}"]`);
       return item?.innerText ?? null;
     },
     testId(TID_TASK_ITEM, taskId),

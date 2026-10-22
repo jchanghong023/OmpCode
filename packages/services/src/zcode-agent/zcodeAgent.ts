@@ -1,3 +1,4 @@
+import type { ZCodeSessionConfigureParams, ZCodeSessionConfigureResult } from "@zcode/shared";
 import type { PluginUiToolResultNotification } from "@zcode/shared/mcp-apps";
 import type {
   BackgroundBashOutputResult,
@@ -826,6 +827,9 @@ export interface IZCodeAgentService {
     params: ZCodeAgentSessionTarget & { expectedPersistence?: "deferred" | "immediate" },
   ): Promise<boolean>;
   setModel(params: ZCodeAgentSetModelParams): Promise<ZCodeSessionStateSnapshot>;
+  configureOmpSession(
+    params: ZCodeAgentSessionTarget & ZCodeSessionConfigureParams,
+  ): Promise<ZCodeSessionConfigureResult>;
   setThoughtLevel(params: ZCodeAgentSetThoughtLevelParams): Promise<ZCodeSessionStateSnapshot>;
   setMode(params: ZCodeAgentSetModeParams): Promise<ZCodeSessionStateSnapshot>;
   respondProviderRuntimeHeaders(

@@ -1,7 +1,11 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
+import {
+  FORK_TEMPORARY_E2E_EXCLUDES,
+  resolveDeferredFormalSpecExcludes,
+} from "../scripts/e2e-formal-spec-selection.mjs";
 
 import {
   assertNonEmptyE2EScheduledSpecFiles,
@@ -79,6 +83,94 @@ describe("E2E spec scheduling resolution", () => {
     });
   });
 
+  it.each(
+    [
+      "./test/e2e/container-boot.test.ts",
+      "./test/e2e/conversation-session/conversation-session-highspeed-card.test.ts",
+      "./test/e2e/conversation-session/conversation-session-toolsearch-recording.test.ts",
+    ].flatMap((spec) =>
+      ["CLI", "environment"].flatMap((selection) =>
+        ["relative", "absolute"].map((form) => ({ spec, selection, form })),
+      ),
+    ),
+  )(
+    "fails before worker startup for all-excluded explicit $selection $form selection $spec",
+    ({ spec, selection, form }) => {
+      withFixture((baseDir) => {
+        writeSpec(baseDir, spec.slice(2));
+        const request = form === "absolute" ? resolve(baseDir, spec) : spec;
+        expect(() =>
+          assertNonEmptyE2EScheduledSpecFiles({
+            baseDir,
+            specs: [request],
+            exclude: FORK_TEMPORARY_E2E_EXCLUDES,
+            requestedSpecs: selection === "CLI" ? [request] : [],
+            envSpec: selection === "environment" ? request : undefined,
+            argv: selection === "CLI" ? ["--spec", request] : [],
+          }),
+        ).toThrow(/Desktop E2E has no scheduled spec files after applying excludes/);
+      });
+    },
+  );
+
+  it("schedules only the retained member of a mixed explicit selection", () => {
+    withFixture((baseDir) => {
+      const retained =
+        "test/e2e/conversation-session/conversation-session-send-message-resume-stop.test.ts";
+      writeSpec(baseDir, "test/e2e/container-boot.test.ts");
+      writeSpec(baseDir, retained);
+      expect(
+        assertNonEmptyE2EScheduledSpecFiles({
+          baseDir,
+          specs: ["./test/e2e/container-boot.test.ts", `./${retained}`],
+          exclude: FORK_TEMPORARY_E2E_EXCLUDES,
+          requestedSpecs: ["./test/e2e/container-boot.test.ts", `./${retained}`],
+          argv: ["--spec", "./test/e2e/container-boot.test.ts", "--spec", `./${retained}`],
+        }),
+      ).toEqual([retained]);
+    });
+  });
+
+  it.each([
+    "./test/e2e/conversation-session/conversation-session-bot-channel-worker.test.ts",
+    "./test/e2e/bots/feishu-channel-mention.test.ts",
+    "./test/e2e/automations-custom-monthly-interval.test.ts",
+    "./test/e2e/off-peak-create-manage.test.ts",
+  ])("defers %s for default and glob requests but admits an exact absolute target", (target) => {
+    withFixture((baseDir) => {
+      const retained = ["test/e2e/bots/bot-runtime-authority.test.ts"];
+      for (const spec of [target.slice(2), ...retained]) {
+        writeSpec(baseDir, spec);
+      }
+      const glob = "./test/e2e/**/*.test.ts";
+      for (const requestedSpecs of [[], [glob]]) {
+        expect(
+          resolveE2EScheduledSpecFiles({
+            baseDir,
+            specs: [glob],
+            exclude: [
+              ...FORK_TEMPORARY_E2E_EXCLUDES,
+              ...resolveDeferredFormalSpecExcludes({ requestedSpecs }),
+            ],
+          }),
+        ).toEqual([...retained].sort());
+      }
+      const request = resolve(baseDir, target);
+      expect(
+        assertNonEmptyE2EScheduledSpecFiles({
+          baseDir,
+          specs: [request],
+          exclude: [
+            ...FORK_TEMPORARY_E2E_EXCLUDES,
+            ...resolveDeferredFormalSpecExcludes({ requestedSpecs: [request] }),
+          ],
+          requestedSpecs: [request],
+          argv: ["--spec", request],
+        }),
+      ).toEqual([target.slice(2)]);
+    });
+  });
+
   it("throws a pre-worker diagnostic when no spec files are scheduled", () => {
     withFixture((baseDir) => {
       expect(() =>
@@ -88,7 +180,13 @@ describe("E2E spec scheduling resolution", () => {
           exclude: [],
           requestedSpecs: ["./test/e2e/conversation-session/*.test.ts"],
           envSpec: "./test/e2e/conversation-session/*.test.ts",
-          argv: ["run", "wdio.conf.ts", "--", "--spec", "./test/e2e/conversation-session/*.test.ts"],
+          argv: [
+            "run",
+            "wdio.conf.ts",
+            "--",
+            "--spec",
+            "./test/e2e/conversation-session/*.test.ts",
+          ],
         }),
       ).toThrow(/Desktop E2E has no scheduled spec files after applying excludes/);
     });

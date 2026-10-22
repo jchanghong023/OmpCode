@@ -11,6 +11,20 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+const { verifyOmpArtifactMock } = vi.hoisted(() => ({
+  verifyOmpArtifactMock: vi.fn(async (root: string) => ({ command: join(root, "omp") })),
+}));
+vi.mock("../../../scripts/omp-artifact.mjs", () => ({
+  verifyOmpArtifact: verifyOmpArtifactMock,
+}));
+
+async function loadRuntimeEnv() {
+  // Tests intentionally reload Electron module constants after resetModules.
+  const runtime = await import("../src/main/desktopRuntimeEnv.js");
+  await runtime.prepareBundledOmpHostEnv({ ...process.env });
+  return runtime;
+}
+
 const appMock = {
   isPackaged: false,
   getPath: vi.fn((name: string) => `/mock/${name}`),
@@ -298,7 +312,7 @@ describe("desktopRuntimeEnv resolveRemoteAssetDirs", () => {
 
   it("开发态当前版本 mock-cdn 存在时默认走 mock-cdn", async () => {
     await withTestMockCdnReleaseDir("present", async () => {
-      const { resolveRemoteAssetDirs } = await import("../src/main/desktopRuntimeEnv.js");
+      const { resolveRemoteAssetDirs } = await loadRuntimeEnv();
       const dirs = resolveRemoteAssetDirs({
         locale: "zh-CN",
         timeZone: "Asia/Shanghai",
@@ -318,7 +332,7 @@ describe("desktopRuntimeEnv resolveRemoteAssetDirs", () => {
 
   it("开发态当前版本 mock-cdn 缺失时保留内容寻址策略并由连接 fail-closed", async () => {
     await withTestMockCdnReleaseDir("missing", async () => {
-      const { resolveRemoteAssetDirs } = await import("../src/main/desktopRuntimeEnv.js");
+      const { resolveRemoteAssetDirs } = await loadRuntimeEnv();
       const dirs = resolveRemoteAssetDirs({
         locale: "zh-CN",
         timeZone: "Asia/Shanghai",
@@ -337,7 +351,7 @@ describe("desktopRuntimeEnv resolveRemoteAssetDirs", () => {
   });
   it("开发态打开开关后应直接走 CDN", async () => {
     process.env["ZCODE_DEV_REMOTE_ASSET_USE_CDN"] = "TRUE";
-    const { resolveRemoteAssetDirs } = await import("../src/main/desktopRuntimeEnv.js");
+    const { resolveRemoteAssetDirs } = await loadRuntimeEnv();
     const dirs = resolveRemoteAssetDirs({
       locale: "en-US",
       timeZone: "Asia/Shanghai",
@@ -358,7 +372,7 @@ describe("desktopRuntimeEnv resolveRemoteAssetDirs", () => {
     appMock.isPackaged = true;
     process.env["ZCODE_DEV_REMOTE_ASSET_USE_CDN"] = "0";
     process.env["ZCODE_REMOTE_ASSET_CDN_BASE_URL"] = "https://cdn.example.com/releases///";
-    const { resolveRemoteAssetDirs } = await import("../src/main/desktopRuntimeEnv.js");
+    const { resolveRemoteAssetDirs } = await loadRuntimeEnv();
     const dirs = resolveRemoteAssetDirs({
       locale: "zh-CN",
       timeZone: "Asia/Shanghai",
@@ -374,7 +388,7 @@ describe("desktopRuntimeEnv resolveRemoteAssetDirs", () => {
   it("remote asset cache 目录支持环境变量覆盖", async () => {
     const overrideCacheDir = join(tmpdir(), "zcode-prod-remote-assets-cache");
     process.env["ZCODE_REMOTE_ASSET_CACHE_DIR"] = overrideCacheDir;
-    const { resolveRemoteAssetDirs } = await import("../src/main/desktopRuntimeEnv.js");
+    const { resolveRemoteAssetDirs } = await loadRuntimeEnv();
     const dirs = resolveRemoteAssetDirs({
       locale: "zh-CN",
       timeZone: "Asia/Shanghai",
@@ -385,7 +399,7 @@ describe("desktopRuntimeEnv resolveRemoteAssetDirs", () => {
 
   it("remote asset cache 目录支持本地 env 文件覆盖", async () => {
     const overrideCacheDir = join(tmpdir(), "zcode-local-env-remote-assets-cache");
-    const { resolveRemoteAssetDirs } = await import("../src/main/desktopRuntimeEnv.js");
+    const { resolveRemoteAssetDirs } = await loadRuntimeEnv();
     const dirs = resolveRemoteAssetDirs(
       {
         locale: "zh-CN",
@@ -401,7 +415,7 @@ describe("desktopRuntimeEnv resolveRemoteAssetDirs", () => {
 
   it("开发态本地 env 文件可切到 CDN 并覆盖 CDN 与 cache", async () => {
     const overrideCacheDir = join(tmpdir(), "zcode-local-env-cdn-remote-assets-cache");
-    const { resolveRemoteAssetDirs } = await import("../src/main/desktopRuntimeEnv.js");
+    const { resolveRemoteAssetDirs } = await loadRuntimeEnv();
     const dirs = resolveRemoteAssetDirs(
       {
         locale: "zh-CN",
@@ -424,6 +438,9 @@ describe("desktopRuntimeEnv resolveRemoteAssetDirs", () => {
 describe("desktopRuntimeEnv buildHostProcessEnv", () => {
   beforeEach(() => {
     vi.resetModules();
+    verifyOmpArtifactMock
+      .mockReset()
+      .mockImplementation(async (root: string) => ({ command: join(root, "omp") }));
     appMock.isPackaged = false;
     appMock.getPath.mockImplementation((name: string) => `/mock/${name}`);
     delete process.env["NODE_NO_WARNINGS"];
@@ -471,8 +488,63 @@ describe("desktopRuntimeEnv buildHostProcessEnv", () => {
     }
   });
 
+  it("异步校验完成前拒绝启动，成功后只消费已校验产物", async () => {
+    appMock.isPackaged = true;
+    Object.defineProperty(process, "resourcesPath", {
+      value: "/mock/resources",
+      configurable: true,
+    });
+    // Intentionally load without the prepared-module helper to test the startup boundary.
+    const runtime = await import("../src/main/desktopRuntimeEnv.js");
+    const verified = Promise.withResolvers<{ command: string }>();
+    verifyOmpArtifactMock.mockReturnValue(verified.promise);
+    const preparation = runtime.prepareBundledOmpHostEnv({});
+    expect(() => runtime.buildHostProcessEnv({})).toThrow(/asynchronous verification/);
+    verified.resolve({ command: join(tmpdir(), "verified-omp") });
+    await preparation;
+    expect(runtime.buildHostProcessEnv({}).ZCODE_AGENT_SERVER_COMMAND).toBe(
+      join(tmpdir(), "verified-omp"),
+    );
+    expect(verifyOmpArtifactMock).toHaveBeenCalledTimes(1);
+  });
+
+  // Main 的模块级 Electron/env 身份必须在每个 resetModules 后重新加载，不能静态 import。
+  it("注入校验后的随包 OMP 和桌面 app-server 参数", async () => {
+    const { resolveBundledOmpHostEnv } = await loadRuntimeEnv();
+    const env = await resolveBundledOmpHostEnv({}, true, "/bundle/omp", "linux-x64");
+    expect(env.ZCODE_AGENT_SERVER_COMMAND).toBe(join("/bundle/omp", "omp"));
+    expect(JSON.parse(env.ZCODE_AGENT_SERVER_ARGS_JSON ?? "[]")).toEqual([
+      "app-server",
+      "--stdio",
+      "--surface",
+      "desktop",
+    ]);
+    expect(verifyOmpArtifactMock).toHaveBeenCalledWith("/bundle/omp", "linux-x64");
+  });
+
+  it("显式命令优先且不校验或回退随包 OMP", async () => {
+    const { resolveBundledOmpHostEnv } = await loadRuntimeEnv();
+    expect(
+      await resolveBundledOmpHostEnv({ ZCODE_AGENT_SERVER_COMMAND: "/custom/omp" }, true),
+    ).toEqual({});
+    expect(verifyOmpArtifactMock).not.toHaveBeenCalled();
+    expect(await resolveBundledOmpHostEnv({}, false)).toEqual({});
+  });
+
+  it("参数覆盖保留而产物缺失或不兼容阻断启动", async () => {
+    const { resolveBundledOmpHostEnv } = await loadRuntimeEnv();
+    expect(
+      (await resolveBundledOmpHostEnv({ ZCODE_AGENT_SERVER_ARGS_JSON: "[]" }, true))
+        .ZCODE_AGENT_SERVER_ARGS_JSON,
+    ).toBe("[]");
+    verifyOmpArtifactMock.mockImplementation(() => {
+      throw new Error("OMP artifact SHA-256 mismatch");
+    });
+    await expect(resolveBundledOmpHostEnv({}, true)).rejects.toThrow(/SHA-256 mismatch/);
+  });
+
   it("host 进程 env 不再注入 NODE_NO_WARNINGS", async () => {
-    const { buildHostProcessEnv } = await import("../src/main/desktopRuntimeEnv.js");
+    const { buildHostProcessEnv } = await loadRuntimeEnv();
 
     const env = buildHostProcessEnv({});
 
@@ -481,7 +553,7 @@ describe("desktopRuntimeEnv buildHostProcessEnv", () => {
   });
 
   it("host 进程显式注入 app version 和 build commit 供 agent 使用", async () => {
-    const { buildHostProcessEnv } = await import("../src/main/desktopRuntimeEnv.js");
+    const { buildHostProcessEnv } = await loadRuntimeEnv();
 
     const env = buildHostProcessEnv({});
 
@@ -490,7 +562,7 @@ describe("desktopRuntimeEnv buildHostProcessEnv", () => {
   });
 
   it("只把 Agent OTLP 配置定向注入 host，并剔除外部身份字段", async () => {
-    const { buildHostProcessEnv } = await import("../src/main/desktopRuntimeEnv.js");
+    const { buildHostProcessEnv } = await loadRuntimeEnv();
 
     const env = buildHostProcessEnv({
       OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: "https://arms.example.com/v1/traces",
@@ -515,7 +587,7 @@ describe("desktopRuntimeEnv buildHostProcessEnv", () => {
   });
 
   it("正式安装包默认配置只接收 OTLP 连接字段，不接受构建期身份字段", async () => {
-    const { resolvePackagedAgentTelemetryEnv } = await import("../src/main/desktopRuntimeEnv.js");
+    const { resolvePackagedAgentTelemetryEnv } = await loadRuntimeEnv();
 
     expect(
       resolvePackagedAgentTelemetryEnv({
@@ -535,8 +607,7 @@ describe("desktopRuntimeEnv buildHostProcessEnv", () => {
   });
 
   it("Windows 打包态会从 resourcesPath 推导安装目录供数据目录保护使用", async () => {
-    const { resolveWindowsAppInstallDirForDataBaseDirGuard } =
-      await import("../src/main/desktopRuntimeEnv.js");
+    const { resolveWindowsAppInstallDirForDataBaseDirGuard } = await loadRuntimeEnv();
 
     expect(
       resolveWindowsAppInstallDirForDataBaseDirGuard({
@@ -548,8 +619,7 @@ describe("desktopRuntimeEnv buildHostProcessEnv", () => {
   });
 
   it("非 Windows 或开发态不会注入安装目录保护路径", async () => {
-    const { resolveWindowsAppInstallDirForDataBaseDirGuard } =
-      await import("../src/main/desktopRuntimeEnv.js");
+    const { resolveWindowsAppInstallDirForDataBaseDirGuard } = await loadRuntimeEnv();
 
     expect(
       resolveWindowsAppInstallDirForDataBaseDirGuard({
@@ -568,7 +638,7 @@ describe("desktopRuntimeEnv buildHostProcessEnv", () => {
   });
 
   it("本地开发态 host 进程显式注入 ZCODE_RUNTIME_ENV=development 且不传 NODE_ENV", async () => {
-    const { buildHostProcessEnv } = await import("../src/main/desktopRuntimeEnv.js");
+    const { buildHostProcessEnv } = await loadRuntimeEnv();
 
     const env = buildHostProcessEnv({});
 
@@ -583,7 +653,7 @@ describe("desktopRuntimeEnv buildHostProcessEnv", () => {
   it.skipIf(process.platform !== "darwin")(
     "本地免签 CUA 使用 dev Helper bundle，且不回退网络下载",
     async () => {
-      const { buildHostProcessEnv } = await import("../src/main/desktopRuntimeEnv.js");
+      const { buildHostProcessEnv } = await loadRuntimeEnv();
 
       const env = buildHostProcessEnv({
         ZCODE_HOME: "/tmp/zcode-cua-dev-home",
@@ -600,7 +670,7 @@ describe("desktopRuntimeEnv buildHostProcessEnv", () => {
   it.skipIf(process.platform !== "darwin")(
     "本地免签 CUA 尊重显式 bundled Helper 路径以支持无打包源码验证",
     async () => {
-      const { buildHostProcessEnv } = await import("../src/main/desktopRuntimeEnv.js");
+      const { buildHostProcessEnv } = await loadRuntimeEnv();
 
       const env = buildHostProcessEnv({
         ZCODE_HOME: "/tmp/zcode-cua-dev-home",
@@ -618,7 +688,7 @@ describe("desktopRuntimeEnv buildHostProcessEnv", () => {
   it.skipIf(process.platform !== "darwin")(
     "本地免签 CUA 在显式 bundled Helper 路径为空白时回退到默认 dev bundle",
     async () => {
-      const { buildHostProcessEnv } = await import("../src/main/desktopRuntimeEnv.js");
+      const { buildHostProcessEnv } = await loadRuntimeEnv();
 
       const env = buildHostProcessEnv({
         ZCODE_HOME: "/tmp/zcode-cua-dev-home",
@@ -639,7 +709,7 @@ describe("desktopRuntimeEnv buildHostProcessEnv", () => {
       value: "/mock/resources",
       configurable: true,
     });
-    const { buildHostProcessEnv } = await import("../src/main/desktopRuntimeEnv.js");
+    const { buildHostProcessEnv } = await loadRuntimeEnv();
 
     const env = buildHostProcessEnv({
       ZCODE_CUA_BUNDLED_HELPER_APP_PATH: "/tmp/untrusted-helper.app",
@@ -657,7 +727,7 @@ describe("desktopRuntimeEnv buildHostProcessEnv", () => {
       value: "/mock/resources",
       configurable: true,
     });
-    const { buildHostProcessEnv } = await import("../src/main/desktopRuntimeEnv.js");
+    const { buildHostProcessEnv } = await loadRuntimeEnv();
 
     const env = buildHostProcessEnv({});
 
@@ -668,7 +738,7 @@ describe("desktopRuntimeEnv buildHostProcessEnv", () => {
 
   it("源码开发态不向 Host 注入独立 storage profile 或精确 CLI 根", async () => {
     appMock.isPackaged = false;
-    const { buildHostProcessEnv } = await import("../src/main/desktopRuntimeEnv.js");
+    const { buildHostProcessEnv } = await loadRuntimeEnv();
 
     const env = buildHostProcessEnv({});
 
@@ -689,7 +759,7 @@ describe("desktopRuntimeEnv buildHostProcessEnv", () => {
         value: "/mock/resources",
         configurable: true,
       });
-      const { buildHostProcessEnv } = await import("../src/main/desktopRuntimeEnv.js");
+      const { buildHostProcessEnv } = await loadRuntimeEnv();
 
       const env = buildHostProcessEnv({
         ZCODE_CUA_BUNDLED_HELPER_APP_PATH: "/tmp/untrusted-helper.app",
@@ -707,7 +777,7 @@ describe("desktopRuntimeEnv buildHostProcessEnv", () => {
     process.env["HTTP_PROXY"] = "http://ambient-proxy:8080";
     process.env["NODE_EXTRA_CA_CERTS"] = "/tmp/ambient-ca.pem";
     process.env["npm_config_proxy"] = "http://npm-proxy:8080";
-    const { buildHostProcessEnv } = await import("../src/main/desktopRuntimeEnv.js");
+    const { buildHostProcessEnv } = await loadRuntimeEnv();
 
     const env = buildHostProcessEnv({
       http_proxy: "http://local-proxy:8080",
@@ -744,7 +814,7 @@ describe("desktopRuntimeEnv buildHostProcessEnv", () => {
     writeFileSync(localGlmPath, "local\n", "utf-8");
     process.chdir(sandboxRoot);
 
-    const { buildHostProcessEnv } = await import("../src/main/desktopRuntimeEnv.js");
+    const { buildHostProcessEnv } = await loadRuntimeEnv();
 
     const env = buildHostProcessEnv({ GLM_BINARY_PATH: localGlmPath });
 
@@ -752,7 +822,7 @@ describe("desktopRuntimeEnv buildHostProcessEnv", () => {
   });
 
   it("本地 host 进程加载工作区 .env.development 的测试环境 API 与 ZAI 登录入口", async () => {
-    const { loadHostProcessEnvFromLocalFiles } = await import("../src/main/desktopRuntimeEnv.js");
+    const { loadHostProcessEnvFromLocalFiles } = await loadRuntimeEnv();
 
     const env = loadHostProcessEnvFromLocalFiles();
 
@@ -764,7 +834,7 @@ describe("desktopRuntimeEnv buildHostProcessEnv", () => {
 
   it("main 进程 endpoint 临时覆盖优先读取命令行环境变量", async () => {
     process.env["ZCODE_ENDPOINT_ORIGIN"] = "http://127.0.0.1:18765";
-    const { resolveZCodeEndpointEnvBaseOrigin } = await import("../src/main/desktopRuntimeEnv.js");
+    const { resolveZCodeEndpointEnvBaseOrigin } = await loadRuntimeEnv();
 
     expect(
       resolveZCodeEndpointEnvBaseOrigin({
@@ -785,8 +855,7 @@ describe("desktopRuntimeEnv buildHostProcessEnv", () => {
     delete process.env["ZAI_BUSINESS_BASE_URL"];
     delete process.env["ZAI_OAUTH_CLIENT_ID"];
 
-    const { buildHostProcessEnv, loadHostProcessEnvFromLocalFiles } =
-      await import("../src/main/desktopRuntimeEnv.js");
+    const { buildHostProcessEnv, loadHostProcessEnvFromLocalFiles } = await loadRuntimeEnv();
 
     const env = buildHostProcessEnv(loadHostProcessEnvFromLocalFiles());
 
@@ -802,8 +871,7 @@ describe("desktopRuntimeEnv buildHostProcessEnv", () => {
   // ZCODE_DYNAMIC_WORKFLOW_MODE 只有「写」和「删」两种动作，先在纯函数上钉住三档语义。
   describe("resolveDynamicWorkflowModeHostEnv", () => {
     it("未打包 dev 透传 shell 里的合法取值", async () => {
-      const { resolveDynamicWorkflowModeHostEnv } =
-        await import("../src/main/desktopRuntimeEnv.js");
+      const { resolveDynamicWorkflowModeHostEnv } = await loadRuntimeEnv();
 
       expect(
         resolveDynamicWorkflowModeHostEnv({
@@ -815,8 +883,7 @@ describe("desktopRuntimeEnv buildHostProcessEnv", () => {
     });
 
     it("未打包 dev 丢弃非法取值和缺省值，而不是转发给 Host", async () => {
-      const { resolveDynamicWorkflowModeHostEnv } =
-        await import("../src/main/desktopRuntimeEnv.js");
+      const { resolveDynamicWorkflowModeHostEnv } = await loadRuntimeEnv();
 
       expect(
         resolveDynamicWorkflowModeHostEnv({
@@ -835,8 +902,7 @@ describe("desktopRuntimeEnv buildHostProcessEnv", () => {
     });
 
     it("打包 preview 固定写入 alwaysOn，忽略 shell 的相反取值", async () => {
-      const { resolveDynamicWorkflowModeHostEnv } =
-        await import("../src/main/desktopRuntimeEnv.js");
+      const { resolveDynamicWorkflowModeHostEnv } = await loadRuntimeEnv();
 
       expect(
         resolveDynamicWorkflowModeHostEnv({
@@ -848,8 +914,7 @@ describe("desktopRuntimeEnv buildHostProcessEnv", () => {
     });
 
     it("打包 production 永不写入，shell 的合法取值同样无效", async () => {
-      const { resolveDynamicWorkflowModeHostEnv } =
-        await import("../src/main/desktopRuntimeEnv.js");
+      const { resolveDynamicWorkflowModeHostEnv } = await loadRuntimeEnv();
 
       expect(
         resolveDynamicWorkflowModeHostEnv({
@@ -863,13 +928,13 @@ describe("desktopRuntimeEnv buildHostProcessEnv", () => {
 
   it("未打包 dev 的 host env 带上 shell 里的 Dynamic Workflow 覆盖，非法取值则整键消失", async () => {
     process.env["ZCODE_DYNAMIC_WORKFLOW_MODE"] = "onDemand";
-    const { buildHostProcessEnv } = await import("../src/main/desktopRuntimeEnv.js");
+    const { buildHostProcessEnv } = await loadRuntimeEnv();
 
     expect(buildHostProcessEnv({}).ZCODE_DYNAMIC_WORKFLOW_MODE).toBe("onDemand");
 
     vi.resetModules();
     process.env["ZCODE_DYNAMIC_WORKFLOW_MODE"] = "not-a-mode";
-    const { buildHostProcessEnv: rebuilt } = await import("../src/main/desktopRuntimeEnv.js");
+    const { buildHostProcessEnv: rebuilt } = await loadRuntimeEnv();
 
     // 非法值必须被删掉而不是随 inheritedEnv 穿透；否则 Host 还要自己分辨来源。
     expect(rebuilt({}).ZCODE_DYNAMIC_WORKFLOW_MODE).toBeUndefined();
@@ -884,7 +949,7 @@ describe("desktopRuntimeEnv buildHostProcessEnv", () => {
     });
     process.env["ZCODE_DYNAMIC_WORKFLOW_MODE"] = "disabled";
 
-    const { buildHostProcessEnv } = await import("../src/main/desktopRuntimeEnv.js");
+    const { buildHostProcessEnv } = await loadRuntimeEnv();
 
     expect(buildHostProcessEnv({}).ZCODE_DYNAMIC_WORKFLOW_MODE).toBe("alwaysOn");
   });
@@ -898,7 +963,7 @@ describe("desktopRuntimeEnv buildHostProcessEnv", () => {
     });
     process.env["ZCODE_DYNAMIC_WORKFLOW_MODE"] = "alwaysOn";
 
-    const { buildHostProcessEnv } = await import("../src/main/desktopRuntimeEnv.js");
+    const { buildHostProcessEnv } = await loadRuntimeEnv();
 
     // shell 和 .env 两条继承路径都要被删干净，本机环境变量不能自行打开灰度。
     expect(buildHostProcessEnv({}).ZCODE_DYNAMIC_WORKFLOW_MODE).toBeUndefined();
@@ -961,7 +1026,7 @@ describe("desktopRuntimeEnv runtime identity", () => {
     process.env["ZCODE_DESKTOP_SESSION_DATA_DIR"] = "/tmp/zcode-e2e/session-data";
 
     const { runtimeApplicationName, runtimeHomePath, runtimeSessionDataPath, runtimeUserDataPath } =
-      await import("../src/main/desktopRuntimeEnv.js");
+      await loadRuntimeEnv();
 
     expect(runtimeApplicationName).toBe("ZCode E2E");
     expect(runtimeHomePath).toBe("/tmp/zcode-e2e/home");
@@ -977,7 +1042,7 @@ describe("desktopRuntimeEnv runtime identity", () => {
       runtimeApplicationName,
       runtimeSessionDataPath,
       runtimeUserDataPath,
-    } = await import("../src/main/desktopRuntimeEnv.js");
+    } = await loadRuntimeEnv();
 
     expect(isPreviewPackagedRuntime).toBe(true);
     expect(runtimeApplicationName).toBe("ZCode Preview");
@@ -999,7 +1064,7 @@ describe("desktopRuntimeEnv runtime identity", () => {
     });
 
     const { runtimeSessionDataPath, runtimeUserDataPath, shouldUseElectronDefaultUserDataPath } =
-      await import("../src/main/desktopRuntimeEnv.js");
+      await loadRuntimeEnv();
 
     expect(shouldUseElectronDefaultUserDataPath).toBe(true);
     expect(runtimeUserDataPath).toBeUndefined();

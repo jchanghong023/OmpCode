@@ -2,13 +2,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { IModelSelectionService, IZCodeAgentService } from "@zcode/services";
-import {
-  disposeServiceResourcesAndWait,
-  resolveDefaultZCodeAgentCommand,
-  setDataBaseDir,
-  type ZCodeAgentCommand,
-  type ZCodeAgentCommandResolverContext,
-} from "@zcode/services/node";
+import { disposeServiceResourcesAndWait, setDataBaseDir } from "@zcode/services/node";
 import {
   SERVICE_AUTHORITY_MODE_ENV,
   ZCODE_DESKTOP_CONTEXT_PROMPT_ENABLED_ENV,
@@ -20,8 +14,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createStdioServices, resolveRemoteAgentNetworkFromEnv } from "../src/stdioServices.js";
 
 const originalHome = process.env.HOME;
-const originalCommand = process.env.ZCODE_AGENT_SERVER_COMMAND;
-const originalArgsJson = process.env.ZCODE_AGENT_SERVER_ARGS_JSON;
 const originalDesktopContextPromptEnabled = process.env[ZCODE_DESKTOP_CONTEXT_PROMPT_ENABLED_ENV];
 
 function restoreEnv(name: string, value: string | undefined): void {
@@ -38,8 +30,6 @@ describe("stdio Desktop presentation surface", () => {
   afterEach(async () => {
     setDataBaseDir(null);
     restoreEnv("HOME", originalHome);
-    restoreEnv("ZCODE_AGENT_SERVER_COMMAND", originalCommand);
-    restoreEnv("ZCODE_AGENT_SERVER_ARGS_JSON", originalArgsJson);
     restoreEnv(ZCODE_DESKTOP_CONTEXT_PROMPT_ENABLED_ENV, originalDesktopContextPromptEnabled);
     vi.restoreAllMocks();
     await Promise.all(
@@ -66,7 +56,7 @@ describe("stdio Desktop presentation surface", () => {
     });
   });
 
-  it("让 Desktop attached remote authority 贯穿 stdio 装配并生成 Desktop Agent 命令", async () => {
+  it("让 Desktop attached remote authority 贯穿 stdio 装配与 Agent presentation surface", async () => {
     const home = await mkdtemp(join(tmpdir(), "zcode-stdio-desktop-surface-"));
     tempHomes.push(home);
     process.env.HOME = home;
@@ -75,12 +65,6 @@ describe("stdio Desktop presentation surface", () => {
     // 会把 desktop-attached-remote 推导出的 presentationSurface 灭成 undefined，
     // 让「surface 贯穿装配」断言变成环境敏感；显式置 1 恢复用例封闭性。
     process.env[ZCODE_DESKTOP_CONTEXT_PROMPT_ENABLED_ENV] = "1";
-    process.env.ZCODE_AGENT_SERVER_COMMAND = process.execPath;
-    process.env.ZCODE_AGENT_SERVER_ARGS_JSON = JSON.stringify([
-      "zcode.cjs",
-      "app-server",
-      "--stdio",
-    ]);
     const zcodeBuiltinProviderConfigFilePath = join(home, "zcode-builtin.json");
     const personalConfigFilePath = join(home, ".zcode", "v2", "provider_config.json");
     await mkdir(join(home, ".zcode", "v2"), { recursive: true });
@@ -179,12 +163,7 @@ describe("stdio Desktop presentation surface", () => {
       "utf8",
     );
 
-    let resolvedCommand: ZCodeAgentCommand | null = null;
-    const commandResolver = vi.fn((context: ZCodeAgentCommandResolverContext) => {
-      resolvedCommand = resolveDefaultZCodeAgentCommand(context);
-      // 集成测试只验证入口装配与最终命令，不启动长驻 Agent 子进程。
-      return null;
-    });
+    const commandResolver = vi.fn(() => null);
     const bootstrap = createStdioServices({
       env: {
         [SERVICE_AUTHORITY_MODE_ENV]: "desktop-attached-remote",
@@ -224,11 +203,6 @@ describe("stdio Desktop presentation surface", () => {
           workspacePath: "/workspace/project",
         }),
       );
-      expect(resolvedCommand).toEqual({
-        args: ["zcode.cjs", "app-server", "--stdio", "--surface", "desktop"],
-        command: process.execPath,
-        cwd: "/workspace/project",
-      });
     } finally {
       // 等待服务异步落盘与回收结束，避免清理临时目录时后台重新创建文件。
       await disposeServiceResourcesAndWait(bootstrap.services);

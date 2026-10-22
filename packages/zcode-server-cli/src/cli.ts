@@ -22,7 +22,11 @@ import {
   validateUninstallTarget,
 } from "./runtime/paths.js";
 import { validateServerInstallOwnership } from "./runtime/installationOwnership.js";
-import { createReleaseAgentWiring, type BundledAgentWiring } from "./runtime/agentWiring.js";
+import {
+  createReleaseAgentWiring,
+  resolveBundledAgentWiring,
+  type BundledAgentWiring,
+} from "./runtime/agentWiring.js";
 import { writeStableLauncher } from "./runtime/stableLauncher.js";
 import {
   runLocalArchiveUpdateCommand,
@@ -385,7 +389,7 @@ async function runServe(
   const supervisor = new Supervisor({
     layout,
     launcher: {
-      launch: (generation, release) => {
+      launch: async (generation, release) => {
         const runtimeRoot = release?.releaseDir ? join(release.releaseDir, "runtime") : null;
         const corePath = runtimeRoot
           ? join(runtimeRoot, "server-core.js")
@@ -398,9 +402,16 @@ async function runServe(
           ZCODE_DATA_BASE_DIR: layout.dataBaseDir,
           ZCODE_SERVER_ROOT: layout.serverRoot,
         };
+        // Metadata/status commands never need runtime assets. Resolve wiring only when
+        // this Supervisor actually launches a Core, including every candidate release.
         const releaseWiring = runtimeRoot
-          ? createReleaseAgentWiring(runtimeRoot, runtimeNode, inheritedEnv)
-          : runtimeOptions.bundledAgentWiring;
+          ? await createReleaseAgentWiring(runtimeRoot, inheritedEnv)
+          : runtimeOptions.bundledAgentWiring !== undefined
+            ? runtimeOptions.bundledAgentWiring
+            : await resolveBundledAgentWiring(
+                dirname(fileURLToPath(import.meta.url)),
+                inheritedEnv,
+              );
         return fork(corePath, [String(generation)], {
           execPath: runtimeNode,
           env: {

@@ -95,7 +95,7 @@ describe("resolveDefaultZCodeAgentCommand", () => {
     {
       name: "trailing orphan surface",
       input: ["app-server", "--surface"],
-      expected: ["app-server", "--surface", "desktop"],
+      expected: ["app-server", "--stdio", "--surface", "desktop"],
     },
   ] as const;
 
@@ -185,14 +185,14 @@ describe("resolveDefaultZCodeAgentCommand", () => {
 
     expect(command).toEqual({
       supportsStorageStartup: true,
-      storagePreparationEntry: expect.any(String),
+      storagePreparation: { kind: "node-worker", entry: expect.any(String) },
       command: process.execPath,
       args: [expect.any(String), "app-server", "--stdio"],
       cwd: "/repo/workspace",
       env: { ELECTRON_RUN_AS_NODE: "1" },
     });
     expect(realpathSync(command!.args![0]!)).toBe(realpathSync(distEntrypoint));
-    expect(realpathSync(command!.storagePreparationEntry!)).toBe(realpathSync(distEntrypoint));
+    expect(command!.storagePreparation).toEqual({ kind: "node-worker", entry: distEntrypoint });
   });
 
   it.each([
@@ -225,7 +225,7 @@ describe("resolveDefaultZCodeAgentCommand", () => {
         realpathSync(electron && enabled ? bytecode : source),
       );
       expect(command!.args!.slice(1)).toEqual(["app-server", "--stdio", "--surface", "desktop"]);
-      expect(realpathSync(command!.storagePreparationEntry!)).toBe(realpathSync(source));
+      expect(command!.storagePreparation).toEqual({ kind: "node-worker", entry: source });
       expect(command!.supportsStorageStartup).toBe(true);
     },
   );
@@ -299,10 +299,63 @@ describe("resolveDefaultZCodeAgentCommand", () => {
 
       expect(command).toMatchObject({
         command: "zcode-agent",
-        args: expected,
+        args: [...expected.slice(0, -2), "--cwd", "/repo/workspace", ...expected.slice(-2)],
       });
     },
   );
+
+  it("resolves external preparation from supplied environment, preserving profile and cwd", () => {
+    const command = resolveDefaultZCodeAgentCommand({
+      workspacePath: originalCwd,
+      workspaceKey: originalCwd,
+      presentationSurface: "desktop",
+      env: {
+        ZCODE_AGENT_SERVER_COMMAND: "omp",
+        ZCODE_AGENT_SERVER_ARGS_JSON: JSON.stringify([
+          "--profile",
+          "isolated",
+          "app-server",
+          "--stdio",
+        ]),
+        ZCODE_AGENT_SERVER_CWD: originalCwd,
+      },
+    });
+    expect(command).toMatchObject({
+      command: "omp",
+      cwd: originalCwd,
+      supportsStorageStartup: true,
+      storagePreparation: { kind: "command" },
+      args: [
+        "--profile",
+        "isolated",
+        "app-server",
+        "--stdio",
+        "--cwd",
+        originalCwd,
+        "--surface",
+        "desktop",
+      ],
+    });
+  });
+
+  it.each([
+    { args: [] },
+    { args: ["--stdio"] },
+    { args: ["app-server", "--prepare-storage"] },
+    { args: ["app-server", "--cwd"] },
+    { args: ["app-server", "--profile"] },
+  ])("rejects unsafe external argument overrides: $args", ({ args }) => {
+    expect(() =>
+      resolveDefaultZCodeAgentCommand({
+        workspacePath: originalCwd,
+        workspaceKey: originalCwd,
+        env: {
+          ZCODE_AGENT_SERVER_COMMAND: "omp",
+          ZCODE_AGENT_SERVER_ARGS_JSON: JSON.stringify(args),
+        },
+      }),
+    ).toThrow();
+  });
 
   it("monorepo 不可达时回退到已部署原生 binary", () => {
     delete process.env.ZCODE_AGENT_SERVER_COMMAND;
@@ -339,14 +392,12 @@ describe("resolveDefaultZCodeAgentCommand", () => {
     const workspacePath = mkdtempSync(join(tmpdir(), "zcode-agent-manager-"));
     createdDirs.push(workspacePath);
     const command = createDeferred<ZCodeAgentCommand>();
-    const commandResolver = vi.fn(() => command.promise);
-    const manager = new ZCodeAgentProcessManager({ commandResolver });
+    const manager = new ZCodeAgentProcessManager({
+      commandResolver: () => command.promise,
+    });
 
     const first = manager.getClient({ workspacePath });
     const second = manager.getClient({ workspacePath });
-    await Promise.resolve();
-
-    expect(commandResolver).toHaveBeenCalledTimes(1);
 
     command.resolve({
       command: process.execPath,
@@ -356,9 +407,12 @@ describe("resolveDefaultZCodeAgentCommand", () => {
 
     const [firstClient, secondClient] = await Promise.all([first, second]);
     expect(firstClient).toBe(secondClient);
-    expect(commandResolver).toHaveBeenCalledTimes(1);
+    const processes = manager.listManagedProcesses();
+    expect(processes).toHaveLength(1);
+    expect(processes[0]!.client).toBe(firstClient);
+    expect(processes[0]!.pid).toBeGreaterThan(0);
 
-    manager.disposeAll();
+    await manager.disposeAllAndWait();
   });
 
   it("Helper 恢复期不会 spawn，commit 后只允许同一 pending start 继续", async () => {
@@ -366,26 +420,34 @@ describe("resolveDefaultZCodeAgentCommand", () => {
     createdDirs.push(workspacePath);
     const gate = new CuaAgentAdmissionGate();
     const recoveryEpoch = gate.beginRecovery();
-    const commandResolver = vi.fn<() => ZCodeAgentCommand>(() => ({
+    const admissionReached = createDeferred<void>();
+    const commandResolver = () => ({
       command: process.execPath,
       args: ["-e", "setInterval(() => {}, 1000);"],
       cwd: workspacePath,
-    }));
+    });
     const manager = new ZCodeAgentProcessManager({
       commandResolver,
-      waitForSpawnAdmission: (context) => gate.waitForSpawnAdmission(context),
+      waitForSpawnAdmission: (context) => {
+        const admitted = gate.waitForSpawnAdmission(context);
+        admissionReached.resolve();
+        return admitted;
+      },
     });
 
     const first = manager.getClient({ workspacePath });
     const second = manager.getClient({ workspacePath });
-    await Promise.resolve();
-    expect(commandResolver).toHaveBeenCalledTimes(1);
+    await admissionReached.promise;
+    expect(manager.listManagedProcesses()).toEqual([]);
     expect(gate.isRecovering()).toBe(true);
 
     gate.commitRecovery(recoveryEpoch);
     const [firstClient, secondClient] = await Promise.all([first, second]);
     expect(firstClient).toBe(secondClient);
-    expect(commandResolver).toHaveBeenCalledTimes(1);
+    const processes = manager.listManagedProcesses();
+    expect(processes).toHaveLength(1);
+    expect(processes[0]!.client).toBe(firstClient);
+    expect(processes[0]!.pid).toBeGreaterThan(0);
 
     await manager.disposeAllAndWait();
   });
@@ -437,6 +499,7 @@ describe("resolveDefaultZCodeAgentCommand", () => {
       presentationSurface: "desktop",
       workspacePath,
       workspaceKey: workspacePath,
+      env: expect.any(Object),
     });
   });
 
@@ -1417,12 +1480,74 @@ require("node:readline").createInterface({ input: process.stdin }).on("line", li
       expect(commandResolver).toHaveBeenCalledWith({
         workspacePath,
         workspaceKey: workspacePath,
+        env: expect.any(Object),
       });
       expect(existsSync(workspacePath)).toBe(false);
     } finally {
       manager.disposeAll();
     }
   });
+
+  it.each(["injected", "explicit", "explicit-equals"] as const)(
+    "默认外部 resolver 的 %s cwd 参数遵循执行兜底与调用方所有权",
+    async (cwdArgument) => {
+      const rootDir = mkdtempSync(join(tmpdir(), "zcode-agent-external-fallback-cwd-"));
+      createdDirs.push(rootDir);
+      const workspacePath = join(rootDir, "missing-workspace");
+      const workspaceIdentity = "remote:host:missing-workspace";
+      const fallbackCwd = join(rootDir, "backing-workspace");
+      const markerPath = join(rootDir, "child-startup.json");
+      const entryPath = join(rootDir, "external-agent.cjs");
+      mkdirSync(fallbackCwd);
+      // 修复回归：读取真实子进程接收到的 cwd 与 argv，避免只覆盖自定义 resolver 的 spawn 目录。
+      writeFileSync(
+        entryPath,
+        `require("node:fs").writeFileSync(${JSON.stringify(markerPath)}, JSON.stringify({ cwd: process.cwd(), args: process.argv.slice(2) }));
+process.stdin.resume();
+process.stdin.on("end", () => process.exit(0));
+`,
+      );
+      const explicitArgs =
+        cwdArgument === "explicit"
+          ? ["--cwd", workspacePath]
+          : cwdArgument === "explicit-equals"
+            ? [`--cwd=${workspacePath}`]
+            : [];
+      const manager = new ZCodeAgentProcessManager({
+        spawnFallbackCwd: fallbackCwd,
+        resolveSpawnEnv: () => ({
+          ZCODE_AGENT_SERVER_COMMAND: process.execPath,
+          ZCODE_AGENT_SERVER_ARGS_JSON: JSON.stringify([
+            entryPath,
+            "app-server",
+            "--stdio",
+            ...explicitArgs,
+          ]),
+          ZCODE_AGENT_SERVER_CWD: workspacePath,
+        }),
+      });
+
+      try {
+        const workspace = { workspacePath, workspaceIdentity };
+        await manager.getClient(workspace);
+        await vi.waitFor(() => expect(existsSync(markerPath)).toBe(true));
+        const observed = JSON.parse(readFileSync(markerPath, "utf-8")) as {
+          cwd: string;
+          args: string[];
+        };
+        expect(realpathSync(observed.cwd)).toBe(realpathSync(fallbackCwd));
+        const expectedArgs = cwdArgument === "injected" ? ["--cwd", fallbackCwd] : explicitArgs;
+        expect(observed.args).toEqual(["app-server", "--stdio", ...expectedArgs]);
+        expect((await manager.getRuntimeIdentity(workspace)).workspaceKey).toBe(workspaceIdentity);
+        expect(manager.listManagedProcesses()).toEqual([
+          expect.objectContaining({ workspacePath }),
+        ]);
+        expect(existsSync(workspacePath)).toBe(false);
+      } finally {
+        await manager.disposeAllAndWait();
+      }
+    },
+  );
 
   it("显式自定义 cwd 与 workspace 不同时不使用 fallback cwd", async () => {
     const rootDir = mkdtempSync(join(tmpdir(), "zcode-agent-custom-cwd-"));
@@ -1566,7 +1691,10 @@ require("node:readline").createInterface({ input: process.stdin }).on("line", li
         join(sandboxRoot, ".zcode", "v2", "dev", "stdio-traffic"),
         "--",
         "zcode-agent",
-        ...expected,
+        ...expected.slice(0, -2),
+        "--cwd",
+        "/repo/workspace",
+        ...expected.slice(-2),
       ]);
     },
   );

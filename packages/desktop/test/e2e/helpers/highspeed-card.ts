@@ -1,3 +1,4 @@
+import { getE2EAppDataPaths } from "./desktop-app.js";
 import {
   E2E_BIGMODEL_PLAN_PROVIDER_ID,
   E2E_PLAN_FIRST_MODEL,
@@ -9,6 +10,7 @@ import {
   waitForSelectedModel,
 } from "./model-provider-restart.js";
 import { skipOccupationOnboardingIfPresent } from "./occupation-onboarding.js";
+import { startDraftFromProject } from "./project-sidebar.js";
 import {
   prepareV4ConversationE2E,
   sendV4Prompt,
@@ -57,6 +59,10 @@ export async function prepareHighspeedDrawWorkspace() {
   // 按真实 UI 跳过引导（与其他 case 同一 helper），不伪造引导记录。
   await skipOccupationOnboardingIfPresent();
   await prepareV4ConversationE2E({ skipProvider: true });
+  // Bug 根因：通用准备可复用空草稿，未必经过 Root 的项目 scope 登记；
+  // 此时 Recent 会写入旧 workspace key，重启后的 scoped Composer 读不到 GLM。
+  // 先走真实项目新建入口，建立 scope 与项目草稿，再 seed 同一 scope 的 Recent。
+  await startDraftFromProject(getE2EAppDataPaths().workspace);
   await seedBigModelOAuthCredential();
   // Highspeed 推理与 draw 共用双凭据；普通抽卡 mock 会绕过推理鉴权，创建期退回 case 不会。
   // 缺少登录 JWT 时 prepareTurn 会在注入 execution Selection 前降级，测试无法进入目标失败点。

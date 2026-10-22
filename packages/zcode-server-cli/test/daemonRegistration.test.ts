@@ -227,8 +227,8 @@ describe("daemon service registration", () => {
     const supervisor = new Supervisor({
       layout,
       launcher: {
-        launch: (generation) => {
-          queueMicrotask(() =>
+        launch: async (generation) => {
+          setImmediate(() =>
             core.emit("message", {
               type: "ready",
               host: "127.0.0.1",

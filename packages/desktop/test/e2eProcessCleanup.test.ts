@@ -341,6 +341,81 @@ describe("desktop e2e process cleanup", () => {
     ).toEqual([12, 11, 10]);
   });
 
+  it("finds native app-server orphans by exact run HOME --cwd without crossing neighboring paths", () => {
+    const home = "F:\\repo\\packages\\desktop\\.e2e-home-run-shard-5";
+    const processes = [
+      {
+        pid: 84740,
+        ppid: 92036,
+        command: `"F:\\repo\\dist\\omp.exe" app-server --stdio --cwd ${home}\\ZCodeProject --surface desktop`,
+      },
+      {
+        pid: 90512,
+        ppid: 73004,
+        command: `"F:\\repo\\dist\\omp.exe" app-server --stdio --cwd ${home}-other\\ZCodeProject --surface desktop`,
+      },
+      {
+        pid: 90513,
+        ppid: 73004,
+        command: `"F:\\repo\\dist\\omp.exe" app-server --stdio --cwd F:\\other-project --surface desktop`,
+      },
+    ];
+    expect(collectE2EProcessTreePids(processes, { currentPid: 999, homeDir: home })).toEqual([
+      84740,
+    ]);
+  });
+
+  it("reclaims quoted Electron utility supervisors so they cannot restart an owned native orphan", () => {
+    const home = "F:\\repo\\packages\\desktop\\.e2e-home-run-shard-5";
+    const processes = [
+      {
+        pid: 84740,
+        ppid: 92036,
+        command: `"F:\\repo\\dist\\omp.exe" app-server --stdio --cwd ${home}\\ZCodeProject --surface desktop`,
+      },
+      {
+        pid: 92036,
+        ppid: 92000,
+        command: '"F:\\Electron Runtime\\electron.exe" --type=utility --service-sandbox-type=none',
+      },
+      { pid: 92000, ppid: 91000, command: '"F:\\Electron Runtime\\electron.exe" app' },
+      { pid: 91000, ppid: 90000, command: '"F:\\Driver Runtime\\chromedriver.exe" --port=1234' },
+      { pid: 90000, ppid: 1, command: "node.exe terminal.cjs" },
+      {
+        pid: 90001,
+        ppid: 90000,
+        command:
+          '"F:\\repo\\dist\\omp.exe" app-server --stdio --cwd F:\\other-project --surface desktop',
+      },
+    ];
+    expect(collectE2EProcessTreePids(processes, { currentPid: 999, homeDir: home })).toEqual([
+      92036, 92000, 91000, 84740,
+    ]);
+  });
+
+  it("retains Windows creation identity for reuse-safe asynchronous cleanup", async () => {
+    const runCommand = vi.fn<(command: string, args: string[]) => Promise<string>>(async () =>
+      JSON.stringify([
+        {
+          ProcessId: 84740,
+          ParentProcessId: 92036,
+          CommandLine: "omp.exe app-server",
+          Birth: "638967000000000000",
+        },
+      ]),
+    );
+    await expect(
+      listSystemProcesses({
+        platform: "win32",
+        includeRuntimeIdentity: true,
+        runCommand,
+      }),
+    ).resolves.toEqual([
+      { pid: 84740, ppid: 92036, command: "omp.exe app-server", birth: "638967000000000000" },
+    ]);
+    expect(runCommand.mock.calls[0]?.[1]?.join(" ")).toContain("CreationDate");
+  });
+
   it("uses the shared run identity scanner for POSIX process trees", () => {
     const runCommand = vi.fn(() =>
       [

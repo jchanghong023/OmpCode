@@ -1,13 +1,22 @@
+import { spawn } from "node:child_process";
 import { realpath } from "node:fs/promises";
-import { resolve as resolvePath } from "node:path";
+import { isAbsolute, resolve as resolvePath } from "node:path";
 import { Worker } from "node:worker_threads";
-import { createInterface } from "node:readline";
 import {
   type DatabaseMigrationFacts,
   zcodeStoragePreparationFrameSchema,
   type DatabaseStartupState,
 } from "@zcode/shared";
-import { resolveDefaultZCodeAgentCommand } from "@zcode/services/storage-startup";
+import {
+  resolveDefaultZCodeAgentCommand,
+  buildZCodeAgentCommandEnv,
+  shouldSpawnInDetachedProcessGroup,
+  terminateProcessTreeAndWait,
+  captureProcessTreeSnapshotAsync,
+  captureExitedRootDescendantsSnapshotAsync,
+  captureProcessGroupSnapshot,
+  type ProcessTreeSnapshot,
+} from "@zcode/services/storage-startup";
 
 type Phase = NonNullable<DatabaseStartupState["databasePhase"]>;
 import { workerMessageSchema } from "./contract.js";
@@ -78,7 +87,7 @@ export function prepareHostStorage(
   });
 }
 
-/** 在 Host 所属 Worker 运行同一 CLI bundle 的存储入口；Host 退出不会留下持锁孤儿进程。 */
+/** Prepare the selected runtime through its explicit Worker or executable boundary. */
 export async function prepareSessionStorage(options: {
   cwd: string;
   env?: Record<string, string>;
@@ -94,50 +103,174 @@ export async function prepareSessionStorage(options: {
     workspacePath: options.cwd,
     workspaceKey: options.cwd,
     presentationSurface: "desktop",
+    env: { ...process.env, ...options.env },
   });
-  if (!command?.supportsStorageStartup || !command.storagePreparationEntry)
+  if (!command?.supportsStorageStartup || !command.storagePreparation)
     throw statusError("unsupported_runtime");
-  const entry = command.storagePreparationEntry;
-  await new Promise<void>((resolve, reject) => {
-    const child = new Worker(entry, {
-      argv: ["app-server", "--stdio", "--prepare-storage", "--cwd", command.cwd ?? options.cwd],
-      env: { ...process.env, ...options.env, ...command.env },
-      stdin: true,
-      stdout: true,
-      stderr: true,
-    });
+  options.signal.throwIfAborted();
+  const preparation = command.storagePreparation;
+  // 与正常启动一致：清洗继承环境后合入可信补丁，命令环境优先。
+  const env = buildZCodeAgentCommandEnv(process.env, { ...options.env, ...command.env });
+  const cwd = command.cwd ?? options.cwd;
+  const completion = Promise.withResolvers<void>();
+  const spawnedAt = Date.now();
+  let exitedAt: number | undefined;
+  const { resolve, reject } = completion;
+  {
+    const args = [...(command.args ?? [])];
+    if (!args.includes("--cwd") && !args.some((arg) => arg.startsWith("--cwd=")))
+      args.push("--cwd", cwd);
+    args.push("--prepare-storage");
+    const external =
+      preparation.kind === "command"
+        ? spawn(command.command, args, {
+            cwd,
+            env,
+            stdio: ["pipe", "pipe", "pipe"],
+            detached: shouldSpawnInDetachedProcessGroup(),
+          })
+        : undefined;
+    const child =
+      external ??
+      new Worker(preparation.kind === "node-worker" ? preparation.entry : "", {
+        argv: [
+          ...(command.args?.slice(1).length
+            ? command.args.slice(1)
+            : ["app-server", "--stdio", "--surface", "desktop"]),
+          "--prepare-storage",
+          "--cwd",
+          cwd,
+        ],
+        env,
+        stdin: true,
+        stdout: true,
+        stderr: true,
+      });
     const input = child.stdin!;
-    const lines = createInterface({ input: child.stdout });
+    const output = child.stdout!;
+    output.setEncoding("utf8");
     let settled = false;
     let prepared = false;
     let pathReceived = false;
     let preparedPath: string | undefined;
+    let pathConfirmed = false;
+    let reused = false;
+    let state:
+      | { attemptId: string; databaseId: string; sequence: number; phase: string }
+      | undefined;
+    let buffer = "";
     let failure: unknown;
+    let cleanup: Promise<{ remainingPids: number[] }> | undefined;
+    let outputEnded = false;
+    let externalExitCode: number | null | undefined;
+    const cleanupExternal = () =>
+      (cleanup ??= (async () => {
+        const root = external!;
+        const childHadExited = root.exitCode !== null || root.signalCode !== null;
+        const ownership = {
+          ownedProcessStartedAtMs: spawnedAt,
+          resolveOwnedProcessExitedAtMs: () => exitedAt,
+        };
+        let snapshot: ProcessTreeSnapshot | undefined = childHadExited
+          ? undefined
+          : await captureProcessTreeSnapshotAsync(root, ownership);
+        if (!snapshot) {
+          if (process.platform === "win32" && !childHadExited && root.pid) {
+            // 身份查询失败不代表原子进程已经退出，必须保留不可验证的归属。
+            snapshot = {
+              rootPid: root.pid,
+              descendantPids: [],
+              identities: [],
+              identityVerification: "unavailable",
+            };
+          } else if (root.pid && shouldSpawnInDetachedProcessGroup()) {
+            snapshot = captureProcessGroupSnapshot(root.pid);
+          } else {
+            snapshot = await captureExitedRootDescendantsSnapshotAsync(root.pid ?? 0, {
+              ...ownership,
+              ownedProcessExitedAtMs: exitedAt ?? Date.now(),
+            });
+            if (!snapshot && process.platform === "win32" && root.pid) {
+              snapshot = {
+                rootPid: root.pid,
+                descendantPids: [],
+                identities: [],
+                identityVerification: "unavailable",
+              };
+            }
+          }
+        }
+        // 与正常 stdio transport 一样，先保全归属再请求 EOF；等待 ACK 的进程也能收尾。
+        if (!input.destroyed && input.writable) {
+          try {
+            input.end();
+          } catch {
+            // 进程可能已经关闭输入，不能因此跳过后续自有进程树回收。
+          }
+        }
+        return await terminateProcessTreeAndWait(root, {
+          ...(root.pid && shouldSpawnInDetachedProcessGroup()
+            ? { ownedProcessGroupId: root.pid }
+            : {}),
+          ...ownership,
+          ...(snapshot ? { snapshot } : {}),
+        });
+      })());
+    const finish = async (code: number | null) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(firstStateTimer);
+      if (external) {
+        try {
+          const result = await cleanupExternal();
+          if (result.remainingPids.length > 0) failure ??= statusError("transport_closed");
+        } catch (error) {
+          failure ??= error;
+        }
+      }
+      // 清理屏障完成前取消仍然有效，不能把正常退出转成业务启动成功。
+      options.signal.removeEventListener("abort", abort);
+      if (options.signal.aborted)
+        failure ??= options.signal.reason ?? statusError("transport_closed");
+      if (code === 0 && prepared && !failure && buffer.length === 0) {
+        if (preparedPath) options.preparedPaths?.add(preparedPath);
+        resolve();
+      } else reject(failure ?? statusError("transport_closed"));
+    };
     const terminate = () => {
-      void child.terminate();
+      if (external) {
+        void cleanupExternal().then(
+          () => finish(null),
+          (error) => {
+            failure ??= error;
+            void finish(null);
+          },
+        );
+      } else void (child as Worker).terminate();
     };
     const abort = () => {
-      failure ??= statusError("transport_closed");
+      failure ??= options.signal.reason ?? statusError("transport_closed");
       terminate();
     };
     const firstStateTimer = setTimeout(() => {
-      failure = statusError("startup_status_timeout");
+      failure ??= statusError("startup_status_timeout");
       terminate();
     }, 30_000);
     options.signal.addEventListener("abort", abort, { once: true });
     // stdout 只有有界控制帧，stderr 排空但不把可能含本地路径的原始文本上报。
-    child.stderr.resume();
+    child.stderr!.resume();
     input.on("error", (error) => {
       failure ??= error;
       terminate();
     });
-    lines.on("line", (line) => {
+    const acceptLine = (line: string) => {
       try {
-        if (line.length > 65536) throw statusError("transport_closed");
+        if (prepared || failure || Buffer.byteLength(line, "utf8") > 65536)
+          throw statusError("transport_closed");
         const frame = zcodeStoragePreparationFrameSchema.parse(JSON.parse(line));
-        clearTimeout(firstStateTimer);
+        if (frame.method === "startup/storagePath") clearTimeout(firstStateTimer);
         if (frame.method === "startup/storagePath") {
-          if (pathReceived) throw statusError("transport_closed");
+          if (pathReceived || !isAbsolute(frame.params.path)) throw statusError("transport_closed");
           pathReceived = true;
           void (async () => {
             // 仅复用同一次准备中已成功关闭的真实库，不能按不同 cwd 误判为不同数据库。
@@ -148,46 +281,99 @@ export async function prepareSessionStorage(options: {
               },
             );
             if (settled || failure || options.signal.aborted) return;
-            const reuse = options.preparedPaths?.has(preparedPath) ?? false;
-            if (!reuse) await options.observePath(frame.params.path);
-            if (!settled && !failure && !options.signal.aborted)
-              input.write(`${JSON.stringify({ method: "startup/storagePathReady", reuse })}\n`);
+            reused = options.preparedPaths?.has(preparedPath) ?? false;
+            if (!reused) await options.observePath(frame.params.path);
+            if (!settled && !failure && !options.signal.aborted) {
+              pathConfirmed = true;
+              input.write(
+                `${JSON.stringify({ method: "startup/storagePathReady", reuse: reused })}\n`,
+              );
+            }
           })().catch((error) => {
             failure ??= error;
             terminate();
           });
         } else if (frame.method === "startup/storagePrepared") {
-          prepared = pathReceived;
+          if (!pathConfirmed || (!reused && state?.phase !== "ready"))
+            throw statusError("transport_closed");
+          prepared = true;
           input.end();
-        } else if (frame.params.phase === "failed")
-          failure ??= statusError(
-            frame.params.errorCode ?? "sql_failed",
-            frame.params,
-            frame.params.databaseId,
-          );
-        else
-          options.report(frame.params.phase, {
-            databaseId: frame.params.databaseId,
-            migration: frame.params.migration,
-          });
+        } else {
+          const next = frame.params;
+          if (
+            !pathConfirmed ||
+            reused ||
+            next.databaseKind !== "session" ||
+            (state &&
+              (next.attemptId !== state.attemptId ||
+                next.databaseId !== state.databaseId ||
+                next.sequence <= state.sequence ||
+                state.phase === "ready" ||
+                state.phase === "failed"))
+          )
+            throw statusError("transport_closed");
+          state = next;
+          if (next.phase === "failed") {
+            failure ??= statusError(next.errorCode ?? "sql_failed", next, next.databaseId);
+            terminate();
+          } else
+            options.report(next.phase, { databaseId: next.databaseId, migration: next.migration });
+        }
       } catch (error) {
         failure ??= error;
         terminate();
       }
+    };
+    output.on("data", (chunk: string) => {
+      buffer += chunk;
+      let newline: number;
+      while ((newline = buffer.indexOf("\n")) !== -1 && !failure) {
+        const line = buffer.slice(0, newline);
+        buffer = buffer.slice(newline + 1);
+        acceptLine(line);
+      }
+      if (Buffer.byteLength(buffer, "utf8") > 65536) {
+        failure ??= statusError("transport_closed");
+        terminate();
+      }
+    });
+    output.once("end", () => {
+      outputEnded = true;
+      if (!prepared || buffer.length > 0) {
+        failure ??= statusError("transport_closed");
+        terminate();
+      }
+      if (externalExitCode !== undefined) void finish(externalExitCode);
+    });
+    external?.once("exit", (code) => {
+      exitedAt = Date.now();
+      externalExitCode = code;
+      // close waits for inherited stdio too; begin owned-tree cleanup at root exit,
+      // rather than waiting for descendants to release the pipes before killing them.
+      void cleanupExternal().then(
+        (result) => {
+          if (result.remainingPids.length > 0) failure ??= statusError("transport_closed");
+          if (code !== 0 || outputEnded || failure) void finish(code);
+        },
+        (error) => {
+          failure ??= error;
+          void finish(code);
+        },
+      );
     });
     child.once("error", (error) => {
       failure ??= error;
+      terminate();
     });
-    child.once("exit", (code) => {
-      settled = true;
-      clearTimeout(firstStateTimer);
-      options.signal.removeEventListener("abort", abort);
-      lines.close();
-      if (code === 0 && prepared && !failure) {
-        if (preparedPath) options.preparedPaths?.add(preparedPath);
-        resolve();
-      } else reject(failure ?? statusError("transport_closed"));
-    });
+    if (external)
+      external.once("close", (code) => {
+        void finish(code);
+      });
+    else
+      child.once("exit", (code) => {
+        void finish(code);
+      });
     if (options.signal.aborted) abort();
-  });
+  }
+  await completion.promise;
 }

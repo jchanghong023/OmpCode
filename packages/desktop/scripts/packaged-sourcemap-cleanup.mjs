@@ -28,6 +28,10 @@ function walkFiles(rootDir, visitor) {
   if (!existsSync(rootDir)) {
     return;
   }
+  if (statSync(rootDir).isFile()) {
+    visitor(rootDir);
+    return;
+  }
 
   for (const entry of readdirSync(rootDir)) {
     const entryPath = resolve(rootDir, entry);
@@ -109,8 +113,19 @@ export async function cleanupPackagedSourcemaps({
     }
   }
 
-  const stripSummary = stripSourceMappingUrlCommentsInDirectory(resourcesDir);
-  const mapSummary = removeSourceMapFilesInDirectory(resourcesDir);
+  const stripSummary = { filesChanged: 0, referencesRemoved: 0 };
+  const mapSummary = { filesRemoved: 0 };
+  if (existsSync(resourcesDir)) {
+    for (const entry of readdirSync(resourcesDir)) {
+      // OMP 已由固定 manifest 摘要封存，整个目录必须保留原始字节。
+      if (entry === "omp") continue;
+      const entryPath = resolve(resourcesDir, entry);
+      const stripped = stripSourceMappingUrlCommentsInDirectory(entryPath);
+      stripSummary.filesChanged += stripped.filesChanged;
+      stripSummary.referencesRemoved += stripped.referencesRemoved;
+      mapSummary.filesRemoved += removeSourceMapFilesInDirectory(entryPath).filesRemoved;
+    }
+  }
   logger.log(
     `[afterPack] resources sourcemap cleanup references=${stripSummary.referencesRemoved} files=${stripSummary.filesChanged} maps=${mapSummary.filesRemoved}`,
   );

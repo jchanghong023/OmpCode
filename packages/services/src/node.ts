@@ -142,6 +142,7 @@ export {
 } from "./zcode-agent/zcodeAgentProcessManager.js";
 export type {
   ZCodeAgentCommand,
+  ZCodeAgentStoragePreparation,
   ZCodeAgentCommandResolver,
   ZCodeAgentCommandResolverContext,
   ZCodeAgentProcessManagerOptions,

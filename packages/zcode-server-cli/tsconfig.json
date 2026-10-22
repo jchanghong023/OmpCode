@@ -3,13 +3,9 @@
   "compilerOptions": {
     "rootDir": "src",
     "outDir": "dist",
-    "lib": ["ES2022", "DOM"],
+    "lib": ["ES2022", "ES2024.Promise", "DOM"],
     "types": ["node"]
   },
   "include": ["src"],
-  "references": [
-    { "path": "../shared" },
-    { "path": "../rpc" },
-    { "path": "../services" }
-  ]
+  "references": [{ "path": "../shared" }, { "path": "../rpc" }, { "path": "../services" }]
 }

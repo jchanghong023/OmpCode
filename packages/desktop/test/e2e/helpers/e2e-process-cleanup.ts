@@ -8,6 +8,7 @@ export interface E2EProcessInfo {
   command: string;
   pid: number;
   ppid: number;
+  birth?: string;
 }
 
 export interface E2EProcessCleanupIdentity {
@@ -31,6 +32,7 @@ export interface E2EProcessScanOptions {
 export interface E2EAsyncProcessScanOptions {
   platform?: NodeJS.Platform;
   runCommand?: (command: string, args: string[]) => Promise<string>;
+  includeRuntimeIdentity?: boolean;
 }
 
 export function buildE2ERunIdArg(runId: string) {
@@ -73,9 +75,12 @@ export async function listSystemProcesses(
 ): Promise<E2EProcessInfo[]> {
   const platform = options.platform ?? process.platform;
   const runCommand = options.runCommand ?? runProcessScanCommandAsync;
-  return platform === "win32"
-    ? parseWindowsProcessRows(await runWindowsProcessScanAsync(runCommand))
-    : parsePosixProcessRows(await runCommand("ps", ["-axo", "pid=,ppid=,command="]));
+  if (platform === "win32") {
+    return parseWindowsProcessRows(
+      await runWindowsProcessScanAsync(runCommand, options.includeRuntimeIdentity),
+    );
+  }
+  return parsePosixProcessRows(await runCommand("ps", ["-axo", "pid=,ppid=,command="]));
 }
 
 export function collectProcessTreeByRootPids(
@@ -167,11 +172,16 @@ export function collectE2EProcessTreePids(
 
 function isE2EProcessAncestorCandidate(command: string, includeChromeDriverAncestors: boolean) {
   const normalizedCommand = command.trim().replaceAll("\\", "/").toLowerCase();
+  // Windows 命令行的 exe 常被双引号包住；旧后缀边界把 `"electron.exe" --type=utility`
+  // 排除，导致只杀 native 子进程，存活 Host 又把它重启。
+  const executable = normalizedCommand.startsWith('"')
+    ? normalizedCommand.slice(1, normalizedCommand.indexOf('"', 1))
+    : (normalizedCommand.split(/\s/u, 1)[0] ?? "");
+  const name = executable.slice(executable.lastIndexOf("/") + 1);
   return (
-    (includeChromeDriverAncestors &&
-      /(?:^|\/)chromedriver(?:\.exe)?(?:\s|$)/u.test(normalizedCommand)) ||
-    /(?:^|\/)electron(?:\.exe)?(?:\s|$)/u.test(normalizedCommand) ||
-    /(?:^|\/)zcode e2e(?:\.exe)?(?:\s|$)/u.test(normalizedCommand)
+    (includeChromeDriverAncestors && /^(?:chromedriver)(?:\.exe)?$/u.test(name)) ||
+    /^(?:electron|zcode e2e)(?:\.exe)?$/u.test(name) ||
+    /^zcode e2e(?:\.exe)?(?:\s|$)/u.test(normalizedCommand)
   );
 }
 
@@ -236,6 +246,7 @@ function parseWindowsProcessRows(output: string): E2EProcessInfo[] {
         command: typeof record.CommandLine === "string" ? record.CommandLine : "",
         pid,
         ppid: parentPid,
+        ...(typeof record.Birth === "string" ? { birth: record.Birth } : {}),
       },
     ];
   });
@@ -273,10 +284,13 @@ function runWindowsProcessScan(runCommand: (command: string, args: string[]) => 
 
 async function runWindowsProcessScanAsync(
   runCommand: (command: string, args: string[]) => Promise<string>,
+  includeRuntimeIdentity = false,
 ) {
   const script = [
     "Get-CimInstance Win32_Process |",
-    "Select-Object ProcessId,ParentProcessId,CommandLine |",
+    includeRuntimeIdentity
+      ? "Select-Object ProcessId,ParentProcessId,CommandLine,@{Name='Birth';Expression={$_.CreationDate.ToUniversalTime().Ticks.ToString()}} |"
+      : "Select-Object ProcessId,ParentProcessId,CommandLine |",
     "ConvertTo-Json -Compress",
   ].join(" ");
   let latestError: unknown = null;
@@ -391,4 +405,47 @@ function hasCommandBoundary(char: string | undefined) {
 
 function uniqueStrings(values: string[]) {
   return [...new Set(values.filter(Boolean))];
+}
+
+export async function terminateOwnedE2EProcesses(identity: E2EProcessCleanupIdentity) {
+  if (process.platform !== "win32") return;
+  const processes = await listSystemProcesses({ includeRuntimeIdentity: true });
+  // 身份路径只是证据之一：仅 runtime 可作为补扫根，Bazel/java 与其他调用不被认领。
+  const runtimeProcesses = processes.map((item) => ({
+    ...item,
+    command:
+      /^(?:"[^"]*[\\/](?:node|electron|omp|chromedriver|zcode(?: e2e)?)\.exe"|(?:[^"\s]*[\\/])?(?:node|electron|omp|chromedriver|zcode(?: e2e)?)(?:\.exe)?)(?:\s|$)/iu.test(
+        item.command.trim(),
+      )
+        ? item.command
+        : "",
+  }));
+  const owned = new Set(collectE2EProcessTreePids(runtimeProcesses, identity));
+  const targets = processes.filter((item) => owned.has(item.pid) && item.birth);
+  if (process.platform === "win32") {
+    if (targets.length === 0) return;
+    const entries = targets.map((item) => `@{Pid=${item.pid};Birth='${item.birth}'}`).join(",");
+    // 首错已同步上报；此处只等待自有进程回收，不等待 worker 报告。
+    await runProcessScanCommandAsync("powershell.exe", [
+      "-NoProfile",
+      "-Command",
+      `
+      @(${entries}) | ForEach-Object {
+        $target = $_
+        $live = Get-CimInstance Win32_Process -Filter ("ProcessId=" + $target.Pid)
+        if ($live -and $live.CreationDate.ToUniversalTime().Ticks.ToString() -eq $target.Birth) {
+          & taskkill /PID $target.Pid /T /F 2>$null | Out-Null
+          if ($LASTEXITCODE -ne 0) {
+            $remaining = Get-CimInstance Win32_Process -Filter ("ProcessId=" + $target.Pid)
+            if ($remaining -and $remaining.CreationDate.ToUniversalTime().Ticks.ToString() -eq $target.Birth) {
+              throw ("Owned E2E process survived taskkill: " + $target.Pid)
+            }
+          }
+        }
+      }
+      exit 0
+    `,
+    ]);
+    return;
+  }
 }

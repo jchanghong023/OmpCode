@@ -4,6 +4,7 @@ import {
   TID_SETTINGS_SECTION_NAV,
   TID_TASK_SETTINGS_BUTTON,
   TID_V4_COMPOSER_INPUT,
+  TID_V4_COMPOSER_SEND,
   TID_V4_STOP,
   testId,
 } from "@zcode/shared/test-ids";
@@ -32,6 +33,7 @@ import {
   waitForUpstreamRequestContaining,
 } from "../helpers/conversation-session-network.js";
 import { getQueueItems, waitForQueueContaining } from "../helpers/conversation-session-queue.js";
+import { startDraftFromProject } from "../helpers/project-sidebar.js";
 import {
   clickV4Stop,
   getV4ConversationState,
@@ -39,7 +41,6 @@ import {
   prepareV4ConversationE2E,
   sendV4Prompt,
   setV4ComposerText,
-  startNewV4Draft,
   waitForV4ComposerText,
   waitForV4ConversationState,
   waitForV4UserMessageContaining,
@@ -58,7 +59,8 @@ describe("会话区修饰键单条 delivery E2E", () => {
 
   beforeEach(async function () {
     this.timeout(TEST_TIMEOUT_MS);
-    await startNewV4Draft();
+    // 全局新任务会切到独立 draft cwd；本组设置返回等待固定项目，须用项目级新建保持准备契约一致。
+    await startDraftFromProject(DEFAULT_WORKSPACE);
   });
 
   afterEach(async () => {
@@ -138,7 +140,7 @@ describe("会话区修饰键单条 delivery E2E", () => {
 
   it("M06n：guide running 下 Cmd/Ctrl+Enter 只反向进入 future queue", async () => {
     await setInteractionBehavior("guide");
-    await startNewV4Draft();
+    await startDraftFromProject(DEFAULT_WORKSPACE);
     const runId = Date.now();
     await startPreOutputTurn(`E2E_MODIFIED_GUIDE_BASE_${runId}`);
     const marker = `E2E_MODIFIED_GUIDE_QUEUE_${runId}`;
@@ -155,6 +157,9 @@ describe("会话区修饰键单条 delivery E2E", () => {
 });
 
 async function submitWithModifiedEnter() {
+  // streaming/Stop 可先于首发 ACK 出现；先等真实可提交态，再测快捷键的清空时限，
+  // 否则 Lexical 会按 pending 门禁忽略按键，测试并未真正发起第二次提交。
+  await $(sel(TID_V4_COMPOSER_SEND)).waitForEnabled({ timeout: 15000 });
   // Lexical 是 contenteditable；通用 DOM click helper 不会建立真实 WebDriver 键盘焦点，
   // 会让 Cmd/Ctrl+Enter 发到旧 activeElement，形成“产品未清空”的假失败。
   await $(sel(TID_V4_COMPOSER_INPUT)).click();

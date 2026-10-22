@@ -32,6 +32,8 @@ import {
   type ZCodeConfigOption,
   type ZCodeProvider,
 } from "@zcode/shared";
+import type { OmpModelRef } from "@zcode/shared";
+import { OmpConfigurationEntry } from "@/omp-configuration/module.js";
 import { TID_V4_MODEL_CONFIG, TID_V4_COMPOSER_INPUT } from "@zcode/shared/test-ids";
 import type {
   SessionConfigState,
@@ -442,6 +444,7 @@ export interface V4ComposerToolbarProps {
 function V4ComposerModelControlsImpl({
   workspacePath,
   workspaceIdentity,
+  sessionId,
   modelSelectionView = null,
   modelSelectionState = MODEL_SELECTION_LOADING_STATE,
   modelSelectionReload,
@@ -467,6 +470,12 @@ function V4ComposerModelControlsImpl({
   onRecoverCustomModelSelection,
 }: V4ComposerToolbarProps) {
   const { intl, locale } = useZCodeIntl();
+  const handleOmpTemporaryModelSelected = useCallback(
+    (model: OmpModelRef) => {
+      onSelectModel(model.provider, model.modelId, null);
+    },
+    [onSelectModel],
+  );
   const { openCodingPlanUpgrade } = useCodingPlanUpgradeDialog();
   const displayProvider = provider ?? ZCODE_AGENT_PROVIDER;
   // 配置面读取：workspace 缺省目录（taskId=null），不读旧会话态。
@@ -1234,6 +1243,16 @@ function V4ComposerModelControlsImpl({
 
   return (
     <>
+      {sessionId ? (
+        <OmpConfigurationEntry
+          key={`${workspaceIdentity ?? workspacePath}:${sessionId}`}
+          workspacePath={workspacePath}
+          workspaceIdentity={workspaceIdentity}
+          sessionId={sessionId}
+          onTemporaryModelSelected={handleOmpTemporaryModelSelected}
+          temporaryModelDisabled={modelLocked || highspeedPresented}
+        />
+      ) : null}
       {/*
         e2e 契约（TID_V4_MODEL_CONFIG）：Composer/usage 状态的 data-* 属性锚点。
         Bug 原因：跨模型切换会主动清除源模型的显式 thought；此时可见控件已按目标模型

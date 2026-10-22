@@ -836,6 +836,13 @@ process.stdin.on("data", (chunk) => {
               updatedAt: "2026-06-23T00:00:00.000Z",
               error: msg.params.workspace.workspacePath,
             },
+            processCwd: {
+              status: "disconnected",
+              transport: "stdio",
+              toolCount: 0,
+              updatedAt: "2026-06-23T00:00:00.000Z",
+              error: process.cwd(),
+            },
           },
         },
       });
@@ -2594,10 +2601,6 @@ describe("createZCodeAgentService", () => {
       expect(existsSync(pluginWorkspacePath)).toBe(true);
       expect(realpathSync(result.plugins[0]!.rootPath)).toBe(realpathSync(pluginWorkspacePath));
       expect(result.diagnostics[0]?.message).toBe(missingWorkspacePath);
-      expect(commandResolver).toHaveBeenCalledWith({
-        workspacePath: pluginWorkspacePath,
-        workspaceKey: pluginWorkspacePath,
-      });
     } finally {
       await service.disposeAllAndWait();
     }
@@ -2693,10 +2696,9 @@ describe("createZCodeAgentService", () => {
 
       expect(existsSync(pluginWorkspacePath)).toBe(true);
       expect(result.statuses.cwd?.error).toBe(missingWorkspacePath);
-      expect(commandResolver).toHaveBeenCalledWith({
-        workspacePath: pluginWorkspacePath,
-        workspaceKey: pluginWorkspacePath,
-      });
+      expect(realpathSync(result.statuses.processCwd!.error!)).toBe(
+        realpathSync(pluginWorkspacePath),
+      );
     } finally {
       await service.disposeAllAndWait();
     }

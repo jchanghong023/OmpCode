@@ -44,7 +44,7 @@ class FakeCore extends EventEmitter {
   }
 
   public reportReady(generation: number, version = "test", releaseId?: string): void {
-    queueMicrotask(() =>
+    setImmediate(() =>
       this.emit("message", {
         type: "ready",
         host: "127.0.0.1",
@@ -73,13 +73,48 @@ describe("Supervisor lifecycle", () => {
     vi.useRealTimers();
   });
 
+  it("reaps a late asynchronous launch before stop releases its data-root ownership", async () => {
+    const root = await mkdtemp(join(tmpdir(), "zcode-r2-async-launch-"));
+    const entered = Promise.withResolvers<void>();
+    const pending = Promise.withResolvers<ChildProcess>();
+    const core = new FakeCore();
+    const supervisor = new Supervisor({
+      layout: resolveServerLayout(join(root, "server")),
+      launcher: {
+        launch: async () => {
+          entered.resolve();
+          return await pending.promise;
+        },
+      },
+      version: "test",
+    });
+    try {
+      const starting = supervisor.start();
+      await entered.promise;
+      let stopped = false;
+      const stopping = supervisor.stop().then((status) => {
+        stopped = true;
+        return status;
+      });
+      await Promise.resolve();
+      expect(stopped).toBe(false);
+      pending.resolve(core as unknown as ChildProcess);
+      await starting;
+      await expect(stopping).resolves.toMatchObject({ state: "stopped", pid: null });
+      expect(core.killRequested).toBe(true);
+    } finally {
+      await supervisor.stop();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("keeps lifecycle state in Supervisor and consumes Core activity snapshots", async () => {
     const root = await mkdtemp(join(tmpdir(), "zcode-r2-supervisor-"));
     const core = new FakeCore();
     const supervisor = new Supervisor({
       layout: resolveServerLayout(join(root, "server")),
       launcher: {
-        launch: (generation) => {
+        launch: async (generation) => {
           core.reportReady(generation);
           return core as unknown as ChildProcess;
         },
@@ -127,7 +162,7 @@ describe("Supervisor lifecycle", () => {
     const supervisor = new Supervisor({
       layout,
       launcher: {
-        launch: (generation) => {
+        launch: async (generation) => {
           core.reportReady(generation, "4.0.0", "release-b");
           return core as unknown as ChildProcess;
         },
@@ -171,7 +206,7 @@ describe("Supervisor lifecycle", () => {
     const supervisor = new Supervisor({
       layout,
       launcher: {
-        launch: (generation, release) => {
+        launch: async (generation, release) => {
           const core = new FakeCore();
           if (release?.version === "new") {
             candidate = core;
@@ -204,7 +239,7 @@ describe("Supervisor lifecycle", () => {
 
     const competing = new Supervisor({
       layout,
-      launcher: { launch: () => new FakeCore() as unknown as ChildProcess },
+      launcher: { launch: async () => new FakeCore() as unknown as ChildProcess },
       version: "test",
     });
     await expect(competing.start()).rejects.toThrow(/already running/i);
@@ -229,7 +264,7 @@ describe("Supervisor lifecycle", () => {
     const supervisor = new Supervisor({
       layout,
       launcher: {
-        launch: (generation) => {
+        launch: async (generation) => {
           core.reportReady(generation);
           return core as unknown as ChildProcess;
         },
@@ -265,7 +300,7 @@ describe("Supervisor lifecycle", () => {
     const supervisor = new Supervisor({
       layout,
       launcher: {
-        launch: (generation, release) => {
+        launch: async (generation, release) => {
           const core = new FakeCore();
           cores.push(core);
           if (release?.version !== "new" || cores.length === 3) core.reportReady(generation);
@@ -313,7 +348,7 @@ describe("Supervisor lifecycle", () => {
     const supervisor = new Supervisor({
       layout,
       launcher: {
-        launch: (generation, release) => {
+        launch: async (generation, release) => {
           launchedRelease = release?.version;
           core.reportReady(generation);
           return core as unknown as ChildProcess;
@@ -343,7 +378,7 @@ describe("Supervisor lifecycle", () => {
       JSON.stringify({ version: "1.0.0", releaseDir: join(root, "outside-release") }),
       "utf8",
     );
-    const launch = vi.fn(() => new FakeCore() as unknown as ChildProcess);
+    const launch = vi.fn(async () => new FakeCore() as unknown as ChildProcess);
     const supervisor = new Supervisor({
       layout,
       launcher: { launch },
@@ -361,7 +396,7 @@ describe("Supervisor lifecycle", () => {
     const supervisor = new Supervisor({
       layout: resolveServerLayout(join(root, "server")),
       launcher: {
-        launch: () => {
+        launch: async () => {
           const core = new FakeCore();
           cores.push(core);
           return core as unknown as ChildProcess;
@@ -407,7 +442,7 @@ describe("Supervisor lifecycle", () => {
     const supervisor = new Supervisor({
       layout,
       launcher: {
-        launch: (generation) => {
+        launch: async (generation) => {
           const core = new FakeCore();
           cores.push(core);
           core.reportReady(generation);
@@ -480,10 +515,10 @@ describe("Supervisor lifecycle", () => {
     const supervisor = new Supervisor({
       layout,
       launcher: {
-        launch: (generation, release) => {
+        launch: async (generation, release) => {
           const core = new FakeCore();
           cores.push({ release: release?.version, core });
-          if (release?.version === "new") queueMicrotask(() => core.emit("exit", 1, null));
+          if (release?.version === "new") setImmediate(() => core.emit("exit", 1, null));
           else core.reportReady(generation);
           return core as unknown as ChildProcess;
         },
@@ -533,10 +568,10 @@ describe("Supervisor lifecycle", () => {
     const supervisor = new Supervisor({
       layout,
       launcher: {
-        launch: (generation, release) => {
+        launch: async (generation, release) => {
           const core = new FakeCore();
           cores.push(core);
-          if (release?.version === "new") queueMicrotask(() => core.emit("exit", 1, null));
+          if (release?.version === "new") setImmediate(() => core.emit("exit", 1, null));
           else core.reportReady(generation);
           return core as unknown as ChildProcess;
         },
@@ -572,7 +607,7 @@ describe("Supervisor lifecycle", () => {
     const supervisor = new Supervisor({
       layout,
       launcher: {
-        launch: (generation, release) => {
+        launch: async (generation, release) => {
           if (release?.version === "new") {
             // 使用真实 ChildProcess 复现 Node 的 spawn 失败序列：error + close，无 exit。
             return fork(join(root, "never-loaded.js"), [], {
@@ -621,7 +656,7 @@ describe("Supervisor lifecycle", () => {
     const supervisor = new Supervisor({
       layout,
       launcher: {
-        launch: (generation, release) => {
+        launch: async (generation, release) => {
           const core = new FakeCore();
           cores.push(core);
           if (release?.version === "new") hangingCore = core;
@@ -663,7 +698,7 @@ describe("Supervisor lifecycle", () => {
     const supervisor = new Supervisor({
       layout,
       launcher: {
-        launch: (generation) => {
+        launch: async (generation) => {
           const core = new FakeCore();
           cores.push(core);
           if (cores.length === 1) core.reportReady(generation);
@@ -710,7 +745,7 @@ describe("Supervisor lifecycle", () => {
     const supervisor = new Supervisor({
       layout,
       launcher: {
-        launch: (generation) => {
+        launch: async (generation) => {
           const core = new FakeCore();
           cores.push(core);
           if (cores.length === 1) core.reportReady(generation);
@@ -761,7 +796,7 @@ describe("Supervisor lifecycle", () => {
     const supervisor = new Supervisor({
       layout,
       launcher: {
-        launch: (generation) => {
+        launch: async (generation) => {
           const core = new FakeCore();
           cores.push(core);
           core.reportReady(generation);
@@ -805,7 +840,7 @@ describe("Supervisor lifecycle", () => {
     const supervisor = new Supervisor({
       layout,
       launcher: {
-        launch: (generation) => {
+        launch: async (generation) => {
           const core = new FakeCore();
           cores.push(core);
           if (generation !== 2) core.reportReady(generation);
@@ -844,7 +879,7 @@ describe("Supervisor lifecycle", () => {
     const supervisor = new Supervisor({
       layout,
       launcher: {
-        launch: (generation) => {
+        launch: async (generation) => {
           core.reportReady(generation);
           return core as unknown as ChildProcess;
         },
@@ -869,7 +904,7 @@ describe("Supervisor lifecycle", () => {
 
     const competing = new Supervisor({
       layout,
-      launcher: { launch: () => new FakeCore() as unknown as ChildProcess },
+      launcher: { launch: async () => new FakeCore() as unknown as ChildProcess },
       version: "test",
     });
     await expect(competing.start()).rejects.toThrow(/already running/i);
@@ -894,7 +929,7 @@ describe("Supervisor lifecycle", () => {
     const supervisor = new Supervisor({
       layout,
       launcher: {
-        launch: (generation) => {
+        launch: async (generation) => {
           core.reportReady(generation);
           return core as unknown as ChildProcess;
         },
@@ -923,20 +958,28 @@ describe("Supervisor lifecycle", () => {
     const root = await mkdtemp(join(tmpdir(), "zcode-r2-generation-"));
     vi.useFakeTimers();
     const cores: FakeCore[] = [];
+    const reportReady = (core: FakeCore | undefined, generation: number) =>
+      core?.emit("message", {
+        type: "ready",
+        host: "127.0.0.1",
+        port: 43123,
+        version: "test",
+        generation,
+      });
     const supervisor = new Supervisor({
       layout: resolveServerLayout(join(root, "server")),
       launcher: {
-        launch: (generation) => {
+        launch: async () => {
           const core = new FakeCore();
           cores.push(core);
-          if (generation === 1) core.reportReady(generation);
           return core as unknown as ChildProcess;
         },
       },
       version: "test",
     });
     await supervisor.start();
-    await vi.runAllTicks();
+    // Report readiness after Supervisor owns the child, independent of fake timer queues.
+    reportReady(cores[0], 1);
     expect(supervisor.status().state).toBe("ready");
 
     cores[0]?.emit("message", { type: "task-activity", runningTaskCount: 3 });
@@ -954,17 +997,15 @@ describe("Supervisor lifecycle", () => {
     });
 
     cores[0]?.emit("message", { type: "heartbeat", at: Date.now(), runningTaskCount: 7 });
-    cores[0]?.reportReady(1);
-    cores[1]?.reportReady(999);
-    await vi.runAllTicks();
+    reportReady(cores[0], 1);
+    reportReady(cores[1], 999);
     expect(supervisor.status()).toMatchObject({
       state: "starting",
       generation: 2,
       runningTaskCount: 0,
     });
 
-    cores[1]?.reportReady(2);
-    await vi.runAllTicks();
+    reportReady(cores[1], 2);
     expect(supervisor.status()).toMatchObject({
       state: "ready",
       generation: 2,

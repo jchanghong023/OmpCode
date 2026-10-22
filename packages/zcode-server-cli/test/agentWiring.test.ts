@@ -1,8 +1,10 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createReleaseAgentWiring, resolveBundledAgentWiring } from "../src/runtime/agentWiring.js";
+import { OMP_PROTOCOL_BASELINE } from "../../../scripts/omp-artifact.mjs";
 
 const temporaryDirs: string[] = [];
 
@@ -12,21 +14,40 @@ async function makeTempDir(): Promise<string> {
   return dir;
 }
 
+async function seedArtifact(runtime: string): Promise<string> {
+  const root = join(runtime, "omp");
+  await mkdir(root);
+  const executable = process.platform === "win32" ? "omp.exe" : "omp";
+  await writeFile(join(root, executable), "fixture");
+  await writeFile(
+    join(root, "omp-artifact.json"),
+    JSON.stringify({
+      schemaVersion: 1,
+      version: "1.2.3",
+      commit: "a".repeat(40),
+      protocolBaseline: OMP_PROTOCOL_BASELINE,
+      target: `${process.platform}-${process.arch}`,
+      executable,
+      files: { [executable]: createHash("sha256").update("fixture").digest("hex") },
+    }),
+  );
+  return join(root, executable);
+}
+
 afterEach(async () => {
-  await Promise.all(temporaryDirs.splice(0).map((dir) => rm(dir, { force: true, recursive: true })));
+  await Promise.all(
+    temporaryDirs.splice(0).map((dir) => rm(dir, { force: true, recursive: true })),
+  );
 });
 
 describe("resolveBundledAgentWiring", () => {
-  it("returns wiring for a bundled zcode.cjs next to the entry", async () => {
+  it("returns verified target-platform OMP wiring, not the retained Node Agent", async () => {
     const entryDir = await makeTempDir();
-    const bundlePath = join(entryDir, "zcode.cjs");
-    await writeFile(bundlePath, "// bundle\n", "utf8");
-
+    const command = await seedArtifact(entryDir);
+    await writeFile(join(entryDir, "zcode.cjs"), "// retained bundle\n", "utf8");
     const wiring = await resolveBundledAgentWiring(entryDir, {});
-    expect(wiring).not.toBeNull();
-    expect(wiring?.ZCODE_AGENT_SERVER_COMMAND).toBe(process.execPath);
+    expect(wiring?.ZCODE_AGENT_SERVER_COMMAND).toBe(command);
     expect(JSON.parse(wiring?.ZCODE_AGENT_SERVER_ARGS_JSON ?? "[]")).toEqual([
-      bundlePath,
       "app-server",
       "--stdio",
     ]);
@@ -47,23 +68,55 @@ describe("resolveBundledAgentWiring", () => {
     expect(await resolveBundledAgentWiring(entryDir, {})).toBeNull();
   });
 
-  it("recomputes automatic wiring from each candidate release runtime", () => {
-    const oldRuntime = "/releases/old/runtime";
-    const newRuntime = "/releases/new/runtime";
-
-    expect(createReleaseAgentWiring(oldRuntime, join(oldRuntime, "node"), {})).toEqual({
-      ZCODE_AGENT_SERVER_COMMAND: join(oldRuntime, "node"),
-      ZCODE_AGENT_SERVER_ARGS_JSON: JSON.stringify([join(oldRuntime, "zcode.cjs"), "app-server", "--stdio"]),
-    });
-    expect(createReleaseAgentWiring(newRuntime, join(newRuntime, "node"), {})).toEqual({
-      ZCODE_AGENT_SERVER_COMMAND: join(newRuntime, "node"),
-      ZCODE_AGENT_SERVER_ARGS_JSON: JSON.stringify([join(newRuntime, "zcode.cjs"), "app-server", "--stdio"]),
-    });
+  it("recomputes verified wiring from each immutable candidate release", async () => {
+    const oldRuntime = await makeTempDir();
+    const newRuntime = await makeTempDir();
+    for (const runtime of [oldRuntime, newRuntime]) {
+      const command = await seedArtifact(runtime);
+      expect(await createReleaseAgentWiring(runtime, {})).toEqual({
+        ZCODE_AGENT_SERVER_COMMAND: command,
+        ZCODE_AGENT_SERVER_ARGS_JSON: JSON.stringify(["app-server", "--stdio"]),
+      });
+    }
   });
 
-  it("does not replace an explicit agent command while computing release wiring", () => {
-    expect(createReleaseAgentWiring("/release/runtime", "/release/runtime/node", {
-      ZCODE_AGENT_SERVER_COMMAND: "/custom/agent",
-    })).toBeNull();
+  it("does not replace an explicit agent command while computing release wiring", async () => {
+    expect(
+      await createReleaseAgentWiring("/release/runtime", {
+        ZCODE_AGENT_SERVER_COMMAND: "/custom/agent",
+      }),
+    ).toBeNull();
+  });
+
+  it("rejects packaged legacy-only releases instead of falling back", async () => {
+    const runtime = await makeTempDir();
+    await writeFile(join(runtime, "zcode.cjs"), "// legacy");
+    await expect(resolveBundledAgentWiring(runtime, {})).rejects.toThrow(
+      /OMP artifact manifest missing/,
+    );
+    await expect(createReleaseAgentWiring(runtime, {})).rejects.toThrow(
+      /OMP artifact manifest missing/,
+    );
+  });
+
+  it("preserves explicit args with the verified default command", async () => {
+    const runtime = await makeTempDir();
+    await seedArtifact(runtime);
+    const args = JSON.stringify(["app-server", "--stdio", "--profile", "isolated"]);
+    expect(
+      (
+        await createReleaseAgentWiring(runtime, {
+          ZCODE_AGENT_SERVER_ARGS_JSON: args,
+        })
+      )?.ZCODE_AGENT_SERVER_ARGS_JSON,
+    ).toBe(args);
+  });
+
+  it("rejects a damaged packaged runtime even when both Agent entrypoints are missing", async () => {
+    const runtime = await makeTempDir();
+    await writeFile(join(runtime, "package.json"), JSON.stringify({ type: "module" }));
+    await expect(resolveBundledAgentWiring(runtime, {})).rejects.toThrow(
+      /OMP artifact manifest missing/,
+    );
   });
 });

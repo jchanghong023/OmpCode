@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
@@ -14,17 +14,6 @@ afterEach(async () => {
 });
 
 describe("E2E Electron binary preflight", () => {
-  it("loads local E2E env before reading timeout and resolving Electron", () => {
-    const wdioSource = readFileSync(new URL("../wdio.conf.ts", import.meta.url), "utf8");
-    const loadEnvIndex = wdioSource.indexOf("\nloadE2ELocalEnv();");
-    const readTimeoutIndex = wdioSource.indexOf("const E2E_ELECTRON_INSTALL_TIMEOUT_MS");
-    const resolveElectronIndex = wdioSource.indexOf("const ELECTRON_APP_BINARY_PATH");
-
-    expect(loadEnvIndex).toBeGreaterThan(-1);
-    expect(readTimeoutIndex).toBeGreaterThan(loadEnvIndex);
-    expect(resolveElectronIndex).toBeGreaterThan(readTimeoutIndex);
-  });
-
   it("returns the executable referenced by path.txt without reinstalling", async () => {
     const { desktopDir, electronRoot, repoRoot } = await createWorkspace();
     const electronBinary = resolve(electronRoot, "dist", "Electron.app", "electron");

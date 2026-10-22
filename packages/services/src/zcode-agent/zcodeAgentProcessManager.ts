@@ -39,11 +39,17 @@ import { shouldSpawnInDetachedProcessGroup } from "../process/processTreeTermina
 import type { RuntimeProcessLifecycleReporter } from "../process/runtimeProcessLifecycle.js";
 import { buildAgentWorkspaceIdentityEnv } from "../runtime-tools/agentProxyEnv.js";
 
+export type ZCodeAgentStoragePreparation =
+  | { kind: "node-worker"; entry: string }
+  | { kind: "command" };
+
 export interface ZCodeAgentCommand {
-  /** 本地配套 CLI bundle 的存储专用 Worker 入口；远端/自定义命令不推断能力。 */
-  storagePreparationEntry?: string;
+  /** Explicit preparation mechanism; native executables must never enter a Node Worker. */
+  storagePreparation?: ZCodeAgentStoragePreparation;
   /** 本次部署的 Agent 支持迁移前的启动通知；旧自定义命令保持原协议。 */
   supportsStorageStartup?: boolean;
+  /** 仅 resolver 自动补入的 --cwd 随最终执行目录变化，调用方参数保持原样。 */
+  injectedCwdArg?: true;
   command: string;
   args?: string[];
   cwd?: string;
@@ -55,6 +61,8 @@ export interface ZCodeAgentCommandResolverContext {
   workspacePath: string;
   workspaceIdentity?: string;
   workspaceKey: string;
+  /** Effective launch environment, including Host startup overrides. */
+  env?: NodeJS.ProcessEnv;
 }
 
 export type ZCodeAgentCommandResolver = (
@@ -337,9 +345,16 @@ async function buildZCodeAgentSpawnPreflight(
     usedFallback: shouldUseWorkspaceFallback,
     cwdExists,
   } = await resolveZCodeAgentSpawnCwd({ requestedCwd, workspacePath, spawnFallbackCwd });
+  // 修复原因：resolver 早于目录兜底补入 --cwd；只同步自动参数，不能改写用户显式参数。
+  const args =
+    shouldUseWorkspaceFallback && command.injectedCwdArg
+      ? command.args?.map((arg, index, original) =>
+          index > 0 && original[index - 1] === "--cwd" ? cwd : arg,
+        )
+      : command.args;
   return {
     command: command.command,
-    args: command.args ?? [],
+    args: args ?? [],
     requestedCwd,
     cwd,
     cwdSource: shouldUseWorkspaceFallback
@@ -373,7 +388,7 @@ function resolveBundledWorkspaceZCodeAgentCommand(
       command: process.execPath,
       args: [entrypoint, "app-server", "--stdio"],
       // Worker 与 Electron Node 子进程的 V8 snapshot 可不同；临时存储准备继续用 JS。
-      storagePreparationEntry: distEntrypoint,
+      storagePreparation: { kind: "node-worker", entry: distEntrypoint },
       cwd: context.workspacePath,
       // 桌面端 host 运行在 Electron utility process 中，process.execPath 指向 Electron Helper。
       // 这里显式启用 Node 运行模式，避免内置 zcode-agent 被当成 Electron/Chromium 子进程启动并卡在 GPU 初始化。
@@ -433,23 +448,70 @@ function resolveElectronRuntimeZCodeAgentCommand(
   return {
     command: process.execPath,
     args: [bundlePath, ...ZCODE_AGENT_RUNTIME.spawnArgs],
-    storagePreparationEntry: bundlePath,
+    storagePreparation: { kind: "node-worker", entry: bundlePath },
     cwd: context.workspacePath,
     // 关键：必须以纯 Node 模式启动，否则子进程会被当成 Electron/Chromium 子进程卡在 GPU 初始化。
     env: { ELECTRON_RUN_AS_NODE: "1" },
   };
 }
 
+/** Preparation and normal startup share execution-end runtime environment policy. */
+export function buildZCodeAgentCommandEnv(
+  env: NodeJS.ProcessEnv,
+  commandEnv?: Record<string, string>,
+  workspaceIdentity?: string,
+): NodeJS.ProcessEnv {
+  return {
+    ...sanitizeZCodeRuntimeEnv(env),
+    [ZCODE_RUNTIME_ENV_KEY]: resolveZCodeRuntimeEnv(env),
+    ...commandEnv,
+    [GEN_UI_OUTPUT_ROOT_ENV]: join(getAppConfigDir(), GEN_UI_OUTPUT_DIRECTORY),
+    ...buildAgentWorkspaceIdentityEnv(workspaceIdentity),
+    ...buildE2EAgentCoverageEnv(env),
+  };
+}
+
 export function resolveDefaultZCodeAgentCommand(
   context: ZCodeAgentCommandResolverContext,
 ): ZCodeAgentCommand | null {
-  const command = process.env.ZCODE_AGENT_SERVER_COMMAND?.trim();
+  const env = { ...process.env, ...context.env };
+  const command = env.ZCODE_AGENT_SERVER_COMMAND?.trim();
+  if (env.ZCODE_AGENT_SERVER_COMMAND !== undefined && !command)
+    throw new Error("ZCODE_AGENT_SERVER_COMMAND must not be empty");
   if (command) {
+    const args = parseArgsJson(env.ZCODE_AGENT_SERVER_ARGS_JSON) ?? ["app-server", "--stdio"];
+    if (!args.includes("app-server") || args.includes("--prepare-storage"))
+      throw new Error("External Agent requires app-server normal stdio arguments");
+    const cwd = env.ZCODE_AGENT_SERVER_CWD?.trim() || context.workspacePath;
+    if (!isAbsolute(cwd)) throw new Error("External Agent cwd must be absolute");
+    for (let index = 0; index < args.length; index += 1) {
+      const arg = args[index]!;
+      if (arg === "--cwd" || arg === "--profile" || arg === "-P") {
+        const value = args[index + 1];
+        if (!value || value.startsWith("-")) throw new Error(`Missing value for ${arg}`);
+        if (arg === "--cwd" && (!isAbsolute(value) || resolve(value) !== resolve(cwd)))
+          throw new Error("External Agent --cwd conflicts with resolved cwd");
+        index += 1;
+      } else if (
+        arg.startsWith("--cwd=") &&
+        (!isAbsolute(arg.slice(6)) || resolve(arg.slice(6)) !== resolve(cwd))
+      ) {
+        throw new Error("External Agent --cwd conflicts with resolved cwd");
+      } else if (arg === "--profile=") {
+        throw new Error("Missing value for --profile");
+      }
+    }
+    if (!args.includes("--stdio")) args.push("--stdio");
+    const injectedCwdArg = !args.some((arg) => arg === "--cwd" || arg.startsWith("--cwd="));
+    if (injectedCwdArg) args.push("--cwd", cwd);
     return applyPresentationSurfaceToCommand(
       {
         command,
-        args: parseArgsJson(process.env.ZCODE_AGENT_SERVER_ARGS_JSON) ?? ["app-server", "--stdio"],
-        cwd: process.env.ZCODE_AGENT_SERVER_CWD?.trim() || context.workspacePath,
+        args,
+        cwd,
+        ...(injectedCwdArg ? { injectedCwdArg: true as const } : {}),
+        supportsStorageStartup: true,
+        storagePreparation: { kind: "command" },
       },
       context.presentationSurface,
     );
@@ -521,6 +583,7 @@ export function wrapZCodeAgentCommandWithStdioTapDevProxy(
   // 这里只在显式开关打开时用旁路 proxy 写盘，生产构建和默认开发路径都不受影响。
   return {
     supportsStorageStartup: command.supportsStorageStartup,
+    ...(command.injectedCwdArg ? { injectedCwdArg: true as const } : {}),
     command: process.execPath,
     args: [
       tapScript,
@@ -966,10 +1029,13 @@ export class ZCodeAgentProcessManager {
   ): Promise<ZCodeProtocolClient> {
     const startStartedAt = Date.now();
     const resolveCommandStartedAt = Date.now();
+    await this.waitForSpawnAdmission?.({ ...params, workspaceKey, signal: admissionSignal });
+    const spawnEnv = (await this.resolveSpawnEnv?.({ ...params, workspaceKey })) ?? {};
     const command = await this.commandResolver({
       ...params,
       ...(this.presentationSurface ? { presentationSurface: this.presentationSurface } : {}),
       workspaceKey,
+      env: { ...process.env, ...spawnEnv },
     });
     const resolveCommandDurationMs = Date.now() - resolveCommandStartedAt;
     if (!command) {
@@ -994,7 +1060,6 @@ export class ZCodeAgentProcessManager {
 
     // 设置页代理等运行时 env 在 process.env 之后合入（覆盖继承的同名 shell 变量），
     // 但仍让 command.env（部署特定）保持最高优先级。
-    const spawnEnv = (await this.resolveSpawnEnv?.({ ...params, workspaceKey })) ?? {};
     if (this.disposed) {
       // app 正在关闭时，启动中的 warmup 可能刚完成 command/env resolve。
       // 这时继续 spawn 会绕过 disposeAllAndWait 的快照，重新制造一个无人托管的 agent 进程。
@@ -1021,9 +1086,6 @@ export class ZCodeAgentProcessManager {
     if ((this.restartGenerationByWorkspaceKey.get(workspaceKey) ?? 0) !== startGeneration) {
       throw new Error("ZCode agent process start was cancelled.");
     }
-    // app 以本地开发方式启动时，让 agent 子进程也带上 ZCODE_RUNTIME_ENV=development；
-    // 不再传 NODE_ENV，避免用户 shell/runtime 变量影响 ZCode 运行模式或泄漏到 Bash 工具。
-    const runtimeEnv = resolveZCodeRuntimeEnv(process.env);
     log("ZCode agent spawn preflight", {
       workspaceKey,
       spawnPreflight,
@@ -1034,17 +1096,12 @@ export class ZCodeAgentProcessManager {
       // agent 可能再派生实际 runtime/MCP 子进程。POSIX 下让 wrapper 进入独立进程组，
       // 关闭时才能按进程树整体回收；Windows 保持非 detached，交给 taskkill /T 处理。
       detached: shouldSpawnInDetachedProcessGroup(),
-      env: {
-        ...sanitizeZCodeRuntimeEnv(process.env),
-        [ZCODE_RUNTIME_ENV_KEY]: runtimeEnv,
-        ...spawnEnv,
-        ...effectiveCommand.env,
-        // 生成文件根目录由执行端 Host 唯一决定，保证 Agent 写入与 Host 读取授权一致。
-        [GEN_UI_OUTPUT_ROOT_ENV]: join(getAppConfigDir(), GEN_UI_OUTPUT_DIRECTORY),
-        // 身份/隔离语义使用 workspaceIdentity；cwd 继续使用 workspacePath。
-        ...buildAgentWorkspaceIdentityEnv(params.workspaceIdentity),
-        ...buildE2EAgentCoverageEnv(),
-      },
+      env: buildZCodeAgentCommandEnv(
+        // 只清洗继承环境；Host 可信补丁随后合入，避免代理、CA 与 broker 等配置被误删。
+        process.env,
+        { ...spawnEnv, ...effectiveCommand.env },
+        params.workspaceIdentity,
+      ),
       stdio: ["pipe", "pipe", "pipe"],
     });
     const startedAt = Date.now();
@@ -1385,6 +1442,7 @@ export class ZCodeAgentProcessManager {
         ...params,
         ...(this.presentationSurface ? { presentationSurface: this.presentationSurface } : {}),
         workspaceKey,
+        env: { ...process.env, ...(await this.resolveSpawnEnv?.({ ...params, workspaceKey })) },
       });
       return command
         ? { available: true, workspaceKey }

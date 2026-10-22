@@ -31,6 +31,49 @@ manual-review/live provider，并
 证明显式分片的并集无遗漏无重复。下文 2/4/8/9/10 shard 与 53/55 spec 均为对应轮次的历史实验值，
 不得反向覆盖本节当前配置。
 
+## 快速反馈：失败即停、零重试
+
+默认及显式分片的本地 E2E 统一采用首错即停。Mocha 用例、WDIO spec 和 WebDriver
+请求均不重试；不改变被测产品自身的模型恢复、队列或重试语义，也不缩短用例的业务等待上限。
+构建、准备、用例、hook、worker 退出或 summary 完整性检查出现首个失败时，
+父 runner 立即取消本轮全部自有分片及其进程树，不再调度后续用例。不能等待 suite
+收尾、截图/录像、coverage 或报告上传才通知父 runner。
+
+Windows 的 `pnpm`／`.cmd` 子步骤通过共享 `quoteArgsForWindowsShell()` 传递字面参数，
+包括带括号／重定向符号的 `--mochaOpts.grep` 正则、含空格的路径和空参数；
+非 shell 子步骤保持原始 argv，不因适配 Windows 改变其他平台参数。
+
+当前 OMP 联调的临时首轮范围以 [fork.md「当前临时 E2E 执行范围」](../../fork.md#当前临时-e2e-执行范围)
+为准，由 `packages/desktop/scripts/e2e-formal-spec-selection.mjs` 统一选择：
+`FORK_TEMPORARY_E2E_EXCLUDES` 是默认、CLI 和环境变量均不可绕过的硬屏蔽；
+`FORK_DEFERRED_E2E_SPECS` 是仅默认首轮暂缓的协议／模型 Provider 场景。
+`resolveDeferredFormalSpecExcludes({ requestedSpecs })` 只对精确指定的文件解除暂缓，
+支持 `--spec`、`ZCODE_E2E_SPEC` 和 Windows 绝对路径；递归或宽泛 glob 不解除暂缓，
+也不会因指定一个文件而放行同组其他文件。WDIO 和默认分片发现共同消费此策略。
+Provider readiness、模型输出 token preflight、Plugin subagent reminder 与 Bot 协议仍在首轮；
+OMP app-server 场景仍按既有 OMP 运行配置纳入。所有暂缓／屏蔽用例保留，不计为通过；
+缩小首轮范围的反馈不能冒充下文完整范围的性能验收。
+
+```mermaid
+sequenceDiagram
+    participant W as WDIO worker/reporter
+    participant P as 本轮父 runner
+    participant S as 全部自有分片
+    W->>P: 同步首错通知（本轮唯一标记、用例/hook、原始错误）
+    P->>P: 锁定首错，后续取消错误不覆盖
+    P->>S: 立即终止进程树
+    S-->>P: close/error
+    P->>P: 写部分 manifest，非零退出
+```
+
+通知使用本轮独占标记的结构化 stdout 行；父 runner 转发正常日志，只接受自己传入的
+标记。已有日志与首错信息保留；被取消或尚未启动的用例不能计为通过，失败后不要求完整
+summary。全部成功时仍须验证每个 shard 的 summary 存在。
+
+验收覆盖：首个用例或 hook 失败在慢收尾前通知父进程；一个分片失败立即停止另一个
+尚未结束的分片；非零退出、启动失败及缺 summary 同样触发取消；不重跑失败用例；
+取消只影响本轮进程，并保留首错和非零结果。
+
 首次基线运行：
 
 - run id：`desktop-e2e-20260716131832268-p8992-a18640ce7414c30d`

@@ -57,6 +57,7 @@ interface InternalProcessTreeTerminatorOptions extends ProcessTreeTerminatorOpti
   onForceTimerScheduled?: (timer: ReturnType<typeof setTimeout>) => void;
   onGracefulCleanupScheduled?: (flight: Promise<void>) => void;
   resolvedOwnership?: ProcessTreeOwnershipResolution;
+  rootForceFlight?: Promise<void>;
   /** 进程身份查询失败，只观察原 ChildProcess，禁止向裸 PID 发送 taskkill。 */
   unverifiedRootOnly?: boolean;
 }
@@ -212,7 +213,12 @@ async function forceTerminateWindowsProcessTree(
   ) {
     targets.add(child.pid);
   }
-  await Promise.all([...targets].map((targetPid) => runWindowsTaskkill(targetPid, true, options)));
+  const rootForceFlight = (options as InternalProcessTreeTerminatorOptions).rootForceFlight;
+  if (rootForceFlight && child.pid != null) targets.delete(child.pid);
+  await Promise.all([
+    ...[...targets].map((targetPid) => runWindowsTaskkill(targetPid, true, options)),
+    rootForceFlight,
+  ]);
   const hasVerifiedRoot = currentIdentities.some((identity) => identity.pid === child.pid);
   return {
     identities: currentIdentities,
@@ -242,6 +248,10 @@ function terminateWindowsProcessTreeWithOwnership(
   // ChildProcess 句柄可以证明 root 属于当前 Host。此时允许用 root /T 作为安全兜底，
   // 只扩大到该句柄对应的活进程，不沿裸 PID 重新发现或认领进程树。
   if (gracefulTargets.length === 0 && childHandleOwnsLiveRoot) gracefulTargets.push(pid);
+  if (internalOptions.rootForceFlight) {
+    const rootIndex = gracefulTargets.indexOf(pid);
+    if (rootIndex !== -1) gracefulTargets.splice(rootIndex, 1);
+  }
   const gracefulFlight = Promise.all(
     [...new Set(gracefulTargets)].map((targetPid) => runWindowsTaskkill(targetPid, false, options)),
   ).then(() => undefined);
@@ -316,12 +326,33 @@ function terminateWindowsProcessTree(
     );
     return;
   }
+  const cleanupOptions: InternalProcessTreeTerminatorOptions = { ...options };
+  // 修复原因：非等待式回收先等待 CIM（最多 2.5 秒）才安排 force，导致 Windows
+  // 无窗口 Node 的 graceful taskkill 失败时，真正清理晚于原定 force 窗口。
+  // 查询与受管 root 的 force deadline 并行；只有原 ChildProcess 仍存活才允许 /T /F，
+  // 不沿裸 PID 发现后代，查询完成后仍由原身份复核路径负责已知后代。
+  const rootForceTimer = scheduleForceCleanup(
+    () => {
+      if (
+        !internalOptions.unverifiedRootOnly &&
+        typeof child.kill === "function" &&
+        child.exitCode === null &&
+        child.signalCode === null &&
+        isPidAlive(child.pid!)
+      ) {
+        cleanupOptions.rootForceFlight = runWindowsTaskkill(child.pid!, true, cleanupOptions);
+      }
+    },
+    options.forceAfterMs ?? DEFAULT_FORCE_AFTER_MS,
+    Boolean(options.keepForceTimerRef),
+  );
   void resolveCurrentOwnedIdentitiesAsync(
     child,
     internalOptions.knownIdentities ?? [],
     options,
   ).then((ownership) => {
-    terminateWindowsProcessTreeWithOwnership(child, options, ownership, startedAtMs);
+    clearTimeout(rootForceTimer);
+    terminateWindowsProcessTreeWithOwnership(child, cleanupOptions, ownership, startedAtMs);
   });
 }
 
@@ -427,6 +458,13 @@ export async function terminateProcessTreeAndWait(
   options: ProcessTreeTerminatorWaitOptions = {},
 ): Promise<ProcessTreeTerminationResult> {
   if (child.pid == null) return { remainingPids: [] };
+  // Exited-root discovery needs the observed lifetime, not only a lazy resolver.
+  // Never substitute query completion time: descendants must predate root exit.
+  options = {
+    ...options,
+    ownedProcessExitedAtMs:
+      options.ownedProcessExitedAtMs ?? options.resolveOwnedProcessExitedAtMs?.(),
+  };
   const cleanupSnapshot =
     options.snapshot?.rootPid === child.pid
       ? options.snapshot

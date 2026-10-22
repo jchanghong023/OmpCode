@@ -30,6 +30,25 @@ const SETTINGS_FILE = join(paths.appDataDir, "setting.json");
 const CREDENTIALS_FILE = paths.credentialsFile;
 const MODEL_SELECTION_RECENT_KEY_PREFIX = "zcode-model-selection-recent-v1";
 
+async function modelSelectionRecentKey(): Promise<string> {
+  return browser.execute(
+    (workspacePath, prefix) => {
+      const raw = window.localStorage.getItem(
+        `zcode-composer-workspace-scope:v1:${JSON.stringify(["desktop", workspacePath])}`,
+      );
+      if (!raw) return `${prefix}:${workspacePath}`;
+      const scope = JSON.parse(raw) as {
+        clientNamespace: string;
+        hostId: string;
+        projectId: string | null;
+      };
+      return `zcode-composer-recent:v2:${JSON.stringify([scope.clientNamespace, scope.hostId, scope.projectId])}`;
+    },
+    paths.workspace,
+    MODEL_SELECTION_RECENT_KEY_PREFIX,
+  );
+}
+
 export { seedTurboAgentStartupModel } from "./model-provider-restart-runtime.js";
 
 export const E2E_BIGMODEL_PLAN_PROVIDER_ID = BUILTIN_MODEL_PROVIDER_IDS.bigmodelTeamCodingPlan;
@@ -143,61 +162,79 @@ export async function seedPersistedModelSelection(params: {
   providerId: string;
   reasoningLevel: string;
 }) {
+  const recentKey = await modelSelectionRecentKey();
   await browser.execute(
-    (workspacePath, keyPrefix, selection, appProvider) => {
+    (key, selection, appProvider) => {
       window.localStorage.setItem(
-        `${keyPrefix}:${workspacePath}`,
+        key,
         JSON.stringify({
           providerId: selection.providerId,
           modelId: selection.modelId,
           options: { reasoningLevel: selection.reasoningLevel },
         }),
       );
+      // An existing project draft owns its explicit intent ahead of Recent.
+      // Seed only this isolated workspace's root draft, never a saved session.
+      const scopePrefix = "zcode-composer-recent:v2:";
+      if (key.startsWith(scopePrefix)) {
+        const draftKey = `zcode-v4-composer-project-drafts:v1:${key.slice(scopePrefix.length)}`;
+        const raw = window.localStorage.getItem(draftKey);
+        if (raw) {
+          const stored = JSON.parse(raw) as {
+            scopes?: Record<string, Record<string, unknown>>;
+          };
+          const draft = stored.scopes?.__draft__;
+          if (draft) {
+            draft.modelSelection = {
+              providerId: selection.providerId,
+              modelId: selection.modelId,
+              options: { reasoningLevel: selection.reasoningLevel },
+            };
+            window.localStorage.setItem(draftKey, JSON.stringify(stored));
+          }
+        }
+      }
       window.localStorage.setItem("zcode-last-agent-provider", appProvider);
     },
-    paths.workspace,
-    MODEL_SELECTION_RECENT_KEY_PREFIX,
+    recentKey,
     params,
     ZCODE_AGENT_PROVIDER,
   );
 }
 
 export async function readLastSelectedAgentConfig() {
-  return await browser.execute(
-    (workspacePath, keyPrefix) => {
-      const raw = window.localStorage.getItem(`${keyPrefix}:${workspacePath}`);
-      if (!raw) return null;
-      const recent: unknown = JSON.parse(raw);
-      // Recent 扩展为模型与权限并列保存；重启断言同时兼容旧的纯模型种子。
-      const record = recent && typeof recent === "object" && !Array.isArray(recent) ? recent : null;
-      const selection =
-        record && "modelSelection" in record ? record.modelSelection : (record ?? recent);
-      const candidate =
-        selection && typeof selection === "object" && !Array.isArray(selection)
-          ? (selection as {
-              providerId?: unknown;
-              modelId?: unknown;
-              options?: { reasoningLevel?: unknown };
-            })
-          : null;
-      if (
-        !candidate ||
-        typeof candidate.providerId !== "string" ||
-        typeof candidate.modelId !== "string" ||
-        candidate.providerId.length === 0 ||
-        candidate.modelId.length === 0
-      ) {
-        return null;
-      }
-      return {
-        schemaVersion: 1,
-        model: `${candidate.providerId}/${candidate.modelId}`,
-        thoughtLevel: candidate.options?.reasoningLevel ?? null,
-      };
-    },
-    paths.workspace,
-    MODEL_SELECTION_RECENT_KEY_PREFIX,
-  );
+  const recentKey = await modelSelectionRecentKey();
+  return await browser.execute((key) => {
+    const raw = window.localStorage.getItem(key);
+    if (!raw) return null;
+    const recent: unknown = JSON.parse(raw);
+    // Recent 扩展为模型与权限并列保存；重启断言同时兼容旧的纯模型种子。
+    const record = recent && typeof recent === "object" && !Array.isArray(recent) ? recent : null;
+    const selection =
+      record && "modelSelection" in record ? record.modelSelection : (record ?? recent);
+    const candidate =
+      selection && typeof selection === "object" && !Array.isArray(selection)
+        ? (selection as {
+            providerId?: unknown;
+            modelId?: unknown;
+            options?: { reasoningLevel?: unknown };
+          })
+        : null;
+    if (
+      !candidate ||
+      typeof candidate.providerId !== "string" ||
+      typeof candidate.modelId !== "string" ||
+      candidate.providerId.length === 0 ||
+      candidate.modelId.length === 0
+    ) {
+      return null;
+    }
+    return {
+      schemaVersion: 1,
+      model: `${candidate.providerId}/${candidate.modelId}`,
+      thoughtLevel: candidate.options?.reasoningLevel ?? null,
+    };
+  }, recentKey);
 }
 
 export async function waitForLastSelectedAgentConfig(params: {
@@ -210,7 +247,8 @@ export async function waitForLastSelectedAgentConfig(params: {
       async () => {
         latest = await readLastSelectedAgentConfig();
         return Boolean(
-          latest?.model.includes(params.model) && latest.thoughtLevel === params.thoughtLevel,
+          latest?.model.split("/").at(-1) === params.model &&
+          latest.thoughtLevel === params.thoughtLevel,
         );
       },
       {
@@ -357,6 +395,7 @@ export async function restartIntoWorkspacePreservingProfile() {
 }
 
 export async function waitForSelectedModel(providerId: string, modelId: string) {
+  const recentKey = await modelSelectionRecentKey();
   const expected = encodeCustomModelValue(providerId, modelId);
   let actual: string | null = null;
   let storedConfig: string | null = null;
@@ -364,18 +403,17 @@ export async function waitForSelectedModel(providerId: string, modelId: string) 
     await browser.waitUntil(
       async () => {
         const snapshot = await browser.execute(
-          (value, triggerTestId, workspacePath, keyPrefix) => {
+          (value, triggerTestId, key) => {
             const trigger = document.querySelector<HTMLElement>(`[data-testid="${triggerTestId}"]`);
             return {
               actual: trigger?.dataset.modelCurrentValue ?? null,
               matched: trigger?.dataset.modelCurrentValue === value,
-              storedConfig: window.localStorage.getItem(`${keyPrefix}:${workspacePath}`),
+              storedConfig: window.localStorage.getItem(key),
             };
           },
           expected,
           TID_CHAT_MODEL_SELECT_TRIGGER,
-          paths.workspace,
-          MODEL_SELECTION_RECENT_KEY_PREFIX,
+          recentKey,
         );
         actual = snapshot.actual;
         storedConfig = snapshot.storedConfig;

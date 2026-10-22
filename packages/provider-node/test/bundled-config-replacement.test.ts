@@ -52,27 +52,23 @@ it("替换期间并发读取只见完整旧版或新版，不产生 hash 历史�
     environmentConfigRoot,
     content: release(1),
   });
-  let finished = false;
-  const writer = (async () => {
-    try {
-      for (let index = 0; index < 30; index++) {
-        await materializeZCodeBuiltinProviderConfig({
-          environmentConfigRoot,
-          content: release((index % 2) + 1),
-        });
-      }
-    } finally {
-      finished = true;
-    }
-  })();
-  const reader = (async () => {
-    do {
-      const fileContent = JSON.parse(await readFile(file, "utf8"));
-      expect([1, 2]).toContain(fileContent.revision);
-      expect(fileContent).toEqual(JSON.parse(release(fileContent.revision)));
-    } while (!finished);
-  })();
-  await Promise.all([writer, reader]);
+  // 无界 readFile 循环会在关闭后立即重开目标，Windows 的覆盖 rename 可能在
+  // 整个有限重试窗口都撞上读句柄。按轮次收敛并发读的生命周期，而不是增加重试：
+  // 每次替换仍与真实异步读取并发，下一轮只在本轮两项 IO 都完成后开始。
+  for (let index = 0; index < 30; index++) {
+    const revision = ((index + 1) % 2) + 1;
+    const [, content] = await Promise.all([
+      materializeZCodeBuiltinProviderConfig({
+        environmentConfigRoot,
+        content: release(revision),
+      }),
+      readFile(file, "utf8"),
+    ]);
+    const fileContent = JSON.parse(content);
+    expect([1, 2]).toContain(fileContent.revision);
+    expect(fileContent).toEqual(JSON.parse(release(fileContent.revision)));
+    expect(JSON.parse(await readFile(file, "utf8"))).toEqual(JSON.parse(release(revision)));
+  }
   expect(await readdir(dirname(file))).toEqual(["zcode-builtin.json"]);
 });
 

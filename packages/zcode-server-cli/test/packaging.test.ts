@@ -14,6 +14,7 @@ import {
   stageRelease,
 } from "../src/packaging/stage.js";
 import { resolveHostTarCommand } from "../src/packaging/tarCommand.js";
+import { OMP_PROTOCOL_BASELINE } from "../../../scripts/omp-artifact.mjs";
 
 const execFileAsync = promisify(execFile);
 async function runTar(args: string[]): Promise<void> {
@@ -154,6 +155,7 @@ describe("stageRelease", () => {
     bundledSkillsDir: string;
     nodeBinaryPath: string;
     outputDir: string;
+    ompArtifactRoot: string;
     notices: { thirdParty: string; node: string; nodeSource: string };
   }> {
     const root = await makeTempDir();
@@ -197,6 +199,41 @@ describe("stageRelease", () => {
     await writeFile(agentBundlePath, "// fake agent bundle\n", "utf8");
     const nodeBinaryPath = join(root, "node-binary");
     await writeFile(nodeBinaryPath, "#!/bin/sh\nexit 0\n", "utf8");
+    const ompArtifactRoot = join(root, "omp-input");
+    const artifacts: Record<string, string> = {};
+    for (const target of [
+      "linux-x64",
+      "linux-arm64",
+      "darwin-x64",
+      "darwin-arm64",
+      "win32-x64",
+      "win32-arm64",
+    ]) {
+      const dir = join(ompArtifactRoot, target);
+      await mkdir(dir, { recursive: true });
+      const executable = target.startsWith("win32-") ? "omp.exe" : "omp";
+      await writeFile(join(dir, executable), "omp-fixture");
+      const manifest = JSON.stringify({
+        schemaVersion: 1,
+        version: "1.2.3",
+        commit: "a".repeat(40),
+        protocolBaseline: OMP_PROTOCOL_BASELINE,
+        target,
+        executable,
+        files: { [executable]: createHash("sha256").update("omp-fixture").digest("hex") },
+      });
+      await writeFile(join(dir, "omp-artifact.json"), manifest);
+      artifacts[target] = createHash("sha256").update(manifest).digest("hex");
+    }
+    await writeFile(
+      join(ompArtifactRoot, "omp-release.json"),
+      JSON.stringify({
+        version: "1.2.3",
+        commit: "a".repeat(40),
+        protocolBaseline: OMP_PROTOCOL_BASELINE,
+        artifacts,
+      }),
+    );
 
     const outputDir = join(root, "out");
     const notices = {
@@ -211,6 +248,7 @@ describe("stageRelease", () => {
       bundledSkillsDir,
       nodeBinaryPath,
       outputDir,
+      ompArtifactRoot,
       notices,
     };
   }
@@ -305,7 +343,17 @@ describe("stageRelease", () => {
     expect(manifest.entrypoints).toEqual({
       cli: "runtime/server-cli.js",
       core: "runtime/server-core.js",
-      agent: "runtime/zcode.cjs",
+      agent: "runtime/omp/omp",
+    });
+    expect(await readFile(join(releaseDir, "runtime/omp/omp"), "utf8")).toBe("omp-fixture");
+    const provenance = JSON.parse(
+      await readFile(join(releaseDir, "runtime/omp/omp-artifact.json"), "utf8"),
+    );
+    expect(provenance).toMatchObject({
+      version: "1.2.3",
+      commit: "a".repeat(40),
+      target: "linux-x64",
+      protocolBaseline: OMP_PROTOCOL_BASELINE,
     });
 
     expect(staged.packagedDependencies).toEqual(["fake-dep", "fake-transitive", "node-pty"]);

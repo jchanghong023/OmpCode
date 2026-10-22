@@ -47,7 +47,8 @@ export async function countUpstreamTitleRequestsContaining(text: string) {
       (record) =>
         record.method === "POST" &&
         isUpstreamModelRequestPath(record.path) &&
-        captureContainsText(record.requestJson, "Generate a concise title") &&
+        (captureContainsText(record.requestJson, "Generate a concise title") ||
+          captureContainsText(record.requestJson, "You name coding-agent sessions.")) &&
         captureContainsText(record.requestJson, text),
     ).length ?? 0
   );
@@ -240,6 +241,7 @@ function matchesUpstreamRequest(
     record.method === "POST" &&
     isUpstreamModelRequestPath(record.path) &&
     !captureContainsText(record.requestJson, "Generate a concise title") &&
+    !captureContainsText(record.requestJson, "You name coding-agent sessions.") &&
     (query.includes ?? []).every((text) => captureContainsText(record.requestJson, text)) &&
     !(query.excludes ?? []).some((text) => captureContainsText(record.requestJson, text)) &&
     (query.lastUserMessageIncludes ?? []).every((text) => latestUserMessageText.includes(text)) &&

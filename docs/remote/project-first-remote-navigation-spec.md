@@ -133,6 +133,7 @@ desktop-continuous / web-remote-replayable → 各自现有恢复边界 → 同�
 
 - 恢复目标继续归属现有页签持久化：TabStore / `lastWorkspaceSession` / `lastActiveTabIndex` 保存项目与激活位置，Layout 的既有 `usePaneSessionPersistence` 保存该 workspaceKey 的最后会话 ID。两者只保存导航选择，不保存远端内容，也不新增恢复 owner。
 - 主窗口冷启动恢复上次激活的项目（包括远程项目）与会话；`restoreTabs` 标记启动激活页签，只有该页签可消费冷启动会话选择。显式打开项目、新窗口和新任务继续遵循原导航意图。后台补齐 tabs 或 Source 恢复不抢焦点；同路径不同设备按 identity 隔离。
+- 保存的 Composer 项目归属与草稿缓存不等于显式新任务导航。启动或 Renderer 刷新存在既有 pane 会话目标时，这些缓存不得调用新任务动作、增加草稿 focus 代次或清除会话恢复键；明确的 `initialTaskDraft`／新任务操作仍优先，无会话可恢复目标时继续恢复原项目草稿归属。
 - Host 本地预热仍只选择本地 workspace。Renderer 激活远程页签不代表 Host 可按远程路径预热；二者不再强制选择同一项目。
 - 依照 [Renderer 挂回门禁](./desktop-remote-session-renderer-reattach.md)，Source online 后仍须完成 workspace bind、services 注册与 ready ACK；首次挂回前只能显示连接占位，不订阅或渲染远端会话。恢复终态为未连接或失败时，停留在原页签显示既有横幅，不自动跳本地。
 - 挂回成功后保持原会话选择，不调用新任务动作。仅对启动恢复与 attachment 挂回瞬间的既有选择，通过该 workspace 的权威 `getTaskMeta` 确认会话已不存在时才进入本项目新任务页并清除旧选择；正常新建任务 ACK 早于索引落盘，不参与这项缺失判定。RPC 失败不是会话删除。切换项目、会话、新建草稿或 services 换代后丢弃旧查询结果。

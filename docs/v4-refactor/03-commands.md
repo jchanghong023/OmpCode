@@ -30,6 +30,30 @@ CLI CommandInbox
 - `createSession` 的 `sessionId` 为 `null`，成功 ACK 返回真实 session id；
 - 客户端是意图提议者，CLI 是唯一写者。不同客户端的命令按 CLI 实际 admission 顺序串行。
 
+- Host 对 queue promotion 的 Provider registry 预备屏障以是否携带新模型／执行材料为界。
+  `sendQueuedNow` 未携带 `modelSelection` 或 `modelExecution` 时，消费的是 CLI 已接纳的队列事实，
+  不得先等待冗余 registry refresh（包括另一命令正在等待的 refresh）再转发已冻结的 CAS 信封。
+  携带任一新材料的提升仍须等待原有 refresh，刷新失败必须阻断上行。Host 不得改写
+  `baseRevision`／`baseLogEpoch`，也不得因真实事实更新导致 stale 而自动重试；最终 admission
+  与 revision guard 仍由 CLI 唯一裁决。
+
+```mermaid
+sequenceDiagram
+    participant U as Renderer
+    participant H as Host
+    participant A as Agent owner
+    U->>H: sendQueuedNow(原队列ID、revision、epoch)
+    alt 没有新模型或执行材料
+        H->>A: 立即透传原信封
+    else 携带新材料
+        H->>A: refreshRegistry
+        A-->>H: 刷新成功或失败
+        H->>A: 仅成功后透传原信封
+    end
+    A->>A: 校验真实 revision 并裁决队列准入
+    A-->>U: accepted 或原始冲突回执
+```
+
 命令全集以 `commandPayloadSchemas` 为准，目前包括 session 创建/删除/重命名、输入与 goal、stop、
 compact、fork/edit/retry/file rewind、queue 操作、interaction 应答与 snooze、模型/模式/followup 切换、
 goal pause/resume 和 background work 取消。文档不得再把 legacy `session/*` operation 当作 V4 UI 写入口。

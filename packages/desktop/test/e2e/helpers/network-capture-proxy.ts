@@ -108,6 +108,7 @@ interface StartNetworkCaptureProxyOptions {
   responsePreviewLimitBytes?: number;
   recordResponseChunkTimeline?: boolean;
   responseMocks?: readonly E2ENetworkCaptureResponseMock[];
+  rejectUnmatchedRequests?: boolean;
 }
 
 export interface E2ENetworkCaptureResponseMock {
@@ -252,6 +253,15 @@ export async function startE2ENetworkCaptureProxy(
       serveResponseMock(ctx, record, mockResponse);
       return;
     }
+    if (options.rejectUnmatchedRequests) {
+      serveResponseMock(ctx, record, {
+        path: new URL(record.url).pathname,
+        statusCode: 502,
+        statusMessage: "Missing Fixture",
+        body: JSON.stringify({ error: "Missing Fixture: no local Account replay response" }),
+      });
+      return;
+    }
 
     callback();
   });
@@ -350,27 +360,37 @@ export async function startE2ENetworkCaptureProxy(
     const finish = () => {
       applyMockRequestBody(record, requestChunks, requestBodyBytes, requestBodyLimitBytes);
 
-      const body = Buffer.from(
-        typeof mock.body === "function"
-          ? mock.body(Buffer.concat(requestChunks).toString("utf8"))
-          : mock.body,
-        "utf-8",
-      );
+      let body: Buffer;
+      let statusCode = mock.statusCode ?? 200;
+      let statusMessage = mock.statusMessage ?? "OK";
+      try {
+        body = Buffer.from(
+          typeof mock.body === "function"
+            ? mock.body(Buffer.concat(requestChunks).toString("utf8"))
+            : mock.body,
+          "utf-8",
+        );
+      } catch {
+        // A replay miss is local failure, never permission to contact the upstream.
+        statusCode = 500;
+        statusMessage = "Missing Fixture";
+        body = Buffer.from(JSON.stringify({ error: "Missing Fixture: local replay failed" }));
+      }
       const responseHeaders = {
         "content-length": String(body.length),
         "content-type": "application/json; charset=utf-8",
         connection: "close",
         ...mock.headers,
       };
-      ctx.proxyToClientResponse.writeHead(mock.statusCode ?? 200, responseHeaders);
+      ctx.proxyToClientResponse.writeHead(statusCode, responseHeaders);
       ctx.proxyToClientResponse.end(body);
 
       record.responseBodyBytes = body.length;
       record.responseHeaders = sanitizeE2ENetworkCaptureHeaders(responseHeaders);
       record.responseTextPreview = redactE2ENetworkCaptureJsonText(body.toString("utf-8"));
       record.status = "complete";
-      record.statusCode = mock.statusCode ?? 200;
-      record.statusMessage = mock.statusMessage ?? "OK";
+      record.statusCode = statusCode;
+      record.statusMessage = statusMessage;
       record.completedAt = new Date().toISOString();
       record.durationMs = durationMs(record.startedAt, record.completedAt);
       writeArtifact();

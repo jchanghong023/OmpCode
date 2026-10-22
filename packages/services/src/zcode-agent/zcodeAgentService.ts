@@ -1,3 +1,4 @@
+import { zcodeSessionConfigureResultSchema } from "@zcode/shared";
 import { isAuxiliarySessionKind } from "@zcode/shared";
 import {
   pluginUiToolResultNotificationSchema,
@@ -955,10 +956,10 @@ interface ActiveWorkspaceClient {
   dynamicWorkflowPolicyMode: DynamicWorkflowMode;
 }
 
-function requiresProviderRegistryRefresh(commandType: string): boolean {
+function requiresProviderRegistryRefresh(envelope: CommandEnvelope): boolean {
   // Bug 原因：模型切换遗漏刷新屏障，会用存量 Worker 的旧 Registry 校验新下发的 Provider。
   // 复用同一刷新队列，成功后才下发切换命令，失败则直接拒绝本次切换。
-  switch (commandType) {
+  switch (envelope.type) {
     case "createSession":
     case "createSelectionSideSession":
     case "sendText":
@@ -967,9 +968,15 @@ function requiresProviderRegistryRefresh(commandType: string): boolean {
     case "forkAssistant":
     case "editUserQuery":
     case "retryTurn":
-    case "sendQueuedNow":
     case "switchModelConfig":
       return true;
+    case "sendQueuedNow": {
+      // 根因：无新材料的提升也等待 registry refresh，Stop 后真实 usage 增量会在等待期间
+      // 推进 revision，让点击时最新的 CAS 到达 CLI 前过期。复用已接纳材料不需要刷新；
+      // 新材料仍走原屏障，不改 revision、不重试，真正的并发冲突继续由 CLI 拒绝。
+      const payload = commandPayloadSchemas.sendQueuedNow.parse(envelope.payload);
+      return payload.modelSelection !== undefined || payload.modelExecution !== undefined;
+    }
     default:
       return false;
   }
@@ -5501,6 +5508,21 @@ export function createZCodeAgentService(
       return result.closed ?? true;
     },
 
+    async configureOmpSession(params) {
+      const client = await getClient(params);
+      const {
+        workspacePath: _workspacePath,
+        workspaceIdentity: _workspaceIdentity,
+        remoteSessionId: _remoteSessionId,
+        ...request
+      } = params;
+      return client.request(
+        zcodeProtocolMethods.sessionConfigure,
+        request,
+        zcodeSessionConfigureResultSchema,
+      );
+    },
+
     async setModel(params: ZCodeAgentSetModelParams) {
       const startedAt = Date.now();
       const client = await getClient(params);
@@ -6145,7 +6167,7 @@ export function createZCodeAgentService(
         params.clientMode ??
         "desktop-continuous";
       let envelope = await buildConversationCommandEnvelope(params);
-      if (requiresProviderRegistryRefresh(envelope.type)) {
+      if (requiresProviderRegistryRefresh(envelope)) {
         await ensureAccountProviderConfigSynced({
           client,
           reason: "v4_command",

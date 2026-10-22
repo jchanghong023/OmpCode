@@ -2,6 +2,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve, win32 } from "node:path";
+import { verifyOmpArtifact } from "../../../../scripts/omp-artifact.mjs";
 import type { ConnectOptions } from "@zcode/server/remote";
 import { listSSHConfigAliasesFromLocalConfig } from "@zcode/services/node";
 import { DEV_HELPER_APP_NAME, HELPER_APP_NAME } from "@zcode/zcode-cua/broker/helperConstants";
@@ -491,6 +492,66 @@ export function resolveDynamicWorkflowModeHostEnv(options: {
   return {};
 }
 
+export async function resolveBundledOmpHostEnv(
+  env: Record<string, string | undefined>,
+  packaged: boolean,
+  artifactRoot = join(process.resourcesPath ?? "", "omp"),
+  target = `${process.platform}-${process.arch}`,
+): Promise<Record<string, string>> {
+  if (env.ZCODE_AGENT_SERVER_COMMAND !== undefined && !env.ZCODE_AGENT_SERVER_COMMAND.trim()) {
+    throw new Error("ZCODE_AGENT_SERVER_COMMAND must not be empty");
+  }
+  if (env.ZCODE_AGENT_SERVER_COMMAND?.trim() || !packaged) return {};
+  const { command } = await verifyOmpArtifact(artifactRoot, target);
+  return {
+    ZCODE_AGENT_SERVER_COMMAND: command,
+    ZCODE_AGENT_SERVER_ARGS_JSON:
+      env.ZCODE_AGENT_SERVER_ARGS_JSON ??
+      JSON.stringify(["app-server", "--stdio", "--surface", "desktop"]),
+  };
+}
+
+let preparedOmpHostEnv: Readonly<{ command: string; root: string; target: string }> | undefined;
+
+/** Main initializes this before creating any Window Host; only real verification publishes a result. */
+export async function prepareBundledOmpHostEnv(
+  env: Record<string, string | undefined>,
+): Promise<void> {
+  preparedOmpHostEnv = undefined;
+  const verified = await resolveBundledOmpHostEnv(env, isElectronAppPackaged());
+  if (verified.ZCODE_AGENT_SERVER_COMMAND) {
+    preparedOmpHostEnv = Object.freeze({
+      command: verified.ZCODE_AGENT_SERVER_COMMAND,
+      root: join(process.resourcesPath ?? "", "omp"),
+      target: `${process.platform}-${process.arch}`,
+    });
+  }
+}
+
+function readPreparedOmpHostEnv(
+  env: Record<string, string | undefined>,
+): Readonly<Record<string, string>> {
+  if (env.ZCODE_AGENT_SERVER_COMMAND !== undefined) {
+    if (!env.ZCODE_AGENT_SERVER_COMMAND.trim())
+      throw new Error("ZCODE_AGENT_SERVER_COMMAND must not be empty");
+    return {};
+  }
+  if (!isElectronAppPackaged()) return {};
+  if (
+    !preparedOmpHostEnv ||
+    preparedOmpHostEnv.root !== join(process.resourcesPath ?? "", "omp") ||
+    preparedOmpHostEnv.target !== `${process.platform}-${process.arch}`
+  ) {
+    throw new Error("Bundled OMP artifact has not completed asynchronous verification");
+  }
+  return {
+    ZCODE_AGENT_SERVER_COMMAND: preparedOmpHostEnv.command,
+    ZCODE_AGENT_SERVER_ARGS_JSON:
+      env.ZCODE_AGENT_SERVER_ARGS_JSON ??
+      JSON.stringify(["app-server", "--stdio", "--surface", "desktop"]),
+  };
+}
+
 export function buildHostProcessEnv(hostProcessLocalEnv: Record<string, string>) {
   const glmBinaryPath = resolveBundledGlmBinaryPath();
   const larkCliBinaryPath = resolveBundledLarkCliBinaryPath();
@@ -510,6 +571,8 @@ export function buildHostProcessEnv(hostProcessLocalEnv: Record<string, string>)
     ...readDefinedProcessEnv(),
   };
   const packagedDesktop = isElectronAppPackaged();
+  // 随包产物只注入当前 Window Host；显式开发覆盖优先，绝不改写用户 PATH。
+  const ompHostEnv = readPreparedOmpHostEnv(rawInheritedEnv);
   const bundledCuaHelperAppPath =
     process.platform !== "darwin"
       ? undefined
@@ -564,6 +627,7 @@ export function buildHostProcessEnv(hostProcessLocalEnv: Record<string, string>)
 
   return {
     ...inheritedEnv,
+    ...ompHostEnv,
     // OTLP 凭据只定向传到 host；host 初始化 services 时会立即捕获并从 process.env 清除，
     // 后续只在启动 Agent 时短暂注入，不会进入 Bash/MCP/tool env。
     ...agentTelemetryEnv,

@@ -1,7 +1,9 @@
-import { readFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
+import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, type Mock } from "vitest";
 import {
   createWindowsE2EShardPlan,
   executeWindowsE2EShardPlan,
@@ -9,6 +11,14 @@ import {
   partitionE2ESpecsByWeight,
   resolveWindowsE2EShardTotal,
 } from "../scripts/run-windows-e2e-shards.mjs";
+import {
+  FORK_DEFERRED_E2E_SPECS,
+  FORK_TEMPORARY_E2E_EXCLUDES,
+  isTemporarilyExcludedFormalSpec,
+  resolveDeferredFormalSpecExcludes,
+} from "../scripts/e2e-formal-spec-selection.mjs";
+import { resolveE2EScheduledSpecFiles } from "#e2e/helpers/e2e-spec-resolution";
+import { spawnCancellableStep } from "../scripts/e2e-step-process.mjs";
 
 const repoRoot = resolve("C:/repo");
 const desktopDir = join(repoRoot, "packages/desktop");
@@ -89,6 +99,24 @@ describe("Windows E2E shard runner", () => {
     expect(specs).not.toContain("./test/e2e/upstream-provider.test.ts");
     expect(specs.some((spec) => spec.includes("/manual-review/"))).toBe(false);
     expect(specs.some((spec) => spec.includes("conversation-session-ssh-remote"))).toBe(false);
+    expect(specs.filter(isTemporarilyExcludedFormalSpec)).toEqual([]);
+    expect(specs).not.toContain("./test/e2e/browser-tab-residency.test.ts");
+    expect(specs).not.toContain("./test/e2e/container-boot.test.ts");
+    expect(specs).not.toContain("./test/e2e/infrastructure/session-lifecycle.test.ts");
+    const deferredCandidates = resolveE2EScheduledSpecFiles({
+      baseDir: resolve("packages/desktop"),
+      specs: FORK_DEFERRED_E2E_SPECS,
+      exclude: [],
+    });
+    for (const spec of FORK_DEFERRED_E2E_SPECS) {
+      expect(deferredCandidates).toContain(spec.slice(2));
+      expect(specs).not.toContain(spec);
+    }
+    const ompSpecs = listDefaultFormalE2ESpecs(resolve(process.cwd(), "packages/desktop"), {
+      ZCODE_AGENT_SERVER_COMMAND: "omp app-server",
+    });
+    expect(ompSpecs).toContain("./test/e2e/omp-app-server.e2e.ts");
+    expect(ompSpecs.filter(isTemporarilyExcludedFormalSpec)).toEqual([]);
 
     const sshSpecs = listDefaultFormalE2ESpecs(resolve(process.cwd(), "packages/desktop"), {
       ZCODE_E2E_SSH_HOST: "ssh.example.test",
@@ -99,6 +127,68 @@ describe("Windows E2E shard runner", () => {
       "./test/e2e/conversation-session/conversation-session-ssh-remote-connection-p0.test.ts",
     );
   });
+
+  it.each(
+    [
+      "./test/e2e/conversation-session/conversation-session-compact-auto.test.ts",
+      "./test/e2e/conversation-session/conversation-session-bot-continuous-worker.test.ts",
+      "./test/e2e/bots/feishu-provider-interactions.test.ts",
+      "./test/e2e/automations-create-manage.test.ts",
+      "./test/e2e/off-peak-create-manage.test.ts",
+    ].flatMap((target) =>
+      ["CLI separate", "CLI equals", "environment", "Windows environment"].map((source) => ({
+        target,
+        source,
+      })),
+    ),
+  )(
+    "forwards exact deferred $source request $target without admitting other deferred specs",
+    ({ source, target }) => {
+      const request =
+        source === "Windows environment"
+          ? `C:\\repo\\packages\\desktop\\${target.slice(2).replaceAll("/", "\\")}`
+          : target;
+      const args =
+        source === "CLI separate"
+          ? ["--spec", request]
+          : source === "CLI equals"
+            ? [`--spec=${request}`]
+            : [];
+      const plan = createPlan({
+        args,
+        env: {
+          ZCODE_E2E_SHARD_TOTAL: "4",
+          ...(source.endsWith("environment") ? { ZCODE_E2E_SPEC: request } : {}),
+        },
+      });
+      expect(plan.shardTotal).toBe(1);
+      const child = plan.children[0]!;
+      let forwardedRequest: string;
+      if (source.endsWith("environment")) {
+        expect(child.env.ZCODE_E2E_SPEC).toBe(request);
+        forwardedRequest = child.env.ZCODE_E2E_SPEC!;
+      } else if (source === "CLI separate") {
+        const specIndex = child.args.indexOf("--spec");
+        expect(specIndex).toBeGreaterThanOrEqual(0);
+        forwardedRequest = child.args[specIndex + 1]!;
+        expect(forwardedRequest).toBe(request);
+      } else {
+        expect(child.args).toContain(`--spec=${request}`);
+        forwardedRequest = child.args.find((arg) => arg.startsWith("--spec="))!.slice(7);
+      }
+      const scheduled = resolveE2EScheduledSpecFiles({
+        baseDir: resolve("packages/desktop"),
+        specs: ["./test/e2e/**/*.test.ts"],
+        exclude: [
+          ...FORK_TEMPORARY_E2E_EXCLUDES,
+          ...resolveDeferredFormalSpecExcludes({ requestedSpecs: [forwardedRequest] }),
+        ],
+      });
+      expect(scheduled.filter((spec) => FORK_DEFERRED_E2E_SPECS.includes(`./${spec}`))).toEqual([
+        target.slice(2),
+      ]);
+    },
+  );
 
   it("uses deterministic LPT weights and a fallback for new specs", () => {
     const buckets = partitionE2ESpecsByWeight(
@@ -123,14 +213,17 @@ describe("Windows E2E shard runner", () => {
   it("passes weighted spec groups explicitly instead of native contiguous shards", () => {
     const weightedSpecBuckets = [
       { estimatedWeightMs: 100, specs: ["./test/e2e/smoke.test.ts"] },
-      { estimatedWeightMs: 90, specs: ["./test/e2e/container-boot.test.ts"] },
+      {
+        estimatedWeightMs: 90,
+        specs: ["./test/e2e/conversation-session/conversation-session-compact-auto.test.ts"],
+      },
     ];
     const plan = createPlan({ weightedSpecBuckets });
 
     expect(plan.distributionKind).toBe("historical-lpt");
     expect(plan.children.map((child) => child.env.ZCODE_E2E_SPEC)).toEqual([
       "./test/e2e/smoke.test.ts",
-      "./test/e2e/container-boot.test.ts",
+      "./test/e2e/conversation-session/conversation-session-compact-auto.test.ts",
     ]);
     expect(
       plan.children.every((child) => child.args.every((arg) => !arg.startsWith("--shard"))),
@@ -258,14 +351,14 @@ describe("Windows E2E shard runner", () => {
   it.each([
     {
       label: "targeted CLI",
-      args: ["--spec=./test/e2e/container-boot.test.ts", "--shards=10"],
+      args: ["--spec=./test/e2e/smoke.test.ts", "--shards=10"],
       env: { ZCODE_E2E_SHARD_TOTAL: "4" },
     },
     {
       label: "targeted env",
       args: ["--shards=10"],
       env: {
-        ZCODE_E2E_SPEC: "./test/e2e/container-boot.test.ts",
+        ZCODE_E2E_SPEC: "./test/e2e/smoke.test.ts",
         ZCODE_E2E_SHARD_TOTAL: "4",
       },
     },
@@ -331,153 +424,408 @@ describe("Windows E2E shard runner", () => {
     ).toBe(1);
   });
 
-  it("waits for every child, writes one manifest, and fails when any shard fails", async () => {
+  it("validates all successful summaries and writes one complete manifest", async () => {
     const plan = createPlan();
-    const completed: string[] = [];
+    const summaryExists = vi.fn((_path: string) => true);
     const writeManifest = vi.fn();
-    const printManifest = vi.fn();
-
-    let caught: unknown;
-    try {
-      await executeWindowsE2EShardPlan(plan, {
-        now: () => 2_000,
-        summaryExists: () => true,
-        spawnStep: async (step) => {
-          if (step.kind === "build") return { exitCode: 0 };
-          completed.push(step.id);
-          return { exitCode: step.shardIndex === 1 ? 7 : 0 };
-        },
-        writeManifest,
-        printManifest,
-      });
-    } catch (error) {
-      caught = error;
-    }
-
-    expect(completed).toEqual(["shard-1-of-2", "shard-2-of-2"]);
-    expect(writeManifest).toHaveBeenCalledOnce();
-    expect(printManifest).toHaveBeenCalledOnce();
-    expect(caught).toMatchObject({
-      message: expect.stringContaining("shard 1/2 exited with code 7"),
-      manifest: {
-        runId: "local-full",
-        shardTotal: 2,
-        wallDurationMs: 0,
-        children: [
-          {
-            shardId: "1/2",
-            exitCode: 7,
-            artifactDir: plan.children[0]?.artifactDir,
-            summaryPath: plan.children[0]?.summaryPath,
-          },
-          {
-            shardId: "2/2",
-            exitCode: 0,
-            artifactDir: plan.children[1]?.artifactDir,
-            summaryPath: plan.children[1]?.summaryPath,
-          },
-        ],
-      },
+    const manifest = await executeWindowsE2EShardPlan(plan, {
+      spawnStep: async () => ({ exitCode: 0 }),
+      summaryExists,
+      writeManifest,
+      printManifest: vi.fn(),
     });
+    expect(manifest.children.map((child) => child.exitCode)).toEqual([0, 0]);
+    expect(manifest).not.toHaveProperty("firstFailure");
+    expect(summaryExists.mock.calls).toEqual(plan.children.map((child) => [child.summaryPath]));
+    expect(writeManifest).toHaveBeenCalledOnce();
   });
 
-  it("rejects a zero-exit shard that produced no summary", async () => {
-    const plan = createPlan();
+  it.each([
+    ["nonzero exit", { exitCode: 7 }, true, "exited with code 7"],
+    ["signal", { exitCode: 1, signal: "SIGABRT" }, true, "terminated by signal SIGABRT"],
+    ["start rejection", new Error("spawn pnpm EAGAIN"), true, "spawn pnpm EAGAIN"],
+    ["missing summary", { exitCode: 0 }, false, "missing shard summary"],
+  ] as const)(
+    "cancels a pending peer immediately after %s without retry",
+    async (_, result, hasSummary, error) => {
+      const plan = createPlan();
+      const writeManifest = vi.fn();
+      const printManifest = vi.fn();
+      const peer = Promise.withResolvers<{ exitCode: number; signal?: string }>();
+      const terminatePeer = vi.fn(() => peer.resolve({ exitCode: 1, signal: "SIGTERM" }));
+      const spawnStep = vi.fn((step) => {
+        if (step.kind === "build") return { exitCode: 0 };
+        if (step.shardIndex === 1) {
+          return result instanceof Error ? Promise.reject(result) : result;
+        }
+        return {
+          result: peer.promise,
+          terminate: terminatePeer,
+        };
+      });
 
+      await expect(
+        executeWindowsE2EShardPlan(plan, {
+          spawnStep,
+          summaryExists: () => hasSummary,
+          writeManifest,
+          printManifest,
+        }),
+      ).rejects.toMatchObject({
+        message: expect.stringContaining(error),
+        manifest: {
+          firstFailure: { shardId: "1/2", error: expect.stringContaining(error) },
+          children: [
+            expect.objectContaining({
+              exitCode: result instanceof Error ? 1 : result.exitCode || 1,
+            }),
+            expect.objectContaining({ cancelled: true, signal: "SIGTERM" }),
+          ],
+        },
+      });
+      expect(terminatePeer).toHaveBeenCalledOnce();
+      expect(spawnStep.mock.calls.filter(([step]) => step.kind === "child")).toHaveLength(2);
+      expect(writeManifest).toHaveBeenCalledOnce();
+      expect(printManifest).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each(["test", "hook", "runner", "prepare"])(
+    "terminates the emitting child and peer on a live %s failure before either result settles",
+    async (kind) => {
+      const plan = createPlan();
+      const steps: Array<{ onFailure: (payload: unknown) => void; env: Record<string, string> }> =
+        [];
+      const closes: Array<(result: { exitCode: number; signal?: string }) => void> = [];
+      const terminates: Mock[] = [];
+      const writeManifest = vi.fn();
+      const execution = executeWindowsE2EShardPlan(plan, {
+        spawnStep: (step) => {
+          if (step.kind === "build") return { exitCode: 0 };
+          steps.push(step);
+          const terminate = vi.fn();
+          terminates.push(terminate);
+          const childClose = Promise.withResolvers<{ exitCode: number; signal?: string }>();
+          closes.push(childClose.resolve);
+          return {
+            result: childClose.promise,
+            terminate,
+          };
+        },
+        summaryExists: vi.fn(() => false),
+        writeManifest,
+        printManifest: vi.fn(),
+      });
+      await vi.waitFor(() => expect(steps).toHaveLength(2));
+      expect(steps[0]?.env.ZCODE_E2E_FAIL_FAST_PREFIX).toBe(
+        steps[1]?.env.ZCODE_E2E_FAIL_FAST_PREFIX,
+      );
+      expect(steps[0]?.env.ZCODE_E2E_FAIL_FAST_PREFIX).toBeTruthy();
+      steps[0]?.onFailure({
+        kind,
+        title: "original failing case",
+        error: "original failure",
+        cid: "0-0",
+      });
+      // 不释放 result，仍须同步取消；manifest 只等 close，不等完整 summary。
+      expect(terminates.every((terminate) => terminate.mock.calls.length === 1)).toBe(true);
+      expect(writeManifest).not.toHaveBeenCalled();
+      steps[1]?.onFailure({
+        kind: "runner",
+        title: "cancelled worker",
+        error: "secondary failure",
+      });
+      closes.forEach((close) => close({ exitCode: 1, signal: "SIGTERM" }));
+      await expect(execution).rejects.toMatchObject({
+        message: "original failing case original failure",
+        manifest: {
+          firstFailure: {
+            kind,
+            title: "original failing case",
+            error: "original failure",
+            cid: "0-0",
+          },
+          children: [
+            expect.objectContaining({ cancelled: true, error: "original failure" }),
+            expect.objectContaining({ cancelled: true }),
+          ],
+        },
+      });
+      expect(steps).toHaveLength(2);
+    },
+  );
+
+  it("handles a synchronous failure during start and never schedules later children", async () => {
+    const plan = createPlan();
+    const terminate = vi.fn();
+    const spawnStep = vi.fn((step) => {
+      if (step.kind === "build") return { exitCode: 0 };
+      step.onFailure({ kind: "prepare", title: "startup", error: "prepare failed" });
+      return { result: Promise.resolve({ exitCode: 1 }), terminate };
+    });
     await expect(
       executeWindowsE2EShardPlan(plan, {
-        now: () => 2_000,
-        spawnStep: async () => ({ exitCode: 0 }),
+        spawnStep,
         summaryExists: () => false,
         writeManifest: vi.fn(),
         printManifest: vi.fn(),
       }),
     ).rejects.toMatchObject({
-      message: expect.stringContaining("missing shard summary"),
       manifest: {
-        children: expect.arrayContaining([
-          expect.objectContaining({ exitCode: 1, error: expect.stringContaining("summary.json") }),
-        ]),
+        firstFailure: { title: "startup", error: "prepare failed" },
+        children: [
+          expect.anything(),
+          expect.objectContaining({ cancelled: true, error: "cancelled before start" }),
+        ],
       },
     });
+    expect(terminate).toHaveBeenCalledOnce();
+    expect(spawnStep.mock.calls.filter(([step]) => step.kind === "child")).toHaveLength(1);
   });
 
-  it("records a rejected shard start, waits for the delayed shard, and writes one manifest", async () => {
-    const plan = createPlan();
-    const writeManifest = vi.fn();
-    const printManifest = vi.fn();
-    let finishDelayedShard: (() => void) | undefined;
+  it("records build failure in a partial manifest without starting any child", async () => {
+    const spawnStep = vi.fn(() => ({ exitCode: 2 }));
+    await expect(
+      executeWindowsE2EShardPlan(createPlan(), {
+        spawnStep,
+        summaryExists: () => false,
+        writeManifest: vi.fn(),
+        printManifest: vi.fn(),
+      }),
+    ).rejects.toMatchObject({
+      manifest: {
+        firstFailure: { kind: "prepare", error: "exited with code 2" },
+        children: [
+          expect.objectContaining({ cancelled: true }),
+          expect.objectContaining({ cancelled: true }),
+        ],
+      },
+    });
+    expect(spawnStep).toHaveBeenCalledOnce();
+  });
 
-    const execution = executeWindowsE2EShardPlan(plan, {
-      now: () => 2_000,
-      summaryExists: () => true,
-      spawnStep: (step) => {
-        if (step.kind === "build") return Promise.resolve({ exitCode: 0 });
-        if (step.shardIndex === 1) return Promise.reject(new Error("spawn pnpm EAGAIN"));
-        return new Promise<{ exitCode: number }>((resolveChild) => {
-          finishDelayedShard = () => resolveChild({ exitCode: 0 });
+  it("gives each invocation a new failure prefix even with the same explicit run ID", async () => {
+    const prefixes: string[] = [];
+    for (let invocation = 0; invocation < 2; invocation += 1) {
+      await executeWindowsE2EShardPlan(createPlan(), {
+        spawnStep: (step) => {
+          if (step.kind === "child") prefixes.push(step.env.ZCODE_E2E_FAIL_FAST_PREFIX);
+          return { exitCode: 0 };
+        },
+        summaryExists: () => true,
+        writeManifest: vi.fn(),
+        printManifest: vi.fn(),
+      });
+    }
+    expect(prefixes[0]).toBe(prefixes[1]);
+    expect(prefixes[2]).toBe(prefixes[3]);
+    expect(prefixes[0]).not.toBe(prefixes[2]);
+  });
+
+  it.each(["direct", ...(process.platform === "win32" ? ["cmd"] : [])])(
+    "passes literal regex and spaced paths to a real %s child",
+    async (mode) => {
+      const root = mkdtempSync(join(tmpdir(), "zcode argv transport "));
+      const script = join(root, "argv child.cjs");
+      const capture = join(root, "received argv.json");
+      const args = [
+        "--mochaOpts.grep",
+        "^(?!.*全局组置顶;全局->项目搬文件).*",
+        "--dir",
+        "C:\\Z Code\\workspace\\",
+        "^&|<>()*",
+        "",
+        "plain",
+      ];
+      try {
+        writeFileSync(
+          script,
+          "require('node:fs').writeFileSync(process.env.ZCODE_ARGV_CAPTURE, JSON.stringify(process.argv.slice(2)));",
+        );
+        // 用真实 cmd shim 复现 pnpm 的 shell:true 路径，不依赖安装的 pnpm 或 WDIO。
+        writeFileSync(
+          join(root, "argv-child.cmd"),
+          '@echo off\r\n"%ZCODE_ARGV_NODE%" "%~dp0argv child.cjs" %*\r\n',
+        );
+        const execution = spawnCancellableStep({
+          command: mode === "cmd" ? "argv-child.cmd" : process.execPath,
+          args: mode === "cmd" ? args : [script, ...args],
+          cwd: root,
+          env: {
+            ...process.env,
+            ZCODE_ARGV_NODE: process.execPath,
+            ZCODE_ARGV_CAPTURE: capture,
+          },
         });
-      },
-      writeManifest,
-      printManifest,
-    });
+        try {
+          await expect(execution.result).resolves.toMatchObject({ exitCode: 0 });
+          expect(JSON.parse(readFileSync(capture, "utf8"))).toEqual(args);
+        } finally {
+          execution.terminate();
+          await execution.result;
+        }
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
 
-    await vi.waitFor(() => expect(finishDelayedShard).toBeTypeOf("function"));
-    await Promise.resolve();
-    expect(writeManifest).not.toHaveBeenCalled();
-
-    finishDelayedShard?.();
-    await expect(execution).rejects.toMatchObject({
-      message: expect.stringContaining("shard 1/2 failed to start: spawn pnpm EAGAIN"),
-      manifest: {
-        children: [
-          expect.objectContaining({
-            shardId: "1/2",
-            exitCode: 1,
-            error: "spawn pnpm EAGAIN",
-          }),
-          expect.objectContaining({ shardId: "2/2", exitCode: 0 }),
-        ],
-      },
+  it("parses owned structured chunks live and terminates the emitting descendant tree", async () => {
+    const prefix = "owned-failure:";
+    const payload = { kind: "hook", title: "before hook 中文", error: "hook failed", cid: "0-0" };
+    const onFailure = vi.fn(() => execution.terminate());
+    const output = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const errorOutput = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const workerSource = `
+      const bytes = Buffer.from(${JSON.stringify(prefix + JSON.stringify(payload) + "\n")});
+      const split = bytes.indexOf(Buffer.from("中文")) + 1;
+      process.stderr.write(bytes.subarray(0, split));
+      setImmediate(() => process.stderr.write(bytes.subarray(split)));
+      // Real process-tree integration: keep the descendant alive until group/taskkill cancellation.
+      setInterval(() => {}, 1000);
+    `;
+    const execution = spawnCancellableStep({
+      command: process.execPath,
+      args: [
+        "-e",
+        `
+        process.stdout.write('foreign-failure:{"kind":"test","title":"foreign","error":"ignore"}\\n');
+        process.stdout.write('owned-failure:not-json\\n');
+        process.stderr.write('owned-failure:{"kind":"unknown","title":"invalid","error":"ignore"}\\n');
+        require('node:child_process').spawn(process.execPath, ['-e', ${JSON.stringify(workerSource)}], {
+          stdio: ['ignore', 'inherit', 'inherit']
+        });
+      `,
+      ],
+      cwd: process.cwd(),
+      env: { ...process.env, ZCODE_E2E_FAIL_FAST_PREFIX: prefix },
+      onFailure,
     });
-    expect(writeManifest).toHaveBeenCalledOnce();
-    expect(printManifest).toHaveBeenCalledOnce();
+    try {
+      await execution.result;
+      expect(onFailure).toHaveBeenCalledOnce();
+      expect(onFailure).toHaveBeenCalledWith(payload);
+      expect(output.mock.calls.map(([chunk]) => String(chunk)).join("")).toContain(
+        "foreign-failure:",
+      );
+      expect(errorOutput.mock.calls.map(([chunk]) => String(chunk)).join("")).toContain(
+        "owned-failure:",
+      );
+    } finally {
+      execution.terminate();
+      await execution.result;
+      output.mockRestore();
+      errorOutput.mockRestore();
+    }
   });
 
-  it("terminates another cancellable shard after an unrecoverable start error", async () => {
-    const plan = createPlan();
-    let finishSecondShard: ((result: { exitCode: number; signal?: string }) => void) | undefined;
-    const terminateSecondShard = vi.fn(() => {
-      finishSecondShard?.({ exitCode: 1, signal: "SIGTERM" });
-    });
-
-    const execution = executeWindowsE2EShardPlan(plan, {
-      now: () => 2_000,
-      summaryExists: () => true,
-      spawnStep: (step) => {
-        if (step.kind === "build") return Promise.resolve({ exitCode: 0 });
-        if (step.shardIndex === 1) return Promise.reject(new Error("spawn pnpm ENOMEM"));
-        return {
-          result: new Promise<{ exitCode: number; signal?: string }>((resolveChild) => {
-            finishSecondShard = resolveChild;
-          }),
-          terminate: terminateSecondShard,
-        };
-      },
-      writeManifest: vi.fn(),
-      printManifest: vi.fn(),
-    });
-
-    await expect(execution).rejects.toMatchObject({
-      manifest: {
-        children: [
-          expect.objectContaining({ error: "spawn pnpm ENOMEM" }),
-          expect.objectContaining({ signal: "SIGTERM" }),
-        ],
-      },
-    });
-    expect(terminateSecondShard).toHaveBeenCalledOnce();
-  });
+  it.skipIf(process.platform !== "win32")(
+    "reclaims a completed shard's reparented real runtime without killing a neighboring invocation",
+    async () => {
+      const root = mkdtempSync(join(tmpdir(), "zcode orphan closure "));
+      const home = join(root, ".e2e-home-current");
+      const otherHome = `${home}-other`;
+      const worker = join(root, "worker.cjs");
+      const wrapper = join(root, "wrapper.cjs");
+      const ownedPidPath = join(root, "owned.pid");
+      const unrelatedPidPath = join(root, "unrelated.pid");
+      mkdirSync(home);
+      mkdirSync(otherHome);
+      writeFileSync(
+        worker,
+        `
+        require('node:fs').writeFileSync(process.argv[2], String(process.pid));
+        // 独立真实后代持续存活至 OS 回收；fake timer 无法覆盖跨进程退出。
+        setInterval(() => {}, 1000);
+      `,
+      );
+      writeFileSync(
+        wrapper,
+        `
+        const child = require('node:child_process').spawn(process.execPath,
+          [${JSON.stringify(worker)}, ${JSON.stringify(ownedPidPath)}, '--cwd', ${JSON.stringify(home)}],
+          { detached: true, stdio: 'ignore', cwd: ${JSON.stringify(home)} });
+        child.unref();
+      `,
+      );
+      const unrelated = spawn(process.execPath, [worker, unrelatedPidPath, "--cwd", otherHome], {
+        cwd: otherHome,
+        stdio: "ignore",
+      });
+      const unrelatedExit = Promise.withResolvers<void>();
+      unrelated.once("close", unrelatedExit.resolve);
+      const plan = createPlan();
+      plan.buildSteps = [];
+      let completedShard:
+        | { result: Promise<unknown>; terminate: () => void | Promise<void> }
+        | undefined;
+      let failPeer: (() => void) | undefined;
+      const peerResult = Promise.withResolvers<{ exitCode: number }>();
+      const run = executeWindowsE2EShardPlan(plan, {
+        summaryExists: () => true,
+        writeManifest: vi.fn(),
+        printManifest: vi.fn(),
+        spawnStep: (step) => {
+          if (step.shardIndex === 1) {
+            completedShard = spawnCancellableStep({
+              ...step,
+              command: process.execPath,
+              args: [wrapper],
+              cwd: root,
+              env: { ...process.env, ...step.env, ZCODE_E2E_HOME_DIR: home },
+            });
+            return completedShard;
+          }
+          failPeer = () => {
+            step.onFailure({ kind: "test", title: "peer failed", error: "original failure" });
+            peerResult.resolve({ exitCode: 1 });
+          };
+          return { result: peerResult.promise, terminate: vi.fn() };
+        },
+      });
+      // 附加拒绝观察器但不吞掉后面的断言，避免首错到断言之间产生 unhandled rejection。
+      const failedRun = run.catch((error) => error);
+      let ownedPid: number | undefined;
+      try {
+        await completedShard!.result;
+        await vi.waitFor(() => {
+          expect(existsSync(ownedPidPath)).toBe(true);
+          expect(existsSync(unrelatedPidPath)).toBe(true);
+        });
+        ownedPid = Number(readFileSync(ownedPidPath, "utf8"));
+        expect(() => process.kill(ownedPid!, 0)).not.toThrow();
+        // 确保 runTrackedStep 已完成；首错必须仍清理它，不只清理 active wrapper。
+        const nextTurn = Promise.withResolvers<void>();
+        setImmediate(nextTurn.resolve);
+        await nextTurn.promise;
+        failPeer!();
+        const failure = await failedRun;
+        expect(failure).toMatchObject({
+          manifest: { firstFailure: { title: "peer failed", error: "original failure" } },
+        });
+        expect(failure.manifest.cleanupErrors).toBeUndefined();
+        await vi.waitFor(() => expect(() => process.kill(ownedPid!, 0)).toThrow());
+        expect(() => process.kill(unrelated.pid!, 0)).not.toThrow();
+      } finally {
+        failPeer?.();
+        try {
+          await completedShard?.terminate();
+          await failedRun;
+        } finally {
+          if (ownedPid) {
+            try {
+              process.kill(ownedPid, "SIGKILL");
+            } catch {
+              /* 已由自有回收屏障清理。 */
+            }
+          }
+          unrelated.kill("SIGKILL");
+          await unrelatedExit.promise;
+          rmSync(root, { recursive: true, force: true });
+        }
+      }
+    },
+  );
 
   it("terminates active shards on a parent signal and reports the interrupted run", async () => {
     const plan = createPlan();

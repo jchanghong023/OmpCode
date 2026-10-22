@@ -2,6 +2,7 @@ import { seedTaskIndex } from "./helpers/taskIndexFixture.js";
 import { fixture, port } from "#src/project-storage/test-fixture.js";
 import type { ZCodeSessionInfo } from "@zcode/shared";
 import { channelReplyHostRequestSchema, type ChannelReplyHostRequest } from "@zcode/shared";
+import { ProviderConfigMap } from "@zcode/provider";
 // v4 conversation 通道 host 转发面测试（M3 竖切，docs/v4-refactor/01-topology §host 通道层）。
 // 验证 host 只做透传：subscribe/unsubscribe/command 转发给 CLI v4 方法，
 // v4/conversation/frame 通知按 workspace fan-out 给 onDynamicConversationFrame 订阅者。
@@ -34,6 +35,10 @@ const V4_FAKE_AGENT = `
 const fs = require("node:fs");
 const logPath = process.argv[2];
 let buf = "";
+let registryArmed = false;
+let pendingRegistryId;
+let heldRevision = 12;
+const heldQueue = new Set(["held-q1", "held-q2"]);
 function send(obj) { process.stdout.write(JSON.stringify(obj) + "\\n"); }
 process.stdin.on("data", (chunk) => {
   buf += chunk.toString("utf8");
@@ -45,6 +50,27 @@ process.stdin.on("data", (chunk) => {
     let msg;
     try { msg = JSON.parse(line); } catch { continue; }
     if (logPath && msg.method) fs.appendFileSync(logPath, line + "\\n");
+    if (msg.method === "provider/updateAccountConfig") {
+      send({ id: msg.id, result: { receivedRevision: "held-account", status: "received", providerCount: 0 } });
+      continue;
+    }
+    if (msg.method === "provider/refreshRegistry") {
+      if (registryArmed) pendingRegistryId = msg.id;
+      else send({ id: msg.id, result: { refreshed: true } });
+      continue;
+    }
+    if (msg.method === "v4/commands/query") {
+      const control = msg.params.commands[0]?.commandId;
+      if (control === "held-registry-arm") registryArmed = true;
+      if (control === "held-registry-release" || control === "held-registry-fail") {
+        registryArmed = false;
+        if (pendingRegistryId !== undefined) {
+          if (control === "held-registry-fail") send({ id: pendingRegistryId, error: { code: -32000, message: "registry refresh failed" } });
+          else send({ id: pendingRegistryId, result: { refreshed: true } });
+          pendingRegistryId = undefined;
+        }
+      }
+    }
     if (msg.method === "session/list" && msg.id !== undefined) {
       const sessions = JSON.parse(fs.readFileSync(process.argv[3], "utf8"));
       send({ id: msg.id, result: { sessions: sessions.filter((session) => msg.params.sessionIds.includes(session.sessionId)) } });
@@ -296,6 +322,21 @@ process.stdin.on("data", (chunk) => {
       else reply();
     }
     if (msg.method === "v4/command" && msg.id !== undefined) {
+      if (msg.params.commandId.startsWith("held-promote-")) {
+        const stale = msg.params.baseRevision !== heldRevision;
+        const missing = !heldQueue.has(msg.params.payload.queueItemId);
+        if (!stale && !missing) {
+          heldQueue.delete(msg.params.payload.queueItemId);
+          heldRevision++;
+        }
+        send({ id: msg.id, result: {
+          commandId: msg.params.commandId,
+          status: stale ? "stale" : missing ? "rejected" : "accepted",
+          revisionAtDecision: heldRevision,
+          ...(stale ? { reasonCode: "guard.revision" } : missing ? { reasonCode: "guard.queueItem" } : {}),
+        } });
+        continue;
+      }
       const status = "accepted";
       const acceptedInput = {
         delivery: "startNow",
@@ -420,6 +461,9 @@ describe("zcodeAgentService v4 conversation channel", () => {
       resolveSessionDirectories?: NonNullable<
         Parameters<typeof createZCodeAgentService>[0]
       >["resolveSessionDirectories"];
+      accountProviderConfigSource?: NonNullable<
+        Parameters<typeof createZCodeAgentService>[0]
+      >["accountProviderConfigSource"];
       storedSessions?: (workspacePath: string) => ZCodeSessionInfo[];
       channelReplyExecutor?: NonNullable<
         Parameters<typeof createZCodeAgentService>[0]
@@ -443,6 +487,7 @@ describe("zcodeAgentService v4 conversation channel", () => {
     }));
     const service = createZCodeAgentService({
       commandResolver,
+      accountProviderConfigSource: options.accountProviderConfigSource,
       prepareSessionCreation: options.prepareSessionCreation,
       resolveSessionDirectories: options.resolveSessionDirectories,
       repoSnapshotCaptureIntentScheduler: options.repoSnapshotCaptureIntentScheduler,
@@ -477,6 +522,150 @@ describe("zcodeAgentService v4 conversation channel", () => {
     });
     return { service, workspacePath, logPath, commandResolver };
   }
+
+  it.each([
+    { material: { modelSelection: { providerId: "glm", modelId: "glm-4.6" } }, fail: false },
+    { material: { modelSelection: { providerId: "glm", modelId: "glm-4.6" } }, fail: true },
+    {
+      material: {
+        modelSelection: { providerId: "glm", modelId: "glm-4.6" },
+        modelExecution: { selectionScope: "execution" as const },
+      },
+      fail: false,
+    },
+    {
+      material: {
+        modelSelection: { providerId: "glm", modelId: "glm-4.6" },
+        modelExecution: { selectionScope: "execution" as const },
+      },
+      fail: true,
+    },
+  ])(
+    "forwards admitted queue material without waiting for registry, preserving new-material barrier: $material / $fail",
+    async ({ material, fail }) => {
+      const { service, workspacePath, logPath } = setupService({
+        accountProviderConfigSource: {
+          async read() {
+            return {
+              revision: "held-account",
+              basedOnZCodeBuiltinRevision: "zcode-builtin:1",
+              providers: new ProviderConfigMap([]),
+            };
+          },
+          onDidChange: () => () => {},
+        },
+      });
+      const scope = createZCodeAgentConnectionScope(service, {
+        connectionId: "held-registry-control",
+        clientMode: "desktop-continuous",
+      });
+      const control = (commandId: string) =>
+        scope.service.queryConversationCommandsV4({
+          workspacePath,
+          commands: [{ sessionId: null, commandId }],
+        });
+      try {
+        await scope.service.helloConversationV4();
+        await scope.service.initializeConversationV4({
+          kind: "clientHello",
+          protocolVersion: 3,
+          clientId: "held-registry-control-client",
+          appVersion: "4.0.0",
+        });
+        await service.sendConversationCommandV4({
+          workspacePath,
+          envelope: {
+            commandId: "held-warmup",
+            clientId: "test",
+            sessionId: "session",
+            type: "compact",
+            payload: {},
+            issuedAt: 1,
+          },
+        });
+        await control("held-registry-arm");
+        const materialCommand = service
+          .sendConversationCommandV4({
+            workspacePath,
+            envelope: {
+              commandId: "held-promote-material",
+              clientId: "test",
+              sessionId: "session",
+              type: "sendQueuedNow",
+              baseRevision: 13,
+              baseLogEpoch: "held-epoch",
+              payload: { queueItemId: "held-q2", ...material },
+              issuedAt: 2,
+            },
+          })
+          .then(
+            (ack) => ({ ack }),
+            (error: unknown) => ({ error }),
+          );
+        await expect
+          .poll(
+            () =>
+              readRequests(logPath).filter((entry) => entry.method === "provider/refreshRegistry")
+                .length,
+          )
+          .toBe(2);
+        expect(
+          readRequests(logPath).some(
+            (entry) =>
+              entry.method === "v4/command" && entry.params.commandId === "held-promote-material",
+          ),
+        ).toBe(false);
+        const original = {
+          commandId: "held-promote-original",
+          clientId: "test",
+          sessionId: "session",
+          type: "sendQueuedNow" as const,
+          baseRevision: 12,
+          baseLogEpoch: "held-epoch",
+          payload: { queueItemId: "held-q1" },
+          issuedAt: 3,
+        };
+        await expect(
+          service.sendConversationCommandV4({ workspacePath, envelope: original }),
+        ).resolves.toMatchObject({ status: "accepted", revisionAtDecision: 13 });
+        expect(
+          readRequests(logPath).find(
+            (entry) =>
+              entry.method === "v4/command" && entry.params.commandId === original.commandId,
+          )?.params,
+        ).toEqual(original);
+        // 不只检查透传参数：Agent 已消费 Q1；原 revision 再发必须真实 stale，不能被 Host 重写。
+        await expect(
+          service.sendConversationCommandV4({
+            workspacePath,
+            envelope: { ...original, commandId: "held-promote-stale" },
+          }),
+        ).resolves.toMatchObject({ status: "stale", reasonCode: "guard.revision" });
+        await expect(
+          service.sendConversationCommandV4({
+            workspacePath,
+            envelope: { ...original, commandId: "held-promote-consumed", baseRevision: 13 },
+          }),
+        ).resolves.toMatchObject({ status: "rejected", reasonCode: "guard.queueItem" });
+        await control(fail ? "held-registry-fail" : "held-registry-release");
+        await expect(materialCommand).resolves.toMatchObject(
+          fail
+            ? { error: expect.objectContaining({ message: "registry refresh failed" }) }
+            : { ack: { status: "accepted", revisionAtDecision: 14 } },
+        );
+        expect(
+          readRequests(logPath).filter(
+            (entry) =>
+              entry.method === "v4/command" && entry.params.commandId === "held-promote-material",
+          ),
+        ).toHaveLength(fail ? 0 : 1);
+      } finally {
+        await control("held-registry-release").catch(() => {});
+        await scope.dispose();
+        await service.disposeAllAndWait();
+      }
+    },
+  );
 
   const childHostId = "remote:server:subagent-view";
   const childWorkspace = (workspacePath: string) => ({

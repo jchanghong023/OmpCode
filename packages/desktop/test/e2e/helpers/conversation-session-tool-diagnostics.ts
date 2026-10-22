@@ -8,6 +8,9 @@ import {
   TID_CHAT_VIEW,
   TID_TOOL_SUMMARY_TRIGGER,
   TID_V4_SESSION_PANE,
+  TID_V4_TIMELINE,
+  TID_V4_STOP,
+  TID_V4_QUEUE_ITEM,
 } from "@zcode/shared/test-ids";
 
 export interface ToolCallBlockSnapshot {
@@ -40,6 +43,7 @@ export interface ToolCallDiagnostics {
   matcher: ToolCallMatcher | null;
   matchedBlock: ToolCallBlockSnapshot | null;
   rendererStore: RendererStoreDiagnostics;
+  v4Rows: Array<{ rowId: string | null; testId: string | null; text: string }>;
 }
 
 interface AssistantHistoryStateSnapshot {
@@ -151,10 +155,20 @@ export function getToolCallDiagnostics(
       historyTriggerPrefix,
       historyContentPrefix,
       v4PaneTestId,
+      v4TimelineTestId,
+      v4StopTestId,
+      v4QueueItemPrefix,
       expectedMatcher,
     ) => {
       const normalizeText = (value: string) =>
         value.replace(/\u00a0/g, " ").trim();
+      const pane = document.querySelector<HTMLElement>(`[data-testid^="${v4PaneTestId}-"]`);
+      const timeline = pane?.querySelector<HTMLElement>(`[data-testid="${v4TimelineTestId}"]`);
+      const v4Rows = Array.from(timeline?.querySelectorAll<HTMLElement>("[data-row-id]") ?? []).map(row => ({
+        rowId: row.getAttribute("data-row-id"),
+        testId: row.getAttribute("data-testid"),
+        text: normalizeText(row.innerText),
+      }));
       const blocks = Array.from(
         document.querySelectorAll<HTMLElement>(
           `[data-testid^="${toolBlockPrefix}-"]`,
@@ -251,7 +265,13 @@ export function getToolCallDiagnostics(
             queueCount: chatView.getAttribute("data-queue-count"),
             state: chatView.getAttribute("data-chat-state"),
           }
-        : null;
+        : pane
+          ? {
+              activeInputId: pane.getAttribute("data-active-input-id"),
+              queueCount: String(pane.querySelectorAll(`[data-testid^="${v4QueueItemPrefix}-"]`).length),
+              state: pane.querySelector(`[data-testid="${v4StopTestId}"]`) ? "running" : "idle",
+            }
+          : null;
       const v4SessionId = document
         // Bug 根因：V4 pane test id 始终带 paneId 后缀；精确匹配基础 id 会让
         // hooks/tool 失败诊断把真实 active task 误报成 null。
@@ -350,6 +370,7 @@ export function getToolCallDiagnostics(
         matcher: expectedMatcher,
         matchedBlock,
         rendererStore,
+        v4Rows,
       };
     },
     TID_CHAT_TOOL_CALL_BLOCK,
@@ -360,6 +381,9 @@ export function getToolCallDiagnostics(
     TID_CHAT_ASSISTANT_HISTORY_TRIGGER,
     TID_CHAT_ASSISTANT_HISTORY_CONTENT,
     TID_V4_SESSION_PANE,
+    TID_V4_TIMELINE,
+    TID_V4_STOP,
+    TID_V4_QUEUE_ITEM,
     matcher,
   );
 }

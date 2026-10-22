@@ -8,7 +8,7 @@ const processLifecycleTests = [
   "packages/services/test/zcodeAgentProcessManager.test.ts",
   "packages/services/test/zcodeStdioTransport.test.ts",
 ];
-const forkIsolatedTests = [
+const fullForkIsolatedTests = [
   ...processLifecycleTests,
   // 真实显示进程树和独立配置读者都在 5 秒内等待启动；并发调度延迟曾触发截止。
   // 放入串行组保留真实进程和原时限，避免把启动排队误判为资源隔离或读锁失败。
@@ -33,6 +33,9 @@ const forkIsolatedTests = [
   "packages/desktop/test/publishReleaseScript.test.ts",
   // 选源集成测试连续启动 Git、Bash 和 Node；并发启动排队会打穿 30s，沿用发布类串行隔离。
   "packages/web/test/remoteFrontendBuildSource.test.ts",
+  // 组件归档与解包会密集启动真实 tar 子进程；并发桌面联调时曾打穿原有 30 秒。
+  // 复用已有串行进程组，不修改用例、归档行为或时间预算。
+  "packages/zcode-server-cli/test/packaging.test.ts",
   // Sharp 闭包装配后要启动真实 Node 加载原生库；并行热启动曾触发其 15s 子进程限时。
   "packages/desktop/test/dev-cua-plugin-runtime.test.ts",
   // 全量并发时真实心跳与嵌套构建会被调度延迟打穿；单独运行均通过，沿用串行组保留原时限。
@@ -59,6 +62,64 @@ const forkIsolatedTests = [
   // docs/windows-test-compatibility.md。
   "packages/ui/test/pdfJsCMapSupport.test.ts",
 ];
+
+const fullUnitTests = [
+  "packages/*/test/**/*.test.ts",
+  // 架构治理要求 managed 模块自带 contract.test.ts（见 architecture-policy.yaml），放在模块目录内。
+  "packages/*/src/**/contract.test.ts",
+  // Gen UI 目录回归位于源码旁，默认入口也必须执行，避免只在手动定向运行时生效。
+  "packages/shared/src/node/genUiPaths.test.ts",
+  "packages/services/src/gen-ui/**/*.test.ts",
+  "scripts/assert-safe-cua-helper-zip.test.mjs",
+  "scripts/ci/ci-telemetry-keyword-guard.test.mjs",
+  "scripts/omp-artifact.test.mjs",
+];
+
+// OMP 对接期仅屏蔽无关 UT，保留全部文件、断言、时限和原全量定义。
+// 恢复全量只需将本数组初始化值替换为 null；普通组、隔离组和 CUA 子项目同时恢复。
+const focusedUnitTests: string[] | null = [
+  "packages/desktop/test/subagentConfigProxy.test.ts",
+  "packages/desktop/test/remoteWorkspacePreparation.test.ts",
+  "packages/desktop/test/desktopMainIpcRemoteOpenExternalFile.test.ts",
+  "packages/desktop/test/desktopMainIpcRemoteTelemetry.test.ts",
+  "packages/desktop/test/fileApplications.test.ts",
+  "packages/desktop/test/powershell-command.test.ts",
+  "packages/desktop/test/windowsInstallerCompile.test.ts",
+  "packages/desktop/test/desktopRuntimeEnv.test.ts",
+  "packages/desktop/test/storagePreparationWorker.test.ts",
+  "packages/desktop/test/windows-e2e-shards.test.ts",
+  "packages/desktop/test/e2eProcessCleanup.test.ts",
+  "packages/desktop/test/e2eSpecAdmission.test.ts",
+  "packages/desktop/test/e2eSpecResolution.test.ts",
+  "packages/server/test/remoteAssetInstaller.test.ts",
+  "packages/server/test/stdioDesktopPresentationSurface.test.ts",
+  ...processLifecycleTests,
+  "packages/services/test/zcodeLegacyTaskCompatTaskIndex.test.ts",
+  "packages/services/src/gen-ui/adapters/files.test.ts",
+  "packages/services/src/project/contract.test.ts",
+  "packages/provider-node/test/bundled-config-replacement.test.ts",
+  "packages/zcode-server-cli/test/remoteAssetRelease.test.ts",
+  "packages/zcode-server-cli/test/serviceManager.test.ts",
+  "packages/zcode-server-cli/test/supervisor.test.ts",
+  "packages/zcode-server-cli/test/packaging.test.ts",
+  "packages/zcode-server-cli/test/agentWiring.test.ts",
+  "packages/zcode-server-cli/test/daemonRegistration.test.ts",
+  "packages/ui/test/elicitationDialog.test.ts",
+  "packages/ui/test/elicitationDialogRequestIdentity.test.ts",
+  "packages/ui/test/v4ComposerToolbarRecovery.test.ts",
+  "packages/ui/test/v4PendingInteractionAdapter.test.ts",
+  "scripts/omp-artifact.test.mjs",
+  "packages/desktop/test/e2eFailFastReporter.test.ts",
+  "packages/desktop/test/conversationSessionNetwork.test.ts",
+  "packages/ui/src/omp-configuration/contract.test.ts",
+  "packages/ui/test/ompConfigurationPanel.test.ts",
+  "packages/ui/test/useRootPlatformEffects.test.ts",
+  "packages/ui/test/usePaneSessionPersistence.test.ts",
+  "packages/ui/test/rootNewTaskWorkbenchContext.test.ts",
+];
+const forkIsolatedTests = focusedUnitTests
+  ? fullForkIsolatedTests.filter((test) => focusedUnitTests.includes(test))
+  : fullForkIsolatedTests;
 
 export default defineConfig({
   // 测试固定注入事件上报端点，使遥测上报链路在单测中可验证；真实构建由 scripts/build-time-config.mjs 决定。
@@ -113,17 +174,12 @@ export default defineConfig({
         extends: true,
         test: {
           name: "unit",
-          include: [
-            "packages/*/test/**/*.test.ts",
-            // 架构治理要求 managed 模块自带 contract.test.ts（见 architecture-policy.yaml），放在模块目录内。
-            "packages/*/src/**/contract.test.ts",
-            // Gen UI 目录回归位于源码旁，默认入口也必须执行，避免只在手动定向运行时生效。
-            "packages/shared/src/node/genUiPaths.test.ts",
-            "packages/services/src/gen-ui/**/*.test.ts",
-            "scripts/assert-safe-cua-helper-zip.test.mjs",
-            "scripts/ci/ci-telemetry-keyword-guard.test.mjs",
+          include: focusedUnitTests ?? fullUnitTests,
+          exclude: [
+            "packages/desktop/test/e2e/**",
+            "packages/zcode-cua/**",
+            ...fullForkIsolatedTests,
           ],
-          exclude: ["packages/desktop/test/e2e/**", "packages/zcode-cua/**", ...forkIsolatedTests],
           // Node 24/macOS 的 threads 全量运行可触发 V8 SIGSEGV；诊断时切换进程隔离，测试范围不变。
           pool: process.env.ZCODE_TEST_POOL === "forks" ? "forks" : "threads",
           maxWorkers: process.env.ZCODE_TEST_POOL === "forks" ? 2 : 4,
@@ -141,7 +197,7 @@ export default defineConfig({
           sequence: { groupOrder: 1 },
         },
       },
-      "packages/zcode-cua/vitest.config.ts",
+      ...(focusedUnitTests ? [] : ["packages/zcode-cua/vitest.config.ts"]),
     ],
     coverage: {
       provider: "v8",
