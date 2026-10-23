@@ -79,7 +79,6 @@ function resolveBootstrapWithRemoteEnv(baseEnv = process.env) {
     ZCODE_ENV: zcodeEnv,
     // bootstrap:with-remote 是手动远程资源初始化入口，自动化等非 TTY 环境里
     // pnpm install 可能要求确认清理 node_modules。只在该入口禁用确认，不改变 CI/生产构建命令。
-    HUSKY: "0",
     PNPM_CONFIG_CONFIRM_MODULES_PURGE: "false",
     npm_config_confirm_modules_purge: "false",
     // remote assets 和 bootstrap build 同一轮里会触发大量 workspace 构建。

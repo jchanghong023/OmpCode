@@ -125,25 +125,24 @@ pnpm --config.use-node-version=24.14.0 test:unit
 - 可用 `pnpm test:unit --maxWorkers=2` 指定 worker 上限，或加 `--no-file-parallelism` 将测试文件串行执行；
   本轮最终全量没有使用这些覆盖参数。
 
-## 5. FORK-002：移除推送时的自动架构门禁
+## 5. FORK-002：禁用全部 Git 钩子
 
 ### 目标
 
-正常推送不再因架构合规扫描失败而被阻断，无需每次使用 `--no-verify` 绕过整个 pre-push 钩子。
+提交、推送、签出等 Git 操作不执行钩子，不隐式运行检查、构建或外部跟踪程序。
 
 ### 范围与规则
 
-- 从根 `verify:pre-push` 执行链删除 `pnpm run architecture:check -- --changed`。
-- 保留 Lint、SQLite schema 兼容检查、架构规则自身的单测及 push 范围的受影响 UT；这些检查失败时仍阻止推送。
-- `.husky/pre-push` 继续作为唯一推送钩子，保留 push ref 传递和 Git local env 清理，不新增旁路脚本或吞错分支。
-- 手动 `pnpm architecture:check --changed`、架构策略及模块边界规则保持不变；移除推送阻断不等于架构违规已修复。
-- 同步维护命令说明，不扩大为运行时代码或架构模块治理改造。
+- 删除全部仓库钩子文件，包括 `.husky`、Git 本地 hooks 目录及外部工具安装的钩子。
+- 移除 Husky 依赖及自动安装步骤；依赖安装、开发和上游同步不得恢复 Git 钩子。
+- 现有 checkout 使用仓库本地 `core.hooksPath=/dev/null` 禁用钩子，不修改用户全局 Git 配置。
+- Lint、SQLite schema 兼容、架构及受影响 UT 等现有验证入口和通过标准保留，仅按任务需要手动执行；`verify:pre-push` 是手动命令，不再阻断 Git 操作。
 
 ### 验收标准
 
-1. 使用正常 `git push origin dev:dev`，不设置跳过钩子的参数或环境变量。
-2. 实际钩子执行保留的检查，不再调用架构合规扫描。
-3. 保留检查通过后推送成功，远端 `dev` 更新到本次提交。
+1. 仓库无已安装或版本控制中的 Git 钩子，安装依赖不会自动安装钩子。
+2. 正常 `git commit`、`git push` 不触发验证或外部程序，无需临时跳过参数或环境变量。
+3. 手动质量检查入口仍可独立调用。
 
 ## 6. FORK-003：通过 OMP app-server 替换 Agent 核心
 
