@@ -207,6 +207,8 @@ export function createZCodeSessionService({
     },
 
     readWorkspacePresentation(params: ZCodeSessionReadWorkspacePresentationParams) {
+      // 设置页先打开也是显式 workspace 使用：复用 Host 目录摄入，不创建会话。
+      taskIndexSyncer?.ensureWorkspaceSubscription(params);
       return agentService.readWorkspacePresentation(params);
     },
 
@@ -477,10 +479,6 @@ export function createZCodeSessionService({
 
     async setMode(params: ZCodeSessionSetModeParams) {
       return withApiRetryRuntime(await agentService.setMode(params));
-    },
-
-    respondProviderRuntimeHeaders(params) {
-      return agentService.respondProviderRuntimeHeaders(params);
     },
 
     // M5 删波次 2：onDynamicSessionEvent（renderer 侧旧 session/subscribe 订阅面）已删。

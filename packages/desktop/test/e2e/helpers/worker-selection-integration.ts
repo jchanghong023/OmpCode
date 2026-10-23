@@ -30,8 +30,6 @@ export async function createWorkerSelectionIntegration() {
   const previousDataDir = getDataBaseDir();
   setDataBaseDir(home);
   const source = new MutableAccountProviderConfigSource();
-  const deliverySource = new MutableAccountProviderConfigSource();
-  let deliveryPaused = false;
   const runtimePaths = {
     zcodeBuiltinFilePath: resolve("../../config/provider/zcode-builtin.json"),
     personalFilePath: join(home, ".zcode/v2/provider_config.json"),
@@ -76,7 +74,6 @@ export async function createWorkerSelectionIntegration() {
       ),
     );
     await runtime.registryService.refresh("test-account-change");
-    if (!deliveryPaused) deliverySource.replace(await source.read());
   }
   await selectAccount(individual);
   const facade = createNodeModelSelectionFacade(runtime.registryService);
@@ -99,21 +96,6 @@ export async function createWorkerSelectionIntegration() {
         ZCODE_PERSONAL_PROVIDER_CONFIG_FILE: runtimePaths.personalFilePath,
       },
     }),
-    modelSelectionReadinessSource: modelSelectionService,
-    accountProviderConfigSource: deliverySource,
-    // 测试只核对选择合同；不使用真实账号、真实 secret 或外部 IM 网络。
-    accountRequestAuthService: {
-      resolveAccessCurrent: async () => ({
-        type: "zhipu-account",
-        family: "bigmodel",
-        planKind: "team-coding-plan",
-        productId: "product-team-a",
-        organizationId: "org-team-a",
-        projectId: "proj-team-a",
-      }),
-      resolveCurrent: async () => ({ apiKey: "e2e-fixture-key" }),
-      assertCurrent: async () => {},
-    },
   });
   const repo = new TaskIndexRepo();
   const syncer = createZCodeTaskIndexSyncer({ agentService: agent, taskIndexRepo: repo });
@@ -129,10 +111,6 @@ export async function createWorkerSelectionIntegration() {
     task,
     modelSelectionService,
     selectAccount,
-    async setDeliveryPaused(paused: boolean) {
-      deliveryPaused = paused;
-      if (!paused) deliverySource.replace(await source.read());
-    },
     async dispose() {
       syncer.disposeAll();
       await agent.disposeWorkspace({ workspacePath });

@@ -97,33 +97,6 @@ require("node:readline").createInterface({input:process.stdin}).on("line", line 
 });
 `;
 
-function createReadyZCodeAgentService(options?: Parameters<typeof createZCodeAgentService>[0]) {
-  return createZCodeAgentService({
-    modelSelectionReadinessSource: {
-      async getView() {
-        return {
-          revision: 1,
-          providers: [
-            {
-              providerId: "glm",
-              config: {
-                kind: "api" as const,
-                api: {
-                  type: "openai-chat-completions" as const,
-                  baseUrl: "https://provider.test/v1",
-                },
-                models: ["glm-4.6"],
-              },
-              models: [{ modelId: "glm-4.6", config: {} }],
-            },
-          ],
-        };
-      },
-    },
-    ...options,
-  });
-}
-
 // 一个最小的 ZCode Protocol stdio fake agent：
 // 第一次收到 session/subscribe 返回错误（模拟 "Session is not active" 之类的瞬时失败），
 // 第二次返回成功并带一条 session.titleUpdated 事件。用来验证订阅建立失败后会重试。
@@ -1311,36 +1284,91 @@ describe("createZCodeAgentService", () => {
     }
   });
 
-  it("does not resolve or spawn a command while provider/model is unavailable", async () => {
+  it("starts a runtime and receives its native model catalog without Host provider configuration", async () => {
+    const workspacePath = mkdtempSync(join(tmpdir(), "zcode-native-model-startup-"));
+    createdDirs.push(workspacePath);
+    const scriptPath = join(workspacePath, "native-catalog-agent.cjs");
+    const modelOption = {
+      id: "model",
+      name: "Model",
+      type: "select",
+      currentValue: "builtin/free-model",
+      options: [
+        {
+          value: "builtin/free-model",
+          name: "Built-in model",
+          origin: "native",
+          modelProviderId: "builtin",
+          modelProviderName: "Built-in",
+          modelThoughtLevels: ["low", "high"],
+          modelDefaultThoughtLevel: "low",
+        },
+      ],
+    };
+    writeFileSync(
+      scriptPath,
+      `
+      const config = ${JSON.stringify({ configOptions: [modelOption], slashCommands: [] })};
+      const send = message => process.stdout.write(JSON.stringify(message) + "\\n");
+      require("node:readline").createInterface({input:process.stdin}).on("line", line => {
+        const request = JSON.parse(line);
+        if (request.id === undefined) return;
+        if (request.method !== "v4/conversation/subscribe") {
+          send({id:request.id,result:{}});
+          return;
+        }
+        const topic = request.params.topic;
+        send({id:request.id,result:{
+          ack:{subscriptionId:"native-catalog",mode:"snapshot",logEpoch:"native-epoch"}
+        }});
+        send({method:"v4/conversation/frame",params:{
+          wireVersion:3,kind:"complete",logicalFrameId:"native-config",
+          logicalFrameOrdinal:1,topic,subscriptionId:"native-catalog",deliveryKind:"online",
+          frame:{topic,subscriptionId:"native-catalog",fromSeq:0,toSeq:0,sentAt:Date.now(),
+            payload:{kind:"deltas",deltas:[{op:"config.updated",config}]}}
+        }});
+      });
+    `,
+    );
     const commandResolver = vi.fn(() => ({
       command: process.execPath,
-      args: ["-e", "setInterval(() => {}, 1000);"],
+      args: [scriptPath],
     }));
     const processLifecycleReporter = {
       onSpawn: vi.fn(),
       onExit: vi.fn(),
       onError: vi.fn(),
     };
-    const service = createZCodeAgentService({
-      commandResolver,
-      processLifecycleReporter,
-      modelSelectionReadinessSource: {
-        async getView() {
-          return { revision: 1, providers: [] };
+    // 原生目录属于运行时；空 Host 账户配置不能阻止启动或另造模型就绪事实。
+    const service = createZCodeAgentService({ commandResolver, processLifecycleReporter });
+    const frames: unknown[] = [];
+    const subscription = service.onDynamicWorkspaceConfigFrame({ workspacePath })((frame) => {
+      frames.push(frame);
+    });
+    try {
+      await expect(service.initialize({ workspacePath })).resolves.toMatchObject({
+        available: true,
+      });
+      await service.subscribeWorkspaceConfigV4({ workspacePath });
+      await vi.waitFor(() => expect(frames).toHaveLength(1));
+      expect(frames[0]).toMatchObject({
+        frame: {
+          payload: {
+            kind: "deltas",
+            deltas: [{ op: "config.updated", config: { configOptions: [modelOption] } }],
+          },
         },
-      },
-    });
-
-    await expect(
-      service.initialize({ workspacePath: "/workspace/provider-waiting" }),
-    ).resolves.toMatchObject({
-      available: false,
-      reasonCode: "provider_not_ready",
-    });
-    expect(commandResolver).not.toHaveBeenCalled();
-    expect(processLifecycleReporter.onSpawn).not.toHaveBeenCalled();
-    expect(processLifecycleReporter.onError).not.toHaveBeenCalled();
-    await service.disposeAllAndWait();
+      });
+      expect(commandResolver).toHaveBeenCalledTimes(1);
+      expect(processLifecycleReporter.onSpawn).toHaveBeenCalledOnce();
+      expect(processLifecycleReporter.onSpawn).toHaveBeenCalledWith(
+        expect.objectContaining({ pid: expect.any(Number), workspacePath }),
+      );
+      expect(processLifecycleReporter.onError).not.toHaveBeenCalled();
+    } finally {
+      subscription.dispose();
+      await service.disposeAllAndWait();
+    }
   });
 
   const createdDirs: string[] = [];
@@ -1373,7 +1401,7 @@ describe("createZCodeAgentService", () => {
       command: process.execPath,
       args: [scriptPath, logPath],
     }));
-    const service = createReadyZCodeAgentService({ commandResolver });
+    const service = createZCodeAgentService({ commandResolver });
 
     try {
       await service.syncAppRuntimePreferences({
@@ -1460,7 +1488,7 @@ describe("createZCodeAgentService", () => {
     const scriptPath = join(workspacePath, "interaction-preferences-agent.cjs");
     const logPath = join(workspacePath, "protocol.log");
     writeFileSync(scriptPath, INTERACTION_PREFERENCES_FAKE_AGENT);
-    const service = createReadyZCodeAgentService({
+    const service = createZCodeAgentService({
       commandResolver: () => ({
         command: process.execPath,
         args: [scriptPath, logPath, "fail-first"],
@@ -1494,7 +1522,7 @@ describe("createZCodeAgentService", () => {
     const scriptPath = join(workspacePath, "interaction-preferences-agent.cjs");
     const logPath = join(workspacePath, "protocol.log");
     writeFileSync(scriptPath, INTERACTION_PREFERENCES_FAKE_AGENT);
-    const service = createReadyZCodeAgentService({
+    const service = createZCodeAgentService({
       commandResolver: () => ({
         command: process.execPath,
         args: [scriptPath, logPath, "delay-first"],
@@ -1596,7 +1624,7 @@ describe("createZCodeAgentService", () => {
     const scriptPath = join(sandboxRoot, "binding-check-agent.cjs");
     const logPath = join(sandboxRoot, "binding-check-response.json");
     writeFileSync(scriptPath, AUTOMATION_BINDING_CHECK_FAKE_AGENT);
-    const service = createReadyZCodeAgentService({
+    const service = createZCodeAgentService({
       commandResolver: () => ({ command: process.execPath, args: [scriptPath, logPath] }),
     });
     const automation = await service.createAutomation({
@@ -1628,7 +1656,7 @@ describe("createZCodeAgentService", () => {
   });
 
   it("reports unavailable without starting a process when no command is configured", async () => {
-    const service = createReadyZCodeAgentService({ commandResolver: () => null });
+    const service = createZCodeAgentService({ commandResolver: () => null });
 
     await expect(
       service.initialize({
@@ -1658,7 +1686,7 @@ describe("createZCodeAgentService", () => {
       onExit: vi.fn(),
       onError: vi.fn(),
     };
-    const service = createReadyZCodeAgentService({ commandResolver, processLifecycleReporter });
+    const service = createZCodeAgentService({ commandResolver, processLifecycleReporter });
 
     await expect(
       service.initialize({
@@ -1722,7 +1750,7 @@ describe("createZCodeAgentService", () => {
       },
       elapsedMs: 1,
     }));
-    const service = createReadyZCodeAgentService({
+    const service = createZCodeAgentService({
       commandResolver: () => ({ command: process.execPath, args: [scriptPath] }),
       browserControlExecutor: { list, execute },
     });
@@ -1772,7 +1800,7 @@ describe("createZCodeAgentService", () => {
     const logPath = join(workspacePath, "protocol.log");
     writeFileSync(scriptPath, SHELL_SETTINGS_SNAPSHOT_FAKE_AGENT);
     const prepareSessionCreation = vi.fn(async () => ["/extra"]);
-    const service = createReadyZCodeAgentService({
+    const service = createZCodeAgentService({
       prepareSessionCreation,
       commandResolver: () => ({ command: process.execPath, args: [scriptPath, logPath] }),
     });
@@ -1809,9 +1837,7 @@ describe("createZCodeAgentService", () => {
     const scriptPath = join(workspacePath, "tool-list-agent.cjs");
     const logPath = join(workspacePath, "protocol.log");
     writeFileSync(scriptPath, SHELL_SETTINGS_SNAPSHOT_FAKE_AGENT);
-    // 修复原因：本用例只验证 session/create 的工具列表透传，不验证 provider readiness。
-    // 门禁启用后必须复用标准 ready registry fixture，否则测试会在协议请求前被正确拦截。
-    const service = createReadyZCodeAgentService({
+    const service = createZCodeAgentService({
       commandResolver: () => ({ command: process.execPath, args: [scriptPath, logPath] }),
     });
 
@@ -1863,7 +1889,7 @@ describe("createZCodeAgentService", () => {
           : {}),
       }),
     );
-    const service = createReadyZCodeAgentService({
+    const service = createZCodeAgentService({
       commandResolver: () => ({ command: process.execPath, args: [scriptPath, logPath] }),
       resolveSessionRuntimePreferences,
     });
@@ -1956,7 +1982,7 @@ describe("createZCodeAgentService", () => {
             elapsedMs: 0,
           },
     );
-    const service = createReadyZCodeAgentService({
+    const service = createZCodeAgentService({
       commandResolver: () => ({
         command: process.execPath,
         args: [scriptPath, logPath],
@@ -2016,7 +2042,7 @@ describe("createZCodeAgentService", () => {
     const scriptPath = join(workspacePath, "browser-ambient-compat-agent.cjs");
     const logPath = join(workspacePath, "protocol.log");
     writeFileSync(scriptPath, SHELL_SETTINGS_SNAPSHOT_FAKE_AGENT);
-    const service = createReadyZCodeAgentService({
+    const service = createZCodeAgentService({
       commandResolver: () => ({
         command: process.execPath,
         args: [scriptPath, logPath, "reject-browser-ambient"],
@@ -2095,7 +2121,7 @@ describe("createZCodeAgentService", () => {
         path: "/usr/bin/first-send-bash",
       },
     }));
-    const service = createReadyZCodeAgentService({
+    const service = createZCodeAgentService({
       commandResolver: () => ({ command: process.execPath, args: [scriptPath, logPath] }),
       resolveSessionRuntimePreferences,
     });
@@ -2218,7 +2244,7 @@ describe("createZCodeAgentService", () => {
       const scriptPath = join(workspacePath, "runtime-preferences-agent.cjs");
       const logPath = join(workspacePath, "protocol.log");
       writeFileSync(scriptPath, RUNTIME_PREFERENCES_FAKE_AGENT);
-      const service = createReadyZCodeAgentService({
+      const service = createZCodeAgentService({
         commandResolver: () => ({
           command: process.execPath,
           args: [scriptPath, logPath, testCase.requestMode ?? "valid"],
@@ -2285,7 +2311,7 @@ describe("createZCodeAgentService", () => {
     const resolverFinished = new Promise<void>((resolve) => {
       markResolverFinished = resolve;
     });
-    const service = createReadyZCodeAgentService({
+    const service = createZCodeAgentService({
       commandResolver: () => ({
         command: process.execPath,
         args: [scriptPath, logPath, "disconnect"],
@@ -2326,7 +2352,7 @@ describe("createZCodeAgentService", () => {
     const scriptPath = join(fixtureDir, "runtime-preferences-agent.cjs");
     const logPath = join(fixtureDir, "protocol.log");
     writeFileSync(scriptPath, RUNTIME_PREFERENCES_FAKE_AGENT);
-    const service = createReadyZCodeAgentService({
+    const service = createZCodeAgentService({
       commandResolver: () => ({ command: process.execPath, args: [scriptPath, logPath] }),
       sessionRuntimePreferencesAuthority: "external",
     });
@@ -2373,7 +2399,7 @@ describe("createZCodeAgentService", () => {
     const scriptPath = join(workspacePath, "runtime-preferences-agent.cjs");
     const logPath = join(workspacePath, "protocol.log");
     writeFileSync(scriptPath, RUNTIME_PREFERENCES_FAKE_AGENT);
-    const service = createReadyZCodeAgentService({
+    const service = createZCodeAgentService({
       commandResolver: () => ({ command: process.execPath, args: [scriptPath, logPath] }),
       sessionRuntimePreferencesAuthority: "external",
     });
@@ -2430,7 +2456,7 @@ describe("createZCodeAgentService", () => {
     createdDirs.push(workspacePath);
     const scriptPath = join(workspacePath, "delayed-compact-agent.cjs");
     writeFileSync(scriptPath, DELAYED_COMPACT_FAKE_AGENT);
-    const service = createReadyZCodeAgentService({
+    const service = createZCodeAgentService({
       commandResolver: () => ({ command: process.execPath, args: [scriptPath] }),
       requestTimeoutMs: 20,
     });
@@ -2456,7 +2482,7 @@ describe("createZCodeAgentService", () => {
     createdDirs.push(workspacePath);
     const scriptPath = join(workspacePath, "flaky-agent.cjs");
     writeFileSync(scriptPath, FLAKY_SUBSCRIBE_FAKE_AGENT);
-    const service = createReadyZCodeAgentService({
+    const service = createZCodeAgentService({
       commandResolver: () => ({ command: process.execPath, args: [scriptPath] }),
     });
 
@@ -2485,7 +2511,7 @@ describe("createZCodeAgentService", () => {
     createdDirs.push(workspacePath);
     const scriptPath = join(workspacePath, "replay-agent.cjs");
     writeFileSync(scriptPath, SUBSCRIBE_REPLAY_FAKE_AGENT);
-    const service = createReadyZCodeAgentService({
+    const service = createZCodeAgentService({
       commandResolver: () => ({ command: process.execPath, args: [scriptPath] }),
     });
 
@@ -2534,7 +2560,7 @@ describe("createZCodeAgentService", () => {
     writeFileSync(scriptPath, CUA_OPERATION_LIVE_EVENT_FAKE_AGENT);
     const reportedStates: Array<{ active: boolean; sessionId: string; turnId: string }> = [];
     const observedServiceActiveStates: boolean[] = [];
-    let service: ReturnType<typeof createReadyZCodeAgentService>;
+    let service: ReturnType<typeof createZCodeAgentService>;
     const onStateChanged = vi.fn(
       (event: { active: boolean; sessionId: string; turnId: string }) => {
         reportedStates.push(event);
@@ -2542,7 +2568,7 @@ describe("createZCodeAgentService", () => {
         if (event.active) throw new Error("host port closed");
       },
     );
-    service = createReadyZCodeAgentService({
+    service = createZCodeAgentService({
       commandResolver: () => ({ command: process.execPath, args: [scriptPath] }),
       cuaOperationStateReporter: { onStateChanged },
     });
@@ -2584,7 +2610,7 @@ describe("createZCodeAgentService", () => {
     const scriptPath = join(workspacePath, "cua-operation-runtime-exit-agent.cjs");
     writeFileSync(scriptPath, CUA_OPERATION_RUNTIME_EXIT_FAKE_AGENT);
     const reportedStates: boolean[] = [];
-    const service = createReadyZCodeAgentService({
+    const service = createZCodeAgentService({
       commandResolver: () => ({ command: process.execPath, args: [scriptPath] }),
       cuaOperationStateReporter: {
         onStateChanged: (event) => reportedStates.push(event.active),
@@ -2616,7 +2642,7 @@ describe("createZCodeAgentService", () => {
     createdDirs.push(workspacePath);
     const scriptPath = join(workspacePath, "legacy-create-agent.cjs");
     writeFileSync(scriptPath, LEGACY_CREATE_PARAMS_FAKE_AGENT);
-    const service = createReadyZCodeAgentService({
+    const service = createZCodeAgentService({
       commandResolver: () => ({ command: process.execPath, args: [scriptPath] }),
     });
 
@@ -2653,7 +2679,7 @@ describe("createZCodeAgentService", () => {
       command: process.execPath,
       args: [scriptPath, markerPath],
     }));
-    const service = createReadyZCodeAgentService({
+    const service = createZCodeAgentService({
       commandResolver,
       // Bugfix: 该用例只需要首个 fake agent 超时，full suite 并发时第二个进程启动到响应可能超过 500ms。
       // 局部放宽 request timeout，避免把重启后成功恢复的路径误判成第二次 stale。
@@ -2683,7 +2709,7 @@ describe("createZCodeAgentService", () => {
       args: [scriptPath],
       cwd: workspacePath,
     }));
-    const service = createReadyZCodeAgentService({ commandResolver });
+    const service = createZCodeAgentService({ commandResolver });
 
     try {
       const result = await service.listPlugins({ workspacePath: missingWorkspacePath });
@@ -2701,7 +2727,7 @@ describe("createZCodeAgentService", () => {
     createdDirs.push(workspacePath);
     const scriptPath = join(workspacePath, "plugin-update-agent.cjs");
     writeFileSync(scriptPath, PLUGIN_UPDATE_ECHO_FAKE_AGENT);
-    const service = createReadyZCodeAgentService({
+    const service = createZCodeAgentService({
       commandResolver: () => ({ command: process.execPath, args: [scriptPath] }),
     });
 
@@ -2724,7 +2750,7 @@ describe("createZCodeAgentService", () => {
     createdDirs.push(workspacePath);
     const scriptPath = join(workspacePath, "plugin-restore-agent.cjs");
     writeFileSync(scriptPath, PLUGIN_RESTORE_BUILTIN_ECHO_FAKE_AGENT);
-    const service = createReadyZCodeAgentService({
+    const service = createZCodeAgentService({
       commandResolver: () => ({ command: process.execPath, args: [scriptPath] }),
     });
 
@@ -2751,7 +2777,7 @@ describe("createZCodeAgentService", () => {
       command: process.execPath,
       args: [scriptPath, markerPath],
     }));
-    const service = createReadyZCodeAgentService({
+    const service = createZCodeAgentService({
       commandResolver,
       requestTimeoutMs: 1_500,
     });
@@ -2779,7 +2805,7 @@ describe("createZCodeAgentService", () => {
       args: [scriptPath],
       cwd: workspacePath,
     }));
-    const service = createReadyZCodeAgentService({ commandResolver });
+    const service = createZCodeAgentService({ commandResolver });
 
     try {
       const result = await service.listMcpServerStatuses({ workspacePath: missingWorkspacePath });
@@ -2805,7 +2831,7 @@ describe("createZCodeAgentService", () => {
       command: process.execPath,
       args: [scriptPath, markerPath],
     }));
-    const service = createReadyZCodeAgentService({ commandResolver });
+    const service = createZCodeAgentService({ commandResolver });
 
     try {
       // connect 模式的 mcp/list 在真实环境里会因坏 MCP server 吃满 30s 超时；这里让它永不返回。
@@ -2841,7 +2867,7 @@ describe("createZCodeAgentService", () => {
       onExit: vi.fn(),
       onError: vi.fn(),
     };
-    const service = createReadyZCodeAgentService({
+    const service = createZCodeAgentService({
       commandResolver: () => ({ command: process.execPath, args: [scriptPath, markerPath] }),
       processLifecycleReporter,
     });
@@ -2880,7 +2906,7 @@ describe("createZCodeAgentService", () => {
       onExit: vi.fn(),
       onError: vi.fn(),
     };
-    const service = createReadyZCodeAgentService({
+    const service = createZCodeAgentService({
       commandResolver,
       processLifecycleReporter,
       mcpStatusIdleTimeoutMs: 300,
@@ -2925,7 +2951,7 @@ describe("createZCodeAgentService", () => {
       onExit: vi.fn(),
       onError: vi.fn(),
     };
-    const service = createReadyZCodeAgentService({
+    const service = createZCodeAgentService({
       commandResolver,
       processLifecycleReporter,
       // 覆盖 fake agent 冷启动（node 进程拉起 + 首个响应），又足够短让两次超时在秒级完成。
@@ -2973,7 +2999,7 @@ describe("createZCodeAgentService", () => {
     createdDirs.push(workspacePath);
     const scriptPath = join(workspacePath, "mcp-explicit-agent.cjs");
     writeFileSync(scriptPath, MCP_LIST_ECHO_MCP_SERVERS_FAKE_AGENT);
-    const service = createReadyZCodeAgentService({
+    const service = createZCodeAgentService({
       commandResolver: () => ({ command: process.execPath, args: [scriptPath] }),
     });
 
@@ -3031,7 +3057,7 @@ describe("createZCodeAgentService", () => {
     createdDirs.push(workspacePath);
     const scriptPath = join(workspacePath, "mcp-compat-agent.cjs");
     writeFileSync(scriptPath, MCP_LIST_REJECTS_MCP_SERVERS_ONCE_FAKE_AGENT);
-    const service = createReadyZCodeAgentService({
+    const service = createZCodeAgentService({
       commandResolver: () => ({ command: process.execPath, args: [scriptPath] }),
     });
 
@@ -3121,13 +3147,9 @@ describe("createZCodeAgentService", () => {
     };
     const isolated = { workspacePath, workspaceIdentity: "team-isolated" };
     let selected: string | null = null;
-    const readiness = vi.fn(() => {
-      throw new Error("Team configuration must not require provider readiness");
-    });
     const service = createZCodeAgentService({
       commandResolver: () => ({ command: process.execPath, args: [scriptPath] }),
       spawnFallbackCwd: directory,
-      modelSelectionReadinessSource: { getView: readiness },
       resolveOmpProfile: async (target) =>
         target.workspaceIdentity === isolated.workspaceIdentity ? "second" : selected,
     });
@@ -3233,7 +3255,6 @@ describe("createZCodeAgentService", () => {
       });
       expect(configureRequests[2].pid).not.toBe(configureRequests[0].pid);
       expect(requests.every((entry) => !entry.method.startsWith("session/"))).toBe(true);
-      expect(readiness).not.toHaveBeenCalled();
       // 被 pending 拒绝的草稿与 CAS revision 仍有效；恢复原 profile 选择后可由消费者正常保存。
       selected = null;
       await expect(
@@ -3302,7 +3323,7 @@ describe("createZCodeAgentService", () => {
     `,
       );
       let preference: string | null | undefined;
-      const service = createReadyZCodeAgentService({
+      const service = createZCodeAgentService({
         commandResolver: () => ({ command: process.execPath, args: [scriptPath] }),
         spawnFallbackCwd: executionDirectory,
         resolveOmpProfile: async () => preference,
@@ -3525,7 +3546,7 @@ describe("createZCodeAgentService", () => {
       });
     `,
     );
-    const service = createReadyZCodeAgentService({
+    const service = createZCodeAgentService({
       commandResolver: () => ({
         command: process.execPath,
         args: [scriptPath, join(workspacePath, "requests.jsonl")],

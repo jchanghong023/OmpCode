@@ -1,12 +1,15 @@
-import { act, createElement, StrictMode } from "react";
-import { createRoot, type Root } from "react-dom/client";
+import { act, createElement, StrictMode, useLayoutEffect, useMemo } from "react";
+import { createRoot as createReactRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ZCodeConfigOption } from "@zcode/shared";
 import type { SessionConfigState } from "@zcode/shared/zcode-protocol-v4";
 import type { IModelSelectionService, ModelSelectionView } from "@zcode/services";
-import { resolveEffectiveModelSelection, type ProviderRegistryView } from "@zcode/provider";
 import { useZCodeSessionStore } from "@/store/zcodeSessionStore.js";
-import { useDraftConfigControl as useActualDraftConfigControl } from "@/v4/composer/useDraftConfigControl.js";
+import { useOmpModelCatalog } from "@/omp-configuration/module.js";
+import {
+  useDraftConfigControl as useActualDraftConfigControl,
+  type DraftConfigControl,
+} from "@/v4/composer/useDraftConfigControl.js";
 import {
   persistV4ComposerDraft as persistScopedDraft,
   readV4ComposerDraft as readScopedDraft,
@@ -17,6 +20,17 @@ import {
   readComposerRecent,
 } from "@/lib/composerRecent.js";
 const STORAGE_SCOPE_A = "opaque-native-root-profile-a";
+const mountedRoots = new Set<Root>();
+function createRoot(container: Element): Root {
+  const root = createReactRoot(container);
+  mountedRoots.add(root);
+  const unmount = root.unmount.bind(root);
+  root.unmount = () => {
+    mountedRoots.delete(root);
+    unmount();
+  };
+  return root;
+}
 const STORAGE_SCOPE_B = "opaque-native-root-profile-b";
 let actualStorageScope: string | null = STORAGE_SCOPE_A;
 function testScope(path: string, identity?: string) {
@@ -77,8 +91,9 @@ function readImportInitialization(
   return value?.taskId === taskId ? value.config : undefined;
 }
 
-const { prepareWorkspaceMock } = vi.hoisted(() => ({
+const { prepareWorkspaceMock, workspaceSubscribeMock } = vi.hoisted(() => ({
   prepareWorkspaceMock: vi.fn(),
+  workspaceSubscribeMock: vi.fn(),
 }));
 
 const { toastMock } = vi.hoisted(() => ({
@@ -89,9 +104,17 @@ vi.mock("@/hooks/useWorkspacePrepare.js", () => ({
   prepareWorkspaceWithZCodeSessionService: prepareWorkspaceMock,
 }));
 
-vi.mock("@/hooks/useZCodeSessionService.js", () => ({
-  useZCodeSessionService: () => ({ readWorkspacePresentation: vi.fn() }),
-}));
+vi.mock("@/hooks/useZCodeSessionService.js", () => {
+  const service = { readWorkspacePresentation: vi.fn() };
+  return { useZCodeSessionService: () => service };
+});
+
+vi.mock("@/hooks/useZCodeTaskService.js", () => {
+  const service = {
+    onDynamicWorkspaceEvent: () => workspaceSubscribeMock,
+  };
+  return { useZCodeTaskService: () => service };
+});
 
 vi.mock("@/hooks/useSettingService.js", () => ({
   useSettings: () => ({ settings: null }),
@@ -134,8 +157,33 @@ const CUSTOM_COMMANDS = [
   },
 ];
 
-const selectionServices = new Map<string, IModelSelectionService>();
-// 用真实纯解析算法模拟 Host，只省略 RPC；同内容的 fixture 保持同一 Service owner。
+// 旧 fixture 的 provider/model 形状只作测试数据；实际输入通过 workspace-config 发布。
+function nativeCatalogOptions(view: ModelSelectionView | null): ZCodeConfigOption[] {
+  if (!view) return [];
+  return [
+    {
+      id: "model",
+      name: "Model",
+      category: "model",
+      type: "select",
+      currentValue: view.preferredSelection
+        ? `${view.preferredSelection.providerId}/${view.preferredSelection.modelId}`
+        : "",
+      options: view.providers.flatMap((provider) =>
+        provider.models.map((model) => ({
+          value: `${provider.providerId}/${model.modelId}`,
+          name: model.modelId,
+          modelProviderId: provider.providerId,
+          modelProviderName: provider.providerName ?? provider.providerId,
+          modelThoughtLevels: model.config.optionSpecs.reasoningLevel?.values,
+          modelDefaultThoughtLevel:
+            view.preferredSelection?.options?.reasoningLevel ??
+            model.config.optionSpecs.reasoningLevel?.values.at(-1),
+        })),
+      ),
+    },
+  ];
+}
 function useDraftConfigControl(
   params: Omit<
     Parameters<typeof useActualDraftConfigControl>[0],
@@ -146,25 +194,25 @@ function useDraftConfigControl(
   },
 ) {
   const view = params.modelSelectionView;
-  const key = JSON.stringify(view);
-  if (view && !selectionServices.has(key))
-    selectionServices.set(key, {
-      getView: async (input) => ({
-        ...view,
-        ...(input
-          ? resolveEffectiveModelSelection({
-              selection: input.selection,
-              registry: view as unknown as ProviderRegistryView,
-              classifyProvider: () => "ordinary",
-            })
-          : {}),
-      }),
-      onDidChange: () => ({ dispose: () => {} }),
-    });
+  const sourceKey = JSON.stringify(view);
+  const nativeOptions = useMemo(() => nativeCatalogOptions(view), [sourceKey]);
+  useLayoutEffect(() => {
+    if (nativeOptions.length === 0) return;
+    const store = useZCodeSessionStore.getState();
+    const current = store.getWorkspaceState(params.workspacePath, params.workspaceIdentity);
+    store.setConfigOptions(
+      params.workspacePath,
+      [
+        ...(current.configOptions ?? []).filter((option) => option.id !== "model"),
+        ...nativeOptions,
+      ],
+      params.workspaceIdentity,
+    );
+  }, [nativeOptions, params.workspacePath, params.workspaceIdentity]);
   return useActualDraftConfigControl({
     ...params,
     storageScope: params.storageScope === undefined ? actualStorageScope : params.storageScope,
-    modelSelectionService: view ? selectionServices.get(key)! : null,
+    modelSelectionService: null,
   });
 }
 
@@ -270,6 +318,53 @@ function installMinimalDom() {
 }
 
 describe("useDraftConfigControl slash command hydration", () => {
+  it("原生 default role 热更新仅补未手选草稿，Host 空配置不参与目录或就绪", async () => {
+    const workspacePath = "/native-role-default";
+    const root = createRoot(installMinimalDom());
+    const store = useZCodeSessionStore.getState();
+    store.setConfigOptions(
+      workspacePath,
+      nativeCatalogOptions(modelSelectionView(1, ["A", "B", "C"], "A")),
+    );
+    const getView = vi.fn(async () => ({ revision: 1, providers: [] }));
+    const onDidChange = vi.fn(() => ({ dispose() {} }));
+    let control: DraftConfigControl;
+    function Probe() {
+      control = useActualDraftConfigControl({
+        workspacePath,
+        storageScope: actualStorageScope,
+        sessionId: null,
+        agentStartupAllowed: false,
+        modelSelectionService: { getView, onDidChange },
+      });
+      return null;
+    }
+    await act(async () => root.render(createElement(Probe)));
+    expect(control!.draftConfig.modelSelection?.modelId).toBe("A");
+    act(() =>
+      store.setConfigOptions(
+        workspacePath,
+        nativeCatalogOptions(modelSelectionView(2, ["A", "B", "C"], "B")),
+      ),
+    );
+    expect(control!.draftConfig.modelSelection?.modelId).toBe("B");
+    act(() => control!.handleDraftSelectModel("provider", "A", "low"));
+    act(() =>
+      store.setConfigOptions(
+        workspacePath,
+        nativeCatalogOptions(modelSelectionView(3, ["A", "B", "C"], "C")),
+      ),
+    );
+    expect(control!.draftConfig.modelSelection).toEqual({
+      providerId: "provider",
+      modelId: "A",
+      options: { reasoningLevel: "low" },
+    });
+    expect(getView).not.toHaveBeenCalled();
+    expect(onDidChange).not.toHaveBeenCalled();
+    act(() => root.unmount());
+  });
+
   it("同 workspace 实际 root/profile 切换隔离正文模型，迟到回调不越域，切回恢复", async () => {
     const workspacePath = "/actual-profile-switch";
     const root = createRoot(installMinimalDom());
@@ -399,10 +494,13 @@ describe("useDraftConfigControl slash command hydration", () => {
     expect(control!.draftConfig.mode).toBe("yolo");
     act(() => root.unmount());
   });
-  it("TD02/04 两次提交后重开空白页继承 B，重复 New Task 不保留空配置", async () => {
+  it("TD02/04 新任务使用原生 default role，不继承上次会话临时模型", async () => {
     const workspacePath = "/text-only-regression";
     const root = createRoot(installMinimalDom());
     const view = modelSelectionView(1, ["A", "B"], "A");
+    useZCodeSessionStore.getState().startDraft(workspacePath, undefined, undefined, {
+      draftStorageScope: actualStorageScope,
+    });
     let control: ReturnType<typeof useDraftConfigControl>;
     function Probe({ sessionId }: { sessionId: string | null }) {
       control = useDraftConfigControl({
@@ -440,14 +538,14 @@ describe("useDraftConfigControl slash command hydration", () => {
       })(),
     );
     await act(async () => root.render(createElement(Probe, { sessionId: null })));
-    expect(control!.draftConfig).toMatchObject({ mode: "build", model: "B" });
+    expect(control!.draftConfig).toMatchObject({ mode: "build", model: "A" });
     act(() => control!.handleDraftSwitchMode("yolo"));
     await act(async () =>
       useZCodeSessionStore
         .getState()
         .startDraft(workspacePath, undefined, undefined, { draftStorageScope: actualStorageScope }),
     );
-    expect(control!.draftConfig).toMatchObject({ mode: "build", model: "B" });
+    expect(control!.draftConfig).toMatchObject({ mode: "build", model: "A" });
     expect(readV4ComposerDraft(workspacePath, undefined, "__draft__")).toBeNull();
     act(() => root.unmount());
   });
@@ -552,7 +650,7 @@ describe("useDraftConfigControl slash command hydration", () => {
         scenario === "session" ? undefined : selection,
       );
       expect(control!.draftConfig.modelSelection).toEqual(
-        scenario === "chosen" ? selection : undefined,
+        scenario === "session" ? undefined : selection,
       );
       expect(control!.composerDraft.text).toBe("KEEP INTENT");
       act(() => root.unmount());
@@ -666,8 +764,7 @@ describe("useDraftConfigControl slash command hydration", () => {
       expect(control!.composerDraft.text).toBe("content stays");
       expect(control!.draftConfig.mode).toBe("build");
       expect(control!.draftConfig.planEnabled).toBe(edited === "mode");
-      if (edited === "mode") expect(control!.composerDraft.modelSelection).toBeUndefined();
-      else expect(control!.draftConfig.modelSelection?.modelId).toBe("model");
+      expect(control!.draftConfig.modelSelection?.modelId).toBe("model");
       if (edited === "model")
         expect(control!.draftConfig.modelSelection?.options?.reasoningLevel).toBe("low");
       expect(control!.composerDraft).not.toHaveProperty("initializeFromNewTask");
@@ -712,8 +809,13 @@ describe("useDraftConfigControl slash command hydration", () => {
 
   beforeEach(() => {
     actualStorageScope = STORAGE_SCOPE_A;
-    selectionServices.clear();
     prepareWorkspaceMock.mockReset();
+    workspaceSubscribeMock.mockReset();
+    workspaceSubscribeMock.mockImplementation(() => ({ dispose() {} }));
+    prepareWorkspaceMock.mockResolvedValue({
+      configOptions: WORKSPACE_PRESENTATION,
+      slashCommands: CUSTOM_COMMANDS,
+    });
     toastMock.mockReset();
     useZCodeSessionStore.setState((state) => ({
       ...state,
@@ -721,7 +823,11 @@ describe("useDraftConfigControl slash command hydration", () => {
     }));
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    // 断言失败也必须先卸载订阅并排空 prepare，不能让下一例在已移除的 window 上更新 React。
+    await act(async () => {
+      for (const root of mountedRoots) root.unmount();
+    });
     vi.restoreAllMocks();
     delete (globalThis as { document?: unknown }).document;
     delete (globalThis as { window?: unknown }).window;
@@ -825,12 +931,11 @@ describe("useDraftConfigControl slash command hydration", () => {
     expect(useZCodeSessionStore.getState().getWorkspaceState(workspacePath).slashCommands).toEqual(
       CUSTOM_COMMANDS,
     );
-    expect(prepareWorkspaceMock).not.toHaveBeenCalled();
 
     act(() => root.unmount());
   });
 
-  it("从 active task 新建草稿时不再从旧 workspace presentation 继承选择", async () => {
+  it("原生 prepare 返回的 workspace model 成为新草稿默认，不依赖 Host View", async () => {
     const workspacePath = "/inherited-draft-workspace";
     const taskId = "task-custom-model";
     const inheritedOptions: ZCodeConfigOption[] = [
@@ -885,13 +990,164 @@ describe("useDraftConfigControl slash command hydration", () => {
       root.render(createElement(Probe));
     });
 
-    // 旧 task presentation 不再是新 Composer 的选择来源；View 未到达时不初始化。
-    expect(initialConfig).toBeUndefined();
+    expect(initialConfig?.modelSelection).toEqual({
+      providerId: "custom-provider",
+      modelId: "gpt-5.6-sol",
+    });
 
     act(() => root.unmount());
   });
 
-  it("active session 切入草稿时，View 未 Ready 不提前用旧 task 配置初始化", async () => {
+  it("session → 新草稿保留原生目录/default，局部 task 缓存不覆盖目录或未发意图", async () => {
+    const workspacePath = "/native-catalog-draft-lifecycle";
+    const taskId = "session-with-temporary-model";
+    const store = useZCodeSessionStore.getState();
+    store.startDraft(workspacePath, undefined, undefined, {
+      draftStorageScope: actualStorageScope,
+    });
+    store.setConfigOptions(
+      workspacePath,
+      nativeCatalogOptions(modelSelectionView(1, ["A", "B", "C"], "A")),
+    );
+    store.setConfigOptionsStatus(workspacePath, "ready");
+    const nativeOptions = store.getWorkspaceState(workspacePath).configOptions;
+    store.setActiveTaskId(workspacePath, taskId);
+    store.setTaskConfigOptions(workspacePath, taskId, [
+      ...WORKSPACE_PRESENTATION,
+      {
+        id: "model",
+        name: "Model",
+        category: "model",
+        type: "select",
+        currentValue: "provider/B",
+      },
+    ]);
+    let control: DraftConfigControl;
+    function Probe({ sessionId }: { sessionId: string | null }) {
+      control = useActualDraftConfigControl({
+        workspacePath,
+        storageScope: actualStorageScope,
+        sessionId,
+        sessionConfig: sessionId
+          ? { mode: "build", modelSelection: { providerId: "provider", modelId: "B" } }
+          : null,
+        agentStartupAllowed: false,
+        modelSelectionService: null,
+      });
+      return null;
+    }
+    const root = createRoot(installMinimalDom());
+    await act(async () => root.render(createElement(Probe, { sessionId: taskId })));
+    expect(control!.draftConfig.modelSelection?.modelId).toBe("B");
+    await act(async () => {
+      store.startDraft(workspacePath, undefined, undefined, {
+        draftStorageScope: actualStorageScope,
+      });
+      root.render(createElement(Probe, { sessionId: null }));
+    });
+    expect(store.getWorkspaceState(workspacePath).configOptions).toBe(nativeOptions);
+    expect(store.getWorkspaceState(workspacePath).configOptionsStatus).toBe("ready");
+    expect(control!.draftConfig.modelSelection?.modelId).toBe("A");
+    act(() => {
+      control!.handleDraftSelectModel("provider", "C", "low");
+      control!.updateComposerContent({ text: "未发送正文" });
+    });
+    await act(async () => {
+      store.setActiveTaskId(workspacePath, taskId);
+      root.render(createElement(Probe, { sessionId: taskId }));
+    });
+    expect(control!.draftConfig.modelSelection?.modelId).toBe("B");
+    act(() =>
+      store.setConfigOptions(
+        workspacePath,
+        nativeCatalogOptions(modelSelectionView(2, ["A", "B", "C"], "B")),
+      ),
+    );
+    expect(control!.draftConfig.modelSelection?.modelId).toBe("B");
+    await act(async () => {
+      store.startDraft(workspacePath, undefined, undefined, {
+        draftStorageScope: actualStorageScope,
+      });
+      root.render(createElement(Probe, { sessionId: null }));
+    });
+    expect(control!.composerDraft.text).toBe("未发送正文");
+    expect(control!.draftConfig.modelSelection).toEqual({
+      providerId: "provider",
+      modelId: "C",
+      options: { reasoningLevel: "low" },
+    });
+    expect(prepareWorkspaceMock).not.toHaveBeenCalled();
+    act(() => root.unmount());
+  });
+
+  it("重启 session 的目录在首次绑定草稿 profile 后通过原订阅重放恢复", async () => {
+    const workspacePath = "/restored-session-first-draft";
+    const store = useZCodeSessionStore.getState();
+    const nativeOptions = nativeCatalogOptions(modelSelectionView(1, ["A", "B"], "A"));
+    // 重启先恢复已有 session；尚未 startDraft，workspace 的 draftStorageScope 仍未知。
+    store.setActiveTaskId(workspacePath, "restored");
+    store.setConfigOptions(workspacePath, nativeOptions);
+    store.setConfigOptionsStatus(workspacePath, "ready");
+    const disposals = vi.fn();
+    workspaceSubscribeMock.mockImplementation(
+      (listener: (event: { type: string; configOptions: ZCodeConfigOption[] }) => void) => {
+        listener({ type: "workspace_config_options_update", configOptions: nativeOptions });
+        return { dispose: disposals };
+      },
+    );
+    let control: DraftConfigControl;
+    let modelOption: ZCodeConfigOption | undefined;
+    let modelGroupItemCount = 0;
+    let preferredModelId: string | undefined;
+    function Probe() {
+      const sessionId = useZCodeSessionStore(
+        (state) => state.workspaces[workspacePath]?.activeTaskId ?? null,
+      );
+      control = useActualDraftConfigControl({
+        workspacePath,
+        storageScope: actualStorageScope,
+        sessionId,
+        sessionConfig: sessionId
+          ? { mode: "build", modelSelection: { providerId: "provider", modelId: "B" } }
+          : null,
+        modelSelectionService: null,
+      });
+      const models = useOmpModelCatalog(workspacePath);
+      modelOption = models.modelOption;
+      modelGroupItemCount = models.modelGroups[0]?.items.length ?? 0;
+      preferredModelId = models.catalog?.preferredSelection?.modelId;
+      return null;
+    }
+    const root = createRoot(installMinimalDom());
+    await act(async () => root.render(createElement(Probe)));
+    expect(control!.draftConfig.modelSelection?.modelId).toBe("B");
+    const subscriptionsBeforeDraft = workspaceSubscribeMock.mock.calls.length;
+    await act(async () => {
+      store.startDraft(workspacePath, undefined, undefined, {
+        draftStorageScope: actualStorageScope,
+      });
+      // 保留安全清域，不以继承未知 profile 的目录来绕过恢复。
+      expect(store.getWorkspaceState(workspacePath).configOptions).toEqual([]);
+      expect(store.getWorkspaceState(workspacePath).configOptionsStatus).toBe("idle");
+    });
+    expect(workspaceSubscribeMock.mock.calls.length).toBeGreaterThan(subscriptionsBeforeDraft);
+    expect(disposals).toHaveBeenCalled();
+    expect(modelOption!.options).toHaveLength(2);
+    expect(modelGroupItemCount).toBe(2);
+    expect(preferredModelId).toBe("A");
+    expect(store.getWorkspaceState(workspacePath).configOptionsStatus).toBe("ready");
+    expect(control!.draftConfig.modelSelection?.modelId).toBe("A");
+    act(() => control!.handleDraftSelectModel("provider", "B", "low"));
+    expect(control!.draftConfigRef.current.modelSelection).toEqual({
+      providerId: "provider",
+      modelId: "B",
+      options: { reasoningLevel: "low" },
+    });
+    expect(preferredModelId).toBe("A");
+    act(() => root.unmount());
+  });
+
+  it("active task 切入草稿时只读 workspace 原生 model，不等待 Host View", async () => {
     const workspacePath = "/inherited-draft-render-transition";
     const taskId = "task-custom-model";
     const inheritedOptions: ZCodeConfigOption[] = [
@@ -921,6 +1177,9 @@ describe("useDraftConfigControl slash command hydration", () => {
       },
     ];
     const store = useZCodeSessionStore.getState();
+    store.startDraft(workspacePath, undefined, undefined, {
+      draftStorageScope: actualStorageScope,
+    });
     store.setConfigOptions(workspacePath, inheritedOptions);
     store.setActiveTaskId(workspacePath, taskId);
     store.setTaskConfigOptions(workspacePath, taskId, inheritedOptions);
@@ -949,19 +1208,22 @@ describe("useDraftConfigControl slash command hydration", () => {
       root.render(createElement(Probe, { sessionId: taskId }));
     });
 
-    act(() => {
+    await act(async () => {
       useZCodeSessionStore
         .getState()
         .startDraft(workspacePath, "glm", undefined, { draftStorageScope: actualStorageScope });
       root.render(createElement(Probe, { sessionId: null }));
     });
 
-    expect(configsSeenDuringDraftRender[0]).toBeUndefined();
+    expect(configsSeenDuringDraftRender[0]?.modelSelection).toEqual({
+      providerId: "custom-provider",
+      modelId: "gpt-5.6-sol",
+    });
 
     act(() => root.unmount());
   });
 
-  it("Registry revision 只影响有效选择，正文和模式编辑保留原意图，配置恢复后重新有效", async () => {
+  it("原生目录变更不改写已手选意图，失效选择由发送准入处理", async () => {
     const workspacePath = "/live-selection-invalidated";
     const firstView = modelSelectionView(1, ["old", "preferred"], "preferred");
     const nextView = modelSelectionView(2, ["preferred"], "preferred");
@@ -994,8 +1256,14 @@ describe("useDraftConfigControl slash command hydration", () => {
       root.render(createElement(Probe, { view: nextView }));
     });
 
-    expect(control!.draftConfig.modelSelection).toBeUndefined();
-    expect(control!.resolveInitialDraftConfig()?.modelSelection).toBeUndefined();
+    expect(control!.draftConfig.modelSelection).toMatchObject({
+      providerId: "provider",
+      modelId: "old",
+    });
+    expect(control!.resolveInitialDraftConfig()?.modelSelection).toMatchObject({
+      providerId: "provider",
+      modelId: "old",
+    });
     act(() => control!.updateComposerContent({ text: "保留原选择" }));
     act(() => control!.handleDraftSwitchMode("plan"));
     expect(readV4ComposerDraft(workspacePath, undefined, "__draft__")).toMatchObject({
@@ -1031,15 +1299,6 @@ describe("useDraftConfigControl slash command hydration", () => {
       mode: "build",
       modelSelection: original,
     });
-    const service: IModelSelectionService = {
-      getView: async (input) => ({
-        revision: 1,
-        providers: [],
-        effectiveSelection:
-          input?.selection?.providerId === "old-account" ? effective : (input?.selection ?? null),
-      }),
-      onDidChange: () => ({ dispose: () => {} }),
-    };
     let control: ReturnType<typeof useActualDraftConfigControl>;
     function Probe({ sessionId }: { sessionId: string }) {
       control = useActualDraftConfigControl({
@@ -1048,21 +1307,24 @@ describe("useDraftConfigControl slash command hydration", () => {
         sessionId,
         sessionConfig: { mode: "build" },
         agentStartupAllowed: false,
-        modelSelectionService: service,
+        modelSelectionService: null,
       });
       return null;
     }
     await act(async () => root.render(createElement(Probe, { sessionId: "a" })));
-    expect(control!.draftConfig.modelSelection).toEqual(effective);
+    expect(control!.draftConfig.modelSelection).toEqual(original);
     expect(readV4ComposerDraft(workspacePath, undefined, "__draft__")).toBeNull();
     act(() => control!.updateComposerContent({ text: "draft" }));
     expect(readV4ComposerDraft(workspacePath, undefined, "a")?.modelSelection).toEqual(original);
     // 对象属性顺序不属于 Selection 语义，协议/序列化重建可能改变顺序。
-    const accepted = control!.captureAcceptedModelSelection({
-      options: effective.options,
-      modelId: effective.modelId,
-      providerId: effective.providerId,
-    });
+    const accepted = control!.captureAcceptedModelSelection(
+      {
+        options: effective.options,
+        modelId: effective.modelId,
+        providerId: effective.providerId,
+      },
+      original,
+    );
     act(() => control!.updateComposerContent({ text: "新正文" }));
     act(() => accepted());
     expect(readV4ComposerDraft(workspacePath, undefined, "a")).toMatchObject({
@@ -1208,7 +1470,7 @@ describe("useDraftConfigControl slash command hydration", () => {
     act(() => root.unmount());
   });
 
-  it("目录重解析期间主动选模型仍使用同 Host 目录补齐思考", async () => {
+  it("原生目录可选模型不等待 Host 的在途读取", async () => {
     const workspacePath = "/select-during-reasoning-read";
     const root = createRoot(installMinimalDom());
     persistV4ComposerDraft(workspacePath, undefined, "__draft__", {
@@ -1220,6 +1482,12 @@ describe("useDraftConfigControl slash command hydration", () => {
         options: { reasoningLevel: "high" },
       },
     });
+    useZCodeSessionStore
+      .getState()
+      .setConfigOptions(
+        workspacePath,
+        nativeCatalogOptions(modelSelectionView(1, ["first", "second"], "first")),
+      );
     let delayed = false;
     const service: IModelSelectionService = {
       getView: async (input) => {
@@ -1243,7 +1511,7 @@ describe("useDraftConfigControl slash command hydration", () => {
     await act(async () => root.render(createElement(Probe)));
     delayed = true;
     await act(async () => control!.handleDraftSelectThought("low"));
-    expect(control!.modelSelectionRead.state.status).toBe("loading");
+    expect(control!.modelSelectionRead.state.status).toBe("unavailable");
     act(() => control!.handleDraftSelectModel("provider", "second"));
     expect(control!.composerDraft.modelSelection).toEqual({
       providerId: "provider",
@@ -1253,31 +1521,7 @@ describe("useDraftConfigControl slash command hydration", () => {
     act(() => root.unmount());
   });
 
-  it("账号连接同步返回的模型和档位原子写入，不依赖旧 API 目录", async () => {
-    const root = createRoot(installMinimalDom());
-    let control: ReturnType<typeof useDraftConfigControl>;
-    function Probe() {
-      control = useDraftConfigControl({
-        workspacePath: "/fresh-connection-selection",
-        sessionId: null,
-        agentStartupAllowed: false,
-        modelSelectionView: modelSelectionView(1, ["api-model"], "api-model"),
-      });
-      return null;
-    }
-    await act(async () => root.render(createElement(Probe)));
-    act(() =>
-      control!.handleDraftSelectModel("account:bigmodel-team-coding-plan", "GLM-5.3", "high"),
-    );
-    expect(control!.composerDraft.modelSelection).toEqual({
-      providerId: "account:bigmodel-team-coding-plan",
-      modelId: "GLM-5.3",
-      options: { reasoningLevel: "high" },
-    });
-    act(() => root.unmount());
-  });
-
-  it("新草稿先保留 Recent 原意图，再交给当前 View 解析，不能在初始化时丢掉旧账号", async () => {
+  it("新草稿使用原生默认值，不读取 Host 账号重映射或上次临时模型", async () => {
     const workspacePath = "/recent-account-intent";
     const root = createRoot(installMinimalDom());
     const original = {
@@ -1287,6 +1531,13 @@ describe("useDraftConfigControl slash command hydration", () => {
     };
     const effective = { ...original, providerId: "provider" };
     captureComposerRecentSubmission(workspacePath, { modelSelection: original, mode: "build" })();
+    useZCodeSessionStore.getState().setConfigOptions(
+      workspacePath,
+      nativeCatalogOptions({
+        ...modelSelectionView(1, ["same"], "same"),
+        preferredSelection: effective,
+      }),
+    );
     const service: IModelSelectionService = {
       getView: async (input) => ({
         ...modelSelectionView(1, ["same"], "same"),
@@ -1312,12 +1563,12 @@ describe("useDraftConfigControl slash command hydration", () => {
     expect(readV4ComposerDraft(workspacePath, undefined, "__draft__")).toBeNull();
     act(() => control!.updateComposerContent({ text: "draft" }));
     expect(readV4ComposerDraft(workspacePath, undefined, "__draft__")?.modelSelection).toEqual(
-      original,
+      effective,
     );
     act(() => root.unmount());
   });
 
-  it("Reasoning 失效只清档位，loading 不清选择，重挂载不补默认", async () => {
+  it("Reasoning 原意图保持稀疏，不被目录或重挂载改写", async () => {
     const workspacePath = "/persisted-invalid-reasoning";
     const container = installMinimalDom();
     persistV4ComposerDraft(workspacePath, undefined, "session", {
@@ -1349,13 +1600,21 @@ describe("useDraftConfigControl slash command hydration", () => {
     await act(async () => {
       root.render(createElement(Probe, { view }));
     });
-    expect(control!.draftConfig.modelSelection).toEqual({ providerId: "provider", modelId: "old" });
+    expect(control!.draftConfig.modelSelection).toEqual({
+      providerId: "provider",
+      modelId: "old",
+      options: { reasoningLevel: "deleted" },
+    });
     act(() => root.unmount());
     root = createRoot(container);
     await act(async () => {
       root.render(createElement(Probe, { view }));
     });
-    expect(control!.draftConfig.modelSelection).toEqual({ providerId: "provider", modelId: "old" });
+    expect(control!.draftConfig.modelSelection).toEqual({
+      providerId: "provider",
+      modelId: "old",
+      options: { reasoningLevel: "deleted" },
+    });
     expect(control!.draftConfig).toMatchObject({ mode: "build", planEnabled: false });
     expect(
       readV4ComposerDraft(workspacePath, undefined, "session")?.modelSelection?.options
@@ -1405,7 +1664,11 @@ describe("useDraftConfigControl slash command hydration", () => {
         }),
       );
     });
-    expect(control!.draftConfig.modelSelection).toEqual({ providerId: "provider", modelId: "old" });
+    expect(control!.draftConfig.modelSelection).toEqual({
+      providerId: "provider",
+      modelId: "old",
+      options: { reasoningLevel: "deleted" },
+    });
     act(() => {
       control!.updateComposerContent({ text: "草稿 A" });
       control!.handleDraftSelectModel("provider", "new");

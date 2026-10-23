@@ -1,18 +1,14 @@
-# Pre-push Hook
+# 手动质量检查与受影响测试
 
-仓库现在通过 Husky 接管 Git 的 `pre-push`。
+本 fork 已删除全部 Git 钩子及 Husky 自动安装。`git commit`、`git push` 不自动运行检查；新克隆、依赖安装及上游同步不得恢复钩子。权威契约见 [FORK-002](../../fork.md)。
 
-- 安装依赖后会执行根脚本 `pnpm prepare`，自动完成 Husky 安装。
-- `pre-push` 会执行 `pnpm run verify:pre-push`。
-- 根 `pnpm test` 现在只跑单测，不再误把桌面端 `packages/desktop/test/e2e` 当成 Vitest 用例。
-- Bugfix：单测脚本里的 E2E exclude glob 必须加引号；否则 shell 会先把 `packages/desktop/test/e2e/**/*.test.ts` 展开成真实文件列表，导致 Vitest 把多余文件当成 filters，同时又被 exclude 排除，最终报 `No test files found` 并阻止 push。
-- `verify:pre-push` 不再自动执行仓库架构合规扫描；保留的检查失败时仍阻止 push。`pnpm architecture:check --changed` 及架构策略继续用于手动检查，不修改或隐藏其诊断结果。
-
-这样可以在代码推到远端前，先用更快的静态检查拦住明显问题，再把单测问题拦在本地，同时保留 `pnpm test:e2e` 作为桌面端 E2E 的独立入口。
+- `pnpm verify:pre-push` 保留为手动命令，执行 Lint、SQLite schema 兼容检查、架构规则单测及受影响 UT；检查失败仅使该命令失败，不再由 Git 阻止提交或推送。
+- 根 `pnpm test` 仅跑单测，不将桌面端 `packages/desktop/test/e2e` 当作 Vitest 用例；E2E exclude glob 保持引号，避免被 shell 展开。
+- `pnpm architecture:check --changed` 及 `pnpm test:e2e` 等独立入口和原通过标准保持不变。
 
 ## 当前临时 OMP UT 范围
 
-- OMP 对接期的根 `vitest.config.ts` 使用单一显式白名单；`pnpm test`、`pnpm test:unit`、根 coverage 和 affected（包括 pre-push）都受它约束，不再执行原完整根 UT。范围与边界以 [Fork 临时 UT 规范](../../fork.md#当前临时-ut-执行范围) 为准。
+- OMP 对接期的根 `vitest.config.ts` 使用单一显式白名单；`pnpm test`、`pnpm test:unit`、根 coverage 和 affected（包括手动 `verify:pre-push`）都受它约束，不再执行原完整根 UT。范围与边界以 [Fork 临时 UT 规范](../../fork.md#当前临时-ut-执行范围) 为准。
 - 无关普通 UT、`fork-isolated` UT、模块合同 UT 及 `zcode-cua` 子项目暂时屏蔽；白名单内的合同 UT 和 `zcodeAgentService.v4` 仍保留。`pnpm test:architecture` 的独立入口不变，CLI 独立套件不由此次根配置修改接管。
 - 只屏蔽执行选择，不删除测试文件、用例或断言，不放宽超时；保留普通 threads 与真实进程串行 forks 的原有分组规则。下文的“完整根 UT／整个套件”在临时配置启用期间均指当前白名单形成的根套件，不是屏蔽前的全部测试。
 - 原完整 `fullUnitTests`、`fullForkIsolatedTests` 及 CUA 子项目定义保留在根配置中。恢复时只需将 `focusedUnitTests` 的数组初始化值替换为 `null`，由现有选择分支同时切回原完整范围，不逐项重建测试定义；仍须根据届时工作区改动处理合并冲突并实际验证。
@@ -20,27 +16,9 @@
 
 ## 开发环境与版本管理工具
 
-pre-push 直接使用当前 `PATH` 中的 pnpm / Node，不强制依赖 mise。此前 hook 外层的
-`mise exec` 虽能选择指定版本，却使已用 nvm 等方式准备好环境的开发者也必须安装 mise，
-否则检查尚未开始就会失败。
+手动验证使用当前 `PATH` 中的 pnpm / Node，不强制依赖 mise。版本仍以 `mise.toml` 为准，`mise-run.mjs` 和现有子进程 PATH 保护保持不变。
 
-```mermaid
-flowchart LR
-    Tools["开发者准备 Node / pnpm"] --> Hook["Git hook<br/>传递 push refs，清理 Git local env"]
-    Hook --> Verify["verify:pre-push"]
-    Verify --> Lint["Lint"]
-    Lint --> Schema["SQLite schema 兼容"]
-    Schema --> Rules["架构规则单测"]
-    Rules --> Affected["受影响 UT"]
-    Affected --> Push["继续推送"]
-```
-
-- 仓库负责声明工具版本和执行检查；个人环境负责让合适的 Node / pnpm 可被 Git 找到。
-- mise 仍是可选的开发入口；`mise.toml`、`mise-run.mjs` 和现有子进程 PATH 保护保持不变。
-- GUI Git 客户端若找不到 Node / pnpm，可在个人 `~/.config/husky/init.sh` 中初始化自己的
-  版本管理环境，参见 [Husky 官方说明](https://typicode.github.io/husky/how-to.html#node-version-managers-and-guis)。
-- 缺少命令或检查失败仍然阻止 push；hook 不自动安装工具，不静默跳过检查。
-- 上述环境规则只解除 hook 对 mise 的依赖，不新增版本检查，也不修改现有开发、CLI/SEA 或 CI 的版本要求。
+缺少命令或检查失败按原验证入口报告；Git 操作不依赖 Node、pnpm 或验证结果，不自动安装工具。
 
 ## Affected Unit Tests
 
@@ -81,11 +59,13 @@ Push 要求已暂存、未暂存、未跟踪改动均为空（忽略 Git 已忽�
 - 选择精度靠准确的模块图，不靠选择规则：官方选择是文件级传递闭包，经由 barrel 的 `export *` 会把一个模块的改动传给所有导入 barrel 的测试。高扇入的纯常量模块因此只走子路径，不进根 barrel。`packages/shared/src/test-ids.ts` 的常量只从 `@zcode/shared/test-ids` 导入，根入口不再 re-export，从根入口导入这些常量会被 typecheck 拒绝；工作流一族 `test-ids-workflow.ts` 仍由根入口导出，不在本规则内。原因：根入口由 100 多条 `export *` 汇总，改 test-ids 曾选中 1379/2638 个测试，其中直接引用 test-ids 的约 50 个。
 - 测试失败 exit 1；Git、参数、基线、Vitest 错误以及脏工作区 exit 2；全量跳过 exit 0，不代表测试通过。绝不自动回退全量、追加全量重试或静默吞掉选择器异常。pnpm test / pnpm test:unit 显式执行当前根套件；临时白名单启用时并非原完整根 UT 的旁路。
 - 输出选中数量与基线；跳过全量时说明官方选中整个套件，列出官方 related 改动文件。dry-run 列精确规格，JSON 包含 runner/project/pool/path，不伪造逐文件关联原因。
-- Git/文件操作异步；保留 hook local env 清理和 lint-staged JSON manifest，Windows 不经 shell 展开文件名。不修改工作区和 index。
+- Git/文件操作异步；手动入口保留 Git local env 清理和 lint-staged JSON manifest，Windows 不经 shell 展开文件名。不修改工作区和 index，不安装 Git 钩子。
 
-全量跳过适用于工作区、任务结束、Push 和显式文件入口。Push 的 lint、数据库兼容、架构规则单测、脏工作区、基线及实际局部测试失败仍会阻止推送；仓库架构合规扫描不再属于推送阻断项。跳过全量只放行 affected UT 这一项，不代表测试已通过。
+全量跳过适用于工作区、任务结束、Push scope 和显式文件入口。手动 `verify:pre-push` 的 lint、数据库兼容、架构规则单测、脏工作区、基线及实际局部测试失败仍使该命令失败，但不由 Git 自动执行或阻止推送；仓库架构合规扫描继续使用独立手动入口。跳过全量只跳过 affected UT 这一项，不代表测试已通过。
 
 ### 回归验收
+
+下述 Git hook 场景仅在临时测试仓库夹具中验证 Push scope 的选择与错误边界，不代表本 fork 安装或启用了推送钩子。
 
 使用临时 Git 仓库、真实 Vitest 和命令入口验证：局部选择与预览/执行一致、未选择文件不执行、任务跨 commit 与旧 WIP、新增测试、配置与公共 setup 全量跳过、共同依赖全量跳过、真实 git push 在全量跳过后成功推送、无关联成功退出、测试失败、无效基线、首次/已有分支 Push、脏工作区和非 HEAD 推送阻止、多个 ref 与删除 ref、集成合并正常参与选择、lint-staged manifest 和 Git local env 隔离。夹具移除外层 push/基线环境后再注入本场景参数，避免真实仓库 SHA 污染临时仓库。
 

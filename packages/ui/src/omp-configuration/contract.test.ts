@@ -1,11 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ZCodeSessionStateSnapshot } from "@zcode/shared";
-import type {
-  OmpModelRef,
-  OmpRoleDescriptor,
-  OmpTeamConfig,
-  ZCodeSessionConfigureResult,
-} from "@zcode/shared";
+import type { OmpModelRef, OmpTeamConfig, ZCodeSessionConfigureResult } from "@zcode/shared";
 import type { OmpConfigurationService } from "./contract.js";
 import { OmpConfigurationController } from "./module.js";
 
@@ -218,52 +213,6 @@ describe("OMP configuration draft contract", () => {
     expect(controller.getSnapshot().dirty).toBe(false);
     expect(controller.getSnapshot().receipt?.effectiveMatchesRequested).toBe(false);
     expect(controller.getSnapshot().expectedRevision).toBe("r2");
-  });
-  it("keeps role draft revision across refresh, then explicitly rebases and saves", async () => {
-    const { controller, configureOmpSession } = fixture();
-    await controller.refresh();
-    const role: OmpRoleDescriptor = {
-      roleId: "custom-reviewer",
-      name: "Reviewer",
-      configurable: true,
-      userValue: null,
-      projectValue: null,
-      candidateModels: [model],
-      source: "default",
-      writableScopes: ["user"],
-      hidden: false,
-      section: "chat",
-      revision: "role-r1",
-    };
-    configureOmpSession.mockResolvedValueOnce({
-      operation: "get_model_roles",
-      data: { roles: [role] },
-    });
-    await controller.addRole(role.roleId);
-    controller.setRole(role, { kind: "model", model });
-    configureOmpSession.mockResolvedValueOnce({
-      operation: "get_model_roles",
-      data: { roles: [{ ...role, revision: "role-r2" }] },
-    });
-    await controller.addRole(role.roleId);
-    expect(controller.getSnapshot().roleDrafts[role.roleId]?.expectedRevision).toBe("role-r1");
-    controller.rebase();
-    configureOmpSession.mockResolvedValueOnce({
-      operation: "set_model_role",
-      data: { role: { ...role, revision: "role-r3" }, persisted: true },
-    });
-    await controller.saveRole(role.roleId);
-    expect(configureOmpSession).toHaveBeenLastCalledWith({
-      workspacePath: "/a",
-      workspaceIdentity: undefined,
-      sessionId: "a",
-      operation: "set_model_role",
-      roleId: role.roleId,
-      scope: "user",
-      expectedRevision: "role-r2",
-      selection: { kind: "model", model },
-    });
-    expect(controller.getSnapshot().roleDrafts[role.roleId]).toBeUndefined();
   });
   it("invalidates in-flight results across connection generations and profile changes", async () => {
     const { controller, configureOmpTeam } = fixture();

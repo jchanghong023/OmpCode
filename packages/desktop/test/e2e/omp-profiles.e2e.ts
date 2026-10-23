@@ -20,6 +20,7 @@ import {
   OMP_PROVIDER_ID,
   type ModelRequest,
 } from "./helpers/omp-integration-fixture.js";
+import { runOmpNativeSource } from "./helpers/omp-native-acceptance.js";
 import { setPluginPresentation } from "./helpers/plugin-management-lifecycle.js";
 
 const tid = (id: string) => $(`[data-testid="${id}"]`);
@@ -59,7 +60,7 @@ async function assertRequestModel(marker: string, model: string) {
   expect(matches.length).toBeGreaterThan(0);
   expect(matches.every((request) => request.model === model)).toBe(true);
 }
-async function saveRole(role: string, model: string) {
+async function selectRole(role: string, model: string) {
   const control = tid(`omp-role-select-${role}`);
   await control.waitForDisplayed({ timeout: 30000 });
   expect(await control.isEnabled()).toBe(true);
@@ -71,6 +72,12 @@ async function saveRole(role: string, model: string) {
   expect(index).toBeGreaterThanOrEqual(0);
   await control.selectByIndex(index);
   expect(await control.getValue()).toBe(value);
+}
+async function saveRole(role: string, model: string) {
+  await selectRole(role, model);
+  await saveSelectedRole(role);
+}
+async function saveSelectedRole(role: string) {
   expect(await tid(`omp-role-save-${role}`).isEnabled()).toBe(true);
   await click(`omp-role-save-${role}`);
   await browser.waitUntil(
@@ -86,6 +93,24 @@ async function saveRole(role: string, model: string) {
       return result.notice === "omp.configuration.roleSaved";
     },
     { timeout: 30000, timeoutMsg: "Native CAS role save did not complete" },
+  );
+}
+async function nativeRoles(roleIds: string[]) {
+  return runOmpNativeSource<
+    Record<string, { userValue: string | null; effectiveValue: string | null; source: string }>
+  >(
+    `import { resolve } from "node:path";
+     import { pathToFileURL } from "node:url";
+     // The parent selects the actual OMP checkout at runtime, not a bundled test implementation.
+     const { Settings } = await import(pathToFileURL(resolve(process.env.OMP_E2E_SOURCE_DIR, "config/settings.ts")).href);
+     const settings = await Settings.loadReadOnly({ cwd: process.cwd(), agentDir: process.env.PI_CODING_AGENT_DIR });
+     const roles = Object.fromEntries(${JSON.stringify(roleIds)}.map(id => [id, {
+       userValue: settings.getGlobalModelRole(id) ?? null,
+       effectiveValue: settings.getModelRole(id) ?? null,
+       source: settings.getModelRoleSource(id),
+     }]));
+     console.log("OMP_E2E_RESULT:" + JSON.stringify(roles));`,
+    DEFAULT_WORKSPACE,
   );
 }
 async function profileState(active: string, selected = active) {
@@ -314,6 +339,11 @@ describe("OMP workspace profiles / native role and temporary model GUI", () => {
     await settings("general");
     const dataRoot = tid("settings-data-base-dir-input");
     await dataRoot.waitForDisplayed({ timeout: 30000 });
+    // 原因：只读目录输入先以空值挂载，再由异步设置读取填充；可见不代表数据域已就绪。
+    await browser.waitUntil(async () => (await dataRoot.getValue()) !== "", {
+      timeout: 30000,
+      timeoutMsg: "Readonly data directory did not finish loading",
+    });
     expect(await dataRoot.getValue()).toBe(`${root}_ompcode`);
     expect(await dataRoot.getAttribute("readonly")).not.toBeNull();
     expect(await tid("settings-data-base-dir-browse").isExisting()).toBe(false);
@@ -388,9 +418,66 @@ describe("OMP workspace profiles / native role and temporary model GUI", () => {
     await click("omp-custom-role-add");
     await saveRole("e2e-reviewer", "omp-alternate");
     savedA = await readFile(originalConfigPath, "utf8");
+    const roleReadback = await nativeRoles(["smol", "e2e-reviewer"]);
+    for (const id of ["smol", "e2e-reviewer"]) {
+      expect(roleReadback[id]).toEqual({
+        userValue: `${OMP_PROVIDER_ID}/omp-alternate`,
+        effectiveValue: `${OMP_PROVIDER_ID}/omp-alternate`,
+        source: "global",
+      });
+    }
     expect(parseDocument(savedA).getIn(["modelRoles", "smol"])).toBe(
       `${OMP_PROVIDER_ID}/omp-alternate`,
     );
+    await click("omp-config-cancel");
+  });
+
+  it("rejects an external native role revision and only saves after explicit readback and rebase", async () => {
+    await click("omp-config-open");
+    await selectRole("smol", OMP_MODEL_ID);
+    // 先建立真实 GUI 脏草稿，再模拟同 profile TUI/编辑器写入；热刷新不得偷偷更新其 CAS 基线。
+    const externalRole = `${OMP_PROVIDER_ID}/external-model-unavailable`;
+    const external = parseDocument(await readFile(originalConfigPath, "utf8"));
+    expect(external.errors).toHaveLength(0);
+    external.setIn(["modelRoles", "smol"], externalRole);
+    const externalSource = external.toString();
+    await writeFile(originalConfigPath, externalSource);
+    await click("omp-role-save-smol");
+    await browser.waitUntil(
+      async () => (await tid("omp-config-error").getText()).includes("revision_conflict"),
+      {
+        timeout: 30000,
+        timeoutMsg: "Concurrent native role edit did not report revision_conflict",
+      },
+    );
+    expect(await readFile(originalConfigPath, "utf8")).toBe(externalSource);
+    expect((await nativeRoles(["smol"])).smol).toEqual({
+      userValue: externalRole,
+      effectiveValue: externalRole,
+      source: "global",
+    });
+    await tid("omp-config-external-change").waitForDisplayed({ timeout: 30000 });
+    // 显式读取保留用户草稿；只有用户采用最新 revision 后才能重试，不关闭重开或自动重放。
+    await click("omp-config-refresh");
+    await tid("omp-config-rebase").waitForEnabled({ timeout: 30000 });
+    expect(await tid("omp-role-select-smol").getValue()).toBe(
+      JSON.stringify({ provider: OMP_PROVIDER_ID, modelId: OMP_MODEL_ID }),
+    );
+    expect(await readFile(originalConfigPath, "utf8")).toBe(externalSource);
+    await click("omp-config-rebase");
+    await selectRole("smol", "omp-alternate");
+    await saveSelectedRole("smol");
+    savedA = await readFile(originalConfigPath, "utf8");
+    const persisted = parseDocument(savedA);
+    expect(persisted.getIn(["modelRoles", "smol"])).toBe(`${OMP_PROVIDER_ID}/omp-alternate`);
+    expect(persisted.getIn(["modelRoles", "e2e-reviewer"])).toBe(
+      `${OMP_PROVIDER_ID}/omp-alternate`,
+    );
+    expect((await nativeRoles(["smol"])).smol).toEqual({
+      userValue: `${OMP_PROVIDER_ID}/omp-alternate`,
+      effectiveValue: `${OMP_PROVIDER_ID}/omp-alternate`,
+      source: "global",
+    });
     await click("omp-config-cancel");
   });
 
@@ -511,7 +598,8 @@ describe("OMP workspace profiles / native role and temporary model GUI", () => {
     await switchV4Model(OMP_PROVIDER_ID, "omp-alternate", "disabled");
     await run("OMP_E2E_PROFILE_B_RECENT");
     await startDraftFromProject(DEFAULT_WORKSPACE);
-    await expectModel("omp-alternate");
+    // v2：新任务取原生 default role，不能继承刚发送会话的临时模型。
+    await expectModel(OMP_MODEL_ID);
     await switchV4Model(OMP_PROVIDER_ID, OMP_MODEL_ID, "disabled");
     await setV4ComposerText("OMP_PROFILE_B_UNSENT");
     await settings("modelProvider");
@@ -558,7 +646,7 @@ describe("OMP workspace profiles / native role and temporary model GUI", () => {
     await browser.saveScreenshot(
       resolve(process.env.ZCODE_E2E_ARTIFACT_DIR!, "omp-profile-a-draft-restored.png"),
     );
-    // 清空正文后丢弃临时草稿配置，再从真实新建入口观察已接纳的 Recent。
+    // 清空正文后丢弃临时草稿配置，再从真实新建入口观察原生 default role。
     await setV4ComposerText("");
     await selectV4TaskById(other);
     await startDraftFromProject(DEFAULT_WORKSPACE);
@@ -593,7 +681,8 @@ describe("OMP workspace profiles / native role and temporary model GUI", () => {
     await selectV4TaskById(b);
     await startDraftFromProject(DEFAULT_WORKSPACE);
     await waitForV4ComposerText("", "Clearing B draft did not take effect");
-    await expectModel("omp-alternate");
+    // v2：清空已保存草稿后恢复原生 default，而不是上次会话的临时模型。
+    await expectModel(OMP_MODEL_ID);
     await browser.saveScreenshot(
       resolve(process.env.ZCODE_E2E_ARTIFACT_DIR!, "omp-profile-b-recent-restored.png"),
     );

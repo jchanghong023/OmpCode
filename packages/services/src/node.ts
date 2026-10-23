@@ -34,7 +34,6 @@ import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import {
-  createNodeProviderRuntimePathEnv,
   NodeModelSelectionConfigRepository,
   PERSONAL_PROVIDER_CONFIG_FILE_NAME,
 } from "@zcode/provider-node";
@@ -1709,10 +1708,6 @@ export function createLocalServices(options: {
     grantWorkspaceHookTrust: (params) => zcodeAgentService.grantWorkspaceHookTrust(params),
   });
   const memoryService = createMemoryService();
-  // 只要当前进程已经装配 Provider Runtime，就由该 Environment 自己的 Selection View
-  // 决定执行就绪状态。Desktop-attached remote 也读取远端自己的 Config/Account Facts。
-  const modelSelectionReadinessSource = providerRuntime.modelSelection;
-  const agentAccountProviderConfigSource = accountProviderConfigSource;
   // ===== Computer Use Helper lifecycle 层（port 自 feat）=====
   // 约束：lifecycle coordinator 懒获取 + 代际 fence（dispose 仅来自显式 workspace 生命周期）；
   // 不创建定时健康探测；Helper restart 尽可能复用 host transport，既有 Agent 的 session、
@@ -2422,11 +2417,6 @@ export function createLocalServices(options: {
     resolveSessionDirectories: async (target) =>
       (await projectService.resolveSessionDirectories({ ...target, taskId: target.sessionId }))
         .additionalDirectories,
-    ...(agentAccountProviderConfigSource
-      ? { accountProviderConfigSource: agentAccountProviderConfigSource }
-      : {}),
-    accountRequestAuthService,
-    ...(modelSelectionReadinessSource ? { modelSelectionReadinessSource } : {}),
     authorizeLocalMediaPreviewPath: options?.authorizeLocalMediaPreviewPath,
     ...offPeakToolWiring,
     // 动态工作流灰度：与 Off-Peak 不同，
@@ -2573,9 +2563,6 @@ export function createLocalServices(options: {
       const telemetryDeviceMid = telemetryConfigured
         ? options?.agentTelemetry?.getDeviceMid?.()?.trim()
         : undefined;
-      // Host 是旧配置迁移的唯一写入者。Agent spawn 前等待初始化完成，避免 Worker
-      // 先拿到尚不存在的 provider_config.json 并发布短暂空 Registry。
-      await providerConfigRuntime.start();
       return {
         ...buildAgentRuntimeEnv({
           httpProxy: agentNetwork.httpProxy,
@@ -2593,12 +2580,6 @@ export function createLocalServices(options: {
           runtimeSurface: options?.agentTelemetry?.runtimeSurface ?? "remote_workspace_host",
           telemetryEnv,
           userId: telemetryProfile?.id,
-        }),
-        ...createNodeProviderRuntimePathEnv({
-          // Built-in Active 路径按当前 Endpoint 隔离，不能通过同步的固定路径
-          // getter 读取；Agent spawn 必须等待本轮 Endpoint Source 完成解析和物化。
-          zcodeBuiltinFilePath: await providerConfigRuntime.resolveZCodeBuiltinActiveFilePath(),
-          personalFilePath: join(resolveAppConfigDir(), PERSONAL_PROVIDER_CONFIG_FILE_NAME),
         }),
       };
     },

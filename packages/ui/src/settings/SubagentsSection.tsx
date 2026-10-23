@@ -1,11 +1,8 @@
 import { useConfigWorkspaceTargets } from "@/workspace-config-catalog/index.js";
 import { SettingsUserScopeProvider } from "@/settings/SettingsMachine.js";
 /* eslint-disable max-lines -- 子智能体管理页集中维护作用域列表、表单和启用状态，避免状态分散 */
-import { useStartPlanRecommendation } from "@/hooks/useStartPlanRecommendation.js";
-import { hasExplicitModelChanged } from "@/lib/startPlanRecommendation.js";
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { Bot, Check, Plus, Trash2 } from "lucide-react";
-import { completeNewModelSelection } from "@zcode/provider";
 import {
   ZCODE_AGENT_PROVIDER,
   type AgentColor,
@@ -21,7 +18,6 @@ import {
   TID_SUBAGENT_ROW,
   testId,
 } from "@zcode/shared/test-ids";
-import type { ModelSelectionView } from "@zcode/services";
 import { Button } from "@/components/ui/button.js";
 import { Input } from "@/components/ui/input.js";
 import {
@@ -45,15 +41,17 @@ import { logger } from "@/logger.js";
 import { settingsResourceRowInteraction } from "@/settings/settingsResourceRowInteraction.js";
 import { useConfirmDialog } from "@/hooks/useConfirmDialog.js";
 import { useServices } from "@/hooks/useServices.js";
-import { useModelSelectionServiceView } from "@/hooks/useModelSelectionView.js";
+import {
+  useOmpModelCatalog,
+  findOmpCatalogEntry,
+  selectionForOmpEntry,
+  ompThoughtOptionForEntry,
+  type OmpModelCatalog,
+} from "@/omp-configuration/module.js";
 import { useConfigWorkspaceServicesResolution as useWorkspaceServicesResolution } from "@/workspace-config-catalog/index.js";
 import { useBaseWorkspaceServices } from "@/hooks/useWorkspaceServices.js";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
-import {
-  buildRegistryModelSelectGroups,
-  resolveModelDisplayName,
-} from "@/lib/modelSelectionGroups.js";
-import { resolveModelThoughtOption } from "@/lib/modelThoughtOption.js";
+import { resolveModelDisplayName } from "@/lib/modelSelectionGroups.js";
 import { parseModelPickerValue } from "@/lib/zcodeSessionProjection.js";
 import { encodeCustomModelValue } from "@/lib/zcodeCustomModelValue.js";
 import { SUBAGENT_COLORS, SUBAGENT_COLOR_CLASS } from "@/lib/subagentColors.js";
@@ -221,7 +219,7 @@ export type SubagentThoughtOptionState = SubagentReasoningFieldState;
 export function resolveSubagentThoughtOptionState(params: {
   model: string;
   modelAvailable: boolean;
-  modelSelectionView?: ModelSelectionView | null;
+  modelSelectionView?: OmpModelCatalog | null;
   modelSelectionLoading: boolean;
   thoughtLevel?: string;
 }): SubagentThoughtOptionState {
@@ -232,15 +230,23 @@ export function resolveSubagentThoughtOptionState(params: {
   const modelSelection = parseModelPickerValue(persistedModel);
   const explicitThoughtLevel = params.thoughtLevel?.trim();
 
-  // Settings 只管理 Local Environment，模型能力与候选统一来自 Local Host View。
-  // Workspace presentation 的 configOptions 不是第二份模型目录，也不参与 reasoning 判断。
-  const metadataOption = params.modelSelectionView
-    ? resolveModelThoughtOption({
-        modelSelectionView: params.modelSelectionView,
-        providerId: modelSelection.providerId,
-        modelId: modelSelection.modelId,
-        currentValue: explicitThoughtLevel,
-      })
+  // 模型能力只读取目标执行端的原生目录；显式旧档位仅展示，不静默改写。
+  const nativeOption = ompThoughtOptionForEntry(
+    findOmpCatalogEntry(
+      params.modelSelectionView ?? null,
+      modelSelection.providerId,
+      modelSelection.modelId,
+    ),
+  );
+  const metadataOption = nativeOption
+    ? {
+        ...nativeOption,
+        currentValue: explicitThoughtLevel
+          ? nativeOption.options?.some((option) => option.value === explicitThoughtLevel)
+            ? explicitThoughtLevel
+            : ""
+          : "",
+      }
     : null;
   if (metadataOption) {
     return {
@@ -464,7 +470,7 @@ function AgentListRow({
   pluginIconItem?: Pick<StorePluginItem, "name" | "listing">;
   isOperating: boolean;
   modelGroups: readonly ModelSelectGroup[];
-  modelSelectionView?: ModelSelectionView | null;
+  modelSelectionView?: OmpModelCatalog | null;
   modelSelectionLoading: boolean;
   modelSelectGroups: readonly ModelSelectGroup[];
   onModelOverrideChange: (
@@ -602,14 +608,13 @@ function SubagentModelOverrideControl({
   agent: AgentSummary;
   disabled: boolean;
   modelGroups: readonly ModelSelectGroup[];
-  modelSelectionView?: ModelSelectionView | null;
+  modelSelectionView?: OmpModelCatalog | null;
   modelSelectionLoading: boolean;
   onModelOverrideChange: (
     agent: AgentSummary,
     config: { model?: string; thoughtLevel?: string },
   ) => Promise<void>;
 }) {
-  const recommendStartPlan = useStartPlanRecommendation(modelSelectionView, "subagent");
   const { intl } = useZCodeIntl();
   const [pending, setPending] = useState(false);
   const [config, setConfig] = useState<{
@@ -671,28 +676,15 @@ function SubagentModelOverrideControl({
       setConfig(nextConfig);
       setPending(true);
       try {
-        let selectedConfig = nextConfig;
-        if (nextConfig.model && nextConfig.model !== config.model) {
-          const selection = toSubagentModelSelection(nextConfig.model, nextConfig.thoughtLevel);
-          const chosen = selection ? await recommendStartPlan(selection) : null;
-          if (!chosen) {
-            setConfig(previousConfig);
-            return;
-          }
-          selectedConfig = {
-            model: toSubagentModelValue(chosen),
-            thoughtLevel: chosen.options?.reasoningLevel,
-          };
-        }
-        await onModelOverrideChange(agent, selectedConfig);
-        setConfig(selectedConfig);
+        await onModelOverrideChange(agent, nextConfig);
+        setConfig(nextConfig);
       } catch {
         setConfig(previousConfig);
       } finally {
         setPending(false);
       }
     },
-    [agent, config, onModelOverrideChange, pending, recommendStartPlan],
+    [agent, config, onModelOverrideChange, pending],
   );
   const handleValueChange = useCallback(
     (nextValue: string) => {
@@ -710,11 +702,13 @@ function SubagentModelOverrideControl({
         modelAvailable: nextModelAvailable,
         modelSelectionView,
         modelSelectionLoading,
-        thoughtLevel:
-          nextModel && modelSelectionView
-            ? completeNewModelSelection(modelSelectionView, parseModelPickerValue(nextModel))
-                ?.options?.reasoningLevel
-            : undefined,
+        thoughtLevel: nextModel
+          ? findOmpCatalogEntry(
+              modelSelectionView ?? null,
+              parseModelPickerValue(nextModel).providerId,
+              parseModelPickerValue(nextModel).modelId,
+            )?.defaultThoughtLevel
+          : undefined,
       });
       // 控件会展示 Registry 的正常默认档位，持久化必须保存同一个值，
       // 不能让界面有值而执行 Selection 缺少 reasoningLevel。
@@ -805,7 +799,7 @@ function SubagentForm({
   onScopeKeyChange,
 }: {
   initial?: AgentSummary;
-  modelSelectionView?: ModelSelectionView | null;
+  modelSelectionView?: OmpModelCatalog | null;
   modelSelectionLoading: boolean;
   modelSelectGroups: readonly ModelSelectGroup[];
   onManageModels?: () => void;
@@ -817,7 +811,6 @@ function SubagentForm({
   workspaceTabs: ConfigWorkspaceTarget[];
   onScopeKeyChange: (scopeKey: string) => void;
 }) {
-  const recommendStartPlan = useStartPlanRecommendation(modelSelectionView, "subagent");
   const { intl } = useZCodeIntl();
   const initialFormStateKey = createSubagentFormInitialStateKey(initial);
   const initialFormState = useMemo(
@@ -848,10 +841,14 @@ function SubagentForm({
       }
       setModel(nextModel);
       const identity = toPersistedModel(nextModel);
-      const selected =
-        identity && modelSelectionView
-          ? completeNewModelSelection(modelSelectionView, parseModelPickerValue(identity))
-          : undefined;
+      const entry = identity
+        ? findOmpCatalogEntry(
+            modelSelectionView ?? null,
+            parseModelPickerValue(identity).providerId,
+            parseModelPickerValue(identity).modelId,
+          )
+        : undefined;
+      const selected = entry ? selectionForOmpEntry(entry) : undefined;
       setThoughtLevel(selected?.options?.reasoningLevel ?? "");
       setModelError(null);
     },
@@ -1006,12 +1003,7 @@ function SubagentForm({
     if (!validate()) {
       return;
     }
-    let selection = toSubagentModelSelection(persistedModel, thoughtLevel);
-    if (hasExplicitModelChanged(initial?.modelSelection, selection)) {
-      const chosen = await recommendStartPlan(selection);
-      if (!chosen) return;
-      selection = chosen;
-    }
+    const selection = toSubagentModelSelection(persistedModel, thoughtLevel);
     await onSave({
       name: name.trim(),
       description: description.trim(),
@@ -1341,32 +1333,25 @@ export function SubagentsSection({
   // 子智能体及插件投影必须统一使用 target-scoped services，连接恢复前暂停 RPC。
   const { pluginManagementService, subagentsService } = targetServiceResolution.services;
   const activeScope = selectedWorkspace ? "workspace" : "user";
-  // Provider/Model 事实属于目标 Environment：内置模型覆盖必须读 Scope target 自己的
-  // Registry 视图，等待远端连接期间不能回退到 Base Host 的模型列表。
-  const modelSelectionRead = useModelSelectionServiceView(
-    targetServiceResolution.services.modelSelectionService,
-    targetServiceResolution.rpcReady,
+  // 与 scope 保存目标共用执行端身份；没有目标或远端等待时保持真实空目录。
+  const catalogWorkspacePath =
+    targetWorkspacePath ??
+    (!settingsSourceServerId && !workspaceIdentity ? workspacePath : undefined);
+  const catalogTargetReady =
+    Boolean(catalogWorkspacePath) &&
+    targetServiceResolution.rpcReady &&
+    (!settingsSourceServerId || Boolean(targetWorkspaceIdentity) || Boolean(selectedWorkspace));
+  const nativeModels = useOmpModelCatalog(
+    catalogWorkspacePath ?? "",
+    targetWorkspaceIdentity,
+    selectedWorkspace?.remoteSessionId,
+    catalogTargetReady,
   );
-  const modelSelectionView =
-    modelSelectionRead.state.status === "ready" ? modelSelectionRead.state.view : null;
-  // 非 Ready 生命周期均保留表单中的模型意图；error/unavailable 不能被误判成模型已失效。
-  const modelSelectionLoading = modelSelectionRead.state.status !== "ready";
+  const modelSelectionView = catalogTargetReady ? nativeModels.catalog : null;
+  const modelSelectionLoading = !catalogTargetReady || nativeModels.status !== "ready";
   const latestRequestIdRef = useRef(0);
   const pluginInventoryWorkspacePath = targetWorkspacePath;
-  const chatModelSelectGroups = useMemo(() => {
-    if (!modelSelectionView) return [];
-    return buildRegistryModelSelectGroups(ZCODE_AGENT_PROVIDER, modelSelectionView, {
-      startPlanBadgeLabel: intl.formatMessage({
-        id: "settings.modelProvider.connectionMode.startPlanBadge",
-      }),
-      apiKeyLabel: intl.formatMessage({
-        id: "settings.modelProvider.apiKey",
-      }),
-      codingPlanLabel: intl.formatMessage({
-        id: "settings.modelProvider.connectionMode.codingPlan",
-      }),
-    });
-  }, [intl, modelSelectionView]);
+  const chatModelSelectGroups = catalogTargetReady ? nativeModels.modelGroups : [];
   const subagentModelSelectGroups = chatModelSelectGroups;
   const loadAgents = useCallback(
     async (showBlockingLoading: boolean) => {
@@ -1812,12 +1797,9 @@ export function SubagentsSection({
         </div>
       ) : null}
 
-      {modelSelectionRead.state.status === "error" ? (
-        <div className="flex items-center justify-between gap-3 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-ui-base text-destructive">
-          <span>{intl.formatMessage({ id: "settings.subagents.modelLoadFailed" })}</span>
-          <Button type="button" variant="ghost" size="sm" onClick={modelSelectionRead.reload}>
-            {intl.formatMessage({ id: "common.retry" })}
-          </Button>
+      {nativeModels.error ? (
+        <div className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-ui-base text-destructive">
+          {intl.formatMessage({ id: "settings.subagents.modelLoadFailed" })}
         </div>
       ) : null}
 

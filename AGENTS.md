@@ -9,6 +9,7 @@
 - 以当前检出的源码、`package.json` 和架构策略为准。说明中只保留当前仓库提供的功能、命令和文件；删除功能时同步清理指令和技能中的引用。
 - 定位问题时，未明确要求修改代码就先调查原因。结合源码、日志和运行时证据，区分已确认原因与待验证假设。
 - 保留与任务无关的本地改动，不自行恢复已移除的模块或内部依赖。
+- 本仓库禁用全部 Git 钩子，NEVER 在安装、开发或上游同步中恢复；提交与推送不自动运行检查。现有验证命令仅按任务需要手动执行，契约见 `fork.md` 的 FORK-002。
 
 ## 命令与仓库结构
 
@@ -23,7 +24,7 @@
 | 格式检查         | `pnpm fmt:check`                                                                         |
 | 桌面开发         | `pnpm dev:desktop`                                                                       |
 | Web 开发         | `pnpm dev:web`                                                                           |
-| 提交前检查       | `pnpm verify:pre-push`（Lint、数据库兼容、架构规则单测与受影响单测；不自动扫描架构合规） |
+| 手动质量检查     | `pnpm verify:pre-push`（Lint、数据库兼容、架构规则单测与受影响单测；不接 Git 钩子） |
 | 架构检查         | `pnpm architecture:check --changed`                                                      |
 | 模块阅读包       | `pnpm architecture:context <module-id>`                                                  |
 | 未使用依赖与导出 | `pnpm knip`                                                                              |

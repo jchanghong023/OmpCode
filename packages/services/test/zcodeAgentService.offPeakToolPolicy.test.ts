@@ -56,7 +56,6 @@ async function setup(params: {
   }));
   const { createZCodeAgentService } = await import("../src/zcode-agent/zcodeAgentService.js");
   const service = createZCodeAgentService({
-    modelSelectionReadinessSource: { getView: async () => offPeakSelectionView() },
     ...(params.offPeakEnabled === undefined
       ? {}
       : {

@@ -162,7 +162,6 @@ export async function createBotWorkerIntegration(baseUrl: string, dropTextContai
           ZCODE_PERSONAL_PROVIDER_CONFIG_FILE: personalFilePath,
         },
       }),
-      modelSelectionReadinessSource: modelSelectionService,
       channelReplyExecutor: async (request) => {
         reverseReplies.push(request);
         return bot.service.replyToChannel!(request);

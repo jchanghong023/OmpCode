@@ -2,9 +2,9 @@
 
 // 确认窗里可调的两项 run 设置（docs/dynamic-workflow/launch.md「Adjusting the settings in the window」；
 // 外观与键盘见 docs/dynamic-workflow/presentation.md「The confirmation window」）：纯规则逐条穷举，
-// 真实 DOM 上钉两句话、改过的那一行、选项描述、Allow 应答带出去的 content、「不可用」的门与 Shift+Tab。
+// 真实 DOM 验证模型与并发草稿、Allow 应答 content、不可用门控与 Shift+Tab，不钉展示文案。
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { type ZCodePermissionRequest } from "@zcode/shared";
+import { type ZCodeConfigOption, type ZCodePermissionRequest } from "@zcode/shared";
 import { TID_CHAT_THOUGHT_LEVEL_SELECT_TRIGGER } from "@zcode/shared/test-ids";
 import type { ConversationSnapshot } from "@zcode/shared/zcode-protocol-v4";
 import { createElement, type ReactNode } from "react";
@@ -24,33 +24,39 @@ vi.mock("@/hooks/useWorkflowSubagentModelProviderName.js", () => ({
   useWorkflowSubagentModelProviderName: () => undefined,
 }));
 
-/** 模型清单：一个 provider、两个模型，其中一个有思考档（与「配置」弹层的测试同一份）。 */
-const VIEW = {
-  revision: 1,
-  providers: [
-    {
-      providerId: "zhipu",
-      providerName: "Zhipu",
-      config: { api: { type: "openai-chat-completions" } },
-      models: [
-        {
-          modelId: "glm-5.3",
-          config: { optionSpecs: { reasoningLevel: { values: [], map: "{}" } } },
-        },
-        {
-          modelId: "glm-5.3-flash",
-          config: { optionSpecs: { reasoningLevel: { values: ["low", "high"], map: "{}" } } },
-        },
-      ],
-    },
-  ],
-};
-const modelRead = vi.hoisted(() => ({
-  state: { status: "ready", view: null as unknown } as { status: string; view?: unknown },
+/** 原生 configOptions 目录：免凭据模型，其中一个有思考档。 */
+const MODEL_OPTIONS: ZCodeConfigOption[] = [
+  {
+    id: "model",
+    name: "Model",
+    type: "select",
+    currentValue: "zhipu/glm-5.3",
+    options: [
+      {
+        value: "zhipu/glm-5.3",
+        name: "Zhipu/glm-5.3",
+        modelProviderName: "Zhipu",
+      },
+      {
+        value: "zhipu/glm-5.3-flash",
+        name: "Zhipu/glm-5.3-flash",
+        modelProviderName: "Zhipu",
+        modelThoughtLevels: ["low", "high"],
+        modelDefaultThoughtLevel: "low",
+      },
+    ],
+  },
+];
+// 只替换服务边界；目录仍由真实 workspace store 和公开 native catalog hook 读取。
+vi.mock("@/hooks/useZCodeSessionService.js", () => ({
+  useZCodeSessionService: () => undefined,
 }));
-vi.mock("@/hooks/useModelSelectionView.js", () => ({
-  useModelSelectionView: () => ({ state: modelRead.state, reload: vi.fn() }),
-}));
+vi.mock("@/hooks/useZCodeTaskService.js", () => {
+  const service = {
+    onDynamicWorkspaceEvent: () => () => ({ dispose() {} }),
+  };
+  return { useZCodeTaskService: () => service };
+});
 
 // 模型菜单的选择走真实组件，只把 props 记下来：测试直接调它的 onValueChange，不去驱动 Radix 菜单。
 const capturedSelects = vi.hoisted(() => [] as Array<Record<string, unknown>>);
@@ -93,6 +99,8 @@ import {
 import { encodeCustomModelValue } from "@/lib/zcodeCustomModelValue.js";
 // eslint-disable-next-line import/first
 import { V4InteractionDialogs } from "@/v4/V4InteractionDialogs.js";
+// eslint-disable-next-line import/first
+import { useZCodeSessionStore } from "@/store/zcodeSessionStore.js";
 
 const SCRIPT = 'const r = await agent("a").ask<string>("do");';
 const ALLOW = { optionId: "allowOnce", kind: "allowOnce", name: "Allow" };
@@ -112,7 +120,9 @@ beforeAll(() => {
 });
 
 beforeEach(() => {
-  modelRead.state = { status: "ready", view: VIEW };
+  useZCodeSessionStore.setState({ workspaces: {} });
+  useZCodeSessionStore.getState().setConfigOptions("/w", MODEL_OPTIONS);
+  useZCodeSessionStore.getState().setConfigOptionsStatus("/w", "ready");
   capturedSelects.length = 0;
   sendCommand.mockReset();
 });
@@ -256,44 +266,26 @@ describe("纯规则：起点、应答 content、改过的行", () => {
   });
 });
 
-describe("确认窗里的两句话", () => {
-  it("没设过的调用也说出将会发生什么：模型在上（会话模型徽标），上界在下（= 默认），没有「原为」", () => {
+describe("确认窗设置行为", () => {
+  it("缺省沿用会话模型与默认并发；默认并发不是上限", () => {
     renderDialog(workflowRequest(ADJUSTABLE));
-    const block = screen.getByTestId("workflow-permission-settings");
-    expect(block.textContent?.indexOf("Subagents run on")).toBeLessThan(
-      block.textContent?.indexOf("At most") ?? -1,
-    );
     expect(modelLine().textContent).toContain("glm-5.3");
-    expect(modelLine().textContent).toContain("session model");
     expect(boundValue().value).toBe("13");
-    expect(boundLine().textContent).toContain("subagents at once");
-    expect(boundLine().textContent).toContain("= default");
     // 默认不是天花板：停在默认上照样能往上加。
     expect(
       screen.getByTestId<HTMLButtonElement>("workflow-permission-settings-bound-increase").disabled,
     ).toBe(false);
     expect(screen.queryByTestId("workflow-permission-settings-model-was")).toBeNull();
     expect(screen.queryByTestId("workflow-permission-settings-bound-was")).toBeNull();
-    // 旧的纯文本行不再出现。
-    expect(screen.queryByTestId("workflow-permission-max-concurrency")).toBeNull();
-    expect(option("Allow").textContent).toContain("Allow only this time");
   });
 
-  it("改上界：那一行加粗并带「· was 13 ↺」，前两个选项换描述，Allow 带 content；↺ 放回去即不带", () => {
+  it("调整上界后 Allow 带 content；重置后不带改动", () => {
     const { onRespond } = renderDialog(workflowRequest(ADJUSTABLE));
     fireEvent.click(screen.getByTestId("workflow-permission-settings-bound-decrease"));
     fireEvent.click(screen.getByTestId("workflow-permission-settings-bound-decrease"));
     expect(boundValue().value).toBe("11");
     expect(boundLine().getAttribute("data-changed")).toBe("true");
     expect(boundValue().className).toContain("font-medium");
-    expect(boundLine().textContent).toContain("default 13");
-    expect(screen.getByTestId("workflow-permission-settings-bound-was").textContent).toBe(
-      "· was 13",
-    );
-    expect(option("Allow").textContent).toContain("Run once with the adjusted settings");
-    expect(option("Always allow in this session").textContent).toContain(
-      "later runs are not asked and carry their own",
-    );
 
     fireEvent.click(option("Allow"));
     expect(onRespond).toHaveBeenLastCalledWith(
@@ -306,7 +298,6 @@ describe("确认窗里的两句话", () => {
     fireEvent.click(screen.getByTestId("workflow-permission-settings-bound-reset"));
     expect(boundValue().value).toBe("13");
     expect(screen.queryByTestId("workflow-permission-settings-bound-was")).toBeNull();
-    expect(option("Allow").textContent).toContain("Allow only this time");
     fireEvent.click(option("Allow"));
     expect(onRespond.mock.lastCall).toEqual([
       "perm-1",
@@ -315,19 +306,16 @@ describe("确认窗里的两句话", () => {
     ]);
   });
 
-  it("换模型：content 是规范串，「原为」说起点（会话模型）；会话免确认同样带着这一次的设置", () => {
+  it("显式换模型带原生默认思考档；会话免确认也携带本次规范模型串", () => {
     const { onRespond } = renderDialog(workflowRequest(ADJUSTABLE));
     pickModel(encodeCustomModelValue("zhipu", "glm-5.3-flash"));
     expect(modelLine().getAttribute("data-changed")).toBe("true");
-    expect(screen.getByTestId("workflow-permission-settings-model-was").textContent).toBe(
-      "· was Zhipu/glm-5.3 · session model",
-    );
 
     fireEvent.click(option("Always allow in this session"));
     fireEvent.click(option("Always allow in this session"));
     const content = onRespond.mock.lastCall?.[3] as { subagent_model?: string };
     expect(onRespond.mock.lastCall?.[1]).toMatchObject({ optionId: "allowSession" });
-    expect(content.subagent_model?.startsWith("zhipu/glm-5.3-flash")).toBe(true);
+    expect(content.subagent_model).toBe("zhipu/glm-5.3-flash$low");
     expect(Object.keys(content)).toEqual(["subagent_model"]);
   });
 
@@ -355,9 +343,7 @@ describe("确认窗里的两句话", () => {
     const { onRespond } = renderDialog(
       workflowRequest({ ...ADJUSTABLE, subagent_model: "gone/model-x" }),
     );
-    expect(screen.getByTestId("workflow-permission-settings-model-unavailable").textContent).toBe(
-      "unavailable",
-    );
+    expect(screen.getByTestId("workflow-permission-settings-model-unavailable")).toBeTruthy();
     await waitFor(() => expect(option("Allow").getAttribute("aria-disabled")).toBe("true"));
     fireEvent.click(option("Allow"));
     expect(onRespond).not.toHaveBeenCalled();
@@ -369,12 +355,9 @@ describe("确认窗里的两句话", () => {
     expect(onRespond.mock.lastCall?.[3]).toEqual({ subagent_model: "zhipu/glm-5.3" });
   });
 
-  it("agent 没有模型目录：模型那一行是一句话，上界照样可调", () => {
+  it("模型不可调时仍可修改并提交并发", () => {
     const { onRespond } = renderDialog(
       workflowRequest({ adjustable_settings: { subagent_model: false, concurrency_ceiling: 8 } }),
-    );
-    expect(modelLine().textContent).toBe(
-      "Subagents stay on the session model· this agent has no model catalog",
     );
     expect(screen.queryByTestId("workflow-permission-settings-model-trigger")).toBeNull();
     fireEvent.click(screen.getByTestId("workflow-permission-settings-bound-decrease"));
@@ -382,27 +365,12 @@ describe("确认窗里的两句话", () => {
     expect(onRespond.mock.lastCall?.[3]).toEqual({ max_concurrency: 7 });
   });
 
-  it("选不了模型、入参却带着一个（沿用来的）：照实说它，不说「沿用会话模型」", () => {
-    renderDialog(
-      workflowRequest({
-        adjustable_settings: { subagent_model: false, concurrency_ceiling: 8 },
-        subagent_model: "zhipu/glm-5.3-flash",
-      }),
-    );
-    // 夹具的 provider 不是内置家族：名字是「provider 名/模型 id」，与菜单同一条拼名规则。
-    expect(modelLine().textContent).toBe("Subagents run on Zhipu/glm-5.3-flash");
-  });
-
-  it("天花板未知、调用也没设上界：步进器留空，句尾「不设上限」；敲一个数就成了调整", () => {
+  it("默认并发未知时输入框留空；输入的数随 Allow 提交", () => {
     const { onRespond } = renderDialog(
       workflowRequest({ adjustable_settings: { subagent_model: true } }),
     );
     expect(boundValue().value).toBe("");
-    expect(screen.getByTestId("workflow-permission-settings-bound-tail").textContent).toBe(
-      "· no limit of its own",
-    );
     fireEvent.change(boundValue(), { target: { value: "5" } });
-    expect(screen.queryByTestId("workflow-permission-settings-bound-tail")).toBeNull();
     fireEvent.click(option("Allow"));
     expect(onRespond.mock.lastCall?.[3]).toEqual({ max_concurrency: 5 });
   });
@@ -418,29 +386,11 @@ describe("确认窗里的两句话", () => {
     ).toBe(true);
   });
 
-  it("zh-CN：两句与「原为」", () => {
-    renderDialog(workflowRequest(ADJUSTABLE), { locale: "zh-CN" });
-    expect(modelLine().textContent).toContain("子代理运行在");
-    expect(boundLine().textContent).toContain("最多");
-    expect(boundLine().textContent).toContain("个子代理同时运行");
-    expect(boundLine().textContent).toContain("= 默认");
-    fireEvent.click(screen.getByTestId("workflow-permission-settings-bound-decrease"));
-    expect(boundLine().textContent).toContain("默认 13");
-    expect(screen.getByTestId("workflow-permission-settings-bound-was").textContent).toBe(
-      "· 原为 13",
-    );
-    expect(
-      screen.getByTestId("workflow-permission-settings-bound-reset").getAttribute("title"),
-    ).toBe("恢复原值");
-    expect(option("允许").textContent).toContain("按调整后的设置运行一次");
-  });
-
   it("换请求：设置回到新入参的起点，上一个窗的改动不带进下一个", () => {
     const { onRespond, rerender } = renderDialog(workflowRequest(ADJUSTABLE));
     fireEvent.click(screen.getByTestId("workflow-permission-settings-bound-decrease"));
     rerender(workflowRequest(ADJUSTABLE, { requestId: "perm-2" }));
     expect(boundValue().value).toBe("13");
-    expect(option("Allow").textContent).toContain("Allow only this time");
     fireEvent.click(option("Allow"));
     expect(onRespond.mock.lastCall).toEqual([
       "perm-2",
@@ -457,10 +407,9 @@ describe("脚本点名了模型", () => {
     model_bindings: { "GLM-5.3-Flash": "zhipu/glm-5.3-flash$low", judge: "zhipu/glm-5.3" },
   };
 
-  it("不逐名列出，模型那一句说「默认」；只有一个模型菜单", () => {
+  it("脚本绑定不逐名列出；只有一个默认模型菜单", () => {
     renderDialog(workflowRequest({ ...ADJUSTABLE, ...BINDINGS }));
     const text = screen.getByTestId("workflow-permission-settings").textContent ?? "";
-    expect(modelLine().textContent).toContain("By default, subagents run on");
     expect(text).not.toContain("judge");
     expect(text).not.toContain("glm-5.3-flash");
     expect(screen.getAllByTestId("workflow-permission-settings-model-trigger")).toHaveLength(1);
@@ -471,41 +420,6 @@ describe("脚本点名了模型", () => {
     fireEvent.click(screen.getByTestId("workflow-permission-settings-bound-decrease"));
     fireEvent.click(option("Allow"));
     expect(onRespond.mock.lastCall?.[3]).toEqual({ max_concurrency: 12 });
-  });
-
-  it("没点名模型的脚本照旧说「子代理运行在」", () => {
-    renderDialog(workflowRequest({ ...ADJUSTABLE, model_bindings: {} }));
-    expect(modelLine().textContent).toContain("Subagents run on");
-    expect(modelLine().textContent).not.toContain("By default");
-  });
-
-  it("选不了模型：「子代理默认沿用会话模型」", () => {
-    renderDialog(
-      workflowRequest({
-        adjustable_settings: { subagent_model: false, concurrency_ceiling: 8 },
-        ...BINDINGS,
-      }),
-    );
-    expect(modelLine().textContent).toBe(
-      "By default, subagents stay on the session model· this agent has no model catalog",
-    );
-  });
-
-  it("zh-CN：「子代理默认运行在」", () => {
-    renderDialog(workflowRequest({ ...ADJUSTABLE, ...BINDINGS }), { locale: "zh-CN" });
-    expect(modelLine().textContent).toContain("子代理默认运行在");
-  });
-
-  it("旧 agent（纯文本）：同样不列名字，模型那一句说「默认」", () => {
-    renderDialog(
-      workflowRequest({ max_concurrency: 2, subagent_model: "zhipu/glm-5.3", ...BINDINGS }),
-    );
-    expect(screen.getByTestId("workflow-permission-subagent-model").textContent).toBe(
-      "By default, subagents run on glm-5.3",
-    );
-    const blockText =
-      document.querySelector('[data-workflow-permission-block="true"]')?.textContent ?? "";
-    expect(blockText).not.toContain("judge");
   });
 });
 
@@ -531,18 +445,6 @@ describe("键盘", () => {
     fireEvent.keyDown(boundValue(), { key: "1" });
     fireEvent.keyDown(boundValue(), { key: "Enter" });
     expect(onRespond).not.toHaveBeenCalled();
-  });
-});
-
-describe("旧 agent（入参没有 adjustable_settings）", () => {
-  it("只画调用设了的字段，纯文本，模型在上、上界在下；没有控件", () => {
-    renderDialog(workflowRequest({ max_concurrency: 2, subagent_model: "zhipu/glm-5.3-flash" }));
-    expect(screen.queryByTestId("workflow-permission-settings")).toBeNull();
-    const blockText =
-      document.querySelector('[data-workflow-permission-block="true"]')?.textContent ?? "";
-    expect(blockText.indexOf("Subagents run on glm-5.3-flash")).toBeLessThan(
-      blockText.indexOf("At most 2 subagents at once"),
-    );
   });
 });
 

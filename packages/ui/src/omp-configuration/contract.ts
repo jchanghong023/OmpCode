@@ -56,6 +56,8 @@ export type OmpConfigurationPanelProps = {
   service: OmpConfigurationPanelService;
 } & (
   | (OmpConfigurationEntryProps & { mode?: "all"; onClose: () => void })
+  /** 内嵌角色页仍绑定真实会话；仅 Team 专页允许没有会话，不能合并两者的 props 分支。 */
+  | (OmpConfigurationEntryProps & { mode: "roles-only"; onClose?: () => void })
   | (OmpConfigurationPanelTarget &
       Omit<OmpConfigurationEntryProps, "sessionId"> & {
         mode: "team-only";

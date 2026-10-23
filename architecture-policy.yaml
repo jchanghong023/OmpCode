@@ -870,6 +870,16 @@ exceptions:
     rule: unmanaged-new-file
     paths: [packages/ui/src/components/workflow-run-line/WorkflowRunRail.tsx]
     reason: Existing upstream workflow rail edited only to adapt native titles within the sidebar tooltip scope; workflow ownership and imports remain unchanged except for the shared UI tooltip adapter.
+  - id: workflow-settings-native-model-existing-ui-edit
+    rule: unmanaged-new-file
+    paths:
+      - packages/ui/src/components/workflow-timeline/WorkflowAskSettingsLines.tsx
+      - packages/ui/src/components/workflow-timeline/useWorkflowSettingsModelChoices.ts
+    reason: 本轮之前已存在的 fork workflow 设置 producer 仅迁移到原生模型 projection，经 omp-configuration/module.js 公开入口读取目录与思考档；确认窗草稿及设置选择仍归现有 workflow owner，不新增平行业务实现或反向依赖。例外仅准入这两个既有文件，不接管 workflow-timeline 目录，其他新增源码仍受 managed gate 约束。
+  - id: selection-side-native-model-existing-ui-edit
+    rule: unmanaged-new-file
+    paths: [packages/ui/src/lib/selectionSideInheritedModel.ts]
+    reason: 既有旁聊继承 helper 仅切换至同一原生目录，继续读取父 runtime 实际模型；不接管 conversation owner、不新增模型状态或放宽其他文件的模块边界。
   - id: onboarding-existing-module-edit
     rule: unmanaged-new-file
     paths:

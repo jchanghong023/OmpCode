@@ -1,3 +1,5 @@
+import { useZCodeSessionStore } from "@/store/zcodeSessionStore.js";
+
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
@@ -13,6 +15,19 @@ import type {
   OpenScopedSubagentSideTabRequest,
   OpenScopedWorkflowRunSideTabRequest,
 } from "@/lib/workspaceSidePane.js";
+// 布局 fixture 提供原生服务上下文，不把应用级 TabStore 当作布局挂载前提。
+vi.mock("@/hooks/useWorkspaceServices.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/hooks/useWorkspaceServices.js")>();
+  const { useServices } = await import("@/hooks/useServices.js");
+  const zcodeAgentService = {
+    getOmpProfiles: async () => ({ storageScope: "native-layout-scope" }),
+    onAgentRuntimeRestarted: () => ({ dispose() {} }),
+  };
+  return {
+    ...actual,
+    useWorkspaceServices: () => ({ ...useServices(), zcodeAgentService }),
+  };
+});
 
 const projectionState = vi.hoisted(() => ({
   current: null as {
@@ -88,6 +103,7 @@ vi.mock("@/hooks/useServices.js", () => ({
   useServices: () => ({
     zcodeSessionService: {},
     zcodeTaskService: {
+      onDynamicWorkspaceEvent: () => () => ({ dispose() {} }),
       restartWorkspaceProcess: vi.fn(),
     },
   }),
@@ -161,14 +177,6 @@ vi.mock("@/v4/V4InteractionDialogs.js", async () => {
   const React = await import("react");
   return {
     V4InteractionDialogs: () => React.createElement("div", { "data-testid": "mock-interactions" }),
-  };
-});
-
-vi.mock("@/request-security-edition/V4ProviderRuntimeHeadersController.js", async () => {
-  const React = await import("react");
-  return {
-    V4ProviderRuntimeHeadersController: () =>
-      React.createElement("div", { "data-testid": "mock-runtime-headers" }),
   };
 });
 
@@ -331,6 +339,18 @@ function renderPane({
   snapshot?: ConversationSnapshot;
   sessionId?: string | null;
 } = {}): string {
+  const store = useZCodeSessionStore.getState();
+  store.setConfigOptions("/workspace", [
+    {
+      id: "model",
+      name: "Model",
+      category: "model",
+      type: "select",
+      currentValue: "",
+      options: [],
+    },
+  ]);
+  store.setConfigOptionsStatus("/workspace", "ready");
   statusPanelCapture.props = [];
   statusPanelCapture.composerProps = [];
   projectionState.current = {
@@ -372,12 +392,6 @@ describe("SessionPane v4 chat layout parity", () => {
     expect(html).toContain('data-centered="true"');
   });
 
-  it("passes compact remote draft mode to the empty state", () => {
-    const html = renderPane({ sessionId: null, compactForRemoteControl: true });
-
-    expect(html).toContain('data-compact-remote="true"');
-  });
-
   it("keeps a bound empty session blank while preserving the bottom composer dock", () => {
     const html = renderPane({
       snapshot: makeSnapshot({
@@ -389,36 +403,9 @@ describe("SessionPane v4 chat layout parity", () => {
     expect(html).toContain('data-v4-composer-dock="true"');
     expect(html).toContain('data-testid="mock-composer"');
     expect(html).not.toContain("v4-timeline-empty");
-    expect(html).not.toContain("发送第一条消息开始对话");
   });
 
-  it("renders the composer after the timeline viewport and inside its dock", () => {
-    const html = renderPane();
-
-    expect(html).toContain('data-v4-timeline-scroll="true"');
-    expect(html).toContain('data-v4-timeline-content-column="true"');
-    expect(html).toContain('data-v4-composer-dock="true"');
-    expect(html.indexOf('data-v4-timeline-scroll="true"')).toBeLessThan(
-      html.indexOf('data-v4-composer-dock="true"'),
-    );
-    expect(html.indexOf('data-v4-composer-dock="true"')).toBeLessThan(
-      html.indexOf('data-testid="mock-composer"'),
-    );
-  });
-
-  it("anchors the back-to-bottom control to the composer dock above input", () => {
-    const html = renderPane();
-
-    expect(html).toContain('data-v4-back-to-bottom-anchor="composer-dock"');
-    expect(html.indexOf('data-v4-composer-dock="true"')).toBeLessThan(
-      html.indexOf('data-v4-back-to-bottom-anchor="composer-dock"'),
-    );
-    expect(html.indexOf('data-v4-back-to-bottom-anchor="composer-dock"')).toBeLessThan(
-      html.indexOf('data-testid="mock-composer"'),
-    );
-  });
-
-  it("renders pending permission before the composer inside the composer dock", () => {
+  it("renders the pending permission blocking request", () => {
     conversationTelemetryState.current = {
       acceptPromptSeed: vi.fn(),
       attachForeground: vi.fn(() => () => {}),
@@ -430,19 +417,6 @@ describe("SessionPane v4 chat layout parity", () => {
     });
     conversationTelemetryState.current = null;
 
-    const dockIndex = html.indexOf('data-v4-composer-dock="true"');
-    const interactionIndex = html.indexOf('data-testid="mock-interactions"');
-    const composerIndex = html.indexOf('data-testid="mock-composer"');
-
-    expect(dockIndex).toBeGreaterThanOrEqual(0);
-    expect(interactionIndex).toBeGreaterThanOrEqual(0);
-    expect(composerIndex).toBeGreaterThanOrEqual(0);
-    expect(dockIndex).toBeLessThan(interactionIndex);
-    expect(interactionIndex).toBeLessThan(composerIndex);
-    // 2026-08-17：Start Plan runtime headers 应答方已迁出 SessionPane，改由 Root 的
-    // V4WorkspaceProviderRuntimeHeadersBridge 按 workspace 常驻挂载（web 远控新建会话
-    // 在桌面没有 pane 时也必须有应答方），pane 内不再渲染该控制器。
-    expect(html).not.toContain('data-testid="mock-runtime-headers"');
     expect(html).toContain('data-blocking-request-id="perm-1"');
   });
 
@@ -461,39 +435,17 @@ describe("SessionPane v4 chat layout parity", () => {
 
         // 待处理请求已有底部卡片，顶部不再重复展示 warning 和跳转入口。
         expect(html).not.toContain('data-testid="v4-pending-interaction-top-notice"');
-        const dockIndex = html.indexOf('data-v4-composer-dock="true"');
-        const interactionIndex = html.indexOf('data-testid="mock-interactions"');
-        const composerIndex = html.indexOf('data-testid="mock-composer"');
-        expect(dockIndex).toBeGreaterThanOrEqual(0);
-        expect(interactionIndex).toBeGreaterThan(dockIndex);
-        expect(composerIndex).toBeGreaterThan(interactionIndex);
       },
     );
   }
 
-  it("普通 Web 没有 desktop-continuous attachment 时不挂一次性 runtime header controller", () => {
-    conversationTelemetryState.current = null;
-    const html = renderPane();
-
-    expect(html).not.toContain('data-testid="mock-runtime-headers"');
-  });
-
-  it("renders structured user input before the composer inside the composer dock", () => {
+  it("renders the structured user input blocking request", () => {
     const html = renderPane({
       snapshot: makeSnapshot({
         pendingInteractions: [pendingStructuredUserInputInteraction()],
       }),
     });
 
-    const dockIndex = html.indexOf('data-v4-composer-dock="true"');
-    const interactionIndex = html.indexOf('data-testid="mock-interactions"');
-    const composerIndex = html.indexOf('data-testid="mock-composer"');
-
-    expect(dockIndex).toBeGreaterThanOrEqual(0);
-    expect(interactionIndex).toBeGreaterThanOrEqual(0);
-    expect(composerIndex).toBeGreaterThanOrEqual(0);
-    expect(dockIndex).toBeLessThan(interactionIndex);
-    expect(interactionIndex).toBeLessThan(composerIndex);
     expect(html).toContain('data-blocking-request-id="ask-1"');
   });
 

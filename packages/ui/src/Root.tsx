@@ -15,15 +15,14 @@ import {
   RequestSecurityWorkspaceBridge,
   setRequestSecurityReporter,
 } from "@/request-security-edition/index.js";
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { LucideProvider, RefreshCw } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { LucideProvider } from "lucide-react";
 import {
   APP_RUNTIME_PREFERENCES_CHANGED_BROADCAST_CHANNEL,
   DesktopCommandIds,
   appRuntimePreferencesChangedBroadcastPayloadSchema,
 } from "@zcode/shared";
 import { TooltipProvider } from "@/components/ui/tooltip.js";
-import { Button } from "@/components/ui/button.js";
 import { PlatformProvider } from "@/hooks/usePlatform.js";
 import { ServiceProvider, useComposerClientNamespace } from "@/hooks/useServices.js";
 import {
@@ -63,9 +62,6 @@ import { setDefaultFileDisplayBasePath } from "@/lib/fileDisplay.js";
 import { readRendererLaunchTimings, shouldReportLaunchToInput } from "@/lib/launchToInputReport.js";
 import { reportUiLaunchToInput } from "@/lib/uiPerfArmsTelemetry.js";
 import {
-  isProviderStartupSyncPending,
-  shouldEnableProviderAvailabilityLoginEntryGuard,
-  shouldResolveProviderStartupState,
   shouldBlockRootRender,
   shouldShowRootStartupLoading,
   shouldOpenFallbackWorkspaceAfterCreate,
@@ -74,7 +70,7 @@ import { StoreProvider, useZCodeStore } from "@/store/StoreProvider.js";
 import { setMcpStorePlatform } from "@/store/mcpStore.js";
 import { useZCodeSessionStore } from "@/store/zcodeSessionStore.js";
 import { TabStoreProvider, useTabStore, useTabStoreApi } from "@/store/TabStoreProvider.js";
-import { isSettingsTab, isWorkspaceTab, type WorkspaceTabState } from "@/store/tabStore.js";
+import { isSettingsTab, isWorkspaceTab } from "@/store/tabStore.js";
 import { logger } from "@/logger.js";
 import { RootShell } from "@/root/RootShell.js";
 import { RootWorkspaceContent } from "@/root/RootWorkspaceContent.js";
@@ -86,7 +82,6 @@ import { useRemoteWorkspaceHistory } from "@/root/useRemoteWorkspaceHistory.js";
 import { useRemoteWorkspaceTabLifecycle } from "@/root/useRemoteWorkspaceTabLifecycle.js";
 import { RemoteWorkspaceControllerProvider } from "@/remote/useRemoteWorkspaceController.js";
 import { useRootProviderStateRefresh } from "@/root/useRootProviderStateRefresh.js";
-import { useModelSelectionServiceView } from "@/hooks/useModelSelectionView.js";
 import { useRootProviderSettingsSnapshot } from "@/root/useRootProviderSettingsSnapshot.js";
 import { useWebRemoteControlAuthSync } from "@/web-remote-control/app/useWebRemoteControlAuthSync.js";
 import { useRootOAuthEffects } from "@/root/useRootOAuthEffects.js";
@@ -104,7 +99,6 @@ import {
   useWebRemoteControlFeatureEnabled,
 } from "@/WebRemoteControlFeatureProvider.js";
 import { useRemoteConnectionLogs } from "@/hooks/useRemoteConnectionLogs.js";
-import { useWebRemoteControlStatus } from "@/hooks/useWebRemoteControlStatus.js";
 import {
   CODE_COMMENT_REMOVE_BROADCAST_CHANNEL,
   CODE_COMMENT_PREVIEW_RESTORE_BROADCAST_CHANNEL,
@@ -118,8 +112,6 @@ import { setUiPerfArmsReporter } from "@/lib/uiPerfArmsTelemetry.js";
 import { setSessionOpenArmsReporter } from "@/lib/sessionOpenArmsTelemetry.js";
 import { setSendFunnelArmsReporter } from "@/lib/sendFunnelArmsTelemetry.js";
 import { RootStartupLoading } from "@/root/RootStartupLoading.js";
-import { resolveProviderAvailabilityState } from "@/lib/modelProviderAvailability.js";
-import { useProviderAvailabilityLoginEntryGuard } from "@/root/useProviderAvailabilityLoginEntryGuard.js";
 import { ensureProviderFamilyDomainMigration } from "@/lib/providerFamilyDomainMigration.js";
 import { useSettings } from "@/hooks/useSettingService.js";
 import { CLOSE_ACTIVE_CONTEXT_REQUEST_EVENT } from "@/lib/closeActiveContext.js";
@@ -137,12 +129,7 @@ import type {
 } from "@/app-shell/types.js";
 
 const DEFAULT_LUCIDE_STROKE_WIDTH = 1.5;
-type WelcomeScreenOpenReason =
-  | "startup-provider-required"
-  | "manual-login"
-  | "provider-request"
-  | "logout-provider-required"
-  | "session-expired";
+type WelcomeScreenOpenReason = "manual-login" | "session-expired";
 
 /**
  * Root —— 应用根组件
@@ -296,28 +283,7 @@ function RootInner({
     useState<WelcomeScreenOpenReason | null>(() =>
       consumeZcodeJwtInvalidRestartMarker() ? "session-expired" : null,
     );
-  const [providerFamilyDomainMigrationComplete, setProviderFamilyDomainMigrationComplete] =
-    useState(false);
   const loginEntryRequest = useZCodeStore((state) => state.loginEntryRequest);
-  const rootModelSelectionRead = useModelSelectionServiceView(services.modelSelectionService);
-  const rootModelSelectionView =
-    rootModelSelectionRead.state.status === "ready" ? rootModelSelectionRead.state.view : null;
-  const rootModelSelectionErrorNode =
-    rootModelSelectionRead.state.status === "error" ? (
-      <div className="fixed right-4 bottom-4 z-50 flex max-w-sm items-center gap-3 rounded-lg border border-destructive/30 bg-surface-raised px-3 py-2 text-ui-base text-foreground shadow-lg">
-        <span className="min-w-0 flex-1">
-          {intl.formatMessage({ id: "root.modelSelection.loadFailed" })}
-        </span>
-        <Button type="button" variant="ghost" size="sm" onClick={rootModelSelectionRead.reload}>
-          <RefreshCw className="size-3.5" aria-hidden="true" />
-          {intl.formatMessage({ id: "common.retry" })}
-        </Button>
-      </div>
-    ) : null;
-  const readRootModelSelectionView = useCallback(
-    () => services.modelSelectionService.getView(),
-    [services.modelSelectionService],
-  );
   const [remoteConnectionDialogOpen, setRemoteConnectionDialogOpen] = useState(false);
   const [remoteConnectionOpenPreference, setRemoteConnectionOpenPreference] =
     useState<RemoteConnectionOpenPreference | null>(null);
@@ -595,13 +561,6 @@ function RootInner({
     [tabStoreApi],
   );
   const webRemoteControlFeatureEnabled = useWebRemoteControlFeatureEnabled();
-  // Bugfix: WebRemoteControlDialog 只是可开关的展示入口，不能由它的本地 state 决定全局远控状态。
-  // Root 直接轮询 main 进程状态，让远控会话 running/active 成为唯一真值来源。
-  const webRemoteControlStatus = useWebRemoteControlStatus({
-    enabled: Boolean(webRemoteControlFeatureEnabled && isDesktop),
-  });
-  const webRemoteControlSessionActive =
-    webRemoteControlStatus.status === "running" || webRemoteControlStatus.status === "active";
   const refreshProviderState = useRootProviderStateRefresh(services);
   useRootProviderSettingsSnapshot(services);
   useEffect(() => {
@@ -624,9 +583,6 @@ function RootInner({
               error: refreshError,
             });
           }
-          // 原因：一次性登录判定不能早于设置刷新，否则迟到的有效 domain 无法纠正登录态，
-          // workspace/pane 恢复会一直被关在门外。刷新后仅由仍有效的启动代次发布完成。
-          if (!disposed) setProviderFamilyDomainMigrationComplete(true);
         }
       }
     })();
@@ -639,56 +595,10 @@ function RootInner({
   const shouldPreferDirectoryBrowser = Boolean(preferDirectoryBrowser);
   const supportsEmbeddedBrowser = explicitSupportsEmbeddedBrowser ?? Boolean(isDesktop);
   const isResolvingStartupAuthState = isRestoringOAuthSession;
-  const rootProviderAvailability = resolveProviderAvailabilityState({
-    modelSelectionView: rootModelSelectionView,
-  });
-  const providerStartupSyncPending = isProviderStartupSyncPending({
-    providerFamilyDomainMigrationComplete,
-    modelSelectionViewHydrated:
-      rootProviderAvailability.hydrated || rootModelSelectionRead.state.status === "error",
-  });
+  // 模型目录与认证就绪由 OMP workspace-config 提供，不能再以 Host 账户快照阻塞启动。
   const isWebRemoteControlRoot = Boolean(webRemoteControlWorkspaceSwitcher);
-  const providerAvailabilityLoginEntryGuardEnabled =
-    shouldEnableProviderAvailabilityLoginEntryGuard({
-      isWebRemoteControlRoot,
-    });
-  const { startupCheckCompleted: providerAvailabilityStartupCheckCompleted } =
-    useProviderAvailabilityLoginEntryGuard({
-      enabled: providerAvailabilityLoginEntryGuardEnabled,
-      user,
-      isRestoringOAuthSession: isResolvingStartupAuthState || providerStartupSyncPending,
-      providerFamilyDomain: appSettings?.providerFamilyDomain,
-      modelSelectionView: rootModelSelectionView,
-      modelSelectionError:
-        rootModelSelectionRead.state.status === "error"
-          ? rootModelSelectionRead.state.error
-          : undefined,
-      refreshProviderState,
-      readModelSelectionView: readRootModelSelectionView,
-      setLoginEntryOpen: (open) => {
-        setWelcomeScreenOpenReason((currentReason) => {
-          if (open) {
-            return "startup-provider-required";
-          }
-          // JWT 过期提示确认后会先写入 session-expired，随后 provider
-          // 启动门禁以 open=false 收尾。这里若无条件清空，会覆盖重新登录页并回到工作区。
-          // 门禁只能关闭自己拥有的启动登录态，不能清理其它交互来源的 reason。
-          return currentReason === "startup-provider-required" ? null : currentReason;
-        });
-      },
-    });
-  const isResolvingProviderStartupState = shouldResolveProviderStartupState({
-    isWebRemoteControlRoot,
-    providerStartupSyncPending,
-    providerAvailabilityStartupCheckCompleted,
-  });
-  const isStartupProviderLoginEntryOpen = welcomeScreenOpenReason === "startup-provider-required";
-  // 首次安装时 provider 登录入口判定晚于 workspace 注入，ChatView 会先 mount 并触发草稿预热。
-  // 这里把 provider 启动检查纳入 workspace 恢复门禁，避免未连接账号前启动 ZCode session。
-  const canRestoreWorkspaceSession =
-    !isResolvingStartupAuthState &&
-    !isResolvingProviderStartupState &&
-    !isStartupProviderLoginEntryOpen;
+  const isResolvingProviderStartupState = false;
+  const canRestoreWorkspaceSession = !isResolvingStartupAuthState;
   const workspacePersistenceGate = useMemo<WorkspacePersistenceGate>(
     () => ({ canPersist: false, restoreFailed: false }),
     [],
@@ -756,7 +666,6 @@ function RootInner({
     handleSelectProject,
     handleSelectConversationWorkspace,
     handleResolveConversationWorkspace,
-    handleEnsureConversationWorkspace,
     handleCreateConversationTask,
     handleOpenWorkspace,
     handleOpenFolderFromWorkspaceMenu,
@@ -780,9 +689,7 @@ function RootInner({
     updateAppSettings,
     setOAuthError,
     setUser,
-    onProviderFamilyDomainClearedAfterLogout: () => {
-      setWelcomeScreenOpenReason("logout-provider-required");
-    },
+    onProviderFamilyDomainClearedAfterLogout: () => setWelcomeScreenOpenReason(null),
     userId: user?.id,
     onOpenRemoteConnection: allowRemoteWorkspace ? handleOpenRemoteConnection : undefined,
     openRemoteProjectWorkspace: openPreparedRemoteProjectWorkspace,
@@ -1183,7 +1090,7 @@ function RootInner({
     webRemoteControlFeatureEnabled,
     hasCompletedFullTabRestore: hasCompletedFullRestore,
     intl,
-    isRestoringOAuthSession: isResolvingStartupAuthState || providerStartupSyncPending,
+    isRestoringOAuthSession: isResolvingStartupAuthState,
   });
 
   useEffect(() => {
@@ -1315,7 +1222,6 @@ function RootInner({
         isRestoring,
         isBootstrappingInitialWorkspace,
       }) ||
-      isStartupProviderLoginEntryOpen ||
       workspaceShellPath ||
       isSettingsTabActive ||
       !allowOpenWorkspace ||
@@ -1367,7 +1273,6 @@ function RootInner({
     isResolvingStartupAuthState,
     isRestoring,
     isSettingsTabActive,
-    isStartupProviderLoginEntryOpen,
     services.fileService,
     setWorkspaceActionError,
     tabStoreApi,
@@ -1388,9 +1293,8 @@ function RootInner({
     if (!loginEntryRequest) {
       return;
     }
-    // 登录入口已从模态弹窗收敛为 WelcomeScreen。
-    // provider 连接请求仍要先退出首次启动引导语义，避免连接完成后误创建默认 workspace。
-    setWelcomeScreenOpenReason("provider-request");
+    // 产品登录请求复用手动账号入口，不再建立模型 provider 连接流程。
+    setWelcomeScreenOpenReason("manual-login");
   }, [loginEntryRequest]);
 
   // 登录入口不依赖会话；保持引用稳定，避免草稿更新穿透侧栏 memo。
@@ -1398,35 +1302,11 @@ function RootInner({
     setWelcomeScreenOpenReason("manual-login");
   }, []);
   const handleWelcomeScreenComplete = useCallback(
-    async (reason: LoginCompleteReason) => {
+    async (_reason: LoginCompleteReason) => {
       await refreshAppSettings();
-      if (
-        welcomeScreenOpenReason !== "startup-provider-required" ||
-        workspaceShellPath ||
-        !allowOpenWorkspace
-      ) {
-        setWelcomeScreenOpenReason(null);
-        return;
-      }
-
-      try {
-        await handleEnsureConversationWorkspace();
-      } catch (error) {
-        logger.error("[Root] 登录后创建默认 workspace 失败", {
-          error,
-          reason,
-        });
-      } finally {
-        setWelcomeScreenOpenReason(null);
-      }
+      setWelcomeScreenOpenReason(null);
     },
-    [
-      allowOpenWorkspace,
-      handleEnsureConversationWorkspace,
-      refreshAppSettings,
-      welcomeScreenOpenReason,
-      workspaceShellPath,
-    ],
+    [refreshAppSettings],
   );
   const remoteProjectIntentEpoch = useRef(0);
   const [remoteProjectSelection, setRemoteProjectSelection] = useState<{
@@ -1641,7 +1521,6 @@ function RootInner({
     const loadingLabel = intl.formatMessage({ id: "common.loading" });
     return (
       <RootShell>
-        {rootModelSelectionErrorNode}
         {requestSecurityBridgeNode}
         {remoteConnectionDialog}
         {directoryBrowserDialog}
@@ -1656,7 +1535,6 @@ function RootInner({
   if (welcomeScreenOpenReason) {
     return (
       <RootShell>
-        {rootModelSelectionErrorNode}
         {requestSecurityBridgeNode}
         {remoteConnectionDialog}
         {directoryBrowserDialog}
@@ -1668,7 +1546,6 @@ function RootInner({
   if (!workspaceShellPath && isSettingsTabActive) {
     return (
       <RootShell>
-        {rootModelSelectionErrorNode}
         {remoteConnectionDialog}
         {directoryBrowserDialog}
         <ScopedErrorBoundary
@@ -1693,7 +1570,6 @@ function RootInner({
     // 这里延续入口 loading，等任务列表有 workspaceShellPath 后再切换，避免露出浏览器白底。
     return (
       <RootShell>
-        {rootModelSelectionErrorNode}
         {requestSecurityBridgeNode}
         {initialWorkspaceLoadingFallback}
         {directoryBrowserDialog}
@@ -1702,9 +1578,8 @@ function RootInner({
   }
 
   if (!workspaceShellPath) {
-    return remoteConnectionDialogOpen || directoryBrowserOpen || rootModelSelectionErrorNode ? (
+    return remoteConnectionDialogOpen || directoryBrowserOpen ? (
       <RootShell>
-        {rootModelSelectionErrorNode}
         {remoteConnectionDialogOpen ? remoteConnectionDialog : null}
         {directoryBrowserDialog}
       </RootShell>
@@ -1713,7 +1588,6 @@ function RootInner({
 
   return (
     <RootShell>
-      {rootModelSelectionErrorNode}
       {requestSecurityBridgeNode}
       {remoteConnectionDialog}
       {directoryBrowserDialog}

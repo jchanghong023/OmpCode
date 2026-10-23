@@ -28,6 +28,7 @@ import {
   OMP_PROVIDER_ID,
   type ModelRequest,
 } from "./helpers/omp-integration-fixture.js";
+import { runOmpNativeSource } from "./helpers/omp-native-acceptance.js";
 
 const tid = (id: string) => $(`[data-testid="${id}"]`);
 async function click(id: string) {
@@ -55,9 +56,29 @@ async function modelRequests(): Promise<ModelRequest[]> {
   if (!response.ok) throw new Error(`Fixture ledger failed: ${response.status}`);
   return response.json() as Promise<ModelRequest[]>;
 }
+async function nativePersistence() {
+  return runOmpNativeSource<{ files: string[]; credentials: string }>(
+    `import { readFile } from "node:fs/promises";
+     import { createHash } from "node:crypto";
+     import { resolve } from "node:path";
+     import { pathToFileURL } from "node:url";
+     // The actual OMP source checkout is selected by the runner at runtime.
+     const { AuthStorage } = await import(pathToFileURL(resolve(process.env.OMP_E2E_SOURCE_DIR, "session/auth-storage.ts")).href);
+     const dir = process.env.PI_CODING_AGENT_DIR;
+     const files = await Promise.all(["config.yml", "models.yml"].map(name => readFile(resolve(dir, name), "utf8")));
+     const auth = await AuthStorage.create(resolve(dir, "agent.db"));
+     try {
+       await auth.credentials.reload();
+       const rows = auth.credentials.providers().sort().map(provider => [provider, auth.credentials.credentials(provider)]);
+       const credentials = createHash("sha256").update(JSON.stringify(rows)).digest("hex");
+       console.log("OMP_E2E_RESULT:" + JSON.stringify({ files, credentials }));
+     } finally { auth.close(); }`,
+    DEFAULT_WORKSPACE,
+  );
+}
 async function selectTemporaryModel(provider: string, model: string) {
-  const configFile = resolve(process.env.PI_CODING_AGENT_DIR!, "config.yml");
-  const persistedBefore = await readFile(configFile, "utf8");
+  // 原生认证已迁入 agent.db；比较凭据语义指纹，避免将会话等无关 SQLite 写入误判为改认证。
+  const persistedBefore = await nativePersistence();
   await click("omp-config-open");
   const select = tid("omp-temporary-model");
   await select.waitForDisplayed({ timeout: 30000 });
@@ -72,7 +93,7 @@ async function selectTemporaryModel(provider: string, model: string) {
       timeoutMsg: "Temporary model operation did not confirm a real session switch",
     },
   );
-  expect(await readFile(configFile, "utf8")).toBe(persistedBefore);
+  expect(await nativePersistence()).toEqual(persistedBefore);
   await click("omp-config-cancel");
 }
 

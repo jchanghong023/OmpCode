@@ -38,10 +38,8 @@ import {
 import { Hand } from "lucide-react";
 import {
   BUILTIN_MODEL_PROVIDER_IDS,
-  buildCustomSupplierKey,
   isHighspeedProviderId,
   isRemoteWorkspaceIdentity,
-  ZCODE_AGENT_PROVIDER,
 } from "@zcode/shared";
 import { TID_CHAT_EMPTY, TID_V4_SESSION_PANE, testId } from "@zcode/shared/test-ids";
 import type {
@@ -146,13 +144,10 @@ import { usePlanIdentitySnapshot } from "@/hooks/usePlanIdentitySnapshot.js";
 import { useBaseWorkspaceServices } from "@/hooks/useWorkspaceServices.js";
 import { buildGenUiModelContext } from "@zcode/shared/gen-ui";
 import { useWorkspaceHomePath } from "@/hooks/useWorkspaceHomePath.js";
-import { prepareWorkspaceWithZCodeSessionService } from "@/hooks/useWorkspacePrepare.js";
 import {
   createCodingPlanFunnelContext,
   resolveCodingPlanEntryPlanState,
 } from "@/lib/codingPlanFunnelTelemetry.js";
-import { decodeCustomModelValue, encodeCustomModelValue } from "@/lib/zcodeCustomModelValue.js";
-import { parseModelPickerValue } from "@/lib/zcodeSessionProjection.js";
 import { prepareComposerRecentReceipt } from "@/lib/composerRecent.js";
 import { useComposerClientNamespace } from "@/hooks/useServices.js";
 import {
@@ -162,6 +157,7 @@ import {
   readComposerWorkspaceScope,
 } from "@/v4/composer/composerDraftStore.js";
 import { useOmpStorageScope } from "@/hooks/useZCodeAgentService.js";
+import { useOmpModelCatalog } from "@/omp-configuration/module.js";
 import { resolveProviderLabel } from "@/lib/registryProviderView.js";
 import { resolveEntitledAccountProviderAccess } from "@/lib/accountProviderAccess.js";
 import { getProviderSettingsSnapshot } from "@/lib/providerSettingsSnapshot.js";
@@ -179,7 +175,6 @@ import {
 import { useDraftSessionPrewarm } from "@/v4/composer/useDraftSessionPrewarm.js";
 import { projectSessionConfigToTaskConfigOptions } from "@/v4/composer/sessionConfigTaskCache.js";
 import { useDraftRuntimeRebuildGate } from "@/v4/composer/useDraftRuntimeRebuildGate.js";
-import { useDraftModelReadinessGate } from "@/v4/composer/useDraftModelReadinessGate.js";
 import { useSettings } from "@/hooks/useSettingService.js";
 import { useZCodeStoreWithDefault } from "@/store/StoreProvider.js";
 import { useZCodeSessionStore } from "@/store/zcodeSessionStore.js";
@@ -893,7 +888,6 @@ export function SessionPane({
     modelSelectionService,
     usageStatsService,
     zcodeSessionService,
-    zcodeTaskService,
     zcodeAgentService,
   } = useServices();
   const { intl, locale } = useZCodeIntl();
@@ -2018,21 +2012,8 @@ export function SessionPane({
     taskId: null,
   });
 
-  const {
-    agentStartupAllowed: providerAgentStartupAllowed,
-    error: draftModelReadinessError,
-    dismissError: dismissDraftModelReadinessError,
-    ensureReadyForSend: ensureDraftModelReadyForSend,
-    markProviderNotReady: markDraftProviderNotReady,
-  } = useDraftModelReadinessGate({
-    workspacePath,
-    workspaceIdentity,
-    provider,
-    sessionId,
-    modelSelectionService,
-  });
-
-  const draftAgentStartupAllowed = providerAgentStartupAllowed && remoteAvailable;
+  // 模型就绪由 OMP 原生链裁决；Host 空 provider 配置不能阻止目录水合或预热。
+  const draftAgentStartupAllowed = remoteAvailable;
 
   // Composer 保存下一次 Submission 的 renderer intent；prewarm session 仅承载草稿预热。
   const {
@@ -2177,13 +2158,18 @@ export function SessionPane({
     useZCodeSessionStore.getState().invalidateDraftRuntime(workspacePath, workspaceIdentity);
   }, [draftConfigRef, modelSelectionView?.revision, sessionId, workspaceIdentity, workspacePath]);
   const recommendStartPlan = useStartPlanRecommendation(modelSelectionView);
+  const { catalog: nativeModelCatalog } = useOmpModelCatalog(
+    workspacePath,
+    workspaceIdentity,
+    remoteSessionId,
+  );
   const createSubmissionFromComposer = useCallback(
-    () => createComposerSubmissionConfig(draftConfigRef.current, modelSelectionView),
-    [draftConfigRef, modelSelectionView],
+    () => createComposerSubmissionConfig(draftConfigRef.current, nativeModelCatalog),
+    [draftConfigRef, nativeModelCatalog],
   );
   const composerSubmissionReady = useMemo(
-    () => createComposerSubmissionConfig(draftConfig, modelSelectionView) !== null,
-    [draftConfig, modelSelectionView],
+    () => createComposerSubmissionConfig(draftConfig, nativeModelCatalog) !== null,
+    [draftConfig, nativeModelCatalog],
   );
   const codingPlanUpgradeDialog = useOptionalCodingPlanUpgradeDialog();
   const openSettingsTab = useOptionalTabStore((state) => state.openSettingsTab);
@@ -3045,7 +3031,7 @@ export function SessionPane({
       }
       const inherited = resolveSelectionSideInheritedModel(
         snapshotRef.current?.config,
-        modelSelectionView,
+        nativeModelCatalog,
       );
       const chosen = inherited ? await recommendStartPlan(inherited) : undefined;
       if (chosen === null) return false;
@@ -3081,7 +3067,7 @@ export function SessionPane({
     },
     [
       dispatchCommand,
-      modelSelectionView,
+      nativeModelCatalog,
       recommendStartPlan,
       onOpenSelectionSideChat,
       remoteSessionId,
@@ -3915,10 +3901,6 @@ export function SessionPane({
         nativeCommandNames: nativeSlashCommandNames,
       });
 
-      if (!(await ensureDraftModelReadyForSend())) {
-        return "blocked" as const;
-      }
-
       const selectionSideSlashCommand =
         sessionId &&
         appSlashCommands?.some((command) => command.value === "side" || command.value === "btw")
@@ -4134,7 +4116,6 @@ export function SessionPane({
       baseWorkspaceServices,
       captureAcceptedModelSelection,
       dispatchSlashCommand,
-      ensureDraftModelReadyForSend,
       availableSelectionSideSlashCommandNames,
       appSlashCommands,
       nativeSlashCommandNames,
@@ -4171,32 +4152,21 @@ export function SessionPane({
           : undefined;
       // followupMode 仍通过 Session CAS 同步；模型和模式已封装进 Submission，不再
       // 依赖“配置命令先到、sendText 后到”的跨命令时序。
-      return configCommandBarrier.enqueue(async () => {
-        try {
-          return await dispatchSendTextAfterConfig(
-            text,
-            submissionOptions,
-            createSource,
-            highspeedOrigin,
-            taskGroupId,
-          );
-        } catch (error) {
-          if (sessionId === null && isProviderNotReadyError(error)) {
-            // UI 预检查与 Host getClient 之间 registry 仍可能失效。竞态命中时收敛成
-            // 同一个正常等待态，不走异常发送路径，也不清空 composer。
-            markDraftProviderNotReady();
-            return "blocked" as const;
-          }
-          throw error;
-        }
-      });
+      return configCommandBarrier.enqueue(() =>
+        dispatchSendTextAfterConfig(
+          text,
+          submissionOptions,
+          createSource,
+          highspeedOrigin,
+          taskGroupId,
+        ),
+      );
     },
     [
       captureHighspeedPaneOrigin,
       configCommandBarrier,
       createSubmissionFromComposer,
       dispatchSendTextAfterConfig,
-      markDraftProviderNotReady,
       sessionId,
       workspacePath,
       workspaceIdentity,
@@ -4753,100 +4723,6 @@ export function SessionPane({
     [handleDraftSelectThought],
   );
 
-  const handleRecoverCustomModelSelection = useCallback(
-    async (value: string, sourceModel: ModelSelectionSource | null) => {
-      const decoded = decodeCustomModelValue(value);
-      if (!decoded?.providerId) {
-        return;
-      }
-      const displayProvider = provider ?? ZCODE_AGENT_PROVIDER;
-      let modelValue = value;
-      if (!decoded.modelName) {
-        const fallbackModel =
-          modelSelectionView?.providers.find(
-            (candidate) => candidate.providerId === decoded.providerId,
-          )?.models[0]?.modelId ?? (modelSelectionView ? null : undefined);
-        if (!fallbackModel) {
-          logger.warn("[v4-pane] custom provider 恢复跳过：provider 没有可用模型", {
-            customProviderId: decoded.providerId,
-            workspacePath,
-          });
-          return;
-        }
-        modelValue = encodeCustomModelValue(decoded.providerId, fallbackModel);
-      }
-      const modelSelection = parseModelPickerValue(modelValue);
-      // Bug 原因：configOptions error 的 custom provider 选择绕过普通 onSelectModel；
-      // 已绑定任务仍复用同一提示入口，草稿态由入口统一静默。
-      showModelChangeNotice(sourceModel, {
-        provider: modelSelection.providerId,
-        model: modelSelection.modelId,
-      });
-      const store = useZCodeSessionStore.getState();
-      store.setModelSelectionResolution(
-        workspacePath,
-        {
-          selectedSupplierKey: buildCustomSupplierKey(decoded.providerId),
-          isGhostSupplier: false,
-          supplierMismatchReason: null,
-        },
-        workspaceIdentity,
-      );
-      store.setConfigOptionsStatus(workspacePath, "loading", workspaceIdentity);
-      logger.info("[v4-pane] configOptions error custom provider recovery start", {
-        modelId: modelSelection.modelId,
-        providerId: modelSelection.providerId,
-        workspaceIdentity: workspaceIdentity ?? null,
-        workspacePath,
-      });
-
-      try {
-        await zcodeTaskService.restartWorkspaceProcess({
-          workspacePath,
-          workspaceIdentity,
-          provider: displayProvider,
-          bumpRuntimeEpoch: true,
-        });
-
-        const prepareResult = await prepareWorkspaceWithZCodeSessionService({
-          workspacePath,
-          workspaceIdentity,
-          provider: displayProvider,
-          zcodeSessionService,
-        });
-        handleDraftSelectModel(modelSelection.providerId, modelSelection.modelId);
-        store.setConfigOptions(workspacePath, prepareResult.configOptions ?? [], workspaceIdentity);
-        store.setConfigOptionsStatus(workspacePath, "ready", workspaceIdentity);
-        store.setSlashCommands(workspacePath, prepareResult.slashCommands ?? [], workspaceIdentity);
-        logger.info("[v4-pane] configOptions error custom provider recovery done", {
-          configOptionsCount: prepareResult.configOptions?.length ?? 0,
-          modelId: modelSelection.modelId,
-          providerId: modelSelection.providerId,
-          workspacePath,
-        });
-      } catch (error) {
-        store.setConfigOptionsStatus(workspacePath, "error", workspaceIdentity);
-        logger.warn("[v4-pane] configOptions error custom provider recovery failed", {
-          error: error instanceof Error ? error.message : String(error),
-          modelId: modelSelection.modelId,
-          providerId: modelSelection.providerId,
-          workspacePath,
-        });
-        throw error;
-      }
-    },
-    [
-      provider,
-      handleDraftSelectModel,
-      sessionId,
-      showModelChangeNotice,
-      workspaceIdentity,
-      workspacePath,
-      zcodeSessionService,
-      zcodeTaskService,
-    ],
-  );
-
   // 模式与模型一样属于下一次 Submission；选择时只更新 Composer。
   const handleSwitchMode = useCallback(
     (mode: string) => {
@@ -5292,17 +5168,11 @@ export function SessionPane({
     mcpUnavailableNotice,
   });
   const composerError =
-    draftModelReadinessError ??
-    sendSubmissionError ??
-    (quotaBanner.takesOverError ? null : projectedComposerError);
+    sendSubmissionError ?? (quotaBanner.takesOverError ? null : projectedComposerError);
   useEffect(() => {
     setSendSubmissionError(null);
   }, [sessionId]);
   const handleDismissComposerError = useCallback(() => {
-    if (draftModelReadinessError) {
-      dismissDraftModelReadinessError();
-      return;
-    }
     if (sendSubmissionError) {
       setSendSubmissionError(null);
       return;
@@ -5313,12 +5183,7 @@ export function SessionPane({
     setDismissedErrorKeys((keys) =>
       keys.includes(controlLastErrorKey) ? keys : [...keys.slice(-19), controlLastErrorKey],
     );
-  }, [
-    controlLastErrorKey,
-    dismissDraftModelReadinessError,
-    draftModelReadinessError,
-    sendSubmissionError,
-  ]);
+  }, [controlLastErrorKey, sendSubmissionError]);
   // 远端 workspace 的模型目录来自远端 Registry；本机配置保存后由 Provisioning 自动下发，
   // 因此缺模型横幅只切换措辞，配置/升级动作仍统一指向本机。
   const modelConfigTarget: ChatErrorBannerModelConfigTarget = isRemoteWorkspaceIdentity(
@@ -5796,7 +5661,6 @@ export function SessionPane({
       // backgroundWorks；Composer 若直接读目录会提前隐藏 Agent 入口。这里复用状态面板按
       // childSessionId 精确回退后的计数，让两个入口共享同一份运行态真值。
       runningSubagentCount={runningAgentCount}
-      onRecoverCustomModelSelection={handleRecoverCustomModelSelection}
       onSendCompressionCommand={handleSendCompressionCommand}
       error={composerError}
       onDismissError={handleDismissComposerError}

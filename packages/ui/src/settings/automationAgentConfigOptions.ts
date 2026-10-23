@@ -2,14 +2,9 @@ import {
   getZCodeAgentModeSelectOptions,
   type ModelSelection,
   type ZCodeConfigOption,
-  type ZCodeProvider,
 } from "@zcode/shared";
-import type { ModelSelectionView } from "@zcode/services";
 import type { ModelSelectGroup, ModelSelectGroupItem } from "@/ModelConfigSelect.js";
-import {
-  buildRegistryModelSelectGroups,
-  type ModelProviderGroupLabelOptions,
-} from "@/lib/modelSelectionGroups.js";
+import { buildOmpModelSelectGroups, type OmpModelCatalog } from "@/omp-configuration/module.js";
 import { decodeCustomModelValue, encodeCustomModelValue } from "@/lib/zcodeCustomModelValue.js";
 import { resolveV4ModelTriggerLabel } from "@/v4/composer/modelTriggerDisplay.js";
 
@@ -19,24 +14,18 @@ import { resolveV4ModelTriggerLabel } from "@/v4/composer/modelTriggerDisplay.js
 /** 权限模式默认值：Ask before changes。 */
 export const AUTOMATION_DEFAULT_MODE = "build";
 
-/** 新建任务必须把目标 Host 的 preferredSelection 固化为具体模型，而不是保存虚拟“默认模型”。 */
+/** 新建任务固化目标执行端 OMP default role 的真实模型身份。 */
 export function resolveAutomationPreferredModelValue(
-  view: Pick<ModelSelectionView, "preferredSelection">,
+  catalog: OmpModelCatalog | null,
 ): string | null {
-  const preferred = view.preferredSelection;
+  const preferred = catalog?.preferredSelection;
   return preferred ? encodeCustomModelValue(preferred.providerId, preferred.modelId) : null;
 }
 
-export function buildAutomationModelSelectGroups(params: {
-  selectedProvider: ZCodeProvider;
-  labels: ModelProviderGroupLabelOptions;
-  registrySelectionView: ModelSelectionView;
-}): ModelSelectGroup[] {
-  return buildRegistryModelSelectGroups(
-    params.selectedProvider,
-    params.registrySelectionView,
-    params.labels,
-  );
+export function buildAutomationModelSelectGroups(
+  catalog: OmpModelCatalog | null,
+): ModelSelectGroup[] {
+  return buildOmpModelSelectGroups(catalog);
 }
 
 export function buildAutomationModeOption(currentValue: string): ZCodeConfigOption {
@@ -91,7 +80,7 @@ export function resolveAutomationModelItem(
 
 export function resolveAutomationModelTriggerLabel(params: {
   modelGroups: readonly ModelSelectGroup[];
-  modelSelectionView?: ModelSelectionView | null;
+  catalog?: OmpModelCatalog | null;
   modelValue: string;
   fallbackLabel: string;
 }): string {
@@ -111,9 +100,9 @@ export function resolveAutomationModelTriggerLabel(params: {
 
   const selectedModel = decodeCustomModelValue(selectedItem.value);
   const providerId = selectedModel?.providerId;
-  const providerName =
-    params.modelSelectionView?.providers.find((provider) => provider.providerId === providerId)
-      ?.providerName ?? undefined;
+  const providerName = params.catalog?.entries.find(
+    (entry) => entry.providerId === providerId,
+  )?.providerName;
 
   // Automations 曾自行截断 provider/model 协议值，只显示最后一级模型名，
   // 导致同一模型在会话侧和定时任务侧身份文案不一致。这里直接复用会话侧规则，

@@ -569,51 +569,6 @@ describe("resolveDefaultZCodeAgentCommand", () => {
     manager.disposeAll();
   });
 
-  it("Host 在每次 Worker 启动时注入所属 Environment 的 Provider Config 路径", async ({
-    signal,
-  }) => {
-    const workspacePath = mkdtempSync(join(tmpdir(), "zcode-agent-manager-provider-env-"));
-    createdDirs.push(workspacePath);
-    const zcodeBuiltinFilePath = join(workspacePath, "zcode-builtin.json");
-    const personalFilePath = join(workspacePath, "personal.json");
-    const manager = new ZCodeAgentProcessManager({
-      commandResolver: () => ({
-        command: process.execPath,
-        args: [
-          "-e",
-          `
-require("node:readline").createInterface({ input: process.stdin }).on("line", line => {
-  const request = JSON.parse(line);
-  process.stdout.write(JSON.stringify({ id: request.id, result: {
-    official: process.env.ZCODE_BUILTIN_PROVIDER_CONFIG_FILE,
-    personal: process.env.ZCODE_PERSONAL_PROVIDER_CONFIG_FILE,
-  } }) + "\\n");
-});
-`,
-        ],
-        cwd: workspacePath,
-      }),
-      resolveSpawnEnv: () => ({
-        ZCODE_BUILTIN_PROVIDER_CONFIG_FILE: zcodeBuiltinFilePath,
-        ZCODE_PERSONAL_PROVIDER_CONFIG_FILE: personalFilePath,
-      }),
-    });
-
-    try {
-      const client = await manager.getClient({ workspacePath });
-      // 修复原因：getClient 仅完成进程创建，不保证 Worker 已执行；默认 1 秒文件轮询
-      // 会把慢启动误判为 env 丢失。通过真实 stdio 响应读取 Worker 看到的配置。
-      await expect(
-        client.request("workspace/readState", {}, undefined, { signal }),
-      ).resolves.toEqual({
-        official: zcodeBuiltinFilePath,
-        personal: personalFilePath,
-      });
-    } finally {
-      await manager.disposeAllAndWait();
-    }
-  });
-
   it("查询 dormant workspace runtime identity 不会隐式启动 agent", async () => {
     const workspacePath = mkdtempSync(join(tmpdir(), "zcode-agent-manager-dormant-runtime-"));
     createdDirs.push(workspacePath);

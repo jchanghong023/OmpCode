@@ -1,153 +1,195 @@
 // @vitest-environment jsdom
 import { act, renderHook, waitFor } from "@testing-library/react";
-import { Emitter } from "@zcode/rpc";
-import type { IModelSelectionService, ModelSelectionView } from "@zcode/services";
-import { describe, expect, it, vi } from "vitest";
-import { useDraftModelReadinessGate } from "@/v4/composer/useDraftModelReadinessGate.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ZCodeConfigOption, ZCodeWorkspaceEvent } from "@zcode/shared";
+import {
+  buildOmpModelSelectGroups,
+  readOmpModelCatalog,
+  useOmpModelCatalog,
+} from "@/omp-configuration/ompModelCatalog.js";
+import { createComposerSubmissionConfig } from "@/v4/composer/composerSubmissionConfig.js";
+import { useZCodeSessionStore } from "@/store/zcodeSessionStore.js";
+import type * as WorkspacePrepareRpc from "@/hooks/workspacePrepareRpc.js";
 
-function selectionView(revision: number, withModel: boolean): ModelSelectionView {
-  return {
-    revision,
-    providers: withModel
-      ? [
-          {
-            providerId: "provider-a",
-            config: { kind: "api" },
-            models: [{ modelId: "model-a", config: {} }],
-          },
-        ]
-      : [],
-  };
+const { service, prepareWorkspace, workspaceListeners } = vi.hoisted(() => ({
+  service: { readWorkspacePresentation: vi.fn() },
+  prepareWorkspace: vi.fn(),
+  workspaceListeners: new Map<string, Set<(event: ZCodeWorkspaceEvent) => void>>(),
+}));
+vi.mock("@/hooks/useZCodeTaskService.js", () => ({
+  useZCodeTaskService: () => taskService,
+}));
+const taskService = {
+  onDynamicWorkspaceEvent:
+    (target: { workspacePath: string; workspaceIdentity?: string }) =>
+    (listener: (event: ZCodeWorkspaceEvent) => void) => {
+      const key = target.workspaceIdentity?.trim() || target.workspacePath;
+      const listeners = workspaceListeners.get(key) ?? new Set();
+      listeners.add(listener);
+      workspaceListeners.set(key, listeners);
+      return { dispose: () => listeners.delete(listener) };
+    },
+};
+vi.mock("@/hooks/useZCodeSessionService.js", () => ({ useZCodeSessionService: () => service }));
+vi.mock("@/hooks/useWorkspacePrepare.js", () => ({
+  prepareWorkspaceWithZCodeSessionService: prepareWorkspace,
+}));
+vi.mock("@/logger.js", () => ({ logger: { warn: vi.fn(), info: vi.fn() } }));
+beforeEach(() => {
+  useZCodeSessionStore.setState({ workspaces: {} });
+  prepareWorkspace.mockReset();
+  workspaceListeners.clear();
+  service.readWorkspacePresentation.mockReset();
+  prepareWorkspace.mockResolvedValue({ configOptions: nativeOptions(), slashCommands: [] });
+});
+function nativeOptions(modelId = "free-chat", thought = "low"): ZCodeConfigOption[] {
+  return [
+    {
+      id: "model",
+      category: "model",
+      name: "Model",
+      type: "select",
+      currentValue: `native/${modelId}`,
+      options: [
+        {
+          value: `native/${modelId}`,
+          name: "Native Free Chat",
+          modelProviderId: "native",
+          modelProviderName: "Native Built-in",
+          modelThoughtLevels: ["off", "low", "high"],
+          modelDefaultThoughtLevel: thought,
+        },
+      ],
+    },
+  ];
 }
 
-function selectionService(params: {
-  getView: () => Promise<ModelSelectionView>;
-  emitter?: Emitter<ModelSelectionView>;
-}): Pick<IModelSelectionService, "getView" | "onDidChange"> {
-  const emitter = params.emitter ?? new Emitter<ModelSelectionView>();
-  return {
-    getView: params.getView,
-    onDidChange: emitter.event,
-  };
+function modeOptions(): ZCodeConfigOption[] {
+  return [
+    {
+      id: "mode",
+      category: "mode",
+      name: "Mode",
+      type: "select",
+      currentValue: "build",
+      options: [{ value: "build", name: "Build" }],
+    },
+  ];
 }
 
-describe("draft model readiness gate", () => {
-  it("进入新草稿的每一帧都先检查模型，不继承正式会话的 ready", async () => {
-    const pending: Array<(view: ModelSelectionView) => void> = [];
-    const service = selectionService({
-      getView: () => new Promise((resolve) => pending.push(resolve)),
-    });
-    const observations: boolean[] = [];
-    const { result, rerender } = renderHook(
-      ({ sessionId }: { sessionId: string | null }) => {
-        const gate = useDraftModelReadinessGate({
-          workspacePath: "/workspace/app",
-          sessionId,
-          modelSelectionService: service,
-        });
-        if (sessionId === null) observations.push(gate.agentStartupAllowed);
-        return gate;
-      },
-      { initialProps: { sessionId: "active" as string | null } },
-    );
+function emitNativeDirectory(workspacePath: string, configOptions: ZCodeConfigOption[]) {
+  for (const listener of workspaceListeners.get(workspacePath) ?? []) {
+    listener({ type: "workspace_config_options_update", workspacePath, configOptions });
+  }
+}
 
-    rerender({ sessionId: null });
-    expect(observations.length).toBeGreaterThan(0);
-    expect(observations.every((allowed) => !allowed)).toBe(true);
-    await act(async () => pending[0]!(selectionView(1, true)));
-    expect(result.current.agentStartupAllowed).toBe(true);
-    rerender({ sessionId: "active-again" });
-    observations.length = 0;
-    rerender({ sessionId: null });
-    expect(observations.every((allowed) => !allowed)).toBe(true);
-    await act(async () => pending[1]!(selectionView(2, true)));
-    expect(result.current.agentStartupAllowed).toBe(true);
+describe("OMP native draft model readiness", () => {
+  it("原生目录完整保留供应商与档位，默认档位不擅自改为最高", () => {
+    const catalog = readOmpModelCatalog(nativeOptions())!;
+    expect(catalog.entries[0]).toMatchObject({
+      providerName: "Native Built-in",
+      modelName: "Native Free Chat",
+      thoughtLevels: ["off", "low", "high"],
+      defaultThoughtLevel: "low",
+    });
+    expect(catalog.preferredSelection?.options?.reasoningLevel).toBe("low");
+    expect(buildOmpModelSelectGroups(catalog)).toMatchObject([
+      { label: "Native Built-in", items: [{ name: "Native Free Chat" }] },
+    ]);
   });
 
-  it("旧草稿发送复查的迟到结果不覆盖新草稿的 ready", async () => {
-    let resolveOld!: (view: ModelSelectionView) => void;
-    const getView = vi.fn(async () => selectionView(1, true));
-    const service = selectionService({ getView });
-    const { result, rerender } = renderHook(
-      ({ sessionId }: { sessionId: string | null }) =>
-        useDraftModelReadinessGate({
-          workspacePath: "/workspace/app",
-          sessionId,
-          modelSelectionService: service,
-        }),
-      { initialProps: { sessionId: null as string | null } },
-    );
-    await waitFor(() => expect(result.current.agentStartupAllowed).toBe(true));
-    getView.mockImplementationOnce(
-      () =>
-        new Promise((resolve) => {
-          resolveOld = resolve;
-        }),
-    );
-    const oldSend = result.current.ensureReadyForSend();
-    rerender({ sessionId: "active" });
-    rerender({ sessionId: null });
-    await waitFor(() => expect(result.current.agentStartupAllowed).toBe(true));
-    await act(async () => {
-      resolveOld(selectionView(2, false));
-      await oldSend;
-    });
-    expect(result.current.agentStartupAllowed).toBe(true);
-    expect(result.current.error).toBeNull();
+  it("内置免 key、无档位模型无需 Host 配置即可构造稀疏发送意图", () => {
+    const options = nativeOptions();
+    delete options[0]!.options![0]!.modelThoughtLevels;
+    delete options[0]!.options![0]!.modelDefaultThoughtLevel;
+    const catalog = readOmpModelCatalog(options)!;
+    expect(
+      createComposerSubmissionConfig(
+        { mode: "build", modelSelection: catalog.preferredSelection! },
+        catalog,
+      )?.modelSelection,
+    ).toEqual({ providerId: "native", modelId: "free-chat" });
   });
 
-  it("blocks a new draft when the Selection View confirms there are no models", async () => {
-    const service = selectionService({ getView: vi.fn(async () => selectionView(1, false)) });
-    const { result } = renderHook(() =>
-      useDraftModelReadinessGate({
-        workspacePath: "/workspace/app",
-        sessionId: null,
-        modelSelectionService: service,
-      }),
-    );
-
-    await waitFor(() => expect(result.current.error).not.toBeNull());
-    expect(result.current.agentStartupAllowed).toBe(false);
-    await expect(result.current.ensureReadyForSend()).resolves.toBe(false);
+  it("非空原生来源不混入 Host，空源只显示真实空态", () => {
+    expect(buildOmpModelSelectGroups(readOmpModelCatalog(nativeOptions()))).toHaveLength(1);
+    expect(readOmpModelCatalog([])).toBeNull();
+    expect(readOmpModelCatalog([{ ...nativeOptions()[0]!, options: [] }])).toBeNull();
+    expect(buildOmpModelSelectGroups(null)).toEqual([]);
+    expect(
+      createComposerSubmissionConfig(
+        { mode: "build", modelSelection: { providerId: "host-only", modelId: "old" } },
+        readOmpModelCatalog(nativeOptions()),
+      ),
+    ).toBeNull();
   });
 
-  it("does not let a stale initial read overwrite a newer Selection event", async () => {
-    const emitter = new Emitter<ModelSelectionView>();
-    let resolveInitial!: (view: ModelSelectionView) => void;
-    const initial = new Promise<ModelSelectionView>((resolve) => {
-      resolveInitial = resolve;
+  it("热更新消费 workspace 事实而非旧 task 模型快照", () => {
+    const store = useZCodeSessionStore.getState();
+    store.setConfigOptions("/workspace", nativeOptions(), "identity");
+    store.setTaskConfigOptions("/workspace", "old-task", nativeOptions("old-task"), "identity");
+    const { result } = renderHook(() => useOmpModelCatalog("/workspace", "identity", null, false));
+    expect(result.current.catalog?.preferredSelection?.modelId).toBe("free-chat");
+    act(() => store.setConfigOptions("/workspace", nativeOptions("hot-chat", "off"), "identity"));
+    expect(result.current.catalog?.preferredSelection).toEqual({
+      providerId: "native",
+      modelId: "hot-chat",
+      options: { reasoningLevel: "off" },
     });
-    const service = selectionService({ getView: vi.fn(() => initial), emitter });
-    const { result } = renderHook(() =>
-      useDraftModelReadinessGate({
-        workspacePath: "/workspace/app",
-        sessionId: null,
-        modelSelectionService: service,
-      }),
-    );
-
-    act(() => emitter.fire(selectionView(2, true)));
-    await waitFor(() => expect(result.current.agentStartupAllowed).toBe(true));
-    await act(async () => resolveInitial(selectionView(1, false)));
-    expect(result.current.agentStartupAllowed).toBe(true);
-    expect(result.current.error).toBeNull();
   });
 
-  it("leaves the Host admission gate in charge when Selection View reading fails", async () => {
-    const service = selectionService({
-      getView: vi.fn(async () => {
-        throw new Error("registry unavailable");
-      }),
-    });
-    const { result } = renderHook(() =>
-      useDraftModelReadinessGate({
-        workspacePath: "/workspace/app",
-        sessionId: null,
-        modelSelectionService: service,
-      }),
+  it("设置先打开：真实 prepare 仅返回 mode，目录从 Host 后到事件水合", async () => {
+    const actual = await vi.importActual<typeof WorkspacePrepareRpc>(
+      "@/hooks/workspacePrepareRpc.js",
     );
+    prepareWorkspace.mockImplementation(actual.prepareWorkspaceWithZCodeSessionService);
+    service.readWorkspacePresentation.mockResolvedValue({ mode: "build", slashCommands: [] });
+    const { result } = renderHook(() => useOmpModelCatalog("/settings-first"));
+    await waitFor(() => expect(service.readWorkspacePresentation).toHaveBeenCalledTimes(1));
+    await waitFor(() =>
+      expect(result.current.configOptions.some((o) => o.id === "mode")).toBe(true),
+    );
+    expect(result.current.catalog).toBeNull();
+    expect(result.current.status).toBe("loading");
+    act(() => emitNativeDirectory("/settings-first", nativeOptions()));
+    expect(result.current.catalog?.entries).toHaveLength(1);
+    expect(result.current.status).toBe("ready");
+    expect(prepareWorkspace).toHaveBeenCalledTimes(1);
+  });
 
-    await waitFor(() => expect(result.current.agentStartupAllowed).toBe(true));
-    expect(result.current.error).toBeNull();
+  it("mode-only ready 不能阻止 renderer refresh 后的 prepare", async () => {
+    const store = useZCodeSessionStore.getState();
+    store.setConfigOptions("/refresh", modeOptions());
+    store.setConfigOptionsStatus("/refresh", "ready");
+    const { result } = renderHook(() => useOmpModelCatalog("/refresh"));
+    await waitFor(() => expect(result.current.catalog?.entries).toHaveLength(1));
+    expect(prepareWorkspace).toHaveBeenCalledTimes(1);
+  });
+
+  it("原生目录先到、迟到 presentation 和热更新不会清空模型", async () => {
+    const pending = Promise.withResolvers<{
+      configOptions: ZCodeConfigOption[];
+      slashCommands: [];
+    }>();
+    prepareWorkspace.mockReturnValue(pending.promise);
+    const { result } = renderHook(() => useOmpModelCatalog("/native-first"));
+    act(() => emitNativeDirectory("/native-first", nativeOptions()));
+    await act(async () => pending.resolve({ configOptions: modeOptions(), slashCommands: [] }));
+    expect(result.current.catalog?.preferredSelection?.modelId).toBe("free-chat");
+    act(() => useZCodeSessionStore.getState().setConfigOptions("/native-first", modeOptions()));
+    expect(result.current.catalog?.preferredSelection?.modelId).toBe("free-chat");
+    act(() => emitNativeDirectory("/native-first", nativeOptions("new-chat")));
+    expect(result.current.catalog?.preferredSelection?.modelId).toBe("new-chat");
+    act(() => emitNativeDirectory("/native-first", [{ ...nativeOptions()[0]!, options: [] }]));
+    expect(result.current.catalog).toBeNull();
+    expect(result.current.status).toBe("ready");
+  });
+
+  it("同路径的 local 与 remote 身份不混用", () => {
+    const store = useZCodeSessionStore.getState();
+    store.setConfigOptions("/same", nativeOptions("local"));
+    store.setConfigOptions("/same", nativeOptions("remote"), "remote-identity");
+    const { result } = renderHook(() => useOmpModelCatalog("/same", undefined, null, false));
+    expect(result.current.catalog?.preferredSelection?.modelId).toBe("local");
   });
 });

@@ -1,14 +1,11 @@
 /* oxlint-disable eslint(max-lines) */
 /**
- * WelcomeScreen —— OAuth / API Key 登录入口
- *
- * 通过 useOAuth hook 驱动 OAuth 流程。
+ * WelcomeScreen —— ZCode 产品账号登录入口。
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Loader2Icon, LoaderIcon, TriangleAlertIcon } from "lucide-react";
 import { type OAuthProviderMeta, BIGMODEL_PROVIDER_ID, ZAI_PROVIDER_ID } from "@zcode/shared";
 import {
-  TID_LOGIN_USE_API_KEY_BUTTON,
   TID_OAUTH_CANCEL,
   TID_OAUTH_ERROR,
   TID_OAUTH_LOGIN_BUTTON,
@@ -19,7 +16,6 @@ import { Button } from "./components/ui/button.js";
 import { ZCodeAboutLogo } from "@/components/ui/ZCodeAboutLogo.js";
 import { useOAuth } from "./hooks/useOAuth.js";
 import { useZCodeIntl } from "./i18n/IntlProvider.js";
-import { LoginApiKeyForm } from "./login/LoginApiKeyForm.js";
 import { renderOAuthProviderIcon } from "./lib/oauthProviderIcon.js";
 import { ThemeHeroVisual } from "./openWorkspacePageThemeHero.js";
 import { useZCodeStore } from "./store/StoreProvider.js";
@@ -29,7 +25,7 @@ interface WelcomeScreenProps {
   onComplete: (reason: LoginCompleteReason) => void | Promise<void>;
 }
 
-export type LoginCompleteReason = "oauth" | "apiKey" | "skip";
+export type LoginCompleteReason = "oauth" | "skip";
 
 export function WelcomeScreen({ onComplete }: WelcomeScreenProps) {
   return (
@@ -90,7 +86,6 @@ export function LoginPanel({ active, onComplete }: LoginPanelProps) {
   const loginEntryRequest = useZCodeStore((s) => s.loginEntryRequest);
   const clearLoginEntryRequest = useZCodeStore((s) => s.clearLoginEntryRequest);
   const markLoginEntryAttemptStatus = useZCodeStore((s) => s.markLoginEntryAttemptStatus);
-  const [loginMode, setLoginMode] = useState<"providers" | "apiKey">("providers");
   const wasActiveRef = useRef(active);
   const consumedLoginRequestRef = useRef<number | null>(null);
   const observedOAuthSuccessSeqRef = useRef(oauthSuccessSeq);
@@ -163,16 +158,8 @@ export function LoginPanel({ active, onComplete }: LoginPanelProps) {
 
     consumedLoginRequestRef.current = loginEntryRequest.id;
     clearLoginEntryRequest(loginEntryRequest.id);
-    // Model Provider 的登录/连接入口以前绕过统一登录入口直接发起 OAuth，
-    // 导致用户看不到统一的等待、取消和错误状态。这里在 WelcomeScreen 打开后自动启动指定 provider，
-    // 复用登录入口的 loading 流程，同时用 request id 防止 React 严格模式下重复发起。
-    void startTrackedLogin(
-      loginEntryRequest.providerId,
-      {
-        purpose: loginEntryRequest.purpose,
-      },
-      loginEntryRequest.id,
-    );
+    // 产品账号使用既有 OAuth；模型凭据仅由 OMP 原生认证管理。
+    void startTrackedLogin(loginEntryRequest.providerId, undefined, loginEntryRequest.id);
   }, [active, clearLoginEntryRequest, loginEntryRequest, startTrackedLogin]);
 
   // Root 层 OAuth 回调失败时写入 Zustand oauthError，统一登录入口负责显示错误。
@@ -244,10 +231,6 @@ export function LoginPanel({ active, onComplete }: LoginPanelProps) {
     status,
   ]);
 
-  const resetApiKeyForm = useCallback(() => {
-    setLoginMode("providers");
-  }, []);
-
   useEffect(() => {
     if (active) {
       wasActiveRef.current = true;
@@ -266,7 +249,6 @@ export function LoginPanel({ active, onComplete }: LoginPanelProps) {
     reset();
     setOAuthError(null);
     clearLoginEntryRequest();
-    resetApiKeyForm();
   }, [
     active,
     cancel,
@@ -274,7 +256,6 @@ export function LoginPanel({ active, onComplete }: LoginPanelProps) {
     finishActiveLoginEntryAttempt,
     pendingProvider,
     reset,
-    resetApiKeyForm,
     setOAuthError,
     status,
   ]);
@@ -292,7 +273,7 @@ export function LoginPanel({ active, onComplete }: LoginPanelProps) {
         {/* Bugfix: Root 层写入 oauthError（轮询/回调失败）后 effect 会把 useOAuth reset 回 idle，
             若只判断 status==="idle" 会让失败块和渠道按钮列表同屏、状态纠缠。
             失败期间统一由下方失败块接管（重新登录/取消），渠道列表等错误清掉后再回来。 */}
-        {status === "idle" && !oauthError && loginMode === "providers" && (
+        {status === "idle" && !oauthError && (
           <div className="space-y-4">
             {loadingProviders ? (
               <div className="flex items-center justify-center gap-2 rounded-xl border border-border bg-surface px-4 py-6 text-ui-base text-foreground-subtle">
@@ -339,35 +320,10 @@ export function LoginPanel({ active, onComplete }: LoginPanelProps) {
                     <LoginOAuthRegionTag providerId={provider.id} />
                   </Button>
                 ))}
-                <Button
-                  variant="outline"
-                  className="h-10 w-full text-ui-base"
-                  size="lg"
-                  data-testid={TID_LOGIN_USE_API_KEY_BUTTON}
-                  onClick={() => {
-                    setLoginMode("apiKey");
-                  }}
-                >
-                  {intl.formatMessage({ id: "login.useApiKey" })}
-                </Button>
               </div>
             ) : null}
           </div>
         )}
-
-        {status === "idle" && loginMode === "apiKey" ? (
-          <LoginApiKeyForm
-            onCancel={() => setLoginMode("providers")}
-            onSaved={() => {
-              resetApiKeyForm();
-              return onComplete("apiKey");
-            }}
-            onSkipped={() => {
-              resetApiKeyForm();
-              return onComplete("skip");
-            }}
-          />
-        ) : null}
 
         {status === "waiting" && (
           <div className="space-y-4">
@@ -446,6 +402,15 @@ export function LoginPanel({ active, onComplete }: LoginPanelProps) {
               {intl.formatMessage({ id: "login.oauth.cancel" })}
             </Button>
           </div>
+        )}
+        {status !== "waiting" && (
+          <Button
+            variant="ghost"
+            className="w-full text-ui-base"
+            onClick={() => void onComplete("skip")}
+          >
+            {intl.formatMessage({ id: "common.cancel" })}
+          </Button>
         )}
       </div>
     </>

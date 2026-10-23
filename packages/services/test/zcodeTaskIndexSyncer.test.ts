@@ -966,6 +966,26 @@ describe("createZCodeTaskIndexSyncer", () => {
     expect(terminals).toEqual(["turn.completed"]);
     expect(readies).toEqual(["prompt_completed"]);
 
+    env.configEmitter.fire(
+      configFrame({
+        configOptions: [
+          {
+            id: "model",
+            name: "Model",
+            category: "model",
+            type: "select",
+            currentValue: "native/old-generation",
+            options: [],
+          },
+        ],
+        slashCommands: [],
+      }),
+    );
+    const beforeExit = vi.fn();
+    const beforeExitSubscription = syncer.onDynamicWorkspaceEvent(seedTarget)(beforeExit);
+    expect(beforeExit).toHaveBeenCalledTimes(1);
+    beforeExitSubscription.dispose();
+
     env.lifecycleEmitter.fire({
       workspacePath: seedTarget.workspacePath,
       workspaceKey: seedTarget.workspacePath,
@@ -976,6 +996,10 @@ describe("createZCodeTaskIndexSyncer", () => {
       },
       state: "unavailable",
     });
+    const afterExit = vi.fn();
+    const afterExitSubscription = syncer.onDynamicWorkspaceEvent(seedTarget)(afterExit);
+    expect(afterExit).not.toHaveBeenCalled();
+    afterExitSubscription.dispose();
     env.lifecycleEmitter.fire({
       workspacePath: seedTarget.workspacePath,
       workspaceKey: seedTarget.workspacePath,
@@ -1354,6 +1378,22 @@ describe("createZCodeTaskIndexSyncer", () => {
       expect(event.configOptions).toHaveLength(1);
       expect(event.configOptions[0]?.id).toBe("model");
     }
+
+    // renderer refresh 后从同一个摄入 owner 重放已接受目录，不重新启动/订阅 CLI。
+    const replayed: ZCodeWorkspaceEvent[] = [];
+    const late = syncer.onDynamicWorkspaceEvent({ workspacePath: "/repo" })((value) =>
+      replayed.push(value),
+    );
+    expect(replayed).toEqual([event]);
+    const remote = vi.fn();
+    const isolated = syncer.onDynamicWorkspaceEvent({
+      workspacePath: "/repo",
+      workspaceIdentity: "remote:other:/repo",
+    })(remote);
+    expect(remote).not.toHaveBeenCalled();
+    expect(env.agent.subscribeWorkspaceConfigV4).toHaveBeenCalledTimes(1);
+    late.dispose();
+    isolated.dispose();
 
     subscription.dispose();
     syncer.disposeAll();

@@ -97,11 +97,16 @@ const servicesMock = vi.hoisted(() => ({
     healthy: vi.fn(),
     share: vi.fn(),
   },
-  // 修复原因：readiness hook 将 service 作为 effect 依赖；每次 render 重建会导致无限重渲染直至 OOM。
+  // storage scope 来自原生启动事实；本组不再构造旧 Host 账户/模型注册表。
+  zcodeAgentService: {
+    getOmpProfiles: vi.fn(async () => ({ storageScope: "edit-user-query/native" })),
+    onAgentRuntimeRestarted: vi.fn(() => ({ dispose() {} })),
+  },
   zcodeSessionService: {
-    updateProviderRegistry: vi.fn(),
+    readWorkspacePresentation: vi.fn(async () => ({ mode: "build", slashCommands: [] })),
   },
   zcodeTaskService: {
+    onDynamicWorkspaceEvent: () => () => ({ dispose() {} }),
     restartWorkspaceProcess: vi.fn(),
   },
 }));
@@ -126,6 +131,20 @@ vi.mock("@/hooks/useServices.js", () => ({
   useComposerClientNamespace: () => "desktop",
   useOptionalServices: () => null,
   useServices: () => servicesMock,
+}));
+
+// 测试边界是已解析的 workspace 服务；真实 scope/catalog hooks 不依赖应用 TabStore。
+vi.mock("@/hooks/useWorkspaceServices.js", () => ({
+  useWorkspaceServices: () => servicesMock,
+  useBaseWorkspaceServices: () => servicesMock,
+  useOptionalBaseWorkspaceServices: () => null,
+  useWorkspaceServicesResolution: () => ({
+    services: servicesMock,
+    rpcReady: true,
+    isRemoteTarget: false,
+    connectionKind: "local-ready",
+    remoteSessionId: null,
+  }),
 }));
 
 vi.mock("@/v4/useConversationProjection.js", () => ({

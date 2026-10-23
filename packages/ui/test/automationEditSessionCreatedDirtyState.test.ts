@@ -1,12 +1,13 @@
 // @vitest-environment jsdom
 import { createElement, type ReactNode } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { type ZCodeAutomation, type ModelSelection } from "@zcode/shared";
+import { type ZCodeAutomation } from "@zcode/shared";
 import {
   TID_AUTOMATION_SCHEDULE_ADD,
   TID_AUTOMATION_SCHEDULE_PREVIEW,
 } from "@zcode/shared/test-ids";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type * as NativeCatalogModule from "../src/omp-configuration/ompModelCatalog.js";
 
 const stableHookValues = vi.hoisted(() => ({
   configResult: { configOptions: [] },
@@ -28,8 +29,6 @@ const stableHookValues = vi.hoisted(() => ({
     remoteTarget?: unknown;
   }>,
   selectRegistrations: 0,
-  effectiveSelection: undefined as ModelSelection | null | undefined,
-  selectionInputs: [] as Array<{ selection: ModelSelection | null } | undefined>,
   locale: "zh-CN" as "zh-CN" | "en-US",
   services: { zcodeAgentService: {} },
 }));
@@ -177,50 +176,36 @@ vi.mock("@/hooks/useServices.js", () => ({
 }));
 vi.mock("@/hooks/useWorkspaceServices.js", () => ({
   useOptionalBaseWorkspaceServices: () => null,
-  useWorkspaceServicesResolution: (
-    workspacePath: string | null | undefined,
-    remoteSessionId?: string | null,
-    workspaceIdentity?: string | null,
-    remoteTarget?: unknown,
-  ) => {
-    stableHookValues.modelSelectionTargets.push({
-      workspacePath,
-      remoteSessionId,
-      workspaceIdentity,
-      remoteTarget,
-    });
-    return { connectionKind: "local", services: stableHookValues.services };
-  },
 }));
-vi.mock("@/hooks/useModelSelectionView.js", () => ({
-  useModelSelectionServiceView: (
-    _service: unknown,
-    _enabled: boolean,
-    _reason: string,
-    input?: { selection: ModelSelection | null },
-  ) => {
-    stableHookValues.selectionInputs.push(input);
-    return {
-      state: stableHookValues.modelSelectionView
-        ? {
-            status: "ready" as const,
-            view: {
-              ...stableHookValues.modelSelectionView,
-              ...(input
-                ? {
-                    effectiveSelection:
-                      stableHookValues.effectiveSelection === undefined
-                        ? input.selection
-                        : stableHookValues.effectiveSelection,
-                  }
-                : {}),
-            },
-          }
-        : { status: "loading" as const },
-      reload: vi.fn(),
-    };
-  },
-}));
+vi.mock("@/omp-configuration/module.js", async () => {
+  const actual = await vi.importActual<typeof NativeCatalogModule>(
+    "../src/omp-configuration/ompModelCatalog.js",
+  );
+  return {
+    ...actual,
+    useOmpModelCatalog: (
+      workspacePath: string,
+      workspaceIdentity?: string,
+      remoteSessionId?: string | null,
+      enabled = true,
+    ) => {
+      stableHookValues.modelSelectionTargets.push({
+        workspacePath,
+        workspaceIdentity,
+        remoteSessionId,
+      });
+      const catalog =
+        enabled && stableHookValues.modelSelectionView
+          ? actual.readOmpModelCatalog(stableHookValues.modelSelectionView)
+          : null;
+      return {
+        catalog,
+        modelGroups: actual.buildOmpModelSelectGroups(catalog),
+        status: catalog ? "ready" : "idle",
+      };
+    },
+  };
+});
 vi.mock("@/i18n/IntlProvider.js", () => ({
   useZCodeIntl: () => ({
     intl: {
@@ -236,29 +221,25 @@ vi.mock("@/i18n/IntlProvider.js", () => ({
 
 import { AutomationEditView } from "@/settings/AutomationEditView.js";
 
-const modelSelectionView = {
-  revision: 1,
-  providers: [
-    {
-      providerId: "provider",
-      providerName: "DeepSeek Provider",
-      config: {
-        api: { type: "openai-chat-completions", baseUrl: "https://example.test" },
+const modelSelectionView = [
+  {
+    id: "model",
+    name: "Model",
+    category: "model",
+    type: "select" as const,
+    currentValue: "provider/deepseek-v4-flash",
+    options: [
+      {
+        value: "provider/deepseek-v4-flash",
+        name: "deepseek-v4-flash",
+        modelProviderId: "provider",
+        modelProviderName: "DeepSeek Provider",
+        modelThoughtLevels: ["low", "high"],
+        modelDefaultThoughtLevel: "low",
       },
-      models: [
-        {
-          modelId: "deepseek-v4-flash",
-          config: {
-            optionSpecs: {
-              reasoningLevel: { values: ["low", "high"], map: "{}" },
-              maxOutputTokens: { max: 32_000, map: "{}" },
-            },
-          },
-        },
-      ],
-    },
-  ],
-};
+    ],
+  },
+];
 
 const sessionCreatedAutomation: ZCodeAutomation = {
   automationId: "automation-session-created",
@@ -317,8 +298,6 @@ beforeEach(() => {
   stableHookValues.projectOptions.length = 0;
   stableHookValues.modelSelectionView = null;
   stableHookValues.modelSelectionTargets.length = 0;
-  stableHookValues.effectiveSelection = undefined;
-  stableHookValues.selectionInputs.length = 0;
   Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
     configurable: true,
     value: vi.fn(),
@@ -328,9 +307,8 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("AutomationEditView session-created dirty state", () => {
-  it("原账号选择只派生展示，主动保存才采用有效选择", async () => {
+  it("原生目录刷新保留已有未知 provider 身份且不回落同名候选", async () => {
     stableHookValues.modelSelectionView = modelSelectionView;
-    stableHookValues.effectiveSelection = uiCreatedAutomation.modelSelection;
     const original = {
       ...uiCreatedAutomation.modelSelection!,
       providerId: "account:bigmodel-individual-coding-plan",
@@ -347,21 +325,15 @@ describe("AutomationEditView session-created dirty state", () => {
       }),
     );
     await waitFor(() =>
-      expect(stableHookValues.selectionInputs.at(-1)).toEqual({ selection: original }),
+      expect(stableHookValues.modelSelectionTargets.at(-1)?.workspacePath).toBe("/workspace"),
     );
     expect(screen.getByTestId("automation-model-trigger-label").textContent).toBe(
-      "DeepSeek Provider/deepseek-v4-flash",
+      "deepseek-v4-flash",
     );
     expect(onSubmit).not.toHaveBeenCalled();
     expect(editing.modelSelection).toEqual(original);
     fireEvent.click(screen.getByRole("button", { name: "automations.form.save" }));
-    await waitFor(() =>
-      expect(onSubmit).toHaveBeenCalledWith(
-        expect.objectContaining({
-          input: expect.objectContaining({ modelSelection: uiCreatedAutomation.modelSelection }),
-        }),
-      ),
-    );
+    expect(onSubmit).not.toHaveBeenCalled();
     expect(editing.modelSelection).toEqual(original);
   });
 
@@ -435,7 +407,7 @@ describe("AutomationEditView session-created dirty state", () => {
     );
   });
 
-  it("切换目标项目后从对应 Host 读取模型视图且携带远程路由", async () => {
+  it("切换目标项目后读取对应原生目录且携带远程身份", async () => {
     stableHookValues.projectOptions.push(
       { workspacePath: "/local", label: "local" },
       {
@@ -464,7 +436,6 @@ describe("AutomationEditView session-created dirty state", () => {
         workspacePath: "/remote/project",
         remoteSessionId: "remote-session",
         workspaceIdentity: "ssh:server:/remote/project",
-        remoteTarget: { type: "ssh", host: "server" },
       });
     });
   });

@@ -12,6 +12,8 @@ import {
 import type { IServiceAccessor } from "@zcode/services";
 import { useRemoteWorkspaceSessionStore } from "@/store/remoteWorkspaceSessionStore.js";
 import { encodeCustomModelValue } from "../src/lib/zcodeCustomModelValue.js";
+import { readOmpModelCatalog } from "@/omp-configuration/module.js";
+import type * as NativeCatalogModule from "../src/omp-configuration/ompModelCatalog.js";
 
 const capturedButtons: Array<Record<string, unknown>> = [];
 const capturedModelConfigSelects: Array<Record<string, unknown>> = [];
@@ -80,65 +82,17 @@ const mockToolbarConfigState = vi.hoisted(() => ({
           name: "plain-chat",
           modelProviderId: "custom-openai",
           modelProviderName: "Custom OpenAI",
-          modelThoughtLevels: [],
+          modelThoughtLevels: ["disabled"],
         },
       ],
     },
   ],
   status: "ready" as "idle" | "loading" | "ready" | "error",
 }));
-const mockModelSelectionView = vi.hoisted(() => ({
-  revision: 1,
-  providers: [
-    {
-      providerId: "custom-openai",
-      config: {
-        label: "Custom OpenAI",
-        access: { type: "api-key" as const, apiKey: "token" },
-        api: {
-          type: "openai-chat-completions" as const,
-          baseUrl: "https://example.test/v1",
-        },
-        models: ["gpt-5.4", "glm-5.2", "plain-chat"],
-      },
-      models: [
-        {
-          modelId: "gpt-5.4",
-          config: {
-            optionSpecs: {
-              reasoningLevel: {
-                values: ["low", "high"],
-                map: "{}",
-              },
-              maxOutputTokens: { max: 32_000, map: "{}" },
-            },
-          },
-        },
-        {
-          modelId: "glm-5.2",
-          config: {
-            optionSpecs: {
-              reasoningLevel: {
-                values: ["high", "max"],
-                map: "{}",
-              },
-              maxOutputTokens: { max: 32_000, map: "{}" },
-            },
-          },
-        },
-        {
-          modelId: "plain-chat",
-          config: {
-            optionSpecs: {
-              reasoningLevel: { values: ["disabled"], map: "{}" },
-              maxOutputTokens: { max: 32_000, map: "{}" },
-            },
-          },
-        },
-      ],
-    },
-  ],
-}));
+// 原生 configOptions 是模型和 reasoning 的唯一 fixture；不再构造 Host 账户目录。
+function readNativeCatalog() {
+  return readOmpModelCatalog(mockToolbarConfigState.configOptions);
+}
 
 vi.mock("react", async () => {
   const actual = await vi.importActual<typeof import("react")>("react");
@@ -344,15 +298,33 @@ vi.mock("@/hooks/useModelProviders.js", () => ({
   useModelProviders: mockUseModelProviders,
 }));
 
-vi.mock("@/hooks/useModelSelectionView.js", () => {
+vi.mock("@/omp-configuration/module.js", async () => {
+  const actual = await vi.importActual<typeof NativeCatalogModule>(
+    "../src/omp-configuration/ompModelCatalog.js",
+  );
   return {
-    useModelSelectionView: () => ({
-      state: { status: "ready", view: mockModelSelectionView },
-      reload: vi.fn(),
-    }),
-    useModelSelectionServiceView: (service: unknown) => {
-      mockScopeRouting.modelServices.push(service);
-      return { state: { status: "ready", view: mockModelSelectionView }, reload: vi.fn() };
+    ...actual,
+    useOmpModelCatalog: (
+      workspacePath: string,
+      workspaceIdentity?: string,
+      remoteSessionId?: string | null,
+      enabled = true,
+    ) => {
+      mockScopeRouting.modelServices.push({
+        workspacePath,
+        workspaceIdentity,
+        remoteSessionId,
+        enabled,
+      });
+      const catalog = enabled
+        ? actual.readOmpModelCatalog(mockToolbarConfigState.configOptions)
+        : null;
+      return {
+        catalog,
+        modelGroups: actual.buildOmpModelSelectGroups(catalog),
+        status: enabled ? mockToolbarConfigState.status : "idle",
+        error: enabled && mockToolbarConfigState.status === "error",
+      };
     },
   };
 });
@@ -596,7 +568,11 @@ describe("SubagentsSection", () => {
     await waitFor(() => expect(local.subagentsService.list).toHaveBeenCalled());
     expect(view.container.querySelector("[data-settings-machine]")).toBeNull();
     expect(remoteA.subagentsService.list).not.toHaveBeenCalled();
-    expect(mockScopeRouting.modelServices.at(-1)).toBe(local.modelSelectionService);
+    expect(mockScopeRouting.modelServices.at(-1)).toMatchObject({
+      workspacePath: path,
+      workspaceIdentity: undefined,
+      enabled: true,
+    });
     expect(mockInitializePlugins).toHaveBeenCalledWith(
       expect.objectContaining({
         workspacePath: path,
@@ -647,7 +623,10 @@ describe("SubagentsSection", () => {
     );
     await waitFor(() => expect(remoteA.subagentsService.list).toHaveBeenCalled());
     expect(local.subagentsService.list).not.toHaveBeenCalled();
-    expect(mockScopeRouting.modelServices.at(-1)).toBe(remoteA.modelSelectionService);
+    expect(mockScopeRouting.modelServices.at(-1)).toMatchObject({
+      workspacePath: "/home/dev",
+      enabled: false,
+    });
     await submitScopeAgent(view.container);
     expect(remoteA.subagentsService.createAgent).toHaveBeenCalledWith(
       expect.objectContaining({ scope: "user" }),
@@ -674,7 +653,11 @@ describe("SubagentsSection", () => {
     expect(remoteA.subagentsService.createAgent).not.toHaveBeenCalled();
     fireEvent.click(screen.getByTestId("scope-user"));
     await waitFor(() => expect(local.subagentsService.list).toHaveBeenCalled());
-    expect(mockScopeRouting.modelServices.at(-1)).toBe(local.modelSelectionService);
+    expect(mockScopeRouting.modelServices.at(-1)).toMatchObject({
+      workspacePath: path,
+      workspaceIdentity: undefined,
+      enabled: true,
+    });
   });
 
   it.each([false, true])(
@@ -1611,7 +1594,7 @@ describe("SubagentsSection", () => {
     const supportedState = resolveSubagentThoughtOptionState({
       model,
       modelAvailable: true,
-      modelSelectionView: mockModelSelectionView,
+      modelSelectionView: await readNativeCatalog(),
       modelSelectionLoading: false,
       thoughtLevel: initial.thoughtLevel,
     });
@@ -1621,14 +1604,14 @@ describe("SubagentsSection", () => {
     expect(isSubagentThoughtLevelAvailable(supportedState, "high")).toBe(true);
   });
 
-  it("uses only the Local Host selection view to resolve reasoning", async () => {
+  it("uses only native model metadata to resolve reasoning", async () => {
     const { resolveSubagentThoughtOptionState } =
       await import("../src/settings/SubagentsSection.js");
     const model = "custom:custom-openai:glm-5.2";
     const state = resolveSubagentThoughtOptionState({
       model,
       modelAvailable: true,
-      modelSelectionView: mockModelSelectionView,
+      modelSelectionView: await readNativeCatalog(),
       modelSelectionLoading: false,
       thoughtLevel: undefined,
     });
@@ -1642,7 +1625,7 @@ describe("SubagentsSection", () => {
     });
   });
 
-  it("renders built-in reasoning from the Local Host selection view", async () => {
+  it("renders built-in reasoning from native model metadata", async () => {
     stateOverrides = new Map<number, unknown>([
       [
         1,
@@ -1672,7 +1655,7 @@ describe("SubagentsSection", () => {
     expect(capturedThoughtLevelControls[0]?.option).toMatchObject({ currentValue: "" });
   });
 
-  it("uses only the Local Host view to resolve reasoning capability", async () => {
+  it("uses only native model metadata to resolve reasoning capability", async () => {
     const { isSubagentThoughtLevelAvailable, resolveSubagentThoughtOptionState } =
       await import("../src/settings/SubagentsSection.js");
     const base = {
@@ -1701,7 +1684,7 @@ describe("SubagentsSection", () => {
       ...base,
       model: "custom:custom-openai:other-model",
       thoughtLevel: "max",
-      modelSelectionView: mockModelSelectionView,
+      modelSelectionView: await readNativeCatalog(),
     });
     expect(targetModelMissing).toEqual({ kind: "unsupported" });
     expect(isSubagentThoughtLevelAvailable(targetModelMissing, "max")).toBe(false);
@@ -1716,7 +1699,7 @@ describe("SubagentsSection", () => {
 
     const authoritative = resolveSubagentThoughtOptionState({
       ...base,
-      modelSelectionView: mockModelSelectionView,
+      modelSelectionView: await readNativeCatalog(),
     });
     expect(authoritative).toMatchObject({
       kind: "supported",
@@ -1768,29 +1751,7 @@ describe("SubagentsSection", () => {
     const base = {
       model: "custom:custom-openai:gpt-5.4",
       modelAvailable: true,
-      modelSelectionView: {
-        revision: 1,
-        providers: [
-          {
-            providerId: "custom-openai",
-            config: {},
-            models: [
-              {
-                modelId: "gpt-5.4",
-                config: {
-                  optionSpecs: {
-                    reasoningLevel: {
-                      values: ["low", "high"],
-                      map: "{}",
-                    },
-                    maxOutputTokens: { max: 32_000, map: "{}" },
-                  },
-                },
-              },
-            ],
-          },
-        ],
-      },
+      modelSelectionView: await readNativeCatalog(),
       thoughtLevel: undefined,
     };
 
@@ -1835,13 +1796,13 @@ describe("SubagentsSection", () => {
     ).toEqual({ kind: "unknown", status: "loading" });
   });
 
-  it("uses the Registry disabled option instead of App metadata", async () => {
+  it("uses the native disabled reasoning capability", async () => {
     const { isSubagentThoughtLevelAvailable, resolveSubagentThoughtOptionState } =
       await import("../src/settings/SubagentsSection.js");
     const base = {
       model: "custom:custom-openai:plain-chat",
       modelAvailable: true,
-      modelSelectionView: mockModelSelectionView,
+      modelSelectionView: readNativeCatalog(),
       modelSelectionLoading: false,
       thoughtLevel: "high",
     };
@@ -1958,7 +1919,7 @@ describe("SubagentsSection", () => {
     });
   });
 
-  it("preserves the unavailable selection but prompts to select a model in the edit form", async () => {
+  it("preserves an unavailable persisted selection and disables saving after catalog resolution", async () => {
     const customModel = "custom:728858ba-605a-4be5-80f8-15cf4de51eae:mimo-v2.5-pro";
     const agent = {
       id: "user:qa-reviewer",
@@ -1988,10 +1949,20 @@ describe("SubagentsSection", () => {
 
     expect(capturedModelConfigSelects.at(-1)).toMatchObject({
       normalizedValue: customModel,
-      triggerLabel: "Select model",
     });
     expect(capturedThoughtLevelControls).toHaveLength(0);
     expect(html).not.toContain('data-subagent-thought-level-unavailable="true"');
+
+    mockToolbarConfigState.status = "ready";
+    capturedButtons.length = 0;
+    await renderSubagentsSection();
+
+    expect(capturedModelConfigSelects.at(-1)).toMatchObject({
+      normalizedValue: customModel,
+    });
+    expect(capturedButtons.find((button) => button.type === "submit")).toMatchObject({
+      disabled: true,
+    });
   });
 
   it("treats unavailable persisted models as invalid form selections", async () => {

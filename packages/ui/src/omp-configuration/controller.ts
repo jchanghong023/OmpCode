@@ -66,11 +66,13 @@ function errorDetails(error: unknown): {
       typeof value.data === "object" && value.data !== null
         ? (value.data as Record<string, unknown>)
         : {};
+    // 原生 role 的业务码位于 data.code；Team 回执使用 data.errorCode，外层 code 仍是数字 RPC 码。
+    const errorCode = typeof data.errorCode === "string" ? data.errorCode : data.code;
     return {
       message: typeof value.message === "string" ? value.message : String(error),
       code: value.code,
       data: value.data,
-      ...(typeof data.errorCode === "string" ? { errorCode: data.errorCode } : {}),
+      ...(typeof errorCode === "string" ? { errorCode } : {}),
     };
   }
   return { message: String(error) };

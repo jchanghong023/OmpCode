@@ -285,7 +285,7 @@ it("retains the mounted target's notice and dirty draft when composer callbacks 
   expect(view.queryByTestId("omp-config-notice")).toBeNull();
 });
 
-it("keeps dirty standard role controls available after adding a custom-only lookup result", async () => {
+it.each(["all", "roles-only"] as const)("preserves native roles in %s", async (mode) => {
   const model = { provider: "fixture", modelId: "chat" };
   const roles: OmpRoleDescriptor[] = ["default", "smol", "slow"].map((roleId) => ({
     roleId,
@@ -357,10 +357,13 @@ it("keeps dirty standard role controls available after adding a custom-only look
         workspacePath: "/a",
         workspaceIdentity: "workspace-a",
         sessionId: "a",
-        onClose: vi.fn(),
+        ...(mode === "all" ? { mode, onClose: vi.fn() } : { mode }),
       }),
     }),
   );
+  expect(Boolean(view.queryByTestId("omp-team-panel"))).toBe(mode === "all");
+  expect(Boolean(view.queryByTestId("omp-temporary-model"))).toBe(mode === "all");
+  expect(Boolean(view.queryByRole("dialog"))).toBe(mode === "all");
   await waitFor(() => expect(view.getByTestId("omp-role-select-default")).toBeTruthy());
   fireEvent.change(view.getByTestId("omp-role-select-default"), {
     target: { value: JSON.stringify(model) },
@@ -829,4 +832,66 @@ it("blocks global Team and persistent role writes while a saved profile awaits r
   expect(
     configureOmpSession.mock.calls.some(([params]) => params.operation === "set_model_role"),
   ).toBe(false);
+});
+
+it("exposes native roles inline without the Team editor or temporary model controls", async () => {
+  const team: OmpTeamConfig = {
+    profile: null,
+    revision: "native-r1",
+    userMembers: null,
+    persistentMembers: null,
+    effectiveMembers: [],
+    source: "global",
+    sessionModel: null,
+    participants: [],
+    issues: [],
+    writableScopes: ["user"],
+    storage: {
+      mode: "single",
+      syncState: "not_applicable",
+      active: { readState: "present" },
+      persistent: { readState: "not_applicable" },
+    },
+  };
+  const configureOmpSession = vi.fn<OmpConfigurationPanelService["configureOmpSession"]>(
+    async () => ({ operation: "get_model_roles", data: { roles: [] } }),
+  );
+  const service: OmpConfigurationPanelService = {
+    configureOmpSession,
+    configureOmpTeam: async ({ request }) => {
+      if (request.operation === "get_team_config")
+        return { operation: request.operation, data: team };
+      if (request.operation === "get_team_models")
+        return { operation: request.operation, data: { models: [] } };
+      throw new Error("Role management must not write Team settings");
+    },
+    setModel: vi.fn(),
+    onDynamicWorkspaceConfigFrame: () => () => ({ dispose() {} }),
+    onAgentRuntimeRestarted: () => ({ dispose() {} }),
+  };
+  const view = render(
+    createElement(ZCodeIntlProvider, {
+      initialLocale: "en-US",
+      children: createElement(OmpConfigurationPanel, {
+        service,
+        workspacePath: "/native",
+        workspaceIdentity: "remote-native",
+        sessionId: "existing-session",
+        mode: "roles-only",
+      }),
+    }),
+  );
+  await waitFor(() =>
+    expect(configureOmpSession).toHaveBeenCalledWith({
+      workspacePath: "/native",
+      workspaceIdentity: "remote-native",
+      sessionId: "existing-session",
+      operation: "get_model_roles",
+    }),
+  );
+  expect(view.getByTestId("omp-role-panel")).toBeTruthy();
+  expect(view.getByTestId("omp-custom-role-id")).toBeTruthy();
+  expect(view.queryByTestId("omp-team-panel")).toBeNull();
+  expect(view.queryByTestId("omp-temporary-model")).toBeNull();
+  expect(view.queryByRole("dialog")).toBeNull();
 });

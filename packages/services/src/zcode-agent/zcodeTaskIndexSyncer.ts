@@ -218,6 +218,11 @@ interface WorkspaceIngestState {
   /** ACK 只证明 admission；首个 logical frame 原子 apply 后才允许把 epoch/seq 当 resume base。 */
   indexHasAppliedBase: boolean;
   configHasAppliedBase: boolean;
+  /** 同一摄入 owner 已接受的目录，供 renderer 迟订阅重放；不得跨 runtime 换代。 */
+  acceptedConfigEvent: Extract<
+    ZCodeWorkspaceEvent,
+    { type: "workspace_config_options_update" }
+  > | null;
   indexRecovery: TopicRecoveryState | null;
   configRecovery: TopicRecoveryState | null;
   indexRecoveryGeneration: number;
@@ -1183,15 +1188,16 @@ export function createZCodeTaskIndexSyncer(
     }
     // v4 载荷与 ZCodeConfigOption 结构对齐（shared 黄金测试背书），零映射直通，
     // 下游 workspace_config_options_update 消费面（useZCodeConfig 等）不改。
-    getWorkspaceEmitter({
-      workspacePath: state.target.workspacePath,
-      workspaceIdentity: state.target.workspaceIdentity,
-    }).fire({
+    state.acceptedConfigEvent = {
       type: "workspace_config_options_update",
       workspacePath: state.target.workspacePath,
       workspaceIdentity: state.target.workspaceIdentity,
       configOptions: config.configOptions,
-    });
+    };
+    getWorkspaceEmitter({
+      workspacePath: state.target.workspacePath,
+      workspaceIdentity: state.target.workspaceIdentity,
+    }).fire(state.acceptedConfigEvent);
     completeConfigRecoveryFrame(state, deliveryKind);
   }
 
@@ -1582,6 +1588,7 @@ export function createZCodeTaskIndexSyncer(
     if (disposed) return;
     const state = workspaceIngests.get(workspaceKey);
     if (!state) return;
+    state.acceptedConfigEvent = null;
     ensureWorkspaceFrameListeners(state);
     // 以前两个 topic 共用 Promise.all 代际，一侧暂态失败会
     // 撤销另一侧已成功的新订阅。现在各自 fresh subscribe + 退避重试。
@@ -1596,6 +1603,7 @@ export function createZCodeTaskIndexSyncer(
     const state = workspaceIngests.get(workspaceKey);
     if (!state || state.runtimeGeneration !== generation) return;
     state.runtimeGeneration = null;
+    state.acceptedConfigEvent = null;
     state.indexSubscriptionGeneration += 1;
     state.configSubscriptionGeneration += 1;
     state.indexRecoveryGeneration += 1;
@@ -1679,6 +1687,7 @@ export function createZCodeTaskIndexSyncer(
       configSeq: 0,
       indexHasAppliedBase: false,
       configHasAppliedBase: false,
+      acceptedConfigEvent: null,
       indexRecovery: null,
       configRecovery: null,
       indexRecoveryGeneration: 0,
@@ -1819,7 +1828,14 @@ export function createZCodeTaskIndexSyncer(
     onDynamicWorkspaceEvent(workspace: WorkspaceEventInput) {
       // 任务列表挂载会为所有 restored workspace 调用本入口。监听事件不代表
       // 用户使用该 workspace，禁止在这里激活 sessions-index 或启动 Agent。
-      return getWorkspaceEmitter(workspace).event;
+      return (listener) => {
+        const subscription = getWorkspaceEmitter(workspace).event(listener);
+        // 先监听再重放同一 owner 的已接受快照，补齐 renderer refresh 的订阅空档。
+        const key = typeof workspace === "string" ? workspace : resolveWorkspaceKey(workspace);
+        const accepted = workspaceIngests.get(key)?.acceptedConfigEvent;
+        if (accepted) listener(accepted);
+        return subscription;
+      };
     },
 
     onSessionTerminalEvent: terminalEventEmitter.event,

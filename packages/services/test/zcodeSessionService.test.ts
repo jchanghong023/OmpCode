@@ -28,6 +28,26 @@ function useTempDataBaseDir(): string {
 }
 
 describe("createZCodeSessionService", () => {
+  it("settings-first presentation activates the existing Host directory owner without creating a session", async () => {
+    const target = { workspacePath: "/same", workspaceIdentity: "remote:settings:/same" };
+    const presentation = { workspace: target, mode: "build", slashCommands: [] };
+    const ensureWorkspaceSubscription = vi.fn();
+    const agentService = {
+      readWorkspacePresentation: vi.fn(async () => {
+        expect(ensureWorkspaceSubscription).toHaveBeenCalledWith(target);
+        return presentation;
+      }),
+      createSession: vi.fn(),
+    } as unknown as IZCodeAgentService;
+    const service = createZCodeSessionService({
+      agentService,
+      taskIndexSyncer: { ensureWorkspaceSubscription } as unknown as ZCodeTaskIndexSyncer,
+    });
+    await expect(service.readWorkspacePresentation(target)).resolves.toBe(presentation);
+    expect(ensureWorkspaceSubscription).toHaveBeenCalledTimes(1);
+    expect(agentService.createSession).not.toHaveBeenCalled();
+  });
+
   it("injects product CUA helper broker config before desktop-continuous session creation", async () => {
     const snapshot = {
       session: {
