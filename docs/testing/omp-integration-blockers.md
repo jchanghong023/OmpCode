@@ -8,6 +8,16 @@
 
 本节是当前结果快照；下文按时间保留的历史门禁、permission 排除与独立 Team 页面记录不覆盖更新后的验收状态。下文“本次仅更新／未运行”只描述对应历史文档 slice，不表示本轮尚未执行验证；旧通过结果也不覆盖后续源码变更。permission、M01／M02、model restore 以及 Tan 子代理／工作流有效通过记录继续保留各自范围。v2 方案及原 17 项工作保持原范围，**已在 Windows 当前源码的授权验收范围完成**，不扩称安装版、其他平台或全产品验收。
 
+### 内置命令目录恢复与发现补全（2026-10-23，Windows 源码定向通过）
+
+- 已修复 workspace-config 丢弃 slash 目录、迟订阅不重放命令，以及模型已 ready 时 task → draft 清空命令后跳过重新加载的问题；复用既有 workspace 事件与原生命令提交，不修改 OMP 协议或执行逻辑。
+- 新增两项 UI 回归在修复前均失败。修复后 `v4DraftModelReadinessGate.test.ts` 与 `zcodeTaskIndexSyncer.test.ts` 首轮为 82 通过／1 失败；失败仅为旧回放事件次数断言不再适用，删除该次数断言后精确复验该运行换代用例通过，按有效结果去重共 83 项通过，不冒称一次全绿。覆盖 task → draft 命令恢复、模型不被 mode-only presentation 清空、命令事件优先于迟到读取、身份隔离及迟订阅重放。
+- 两个生产文件 LSP 无类型错误；5 个修改 TS 文件 lint 为 0 errors／2 项既有警告，格式检查修正后通过；架构检查 0 violations。未运行全仓 UT、完整类型检查或 OMP 门禁，未改用户配置或调用真实模型。
+- 早期真实 Electron 验证为 **UNVERIFIED**：run `desktop-e2e-20261023095337869-p166956-2b4ff21b051f2ed0` 完成桌面构建后，ChromeDriver `POST /session` 30 秒超时；追加启动诊断的 run `desktop-e2e-20261023095650709-p100540-fca9970421908532` 同样在创建 WebDriver session 时超时。两轮均未进入业务用例，原始失败记录保留，不作为下述最新通过证据。
+- 最新通过：正式入口 `pnpm --filter @zcode/desktop test:e2e -- --spec ./test/e2e/omp-commands.e2e.ts`，使用 Bun 绝对源码 app-server 与隔离 localhost 模型，grep 仅选择 `browses, filters and completes native commands in initial drafts, new drafts and restored sessions`。run `desktop-e2e-20261023102252355-p141872-dd09c5475184d021` 为 **1／1 PASS、无重试、exit 0**，用例 19269ms、外层墙钟 80.13s；pretest 报告构建及当前桌面源码构建均实际执行。`test-results.ndjson`、`summary.json`、列表／补全截图及真实请求记录保留于 `packages/desktop/.e2e-artifacts/<run>/`。
+- 当前场景在首次草稿、task → draft、切回已有会话并刷新三种状态，分别验证 `/` 展示原生命令、前缀筛选、鼠标补全 `/goal`、Tab 补全 `/compact`、Enter 补全 `/loop`、无匹配及 Escape 关闭；补全过程要求消息、绑定会话及运行状态保持不变，不以直接执行完整命令代替发现能力，也不把后台预热的模型请求总数当成误发送。该 spec 已在既有 OMP 默认集合中，不依赖被排除的旧 toolbar 用例。
+- 首次执行 run `desktop-e2e-20261023101843909-p77400-018b6bed328d671f` 已进入 GUI，但因“总请求数 0”这一额外断言失败（实际 7），未记为通过；后续移除总请求数断言，改查会话消息／身份／运行状态，未关闭 Skill 功能、未过滤请求或改产品代码。当前修改文件格式、lint 与 LSP 无错误；架构复查受另行出现的 `offlineNetworkGuard.ts`、`offlineNetworkJail.ts`、`observeBeforeRequest.ts` 三个未受管新文件阻断，本轮未修改这些文件。结论仅限上述 Windows 源码场景，不包含安装版、其他平台、真实模型或完整 E2E 套件。
+
 ### v2 模型、认证与 profile 当前快照
 
 - **v2 当前源码交付已完成**：原生目录／认证链投影、role 逐角色 CAS、profile 写入边界及原生命令回执读取优化已落源码，并有下述 GUI、真实模型、目录与回归证据。结论限本轮 Windows 源码授权范围，不以实现或局部 UT 代替其他平台验收。

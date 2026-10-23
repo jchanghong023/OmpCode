@@ -57,8 +57,6 @@ import { randomUUID } from "node:crypto";
 import { getAppConfigDir as getContentAppConfigDir } from "#src/paths.js";
 import { ICloudContentService } from "#src/cloud-content/cloudContent.js";
 import { createCloudContentService } from "#src/cloud-content/cloudContentService.js";
-import { IMarketingTouchService } from "#src/marketing-touch/marketingTouch.js";
-import { createMarketingTouchService } from "#src/marketing-touch/marketingTouchService.js";
 import { createMarketingAssetRegistry } from "#src/marketing-touch/marketingAssetRegistry.js";
 import type { IChannel } from "@zcode/rpc";
 import {
@@ -2520,7 +2518,9 @@ export function createLocalServices(options: {
     // 设置页的 HTTP 代理、No Proxy + 自定义 CA 按 spawn 时读取注入 agent 子进程 env，
     // 覆盖模型 API / MCP / Bash 出口流量并信任用户显式配置的证书；改动后下次启动 agent 生效。
     resolveSpawnEnv: async (context) => {
-      const [settings] = await Promise.all([settingService.get(), providerRuntime.start()]);
+      // 离线网络隔离（docs/requirements/offline-network-isolation.md）：Agent spawn 不触发
+      // provider registry 远端刷新；off-peak 等消费方仍按需自行 start()。
+      const settings = await settingService.get();
       // 本地 Host 准备解析快照；远程 CLI 继续由自己的文件 loader 读取和迁移配置。
       if (!isDesktopAttachedRemote) await subagentsService.prepareRuntimeState(context);
       const agentNetwork =
@@ -2845,18 +2845,10 @@ export function createLocalServices(options: {
   const marketingAssets = createMarketingAssetRegistry({
     allowLoopback: ZCODE_ENV === "test" || process.env.NODE_ENV === "development",
   });
+  // 离线网络隔离（docs/requirements/offline-network-isolation.md）：不注册
+  // IMarketingTouchService——营销触达在离线版为不可用能力；renderer Provider 已有
+  // 服务存在性守卫，展示为无数据而非报错。marketingAssets 空注册表仍供云内容消费。
   const services = new ServiceCollection()
-    .register(
-      IMarketingTouchService,
-      createMarketingTouchService({
-        apiClient,
-        getToken: () => credentialService.load("zcodejwttoken"),
-        getDeviceMid: () => options?.agentTelemetry?.getDeviceMid?.(),
-        baseUrl: buildRuntimeZCodeApiUrl(process.env, "/"),
-        appVersion: ZCODE_VERSION,
-        onSnapshot: (snapshot) => marketingAssets.accept(snapshot),
-      }),
-    )
     .register(IFileService, fileService)
     .register(IMediaPreviewService, mediaPreviewService)
     .register(

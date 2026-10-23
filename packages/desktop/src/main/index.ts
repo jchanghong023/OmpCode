@@ -13,10 +13,7 @@ import {
 import armsRum from "@arms/rum-electron";
 import { createArmsUserIdentitySync } from "./armsUserIdentity.js";
 import { ensureDesktopDeviceMidSync } from "./desktopDeviceMid.js";
-import {
-  createDesktopContextPromptRollout,
-  createElectronDesktopContextPromptConfigFetcher,
-} from "./desktopContextPromptRollout.js";
+import { createDesktopContextPromptRollout } from "./desktopContextPromptRollout.js";
 import { buildBrowserViewCloseTabNotification } from "./browserView/browserCloseTabNotification.js";
 import { BrowserGuestManager } from "./browserView/browserGuestManager.js";
 import { createElectronBrowserWebmRecorder } from "./browserView/electronBrowserWebmRecorder.js";
@@ -52,6 +49,13 @@ import { spawn } from "node:child_process";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { homedir, hostname } from "node:os";
+import { installOfflineNetworkJail } from "../shared/offlineNetworkJail.js";
+import { installOfflineSessionNetworkGuard } from "./offlineNetworkGuard.js";
+// 离线网络隔离（docs/requirements/offline-network-isolation.md）：main 进程入口即
+// 安装 Node 网络 jail，非回环出站快速失败；VITEST 进程跳过，避免破坏单测网络桩。
+if (!process.env.VITEST) {
+  installOfflineNetworkJail({ label: "main" });
+}
 // Node 18 没有 import.meta.dirname；以输出模块 URL 为资源路径权威。
 const moduleDirname = dirname(fileURLToPath(import.meta.url));
 import {
@@ -859,20 +863,15 @@ const readHelpConfig = createDesktopHelpConfigReader({
   getClientLanguage: () => currentApplicationLocale,
   resolveEndpointOrigin: resolveCurrentZCodeEndpointOrigin,
 });
-// 同一个 /api/v1/client/configs fetcher 供两个灰度 rollout 共用（请求参数与鉴权完全一致，
-// 各自独立缓存/去重，服务端按 data.configs.<key> 区分功能）。
-const electronClientConfigsFetcher = createElectronDesktopContextPromptConfigFetcher({
-  appVersion: ZCODE_VERSION || app.getVersion(),
-  deviceMid,
-  getClientLanguage: () => currentApplicationLocale,
-  resolveEndpointOrigin: resolveCurrentZCodeEndpointOrigin,
-});
-desktopContextPromptRollout = createDesktopContextPromptRollout({
-  fetchConfig: electronClientConfigsFetcher,
-  logger,
-});
+// 离线网络隔离（docs/requirements/offline-network-isolation.md）：不装配
+// /api/v1/client/configs 请求链。desktopContextPromptRollout 保持未创建——
+// awaitFirstHostSpawnDecision / resolveDesktopContextPromptEnabledForHost 已有
+// if (!rollout) 短路，首个 Host fork 不再等待灰度裁决门（冷启动提速）；
+// rendererActionTraceRollout 改用离线 stub fetcher，请求立即失败并按关闭 fail-open。
+const offlineClientConfigsFetchConfig = (): Promise<never> =>
+  Promise.reject(new Error("[offline] client/configs rollout fetch disabled"));
 const rendererActionTraceRollout = createRendererActionTraceRollout({
-  fetchConfig: electronClientConfigsFetcher,
+  fetchConfig: offlineClientConfigsFetchConfig,
   logger,
 });
 const localTtftExporter = createLocalTtftExporter({
@@ -2174,6 +2173,9 @@ app.whenReady().then(async () => {
     locale: currentApplicationLocale,
     logger,
   });
+  // 离线网络隔离：所有 session（defaultSession 与后续新建 partition）的非回环
+  // http/https/ws/wss 请求一律取消；须在任何窗口加载远程内容前完成注册。
+  installOfflineSessionNetworkGuard();
   try {
     await applyDesktopChromiumNetworkPolicies(session, bootstrapSettings ?? {}, logger);
   } catch (error) {

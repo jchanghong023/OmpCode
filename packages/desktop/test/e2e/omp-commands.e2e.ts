@@ -18,6 +18,8 @@ import {
   getV4GoalProjection,
   getV4Messages,
   getV4PaneSnapshot,
+  getV4SlashOptionIds,
+  hasV4SlashPanel,
   prepareV4ConversationE2E,
   selectV4TaskById,
   sendV4Prompt,
@@ -76,23 +78,113 @@ async function artifact(name: string) {
   await writeFile(resolve(dir, `${name}-requests.json`), JSON.stringify(await requests(), null, 2));
 }
 
+async function discoverAndCompleteNativeCommands(stage: string) {
+  const sessionId = (await getV4PaneSnapshot()).sessionId;
+  const messages = await getV4Messages();
+  await input("/");
+  await waitForV4SlashOption("slash:settings");
+  await waitForV4SlashOption("slash:display");
+  expect(
+    await $(`[data-testid="${testId(TID_PROMPT_SUGGESTION_OPTION, "slash:settings")}"]`).getText(),
+  ).toContain("/settings");
+  expect(
+    await $(`[data-testid="${testId(TID_PROMPT_SUGGESTION_OPTION, "slash:display")}"]`).getText(),
+  ).toContain("/display");
+  await artifact(`omp-command-list-${stage}`);
+
+  // 原因：完整命令直接提交绕过候选目录，必须从前缀开始验证可见筛选和补全。
+  await input("/go");
+  await waitForV4SlashOption("slash:goal");
+  expect(await getV4SlashOptionIds()).not.toContain("slash:settings");
+  await clickV4SlashOption("slash:goal");
+  await browser.waitUntil(async () => (await getV4ComposerText())?.trim() === "/goal", {
+    timeout: 15000,
+    timeoutMsg: `${stage}: selecting /go did not complete /goal`,
+  });
+  expect(await hasV4SlashPanel()).toBe(false);
+
+  await input("/comp");
+  await waitForV4SlashOption("slash:compact");
+  const compact = $(`[data-testid="${testId(TID_PROMPT_SUGGESTION_OPTION, "slash:compact")}"]`);
+  await browser.waitUntil(async () => (await compact.getAttribute("data-selected")) === "true", {
+    timeout: 15000,
+    timeoutMsg: `${stage}: /comp did not select the compact candidate`,
+  });
+  await browser.keys("Tab");
+  await browser.waitUntil(async () => (await getV4ComposerText())?.trim() === "/compact", {
+    timeout: 15000,
+    timeoutMsg: `${stage}: Tab did not complete /compact`,
+  });
+  expect(await hasV4SlashPanel()).toBe(false);
+
+  await input("/loo");
+  await waitForV4SlashOption("slash:loop");
+  const loop = $(`[data-testid="${testId(TID_PROMPT_SUGGESTION_OPTION, "slash:loop")}"]`);
+  await browser.waitUntil(async () => (await loop.getAttribute("data-selected")) === "true", {
+    timeout: 15000,
+    timeoutMsg: `${stage}: /loo did not select the loop candidate`,
+  });
+  await browser.keys("Enter");
+  await browser.waitUntil(async () => (await getV4ComposerText())?.trim() === "/loop", {
+    timeout: 15000,
+    timeoutMsg: `${stage}: Enter submitted instead of completing /loop`,
+  });
+  expect(await hasV4SlashPanel()).toBe(false);
+
+  const unmatched = "/zzzz_omp_command_not_registered_731";
+  await input(unmatched);
+  await browser.waitUntil(
+    async () =>
+      (await hasV4SlashPanel()) &&
+      (await getV4SlashOptionIds()).filter((id) => id.startsWith("slash:")).length === 0,
+    { timeout: 15000, timeoutMsg: `${stage}: unmatched prefix still lists native commands` },
+  );
+  await browser.keys("Escape");
+  expect(await getV4ComposerText()).toBe(unmatched);
+  expect(await hasV4SlashPanel()).toBe(false);
+  expect((await getV4PaneSnapshot()).sessionId).toBe(sessionId);
+  expect(await getV4Messages()).toEqual(messages);
+  expect((await getV4PaneSnapshot()).canStop).toBe(false);
+  await artifact(`omp-command-completion-${stage}`);
+  await input("");
+}
+
 // Ordinary chat, existing compact/model buttons and upstream Agent paths retain
 // their existing omp-app-server and legacy suites; this spec only adds commands.
 describe("OMP native slash commands / actual Electron input and runtime", () => {
-  it("discovers native usage, executes goal controls, cancels a confirmation and restores isolated command history", async function () {
+  it("browses, filters and completes native commands in initial drafts, new drafts and restored sessions", async function () {
+    this.timeout(120000);
+    await prepareV4ConversationE2E({ skipProvider: true });
+    await switchV4Model(OMP_PROVIDER_ID, OMP_MODEL_ID, "disabled");
+    await discoverAndCompleteNativeCommands("initial-draft");
+    await submit("/goal show");
+    const original = await boundSession();
+    await waitForV4TimelineContaining("No goal set.");
+    await idle();
+
+    await draft();
+    // 原因：task → draft 清空 slashCommands 却保留 model ready，旧水合门禁不会补回目录。
+    await discoverAndCompleteNativeCommands("task-to-draft");
+    await submit("/goal show");
+    expect(await boundSession()).not.toBe(original);
+    await waitForV4TimelineContaining("No goal set.");
+    await idle();
+
+    await selectV4TaskById(original);
+    await browser.refresh();
+    await waitForV4Pane(
+      (pane) => pane.sessionId === original,
+      "Native command discovery restored a different session",
+      60000,
+    );
+    await waitForV4TimelineContaining("No goal set.");
+    await discoverAndCompleteNativeCommands("restored-session");
+  });
+
+  it("executes goal controls, cancels a confirmation and restores isolated command history", async function () {
     this.timeout(180000);
     await prepareV4ConversationE2E({ skipProvider: true });
     await switchV4Model(OMP_PROVIDER_ID, OMP_MODEL_ID, "disabled");
-    await input("/go");
-    await waitForV4SlashOption("slash:goal");
-    const option = $(`[data-testid="${testId(TID_PROMPT_SUGGESTION_OPTION, "slash:goal")}"]`);
-    const description = await option.getText();
-    expect(description).toContain("/goal");
-    expect(description).toMatch(/show|pause|objective/i);
-    await artifact("omp-command-catalog");
-    await clickV4SlashOption("slash:goal");
-    expect((await getV4ComposerText())?.trim()).toBe("/goal");
-
     // A real held local-model turn makes pause observable, without racing an
     // automatically completed goal or asking a production provider for anything.
     await submit("/goal set OMP_E2E_STOP_COMMAND_GOAL");

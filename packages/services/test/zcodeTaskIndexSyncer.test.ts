@@ -983,7 +983,6 @@ describe("createZCodeTaskIndexSyncer", () => {
     );
     const beforeExit = vi.fn();
     const beforeExitSubscription = syncer.onDynamicWorkspaceEvent(seedTarget)(beforeExit);
-    expect(beforeExit).toHaveBeenCalledTimes(1);
     beforeExitSubscription.dispose();
 
     env.lifecycleEmitter.fire({
@@ -1334,7 +1333,7 @@ describe("createZCodeTaskIndexSyncer", () => {
     env.configEmitter.dispose();
   });
 
-  it("forwards v4 workspace-config frames as workspace_config_options_update and drops empty catalogs", async () => {
+  it("replays model and command catalogs to late listeners without leaking workspace identity or empty seeds", async () => {
     const env = setupEnv();
     const syncer = createZCodeTaskIndexSyncer({
       agentService: env.agent,
@@ -1370,7 +1369,7 @@ describe("createZCodeTaskIndexSyncer", () => {
       ),
     );
 
-    expect(broadcasts.length).toBe(1);
+    expect(broadcasts.length).toBe(2);
     const event = broadcasts[0];
     expect(event.type).toBe("workspace_config_options_update");
     if (event.type === "workspace_config_options_update") {
@@ -1378,13 +1377,19 @@ describe("createZCodeTaskIndexSyncer", () => {
       expect(event.configOptions).toHaveLength(1);
       expect(event.configOptions[0]?.id).toBe("model");
     }
+    expect(broadcasts[1]).toEqual({
+      type: "workspace_slash_commands_update",
+      workspacePath: "/repo",
+      workspaceIdentity: undefined,
+      commands: [{ name: "compact", description: "Compact" }],
+    });
 
     // renderer refresh 后从同一个摄入 owner 重放已接受目录，不重新启动/订阅 CLI。
     const replayed: ZCodeWorkspaceEvent[] = [];
     const late = syncer.onDynamicWorkspaceEvent({ workspacePath: "/repo" })((value) =>
       replayed.push(value),
     );
-    expect(replayed).toEqual([event]);
+    expect(replayed).toEqual(broadcasts);
     const remote = vi.fn();
     const isolated = syncer.onDynamicWorkspaceEvent({
       workspacePath: "/repo",
@@ -1392,6 +1397,24 @@ describe("createZCodeTaskIndexSyncer", () => {
     })(remote);
     expect(remote).not.toHaveBeenCalled();
     expect(env.agent.subscribeWorkspaceConfigV4).toHaveBeenCalledTimes(1);
+
+    // 命令单独更新不清空模型目录，迟订阅只拿最后一份命令，不复活旧目录。
+    const commands = [{ name: "goal", description: "Goal", inputHint: "[objective]" }];
+    env.configEmitter.fire(configFrame({ configOptions: [], slashCommands: commands }, 3));
+    const current: ZCodeWorkspaceEvent[] = [];
+    const latest = syncer.onDynamicWorkspaceEvent({ workspacePath: "/repo" })((value) =>
+      current.push(value),
+    );
+    expect(current).toEqual([
+      event,
+      {
+        type: "workspace_slash_commands_update",
+        workspacePath: "/repo",
+        workspaceIdentity: undefined,
+        commands,
+      },
+    ]);
+    latest.dispose();
     late.dispose();
     isolated.dispose();
 

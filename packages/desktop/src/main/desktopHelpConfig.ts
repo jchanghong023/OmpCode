@@ -1,4 +1,3 @@
-import { net } from "electron";
 import {
   buildHelpAppConfigUrl,
   buildZCodeSourceHeadersFromContext,
@@ -14,7 +13,9 @@ export function createDesktopHelpConfigReader(options: {
   getClientLanguage: () => string;
 }) {
   const read = createHelpAppConfigReader({
-    fetchImpl: (input, init) => net.fetch(input instanceof URL ? input.href : input, init),
+    // 离线网络隔离（docs/requirements/offline-network-isolation.md）：帮助配置读取
+    // 不再经 Electron net.fetch 出网；读取失败由 openFeedback/openCommunity 回退本地配置。
+    fetchImpl: () => Promise.reject(new Error("[offline] help config remote fetch disabled")),
   });
   return async () => {
     const endpointOrigin = await options.resolveEndpointOrigin();

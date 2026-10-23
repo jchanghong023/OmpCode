@@ -4,6 +4,22 @@ Owner: conversation UI. This module owns only unsaved role and Team drafts. Pers
 
 Native model settings and pickers share the workspace store projection of Host's accepted `workspace-config` facts. `workspace/readPresentation` supplies only mode and slash metadata and must not erase the model directory. The Host ingestion owner replays its current-generation accepted directory to late subscribers; renderer refresh and settings-first hydration subscribe before preparing the workspace, without creating a session. Presentation readiness alone is not model readiness. Late presentation results cannot replace newer native directory facts; an explicit native model option with no candidates remains authoritative empty availability.
 
+Slash metadata has independent readiness from model availability. The Host ingestion owner projects accepted `workspace-config.slashCommands` through the existing workspace slash event and replays it to late subscribers within the same runtime generation and workspace identity. A task-to-draft transition may clear session-derived commands; the mounted catalog hook must reload missing commands even when models remain ready, without resetting model availability. Scope changes reject late presentation results; newer command events win over older presentation reads. Desktop-continuous and web-remote-replayable consume these same accepted facts without creating a session or executing a command.
+
+```mermaid
+sequenceDiagram
+    participant N as Native workspace-config
+    participant H as Host ingestion owner
+    participant U as Workspace UI store
+    participant C as Catalog hook
+    N->>H: Current-generation model and slash facts
+    H->>U: Existing workspace events (live or late replay)
+    U->>U: Task to draft clears commands
+    C->>H: Prepare missing slash metadata
+    H-->>U: Current workspace/profile commands
+    Note over H,U: Newer events win; reject stale scope reads
+```
+
 Team reads, previews, model catalogs and saves call the public `IZCodeAgentService.configureOmpTeam` workspace-routing port and optional `omp/team/configure {workspace,request}` extension. No session is needed or created, including when opened from an existing chat. Roles and temporary session model controls retain the explicit-session `configureOmpSession`/`setModel` ports. The UI never accesses files, credentials or `window.zcode`. Profile comes from the trusted server response; workspace/identity route to that execution endpoint, not a separate Team configuration store. Draft preview is read-only and revision correlated. Scope, close, disconnect or process generation changes invalidate in-flight callbacks. External changes never overwrite dirty drafts or their original CAS revision. Only explicit Save submits; cancellation and defaults only edit local state. Conflict, partial and unknown outcomes never replay saves automatically.
 
 Before the first native Team configuration baseline is available, editing controls are disabled; Refresh and Close remain usable. A local draft must not become dirty before its authoritative CAS baseline is known. Once the baseline is read, the existing editing and revision-checked save behavior resumes.

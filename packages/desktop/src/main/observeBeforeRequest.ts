@@ -1,6 +1,7 @@
 import type { WebRequest, OnBeforeRequestListenerDetails } from "electron";
 
-type Observer = (details: OnBeforeRequestListenerDetails) => void;
+// 观察者返回 true 表示该请求应被取消（离线网络守卫使用）；返回 void 保持放行。
+type Observer = (details: OnBeforeRequestListenerDetails) => boolean | void;
 type RequestSource = Pick<WebRequest, "onBeforeRequest">;
 const sources = new WeakMap<RequestSource, Map<Observer, { urls: string[]; patterns: RegExp[] }>>();
 
@@ -25,14 +26,17 @@ export function subscribeBeforeRequest(
     source.onBeforeRequest(
       { urls: [...new Set([...entries.values()].flatMap((entry) => entry.urls))] },
       (details, callback) => {
-        callback({});
+        let cancel = false;
         for (const [listener, entry] of entries) {
           try {
-            if (entry.patterns.some((pattern) => pattern.test(details.url))) listener(details);
+            if (entry.patterns.some((pattern) => pattern.test(details.url))) {
+              if (listener(details) === true) cancel = true;
+            }
           } catch {
             /* 观测错误不得阻断网络或其他观测者 */
           }
         }
+        callback(cancel ? { cancel: true } : {});
       },
     );
   };

@@ -166,6 +166,60 @@ describe("OMP native draft model readiness", () => {
     expect(prepareWorkspace).toHaveBeenCalledTimes(1);
   });
 
+  it("已有会话切回同 profile 草稿会重新加载命令，不重置已就绪的模型", async () => {
+    const path = "/command-draft";
+    const scope = "native-profile";
+    const commands = [{ name: "goal", description: "Native goal", source: "builtin" as const }];
+    const store = useZCodeSessionStore.getState();
+    store.startDraft(path, undefined, undefined, { draftStorageScope: scope });
+    store.setConfigOptions(path, nativeOptions());
+    store.setConfigOptionsStatus(path, "ready");
+    store.setSlashCommands(path, commands);
+    store.setActiveTaskId(path, "existing-task");
+    const models = store.getWorkspaceState(path).configOptions;
+    prepareWorkspace.mockResolvedValue({ configOptions: modeOptions(), slashCommands: commands });
+    const { result } = renderHook(() => useOmpModelCatalog(path));
+
+    act(() => store.startDraft(path, undefined, undefined, { draftStorageScope: scope }));
+    await waitFor(() => expect(store.getWorkspaceState(path).slashCommands).toEqual(commands));
+    expect(store.getWorkspaceState(path).configOptions).toBe(models);
+    expect(result.current.status).toBe("ready");
+    expect(result.current.catalog?.preferredSelection?.modelId).toBe("free-chat");
+  });
+
+  it("命令事件按身份替换目录，迟到 presentation 不能复活旧命令", async () => {
+    const path = "/command-events";
+    const identity = "remote:commands";
+    const store = useZCodeSessionStore.getState();
+    store.setConfigOptions(path, nativeOptions(), identity);
+    store.setConfigOptionsStatus(path, "ready", identity);
+    const pending = Promise.withResolvers<{
+      configOptions: ZCodeConfigOption[];
+      slashCommands: Array<{ name: string; description: string }>;
+    }>();
+    prepareWorkspace.mockReturnValue(pending.promise);
+    renderHook(() => useOmpModelCatalog(path, identity));
+    const current = [{ name: "repo", description: "Current native command" }];
+    act(() => {
+      for (const listener of workspaceListeners.get(identity) ?? []) {
+        listener({
+          type: "workspace_slash_commands_update",
+          workspacePath: path,
+          workspaceIdentity: identity,
+          commands: current,
+        });
+      }
+    });
+    await act(async () =>
+      pending.resolve({
+        configOptions: modeOptions(),
+        slashCommands: [{ name: "old-command", description: "Stale presentation" }],
+      }),
+    );
+    expect(store.getWorkspaceState(path, identity).slashCommands).toEqual(current);
+    expect(store.getWorkspaceState(path).slashCommands).toEqual([]);
+  });
+
   it("原生目录先到、迟到 presentation 和热更新不会清空模型", async () => {
     const pending = Promise.withResolvers<{
       configOptions: ZCodeConfigOption[];

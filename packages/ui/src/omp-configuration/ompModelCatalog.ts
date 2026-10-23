@@ -116,6 +116,9 @@ export function useOmpModelCatalog(
   const storageScope = useZCodeSessionStore(
     (state) => state.workspaces[workspaceKey]?.draftStorageScope ?? null,
   );
+  const commandCount = useZCodeSessionStore(
+    (state) => state.workspaces[workspaceKey]?.slashCommands.length ?? 0,
+  );
   const hydrationKey = JSON.stringify([workspaceKey, storageScope]);
   const service = useZCodeSessionService(workspacePath, remoteSessionId, workspaceIdentity);
   const taskService = useZCodeTaskService(workspacePath, remoteSessionId, workspaceIdentity);
@@ -128,8 +131,14 @@ export function useOmpModelCatalog(
     const subscription = taskService.onDynamicWorkspaceEvent({ workspacePath, workspaceIdentity })((
       event,
     ) => {
-      if (!active || event.type !== "workspace_config_options_update") return;
+      if (!active) return;
       const store = useZCodeSessionStore.getState();
+      // 原因：Host 的命令目录与模型目录是独立事件，漏消费会让新草稿永久缺少内置命令。
+      if (event.type === "workspace_slash_commands_update") {
+        store.setSlashCommands(workspacePath, event.commands, workspaceIdentity);
+        return;
+      }
+      if (event.type !== "workspace_config_options_update") return;
       store.setConfigOptions(workspacePath, event.configOptions, workspaceIdentity);
       if (event.configOptions.some((option) => option.id === "model")) {
         store.setConfigOptionsStatus(workspacePath, "ready", workspaceIdentity);
@@ -144,13 +153,13 @@ export function useOmpModelCatalog(
     if (!enabled || !workspacePath) return;
     const store = useZCodeSessionStore.getState();
     const initial = store.getWorkspaceState(workspacePath, workspaceIdentity);
-    if (
-      (initial.configOptionsStatus === "ready" &&
-        initial.configOptions?.some((option) => option.id === "model")) ||
-      workspaceCatalogHydrationFlights.has(hydrationKey)
-    )
+    const modelsReady =
+      initial.configOptionsStatus === "ready" &&
+      initial.configOptions?.some((option) => option.id === "model");
+    // 原因：task → draft 会清空命令但保留模型；模型 ready 不能替代命令目录已加载。
+    if ((modelsReady && commandCount > 0) || workspaceCatalogHydrationFlights.has(hydrationKey))
       return;
-    store.setConfigOptionsStatus(workspacePath, "loading", workspaceIdentity);
+    if (!modelsReady) store.setConfigOptionsStatus(workspacePath, "loading", workspaceIdentity);
     // 首次写 loading 才创建 workspace；比较必须基于这个已创建 owner 的数组引用。
     const baseline = store.getWorkspaceState(workspacePath, workspaceIdentity);
     const flight = prepareWorkspaceWithZCodeSessionService({
@@ -165,7 +174,7 @@ export function useOmpModelCatalog(
         // 旧 scope 的 presentation 不得在 profile 切换后回写新 owner。
         if ((current.draftStorageScope ?? null) !== storageScope) return;
         // 水合先发、原生事件后到时，迟到读取不能覆盖较新的目录。
-        if (current.configOptions === baseline.configOptions) {
+        if (!modelsReady && current.configOptions === baseline.configOptions) {
           latest.setConfigOptions(workspacePath, result.configOptions ?? [], workspaceIdentity);
         }
         // mode-only 的 readPresentation 完成不代表模型已到；原生空模型项才是权威空态。
@@ -183,16 +192,26 @@ export function useOmpModelCatalog(
             .draftStorageScope ?? null) !== storageScope
         )
           return;
-        useZCodeSessionStore
-          .getState()
-          .setConfigOptionsStatus(workspacePath, "error", workspaceIdentity);
+        if (!modelsReady) {
+          useZCodeSessionStore
+            .getState()
+            .setConfigOptionsStatus(workspacePath, "error", workspaceIdentity);
+        }
         logger.warn(`[omp-workspace-catalog] workspace 目录水合失败: ${String(error)}`);
       })
       .finally(() => {
         workspaceCatalogHydrationFlights.delete(hydrationKey);
       });
     workspaceCatalogHydrationFlights.set(hydrationKey, flight);
-  }, [enabled, hydrationKey, workspacePath, workspaceIdentity, storageScope, service]);
+  }, [
+    enabled,
+    hydrationKey,
+    workspacePath,
+    workspaceIdentity,
+    storageScope,
+    service,
+    commandCount,
+  ]);
   const catalog = useMemo(() => readOmpModelCatalog(configOptions), [configOptions]);
   const modelGroups = useMemo(() => buildOmpModelSelectGroups(catalog), [catalog]);
   return {

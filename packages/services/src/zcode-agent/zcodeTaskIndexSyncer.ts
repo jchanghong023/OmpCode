@@ -225,6 +225,10 @@ interface WorkspaceIngestState {
     ZCodeWorkspaceEvent,
     { type: "workspace_config_options_update" }
   > | null;
+  acceptedSlashCommandsEvent: Extract<
+    ZCodeWorkspaceEvent,
+    { type: "workspace_slash_commands_update" }
+  > | null;
   indexRecovery: TopicRecoveryState | null;
   configRecovery: TopicRecoveryState | null;
   indexRecoveryGeneration: number;
@@ -1182,24 +1186,34 @@ export function createZCodeTaskIndexSyncer(
       frame.payload.kind === "snapshot"
         ? frame.payload.snapshot.config
         : frame.payload.deltas.at(-1)?.config;
-    if (!config || config.configOptions.length === 0) {
-      // 空目录（无 live session 的订阅种子）不下发：下游 useZCodeConfig 收到空
-      // configOptions 会把聊天工具栏的模型目录清掉。
+    if (!config || (config.configOptions.length === 0 && config.slashCommands.length === 0)) {
+      // 空订阅种子不覆盖已接受目录；仅有命令的合法更新仍须独立投影。
       completeConfigRecoveryFrame(state, deliveryKind);
       return;
     }
-    // v4 载荷与 ZCodeConfigOption 结构对齐（shared 黄金测试背书），零映射直通，
-    // 下游 workspace_config_options_update 消费面（useZCodeConfig 等）不改。
-    state.acceptedConfigEvent = {
-      type: "workspace_config_options_update",
+    const emitter = getWorkspaceEmitter({
       workspacePath: state.target.workspacePath,
       workspaceIdentity: state.target.workspaceIdentity,
-      configOptions: config.configOptions,
+    });
+    if (config.configOptions.length > 0) {
+      state.acceptedConfigEvent = {
+        type: "workspace_config_options_update",
+        workspacePath: state.target.workspacePath,
+        workspaceIdentity: state.target.workspaceIdentity,
+        configOptions: config.configOptions,
+      };
+    }
+    // 原因：旧投影只转发模型，丢失原生 slashCommands，刷新与新草稿都无法恢复内置命令。
+    state.acceptedSlashCommandsEvent = {
+      type: "workspace_slash_commands_update",
+      workspacePath: state.target.workspacePath,
+      workspaceIdentity: state.target.workspaceIdentity,
+      commands: config.slashCommands,
     };
-    getWorkspaceEmitter({
-      workspacePath: state.target.workspacePath,
-      workspaceIdentity: state.target.workspaceIdentity,
-    }).fire(state.acceptedConfigEvent);
+    if (config.configOptions.length > 0 && state.acceptedConfigEvent) {
+      emitter.fire(state.acceptedConfigEvent);
+    }
+    emitter.fire(state.acceptedSlashCommandsEvent);
     completeConfigRecoveryFrame(state, deliveryKind);
   }
 
@@ -1591,6 +1605,7 @@ export function createZCodeTaskIndexSyncer(
     const state = workspaceIngests.get(workspaceKey);
     if (!state) return;
     state.acceptedConfigEvent = null;
+    state.acceptedSlashCommandsEvent = null;
     ensureWorkspaceFrameListeners(state);
     // 以前两个 topic 共用 Promise.all 代际，一侧暂态失败会
     // 撤销另一侧已成功的新订阅。现在各自 fresh subscribe + 退避重试。
@@ -1606,6 +1621,7 @@ export function createZCodeTaskIndexSyncer(
     if (!state || state.runtimeGeneration !== generation) return;
     state.runtimeGeneration = null;
     state.acceptedConfigEvent = null;
+    state.acceptedSlashCommandsEvent = null;
     state.indexSubscriptionGeneration += 1;
     state.configSubscriptionGeneration += 1;
     state.indexRecoveryGeneration += 1;
@@ -1690,6 +1706,7 @@ export function createZCodeTaskIndexSyncer(
       indexHasAppliedBase: false,
       configHasAppliedBase: false,
       acceptedConfigEvent: null,
+      acceptedSlashCommandsEvent: null,
       indexRecovery: null,
       configRecovery: null,
       indexRecoveryGeneration: 0,
@@ -1844,8 +1861,9 @@ export function createZCodeTaskIndexSyncer(
         const subscription = getWorkspaceEmitter(workspace).event(listener);
         // 先监听再重放同一 owner 的已接受快照，补齐 renderer refresh 的订阅空档。
         const key = typeof workspace === "string" ? workspace : resolveWorkspaceKey(workspace);
-        const accepted = workspaceIngests.get(key)?.acceptedConfigEvent;
-        if (accepted) listener(accepted);
+        const state = workspaceIngests.get(key);
+        if (state?.acceptedConfigEvent) listener(state.acceptedConfigEvent);
+        if (state?.acceptedSlashCommandsEvent) listener(state.acceptedSlashCommandsEvent);
         return subscription;
       };
     },

@@ -1,4 +1,5 @@
 import { normalizeRemoteConnectionError, sanitizeRemoteConnectionLog } from "@zcode/shared";
+import { installOfflineNetworkJail } from "../shared/offlineNetworkJail.js";
 /* eslint-disable max-lines -- Host 入口集中编排 local/remote service wiring，本次退出保护需要在同一处桥接 host 上报。 */
 /* eslint-disable max-lines -- host process 入口集中维护 local/remote 初始化和资源回收，realtime bridge 接入后先保持同文件收口。 */
 /**
@@ -226,6 +227,12 @@ interface HostRemoteConnectionCapabilities {
     legacyRouteHint?: string;
     signal?: AbortSignal;
   }) => Promise<void>;
+}
+
+// 离线网络隔离（docs/requirements/offline-network-isolation.md）：host 进程入口即
+// 安装 Node 网络 jail，非回环出站快速失败；VITEST 进程跳过，避免破坏单测网络桩。
+if (!process.env.VITEST) {
+  installOfflineNetworkJail({ label: "host" });
 }
 
 let activeRemoteMediaRequests = 0;

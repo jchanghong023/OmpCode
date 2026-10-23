@@ -955,3 +955,9 @@ exceptions:
       - packages/ui/src/settings/DynamicWorkflowModeSetting.tsx
       - packages/ui/src/store/dynamicWorkflowAvailabilityStore.ts
     reason: Admitted upstream files edited only to let the user's dynamic workflow mode choice always win and keep the settings row visible; adopting packages/shared/src and packages/ui/src needs a separate module boundary refactor.
+  - id: offline-network-isolation-guard-files
+    rule: unmanaged-new-file
+    paths:
+      - packages/desktop/src/shared/offlineNetworkJail.ts
+      - packages/desktop/src/main/offlineNetworkGuard.ts
+    reason: 离线网络隔离需求（docs/requirements/offline-network-isolation.md）新增的进程级 jail 与 session 级拦截守卫，是各自层面的唯一所有者；desktop 模块未整体 adopt，仅准入这两个守卫文件，其余新增源码仍受 managed gate 约束。
