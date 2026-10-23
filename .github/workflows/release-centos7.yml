@@ -86,7 +86,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          node packages/desktop/node_modules/electron/install.js
+          # pnpm hoisted 布局不保证 Desktop 下有 electron；按实际模块解析定位安装脚本。
+          node -e "require(require.resolve('electron/install.js', { paths: ['./packages/desktop'] }))"
           pnpm exec tsc -b packages/shared
           # The placeholder CUA package's build is only tsc --noEmit, not artifact compilation.
           pnpm -r --filter "./packages/*" --filter "!@zcode/desktop" --filter "!@zcode/zcode-cua" build
@@ -128,11 +129,13 @@ jobs:
       - name: Create isolated native dependency workspace
         run: node scripts/prepare-centos7-build.mjs create "$RUNNER_TEMP/centos7-workspace"
       - name: Install native build inputs with modern build Node
+        working-directory: ${{ runner.temp }}/centos7-workspace
         shell: bash
         run: |
           set -euo pipefail
-          pnpm --dir "$RUNNER_TEMP/centos7-workspace" install --frozen-lockfile --ignore-scripts
-          node "$RUNNER_TEMP/centos7-workspace/packages/desktop/node_modules/electron/install.js"
+          pnpm install --frozen-lockfile --ignore-scripts
+          # 与桌面构建使用同一解析规则，不能假定依赖位于 Desktop 的 node_modules。
+          node -e "require(require.resolve('electron/install.js', { paths: ['./packages/desktop'] }))"
       - name: Prepare verified Node 20 glibc 2.17 native host
         shell: bash
         run: |
