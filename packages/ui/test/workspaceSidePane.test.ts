@@ -22,6 +22,7 @@ import {
   openSubagentDirectorySidePane,
   openSubagentSessionSidePane,
   openWorkflowRunSidePane,
+  openOmpTeamRunSidePane,
   openWorkflowActorSessionSidePane,
   openWorkflowArtifactSidePane,
   openWorkflowWorkspaceSidePane,
@@ -721,6 +722,97 @@ describe("workspaceSidePane", () => {
     const unlanded = openWorkflowRunSidePane(relanded, base);
     expect(unlanded.tabs).toHaveLength(1);
     expect(unlanded.tabs[0]).not.toHaveProperty("focusPhaseId");
+  });
+
+  it("原生 Team 详情按工作区身份、父会话和 job 幂等打开并保留远程 scope", () => {
+    const request = {
+      workspaceKey: "ssh://one/workspace",
+      workspacePath: "/workspace",
+      workspaceIdentity: "ssh://one/workspace",
+      remoteSessionId: "remote-one",
+      parentSessionId: "parent-a",
+      jobId: "team/job:a",
+      label: "初始讨论",
+    };
+    const first = openOmpTeamRunSidePane(null, request);
+    const otherJob = openOmpTeamRunSidePane(first, { ...request, jobId: "team/job:b" });
+    const reopened = openOmpTeamRunSidePane(otherJob, { ...request, label: "最终方案" });
+
+    expect(reopened.tabs).toHaveLength(2);
+    expect(reopened.activeTabId).toBe(first.activeTabId);
+    expect(reopened.tabs[0]).toMatchObject({
+      type: "omp-team-run",
+      workspaceKey: request.workspaceKey,
+      workspacePath: request.workspacePath,
+      workspaceIdentity: request.workspaceIdentity,
+      remoteSessionId: request.remoteSessionId,
+      parentSessionId: "parent-a",
+      ownerTaskId: "parent-a",
+      jobId: "team/job:a",
+      label: "最终方案",
+    });
+    expect(normalizeWorkspaceSidePaneState(reopened)).toEqual(reopened);
+    expect(
+      getVisibleSidePaneTabs(reopened.tabs, {
+        workspaceKey: request.workspaceKey,
+        ownerTaskId: "parent-a",
+      }),
+    ).toHaveLength(2);
+    expect(
+      getVisibleSidePaneTabs(reopened.tabs, {
+        workspaceKey: request.workspaceKey,
+        ownerTaskId: "parent-b",
+      }),
+    ).toHaveLength(0);
+    expect(
+      getVisibleSidePaneTabs(reopened.tabs, {
+        workspaceKey: "ssh://two/workspace",
+        ownerTaskId: "parent-a",
+      }),
+    ).toHaveLength(0);
+
+    const closed = closeSidePaneTab(reopened, first.activeTabId);
+    expect(closed?.tabs).toHaveLength(1);
+    expect(closed?.tabs[0]).toEqual(otherJob.tabs[1]);
+    expect(openOmpTeamRunSidePane(closed, request).tabs).toHaveLength(2);
+  });
+
+  it("同路径下原生 Team job 按远程身份和父会话隔离，不复用 workflow tab", () => {
+    const request = {
+      workspaceKey: "ssh://one/workspace",
+      workspacePath: "/workspace",
+      workspaceIdentity: "ssh://one/workspace",
+      remoteSessionId: "remote-one",
+      parentSessionId: "parent-a",
+      jobId: "job",
+    };
+    const first = openOmpTeamRunSidePane(null, request);
+    const otherWorkspace = openOmpTeamRunSidePane(first, {
+      ...request,
+      workspaceKey: "ssh://two/workspace",
+      workspaceIdentity: "ssh://two/workspace",
+      remoteSessionId: "remote-two",
+    });
+    const otherParent = openOmpTeamRunSidePane(otherWorkspace, {
+      ...request,
+      parentSessionId: "parent-b",
+    });
+    const withWorkflow = openWorkflowRunSidePane(otherParent, {
+      workspaceKey: request.workspaceKey,
+      workspacePath: request.workspacePath,
+      parentSessionId: request.parentSessionId,
+      runId: request.jobId,
+      toolCallId: "workflow-call",
+    });
+
+    expect(withWorkflow.tabs).toHaveLength(4);
+    expect(new Set(withWorkflow.tabs.map((tab) => tab.id)).size).toBe(4);
+    expect(
+      selectSidePaneTabsForScope(
+        { ...otherParent, activeTabId: "missing" },
+        { workspaceKey: request.workspaceKey, ownerTaskId: "parent-a" },
+      )?.activeTabId,
+    ).toBe(first.activeTabId);
   });
 
   it("按 workspace identity + parent + run 复用并隔离 workflow run 详情 tab", () => {
@@ -2532,6 +2624,7 @@ describe("workspaceSidePane", () => {
         owner: "parent",
       },
       "workflow-run": { tab: { ...base, type: "workflow-run" }, owner: "parent" },
+      "omp-team-run": { tab: { ...base, type: "omp-team-run", jobId: "job" }, owner: "parent" },
       "workflow-directory": { tab: { ...base, type: "workflow-directory" }, owner: "parent" },
       "workflow-actor-session": {
         tab: { ...base, type: "workflow-actor-session", siteId: "actor" },

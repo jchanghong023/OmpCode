@@ -3,13 +3,16 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
 import type { Locale } from "@zcode/shared";
+import { ZCODE_PRODUCT_FLAVOR } from "@zcode/shared";
+import { desktopProductIdentities } from "../../scripts/desktop-product-identity.mjs";
 
-const WORKFLOW_NAME = "Open in ZCode.workflow";
-const WORKFLOW_BUNDLE_ID = "dev.zcode.app.finder-open-workflow";
+const identity = desktopProductIdentities[ZCODE_PRODUCT_FLAVOR];
+const WORKFLOW_NAME = `Open in ${identity.productName}.workflow`;
+const WORKFLOW_BUNDLE_ID = `${identity.appId}.finder-open-workflow`;
 const WORKFLOW_VERSION = "5";
 const SERVICES_MENU_LABELS: Record<Locale, string> = {
-  "zh-CN": "在ZCode中打开",
-  "en-US": "Open in ZCode",
+  "zh-CN": `在 ${identity.productName} 中打开`,
+  "en-US": `Open in ${identity.productName}`,
 };
 
 const workflowScript = `first=""
@@ -22,7 +25,7 @@ done
 
 if [ -n "$first" ]; then
   encoded=$(/usr/bin/osascript -l JavaScript -e 'function run(argv) { return encodeURIComponent(argv[0]); }' "$first")
-  /usr/bin/open "zcode://workspace/open?path=\${encoded}"
+  /usr/bin/open "${identity.protocolScheme}://workspace/open?path=\${encoded}"
 fi
 `;
 

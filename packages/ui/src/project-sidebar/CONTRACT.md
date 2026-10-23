@@ -105,8 +105,11 @@ Root 的原项目完成 guard 从成员目录异步复验 entryId、membershipId
 ## 分组视图
 
 按项目、按分组、最近更新共享同一 ProjectDirectory 任务树与任务命令。分组呈现复用删除前的组件，保持原整行拖拽、右键菜单和空组新建语义。
-`useTaskGroups` 只订阅控制端 Host 的结构，成员身份为 canonical workspace key + taskId；
-视图不创建连接或 Agent，不以缺席清理成员，不修改项目或会话事实。
+`useTaskGroups` 仅聚合当前 workspace target 的实际运行域；target 完整传递 workspacePath、workspaceIdentity 与 remoteSessionId，成员身份为 canonical workspace key + taskId。
+原生 storageScope 未就绪时清空已接受结构并显示不可用原因；runtime lifecycle/restart 先失效旧域，再读取实际事实，待应用的 profile 偏好不触发换域。后端返回物理组织库去重后的 targets 成员，UI 不根据路径或 storageScope 文本猜测跨 Host 同域。
+`useProjectTree` 在实际 runtime 不可用或重启时丢弃已接受的项目/任务树，并使旧代读取响应和创建提交回调失效；收到 available 后重新读取实际域。仅保存待应用的 profile 偏好不使当前目录失效。
+创建必须指定 workspace target；改名、颜色、解散、排序使用分组所属域，任务移动及锚点使用任务实际 target。同域多 workspace 保持可移动，跨 root/profile/Host 的目标菜单禁用并显示原因；跨域拖拽明确拒绝。固定系统分组可聚合展示，但多个物理域共用的系统分组不接受一次性统一修改。
+视图不创建连接或 Agent，不以缺席清理成员，不修改项目或会话事实；切回旧域重新读取原组织数据，不复制或删除旧域数据。
 旧 grouped 偏好在没有有效新版选择时映射到按分组。
 草稿 placement 独立于项目选择；普通项目选择与聊天远程目录确认均沿用原草稿分组，既有会话不读取残留草稿分组。创建 ACK 后，权威目录确认同时触发 UI 提升与独立幂等入组；组织请求不占用共享目录读取，辅助分组重读不进入首发屏障。导航取消立即结束 UI 等待，尚未确认的组织回调继续由原目录 owner 保留，确认后只执行一次；迟到结果不得重新打开详情。
 分组手工移动提交节点/来源/锚点，Host 事务处理并广播刷新。`grouped/` 的嵌套 view 只做展示和当前手势预览，不恢复旧任务事实缓存或整表 applyOrder。吸顶浮层位于统一渐隐容器之外，Hash/收起全部操作挂在既有列表工具栏。关闭草稿行只从 Composer 草稿 owner 清除分组意图。

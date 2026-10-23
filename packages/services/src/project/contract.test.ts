@@ -5,27 +5,14 @@ import { describe, expect, it, vi } from "vitest";
 import type { ProjectRepositoryContract, VirtualProject } from "#src/project-storage/contract.js";
 import type { IProjectService } from "#src/project/contract.js";
 import { createProjectService, bindRemoteProjectIdentities } from "#src/project/index.js";
+import { primaryDirectoryProject } from "./test-fixture.js";
 
 it("projects live primary directory status without changing roots, and rejects stale create requests", async () => {
   const root = await mkdtemp(join(tmpdir(), "project-primary-"));
   const primary = join(root, "primary");
   const extra = join(root, "extra");
   const moved = join(root, "moved");
-  const project: VirtualProject = {
-    id: "project",
-    hostId: "local",
-    name: "Project",
-    nameOverridden: true,
-    roots: [
-      { rootPath: extra, position: 0, isPrimary: false },
-      { rootPath: primary, position: 1, isPrimary: true },
-    ],
-    pinned: false,
-    deleted: false,
-    position: 0,
-    createdAt: 1,
-    updatedAt: 1,
-  };
+  const project = primaryDirectoryProject(primary, extra);
   const readTree = vi.fn(() => ({ projects: [project], tasks: [] }));
   const initializeProjectRoot = vi.fn();
   const afterChange = vi.fn();
@@ -196,6 +183,11 @@ it("routes every foreign project operation to its existing owner and never falls
     throw new Error("must not read local storage");
   });
   const remote = {
+    getOrganizationScope: vi.fn(async () => ({
+      configRoot: "/remote-omp",
+      activeProfile: "work",
+      storageScope: "remote-work",
+    })),
     readDirectory: vi.fn(async () => ({ path: "/remote-home", entries: [] })),
     readProjects: vi.fn(async () => [] as VirtualProject[]),
     readTree: vi.fn(async () => ({ projects: [], tasks: [] })),
@@ -235,6 +227,13 @@ it("routes every foreign project operation to its existing owner and never falls
     workspacePath: "/remote",
   });
   await service.resolveSessionDirectories({ workspacePath: "/remote", taskId: "s" }, "source");
+  await expect(
+    service.getOrganizationScope({ workspacePath: "/remote" }, "source"),
+  ).resolves.toMatchObject({
+    configRoot: "/remote-omp",
+    activeProfile: "work",
+    storageScope: "remote-work",
+  });
   for (const method of Object.values(remote)) expect(method).toHaveBeenCalledTimes(1);
   expect(repository).not.toHaveBeenCalled();
   await expect(service.readTree({ hostId: "offline" })).rejects.toThrow("project.host-offline");

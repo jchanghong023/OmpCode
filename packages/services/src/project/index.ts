@@ -1,10 +1,16 @@
-import type { FileEntry } from "@zcode/shared";
+import type { FileEntry, OmpStartupProfileParams } from "@zcode/shared";
+import { remoteHostIdFromWorkspaceIdentity } from "@zcode/shared";
 import { z } from "zod";
 import { randomUUID } from "node:crypto";
 import { mkdir, stat } from "node:fs/promises";
 import { isAbsolute, join, normalize } from "node:path";
 import type { ProjectRepositoryContract } from "#src/project-storage/contract.js";
-import type { IProjectService, ProjectDirectories, VirtualProject } from "#src/project/contract.js";
+import type {
+  IProjectService,
+  ProjectDirectories,
+  ProjectTree,
+  VirtualProject,
+} from "#src/project/contract.js";
 export { IProjectService } from "#src/project/contract.js";
 export { createLegacySingleRootProjectService } from "#src/project/legacy-single-root.js";
 export {
@@ -73,7 +79,30 @@ const saveProjectSchema = z
   );
 
 export function createProjectService(options: {
-  repository(): Promise<ProjectRepositoryContract>;
+  repository(target?: {
+    workspacePath: string;
+    workspaceIdentity?: string;
+    remoteSessionId?: string;
+  }): Promise<ProjectRepositoryContract>;
+  /** 装配层只提供当前各 workspace 的真实原生域；不包含曾打开过的旧 profile。 */
+  repositories?(): Promise<ProjectRepositoryContract[]>;
+  filterTree?(repository: ProjectRepositoryContract, tree: ProjectTree): Promise<ProjectTree>;
+  organizationScope?(target: {
+    workspacePath: string;
+    workspaceIdentity?: string;
+    remoteSessionId?: string;
+  }): Promise<OmpStartupProfileParams>;
+  /** 从现有 TaskIndex owner 及原生事实选择项目域活源；调用方 source 不能覆盖项目 owner。 */
+  projectWorkspaceSource?(
+    repository: ProjectRepositoryContract,
+    preferred: Parameters<IProjectService["getOrganizationScope"]>[0] | undefined,
+  ): Promise<Parameters<IProjectService["getOrganizationScope"]>[0]>;
+  prepareWorkspaceScope?(
+    source:
+      | { workspacePath: string; workspaceIdentity?: string; remoteSessionId?: string }
+      | undefined,
+    destination: { workspacePath: string; workspaceIdentity?: string; remoteSessionId?: string },
+  ): Promise<void>;
   workspaceDirectory: string;
   ownerHostId?: string;
   directories?: ProjectDirectoryPort;
@@ -90,7 +119,43 @@ export function createProjectService(options: {
   const changed = async () => {
     await options.afterChange?.();
   };
+  const repositories = async () =>
+    options.repositories ? options.repositories() : [await options.repository()];
+  const readTree = async (
+    repository: ProjectRepositoryContract,
+    query: {
+      includeDeleted?: boolean;
+      includeDeletedTasks?: boolean;
+      includeTasks?: boolean;
+    },
+  ) => {
+    const tree = repository.readTree(query);
+    return options.filterTree ? options.filterTree(repository, tree) : tree;
+  };
+  const repositoryForProject = async (id: string) => {
+    if (!options.repositories) return options.repository();
+    for (const repository of await repositories()) {
+      if (
+        (await readTree(repository, { includeDeleted: true, includeTasks: false })).projects.some(
+          (project) => project.id === id,
+        )
+      )
+        return repository;
+    }
+    throw new Error("project.not-found");
+  };
   const service: IProjectService = {
+    async getOrganizationScope(target, hostId) {
+      const remote = await route(
+        hostId ?? remoteHostIdFromWorkspaceIdentity(target.workspaceIdentity ?? "") ?? undefined,
+      );
+      if (remote) return remote.getOrganizationScope(target);
+      if (!options.organizationScope)
+        throw Object.assign(new Error("Native OMP organization scope is unavailable"), {
+          code: "omp.storageScopeUnavailable",
+        });
+      return options.organizationScope(target);
+    },
     async readDirectory(params = {}) {
       const input = z
         .object({
@@ -120,10 +185,21 @@ export function createProjectService(options: {
       return remote
         ? remote.readProjects({ includeDeleted: params?.includeDeleted })
         : projectPrimaryRootStatuses(
-            (await options.repository()).readTree({
-              includeDeleted: params?.includeDeleted,
-              includeTasks: false,
-            }).projects,
+            (
+              await Promise.all(
+                (
+                  await repositories()
+                ).map(
+                  async (repository) =>
+                    (
+                      await readTree(repository, {
+                        includeDeleted: params?.includeDeleted,
+                        includeTasks: false,
+                      })
+                    ).projects,
+                ),
+              )
+            ).flat(),
           );
     },
     async readTree(params) {
@@ -134,11 +210,21 @@ export function createProjectService(options: {
           includeDeletedTasks: params?.includeDeletedTasks,
         });
       // 只读：自动归档由 autoArchiveScheduler 定时执行，读取与点击都不改变 archived。
-      const tree = (await options.repository()).readTree({
-        includeDeleted: params?.includeDeleted,
-        includeDeletedTasks: params?.includeDeletedTasks,
-      });
-      return { ...tree, projects: await projectPrimaryRootStatuses(tree.projects) };
+      const trees = await Promise.all(
+        (await repositories()).map((repository) =>
+          readTree(repository, {
+            includeDeleted: params?.includeDeleted,
+            includeDeletedTasks: params?.includeDeletedTasks,
+          }),
+        ),
+      );
+      return {
+        projects: await projectPrimaryRootStatuses(trees.flatMap((tree) => tree.projects)),
+        tasks: trees.flatMap((tree) => tree.tasks),
+        ...(params?.includeDeletedTasks
+          ? { deletedTasks: trees.flatMap((tree) => tree.deletedTasks ?? []) }
+          : {}),
+      };
     },
     async saveProject(input) {
       input = saveProjectSchema.parse(input);
@@ -159,7 +245,17 @@ export function createProjectService(options: {
           if (!(await stat(path)).isDirectory()) throw new Error("project.directory-required");
         }),
       );
-      const result = (await options.repository()).saveProject({
+      const repository =
+        input.id || input.restoreProjectId
+          ? await repositoryForProject((input.id ?? input.restoreProjectId)!)
+          : await options.repository(roots?.[0] ? { workspacePath: roots[0] } : undefined);
+      if (options.repositories) {
+        for (const root of roots ?? []) {
+          if ((await options.repository({ workspacePath: root })) !== repository)
+            throw new Error("project.cross-profile-roots");
+        }
+      }
+      const result = repository.saveProject({
         ...input,
         roots,
         ...(input.primaryRoot ? { primaryRoot: normalize(input.primaryRoot) } : {}),
@@ -170,7 +266,7 @@ export function createProjectService(options: {
     async deleteProject(id, hostId) {
       const remote = await route(hostId);
       if (remote) return remote.deleteProject(id);
-      (await options.repository()).deleteProject(id);
+      (await repositoryForProject(id)).deleteProject(id);
       await changed();
     },
     async moveTask(input) {
@@ -184,19 +280,26 @@ export function createProjectService(options: {
       // 确认增加缺失 root 时也校验目录，不能通过拖动绕过新增目录的存在性约束。
       if (input.addMissingRoot && !(await stat(input.task.workspacePath)).isDirectory())
         throw new Error("project.directory-required");
-      (await options.repository()).moveTask(input);
+      (await options.repository(input.task)).moveTask(input);
       await changed();
     },
     async reorderProjects(ids, hostId) {
       const remote = await route(hostId);
       if (remote) return remote.reorderProjects(ids);
-      (await options.repository()).reorderProjects(ids);
+      const byRepository = new Map<ProjectRepositoryContract, string[]>();
+      for (const id of ids) {
+        const repository = await repositoryForProject(id);
+        const selected = byRepository.get(repository) ?? [];
+        selected.push(id);
+        byRepository.set(repository, selected);
+      }
+      for (const [repository, selected] of byRepository) repository.reorderProjects(selected);
       await changed();
     },
     async resolveSessionDirectories(task, hostId) {
       const remote = await route(hostId);
       if (remote) return remote.resolveSessionDirectories(task);
-      return (await options.repository()).resolveSessionDirectories(task);
+      return (await options.repository(task)).resolveSessionDirectories(task);
     },
     async prepareSession(params) {
       const draftId =
@@ -204,7 +307,11 @@ export function createProjectService(options: {
       if ((draftId && params?.projectId) || (params?.reuseDraft && !draftId))
         throw new Error("project.invalid-draft-target");
       const remote = await route(params?.hostId);
-      if (remote) return remote.prepareSession({ projectId: params?.projectId });
+      if (remote)
+        return remote.prepareSession({
+          projectId: params?.projectId,
+          sourceWorkspace: params?.sourceWorkspace,
+        });
       const id = params?.projectId;
       const remoteOwner = Boolean(options.ownerHostId && options.ownerHostId !== "local");
       // 旧入口可绕过项目直接在远端 mkdir；必须在目录或会话副作用之前拒绝。
@@ -221,10 +328,13 @@ export function createProjectService(options: {
           // 已交付的目录若被移走，只报告缺失；不能用 mkdir 静默重建空目录。
           if (params?.reuseDraft) {
             if (!(await stat(path)).isDirectory()) throw new Error("project.directory-required");
-          } else await mkdir(path, { recursive: true });
+          } else {
+            await options.prepareWorkspaceScope?.(params?.sourceWorkspace, { workspacePath: path });
+            await mkdir(path, { recursive: true });
+          }
           return { workspacePath: path, additionalDirectories: [], projectId: null };
         }
-        const repo = await options.repository();
+        const repo = await repositoryForProject(id);
         // 新建只需要项目目录；读取全量历史任务会阻塞草稿导航，复检也使用同一项目限定读取。
         let project = repo
           .readTree({ includeTasks: false })
@@ -235,7 +345,19 @@ export function createProjectService(options: {
         if (!project.roots.length) {
           // 多窗口为同一空项目生成同一个目录，不依赖进程间定时锁。
           const path = join(options.workspaceDirectory, id);
+          // 原因：caller 可能仍在 B 域；空项目 A 的新 cwd 必须继承 A 的活源，不能把 B 写进 A。
+          const source = options.projectWorkspaceSource
+            ? await options.projectWorkspaceSource(repo, params?.sourceWorkspace)
+            : params?.sourceWorkspace;
+          if (options.repositories && !options.projectWorkspaceSource)
+            throw new Error("project.workspace-source-unavailable");
+          await options.prepareWorkspaceScope?.(source, { workspacePath: path });
           await mkdir(path, { recursive: true });
+          if (
+            options.projectWorkspaceSource &&
+            (await options.repository({ workspacePath: path })) !== repo
+          )
+            throw new Error("project.workspace-domain-mismatch");
           // 空判断和 INSERT 必须共用写事务，防止另一 Host 的 roots 编辑被覆盖。
           project = repo.initializeProjectRoot(id, path);
           await changed();
@@ -283,6 +405,7 @@ export function bindRemoteProjectIdentities(
   resolveIdentity: (workspacePath: string) => Promise<string>,
 ): IProjectService {
   return {
+    getOrganizationScope: (target, hostId) => service.getOrganizationScope(target, hostId),
     readProjects: (params) => service.readProjects(params),
     async readTree(params) {
       const tree = await service.readTree(params);

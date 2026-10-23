@@ -1,9 +1,10 @@
 import { access, cp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, posix } from "node:path";
+import { resolveDesktopProductIdentity } from "./desktop-product-identity.mjs";
 
-export const DEV_ELECTRON_PROTOCOL_SCHEME = "zcode";
-export const DEV_ELECTRON_APP_NAME = "ZCode Dev";
-export const DEV_ELECTRON_APP_BUNDLE_ID = "dev.zcode.app.development";
+export const DEV_ELECTRON_PROTOCOL_SCHEME = resolveDesktopProductIdentity().protocolScheme;
+export const DEV_ELECTRON_APP_NAME = "OmpCode Dev";
+export const DEV_ELECTRON_APP_BUNDLE_ID = "dev.ompcode.app.development";
 // 副本布局版本，见 prepareDevElectronAppBundle 中的指纹说明。
 export const DEV_ELECTRON_BUNDLE_FORMAT = 2;
 

@@ -5,6 +5,7 @@ import {
   realpathSync,
   rmSync,
   writeFileSync,
+  watch,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -19,7 +20,8 @@ import { ZCodeAgentProcessManager } from "../src/zcode-agent/zcodeAgentProcessMa
 import type { ZCodeProtocolClient } from "../src/zcode-agent/zcodeProtocolClient.js";
 import { ZCODE_AGENT_MCP_STATUS_MODE_UNSUPPORTED_ERROR_CODE } from "../src/zcode-agent/zcodeAgentErrors.js";
 import type { ZCodeAgentServiceEvent } from "../src/zcode-agent/zcodeAgent.js";
-import { getTasksIndexDatabasePath, setDataBaseDir } from "../src/paths.js";
+import { getDataBaseDir, getTasksIndexDatabasePath, setDataBaseDir } from "../src/paths.js";
+import { TaskIndexRepo } from "../src/session/taskIndexRepo.js";
 
 const protocolModelProperties = {
   inputFormat: {
@@ -32,6 +34,68 @@ const protocolModelProperties = {
   outputFormat: { supportsText: true },
 };
 const protocolModelPropertiesJson = JSON.stringify(protocolModelProperties);
+
+// 有状态 stdio fixture：按原生 profile 持久化配置并执行 CAS，拒绝会话或模型执行请求。
+const GLOBAL_TEAM_CONFIG_AGENT = `
+const fs = require("node:fs");
+const path = require("node:path");
+const profileIndex = process.argv.indexOf("--profile");
+const profile = profileIndex < 0 || process.argv[profileIndex + 1] === "default"
+  ? null : process.argv[profileIndex + 1];
+const store = path.join(__dirname, "team-" + (profile ?? "default") + ".json");
+const log = path.join(__dirname, "team-requests.jsonl");
+function send(id, result, error) {
+  process.stdout.write(JSON.stringify({id, ...(error ? {error} : {result})}) + "\\n");
+}
+function readConfig() {
+  const state = fs.existsSync(store) ? JSON.parse(fs.readFileSync(store, "utf8"))
+    : {revision: "0", members: null};
+  return {
+    profile, revision: state.revision, userMembers: state.members,
+    persistentMembers: state.members, effectiveMembers: state.members, source: null,
+    sessionModel: null, participants: [], issues: [], writableScopes: ["user"],
+    storage: {mode:"single",syncState:"not_applicable",
+      active:{readState:"present"},persistent:{readState:"not_applicable"}}
+  };
+}
+require("node:readline").createInterface({input:process.stdin}).on("line", line => {
+  const message = JSON.parse(line);
+  fs.appendFileSync(log, JSON.stringify({...message, pid:process.pid}) + "\\n");
+  if (message.id === undefined) return;
+  if (message.method === "runtime/capabilities") return send(message.id, {ompProfiles:true});
+  if (message.method === "omp/profiles/list") return send(message.id, {
+    activeProfile:profile, profiles:[{name:null,active:profile===null},{name:"second",active:profile==="second"}],
+    configRoot:__dirname,storageScope:__dirname+"::"+(profile??"default")
+  });
+  if (message.method !== "omp/team/configure") {
+    return send(message.id, undefined, {code:-32601,message:"Session/model execution forbidden"});
+  }
+  if (path.resolve(message.params.workspace.workspacePath) !== process.cwd()) {
+    return send(message.id, undefined, {code:-32602,message:"Workspace mismatch"});
+  }
+  const request = message.params.request;
+  if (request.operation === "get_team_models") return send(message.id, {
+    operation:request.operation,data:{models:[]}
+  });
+  let config = readConfig();
+  if (request.operation === "set_team_config") {
+    if (request.expectedRevision !== config.revision) return send(message.id, undefined, {
+      code:-32009,message:"Team configuration revision conflict",
+      data:{code:"revision_conflict",config}
+    });
+    const members = request.members?.map((model, index) => ({
+      index, rawSelector:model.provider + "/" + model.modelId, model, status:"available"
+    })) ?? null;
+    fs.writeFileSync(store, JSON.stringify({revision:String(Number(config.revision)+1),members}));
+    config = readConfig();
+    return send(message.id, {operation:request.operation,data:{
+      saveState:"complete",writes:{active:{status:"saved"},persistent:{status:"not_applicable"}},
+      config,effectiveMatchesRequested:true
+    }});
+  }
+  return send(message.id, {operation:request.operation,data:config});
+});
+`;
 
 function createReadyZCodeAgentService(options?: Parameters<typeof createZCodeAgentService>[0]) {
   return createZCodeAgentService({
@@ -1183,7 +1247,16 @@ process.stdin.on("data", (chunk) => {
       },
     };
     if (delayFirst && updateCount === 1) {
-      setTimeout(() => send(response), 100);
+      const releasePath = logPath + ".release";
+      let released = false;
+      const release = () => {
+        if (released || !fs.existsSync(releasePath)) return;
+        released = true;
+        releaseWatcher.close();
+        send(response);
+      };
+      const releaseWatcher = fs.watch(require("node:path").dirname(logPath), release);
+      release();
     } else {
       send(response);
     }
@@ -1427,16 +1500,30 @@ describe("createZCodeAgentService", () => {
         args: [scriptPath, logPath, "delay-first"],
       }),
     });
+    const {
+      promise: firstUpdate,
+      resolve: firstUpdateReceived,
+      reject: firstUpdateFailed,
+    } = Promise.withResolvers<void>();
+    const firstUpdateWatcher = watch(workspacePath, (_event, filename) => {
+      if (filename !== "protocol.log" || !existsSync(logPath)) return;
+      firstUpdateWatcher.close();
+      firstUpdateReceived();
+    });
+    firstUpdateWatcher.on("error", firstUpdateFailed);
 
     try {
       await service.syncAppRuntimePreferences({
         askUserQuestionAutoResolutionEnabled: false,
       });
       const initializing = service.initialize({ workspacePath });
-      await vi.waitFor(() => expect(existsSync(logPath)).toBe(true));
+      // 等真实首次写入而非默认一秒轮询，进程启动时间不属于偏好竞态的验收边界。
+      await firstUpdate;
       const enabling = service.syncAppRuntimePreferences({
         askUserQuestionAutoResolutionEnabled: true,
       });
+      // 先将 true 提交给 Host，再允许 fixture 完成仍在途的 false 回包。
+      writeFileSync(`${logPath}.release`, "");
 
       await expect(initializing).resolves.toMatchObject({ available: true });
       await expect(enabling).resolves.toBeUndefined();
@@ -1456,6 +1543,7 @@ describe("createZCodeAgentService", () => {
       expect(updates[0]?.params.preferences.askUserQuestionAutoResolutionEnabled).toBe(false);
       expect(updates.at(-1)?.params.preferences.askUserQuestionAutoResolutionEnabled).toBe(true);
     } finally {
+      firstUpdateWatcher.close();
       await service.disposeAllAndWait();
     }
   });
@@ -1560,7 +1648,9 @@ describe("createZCodeAgentService", () => {
     createdDirs.push(workspacePath);
     const commandResolver = vi.fn(() => ({
       command: process.execPath,
-      args: ["-e", "setInterval(() => {}, 1000);"],
+      // 本例验证真实进程的启动、ready 与复用；stdio fixture 应按 EOF 收尾，
+      // 强杀与后代回收由 transport/processTree 专项用例验证，不依赖机器上的 taskkill 耗时。
+      args: ["-e", "process.stdin.resume(); process.stdin.once('end', () => process.exit(0));"],
     }));
     const processLifecycleReporter = {
       onSpawn: vi.fn(),
@@ -2587,7 +2677,7 @@ describe("createZCodeAgentService", () => {
     const scriptPath = join(sandboxRoot, "plugin-cwd-agent.cjs");
     writeFileSync(scriptPath, PLUGIN_LIST_ECHO_CWD_FAKE_AGENT);
     const missingWorkspacePath = join(sandboxRoot, "deleted-workspace");
-    const pluginWorkspacePath = join(sandboxRoot, ".zcode", "plugin-workspace");
+    const pluginWorkspacePath = join(getDataBaseDir(), "plugin-workspace");
     const commandResolver = vi.fn(({ workspacePath }) => ({
       command: process.execPath,
       args: [scriptPath],
@@ -2683,7 +2773,7 @@ describe("createZCodeAgentService", () => {
     const scriptPath = join(sandboxRoot, "mcp-cwd-agent.cjs");
     writeFileSync(scriptPath, MCP_LIST_ECHO_CWD_FAKE_AGENT);
     const missingWorkspacePath = join(sandboxRoot, "deleted-workspace");
-    const pluginWorkspacePath = join(sandboxRoot, ".zcode", "plugin-workspace");
+    const pluginWorkspacePath = join(getDataBaseDir(), "plugin-workspace");
     const commandResolver = vi.fn(({ workspacePath }) => ({
       command: process.execPath,
       args: [scriptPath],
@@ -3010,6 +3100,453 @@ describe("createZCodeAgentService", () => {
       });
     } finally {
       await service.disposeAllAndWait();
+    }
+  });
+
+  it("configures global Team without sessions, preserving CAS, profile and identity routing", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "zcode-global-team-"));
+    createdDirs.push(directory);
+    const workspacePath = join(directory, "missing");
+    const scriptPath = join(directory, "global-team-agent.cjs");
+    writeFileSync(scriptPath, GLOBAL_TEAM_CONFIG_AGENT);
+    const first = {
+      workspacePath,
+      workspaceIdentity: "team-first",
+      remoteSessionId: "remote-first",
+    };
+    const second = {
+      workspacePath,
+      workspaceIdentity: "team-second",
+      remoteSessionId: "remote-second",
+    };
+    const isolated = { workspacePath, workspaceIdentity: "team-isolated" };
+    let selected: string | null = null;
+    const readiness = vi.fn(() => {
+      throw new Error("Team configuration must not require provider readiness");
+    });
+    const service = createZCodeAgentService({
+      commandResolver: () => ({ command: process.execPath, args: [scriptPath] }),
+      spawnFallbackCwd: directory,
+      modelSelectionReadinessSource: { getView: readiness },
+      resolveOmpProfile: async (target) =>
+        target.workspaceIdentity === isolated.workspaceIdentity ? "second" : selected,
+    });
+    try {
+      const initial = await service.configureOmpTeam({
+        ...first,
+        request: { operation: "get_team_config" },
+      });
+      expect(initial).toMatchObject({
+        operation: "get_team_config",
+        data: { revision: "0", profile: null, effectiveMembers: null },
+      });
+      const saved = await service.configureOmpTeam({
+        ...first,
+        request: {
+          operation: "set_team_config",
+          scope: "user",
+          expectedRevision: "0",
+          members: [{ provider: "test", modelId: "team-model" }],
+        },
+      });
+      expect(saved).toMatchObject({
+        operation: "set_team_config",
+        data: { saveState: "complete", config: { revision: "1" }, effectiveMatchesRequested: true },
+      });
+      await expect(
+        service.configureOmpTeam({
+          ...second,
+          request: { operation: "get_team_config" },
+        }),
+      ).resolves.toMatchObject({
+        data: {
+          revision: "1",
+          effectiveMembers: [{ model: { provider: "test", modelId: "team-model" } }],
+        },
+      });
+      await expect(
+        service.configureOmpTeam({
+          ...isolated,
+          request: { operation: "get_team_config" },
+        }),
+      ).resolves.toMatchObject({
+        data: { profile: "second", revision: "0", effectiveMembers: null },
+      });
+      await expect(
+        service.configureOmpTeam({
+          ...first,
+          request: {
+            operation: "set_team_config",
+            scope: "user",
+            expectedRevision: "0",
+            members: null,
+          },
+        }),
+      ).rejects.toMatchObject({ code: -32009, message: "Team configuration revision conflict" });
+      selected = "second";
+      await expect(
+        service.configureOmpTeam({
+          ...first,
+          request: {
+            operation: "set_team_config",
+            scope: "user",
+            expectedRevision: "1",
+            members: null,
+          },
+        }),
+      ).rejects.toMatchObject({ code: "omp.profileRestartRequired" });
+      await expect(
+        service.configureOmpTeam({
+          ...first,
+          request: { operation: "get_team_config" },
+        }),
+      ).resolves.toMatchObject({ data: { profile: null, revision: "1" } });
+      await expect(
+        service.configureOmpTeam({
+          ...first,
+          request: { operation: "get_team_models", query: "team" },
+        }),
+      ).resolves.toEqual({ operation: "get_team_models", data: { models: [] } });
+      await expect(
+        service.configureOmpTeam({
+          ...first,
+          // @ts-expect-error 全局 request 不得偷偷重新接受 sessionId。
+          request: { operation: "get_team_config", sessionId: "hidden-session" },
+        }),
+      ).rejects.toThrow();
+      const requests = readFileSync(join(directory, "team-requests.jsonl"), "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      const configureRequests = requests.filter((entry) => entry.method === "omp/team/configure");
+      expect(configureRequests).toHaveLength(7);
+      expect(
+        configureRequests.every((entry) => entry.params.workspace.workspacePath === directory),
+      ).toBe(true);
+      expect(configureRequests[0].params.workspace).toMatchObject({
+        workspaceIdentity: first.workspaceIdentity,
+        remoteSessionId: first.remoteSessionId,
+      });
+      expect(configureRequests[2].params.workspace).toMatchObject({
+        workspaceIdentity: second.workspaceIdentity,
+        remoteSessionId: second.remoteSessionId,
+      });
+      expect(configureRequests[2].pid).not.toBe(configureRequests[0].pid);
+      expect(requests.every((entry) => !entry.method.startsWith("session/"))).toBe(true);
+      expect(readiness).not.toHaveBeenCalled();
+      // 被 pending 拒绝的草稿与 CAS revision 仍有效；恢复原 profile 选择后可由消费者正常保存。
+      selected = null;
+      await expect(
+        service.configureOmpTeam({
+          ...first,
+          request: {
+            operation: "set_team_config",
+            scope: "user",
+            expectedRevision: "1",
+            members: null,
+          },
+        }),
+      ).resolves.toMatchObject({
+        data: {
+          saveState: "complete",
+          config: { profile: null, revision: "2", effectiveMembers: null },
+        },
+      });
+      await expect(
+        service.configureOmpTeam({
+          ...second,
+          request: { operation: "get_team_config" },
+        }),
+      ).resolves.toMatchObject({
+        data: { profile: null, revision: "2", effectiveMembers: null },
+      });
+    } finally {
+      await service.disposeAllAndWait();
+    }
+  });
+  it.each([false, true])(
+    "keeps profile ownership and switching across cwd fallback=%s",
+    async (fallback) => {
+      const executionDirectory = mkdtempSync(join(tmpdir(), "zcode-profile-state-"));
+      const workspacePath = fallback ? join(executionDirectory, "missing") : executionDirectory;
+      createdDirs.push(executionDirectory);
+      const scriptPath = join(executionDirectory, "profile-agent.cjs");
+      writeFileSync(
+        scriptPath,
+        `
+      const readline = require("node:readline");
+      const value = process.argv[process.argv.indexOf("--profile") + 1];
+      const activeProfile = value === "default" || !process.argv.includes("--profile") ? null : value;
+      readline.createInterface({input:process.stdin}).on("line", line => {
+        const request = JSON.parse(line);
+        if (request.method.startsWith("omp/profiles/") &&
+            require("node:path").resolve(request.params.workspace.workspacePath) !== process.cwd()) {
+          process.stdout.write(JSON.stringify({id:request.id,error:{code:-32602,
+            message:"Profile workspace does not match this process execution directory"}})+"\\n");
+          return;
+        }
+        let result = {};
+        if (request.method === "runtime/capabilities") result = {ompProfiles:true};
+        if (request.method === "omp/profiles/list") result = {
+          activeProfile, profiles:[{name:null,active:activeProfile===null},{name:"second",active:activeProfile==="second"}],
+          configRoot:__dirname,storageScope:__dirname+"::"+(activeProfile??"default"),
+          ...(Object.hasOwn(request.params,"candidate") ? {candidate:request.params.candidate} : {})
+        };
+        if (request.method === "session/list") result = {sessions:[]};
+        if (request.method === "omp/profiles/prepareSwitch") result =
+          require("node:fs").existsSync(require("node:path").join(__dirname,"allow-switch"))
+            ? {ready:true,token:"native-idle-token",blockers:[]}
+            : {ready:false,blockers:[{code:"running",sessionId:"busy-task",message:"Task is running"}]};
+        process.stdout.write(JSON.stringify({id:request.id,result})+"\\n");
+      });
+    `,
+      );
+      let preference: string | null | undefined;
+      const service = createReadyZCodeAgentService({
+        commandResolver: () => ({ command: process.execPath, args: [scriptPath] }),
+        spawnFallbackCwd: executionDirectory,
+        resolveOmpProfile: async () => preference,
+        saveOmpProfile: async (_target, profile) => {
+          preference = profile;
+        },
+      });
+      try {
+        const initial = await service.getOmpProfiles({ workspacePath });
+        expect(initial.activeProfile).toBeNull();
+        const saved = await service.selectOmpProfile({
+          workspacePath,
+          profile: "second",
+          expectedRuntimeIdentity: initial.runtimeIdentity,
+          apply: "next-start",
+        });
+        expect(saved).toMatchObject({
+          selectedProfile: "second",
+          activeProfile: null,
+          pending: true,
+          runtimeIdentity: initial.runtimeIdentity,
+        });
+        expect(saved.storageScope).toBe(initial.storageScope);
+        expect(saved.configRoot).toBe(executionDirectory);
+        await expect(
+          service.configureOmpSession({
+            workspacePath,
+            sessionId: "old-profile-task",
+            operation: "set_model_role",
+            roleId: "default",
+            scope: "user",
+            expectedRevision: "old-role-revision",
+            selection: { kind: "auto" },
+          }),
+        ).rejects.toMatchObject({ code: "omp.profileRestartRequired" });
+        expect(await service.getOmpProfiles({ workspacePath })).toMatchObject({
+          selectedProfile: "second",
+          activeProfile: null,
+          pending: true,
+          runtimeIdentity: initial.runtimeIdentity,
+        });
+        const blocked = await service.selectOmpProfile({
+          workspacePath,
+          profile: "second",
+          expectedRuntimeIdentity: initial.runtimeIdentity,
+          apply: "now",
+        });
+        expect(blocked.blockers).toEqual([
+          { code: "running", sessionId: "busy-task", message: "Task is running" },
+        ]);
+        expect((await service.getOmpProfiles({ workspacePath })).runtimeIdentity).toBe(
+          initial.runtimeIdentity,
+        );
+        await expect(
+          service.selectOmpProfile({
+            workspacePath,
+            profile: null,
+            expectedRuntimeIdentity: "stale-runtime",
+            apply: "now",
+          }),
+        ).rejects.toMatchObject({ code: "omp.profileStaleRuntime" });
+        writeFileSync(join(executionDirectory, "allow-switch"), "");
+        const switched = await service.selectOmpProfile({
+          workspacePath,
+          profile: "second",
+          expectedRuntimeIdentity: initial.runtimeIdentity,
+          apply: "now",
+        });
+        expect(switched).toMatchObject({
+          activeProfile: "second",
+          selectedProfile: "second",
+          pending: false,
+          blockers: [],
+        });
+        expect(switched.runtimeIdentity).not.toBe(initial.runtimeIdentity);
+        expect(switched.storageScope).not.toBe(initial.storageScope);
+        await service.disposeWorkspace({ workspacePath });
+        expect(await service.getOmpProfiles({ workspacePath })).toMatchObject({
+          selectedProfile: "second",
+          activeProfile: "second",
+          pending: false,
+          configRoot: switched.configRoot,
+          storageScope: switched.storageScope,
+        });
+      } finally {
+        await service.disposeAllAndWait();
+      }
+    },
+  );
+  it("inherits actual source launch root/profile for a fresh cwd, not its pending selection, and preserves existing preferences", async () => {
+    const source = { workspacePath: mkdtempSync(join(tmpdir(), "omp-profile-source-")) };
+    const destination = { workspacePath: mkdtempSync(join(tmpdir(), "omp-profile-destination-")) };
+    const existing = { workspacePath: mkdtempSync(join(tmpdir(), "omp-profile-existing-")) };
+    createdDirs.push(source.workspacePath, destination.workspacePath, existing.workspacePath);
+    const scriptPath = join(source.workspacePath, "profile-scope.cjs");
+    writeFileSync(
+      scriptPath,
+      `
+      const readline=require("node:readline");
+      const value=process.argv[process.argv.indexOf("--profile")+1];
+      const activeProfile=value==="default"||!process.argv.includes("--profile")?null:value;
+      const configRoot=process.env.OMP_CONFIG_ROOT;
+      readline.createInterface({input:process.stdin}).on("line",line=>{
+        const request=JSON.parse(line);
+        const result=request.method==="runtime/capabilities"?{ompProfiles:true}:
+          request.method==="omp/profiles/list"?{
+            activeProfile,configRoot,storageScope:configRoot+"::"+(activeProfile??"default"),
+            profiles:[{name:activeProfile,active:true}],
+            ...(Object.hasOwn(request.params,"candidate")?{candidate:request.params.candidate}:{})
+          }:{};
+        process.stdout.write(JSON.stringify({id:request.id,result})+"\\n");
+      });
+    `,
+    );
+    const profiles = new Map<string, string | null>([
+      [source.workspacePath, "work"],
+      [existing.workspacePath, null],
+    ]);
+    const roots = new Map([
+      [source.workspacePath, source.workspacePath],
+      [existing.workspacePath, existing.workspacePath],
+    ]);
+    const service = createZCodeAgentService({
+      commandResolver: () => ({ command: process.execPath, args: [scriptPath] }),
+      resolveSpawnEnv: () => ({ OMP_CONFIG_ROOT: "ambient-root" }),
+      resolveOmpProfile: async (target) => profiles.get(target.workspacePath),
+      resolveOmpConfigRoot: async (target) => roots.get(target.workspacePath),
+      saveOmpProfile: async (target, profile) => {
+        profiles.set(target.workspacePath, profile);
+      },
+      prepareNewWorkspaceOmpProfilePreference: async (target, inherited) => {
+        if (profiles.has(target.workspacePath) || roots.has(target.workspacePath)) return;
+        profiles.set(target.workspacePath, inherited.profile);
+        roots.set(target.workspacePath, inherited.configRoot);
+      },
+    });
+    try {
+      const active = await service.getOmpProfiles(source);
+      await service.selectOmpProfile({
+        ...source,
+        profile: "pending",
+        expectedRuntimeIdentity: active.runtimeIdentity,
+        apply: "next-start",
+      });
+      await service.prepareNewWorkspaceOmpProfile(source, destination);
+      const inherited = await service.getOmpProfiles(destination);
+      expect(inherited).toMatchObject({
+        activeProfile: "work",
+        selectedProfile: "work",
+        configRoot: active.configRoot,
+        storageScope: active.storageScope,
+        pending: false,
+      });
+      expect(await service.getOmpProfiles(source)).toMatchObject({
+        activeProfile: "work",
+        selectedProfile: "pending",
+        pending: true,
+        runtimeIdentity: active.runtimeIdentity,
+      });
+      await service.prepareNewWorkspaceOmpProfile(source, existing);
+      expect(await service.getOmpProfiles(existing)).toMatchObject({
+        activeProfile: null,
+        selectedProfile: null,
+        configRoot: existing.workspacePath,
+        pending: false,
+      });
+      await service.disposeWorkspace(destination);
+      expect(await service.getOmpProfiles(destination)).toMatchObject({
+        activeProfile: "work",
+        configRoot: active.configRoot,
+        storageScope: active.storageScope,
+      });
+    } finally {
+      await service.disposeAllAndWait();
+    }
+  });
+  it("confirms an old unknown task through strict native session/read before admitting its mode mutation", async () => {
+    const workspacePath = mkdtempSync(join(tmpdir(), "omp-profile-unknown-read-"));
+    createdDirs.push(workspacePath);
+    setDataBaseDir(workspacePath);
+    const owner = new TaskIndexRepo();
+    const repository = owner.forOmpScope({ configRoot: workspacePath, profileId: null });
+    const task = {
+      workspacePath,
+      taskId: "legacy-profile-task",
+      traceId: "legacy-trace",
+      title: "Legacy task",
+      createdAt: 1,
+      updatedAt: 2,
+      mode: "build",
+      provider: "glm" as const,
+    };
+    await repository.applyCliFacts({ meta: task });
+    expect(await repository.readTaskOmpProfile(task)).toBeUndefined();
+    const scriptPath = join(workspacePath, "strict-profile-read.cjs");
+    writeFileSync(
+      scriptPath,
+      SHELL_SETTINGS_SNAPSHOT_FAKE_AGENT +
+        `
+      require("node:readline").createInterface({input:process.stdin}).on("line",line=>{
+        const request=JSON.parse(line);
+        const workspace={workspacePath:process.cwd(),workspaceKey:process.cwd()};
+        if(request.method==="runtime/capabilities") send({id:request.id,result:{ompProfiles:true}});
+        if(request.method==="omp/profiles/list") send({id:request.id,result:{
+          activeProfile:null,configRoot:process.cwd(),storageScope:"strict-native-default",
+          profiles:[{name:null,active:true}]
+        }});
+        if(request.method==="session/read") {
+          if(Object.keys(request.params).some(key=>key!=="sessionId")) {
+            send({id:request.id,error:{code:-32602,message:"Unrecognized session/read parameter"}});
+          } else send({id:request.id,result:snapshot(workspace,request.params.sessionId)});
+        }
+        if(request.method==="session/setMode") {
+          const state=snapshot(workspace,request.params.sessionId);
+          state.session.mode=request.params.mode;
+          state.settings.mode.current=request.params.mode;
+          state.projection.mode=request.params.mode;
+          send({id:request.id,result:state});
+        }
+      });
+    `,
+    );
+    const service = createReadyZCodeAgentService({
+      commandResolver: () => ({
+        command: process.execPath,
+        args: [scriptPath, join(workspacePath, "requests.jsonl")],
+      }),
+      resolveOmpProfile: async () => undefined,
+    });
+    try {
+      const changed = await service.setMode({
+        workspacePath,
+        sessionId: task.taskId,
+        mode: "plan",
+      });
+      expect(changed.session).toMatchObject({ sessionId: task.taskId, mode: "plan" });
+      expect(await repository.getTaskMeta(task)).toMatchObject({
+        taskId: task.taskId,
+        title: task.title,
+        ompProfile: null,
+      });
+    } finally {
+      await service.disposeAllAndWait();
+      owner.close();
     }
   });
 });

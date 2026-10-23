@@ -4,6 +4,16 @@
 
 当前分工：本轮已获两仓联调与相关修复授权。用户确认 OMP fulltest 当前通过，不重跑；优先让 ZCode UT／E2E 通过，确认与 OMP 无关的失败暂时过滤。早期使用安装版 `C:/Users/jiang/AppData/Local/omp/omp.exe`；当前保留集改用下文已实测的 Bun 绝对源码入口，不启动原 `zcode-cli`，不覆盖 Host workspace cwd。源码验证不冒充安装版产物验证。
 
+## 最新局部验证与未完成项（2026-10-23）
+
+本节是当前结果快照；下文按时间保留的历史门禁、permission 排除与独立 Team 页面记录不覆盖更新后的验收状态。permission、M01／M02、model restore 以及 Tan 子代理／工作流有效通过记录继续保留各自范围。
+
+- Wiki／Repo 真实 GUI bg229 PASS、exit 0，170.04s，run `desktop-e2e-20261022224641003-p64788-9616faedaa677057`；mention 真实 GUI bg230 PASS、exit 0，246.40s，run `desktop-e2e-20261022224640810-p85936-69d818d634ab7f89`。原始结果位于 `packages/desktop/.e2e-artifacts/<run>/test-results.ndjson`；Wiki／Repo 另有 `omp-indexes-evidence.json`、明亮及 900px 窄屏截图。具体动作、可点击证据路径和范围见 [coverage matrix](conversation-session-e2e-coverage-matrix.md#omp-native-wikirepo-与-mention-最新真实-gui-证据2026-10-23)。
+- Wiki 新增、完整正文、grep 边界空白、原生纯空白错误、字面 `[ ]`、删除，以及 Repo 文本、真实 Python 符号／路径、更新、重建、删除均通过，`modelRequests=0`、`sourcePreserved=true`。mention 同一个 `it` 中原触发器／session catalog 生命周期与真实 SharedSkill 的 assistant 执行结果均过；受控 localhost 模型不冒充真实模型。
+- Parent 已执行根 UT bg233：100 文件、1905 passed／31 skipped；这是当前白名单，不是原完整全仓 UT。Desktop full typecheck bg237 exit 0（28.73s）、lint 98 warnings／0 errors、architecture 0 violations（11.31s）。
+- Parent 已执行 Native `check:ts` bg235：新 action PASS（105.25s），37 warnings／0 errors，BEP `static/runs/cafa0c33-7c0b-4c98-a894-aafe34a97b1a/events.jsonl`，不记为旧缓存结果；原生 Team／projection／commands 回归 bg236：3 文件、84 pass、680 asserts（2.65s）。
+- **Team 配置与完整聊天 E2E 已通过**：Parent bg323，exit 0，墙钟 146.93s，无重试，真实 Electron `omp-team.e2e.ts` 整 spec 1／1 PASS，run `desktop-e2e-20261023002309604-p63584-57f2834ff080b229`。覆盖全局模型配置 inline 无需 session、优先已配置可用模型、选择／复制／排序／保存与跨两个 session 读取，以及原生讨论阶段、节点角色／模型／边和工具详情、折叠不取消、完成后同会话续聊、取消、刷新与冷启动恢复。该 run 保留 `test-results.ndjson`、summary、配置 saved／relations／cancelled／reopened 截图、native completed journal、Provider requests 与 `omp-team-chat-history.txt`；早期 helper／details 夹具／navigation 输入故障不再是当前阻塞。旧独立 Team 运行页结果未用于替代本轮。本次仅为 Windows 源码 Electron 与隔离 localhost 模型的 ZCode 验证，不报告 OMP 本次验收或发布，不代表安装版、手机、真实模型、远端、其他平台或全产品通过。
+
 ## OMP owner 修复状态（2026-10-22 ~11:10，OMP 侧 Agent 回写）
 
 下述内容为 2026-10-22 ~11:10 的历史回写：当时报告 8 项已修复并通过 OMP 门禁（fastcheck PASS；fulltest PASS 573.1s/900s，含用户裁定跳过的 collab 用例）。后续回退和当前验证边界见本文件末节，不将此表当作当前源码状态：

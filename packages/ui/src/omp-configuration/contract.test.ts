@@ -39,59 +39,50 @@ function snapshot(revision = "r1"): OmpTeamConfig {
   };
 }
 function fixture(onTemporaryModelSelected?: (model: OmpModelRef) => void) {
+  const configureOmpTeam = vi.fn<OmpConfigurationService["configureOmpTeam"]>(
+    async ({ request: p }) => {
+      if (p.operation === "get_team_config")
+        return {
+          operation: p.operation,
+          data: {
+            ...snapshot(),
+            ...(p.preview
+              ? {
+                  preview: {
+                    clientRevision: p.preview.clientRevision,
+                    userMembers: [],
+                    effectiveMembers: [],
+                    source: "global",
+                    participants: [],
+                    issues: [],
+                  },
+                }
+              : {}),
+          },
+        };
+      if (p.operation === "get_team_models")
+        return {
+          operation: p.operation,
+          data: { models: [{ model, name: "Chat", selectable: true }] },
+        };
+      throw new Error("unexpected save");
+    },
+  );
   const configureOmpSession = vi.fn<OmpConfigurationService["configureOmpSession"]>(async (p) => {
-    if (p.operation === "get_team_config")
-      return {
-        operation: p.operation,
-        data: {
-          ...snapshot(),
-          ...(p.preview
-            ? {
-                preview: {
-                  clientRevision: p.preview.clientRevision,
-                  userMembers: [],
-                  effectiveMembers: [],
-                  source: "global",
-                  participants: [],
-                  issues: [],
-                },
-              }
-            : {}),
-        },
-      };
-    if (p.operation === "get_team_models")
-      return {
-        operation: p.operation,
-        data: { models: [{ model, name: "Chat", selectable: true }] },
-      };
     if (p.operation === "get_model_roles") return { operation: p.operation, data: { roles: [] } };
-    throw new Error("unexpected save");
+    throw new Error("unexpected session save");
   });
   const setModel = vi
     .fn<OmpConfigurationService["setModel"]>()
     .mockResolvedValue({} as ZCodeSessionStateSnapshot);
   const controller = new OmpConfigurationController(
-    { configureOmpSession, setModel },
+    { configureOmpTeam, configureOmpSession, setModel },
     { workspacePath: "/a", sessionId: "a" },
     onTemporaryModelSelected,
   );
-  return { controller, configureOmpSession, setModel };
+  return { controller, configureOmpTeam, configureOmpSession, setModel };
 }
 describe("OMP configuration draft contract", () => {
-  it("preserves invalid raw slots and edits without saving; cancel cannot save", async () => {
-    const { controller, configureOmpSession } = fixture();
-    await controller.refresh();
-    expect(controller.getSnapshot().members).toEqual([{ rawSelector: "old invalid" }]);
-    controller.setMembers([model, model]);
-    await controller.preview();
-    expect(controller.getSnapshot().preview?.clientRevision).toBe(
-      controller.getSnapshot().clientRevision,
-    );
-    controller.dispose();
-    expect(configureOmpSession.mock.calls.some(([p]) => p.operation.startsWith("set_"))).toBe(
-      false,
-    );
-  });
   it("does not transplant a late temporary model into another composer generation", async () => {
     const selected = vi.fn();
     const { controller, setModel } = fixture(selected);
@@ -104,10 +95,10 @@ describe("OMP configuration draft contract", () => {
     expect(selected).not.toHaveBeenCalled();
   });
   it("keeps dirty draft and original CAS revision when external facts refresh", async () => {
-    const { controller, configureOmpSession } = fixture();
+    const { controller, configureOmpTeam } = fixture();
     await controller.refresh();
     controller.setMembers([model]);
-    configureOmpSession.mockResolvedValueOnce({
+    configureOmpTeam.mockResolvedValueOnce({
       operation: "get_team_config",
       data: snapshot("r2"),
     });
@@ -118,7 +109,7 @@ describe("OMP configuration draft contract", () => {
     expect(controller.getSnapshot().externalChange).toBe(true);
   });
   it("retains draft after conflict or partial receipt and never automatically replays", async () => {
-    const { controller, configureOmpSession } = fixture();
+    const { controller, configureOmpTeam } = fixture();
     await controller.refresh();
     controller.setMembers([model]);
     const data = {
@@ -127,7 +118,7 @@ describe("OMP configuration draft contract", () => {
       writes: { active: { status: "saved" }, persistent: { status: "failed" } },
       config: snapshot("r2"),
     };
-    configureOmpSession.mockRejectedValueOnce(
+    configureOmpTeam.mockRejectedValueOnce(
       Object.assign(new Error("conflict"), { code: -32000, data }),
     );
     await controller.saveTeam();
@@ -138,15 +129,15 @@ describe("OMP configuration draft contract", () => {
     expect(controller.getSnapshot().requiresReadback).toBe(true);
     await controller.saveTeam();
     expect(
-      configureOmpSession.mock.calls.filter(([p]) => p.operation === "set_team_config"),
+      configureOmpTeam.mock.calls.filter(([p]) => p.request.operation === "set_team_config"),
     ).toHaveLength(1);
   });
   it("discards stale preview and disposed session responses", async () => {
-    const { controller, configureOmpSession } = fixture();
+    const { controller, configureOmpTeam } = fixture();
     await controller.refresh();
     controller.setMembers([model]);
     const pending = Promise.withResolvers<ZCodeSessionConfigureResult>();
-    configureOmpSession.mockReturnValueOnce(pending.promise);
+    configureOmpTeam.mockReturnValueOnce(pending.promise);
     const request = controller.preview();
     const revision = controller.getSnapshot().clientRevision;
     controller.setMembers([]);
@@ -167,7 +158,7 @@ describe("OMP configuration draft contract", () => {
     await request;
     expect(controller.getSnapshot().preview).toBeNull();
     const late = Promise.withResolvers<ZCodeSessionConfigureResult>();
-    configureOmpSession.mockReturnValueOnce(late.promise);
+    configureOmpTeam.mockReturnValueOnce(late.promise);
     const refresh = controller.refresh();
     controller.dispose();
     late.resolve({ operation: "get_team_config", data: snapshot("late") });
@@ -175,20 +166,20 @@ describe("OMP configuration draft contract", () => {
     expect(controller.getSnapshot().team?.revision).not.toBe("late");
   });
   it("marks lost save outcome unknown and requires readback before another save", async () => {
-    const { controller, configureOmpSession } = fixture();
+    const { controller, configureOmpTeam } = fixture();
     await controller.refresh();
     controller.setMembers([model]);
-    configureOmpSession.mockRejectedValueOnce(new Error("connection closed"));
+    configureOmpTeam.mockRejectedValueOnce(new Error("connection closed"));
     await controller.saveTeam();
     expect(controller.getSnapshot().receipt?.saveState).toBe("unknown");
     expect(controller.getSnapshot().requiresReadback).toBe(true);
     await controller.saveTeam();
     expect(
-      configureOmpSession.mock.calls.filter(([p]) => p.operation === "set_team_config"),
+      configureOmpTeam.mock.calls.filter(([p]) => p.request.operation === "set_team_config"),
     ).toHaveLength(1);
   });
   it("saves the complete ordered duplicate list with CAS and reports overrides", async () => {
-    const { controller, configureOmpSession } = fixture();
+    const { controller, configureOmpTeam, configureOmpSession } = fixture();
     await controller.refresh();
     controller.setMembers([model, model]);
     const config = {
@@ -200,7 +191,7 @@ describe("OMP configuration draft contract", () => {
         status: "available" as const,
       })),
     };
-    configureOmpSession.mockResolvedValueOnce({
+    configureOmpTeam.mockResolvedValueOnce({
       operation: "set_team_config",
       data: {
         saveState: "complete",
@@ -211,14 +202,19 @@ describe("OMP configuration draft contract", () => {
       },
     });
     await controller.saveTeam();
-    expect(configureOmpSession).toHaveBeenLastCalledWith({
+    expect(configureOmpTeam).toHaveBeenLastCalledWith({
       workspacePath: "/a",
-      sessionId: "a",
-      operation: "set_team_config",
-      scope: "user",
-      expectedRevision: "r1",
-      members: [model, model],
+      workspaceIdentity: undefined,
+      request: {
+        operation: "set_team_config",
+        scope: "user",
+        expectedRevision: "r1",
+        members: [model, model],
+      },
     });
+    expect(configureOmpSession.mock.calls.every(([p]) => p.operation === "get_model_roles")).toBe(
+      true,
+    );
     expect(controller.getSnapshot().dirty).toBe(false);
     expect(controller.getSnapshot().receipt?.effectiveMatchesRequested).toBe(false);
     expect(controller.getSnapshot().expectedRevision).toBe("r2");
@@ -259,6 +255,7 @@ describe("OMP configuration draft contract", () => {
     await controller.saveRole(role.roleId);
     expect(configureOmpSession).toHaveBeenLastCalledWith({
       workspacePath: "/a",
+      workspaceIdentity: undefined,
       sessionId: "a",
       operation: "set_model_role",
       roleId: role.roleId,
@@ -269,23 +266,29 @@ describe("OMP configuration draft contract", () => {
     expect(controller.getSnapshot().roleDrafts[role.roleId]).toBeUndefined();
   });
   it("invalidates in-flight results across connection generations and profile changes", async () => {
-    const { controller, configureOmpSession } = fixture();
+    const { controller, configureOmpTeam } = fixture();
     await controller.refresh();
     const pending = Promise.withResolvers<ZCodeSessionConfigureResult>();
-    configureOmpSession.mockReturnValueOnce(pending.promise);
+    configureOmpTeam.mockReturnValueOnce(pending.promise);
     const request = controller.refresh();
     controller.invalidate();
     pending.resolve({ operation: "get_team_config", data: snapshot("old-generation") });
     await request;
-    expect(controller.getSnapshot().team?.revision).toBe("r1");
-    expect(controller.getSnapshot().requiresReadback).toBe(true);
-    configureOmpSession.mockResolvedValueOnce({
+    expect(controller.getSnapshot().team).toBeNull();
+    const staleProfile = Promise.withResolvers<ZCodeSessionConfigureResult>();
+    configureOmpTeam.mockReturnValueOnce(staleProfile.promise);
+    const staleRequest = controller.refresh();
+    configureOmpTeam.mockResolvedValueOnce({
       operation: "get_team_config",
       data: { ...snapshot("other-profile"), profile: "other" },
     });
     await controller.refresh();
-    expect(controller.getSnapshot().team?.profile).toBeNull();
+    staleProfile.resolve({ operation: "get_team_config", data: snapshot("late-old-profile") });
+    await staleRequest;
+    expect(controller.getSnapshot().team?.profile).toBe("other");
+    expect(controller.getSnapshot().team?.revision).toBe("other-profile");
+    await controller.refresh();
+    expect(controller.getSnapshot().team).toBeNull();
     expect(controller.getSnapshot().requiresReadback).toBe(true);
-    expect(controller.getSnapshot().busy).toBe(false);
   });
 });

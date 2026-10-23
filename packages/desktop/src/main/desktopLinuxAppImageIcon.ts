@@ -10,18 +10,10 @@ import {
 // 从 desktopLinuxDeepLinkRegistration 拆出的 AppImage 用户级图标安装逻辑：
 // 图标集成是可选的桌面增强，与 deep link 协议注册分属不同关注点，独立成模块便于各自演进。
 
-const LINUX_APP_ICON_NAME = "zcode";
 const LINUX_APP_ICON_SIZE = "512x512";
 
-function resolveLinuxUserIconFilePath(dataDir: string): string {
-  return join(
-    dataDir,
-    "icons",
-    "hicolor",
-    LINUX_APP_ICON_SIZE,
-    "apps",
-    `${LINUX_APP_ICON_NAME}.png`,
-  );
+function resolveLinuxUserIconFilePath(dataDir: string, iconName: string): string {
+  return join(dataDir, "icons", "hicolor", LINUX_APP_ICON_SIZE, "apps", `${iconName}.png`);
 }
 
 function copyFileIfChanged(sourcePath: string, targetPath: string): boolean {
@@ -42,11 +34,12 @@ export function shouldInstallAppImageDesktopIcon(params: {
 
 export function installLinuxAppImageDesktopIcon(params: {
   dataDir: string;
+  iconName: string;
   iconSourcePath: string;
   logger: LinuxDeepLinkRegistrationLogger;
   runCommand?: LinuxDesktopCommandRunner;
 }): { iconFilePath: string; installed: boolean; changed: boolean } {
-  const iconFilePath = resolveLinuxUserIconFilePath(params.dataDir);
+  const iconFilePath = resolveLinuxUserIconFilePath(params.dataDir, params.iconName);
   if (!existsSync(params.iconSourcePath)) {
     params.logger.warn("[deep-link] Linux AppImage 图标源文件不存在，跳过用户级图标安装", {
       iconSourcePath: params.iconSourcePath,
@@ -57,8 +50,8 @@ export function installLinuxAppImageDesktopIcon(params: {
 
   mkdirSync(dirname(iconFilePath), { recursive: true });
   const changed = copyFileIfChanged(params.iconSourcePath, iconFilePath);
-  // AppImage 直跑不会像 deb 安装包一样把 Icon=zcode 写入 hicolor 图标主题。
-  // 这里在用户级 hicolor 目录补齐同名图标，让任务栏/Dock 有机会按 desktop entry 命中真实图标。
+  // 原 writer 固定写 zcode.png，既无法匹配 fork 的 Icon，也会覆盖双装的上游图标。
+  // 使用 desktop entry 的同一产品图标名，让用户级 hicolor 文件与 Icon 精确对应。
   if (!changed) {
     return { iconFilePath, installed: true, changed };
   }
@@ -92,6 +85,7 @@ export function installLinuxAppImageDesktopIcon(params: {
 
 export function installLinuxAppImageDesktopIconBestEffort(params: {
   dataDir: string;
+  iconName: string;
   env?: { APPIMAGE?: string };
   iconSourcePath?: string;
   logger: LinuxDeepLinkRegistrationLogger;
@@ -110,6 +104,7 @@ export function installLinuxAppImageDesktopIconBestEffort(params: {
   try {
     return installLinuxAppImageDesktopIcon({
       dataDir: params.dataDir,
+      iconName: params.iconName,
       iconSourcePath: params.iconSourcePath,
       logger: params.logger,
       runCommand: params.runCommand,

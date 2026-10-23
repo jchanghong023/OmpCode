@@ -1,4 +1,5 @@
 import { useComposerClientNamespace } from "@/hooks/useServices.js";
+import { useOmpStorageScope } from "@/hooks/useZCodeAgentService.js";
 import { readComposerWorkspaceScope } from "@/v4/composer/composerDraftStore.js";
 import {
   useCallback,
@@ -54,7 +55,10 @@ import {
 } from "@/project-sidebar/grouped/view.js";
 import { mutateProjectTask, type ProjectTaskMutation } from "@/project-sidebar/task-mutation.js";
 import { useBaseWorkspaceServices } from "@/hooks/useWorkspaceServices.js";
-import { resolveRemoteWorkspaceSessionIdForTarget } from "@/hooks/useResolvedRemoteWorkspaceSessionId.js";
+import {
+  resolveRemoteWorkspaceSessionIdForTarget,
+  useResolvedRemoteWorkspaceSessionId,
+} from "@/hooks/useResolvedRemoteWorkspaceSessionId.js";
 import { useRemoteWorkspaceSessionStore } from "@/store/remoteWorkspaceSessionStore.js";
 import { useZCodeSessionStore } from "@/store/zcodeSessionStore.js";
 import {
@@ -74,6 +78,7 @@ export function TaskGroupedView({
   onCreate,
   workspacePath,
   workspaceIdentity,
+  workspaceRemoteSessionId,
   onOpenAutomations,
   toolbarTarget,
   stickyTarget,
@@ -85,6 +90,7 @@ export function TaskGroupedView({
   onCreate(groupId: string | null): void;
   workspacePath: string;
   workspaceIdentity?: string;
+  workspaceRemoteSessionId?: string;
   onOpenAutomations?: () => void;
   toolbarTarget: HTMLElement | null;
   stickyTarget: HTMLElement | null;
@@ -97,10 +103,17 @@ export function TaskGroupedView({
     useBaseWorkspaceServices();
   const workspaceKey = workspaceIdentity?.trim() || workspacePath;
   const composerClientNamespace = useComposerClientNamespace();
+  const remoteSessionId = useResolvedRemoteWorkspaceSessionId(
+    workspacePath,
+    workspaceRemoteSessionId,
+    workspaceIdentity,
+  );
+  const storageScope = useOmpStorageScope(workspacePath, workspaceIdentity, remoteSessionId);
   const draftScope = readComposerWorkspaceScope(
     workspacePath,
     workspaceIdentity,
     composerClientNamespace,
+    storageScope,
   );
   const activeTaskId = useZCodeSessionStore(
     (state) => state.workspaces[workspaceKey]?.activeTaskId ?? null,
@@ -108,15 +121,24 @@ export function TaskGroupedView({
   const draftFocusVersion = useZCodeSessionStore(
     (state) => state.workspaces[workspaceKey]?.draftFocusVersion,
   );
-  // 空正文不再持久化；分组行订阅现有内存草稿，不能靠 localStorage 或手动重绘维持归属。
-  const currentDraftGroupId = useZCodeSessionStore(
-    (state) => state.workspaces[workspaceKey]?.draftTaskGroupId,
-  );
-  // 查看会话时仅显示尚未提交的文字草稿；首发已移除保存记录，不能复活旧的内存 placement。
-  const draftGroupId = activeTaskId
-    ? readV4ComposerDraft(workspacePath, workspaceIdentity, V4_DRAFT_SCOPE_ROOT, draftScope)
-        ?.taskGroupId
-    : currentDraftGroupId;
+  // Root 导航 owner 标记实际域；无标签的旧 workspace 内存不能认领到当前 profile。
+  const currentDraftGroupId = useZCodeSessionStore((state) => {
+    const workspace = state.workspaces[workspaceKey];
+    return storageScope && workspace?.draftStorageScope === storageScope
+      ? workspace.draftTaskGroupId
+      : undefined;
+  });
+  const savedDraftGroupId = draftScope
+    ? readV4ComposerDraft(workspacePath, workspaceIdentity, V4_DRAFT_SCOPE_ROOT, {
+        ...draftScope,
+        remoteSessionId,
+      })?.taskGroupId
+    : undefined;
+  const draftGroupId = !storageScope
+    ? undefined
+    : activeTaskId || currentDraftGroupId === undefined
+      ? savedDraftGroupId
+      : currentDraftGroupId;
   const [collapsed, setCollapsed] = useState(readGroupedTaskCollapsedGroupIds);
   const changeCollapsed = useCallback<Dispatch<SetStateAction<Set<string>>>>((update) => {
     setCollapsed((current) => (typeof update === "function" ? update(current) : update));
@@ -153,12 +175,14 @@ export function TaskGroupedView({
     [remoteState],
   );
   const authoritativeView = useMemo(
-    () => buildGroupedTaskView(tasks, organization.structure),
-    [tasks, organization.structure],
+    () => buildGroupedTaskView(organization.available ? tasks : [], organization.structure),
+    [tasks, organization.structure, organization.available],
   );
   const report = (error: unknown, messageId = "taskGroup.updateFailed") => {
     logger.error("[task-groups] 分组操作失败", error);
-    toast(intl.formatMessage({ id: messageId }));
+    toast(
+      `${intl.formatMessage({ id: messageId })}${error instanceof Error ? `：${error.message}` : ""}`,
+    );
   };
   const action = (work: () => Promise<unknown>, messageId?: string) => {
     void work().catch((error) => report(error, messageId));
@@ -178,8 +202,27 @@ export function TaskGroupedView({
     onMove: move,
   });
   const groups = useMemo(
-    () => drag.view.nodes.flatMap((node) => (node.type === "group" ? [node.group] : [])),
-    [drag.view.nodes],
+    () =>
+      drag.view.nodes.flatMap((node) =>
+        node.type === "group"
+          ? [
+              {
+                ...node.group,
+                moveUnavailableReason: (task: ProjectTask) =>
+                  organization.moveUnavailableReason(task, node.group.id),
+              },
+            ]
+          : [],
+      ),
+    [drag.view.nodes, organization.moveUnavailableReason],
+  );
+  const groupWorkspaceTarget = {
+    workspacePath,
+    workspaceIdentity,
+    remoteSessionId: remoteSessionId ?? undefined,
+  };
+  const groupCreationAvailable = Boolean(
+    storageScope && organization.targetAvailable(groupWorkspaceTarget),
   );
   const allExpanded = groups.every((group) => !collapsed.has(group.id));
   const toggleCollapsed = (id: string) =>
@@ -190,6 +233,11 @@ export function TaskGroupedView({
       return next;
     });
   const createTask = (groupId: string | null) => {
+    const reason = organization.moveUnavailableReason(groupWorkspaceTarget, groupId);
+    if (!storageScope || reason) {
+      toast(reason ?? organization.unavailableReason ?? "实际 OMP 运行域尚未就绪");
+      return;
+    }
     if (groupId === OFF_PEAK_DEFAULT_GROUP_ID) {
       onOpenAutomations?.();
       return;
@@ -203,8 +251,15 @@ export function TaskGroupedView({
     onCreate(groupId);
   };
   const closeDraft = () => {
-    clearV4ComposerDraftTaskGroup(workspacePath, workspaceIdentity, draftScope);
-    useZCodeSessionStore.getState().clearDraftTaskGroup(workspacePath, workspaceIdentity);
+    if (!storageScope) return;
+    if (draftScope)
+      clearV4ComposerDraftTaskGroup(workspacePath, workspaceIdentity, {
+        ...draftScope,
+        remoteSessionId,
+      });
+    const state = useZCodeSessionStore.getState();
+    if (state.workspaces[workspaceKey]?.draftStorageScope === storageScope)
+      state.clearDraftTaskGroup(workspacePath, workspaceIdentity);
   };
   useEffect(() => {
     if (draftGroupId !== null || !drag.root.current) return;
@@ -349,17 +404,24 @@ export function TaskGroupedView({
                 )}
               </Button>
             </ControlHintTooltip>
-            <ControlHintTooltip title={intl.formatMessage({ id: "taskGroup.newGroup" })}>
+            <ControlHintTooltip
+              title={
+                groupCreationAvailable
+                  ? intl.formatMessage({ id: "taskGroup.newGroup" })
+                  : (organization.unavailableReason ?? "实际 OMP 运行域尚未就绪")
+              }
+            >
               <Button
                 variant="ghost"
                 size="icon-sm"
                 className="shrink-0 text-foreground-subtle hover:text-foreground"
                 data-testid="task-group-add"
                 aria-label={intl.formatMessage({ id: "taskGroup.newGroup" })}
-                disabled={!organization.available}
+                disabled={!groupCreationAvailable}
                 onClick={() =>
                   action(async () => {
                     const group = await organization.save({
+                      target: groupWorkspaceTarget,
                       title: intl.formatMessage({ id: "taskGroup.defaultTitle" }),
                     });
                     setNewGroupSetupId(group.id);
@@ -411,6 +473,15 @@ export function TaskGroupedView({
       />
       <DndContext {...drag.dnd}>
         <div ref={drag.root} className="px-2 pb-4" data-testid="task-grouped-view">
+          {organization.unavailableReason && (
+            <p
+              role="status"
+              className="px-2 py-1 text-ui-xs text-foreground-subtle"
+              data-testid="task-group-scope-unavailable"
+            >
+              {organization.unavailableReason}
+            </p>
+          )}
           {draftGroupId === null && (
             <GroupedDraftTaskRow
               active={!activeTaskId}

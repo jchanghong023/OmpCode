@@ -81,23 +81,25 @@ export function GroupedTaskContextMenuContent({
             </ContextMenuItem>
           </SidebarNativeTooltip>
           <ContextMenuSeparator />
-          {groups.map((group) => (
-            <SidebarNativeTooltip key={group.id}>
-              <ContextMenuItem
-                data-task-group-target={group.id}
-                disabled={Boolean(disabledReason) || group.id === currentGroupId}
-                title={disabledReason}
-                onSelect={() => {
-                  if (!disabledReason) {
-                    onMoveTaskToGroup(task, group.id);
-                  }
-                }}
-              >
-                <TaskGroupColorDot color={group.color} />
-                <span className="truncate">{group.title}</span>
-              </ContextMenuItem>
-            </SidebarNativeTooltip>
-          ))}
+          {groups.map((group) => {
+            const moveReason = disabledReason ?? group.moveUnavailableReason?.(task);
+            return (
+              <SidebarNativeTooltip key={group.id}>
+                <ContextMenuItem
+                  data-task-group-target={group.id}
+                  disabled={Boolean(moveReason) || group.id === currentGroupId}
+                  title={moveReason ?? undefined}
+                  onSelect={() => {
+                    if (!moveReason) onMoveTaskToGroup(task, group.id);
+                  }}
+                >
+                  <TaskGroupColorDot color={group.color} />
+                  <span className="truncate">{group.title}</span>
+                  {moveReason && <span className="sr-only">{moveReason}</span>}
+                </ContextMenuItem>
+              </SidebarNativeTooltip>
+            );
+          })}
         </ContextMenuSubContent>
       </ContextMenuSub>
       <SidebarNativeTooltip>

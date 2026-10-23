@@ -2,10 +2,10 @@
 !include FileFunc.nsh
 
 !ifndef ZCODE_INSTALLER_DEFAULT_LOG_PATH
-  !define ZCODE_INSTALLER_DEFAULT_LOG_PATH "$TEMP\ZCode-installer.log"
+  !define ZCODE_INSTALLER_DEFAULT_LOG_PATH "$TEMP\OmpCode-installer.log"
 !endif
 !ifndef ZCODE_INSTALLER_ELEVATED_LOG_PATH
-  !define ZCODE_INSTALLER_ELEVATED_LOG_PATH "$WINDIR\Logs\ZCode-installer.log"
+  !define ZCODE_INSTALLER_ELEVATED_LOG_PATH "$WINDIR\Logs\OmpCode-installer.log"
 !endif
 !ifndef ZCODE_INSTALLER_IS_ELEVATED_INNER
   ; 修复原因：来源只在测试夹具模拟内层，正式默认恒假会让提权进程继续使用调用方 /LOG。
@@ -19,7 +19,7 @@
 !endif
 
 !ifndef ZCODE_UNINSTALLER_LOG_PATH
-  !define ZCODE_UNINSTALLER_LOG_PATH "$TEMP\ZCode-uninstaller.log"
+  !define ZCODE_UNINSTALLER_LOG_PATH "$TEMP\OmpCode-uninstaller.log"
 !endif
 !ifndef ZCODE_UNINSTALLER_FUNCTION_PREFIX
   !define ZCODE_UNINSTALLER_FUNCTION_PREFIX "un."
@@ -30,7 +30,7 @@
 
   ; 卸载器只在更新时删除旧文件；单独记录清理阶段，避免外层把权限/空间错误误报成应用仍在运行。
   !macro ZCodeReportUninstallerStage MESSAGE
-    DetailPrint "ZCode: ${MESSAGE}"
+    DetailPrint "OmpCode: ${MESSAGE}"
     Push "${MESSAGE}"
     Call ${ZCODE_UNINSTALLER_FUNCTION_PREFIX}ZCodeWriteUninstallerLog
   !macroend

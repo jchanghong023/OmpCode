@@ -27,7 +27,11 @@ import { parseModelPickerValue } from "@/lib/zcodeSessionProjection.js";
 import { resolveDraftInitialModelSelection } from "@/lib/composerRecent.js";
 import { initializeNewTaskDraft } from "@/v4/composer/newTaskDraft.js";
 import { useComposerClientNamespace } from "@/hooks/useServices.js";
-import { resolveComposerScope, composerScopeKey } from "@/v4/composer/composerDraftStore.js";
+import {
+  resolveComposerScope,
+  composerScopeKey,
+  readComposerWorkspaceScope,
+} from "@/v4/composer/composerDraftStore.js";
 import {
   clearV4ComposerDraft,
   persistV4ComposerDraft,
@@ -102,6 +106,7 @@ export interface DraftConfigControl {
 
 interface ComposerState {
   scopeKey: string;
+  storageScope: string | null;
   workspaceKey: string;
   draft: V4ComposerDraft;
   initialization: "new-task" | "session" | "promotion";
@@ -112,6 +117,8 @@ interface ComposerState {
 export function useDraftConfigControl(params: {
   workspacePath: string;
   workspaceIdentity?: string;
+  remoteSessionId?: string | null;
+  storageScope: string | null;
   provider?: ZCodeProvider;
   /** 会话切换恢复文字/模型，权限和 Plan 使用当前快照。 */
   sessionId: string | null;
@@ -124,6 +131,8 @@ export function useDraftConfigControl(params: {
   const {
     workspacePath,
     workspaceIdentity,
+    remoteSessionId,
+    storageScope,
     provider,
     sessionId,
     sessionConfig,
@@ -132,17 +141,44 @@ export function useDraftConfigControl(params: {
   } = params;
   const workspaceKey = workspaceIdentity?.trim() || workspacePath;
   const displayProvider = provider ?? ZCODE_AGENT_PROVIDER;
-  const zcodeSessionService = useZCodeSessionService(workspacePath, null, workspaceIdentity);
+  const zcodeSessionService = useZCodeSessionService(
+    workspacePath,
+    remoteSessionId,
+    workspaceIdentity,
+  );
   const { settings: sharedSettings } = useSettings();
   const appFollowupMode = resolveAppFollowupMode(sharedSettings);
   const scopeId = sessionId ?? V4_DRAFT_SCOPE_ROOT;
   const clientNamespace = useComposerClientNamespace();
-  const draftProjectId = useZCodeSessionStore(
-    (state) => state.workspaces[workspaceKey]?.draftProjectId,
+  const draftProjectId = useZCodeSessionStore((state) =>
+    state.workspaces[workspaceKey]?.draftStorageScope === storageScope && storageScope
+      ? state.workspaces[workspaceKey]?.draftProjectId
+      : undefined,
   );
   const rootScope = useMemo(
-    () => resolveComposerScope(draftProjectId, workspaceIdentity, clientNamespace),
-    [draftProjectId, workspaceIdentity, clientNamespace],
+    () =>
+      resolveComposerScope(
+        draftProjectId !== undefined
+          ? draftProjectId
+          : readComposerWorkspaceScope(
+              workspacePath,
+              workspaceIdentity,
+              clientNamespace,
+              storageScope,
+            )?.projectId,
+        workspaceIdentity,
+        clientNamespace,
+        storageScope,
+        remoteSessionId,
+      ),
+    [
+      draftProjectId,
+      workspacePath,
+      workspaceIdentity,
+      clientNamespace,
+      storageScope,
+      remoteSessionId,
+    ],
   );
   const draftFocusVersion = useZCodeSessionStore((state) =>
     sessionId === null ? (state.workspaces[workspaceKey]?.draftFocusVersion ?? 0) : 0,
@@ -152,11 +188,13 @@ export function useDraftConfigControl(params: {
     workspaceKey,
     scopeId,
     draftFocusVersion,
-    sessionId === null ? composerScopeKey(rootScope) : null,
+    composerScopeKey(rootScope),
   ]);
   const navigationInitialization = useZCodeSessionStore((state) => {
     const workspace = state.workspaces[workspaceKey];
     return workspace?.activeTaskId === sessionId &&
+      workspace?.draftStorageScope === storageScope &&
+      Boolean(storageScope) &&
       workspace?.composerInitialization?.taskId === sessionId
       ? workspace.composerInitialization
       : undefined;
@@ -166,6 +204,7 @@ export function useDraftConfigControl(params: {
     return {
       scopeKey,
       workspaceKey,
+      storageScope,
       draft: saved ?? { text: "", updatedAt: 0, ...navigationInitialization?.config },
       initialization:
         sessionId === null || (!saved && navigationInitialization) ? "new-task" : "session",
@@ -176,7 +215,9 @@ export function useDraftConfigControl(params: {
   let currentState: ComposerState =
     storedState.scopeKey === scopeKey
       ? storedState
-      : storedState.workspaceKey === workspaceKey && storedState.promotedSessionId === sessionId
+      : storedState.workspaceKey === workspaceKey &&
+          storedState.storageScope === storageScope &&
+          storedState.promotedSessionId === sessionId
         ? {
             ...storedState,
             scopeKey,
@@ -293,8 +334,10 @@ export function useDraftConfigControl(params: {
         workspacePath,
         workspaceIdentity,
         // 首发已绑定但 React 尚未切换地址时，新输入也属于已创建的会话。
-        stateRef.current.promotedSessionId ?? scopeId,
-        scopeId === V4_DRAFT_SCOPE_ROOT
+        stateRef.current.scopeKey === scopeKey
+          ? (stateRef.current.promotedSessionId ?? scopeId)
+          : scopeId,
+        scopeId === V4_DRAFT_SCOPE_ROOT && workspace.draftStorageScope === storageScope
           ? {
               ...value,
               projectId:
@@ -308,7 +351,7 @@ export function useDraftConfigControl(params: {
         rootScope,
       );
     },
-    [workspacePath, workspaceIdentity, scopeId, rootScope],
+    [workspacePath, workspaceIdentity, scopeId, rootScope, scopeKey, storageScope],
   );
   const mountedRef = useRef(false);
   useEffect(() => {
@@ -445,6 +488,7 @@ export function useDraftConfigControl(params: {
         workspaceIdentity,
         targetSessionId,
         stateRef.current.draft,
+        rootScope,
       );
       if (!written) return;
       const next = { ...stateRef.current, promotedSessionId: targetSessionId };

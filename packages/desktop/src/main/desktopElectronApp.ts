@@ -1,12 +1,23 @@
 import { app } from "electron";
 import { getAppConfigDir } from "@zcode/services/node";
+import { ZCODE_PRODUCT_FLAVOR } from "@zcode/shared";
+import { desktopProductIdentities } from "../../scripts/desktop-product-identity.mjs";
+
+// 原因：静态依赖可能早于 index.ts 读取 Electron 路径；先确立 fork 身份，不能继承上游 userData/锁。
+const electronApp = app as typeof app | undefined;
+if (electronApp?.setName) {
+  electronApp.setName(
+    process.env.ZCODE_DESKTOP_APPLICATION_NAME?.trim() ||
+      (electronApp.isPackaged
+        ? desktopProductIdentities[ZCODE_PRODUCT_FLAVOR].productName
+        : "OmpCode Dev"),
+  );
+}
 
 export type ElectronAppPathName = "appData" | "userData";
 
 export function isElectronAppPackaged(): boolean {
-  return (
-    (app as unknown as { isPackaged?: boolean } | undefined)?.isPackaged === true
-  );
+  return (app as unknown as { isPackaged?: boolean } | undefined)?.isPackaged === true;
 }
 
 export function getElectronAppPath(name: ElectronAppPathName): string {

@@ -1,6 +1,7 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import messagesZh from "../src/i18n/locales/zh-CN.js";
 
 const capturedButtons: Array<Record<string, unknown>> = [];
 const capturedInputs: Array<Record<string, unknown>> = [];
@@ -134,19 +135,16 @@ vi.mock("@/i18n/IntlProvider.js", () => ({
           "settings.taskAutoArchiveDays.option.30": "30 天后归档",
           "settings.dataBaseDir": "数据存储路径",
           "settings.dataBaseDirDescription": "desc",
-          "settings.dataBaseDirPlaceholder": "默认：用户主目录",
-          "settings.dataBaseDirBrowse": "选择文件夹",
+          "settings.dataBaseDirPlaceholder": messagesZh["settings.dataBaseDirPlaceholder"]!,
           "settings.dataBaseDirSave": "保存",
         };
-        return messages[id] ?? id;
+        return id.startsWith("settings.dataBaseDir")
+          ? (messagesZh[id] ?? id)
+          : (messages[id] ?? id);
       },
     },
   }),
 }));
-
-function findButton(label: string) {
-  return capturedButtons.find((button) => button.children === label);
-}
 
 async function renderGeneralSection(
   overrides: Partial<
@@ -167,11 +165,10 @@ async function renderGeneralSection(
       receivePreviewUpdates: false,
       autoDownloadAndInstallUpdates: false,
       desktopChromiumHardwareAccelerationEnabled: true,
-      dataBaseDir: "/Users/test",
+      dataBaseDir: "/Users/test/.ompcode",
       terminalInheritSystemProfile: true,
       terminalFontFamily: "",
       nativeSearchEnhancementsEnabled: true,
-      defaultHomeDir: "/Users/test",
       setTheme: vi.fn(),
       setLocalePreference: vi.fn(),
       setNotificationEnabled: vi.fn(),
@@ -184,8 +181,6 @@ async function renderGeneralSection(
       zcodeInteractionBehavior: "queue",
       askUserQuestionAutoResolutionEnabled: true,
       modelIoFullRetentionEnabled: false,
-      onDataBaseDirChange: vi.fn(async () => {}),
-      onSelectDataBaseDir: vi.fn(async () => "/Users/test/data"),
       onTerminalInheritSystemProfileChange: vi.fn(async () => {}),
       onTerminalFontFamilyChange: vi.fn(async () => {}),
       onNativeSearchEnhancementsEnabledChange: vi.fn(async () => {}),
@@ -221,10 +216,19 @@ describe("GeneralSectionContent data directory control", () => {
     vi.resetModules();
   });
 
-  it("数据目录改为只读展示，避免继续手输路径", async () => {
-    await renderGeneralSection();
+  it("展示服务返回的实际应用根，而非默认 HOME", async () => {
+    const markup = await renderGeneralSection({ dataBaseDir: "/data/omp_ompcode" });
+    expect(markup).toContain('value="/data/omp_ompcode"');
+    expect(markup).toContain('aria-label="数据存储路径"');
+    expect(markup).toContain('readOnly=""');
+    expect(markup).not.toContain('value="/Users/test"');
+  });
 
-    expect(capturedInputs.some((input) => input.readOnly === true)).toBe(true);
+  it("根尚未获取时保持空值，不猜测 HOME 或应用根", async () => {
+    const markup = await renderGeneralSection({ dataBaseDir: "" });
+    expect(markup).toContain('value=""');
+    expect(markup).toContain("等待获取实际应用数据根");
+    expect(markup).not.toContain('value="/Users/test"');
   });
 
   it("ModelIO 读取关闭值并通过标准设置开关提交", async () => {
@@ -241,14 +245,26 @@ describe("GeneralSectionContent data directory control", () => {
     expect(onModelIoFullRetentionEnabledChange).toHaveBeenCalledWith(true);
   });
 
-  it("点击选择文件夹会调用系统目录选择回调", async () => {
-    const onSelectDataBaseDir = vi.fn(async () => "/Users/test/data");
+  it("目录分区没有选择、保存或迁移入口，并解释环境生效规则", async () => {
+    const markup = await renderGeneralSection();
+    const directoryGroup = markup
+      .split('<section data-settings-group="true">')
+      .find((group) => group.includes('data-testid="settings-data-base-dir-input"'))
+      ?.split("</section>")[0];
 
-    await renderGeneralSection({ onSelectDataBaseDir });
-
-    await (findButton("选择文件夹")?.onClick as (() => Promise<void>) | undefined)?.();
-
-    expect(onSelectDataBaseDir).toHaveBeenCalledTimes(1);
+    expect(directoryGroup).toBeDefined();
+    expect(directoryGroup).not.toContain("<button");
+    expect(directoryGroup).not.toContain("settings-data-base-dir-browse");
+    expect(directoryGroup).not.toContain("settings-data-base-dir-save");
+    expect(directoryGroup).not.toContain("data-state=");
+    expect(directoryGroup).toContain("OMP_CONFIG_ROOT");
+    expect(directoryGroup).toContain("Windows（PowerShell）");
+    expect(directoryGroup).toContain("$env:OMP_CONFIG_ROOT");
+    expect(directoryGroup).toContain("Linux：export OMP_CONFIG_ROOT");
+    expect(directoryGroup).toContain("_ompcode");
+    expect(directoryGroup).toContain("~/.ompcode");
+    expect(directoryGroup).toContain("完全退出并重新启动");
+    expect(directoryGroup).toContain("不会自动迁移或复制旧数据");
   });
 
   it("Windows host 会展示集成终端 Shell 下拉选项", async () => {

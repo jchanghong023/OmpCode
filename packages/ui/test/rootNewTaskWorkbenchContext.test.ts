@@ -1,5 +1,8 @@
 // @vitest-environment jsdom
 import { act, renderHook } from "@testing-library/react";
+import { flushSync } from "react-dom";
+import { createTabStore } from "@/store/tabStore.js";
+import { consumeV4ComposerDraftAttachments } from "@/v4/composer/composerDraftWorkspaceTransfer.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   readV4ComposerDraft,
@@ -20,6 +23,8 @@ import {
 } from "@/v4/paneLayoutStore.js";
 import { useWorkbenchGroupStore } from "@/v4/workbenchGroupStore.js";
 
+const storageScope = "scope-a";
+
 function fixture(
   clientMode: "desktop-continuous" | "web-remote-replayable" = "desktop-continuous",
   openRemoteProjectWorkspace?: (target: {
@@ -28,6 +33,11 @@ function fixture(
     hostId: string;
   }) => Promise<void>,
   openMobileProjectDraft?: (request: CreateTaskOptions) => Promise<void>,
+  draftTarget = {
+    workspacePath: "/remote",
+    workspaceIdentity: "remote:server:s:/remote",
+    remoteSessionId: "s",
+  },
 ) {
   let next = 0;
   const prepared = new Map<string, string>();
@@ -59,7 +69,10 @@ function fixture(
   }));
   const addTab = vi.fn();
   const state = {
-    tabs: [],
+    tabs: [
+      { id: "old", kind: "workspace", workspacePath: "/old" },
+      { id: "remote", kind: "workspace", ...draftTarget },
+    ],
     activeWorkspacePath: "/old",
     activeWorkspaceIdentity: null,
     activateTabByPath: vi.fn(() => true),
@@ -72,6 +85,8 @@ function fixture(
     addTab,
     activeWorkspacePath: "/old",
     activeWorkspaceIdentity: null,
+    storageScope,
+    resolveStorageScope: async () => storageScope,
     supportsSettings: true,
     allowOpenWorkspace: true,
     preferDirectoryBrowser: false,
@@ -86,7 +101,7 @@ function fixture(
     ({ opener }) => useRootWorkspaceActions({ ...options, openRemoteProjectWorkspace: opener }),
     { initialProps: { opener: openRemoteProjectWorkspace } },
   );
-  return { result, rerender, prepareSession, readTree, addTab, state };
+  return { result, rerender, prepareSession, readTree, addTab, state, options };
 }
 beforeEach(() => {
   localStorage.clear();
@@ -104,9 +119,13 @@ it.each([null, "other-project", "retained-project"])(
       rememberComposerWorkspaceScope(
         path,
         identity,
-        resolveComposerScope(cachedProjectId, identity),
+        resolveComposerScope(cachedProjectId, identity, undefined, storageScope, "session-1"),
       );
-    const { result } = fixture();
+    const { result } = fixture("desktop-continuous", undefined, undefined, {
+      workspacePath: path,
+      workspaceIdentity: identity,
+      remoteSessionId: "session-1",
+    });
     const activation = vi.fn(
       (target: { workspacePath: string; workspaceIdentity: string; projectId?: string | null }) =>
         result.current.startDraftInWorkspace(target.workspacePath, target.workspaceIdentity, {
@@ -151,17 +170,13 @@ it.each([null, "other-project", "retained-project"])(
         addTab: vi.fn(),
         onWorkspaceActivated: activation,
       });
+      await activation.mock.results[0].value;
     });
     expect(activation).toHaveBeenCalledOnce();
-    expect(activation).toHaveBeenCalledWith({
-      workspacePath: path,
-      workspaceIdentity: identity,
-      projectId,
-    });
     expect(useZCodeSessionStore.getState().getWorkspaceState(path, identity).draftProjectId).toBe(
       projectId,
     );
-    expect(readComposerWorkspaceScope(path, identity)?.projectId).toBe(projectId);
+    expect(readComposerWorkspaceScope(path, identity, undefined, storageScope)?.projectId).toBe(projectId);
   },
 );
 describe("project-aware new task creation", () => {
@@ -223,7 +238,11 @@ describe("project-aware new task creation", () => {
     await act(async () => {
       await result.current.handleCreateTask({ projectId: "p", hostId: "remote:server:s" });
     });
-    expect(prepareSession).toHaveBeenCalledWith({ projectId: "p", hostId: "remote:server:s" });
+    expect(prepareSession).toHaveBeenCalledWith(expect.objectContaining({
+      projectId: "p",
+      hostId: "remote:server:s",
+      sourceWorkspace: { workspacePath: "/old" },
+    }));
     expect(open).toHaveBeenCalledWith(
       expect.objectContaining({
         hostId: "remote:server:s",
@@ -278,7 +297,10 @@ describe("project-aware new task creation", () => {
         initialPromptMention: mention,
       });
     });
-    expect(prepareSession).toHaveBeenCalledWith({ projectId: "project-a" });
+    expect(prepareSession).toHaveBeenCalledWith(expect.objectContaining({
+      projectId: "project-a",
+      sourceWorkspace: { workspacePath: "/old" },
+    }));
     const draft = useZCodeSessionStore.getState().getWorkspaceState("/project-primary");
     expect(draft.draftProjectId).toBe("project-a");
     expect(draft.composerTextInsertRequest).toMatchObject({ text: "$creator ", mention });
@@ -319,11 +341,18 @@ it("hands mobile project intent to the bridge owner without preparing or mutatin
   await act(async () => {
     pending = result.current.handleCreateTask(request);
   });
-  expect(openMobileProjectDraft).toHaveBeenCalledWith(request);
+  expect(openMobileProjectDraft).toHaveBeenCalledWith(expect.objectContaining({
+    projectId: "p",
+    hostId: "remote:server:s",
+    initialPrompt: "$creator ",
+  }));
   expect(prepareSession).not.toHaveBeenCalled();
   useZCodeSessionStore
     .getState()
-    .startDraft("/new", undefined, "remote:server:s:/new", { projectId: "p" });
+    .startDraft("/new", undefined, "remote:server:s:/new", {
+      projectId: "p",
+      draftStorageScope: storageScope,
+    });
   await act(async () => {
     finish();
     await pending;
@@ -337,8 +366,12 @@ it("hands mobile project intent to the bridge owner without preparing or mutatin
       .draftProjectId,
   ).toBe("p");
 });
-it("initializes a handed off draft with its project and exact input under the new identity", () => {
-  const { result } = fixture("web-remote-replayable");
+it("initializes a handed off draft with its project and exact input under the new identity", async () => {
+  const { result } = fixture("web-remote-replayable", undefined, undefined, {
+    workspacePath: "/new",
+    workspaceIdentity: "remote:server:s:/new",
+    remoteSessionId: "s",
+  });
   const mention = {
     id: "skill:creator",
     category: "skills" as const,
@@ -346,7 +379,7 @@ it("initializes a handed off draft with its project and exact input under the ne
     value: "creator",
     markdown: "$creator",
   };
-  act(() =>
+  await act(async () =>
     result.current.startDraftInWorkspace("/new", "remote:server:s:/new", {
       projectId: "p",
       provider: "zcode",
@@ -372,9 +405,13 @@ it("does not allocate a directory when the mobile peer lacks project admission",
 
 it.each(["desktop-continuous", "web-remote-replayable"] as const)(
   "TD07 %s 空白创建意图只留在内存，文字出现时才保存项目和分组",
-  (mode) => {
-    const { result } = fixture(mode);
-    act(() =>
+  async (mode) => {
+    const { result } = fixture(mode, undefined, undefined, {
+      workspacePath: "/metadata",
+      workspaceIdentity: "remote:server:s:/metadata",
+      remoteSessionId: "s",
+    });
+    await act(async () =>
       result.current.startDraftInWorkspace("/metadata", "remote:server:s:/metadata", {
         projectId: "p",
         taskGroupId: "g",
@@ -384,13 +421,10 @@ it.each(["desktop-continuous", "web-remote-replayable"] as const)(
       useZCodeSessionStore.getState().getWorkspaceState("/metadata", "remote:server:s:/metadata"),
     ).toMatchObject({ draftProjectId: "p", draftTaskGroupId: "g" });
     expect(
-      readV4ComposerDraft("/metadata", "remote:server:s:/metadata", "__draft__", {
-        clientNamespace: "desktop",
-        hostId: "remote:server:s",
-        projectId: "p",
-      }),
+      readV4ComposerDraft("/metadata", "remote:server:s:/metadata", "__draft__",
+        resolveComposerScope("p", "remote:server:s:/metadata", undefined, storageScope, "s")),
     ).toBeNull();
-    act(() =>
+    await act(async () =>
       result.current.startDraftInWorkspace("/metadata", "remote:server:s:/metadata", {
         projectId: "p",
         taskGroupId: "g",
@@ -398,11 +432,8 @@ it.each(["desktop-continuous", "web-remote-replayable"] as const)(
       }),
     );
     expect(
-      readV4ComposerDraft("/metadata", "remote:server:s:/metadata", "__draft__", {
-        clientNamespace: "desktop",
-        hostId: "remote:server:s",
-        projectId: "p",
-      }),
+      readV4ComposerDraft("/metadata", "remote:server:s:/metadata", "__draft__",
+        resolveComposerScope("p", "remote:server:s:/metadata", undefined, storageScope, "s")),
     ).toMatchObject({ text: "draft", projectId: "p", taskGroupId: "g" });
   },
 );
@@ -423,9 +454,12 @@ it.each(["desktop-continuous", "web-remote-replayable"] as const)(
       await result.current.handleCreateTask();
     });
     if (mode === "desktop-continuous") {
-      expect(prepareSession).toHaveBeenCalledWith({ projectId: "current" });
+      expect(prepareSession).toHaveBeenCalledWith(expect.objectContaining({
+        projectId: "current",
+        sourceWorkspace: { workspacePath: "/old" },
+      }));
     } else {
-      expect(open).toHaveBeenCalledWith({ projectId: "current" });
+      expect(open).toHaveBeenCalledWith(expect.objectContaining({ projectId: "current" }));
       expect(prepareSession).not.toHaveBeenCalled();
     }
   },
@@ -434,20 +468,27 @@ it.each(["desktop-continuous", "web-remote-replayable"] as const)(
 it("D3 inherits draft project without reading task history; explicit null opts out", async () => {
   useZCodeSessionStore
     .getState()
-    .startDraft("/old", undefined, undefined, { projectId: "draft-project" });
+    .startDraft("/old", undefined, undefined, {
+      projectId: "draft-project",
+      draftStorageScope: storageScope,
+    });
   const { result, prepareSession, readTree } = fixture();
   await act(async () => {
     await result.current.handleCreateTask();
   });
-  expect(prepareSession).toHaveBeenLastCalledWith({ projectId: "draft-project" });
+  expect(prepareSession).toHaveBeenLastCalledWith(expect.objectContaining({
+    projectId: "draft-project",
+    sourceWorkspace: { workspacePath: "/old" },
+  }));
   expect(readTree).not.toHaveBeenCalled();
   await act(async () => {
     await result.current.handleCreateTask({ projectId: null });
   });
-  expect(prepareSession).toHaveBeenLastCalledWith({
+  expect(prepareSession).toHaveBeenLastCalledWith(expect.objectContaining({
     draftId: expect.any(String),
     reuseDraft: false,
-  });
+    sourceWorkspace: { workspacePath: "/old" },
+  }));
 });
 
 it("D3 discards project lookup after the user selects another session", async () => {
@@ -472,3 +513,122 @@ it("D3 discards project lookup after the user selects another session", async ()
   expect(prepareSession).not.toHaveBeenCalled();
   expect(addTab).not.toHaveBeenCalled();
 });
+
+function navigationFixture() {
+  const { options, prepareSession } = fixture();
+  const tabs = createTabStore(null);
+  tabs.getState().addTab("/old", {
+    workspaceIdentity: "remote:server:source:/old",
+    remoteSessionId: "source-attachment",
+  });
+  prepareSession.mockResolvedValue({
+    workspacePath: "/new-project",
+    projectId: "p",
+    additionalDirectories: [],
+  });
+  const finalScope = Promise.withResolvers<string | null>();
+  let targetLookups = 0;
+  const resolver = vi.fn(async (path: string) => {
+    if (path === "/new-project" && ++targetLookups === 2)
+      return finalScope.promise;
+    return storageScope;
+  });
+  const hook = renderHook(
+    ({ runtimeScope, settled }: { runtimeScope: string | null; settled: boolean }) => {
+      const activePath = tabs((state) => state.activeWorkspacePath);
+      const activeIdentity = tabs((state) => state.activeWorkspaceIdentity);
+      return useRootWorkspaceActions({
+        ...options,
+        tabStoreApi: tabs,
+        addTab: (path, tabOptions) => {
+          let id!: string;
+          flushSync(() => { id = tabs.getState().addTab(path, tabOptions); });
+          return id;
+        },
+        activeWorkspacePath: activePath,
+        activeWorkspaceIdentity: activeIdentity,
+        storageScope: activePath === "/old" || settled ? runtimeScope : null,
+        resolveStorageScope: resolver,
+      });
+    },
+    { initialProps: { runtimeScope: storageScope as string | null, settled: false } },
+  );
+  return { ...hook, tabs, prepareSession, finish: finalScope.resolve };
+}
+
+it("binds project, group, exact input and attachments before its own A→null→B shell navigation", async () => {
+  const { result, rerender, tabs, finish, prepareSession } = navigationFixture();
+  const onComplete = vi.fn();
+  const attachments = [{
+    id: "draft-file",
+    filename: "notes.txt",
+    mimeType: "text/plain",
+    sizeBytes: 5,
+    file: new File(["notes"], "notes.txt", { type: "text/plain" }),
+  }];
+  let pending!: Promise<void>;
+  await act(async () => {
+    pending = result.current.handleCreateTask({
+      projectId: "p",
+      taskGroupId: "g",
+      initialPrompt: "$creator  \n",
+      initialComposerDraft: {
+        sourceWorkspaceKey: "remote:server:source:/old",
+        draft: { text: "$creator  \n" },
+        attachments,
+      },
+      onComplete,
+    });
+  });
+  expect(tabs.getState().activeWorkspacePath).toBe("/old");
+  await act(async () => {
+    finish(storageScope);
+    await pending;
+  });
+  expect(tabs.getState().activeWorkspacePath).toBe("/new-project");
+  rerender({ runtimeScope: storageScope, settled: true });
+  const draft = useZCodeSessionStore.getState().getWorkspaceState("/new-project");
+  expect(draft).toMatchObject({
+    draftProjectId: "p",
+    draftTaskGroupId: "g",
+    draftStorageScope: storageScope,
+    composerTextInsertRequest: { text: "$creator  \n" },
+  });
+  expect(readV4ComposerDraft("/new-project", undefined, "__draft__",
+    resolveComposerScope("p", undefined, undefined, storageScope))).toMatchObject({
+    text: "$creator  \n", projectId: "p", taskGroupId: "g",
+  });
+  expect(consumeV4ComposerDraftAttachments("/new-project", draft.draftFocusVersion, storageScope))
+    .toEqual(attachments);
+  expect(onComplete).toHaveBeenCalledOnce();
+  expect(prepareSession).toHaveBeenCalledWith(expect.objectContaining({
+    sourceWorkspace: {
+      workspacePath: "/old",
+      workspaceIdentity: "remote:server:source:/old",
+      remoteSessionId: "source-attachment",
+    },
+  }));
+});
+
+it.each(["navigation", "profile", "disconnect"] as const)(
+  "discards a late target scope after independent %s",
+  async (change) => {
+    const { result, rerender, tabs, finish } = navigationFixture();
+    const onComplete = vi.fn();
+    let pending!: Promise<void>;
+    await act(async () => {
+      pending = result.current.handleCreateTask({ projectId: "p", taskGroupId: "g", onComplete });
+    });
+    if (change === "navigation") {
+      rerender({ runtimeScope: storageScope, settled: true });
+      act(() => { tabs.getState().addTab("/chosen-c"); });
+    } else rerender({ runtimeScope: change === "profile" ? "scope-b" : null, settled: false });
+    await act(async () => {
+      finish(storageScope);
+      await pending;
+    });
+    expect(tabs.getState().activeWorkspacePath).toBe(change === "navigation" ? "/chosen-c" : "/old");
+    expect(useZCodeSessionStore.getState().workspaces["/new-project"]).toBeUndefined();
+    expect(onComplete).not.toHaveBeenCalled();
+  },
+);

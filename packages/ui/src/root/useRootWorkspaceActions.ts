@@ -90,6 +90,8 @@ export function useRootWorkspaceActions({
   addTab,
   activeWorkspacePath,
   activeWorkspaceIdentity,
+  storageScope,
+  resolveStorageScope,
   supportsSettings,
   allowOpenWorkspace,
   preferDirectoryBrowser,
@@ -112,6 +114,11 @@ export function useRootWorkspaceActions({
   addTab: TabStoreState["addTab"];
   activeWorkspacePath: string | null;
   activeWorkspaceIdentity: string | null;
+  storageScope: string | null;
+  resolveStorageScope: (
+    workspacePath: string,
+    workspaceIdentity?: string,
+  ) => Promise<string | null>;
   supportsSettings: boolean;
   allowOpenWorkspace: NonNullable<RootProps["allowOpenWorkspace"]>;
   preferDirectoryBrowser: boolean;
@@ -135,6 +142,14 @@ export function useRootWorkspaceActions({
   workbenchGroupClientMode?: ZCodeTaskClientMode;
 }) {
   const navigationSequence = useRef(0);
+  const draftSequence = useRef(0);
+  const scopeGeneration = useRef({ storageScope, generation: 0 });
+  if (scopeGeneration.current.storageScope !== storageScope) {
+    scopeGeneration.current = {
+      storageScope,
+      generation: scopeGeneration.current.generation + 1,
+    };
+  }
   const [workspaceActionError, setWorkspaceActionError] = useState<string | null>(null);
   const requestConfirmation = useConfirmDialog();
   // Root 的远端装配依赖本 hook 返回的动作，函数引用每轮都会变化；它只用于点击执行，
@@ -171,13 +186,54 @@ export function useRootWorkspaceActions({
 
   const composerClientNamespace = useComposerClientNamespace();
   const startDraftInWorkspace = useCallback(
-    (workspacePath: string, workspaceIdentity?: string, options?: CreateTaskOptions) => {
+    async (
+      workspacePath: string,
+      workspaceIdentity?: string,
+      options?: CreateTaskOptions,
+      expectedStorageScope?: string,
+      commit?: { isCurrent: () => boolean; onCommitted: () => void },
+    ) => {
+      const sequence = ++draftSequence.current;
+      const generation = scopeGeneration.current.generation;
+      const targetStorageScope = await resolveStorageScope(workspacePath, workspaceIdentity).catch(
+        () => null,
+      );
+      // 原因：重启后的迟到目录准备结果不能把旧 pending draft 绑定到新 profile。
+      if (
+        !targetStorageScope ||
+        generation !== scopeGeneration.current.generation ||
+        sequence !== draftSequence.current ||
+        (expectedStorageScope !== undefined && expectedStorageScope !== targetStorageScope) ||
+        commit?.isCurrent() === false
+      )
+        return;
       const projectId =
         options?.projectId !== undefined
           ? options.projectId
-          : (readComposerWorkspaceScope(workspacePath, workspaceIdentity, composerClientNamespace)
-              ?.projectId ?? null);
-      const scope = resolveComposerScope(projectId, workspaceIdentity, composerClientNamespace);
+          : (readComposerWorkspaceScope(
+              workspacePath,
+              workspaceIdentity,
+              composerClientNamespace,
+              targetStorageScope,
+            )?.projectId ?? null);
+      const targetTab = tabStoreApi
+        .getState()
+        .tabs.find(
+          (tab) =>
+            "workspacePath" in tab &&
+            (workspaceIdentity
+              ? tab.workspaceIdentity === workspaceIdentity
+              : tab.workspacePath === workspacePath && !tab.workspaceIdentity),
+        );
+      const remoteSessionId =
+        targetTab && "remoteSessionId" in targetTab ? targetTab.remoteSessionId : undefined;
+      const scope = resolveComposerScope(
+        projectId,
+        workspaceIdentity,
+        composerClientNamespace,
+        targetStorageScope,
+        remoteSessionId,
+      );
       const savedDraft = readV4ComposerDraft(
         workspacePath,
         workspaceIdentity,
@@ -211,6 +267,7 @@ export function useRootWorkspaceActions({
         .startDraft(workspacePath, options?.provider, workspaceIdentity, {
           projectId,
           taskGroupId,
+          draftStorageScope: targetStorageScope,
         });
       if (options?.initialComposerDraft) {
         stageV4ComposerDraftAttachments(
@@ -219,6 +276,7 @@ export function useRootWorkspaceActions({
           useZCodeSessionStore.getState().getWorkspaceState(workspacePath, workspaceIdentity)
             .draftFocusVersion,
           options.initialComposerDraft,
+          targetStorageScope,
         );
       }
       // 项目草稿只由接收目录的 Root 初始化；mention 的尾空格属于编辑内容。
@@ -241,8 +299,9 @@ export function useRootWorkspaceActions({
           .getState()
           .requestComposerTextInsert(workspacePath, initialPrompt, workspaceIdentity, mention);
       }
+      commit?.onCommitted();
     },
-    [workbenchGroupClientMode, composerClientNamespace],
+    [workbenchGroupClientMode, composerClientNamespace, resolveStorageScope, tabStoreApi],
   );
 
   const startNewTaskFromActiveWorkspace = useCallback(
@@ -250,6 +309,7 @@ export function useRootWorkspaceActions({
       const openRemoteProjectWorkspace = remoteProjectOpener.current;
       const sequence = ++navigationSequence.current;
       const originTab = tabStoreApi.getState().activeTabId;
+      const generation = scopeGeneration.current.generation;
       const originWorkspace = activeWorkspacePath
         ? useZCodeSessionStore
             .getState()
@@ -258,6 +318,7 @@ export function useRootWorkspaceActions({
       const isCurrent = () =>
         (typeof request !== "object" || request.isCurrent?.() !== false) &&
         sequence === navigationSequence.current &&
+        generation === scopeGeneration.current.generation &&
         tabStoreApi.getState().activeTabId === originTab &&
         (!activeWorkspacePath ||
           (() => {
@@ -279,15 +340,28 @@ export function useRootWorkspaceActions({
           activeWorkspacePath
         ) {
           const taskId = originWorkspace?.activeTaskId;
-          const draftGroupId = originWorkspace?.draftTaskGroupId;
-          const structure = taskId ? await services.taskGroupService?.read() : undefined;
+          const draftGroupId =
+            storageScope && originWorkspace?.draftStorageScope === storageScope
+              ? originWorkspace.draftTaskGroupId
+              : undefined;
+          const structure = taskId
+            ? await services.taskGroupService?.read([
+                {
+                  workspacePath: activeWorkspacePath,
+                  workspaceIdentity: activeWorkspaceIdentity ?? undefined,
+                },
+              ])
+            : undefined;
           if (!isCurrent()) return;
           requestOptions.taskGroupId = taskId
-            ? (structure?.members.find(
-                (member) =>
-                  member.taskId === taskId &&
-                  member.workspaceKey === (activeWorkspaceIdentity?.trim() || activeWorkspacePath),
-              )?.groupId ?? null)
+            ? (structure
+                ?.flatMap((domain) => domain.members)
+                .find(
+                  (member) =>
+                    member.taskId === taskId &&
+                    member.workspaceKey ===
+                      (activeWorkspaceIdentity?.trim() || activeWorkspacePath),
+                )?.groupId ?? null)
             : (draftGroupId ?? null);
         }
         request = requestOptions;
@@ -328,6 +402,18 @@ export function useRootWorkspaceActions({
               newTaskTarget.workspacePath,
               newTaskTarget.workspaceIdentity ?? undefined,
             );
+          const targetScope = await resolveStorageScope(
+            newTaskTarget.workspacePath,
+            newTaskTarget.workspaceIdentity ?? undefined,
+          );
+          if (!isCurrent()) return;
+          if (!targetScope) throw new Error("composer.scope-unavailable");
+          const savedScope = readComposerWorkspaceScope(
+            newTaskTarget.workspacePath,
+            newTaskTarget.workspaceIdentity ?? undefined,
+            composerClientNamespace,
+            targetScope,
+          );
           const tree = workspace.activeTaskId
             ? await services.projectService?.readTree(hostId ? { hostId } : undefined)
             : undefined;
@@ -339,7 +425,9 @@ export function useRootWorkspaceActions({
                   (task.workspaceIdentity?.trim() || task.workspacePath) ===
                     (newTaskTarget.workspaceIdentity?.trim() || newTaskTarget.workspacePath),
               )?.projectId ?? undefined)
-            : (workspace.draftProjectId ?? undefined);
+            : workspace.draftStorageScope === targetScope
+              ? (workspace.draftProjectId ?? undefined)
+              : (savedScope?.projectId ?? undefined);
           if (hostId && !projectId) throw new Error("project.remote-project-required");
         }
         if (!isCurrent()) return;
@@ -354,19 +442,67 @@ export function useRootWorkspaceActions({
           return;
         }
         if (!services.projectService) throw new Error("project.service-unavailable");
-        const pendingDraft =
-          !projectId && (!hostId || hostId === "local")
-            ? ensurePendingTaskDraft(resolveComposerScope(null, undefined, composerClientNamespace))
-            : null;
+        const needsPendingDraft = !projectId && (!hostId || hostId === "local");
+        let targetStorageScope = needsPendingDraft
+          ? await resolveStorageScope(
+              newTaskTarget?.workspacePath ?? activeWorkspacePath ?? "",
+              newTaskTarget?.workspaceIdentity ?? activeWorkspaceIdentity ?? undefined,
+            )
+          : null;
+        if (!isCurrent()) return;
+        if (needsPendingDraft && !targetStorageScope) throw new Error("composer.scope-unavailable");
+        const pendingDraft = needsPendingDraft
+          ? ensurePendingTaskDraft(
+              resolveComposerScope(null, undefined, composerClientNamespace, targetStorageScope),
+            )
+          : null;
+        const sourcePath = activeWorkspacePath ?? newTaskTarget?.workspacePath;
+        const sourceIdentity = activeWorkspacePath
+          ? (activeWorkspaceIdentity ?? undefined)
+          : (newTaskTarget?.workspaceIdentity ?? undefined);
+        const sourceTab = sourcePath
+          ? tabStoreApi
+              .getState()
+              .tabs.find(
+                (tab) =>
+                  "workspacePath" in tab &&
+                  (sourceIdentity
+                    ? tab.workspaceIdentity?.trim() === sourceIdentity.trim()
+                    : tab.workspacePath === sourcePath && !tab.workspaceIdentity),
+              )
+          : undefined;
+        const sourceRemoteSessionId =
+          sourceTab && "remoteSessionId" in sourceTab ? sourceTab.remoteSessionId : undefined;
         const target = await services.projectService.prepareSession({
           ...(projectId ? { projectId } : {}),
           ...(hostId ? { hostId } : {}),
+          // 原因：新 cwd 尚无 profile 选择；Host 必须沿实际源运行时继承，而非按待重启设置启动默认域。
+          ...(sourcePath
+            ? {
+                sourceWorkspace: {
+                  workspacePath: sourcePath,
+                  ...(sourceIdentity ? { workspaceIdentity: sourceIdentity } : {}),
+                  ...(sourceRemoteSessionId ? { remoteSessionId: sourceRemoteSessionId } : {}),
+                },
+              }
+            : {}),
           // 显式 local 与省略 Host 是同一入口，不能漏掉待发送身份而另建目录。
           ...(pendingDraft
             ? { draftId: pendingDraft.draftId, reuseDraft: Boolean(pendingDraft.workspacePath) }
             : {}),
         });
         if (!isCurrent()) return;
+        const preparedStorageScope = await resolveStorageScope(
+          target.workspacePath,
+          target.workspaceIdentity,
+        );
+        if (
+          !isCurrent() ||
+          !preparedStorageScope ||
+          (targetStorageScope && preparedStorageScope !== targetStorageScope)
+        )
+          return;
+        targetStorageScope = preparedStorageScope;
         if (hostId && hostId !== "local") {
           if (!target.workspaceIdentity || !openRemoteProjectWorkspace)
             throw new Error("project.remote-navigation-unavailable");
@@ -378,24 +514,43 @@ export function useRootWorkspaceActions({
               ? { expectedMembershipId: request.remoteProjectMembershipId }
               : {}),
           });
+          if (generation !== scopeGeneration.current.generation) return;
         }
-        // 目录准备成功才提交导航；失败保留当前会话和分屏。
-        if (!hostId || hostId === "local")
-          addTab(target.workspacePath, {
-            workspacePurpose: target.projectId ? "project" : "conversation",
-            ...(target.workspaceIdentity ? { workspaceIdentity: target.workspaceIdentity } : {}),
-          });
-        startDraftInWorkspace(target.workspacePath, target.workspaceIdentity, {
-          ...(typeof request === "string" ? { provider: request } : request),
-          ...(pendingDraft ? { draftId: pendingDraft.draftId } : {}),
-          projectId: target.projectId,
-        });
-        if (typeof request === "object") request.onComplete?.();
-        setWorkspaceActionError(null);
-        logger.info(`[Root] ${source}`, {
-          workspacePath: target.workspacePath,
-          projectId: target.projectId,
-        });
+        await startDraftInWorkspace(
+          target.workspacePath,
+          target.workspaceIdentity,
+          {
+            ...(typeof request === "string" ? { provider: request } : request),
+            ...(pendingDraft ? { draftId: pendingDraft.draftId } : {}),
+            projectId: target.projectId,
+          },
+          targetStorageScope,
+          {
+            isCurrent: () =>
+              hostId && hostId !== "local"
+                ? generation === scopeGeneration.current.generation &&
+                  sequence === navigationSequence.current &&
+                  (typeof request !== "object" || request.isCurrent?.() !== false)
+                : isCurrent(),
+            onCommitted: () => {
+              // 原因：先导航会让 shell 的实际域经历 A→null→B，误伤本次合法草稿。
+              // 唯一 draft owner 完成目标绑定后才提交本地导航，不放宽迟到请求的代际检查。
+              if (!hostId || hostId === "local")
+                addTab(target.workspacePath, {
+                  workspacePurpose: target.projectId ? "project" : "conversation",
+                  ...(target.workspaceIdentity
+                    ? { workspaceIdentity: target.workspaceIdentity }
+                    : {}),
+                });
+              if (typeof request === "object") request.onComplete?.();
+              setWorkspaceActionError(null);
+              logger.info(`[Root] ${source}`, {
+                workspacePath: target.workspacePath,
+                projectId: target.projectId,
+              });
+            },
+          },
+        );
       } catch (error) {
         if (!isCurrent()) return;
         logger.error("[Root] 准备新任务失败", error);
@@ -412,7 +567,9 @@ export function useRootWorkspaceActions({
       addTab,
       openMobileProjectDraft,
       workbenchGroupClientMode,
+      storageScope,
       startDraftInWorkspace,
+      resolveStorageScope,
     ],
   );
 

@@ -28,6 +28,7 @@ import type { AddressInfo } from "node:net";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
+import { resolveOmpCodeDataRoot } from "@zcode/shared/node";
 import E2EFailFastReporter, {
   hasReportedE2EFailure,
   notifyE2EFailure,
@@ -133,6 +134,7 @@ import {
 } from "./test/e2e/helpers/coding-plan-upgrade-mock-server.js";
 import {
   FORK_TEMPORARY_E2E_EXCLUDES,
+  OMP_DEFAULT_E2E_SPECS,
   MANUAL_REVIEW_SPEC_GLOB,
   hasRequiredSshE2EEnvironment,
   resolveDeferredFormalSpecExcludes,
@@ -231,8 +233,9 @@ const E2E_HOME_DIR = resolve(
 const E2E_PACKAGED_APP_BINARY_PATH = process.env.ZCODE_E2E_PACKAGED_APP_PATH?.trim()
   ? resolve(process.env.ZCODE_E2E_PACKAGED_APP_PATH)
   : null;
-// 目录隔离已回滚：所有 Desktop E2E 继续使用历史 ~/.zcode 布局。
-const E2E_STORAGE_ROOT = resolve(E2E_HOME_DIR, ".zcode");
+// 必须先建立本轮隔离 OMP 根，再派生所有 seed/reset 路径；不继承用户的真实根。
+process.env.OMP_CONFIG_ROOT = resolve(E2E_HOME_DIR, "omp-config");
+const E2E_STORAGE_ROOT = resolveOmpCodeDataRoot(process.env, E2E_HOME_DIR);
 const E2E_APP_CONFIG_DIR = resolve(E2E_STORAGE_ROOT, "v2");
 const E2E_APP_SETTINGS_FILE = resolve(E2E_APP_CONFIG_DIR, "setting.json");
 const E2E_APP_CREDENTIALS_FILE = resolve(E2E_APP_CONFIG_DIR, "credentials.json");
@@ -565,11 +568,7 @@ const configuredE2ESpecs =
         : [
             "./test/e2e/**/*.test.ts",
             ...(EXPLICIT_AGENT_SERVER_ENV.ZCODE_AGENT_SERVER_COMMAND?.trim()
-              ? [
-                  "./test/e2e/omp-app-server.e2e.ts",
-                  "./test/e2e/omp-subagents.e2e.ts",
-                  "./test/e2e/omp-workflows.e2e.ts",
-                ]
+              ? OMP_DEFAULT_E2E_SPECS
               : []),
           ];
 const pluginNoGitGitHubArchiveE2E = configuredE2ESpecs.some((spec) =>
@@ -629,7 +628,7 @@ process.env.USERPROFILE = E2E_HOME_DIR;
 process.env.ZCODE_E2E_HOME_DIR = E2E_HOME_DIR;
 process.env.ZCODE_E2E_RUN_ID = E2E_RUN_ID;
 process.env.ZCODE_DATA_BASE_DIR = E2E_HOME_DIR;
-process.env.ZCODE_DESKTOP_APPLICATION_NAME = "ZCode E2E";
+process.env.ZCODE_DESKTOP_APPLICATION_NAME = "OmpCode";
 process.env.ZCODE_DESKTOP_HOME_DIR = E2E_HOME_DIR;
 process.env.ZCODE_DESKTOP_USE_ELECTRON_DEFAULT_USER_DATA = "1";
 // Bugfix: renderer E2E store bridge 只能由 WDIO 进程显式打开，避免 ZCODE_ENV=test 的产品测试环境暴露全局可变 store。
@@ -4637,6 +4636,7 @@ export const config: WebdriverIO.Config = {
       : {}),
     HOME: E2E_HOME_DIR,
     USERPROFILE: E2E_HOME_DIR,
+    OMP_CONFIG_ROOT: process.env.OMP_CONFIG_ROOT,
     // PLM-LC-010 使用非 ZCODE_ 前缀验证插件 MCP 的 Claude-compatible env 展开。
     // 值只供 fixture 做 hash 比对，工具结果和截图都不得回显原值。
     E2E_PLUGIN_RUNTIME_SECRET: "e2e-plugin-runtime-secret-fixture-20260718",
@@ -4652,7 +4652,7 @@ export const config: WebdriverIO.Config = {
     ZCODE_DATA_BASE_DIR: E2E_HOME_DIR,
     ZCODE_BUILTIN_PROVIDER_CONFIG_FILE:
       INITIAL_ZCODE_BUILTIN_PROVIDER_CONFIG_FILE ?? E2E_DEFAULT_ZCODE_BUILTIN_PROVIDER_CONFIG_FILE,
-    ZCODE_DESKTOP_APPLICATION_NAME: "ZCode E2E",
+    ZCODE_DESKTOP_APPLICATION_NAME: "OmpCode",
     ZCODE_DESKTOP_HOME_DIR: E2E_HOME_DIR,
     ZCODE_DESKTOP_USE_ELECTRON_DEFAULT_USER_DATA: "1",
     ZCODE_DISABLE_FIXED_REMOTE_DEBUGGING_PORT: "1",

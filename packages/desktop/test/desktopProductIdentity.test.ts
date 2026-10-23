@@ -25,11 +25,13 @@ describe("desktop product identity", () => {
   it("ZCODE_ENV=test 使用可与生产版并排安装的 Preview 身份", () => {
     expect(resolveDesktopProductIdentity({ ZCODE_ENV: "test" })).toEqual({
       flavor: "preview",
-      appId: "dev.zcode.app.preview",
-      productName: "ZCode Preview",
-      linuxExecutableName: "zcode-preview",
-      linuxPackageName: "zcode-preview",
-      cuaHelperInstallVariant: "preview",
+      appId: "dev.ompcode.app.preview",
+      productName: "OmpCode Preview",
+      linuxExecutableName: "ompcode-preview",
+      linuxPackageName: "ompcode-preview",
+      protocolScheme: "ompcode-preview",
+      autoUpdateEnabled: false,
+      cuaHelperInstallVariant: "ompcode-preview",
     });
   });
 
@@ -80,11 +82,13 @@ describe("desktop product identity", () => {
     );
     expect(desktopProductIdentities.production).toEqual({
       flavor: "production",
-      appId: "dev.zcode.app",
-      productName: "ZCode",
-      linuxExecutableName: "zcode",
-      linuxPackageName: "zcode",
-      cuaHelperInstallVariant: null,
+      appId: "dev.ompcode.app",
+      productName: "OmpCode",
+      linuxExecutableName: "ompcode",
+      linuxPackageName: "ompcode",
+      protocolScheme: "ompcode",
+      autoUpdateEnabled: false,
+      cuaHelperInstallVariant: "ompcode",
     });
   });
 
@@ -113,6 +117,23 @@ describe("desktop product identity", () => {
   });
 
   it("开发态继续使用独立 AUMID，避免污染打包版 Shell 身份", () => {
-    expect(resolveWindowsAppUserModelId({}, { isPackaged: false })).toBe("cn.aminer.zcode");
+    expect(resolveWindowsAppUserModelId({}, { isPackaged: false })).toBe(
+      "dev.ompcode.app.development",
+    );
+  });
+
+  it("所有安装身份与上游及彼此隔离，未配置 fork feed 时不启用更新", () => {
+    const identities = Object.values(desktopProductIdentities);
+    for (const key of [
+      "appId",
+      "productName",
+      "linuxExecutableName",
+      "linuxPackageName",
+      "protocolScheme",
+    ] as const) {
+      expect(new Set(identities.map((identity) => identity[key])).size).toBe(identities.length);
+      for (const identity of identities) expect(identity[key].toLowerCase()).not.toContain("zcode");
+    }
+    for (const identity of identities) expect(identity.autoUpdateEnabled).toBe(false);
   });
 });

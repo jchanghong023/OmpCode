@@ -37,6 +37,9 @@ export function useRootPlatformEffects({
   initialWorkspacePurpose,
   initialTaskId,
   initialTaskDraft,
+  initialStorageScope,
+  storageScope,
+  resolveStorageScope,
   clientMode = "desktop-continuous",
   canBootstrapInitialWorkspace = true,
   addTab,
@@ -66,6 +69,12 @@ export function useRootPlatformEffects({
   initialWorkspacePurpose?: import("@zcode/shared").WorkspacePurpose;
   initialTaskId?: string;
   initialTaskDraft?: CreateTaskOptions;
+  initialStorageScope: string | null;
+  storageScope: string | null;
+  resolveStorageScope: (
+    workspacePath: string,
+    workspaceIdentity?: string,
+  ) => Promise<string | null>;
   clientMode?: ZCodeTaskClientMode;
   canBootstrapInitialWorkspace?: boolean;
   addTab: (
@@ -109,6 +118,10 @@ export function useRootPlatformEffects({
   const importOperationRef = useRef<string | null>(null);
   const lastImportProgressToastRef = useRef<{ phase: string; at: number } | null>(null);
   const importToastIdRef = useRef<number | null>(null);
+  const scopeEpoch = useRef({ storageScope, generation: 0 });
+  if (scopeEpoch.current.storageScope !== storageScope) {
+    scopeEpoch.current = { storageScope, generation: scopeEpoch.current.generation + 1 };
+  }
 
   useEffect(() => {
     // 启动时必须先判断 OAuth 本地会话，再恢复历史/初始 workspace。
@@ -123,6 +136,7 @@ export function useRootPlatformEffects({
         initialWorkspaceAbsPath,
         initialWorkspaceIdentity,
         composerClientNamespace,
+        initialStorageScope,
       );
       // 手机重建 Root 时 bridge 只有地址；项目意图随已有浏览器草稿恢复，先于 prewarm。
       const savedDraft =
@@ -195,6 +209,7 @@ export function useRootPlatformEffects({
     initialTaskId,
     initialTaskDraft,
     composerClientNamespace,
+    initialStorageScope,
     clientMode,
     initialWorkspaceAbsPath,
     initialWorkspaceIdentity,
@@ -373,6 +388,7 @@ export function useRootPlatformEffects({
       importToastIdRef.current = null;
     }
     const operationId = `share-import-${globalThis.crypto?.randomUUID?.() ?? Date.now()}`;
+    const generation = scopeEpoch.current.generation;
     importOperationRef.current = operationId;
     lastImportProgressToastRef.current = null;
     const progressEvent =
@@ -435,10 +451,20 @@ export function useRootPlatformEffects({
         },
         operationId,
       )
-      .then((result) => {
+      .then(async (result) => {
+        const targetStorageScope = await resolveStorageScope(
+          result.workspacePath,
+          result.workspaceIdentity,
+        );
+        // 原因：导入和 profile 重启并发时，旧请求不得激活新域或写入旧草稿。
+        if (generation !== scopeEpoch.current.generation || !targetStorageScope) return;
         pending.status = "complete";
         // 先准备实际落地工作区的独立草稿，再激活；复用导入不覆盖会话选择。
-        const composerConfig = resolveImportedComposerConfig(result, composerClientNamespace);
+        const composerConfig = resolveImportedComposerConfig(
+          result,
+          composerClientNamespace,
+          targetStorageScope,
+        );
         const activated = activateTabByPath(
           result.workspacePath,
           result.workspaceIdentity ? { workspaceIdentity: result.workspaceIdentity } : undefined,
@@ -490,6 +516,7 @@ export function useRootPlatformEffects({
         }
       })
       .catch((error) => {
+        if (generation !== scopeEpoch.current.generation) return;
         pending.status = "failed";
         const record = error && typeof error === "object" ? (error as Record<string, unknown>) : {};
         const kind = typeof record.kind === "string" ? record.kind : "unknown";
@@ -565,6 +592,7 @@ export function useRootPlatformEffects({
     locale,
     shareImportRevision,
     composerClientNamespace,
+    resolveStorageScope,
   ]);
 
   useEffect(() => {

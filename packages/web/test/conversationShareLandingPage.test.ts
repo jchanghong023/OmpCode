@@ -1,6 +1,8 @@
-import { createElement } from "react";
+// @vitest-environment jsdom
+import { act, createElement } from "react";
+import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ConversationSharePreview } from "@zcode/shared";
 import {
   ConversationShareLandingPage,
@@ -45,6 +47,24 @@ const preview: ConversationSharePreview = {
 };
 
 describe("ConversationShareLandingPage", () => {
+  beforeEach(() => {
+    // 新增 DOM 回归后 SSR 也处于 jsdom；补齐浏览器媒体 API，不能让生产主题逻辑为测试兜底。
+    vi.stubGlobal("matchMedia", (query: string) => ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      dispatchEvent: vi.fn(() => true),
+    }));
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   it.each([
     ["rate_limited", "访问过于频繁", "Too many requests", true],
     ["service_unavailable", "分享服务暂时异常", "Sharing service unavailable", true],
@@ -82,12 +102,71 @@ describe("ConversationShareLandingPage", () => {
     expect(html).toContain('data-share-header-ready="false"');
     expect(html).toContain('data-share-continue-visible="true"');
     expect(html).toContain("请生成一个文件");
-    expect(html).toContain("去 ZCode 继续");
+    expect(html).toContain("去 OmpCode 继续");
     expect(html).toContain('data-share-theme-toggle="true"');
     expect(html).toContain("切换到深色主题");
-    expect(html.match(/href="zcode:\/\/share\/import\?code=share-1"/g)?.length).toBe(2);
+    expect(html).toContain('href="ompcode-preview://share/import?code=share-1"');
+    expect(html).not.toContain('href="zcode:');
     expect(html).not.toContain("Sign out");
   });
+
+  it.each(["zh-CN", "en-US"] as const)(
+    "keeps download disabled with a reason after an unhandled fork deep link in %s",
+    async (locale) => {
+      vi.useFakeTimers();
+      vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+      const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+      const container = document.createElement("div");
+      document.body.append(container);
+      const root = createRoot(container);
+      try {
+        await act(async () => {
+          root.render(
+            createElement(ConversationShareLandingPage, {
+              shareCode: "share-1",
+              preview,
+              locale,
+            }),
+          );
+        });
+        const continueLink = container.querySelector<HTMLAnchorElement>(
+          "[data-share-continue-footer] a",
+        )!;
+        expect(continueLink.protocol).toBe("ompcode-preview:");
+        await act(async () => {
+          continueLink.click();
+          await vi.advanceTimersByTimeAsync(1500);
+        });
+
+        const recovery = container.querySelector<HTMLElement>('[role="status"]')!;
+        expect(recovery).not.toBeNull();
+        const download = recovery.querySelector<HTMLButtonElement>("button")!;
+        expect(download.disabled).toBe(true);
+        expect(download.hasAttribute("href")).toBe(false);
+        const reason = document.getElementById(download.getAttribute("aria-describedby")!);
+        expect(reason?.textContent).toMatch(/OmpCode/);
+        expect(reason?.textContent).toMatch(/ZCode/);
+        // 下载不可用不能变成上游站点导航；重试仍只打开本 fork 的原始分享。
+        expect(recovery.querySelector('a[href^="http"]')).toBeNull();
+        const retry = recovery.querySelector<HTMLAnchorElement>("a")!;
+        expect(retry.href).toBe(continueLink.href);
+        const locationBeforeDownload = window.location.href;
+        await act(async () => download.click());
+        expect(window.location.href).toBe(locationBeforeDownload);
+        expect(download.disabled).toBe(true);
+        await act(async () => {
+          retry.click();
+          await vi.advanceTimersByTimeAsync(1500);
+        });
+        expect(container.querySelector('[role="status"] button:disabled')).not.toBeNull();
+      } finally {
+        await act(async () => root.unmount());
+        container.remove();
+        visibility.mockRestore();
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it("counts only artifact rows and excludes user input attachment manifests", () => {
     const inputRef = "zcode-artifact://share/input-1";
@@ -230,9 +309,9 @@ describe("ConversationShareLandingPage", () => {
         locale: "en-US",
       }),
     );
-    expect(html).not.toContain("zcode://share/import");
-    expect(html).not.toContain("Open in ZCode");
-    expect(html).not.toContain("去 ZCode 继续");
+    expect(html).not.toContain("ompcode-preview://share/import");
+    expect(html).not.toContain("Open in OmpCode");
+    expect(html).not.toContain("去 OmpCode 继续");
     expect(html).toContain('data-share-theme-toggle="true"');
     expect(html).not.toContain('data-share-continue-footer="true"');
     expect(html).toContain('data-share-continue-visible="false"');

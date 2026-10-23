@@ -19,6 +19,7 @@ export interface SidePaneTabPresentationLabels {
   selectionChatTitle: string;
   planTitle: string;
   workflowRunTitle: string;
+  ompTeamRunTitle?: string;
   workflowDirectoryTitle: string;
   workflowActorTitle: string;
   workflowScriptTitle: string;
@@ -31,6 +32,9 @@ export function getSidePaneTabSearchHint(tab: WorkspaceSidePaneTab): string {
   }
   if (tab.type === "plugin-ui") {
     return `${tab.title} ${tab.pluginId} ${tab.toolCallId ?? tab.surfaceId ?? ""} plugin ui`;
+  }
+  if (tab.type === "omp-team-run") {
+    return `${tab.label ?? ""} ${tab.jobId} ${tab.parentSessionId} native team discussion`;
   }
   if (tab.type === "workflow-run") {
     return `${tab.workflowName ?? ""} ${tab.runId} ${tab.toolCallId} ${tab.parentSessionId} workflow run CreateWorkflow AmendWorkflow`;
@@ -119,6 +123,7 @@ export function getSidePaneTabTypeLabel(
   if (tab.type === "plan-detail") return labels.planTitle;
   if (tab.type === "plugin-ui") return tab.title;
   if (tab.type === "workflow-run") return labels.workflowRunTitle;
+  if (tab.type === "omp-team-run") return labels.ompTeamRunTitle ?? "Team";
   if (tab.type === "workflow-directory") return labels.workflowDirectoryTitle;
   if (tab.type === "workflow-actor-session") return labels.workflowActorTitle;
   if (tab.type === "workflow-workspace") return labels.workflowScriptTitle;

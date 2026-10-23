@@ -162,6 +162,8 @@ export interface WorkspaceZCodeUIState {
   draftRuntime: DraftRuntimeState;
   /** 未提交草稿的项目选择；已提交归属只在 Host。 */
   draftProjectId?: string | null;
+  /** 草稿组织元数据所属的实际 OMP 根/profile；未知或不匹配时不得消费。 */
+  draftStorageScope?: string | null;
   /** 未提交任务的分组意图；无文字时仅保留在当前 Renderer 内存。 */
   draftTaskGroupId?: string | null;
   /**
@@ -261,6 +263,7 @@ export interface ZCodeSessionStoreState {
     options?: {
       projectId?: string | null;
       taskGroupId?: string | null;
+      draftStorageScope?: string | null;
       createSource?: SessionCreateSource;
     },
   ) => void;

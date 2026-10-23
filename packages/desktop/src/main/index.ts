@@ -64,8 +64,6 @@ import {
   getDataBaseDir,
   getZCodeDataRootDir,
   normalizeRuntimeProcessEnv,
-  setDataBaseDir,
-  migrateApplicationStorage,
   resolveDefaultZCodeAgentCommand,
   startupStorage,
 } from "@zcode/services/node";
@@ -144,7 +142,10 @@ import {
   updateZCodeStdioTapDevMenuState,
 } from "./desktopApplicationMenu.js";
 import { applyAppIcon } from "./desktopWindowChrome.js";
-import { resolveWindowsAppUserModelIdForFlavor } from "../../scripts/desktop-product-identity.mjs";
+import {
+  desktopProductIdentities,
+  resolveWindowsAppUserModelIdForFlavor,
+} from "../../scripts/desktop-product-identity.mjs";
 import type { DesktopWindowSize } from "./desktopWindowSize.js";
 import { maybeWarnArchitectureMismatch } from "./desktopArchitectureGuard.js";
 import { maybeBlockStartupForForceUpdate } from "./forceUpdateGuard.js";
@@ -172,7 +173,6 @@ import {
   listAvailableDockerContainers,
   listAvailableWSLDistros,
   loadHostProcessEnvFromLocalFiles,
-  prepareBundledOmpHostEnv,
   resolveBundledGlmBinaryPath,
   resolveRemoteAssetDirs,
   resolveZCodeEndpointEnvBaseOrigin,
@@ -571,7 +571,7 @@ async function runBrowserCommandOnView(params: {
 let currentDesktopZoomLevel = 0;
 let currentDesktopWindowSize: DesktopWindowSize | undefined;
 const preloadPath = join(import.meta.dirname, "../preload/index.cjs");
-const settingsFile = join(homedir(), ".zcode", "v2", "setting.json");
+const settingsFile = join(getZCodeDataRootDir(), "v2", "setting.json");
 let activeAppShutdownPolicy = resolveAppShutdownPolicy("normal", process.platform);
 let activeAppShutdownKind: AppShutdownKind | null = null;
 const WINDOWS_AGENT_FORCE_KILL_TIMEOUT_MS = 2_000;
@@ -590,9 +590,6 @@ mainMemoryDiagnosticsRegistry.register("app", () => ({
   willDownloadListeners: session.defaultSession.listenerCount("will-download"),
 }));
 const hostProcessLocalEnv = loadHostProcessEnvFromLocalFiles();
-const bundledOmpPreparation = app
-  .whenReady()
-  .then(() => prepareBundledOmpHostEnv({ ...hostProcessLocalEnv, ...process.env }));
 interface RuntimeProcessEnvPreparation {
   patchPromise: Promise<Record<string, string>>;
   fallbackPatch: Record<string, string>;
@@ -1076,7 +1073,6 @@ const primaryWindowCoordinator = createPrimaryWindowCoordinator({
 
     return resolveStartupWindowBootstrap({
       settingsFile,
-      // dataBaseDir 可能在 bootstrap 设置阶段被覆盖，必须在真正解析启动工作区时再取值。
       conversationWorkspaceDir: getConversationWorkspaceDir(),
       logger,
     });
@@ -1884,10 +1880,7 @@ function createWindowInstance(startupBootstrap: StartupWindowBootstrap = {}) {
       }),
     windowHostProcessMap,
     onHostProcessReady: (windowKey) => cuaPipFocusRouter.refreshWindow(windowKey),
-    awaitFirstHostSpawnDecision: async () => {
-      await bundledOmpPreparation;
-      await awaitFirstHostSpawnDecision();
-    },
+    awaitFirstHostSpawnDecision,
     spawnHostProcess: (win, label, initMessage) =>
       spawnHostProcess(
         win,
@@ -2055,21 +2048,6 @@ app.on("second-instance", (_event, argv, _workingDirectory, additionalData) => {
 });
 
 app.whenReady().then(async () => {
-  try {
-    await bundledOmpPreparation;
-  } catch (error) {
-    // 产物校验失败时尚无主窗口，必须显示原始错误并退出，不能持锁空转或启动业务服务。
-    try {
-      logger.error("[startup] OMP 准备失败:", error);
-      dialog.showErrorBox(
-        "ZCode 启动失败",
-        error instanceof Error ? (error.stack ?? error.message) : String(error),
-      );
-    } finally {
-      app.exit(1);
-    }
-    return;
-  }
   markMainLaunchAppReady();
   installRequestSecurityDiagnostics(session.defaultSession.webRequest, logger);
   installLocalMediaPreviewProtocol(session.defaultSession.protocol, {
@@ -2095,14 +2073,11 @@ app.whenReady().then(async () => {
   installBrowserRestoreBootstrapProtocol(
     session.fromPartition(EMBEDDED_BROWSER_PARTITION).protocol,
   );
-  // Bootstrap: 从设置文件读取自定义数据目录，在所有 host 进程启动前生效
+  // 路径已在导入最早期由环境固定；设置只负责启动偏好，不能重定向数据根。
   let loadedBootstrapLocale = false;
   let bootstrapSettings: AppSettings | undefined;
   try {
     bootstrapSettings = await mainSettingService.get();
-    if (bootstrapSettings.dataBaseDir) {
-      setDataBaseDir(bootstrapSettings.dataBaseDir);
-    }
     if (bootstrapSettings.locale) {
       loadedBootstrapLocale = true;
       currentApplicationLocale = bootstrapSettings.locale;
@@ -2223,12 +2198,10 @@ app.whenReady().then(async () => {
   await hydratePendingPostUpdateReleaseNotes(mainSettingService);
   logWindowsBundledRuntimeIntegrityDiagnostic();
 
-  // 启动自动更新检查（后台执行，不阻塞主界面）
-  // Preview 身份无论连接哪个后端都不自动更新：stable feed 上只分发正式 ZCode 安装包，
-  // 不向 Preview 渠道提供更新。构建期未启用自动更新时同样不更新
-  // （见 docs/desktop/build-time-optional-capabilities.md）。
+  // 本 fork 尚无专属 feed；不能连接上游 manifest 或安装上游 ZCode 更新。
   void initAutoUpdater({
-    enabled: ZCODE_PRODUCT_FLAVOR === "production" && ZCODE_AUTO_UPDATE_ENABLED,
+    enabled:
+      desktopProductIdentities[ZCODE_PRODUCT_FLAVOR].autoUpdateEnabled && ZCODE_AUTO_UPDATE_ENABLED,
     onBeforeQuitAndInstall: async () => {
       notifyStabilityLifecycle("update_install");
       await prepareAppQuit("auto-update quitAndInstall", "update-install");
@@ -2515,7 +2488,10 @@ app.whenReady().then(async () => {
   registerDesktopResourceTelemetry(logger);
   // 主窗口 renderer 的 60 秒 heap 样本入口；随 App 生命周期常驻，只注册一次。
   registerRendererHeapSampleIpc();
-  const defaultDataBaseDir = process.env.HOME?.trim() || homedir();
+  const defaultDataBaseDir = join(
+    process.env.ZCODE_DESKTOP_HOME_DIR?.trim() || process.env.HOME?.trim() || homedir(),
+    ".ompcode",
+  );
   registerDesktopZCodeDataSizeTelemetry({
     context: {
       appVersion: ZCODE_VERSION,
@@ -2542,7 +2518,8 @@ app.whenReady().then(async () => {
   // gate 照常生效，对真实用户零影响。
   const skipForceUpdateForLocalDevRuntime = !app.isPackaged;
   const forceUpdateGuardResult =
-    ZCODE_PRODUCT_FLAVOR === "production" && !skipForceUpdateForLocalDevRuntime
+    desktopProductIdentities[ZCODE_PRODUCT_FLAVOR].autoUpdateEnabled &&
+    !skipForceUpdateForLocalDevRuntime
       ? await maybeBlockStartupForForceUpdate({
           locale: currentApplicationLocale,
           logger,

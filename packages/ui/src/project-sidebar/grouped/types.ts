@@ -8,6 +8,7 @@ interface TaskGroupMenuItem {
   id: string;
   title: string;
   color: ZCodeTaskGroupColor;
+  moveUnavailableReason?: (task: ProjectTask) => string | null;
 }
 const TASK_GROUP_COLORS = [
   "gray",

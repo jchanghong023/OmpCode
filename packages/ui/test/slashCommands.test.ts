@@ -36,6 +36,18 @@ describe("extractActiveSlashQuery", () => {
     expect(extractActiveSlashQuery("/agent test")).toBeNull();
     expect(extractActiveSlashQuery("/agent\ttest")).toBeNull();
   });
+
+  it("does not offer argument completion after a native command name", () => {
+    for (const text of [
+      "/goal show",
+      '/compact "summary  hint"',
+      "/compress --invalid",
+      "/plan ",
+      "/wt\t",
+    ]) {
+      expect(extractActiveSlashQuery(text)).toBeNull();
+    }
+  });
 });
 
 describe("filterSlashCommands", () => {
@@ -83,4 +95,16 @@ describe("replaceActiveSlashCommand", () => {
       text: "/agent-browser ",
     });
   });
+
+  it.each(["goal", "compact", "compress", "plan", "move", "wt"])(
+    "selects only native command %s and leaves raw arguments untouched",
+    (command) => {
+      const argumentsText = '  "quoted  value"\n--invalid-native-argument  ';
+      const result = replaceActiveSlashCommand("/", argumentsText, command);
+      expect(result).toEqual({
+        cursorOffset: command.length + 2,
+        text: `/${command} ${argumentsText}`,
+      });
+    },
+  );
 });

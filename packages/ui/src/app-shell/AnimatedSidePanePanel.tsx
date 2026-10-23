@@ -1,6 +1,7 @@
 /* eslint-disable max-lines -- Side pane 当前集中承载 tabs、browser/git/code-viewer 内容；完整拆分需按 pane 功能边界继续推进。 */
 import type { CreateTaskRequest } from "@/app-shell/types.js";
 import { ServiceProvider, useComposerClientNamespace } from "@/hooks/useServices.js";
+import { useOmpStorageScope } from "@/hooks/useZCodeAgentService.js";
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type RefObject } from "react";
 import type { PanelImperativeHandle } from "react-resizable-panels";
 import type { IServiceAccessor } from "@zcode/services";
@@ -19,7 +20,11 @@ import type { BrowserViewScreenshotSurfacePreparePayload, GitChangeSourceId } fr
 import { FileManagerPane } from "@/WorkspaceFileTree.js";
 import type { FileManagerTarget } from "@/lib/workspaceSidePane.js";
 import { useZCodeSessionStore } from "@/store/zcodeSessionStore.js";
-import { composerScopeKey, resolveComposerScope } from "@/v4/composer/composerDraftStore.js";
+import {
+  composerScopeKey,
+  readComposerWorkspaceScope,
+  resolveComposerScope,
+} from "@/v4/composer/composerDraftStore.js";
 import { SidePaneTerminalPane } from "@/SidePaneTerminalPane.js";
 import { useIsOfficeMode } from "@/hooks/useInterfaceMode.js";
 import { WorkspaceSidePaneToggleButton } from "@/WorkspaceSidePaneToggleButton.js";
@@ -63,6 +68,7 @@ import {
   useOpenPluginUi,
 } from "@/plugin-ui/index.js";
 import { WorkflowRunSidePane } from "@/app-shell/WorkflowRunSidePane.js";
+import { OmpTeamRunSidePane } from "@/omp-configuration/module.js";
 import { WorkflowRunDirectorySidePane } from "@/app-shell/WorkflowRunDirectorySidePane.js";
 import { WorkflowActorSessionSidePane } from "@/app-shell/WorkflowActorSessionSidePane.js";
 import { WorkflowWorkspaceSidePane } from "@/app-shell/WorkflowWorkspaceSidePane.js";
@@ -464,11 +470,31 @@ export function AnimatedSidePanePanel({
   const isResizeDisabled = !isVisible;
   const workspaceKey = workspaceIdentity?.trim() || workspaceAbsPath;
   const composerClientNamespace = useComposerClientNamespace();
-  const draftProjectId = useZCodeSessionStore(
-    (state) => state.workspaces[workspaceKey]?.draftProjectId,
+  const storageScope = useOmpStorageScope(
+    workspaceAbsPath,
+    workspaceIdentity,
+    workspaceRemoteSessionId,
   );
+  const rememberedScope = readComposerWorkspaceScope(
+    workspaceAbsPath,
+    workspaceIdentity,
+    composerClientNamespace,
+    storageScope,
+  );
+  const draftProjectId = useZCodeSessionStore((state) => {
+    const workspace = state.workspaces[workspaceKey];
+    return storageScope && workspace?.draftStorageScope === storageScope
+      ? workspace.draftProjectId
+      : rememberedScope?.projectId;
+  });
   const draftScopeKey = composerScopeKey(
-    resolveComposerScope(draftProjectId, workspaceIdentity, composerClientNamespace),
+    resolveComposerScope(
+      draftProjectId,
+      workspaceIdentity,
+      composerClientNamespace,
+      storageScope,
+      workspaceRemoteSessionId,
+    ),
   );
   const tabs = sidePaneState?.tabs ?? EMPTY_SIDE_PANE_TABS;
   const screenshotSurfaceRequest = screenshotSurfaceRequestProp;
@@ -1243,6 +1269,8 @@ export function AnimatedSidePanePanel({
                             onOpenCodeViewer={onOpenCodeViewer}
                             onOpenFileLink={onOpenFileLink}
                           />
+                        ) : tab.type === "omp-team-run" ? (
+                          <OmpTeamRunSidePane tab={tab} />
                         ) : tab.type === "workflow-run" ? (
                           <WorkflowRunSidePane
                             tab={tab}

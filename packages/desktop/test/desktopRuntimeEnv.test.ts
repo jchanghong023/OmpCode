@@ -1,4 +1,4 @@
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   existsSync,
   mkdirSync,
@@ -11,17 +11,9 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const { verifyOmpArtifactMock } = vi.hoisted(() => ({
-  verifyOmpArtifactMock: vi.fn(async (root: string) => ({ command: join(root, "omp") })),
-}));
-vi.mock("../../../scripts/omp-artifact.mjs", () => ({
-  verifyOmpArtifact: verifyOmpArtifactMock,
-}));
-
 async function loadRuntimeEnv() {
   // Tests intentionally reload Electron module constants after resetModules.
   const runtime = await import("../src/main/desktopRuntimeEnv.js");
-  await runtime.prepareBundledOmpHostEnv({ ...process.env });
   return runtime;
 }
 
@@ -184,6 +176,14 @@ const originalDesktopUseElectronDefaultUserData =
   process.env["ZCODE_DESKTOP_USE_ELECTRON_DEFAULT_USER_DATA"];
 const originalCwd = process.cwd();
 const originalResourcesPathDescriptor = Object.getOwnPropertyDescriptor(process, "resourcesPath");
+const ompInstallEnvKeys = [
+  "ZCODE_AGENT_SERVER_COMMAND",
+  "ZCODE_AGENT_SERVER_ARGS_JSON",
+  "ZCODE_AGENT_SERVER_CWD",
+] as const;
+const originalOmpInstallEnv = Object.fromEntries(
+  ompInstallEnvKeys.map((key) => [key, process.env[key]]),
+);
 const createdDirs: string[] = [];
 
 function restoreEnvValue(key: string, value: string | undefined) {
@@ -438,9 +438,6 @@ describe("desktopRuntimeEnv resolveRemoteAssetDirs", () => {
 describe("desktopRuntimeEnv buildHostProcessEnv", () => {
   beforeEach(() => {
     vi.resetModules();
-    verifyOmpArtifactMock
-      .mockReset()
-      .mockImplementation(async (root: string) => ({ command: join(root, "omp") }));
     appMock.isPackaged = false;
     appMock.getPath.mockImplementation((name: string) => `/mock/${name}`);
     delete process.env["NODE_NO_WARNINGS"];
@@ -451,8 +448,17 @@ describe("desktopRuntimeEnv buildHostProcessEnv", () => {
     delete process.env["ZCODE_BASE_URL"];
     delete process.env["ZCODE_ENDPOINT_ORIGIN"];
     delete process.env["ZCODE_DYNAMIC_WORKFLOW_MODE"];
+    for (const key of ompInstallEnvKeys) {
+      delete process.env[key];
+    }
     productFlavorMock.value = "preview";
     process.chdir(originalCwd);
+  });
+
+  afterEach(() => {
+    for (const key of ompInstallEnvKeys) {
+      restoreEnvValue(key, originalOmpInstallEnv[key]);
+    }
   });
 
   afterAll(() => {
@@ -486,61 +492,6 @@ describe("desktopRuntimeEnv buildHostProcessEnv", () => {
     for (const dir of createdDirs.splice(0).reverse()) {
       rmSync(dir, { recursive: true, force: true });
     }
-  });
-
-  it("异步校验完成前拒绝启动，成功后只消费已校验产物", async () => {
-    appMock.isPackaged = true;
-    Object.defineProperty(process, "resourcesPath", {
-      value: "/mock/resources",
-      configurable: true,
-    });
-    // Intentionally load without the prepared-module helper to test the startup boundary.
-    const runtime = await import("../src/main/desktopRuntimeEnv.js");
-    const verified = Promise.withResolvers<{ command: string }>();
-    verifyOmpArtifactMock.mockReturnValue(verified.promise);
-    const preparation = runtime.prepareBundledOmpHostEnv({});
-    expect(() => runtime.buildHostProcessEnv({})).toThrow(/asynchronous verification/);
-    verified.resolve({ command: join(tmpdir(), "verified-omp") });
-    await preparation;
-    expect(runtime.buildHostProcessEnv({}).ZCODE_AGENT_SERVER_COMMAND).toBe(
-      join(tmpdir(), "verified-omp"),
-    );
-    expect(verifyOmpArtifactMock).toHaveBeenCalledTimes(1);
-  });
-
-  // Main 的模块级 Electron/env 身份必须在每个 resetModules 后重新加载，不能静态 import。
-  it("注入校验后的随包 OMP 和桌面 app-server 参数", async () => {
-    const { resolveBundledOmpHostEnv } = await loadRuntimeEnv();
-    const env = await resolveBundledOmpHostEnv({}, true, "/bundle/omp", "linux-x64");
-    expect(env.ZCODE_AGENT_SERVER_COMMAND).toBe(join("/bundle/omp", "omp"));
-    expect(JSON.parse(env.ZCODE_AGENT_SERVER_ARGS_JSON ?? "[]")).toEqual([
-      "app-server",
-      "--stdio",
-      "--surface",
-      "desktop",
-    ]);
-    expect(verifyOmpArtifactMock).toHaveBeenCalledWith("/bundle/omp", "linux-x64");
-  });
-
-  it("显式命令优先且不校验或回退随包 OMP", async () => {
-    const { resolveBundledOmpHostEnv } = await loadRuntimeEnv();
-    expect(
-      await resolveBundledOmpHostEnv({ ZCODE_AGENT_SERVER_COMMAND: "/custom/omp" }, true),
-    ).toEqual({});
-    expect(verifyOmpArtifactMock).not.toHaveBeenCalled();
-    expect(await resolveBundledOmpHostEnv({}, false)).toEqual({});
-  });
-
-  it("参数覆盖保留而产物缺失或不兼容阻断启动", async () => {
-    const { resolveBundledOmpHostEnv } = await loadRuntimeEnv();
-    expect(
-      (await resolveBundledOmpHostEnv({ ZCODE_AGENT_SERVER_ARGS_JSON: "[]" }, true))
-        .ZCODE_AGENT_SERVER_ARGS_JSON,
-    ).toBe("[]");
-    verifyOmpArtifactMock.mockImplementation(() => {
-      throw new Error("OMP artifact SHA-256 mismatch");
-    });
-    await expect(resolveBundledOmpHostEnv({}, true)).rejects.toThrow(/SHA-256 mismatch/);
   });
 
   it("host 进程 env 不再注入 NODE_NO_WARNINGS", async () => {
@@ -864,7 +815,7 @@ describe("desktopRuntimeEnv buildHostProcessEnv", () => {
     expect(env.ZAI_OAUTH_ORIGIN).toBe("https://chat.z.ai");
     expect(env.ZAI_BUSINESS_BASE_URL).toBe("https://api.z.ai");
     expect(env.ZAI_OAUTH_CLIENT_ID).toBe("client_P8X5CMWmlaRO9gyO-KSqtg");
-    expect(env.ZCODE_CUA_HELPER_INSTALL_VARIANT).toBe("preview");
+    expect(env.ZCODE_CUA_HELPER_INSTALL_VARIANT).toBe("ompcode-preview");
   });
 
   // DWG-05（docs/dynamic-workflow/launch.md「Gray release」）：Main 对
@@ -1036,6 +987,14 @@ describe("desktopRuntimeEnv runtime identity", () => {
 
   it("打包测试环境使用 Preview 应用名和独立 Electron 数据目录", async () => {
     appMock.isPackaged = true;
+    const profileDataRoot = join(tmpdir(), "desktop-runtime-preview-profile", "db");
+    const electronAppDataRoot = join(tmpdir(), "desktop-runtime-electron-app-data");
+    // resetModules 后取本轮模块实例；静态导入会把 profile mock 留在上一轮实例上。
+    const { getDataBaseDir } = await import("@zcode/services/node");
+    vi.mocked(getDataBaseDir).mockReturnValueOnce(profileDataRoot);
+    appMock.getPath.mockImplementation((name: string) =>
+      name === "appData" ? electronAppDataRoot : join(tmpdir(), "desktop-runtime", name),
+    );
 
     const {
       isPreviewPackagedRuntime,
@@ -1045,13 +1004,15 @@ describe("desktopRuntimeEnv runtime identity", () => {
     } = await loadRuntimeEnv();
 
     expect(isPreviewPackagedRuntime).toBe(true);
-    expect(runtimeApplicationName).toBe("ZCode Preview");
-    // Bugfix：这两条路径由实现用宿主 path.join 从 app.getPath("appData") 拼出，
-    // Windows 上是 `\mock\appData\ZCode Preview`，写死 POSIX 字面量必然失败。
-    // 用例要断言的是「Preview 单独占一个 Electron 数据目录」的目录结构，与分隔符无关，
-    // 所以用同样的 join 表达；在 POSIX 上是恒等变换。
-    expect(runtimeUserDataPath).toBe(join("/mock/appData", "ZCode Preview"));
-    expect(runtimeSessionDataPath).toBe(join("/mock/appData", "ZCode Preview", "session"));
+    expect(runtimeApplicationName).toContain("Preview");
+    // 根因是旧断言仍以 Electron appData 为根；当前数据归 profile 所有，fixture 使用宿主原生路径。
+    expect(runtimeUserDataPath).toBe(join(profileDataRoot, "electron", runtimeApplicationName));
+    for (const upstreamName of ["ZCode", "ZCode Preview"]) {
+      expect(runtimeUserDataPath).not.toBe(join(electronAppDataRoot, upstreamName));
+      expect(runtimeUserDataPath).not.toBe(join(profileDataRoot, "electron", upstreamName));
+      expect(runtimeSessionDataPath).not.toBe(join(electronAppDataRoot, upstreamName, "session"));
+    }
+    expect(runtimeSessionDataPath).toBe(join(runtimeUserDataPath!, "session"));
   });
 
   it("e2e 可保留 Chromedriver 注入的 Electron userData 目录", async () => {

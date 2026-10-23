@@ -14,7 +14,7 @@ import {
   stageRelease,
 } from "../src/packaging/stage.js";
 import { resolveHostTarCommand } from "../src/packaging/tarCommand.js";
-import { OMP_PROTOCOL_BASELINE } from "../../../scripts/omp-artifact.mjs";
+import { serverRuntimeManifestSchema } from "../src/runtime/manifest.js";
 
 const execFileAsync = promisify(execFile);
 async function runTar(args: string[]): Promise<void> {
@@ -155,7 +155,6 @@ describe("stageRelease", () => {
     bundledSkillsDir: string;
     nodeBinaryPath: string;
     outputDir: string;
-    ompArtifactRoot: string;
     notices: { thirdParty: string; node: string; nodeSource: string };
   }> {
     const root = await makeTempDir();
@@ -199,42 +198,6 @@ describe("stageRelease", () => {
     await writeFile(agentBundlePath, "// fake agent bundle\n", "utf8");
     const nodeBinaryPath = join(root, "node-binary");
     await writeFile(nodeBinaryPath, "#!/bin/sh\nexit 0\n", "utf8");
-    const ompArtifactRoot = join(root, "omp-input");
-    const artifacts: Record<string, string> = {};
-    for (const target of [
-      "linux-x64",
-      "linux-arm64",
-      "darwin-x64",
-      "darwin-arm64",
-      "win32-x64",
-      "win32-arm64",
-    ]) {
-      const dir = join(ompArtifactRoot, target);
-      await mkdir(dir, { recursive: true });
-      const executable = target.startsWith("win32-") ? "omp.exe" : "omp";
-      await writeFile(join(dir, executable), "omp-fixture");
-      const manifest = JSON.stringify({
-        schemaVersion: 1,
-        version: "1.2.3",
-        commit: "a".repeat(40),
-        protocolBaseline: OMP_PROTOCOL_BASELINE,
-        target,
-        executable,
-        files: { [executable]: createHash("sha256").update("omp-fixture").digest("hex") },
-      });
-      await writeFile(join(dir, "omp-artifact.json"), manifest);
-      artifacts[target] = createHash("sha256").update(manifest).digest("hex");
-    }
-    await writeFile(
-      join(ompArtifactRoot, "omp-release.json"),
-      JSON.stringify({
-        version: "1.2.3",
-        commit: "a".repeat(40),
-        protocolBaseline: OMP_PROTOCOL_BASELINE,
-        artifacts,
-      }),
-    );
-
     const outputDir = join(root, "out");
     const notices = {
       thirdParty: "Copyright npm\nComplete terms\n",
@@ -248,7 +211,6 @@ describe("stageRelease", () => {
       bundledSkillsDir,
       nodeBinaryPath,
       outputDir,
-      ompArtifactRoot,
       notices,
     };
   }
@@ -329,13 +291,9 @@ describe("stageRelease", () => {
     );
     expect(linuxPty).toBe("linux-binary");
 
-    const manifest = JSON.parse(await readFile(join(releaseDir, "manifest.json"), "utf8")) as {
-      product: string;
-      target: string;
-      appVersion: string;
-      nodeVersion: string;
-      entrypoints: { cli: string; core: string; agent: string };
-    };
+    const manifest = serverRuntimeManifestSchema.parse(
+      JSON.parse(await readFile(join(releaseDir, "manifest.json"), "utf8")),
+    );
     expect(manifest.product).toBe("zcode-server");
     expect(manifest.target).toBe("linux-x64");
     expect(manifest.appVersion).toBe("9.9.9-test");
@@ -343,17 +301,9 @@ describe("stageRelease", () => {
     expect(manifest.entrypoints).toEqual({
       cli: "runtime/server-cli.js",
       core: "runtime/server-core.js",
-      agent: "runtime/omp/omp",
     });
-    expect(await readFile(join(releaseDir, "runtime/omp/omp"), "utf8")).toBe("omp-fixture");
-    const provenance = JSON.parse(
-      await readFile(join(releaseDir, "runtime/omp/omp-artifact.json"), "utf8"),
-    );
-    expect(provenance).toMatchObject({
-      version: "1.2.3",
-      commit: "a".repeat(40),
-      target: "linux-x64",
-      protocolBaseline: OMP_PROTOCOL_BASELINE,
+    await expect(stat(join(releaseDir, "runtime", "omp"))).rejects.toMatchObject({
+      code: "ENOENT",
     });
 
     expect(staged.packagedDependencies).toEqual(["fake-dep", "fake-transitive", "node-pty"]);
@@ -389,6 +339,15 @@ describe("stageRelease", () => {
       ...fixture,
     });
     expect(staged.archivePath).toMatch(/\.zip$/u);
+    const { stdout: archiveListing } = await execFileAsync(resolveHostTarCommand(), [
+      "-tf",
+      staged.archivePath ?? "",
+    ]);
+    expect(archiveListing).toContain("runtime/zcode.cjs");
+    expect(archiveListing).toContain("runtime/node.exe");
+    expect(archiveListing).not.toMatch(/(?:^|\/)omp(?:\/|\.exe(?:\r?\n|$)|\r?\n|$)/u);
+    expect(archiveListing).not.toContain("omp-artifact.json");
+    expect(archiveListing).not.toContain("omp-release.json");
     expect(await readFile(join(staged.releaseDir, "bin", "zcode.cmd"), "utf8")).toContain(
       "node.exe",
     );
@@ -432,11 +391,27 @@ describe("stageRelease", () => {
     expect(manifest.components.map((component) => component.id).sort()).toEqual(
       Object.keys(expected).sort(),
     );
+    const { stdout: archiveListing } = await execFileAsync(resolveHostTarCommand(), [
+      "-tf",
+      staged.archivePath ?? "",
+    ]);
+    expect(archiveListing).toContain("runtime/zcode.cjs");
+    expect(archiveListing).toContain("runtime/node");
+    expect(archiveListing).not.toMatch(/(?:^|\/)omp(?:\/|\.exe(?:\r?\n|$)|\r?\n|$)/u);
+    expect(archiveListing).not.toContain("omp-artifact.json");
+    expect(archiveListing).not.toContain("omp-release.json");
     const extractRoot = await makeTempDir();
     for (const component of manifest.components) {
       const extractDir = join(extractRoot, component.id);
       await mkdir(extractDir, { recursive: true });
       await runTar(["-xf", join(fixture.outputDir, component.archivePath), "-C", extractDir]);
+      const { stdout: componentListing } = await execFileAsync(resolveHostTarCommand(), [
+        "-tf",
+        join(fixture.outputDir, component.archivePath),
+      ]);
+      expect(componentListing).not.toMatch(/(?:^|\/)omp(?:\/|\.exe(?:\r?\n|$)|\r?\n|$)/u);
+      expect(componentListing).not.toContain("omp-artifact.json");
+      expect(componentListing).not.toContain("omp-release.json");
       for (const member of expected[component.id] ?? []) {
         expect(await readFile(join(extractDir, member))).toEqual(
           await readFile(join(staged.releaseDir, member)),

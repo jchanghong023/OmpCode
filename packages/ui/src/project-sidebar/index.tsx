@@ -295,6 +295,7 @@ export const ProjectSidebar = memo(function ProjectSidebar(props: ProjectSidebar
                             stickyTarget={groupedSticky}
                             workspacePath={props.workspacePath}
                             workspaceIdentity={props.workspaceIdentity}
+                            workspaceRemoteSessionId={props.workspaceRemoteSessionId}
                             onOpenAutomations={props.onOpenAutomations}
                             onCreate={(groupId) =>
                               action(() => start(undefined, undefined, groupId))

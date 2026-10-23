@@ -296,6 +296,8 @@ export interface ZCodeTaskMeta {
    * 导致任务列表、快照和日志互相串读。这里补充 workspaceIdentity 参与隔离。
    */
   workspaceIdentity?: string;
+  /** 原生成功事实确认的不可变 profile 绑定；undefined 为旧未知，null 为默认 profile。 */
+  ompProfile?: string | null;
   /** Controller/renderer 任务列表投影使用；不参与 workspace identity 或持久化 key。 */
   sourceServerId?: string;
   /** Source directory 的用户可读名称；缺失时 UI 回退 sourceServerId。 */

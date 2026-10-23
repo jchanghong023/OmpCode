@@ -435,6 +435,7 @@ export function createWorkspaceSlice(set: SetFn) {
       options?: {
         projectId?: string | null;
         taskGroupId?: string | null;
+        draftStorageScope?: string | null;
         createSource?: SessionCreateSource;
       },
     ) => {
@@ -455,10 +456,18 @@ export function createWorkspaceSlice(set: SetFn) {
             );
             const shouldResetSupplierForDraftProvider =
               Boolean(normalizedProvider) && nextSelectedProvider !== current.selectedProvider;
+            // 原因：旧域和未知域的临时模型种子不能在重绑 metadata 时被认领到新 profile。
+            const storageScopeChanged =
+              Boolean(options?.draftStorageScope) &&
+              current.draftStorageScope !== options?.draftStorageScope;
             const shouldClearSlashCommands =
-              current.activeTaskId !== null || shouldResetSupplierForDraftProvider;
+              current.activeTaskId !== null ||
+              shouldResetSupplierForDraftProvider ||
+              storageScopeChanged;
             const shouldInheritActiveTaskConfig =
-              current.activeTaskId !== null && !shouldResetSupplierForDraftProvider;
+              current.activeTaskId !== null &&
+              !shouldResetSupplierForDraftProvider &&
+              !storageScopeChanged;
             const activeTaskIdForInheritance = shouldInheritActiveTaskConfig
               ? current.activeTaskId
               : null;
@@ -487,10 +496,14 @@ export function createWorkspaceSlice(set: SetFn) {
               composerInitialization: undefined,
               draftProjectId: options?.projectId,
               draftTaskGroupId: options?.taskGroupId,
+              draftStorageScope: options?.draftStorageScope ?? null,
               // 同 cwd 可属于多个项目；换项目不能复用前一个项目的预热 runtime 目录范围。
               draftRuntimeInvalidationVersion:
                 current.draftRuntimeInvalidationVersion +
-                Number(current.draftProjectId !== options?.projectId),
+                Number(
+                  current.draftProjectId !== options?.projectId ||
+                    current.draftStorageScope !== (options?.draftStorageScope ?? null),
+                ),
               draftCreateSource: options?.createSource ?? "session",
               draftRuntime: { status: "idle", error: null },
               // 从已有 task 点 New Task 时，草稿输入框必须继承当前 task 的完整配置。
@@ -500,7 +513,9 @@ export function createWorkspaceSlice(set: SetFn) {
                     configOptions: inheritedDraftConfigOptions,
                     configOptionsStatus: inheritedConfigOptionsStatus,
                   }
-                : {}),
+                : storageScopeChanged
+                  ? { configOptions: [], configOptionsStatus: "idle" as const }
+                  : {}),
               draftError: null,
               modelSwitchRequestId: null,
               modelSwitchPending: false,
@@ -518,11 +533,10 @@ export function createWorkspaceSlice(set: SetFn) {
               // 仅在“从 task 切到 draft”或“provider 真正切换”时清空，避免同草稿态重复点击误伤。
               ...(shouldClearSlashCommands ? { slashCommands: [] } : {}),
               ...(normalizedProvider ? { selectedProvider: nextSelectedProvider } : {}),
-              ...(shouldResetSupplierForDraftProvider
+              ...(shouldResetSupplierForDraftProvider || storageScopeChanged
                 ? {
-                    // 某些“新建任务”入口会把当前 selectedProvider 透传回 startDraft。
-                    // 如果 provider 实际没变化却强制重置 supplier，会出现“显示 custom 模型但 custom 选项被锁”的撕裂态。
-                    // 这里只在 provider 真正切换时才回到 native，避免同 provider 新建草稿误伤现有 supplier 上下文。
+                    // 同域、同 provider 的新建任务保留 supplier，避免损失当前配置；
+                    // 实际域改变则回到 native，由目标域的草稿/Recent 恢复模型，不继承旧域 selector。
                     selectedSupplierKey: buildNativeSupplierKey(nextSelectedProvider),
                     isGhostSupplier: false,
                     supplierMismatchReason: null,

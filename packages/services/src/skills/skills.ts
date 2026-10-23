@@ -1,7 +1,71 @@
+import { z } from "zod";
 import type { ZCodeProvider, SkillsPromptContext, SkillsListResult } from "@zcode/shared";
 import { ServiceChannels } from "@zcode/shared";
 import { createServiceDescriptor } from "../descriptors.js";
 
+/** OMP bridge extension: no Session is created for management. */
+export const nativeSkillsManageParamsSchema = z.discriminatedUnion("action", [
+  z.object({ action: z.literal("list"), workspacePath: z.string().min(1) }).strict(),
+  z.object({ action: z.literal("refresh"), workspacePath: z.string().min(1) }).strict(),
+  z
+    .object({
+      action: z.literal("setEnabled"),
+      workspacePath: z.string().min(1),
+      skillId: z.string().min(1),
+      enabled: z.boolean(),
+      scope: z.enum(["user", "workspace"]).default("user"),
+    })
+    .strict(),
+]);
+export type NativeSkillsManageParams = z.input<typeof nativeSkillsManageParamsSchema> & {
+  workspaceIdentity?: string;
+};
+export const nativeSkillsManageResultSchema = z
+  .object({
+    skills: z.array(
+      z
+        .object({
+          id: z.string(),
+          name: z.string(),
+          description: z.string(),
+          body: z.string(),
+          path: z.string(),
+          scope: z.enum(["workspace", "user", "plugin"]),
+          enabled: z.boolean(),
+          pluginName: z.string().optional(),
+          source: z
+            .object({
+              provider: z.string(),
+              providerName: z.string(),
+              path: z.string(),
+              level: z.enum(["user", "project", "native"]),
+              origin: z.string().optional(),
+              pluginName: z.string().optional(),
+            })
+            .strict(),
+          disabledReason: z.enum(["item-disabled", "provider-disabled", "user-opt-in"]).optional(),
+        })
+        .strict(),
+    ),
+    capability: z
+      .object({ userScopeAvailable: z.literal(true), toggleScope: z.literal("profile") })
+      .strict(),
+    diagnostics: z.array(
+      z
+        .object({
+          code: z.literal("skill_read_failed"),
+          severity: z.literal("warning"),
+          message: z.string(),
+          path: z.string(),
+        })
+        .strict(),
+    ),
+    sharedDirectory: z
+      .object({ path: z.string(), readOnly: z.literal(true) })
+      .strict()
+      .optional(),
+  })
+  .strict();
 export interface ISkillsService {
   list(params: {
     workspacePath: string;
@@ -22,22 +86,19 @@ export interface ISkillsService {
     provider?: ZCodeProvider;
     prompt: string;
   }): Promise<SkillsPromptContext>;
-  /** 将指定 skill 复制到通用目录（.zcode/skills），成功后返回新 skill 的路径。 */
+  /** OMP 无等价安全复制 API；当前桥接明确拒绝。 */
   copyToCommon(params: {
     workspacePath: string;
     workspaceIdentity?: string;
     skillId: string;
   }): Promise<{ newPath: string }>;
-  /** 从通用目录中移除指定 skill（仅当 skill 位于 .zcode/skills 时有效）。 */
+  /** OMP 无等价安全移除 API；当前桥接明确拒绝。 */
   removeFromCommon(params: {
     workspacePath: string;
     workspaceIdentity?: string;
     skillId: string;
   }): Promise<void>;
-  /**
-   * 删除本地技能（仅 workspace/user 作用域；plugin 作用域拒绝）。
-   * 删除技能所在目录，仅允许命中 .zcode/skills 或 .agents/skills 根，越界则拒绝。
-   */
+  /** OMP 无等价安全删除 API；不得直接删除共享或插件技能目录。 */
   deleteSkill(params: {
     workspacePath: string;
     workspaceIdentity?: string;

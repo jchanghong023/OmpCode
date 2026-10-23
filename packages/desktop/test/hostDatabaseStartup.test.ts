@@ -30,7 +30,7 @@ it("prepares actual restored working directories before publishing services, wit
   const startup = createHostDatabaseStartup({
     startupId: "host-startup-test",
     cwd: tmpdir(),
-    workingDirectories: [dir, dir],
+    workspaceTargets: [{ workspacePath: dir }, { workspacePath: dir }],
     initializeServices: async () => {
       sequence.push("services");
     },
@@ -60,14 +60,16 @@ it("uses the normal Agent fallback for ENOTDIR and preserves actual database fai
   const failure = vi.fn();
   const startup = createHostDatabaseStartup({
     cwd: dir,
-    workingDirectories: [cwd],
+    workspaceTargets: [{ workspacePath: cwd }],
     initializeServices: initialized,
     publish: () => {},
     onFailure: failure,
   });
   try {
     await startup.coordinator.start();
-    expect(fixtures.session).toHaveBeenLastCalledWith(expect.objectContaining({ cwd: dir }));
+    expect(fixtures.session).toHaveBeenLastCalledWith(
+      expect.objectContaining({ cwd: dir, workspaceTarget: { workspacePath: cwd } }),
+    );
     expect(failure).toHaveBeenCalledWith(primary);
     expect(startup.coordinator.snapshot).toMatchObject({
       phase: "failed",
@@ -99,7 +101,7 @@ it("only marks the last session database as eligible for global saving/finishing
   });
   const startup = createHostDatabaseStartup({
     cwd: dir,
-    workingDirectories: [dir, tmpdir()],
+    workspaceTargets: [{ workspacePath: dir }, { workspacePath: tmpdir() }],
     initializeServices: async () => {},
     publish: (state) => states.push(state),
     onFailure: () => {},
@@ -109,6 +111,38 @@ it("only marks the last session database as eligible for global saving/finishing
     const commits = states.filter((state) => state.databasePhase === "committing");
     expect(commits.map((state) => state.finalDatabase)).toEqual([undefined, false, true]);
     expect(states.at(-1)?.phase).toBe("ready");
+  } finally {
+    startup.dispose();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+it("keeps same-cwd identities and distinct historical targets separate through cwd fallback", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "zcode-startup-identities-"));
+  const blocker = join(dir, "former-directory");
+  await writeFile(blocker, "now a file");
+  const targets = [
+    { workspacePath: dir, workspaceIdentity: "remote:alpha" },
+    { workspacePath: dir, workspaceIdentity: "remote:beta" },
+    { workspacePath: join(blocker, "old-alpha") },
+    { workspacePath: join(blocker, "old-beta") },
+  ];
+  const seen: unknown[] = [];
+  fixtures.host.mockResolvedValue(undefined);
+  fixtures.session.mockImplementation(async ({ cwd, workspaceTarget }) => {
+    seen.push({ cwd, workspaceTarget });
+  });
+  const startup = createHostDatabaseStartup({
+    cwd: dir,
+    workspaceTargets: [...targets, targets[0]!],
+    initializeServices: async () => {},
+    publish: () => {},
+    onFailure: () => {},
+  });
+  try {
+    await startup.coordinator.start();
+    expect(seen).toEqual(targets.map((workspaceTarget) => ({ cwd: dir, workspaceTarget })));
+    expect(startup.coordinator.snapshot.phase).toBe("ready");
   } finally {
     startup.dispose();
     await rm(dir, { recursive: true, force: true });

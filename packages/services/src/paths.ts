@@ -1,9 +1,7 @@
 /* path 规则集中维护：旧 task 快照与 provider 配置路径仍在这里收口。 */
-import { lstatSync } from "node:fs";
-import { cp } from "node:fs/promises";
 import { createHash } from "node:crypto";
-import { basename, join, win32 } from "node:path";
-import { homedir } from "node:os";
+import { join, win32 } from "node:path";
+import { resolveOmpCodeDataRoot } from "@zcode/shared/node";
 import {
   DATA_BASE_DIR_FORBIDDEN_WINDOWS_INSTALL_DIR_ERROR_CODE,
   ZCODE_AGENT_RUNTIME,
@@ -11,8 +9,8 @@ import {
 
 let _dataBaseDir: string | null = null;
 export const ZCODE_WINDOWS_APP_INSTALL_DIR_ENV = "ZCODE_WINDOWS_APP_INSTALL_DIR";
-const envDataBaseDir = process.env.ZCODE_DATA_BASE_DIR?.trim() || null;
-const defaultDataBaseDir = process.env.HOME?.trim() || homedir();
+// 启动时固定环境事实，后续设置读写和后台任务不能改变当前进程的数据域。
+const applicationDataRoot = resolveOmpCodeDataRoot();
 
 export interface DataBaseDirTargetValidationOptions {
   platform?: NodeJS.Platform | string;
@@ -28,31 +26,30 @@ export type DataBaseDirTargetValidationResult =
       forbiddenDir: string;
     };
 
-/** Set the base directory for app data (replaces homedir() prefix). */
+/** Test fixture injection only. Production roots are owned by startup environment. */
 export function setDataBaseDir(dir: string | null): void {
+  if (process.env.NODE_ENV !== "test" && process.env.VITEST !== "true") {
+    throw new Error("OmpCode data directory is read-only");
+  }
   _dataBaseDir = dir?.trim() || null;
 }
 
-/** Get the current base directory. Priority: setDataBaseDir() > env ZCODE_DATA_BASE_DIR > homedir(). */
+/** Actual application root, not a parent HOME and never a persisted setting. */
 export function getDataBaseDir(): string {
-  if (_dataBaseDir) return _dataBaseDir;
-  if (envDataBaseDir) return envDataBaseDir;
-  // 服务实例会启动后台刷新任务；若每次调用都动态读取 HOME，
-  // 测试或宿主切换环境变量后，旧实例可能把数据写到新实例目录。
-  return defaultDataBaseDir;
+  return _dataBaseDir ?? applicationDataRoot;
 }
 
-/** {dataBaseDir}/.zcode */
+/** Effective OmpCode application data root. */
 export function getZCodeDataRootDir(): string {
-  return join(getDataBaseDir(), ".zcode");
+  return getDataBaseDir();
 }
 
-/** 非项目对话共享的真实工作目录；默认 ~/.zcode/workspace/default。 */
+/** 非项目对话共享的真实工作目录；默认 ~/.ompcode/workspace/default。 */
 export function getConversationWorkspaceDir(): string {
   return join(getZCodeDataRootDir(), "workspace", "default");
 }
 
-/** {dataBaseDir}/.zcode/v2 */
+/** {applicationRoot}/v2 */
 export function getAppConfigDir(): string {
   return join(getZCodeDataRootDir(), "v2");
 }
@@ -185,9 +182,20 @@ export function getGitCheckpointIndexRootDir(): string {
   return join(getZCodeDataRootDir(), "git-checkpoint-index");
 }
 
-/** ~/.zcode/v2/tasks-index.sqlite */
-export function getTasksIndexDatabasePath(): string {
-  return join(getAppConfigDir(), "tasks-index.sqlite");
+/** Organization scope must come from the running OMP handshake, never a pending selection. */
+export function getTasksIndexDatabasePath(scope?: {
+  configRoot: string;
+  profileId: string | null;
+  authority?: string;
+}): string {
+  if (!scope) return join(getAppConfigDir(), "tasks-index.sqlite");
+  // 远端控制器按 Host authority 隔离；本地保持原有 root/profile 哈希不变。
+  const identity =
+    scope.authority && scope.authority !== "local"
+      ? [scope.authority, scope.configRoot, scope.profileId]
+      : [scope.configRoot, scope.profileId];
+  const key = createHash("sha256").update(JSON.stringify(identity)).digest("hex");
+  return join(getAppConfigDir(), "omp-scopes", key, "tasks-index.sqlite");
 }
 
 /** workspace 级身份键：远程优先使用 workspaceIdentity，本地回退 workspacePath。 */
@@ -203,12 +211,12 @@ export function getWorkspaceHash(workspacePath: string, workspaceIdentity?: stri
     .slice(0, 12);
 }
 
-/** ~/.zcode/v2/sessions/{workspaceHash} */
+/** {applicationRoot}/v2/sessions/{workspaceHash} */
 function getTaskSessionDir(workspacePath: string, workspaceIdentity?: string): string {
   return join(getAppConfigDir(), "sessions", getWorkspaceHash(workspacePath, workspaceIdentity));
 }
 
-/** ~/.zcode/v2/sessions/{workspaceHash}/{taskId}.json */
+/** {applicationRoot}/v2/sessions/{workspaceHash}/{taskId}.json */
 export function getLegacyTaskSessionSnapshotPath(
   workspacePath: string,
   taskId: string,
@@ -217,7 +225,7 @@ export function getLegacyTaskSessionSnapshotPath(
   return join(getTaskSessionDir(workspacePath, workspaceIdentity), `${taskId}.json`);
 }
 
-/** ~/.zcode/v2/sessions/{workspaceHash}/{taskId}.deleted.json */
+/** {applicationRoot}/v2/sessions/{workspaceHash}/{taskId}.deleted.json */
 export function getLegacyDeletedTaskSessionSnapshotPath(
   workspacePath: string,
   taskId: string,
@@ -226,44 +234,7 @@ export function getLegacyDeletedTaskSessionSnapshotPath(
   return join(getTaskSessionDir(workspacePath, workspaceIdentity), `${taskId}.deleted.json`);
 }
 
-/**
- * GLM（唯一 agent provider）的配置目录：~/.zcode/cli。
- * Bugfix：GLM 配置改为直接读写新版 zcode-cli 的全局配置目录，不做 workspace 隔离，
- * 避免同机不同工作区配置漂移。
- */
+/** OmpCode-owned provider workspace configuration, never the upstream .zcode tree. */
 export function getProviderWorkspaceConfigDir(): string {
-  return ZCODE_AGENT_RUNTIME.nativeConfigDir
-    ? join(getDataBaseDir(), ZCODE_AGENT_RUNTIME.nativeConfigDir)
-    : join(getDataBaseDir(), ".zcode", "cli");
-}
-
-/**
- * Copy the .zcode/v2 data directory from one base dir to another.
- * Excludes setting.json and its transient atomic-write siblings — bootstrap
- * state must only live at the default homedir location.
- */
-export async function copyDataDirectory(oldBaseDir: string, newBaseDir: string): Promise<void> {
-  const oldDir = join(oldBaseDir, ".zcode", "v2");
-  const newDir = join(newBaseDir, ".zcode", "v2");
-  await cp(oldDir, newDir, {
-    recursive: true,
-    force: false,
-    filter: (source) => {
-      const sourceName = basename(source);
-      if (sourceName === "setting.json" || sourceName.startsWith("setting.json.")) {
-        // setting.json.lock 和 setting.json.*.tmp 由原子写入短暂创建/删除，
-        // 复制过程中扫描到已消失的 lock 会触发 ENOENT，并让数据目录迁移失败。
-        // 这些文件都属于 bootstrap 写入中间态，不能迁移到新数据根。
-        return false;
-      }
-      // Windows 非提权环境下 fs.cp 无法复制符号链接（EPERM）。
-      // 跳过符号链接可避免 Windows 非提权环境下 fs.cp 报 EPERM。
-      try {
-        if (lstatSync(source).isSymbolicLink()) return false;
-      } catch {
-        // lstat 失败时放行，让 cp 自行处理
-      }
-      return true;
-    },
-  });
+  return join(getZCodeDataRootDir(), ZCODE_AGENT_RUNTIME.nativeConfigDir ?? "cli");
 }

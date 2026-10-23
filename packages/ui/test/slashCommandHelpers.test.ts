@@ -11,12 +11,28 @@ import {
 } from "../src/slashCommandHelpers.js";
 
 describe("slashCommandHelpers", () => {
-  it("计划模式使用本地化操作名称，旧 CLI Plan 命令不能覆盖它", () => {
+  it("旧 Agent 的 Plan 仍由本地计划模式操作提供，OMP 则展示原生命令", () => {
     const [action] = buildAppSlashCommandSuggestions([
       { value: "plan", label: "计划模式", description: "开启计划模式", run: () => {} },
     ]);
-    expect(action).toMatchObject({ id: "app-slash:plan", value: "plan", label: "计划模式" });
-    expect(buildSlashSuggestions([{ name: "/PLAN", description: "legacy plan" }])).toEqual([]);
+    const catalog: ZCodeSlashCommand[] = [
+      {
+        name: "/PLAN",
+        description: "Toggle native planning",
+        inputHint: "/plan [on|off]",
+        source: "builtin",
+      },
+    ];
+    expect(action).toMatchObject({ value: "plan", label: "计划模式" });
+    expect(isAppSlashCommandSuggestion(action!)).toBe(true);
+    expect(buildSlashSuggestions(catalog)).toEqual([]);
+    const [native] = buildSlashSuggestions(catalog, true);
+    expect(native).toMatchObject({
+      value: "PLAN",
+      label: "/plan [on|off]",
+      description: catalog[0]!.description,
+    });
+    expect(isAppSlashCommandSuggestion(native!)).toBe(false);
   });
 
   it("buildSlashSuggestions 逐项展示 CLI catalog，不在 UI 维护内建白名单", () => {
@@ -50,47 +66,12 @@ describe("slashCommandHelpers", () => {
       },
     ];
     const result = buildSlashSuggestions(commands);
-    expect(result).toEqual([
-      {
-        id: "slash:review",
-        trigger: "/",
-        value: "review",
-        label: "/review [scope]",
-        description: "run review",
-        keywords: ["review", "run review", "/review [scope]"],
-      },
-      {
-        id: "slash:goal",
-        trigger: "/",
-        value: "goal",
-        label: "/goal",
-        description: "set goal",
-        keywords: ["goal", "set goal", ""],
-      },
-      {
-        id: "slash:compact",
-        trigger: "/",
-        value: "compact",
-        label: "/compact",
-        description: "compact context",
-        keywords: ["compact", "compact context", ""],
-      },
-      {
-        id: "slash:init",
-        trigger: "/",
-        value: "init",
-        label: "/init [notes]",
-        description: "create AGENTS.md",
-        keywords: ["init", "create AGENTS.md", "/init [notes]"],
-      },
-      {
-        id: "slash:model",
-        trigger: "/",
-        value: "model",
-        label: "/model",
-        description: "switch model",
-        keywords: ["model", "switch model", ""],
-      },
+    expect(result.map(({ value, label, description }) => ({ value, label, description }))).toEqual([
+      { value: "review", label: "/review [scope]", description: "run review" },
+      { value: "goal", label: "/goal", description: "set goal" },
+      { value: "compact", label: "/compact", description: "compact context" },
+      { value: "init", label: "/init [notes]", description: "create AGENTS.md" },
+      { value: "model", label: "/model", description: "switch model" },
     ]);
   });
 
@@ -117,20 +98,57 @@ describe("slashCommandHelpers", () => {
       },
     ]);
 
-    expect(result).toEqual([
-      {
-        id: "slash:compact",
-        trigger: "/",
-        value: "compact",
-        label: "/compact",
-        description: "Compact context",
-        keywords: ["compact", "/compact", "Compact context", ""],
-      },
-    ]);
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({ value: "compact", label: "/compact" });
+    expect(replaceActiveSlashToken("/comp", "", `/${result[0]!.value}`)?.text).toBe("/compact ");
   });
 
   it("buildSlashSuggestions 不为缺失的 CLI catalog 补任何命令", () => {
     expect(buildSlashSuggestions([])).toEqual([]);
+  });
+
+  it("原生 canonical 和 alias 展示目录描述与 hint，但选择只插入命令名", () => {
+    const catalog: ZCodeSlashCommand[] = [
+      {
+        name: "compact",
+        description: "Summarize the current session",
+        inputHint: "/compact [instructions]",
+        source: "builtin",
+      },
+      {
+        name: "compress",
+        description: "Alias for /compact",
+        inputHint: "/compress [instructions]",
+        source: "builtin",
+      },
+      {
+        name: "goal",
+        description: "Manage session goals",
+        inputHint: "/goal <set|show|pause|resume>",
+        source: "builtin",
+      },
+      {
+        name: "move",
+        description: "Move this session",
+        inputHint: "/move <directory>",
+        source: "builtin",
+      },
+      { name: "wt", description: "Manage worktrees", inputHint: "/wt <action>", source: "builtin" },
+    ];
+    const suggestions = buildSlashSuggestions(catalog, true);
+    expect(suggestions).toHaveLength(catalog.length);
+    for (const [index, suggestion] of suggestions.entries()) {
+      const command = catalog[index]!;
+      expect(suggestion).toMatchObject({
+        value: command.name,
+        label: command.inputHint,
+        description: command.description,
+      });
+      expect(isAppSlashCommandSuggestion(suggestion)).toBe(false);
+      expect(replaceActiveSlashToken("/", "", `/${suggestion.value}`)?.text).toBe(
+        `/${command.name} `,
+      );
+    }
   });
 
   it("buildSubagentSuggestions 只包含 enabled subagents", () => {

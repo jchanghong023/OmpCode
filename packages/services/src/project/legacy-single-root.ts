@@ -75,6 +75,11 @@ export function createLegacySingleRootProjectService(
     return { paths, projects };
   };
   const service: IProjectService = {
+    async getOrganizationScope() {
+      throw Object.assign(new Error("Legacy Host does not expose native OMP organization scope"), {
+        code: "omp.storageScopeUnavailable",
+      });
+    },
     async readDirectory(params) {
       verifyHost(params?.hostId);
       // 旧远端只读能力不应阻止选择已有项目；目录校验走远端文件服务，路径规则不能取本机平台。

@@ -28,6 +28,7 @@ import { PlatformProvider } from "@/hooks/usePlatform.js";
 import { ServiceProvider, useComposerClientNamespace } from "@/hooks/useServices.js";
 import {
   readComposerWorkspaceScope,
+  resolveComposerScope,
   readV4ComposerDraft,
   V4_DRAFT_SCOPE_ROOT,
 } from "@/v4/composer/composerDraftStore.js";
@@ -44,7 +45,13 @@ import { DirectoryBrowser } from "@/DirectoryBrowser.js";
 import { attachRemoteProjectWorkspace, resolveEntryProject } from "@/project-sidebar/index.js";
 import { useTabPersistence, type WorkspacePersistenceGate } from "@/hooks/useTabPersistence.js";
 import { useTokenRefresh } from "@/hooks/useTokenRefresh.js";
-import { useWorkspaceServices } from "@/hooks/useWorkspaceServices.js";
+import {
+  useWorkspaceServices,
+  resolveWorkspaceServiceIsRemoteTarget,
+  resolveWorkspaceServicesForTarget,
+} from "@/hooks/useWorkspaceServices.js";
+import { useOmpStorageScope } from "@/hooks/useZCodeAgentService.js";
+import { resolveRemoteWorkspaceSessionIdForTarget } from "@/hooks/useResolvedRemoteWorkspaceSessionId.js";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
 import { SSHDialog } from "@/SSHDialog.js";
 import { SettingsPage } from "@/SettingsPage.js";
@@ -446,6 +453,64 @@ function RootInner({
     workspaceShellRemoteSessionId,
     workspaceShellIdentity,
   );
+  const storageScope = useOmpStorageScope(
+    workspaceShellPath ?? "",
+    workspaceShellIdentity ?? undefined,
+    workspaceShellRemoteSessionId,
+  );
+  const initialStorageScope = useOmpStorageScope(
+    initialWorkspaceAbsPath ?? workspaceShellPath ?? "",
+    initialWorkspaceAbsPath ? initialWorkspaceIdentity : workspaceShellIdentity,
+    initialWorkspaceAbsPath ? undefined : workspaceShellRemoteSessionId,
+  );
+  const storageScopeEpoch = useRef({ scope: storageScope, generation: 0 });
+  if (storageScopeEpoch.current.scope !== storageScope) {
+    storageScopeEpoch.current = {
+      scope: storageScope,
+      generation: storageScopeEpoch.current.generation + 1,
+    };
+  }
+  const tabStoreApi = useTabStoreApi();
+  const resolveStorageScope = useCallback(
+    async (workspacePath: string, workspaceIdentity?: string) => {
+      const state = tabStoreApi.getState();
+      const remoteState = useRemoteWorkspaceSessionStore.getState();
+      const tab = state.tabs.find(
+        (candidate) =>
+          isWorkspaceTab(candidate) &&
+          (workspaceIdentity
+            ? candidate.workspaceIdentity === workspaceIdentity
+            : candidate.workspacePath === workspacePath && !candidate.workspaceIdentity),
+      );
+      const workspaceTab = tab && isWorkspaceTab(tab) ? tab : null;
+      const remoteSessionId = resolveRemoteWorkspaceSessionIdForTarget({
+        workspacePath,
+        workspaceIdentity,
+        activeTab: workspaceTab,
+        state: remoteState,
+        preferredRemoteSessionId: workspaceTab?.remoteSessionId,
+      });
+      const targetServices = resolveWorkspaceServicesForTarget({
+        currentContextServices: services,
+        baseServices: remoteState.baseServices ?? services,
+        sessionsById: remoteState.sessionsById,
+        resolvedRemoteSessionId: remoteSessionId,
+        isRemoteTarget: resolveWorkspaceServiceIsRemoteTarget({
+          workspacePath,
+          workspaceIdentity,
+          preferredRemoteSessionId: remoteSessionId,
+          activeTab: workspaceTab,
+          workspaceTabs: state.tabs.filter(isWorkspaceTab),
+        }),
+      });
+      const profile = await targetServices.zcodeAgentService.getOmpProfiles({
+        workspacePath,
+        workspaceIdentity,
+      });
+      return profile.storageScope ?? null;
+    },
+    [services, tabStoreApi],
+  );
 
   const localWorkspacePathForRemoteConnection = useTabStore((state) => {
     const activeTab = state.activeTabId
@@ -465,7 +530,6 @@ function RootInner({
   });
   const addTab = useTabStore((state) => state.addTab);
   const activateTabByPath = useTabStore((state) => state.activateTabByPath);
-  const tabStoreApi = useTabStoreApi();
   const deviceAdditionReturn = useRef<{
     target: DeviceAdditionReturnTarget;
     completion?: "checking" | "delivered";
@@ -706,6 +770,8 @@ function RootInner({
     addTab,
     activeWorkspacePath,
     activeWorkspaceIdentity,
+    storageScope,
+    resolveStorageScope,
     supportsSettings,
     allowOpenWorkspace,
     preferDirectoryBrowser: shouldPreferDirectoryBrowser,
@@ -880,10 +946,57 @@ function RootInner({
   }, [activeWorkspacePath, setWorkspaceActionError]);
 
   const composerClientNamespace = useComposerClientNamespace();
+  const actualScopeByWorkspace = useRef(new Map<string, string>());
+  useEffect(() => {
+    if (!storageScope || !workspaceShellPath) return;
+    const key = workspaceShellIdentity?.trim() || workspaceShellPath;
+    const previousScope = actualScopeByWorkspace.current.get(key);
+    actualScopeByWorkspace.current.set(key, storageScope);
+    const workspace = useZCodeSessionStore
+      .getState()
+      .getWorkspaceState(workspaceShellPath, workspaceShellIdentity ?? undefined);
+    if (workspace.draftStorageScope === storageScope) return;
+    if (workspace.activeTaskId && (!previousScope || previousScope === storageScope)) return;
+    const savedScope = readComposerWorkspaceScope(
+      workspaceShellPath,
+      workspaceShellIdentity ?? undefined,
+      composerClientNamespace,
+      storageScope,
+    );
+    const scope = resolveComposerScope(
+      savedScope?.projectId ?? null,
+      workspaceShellIdentity ?? undefined,
+      composerClientNamespace,
+      storageScope,
+      workspaceShellRemoteSessionId,
+    );
+    const draft = readV4ComposerDraft(
+      workspaceShellPath,
+      workspaceShellIdentity ?? undefined,
+      V4_DRAFT_SCOPE_ROOT,
+      scope,
+    );
+    // 原因：内存导航按 workspace 保留，实际根/profile 改变后必须重绑目标域而非沿用旧归属。
+    // 这里只重建展示元数据，不清空任何旧域持久草稿；切回时由原 owner 读回。
+    useZCodeSessionStore
+      .getState()
+      .startDraft(workspaceShellPath, undefined, workspaceShellIdentity ?? undefined, {
+        projectId: scope?.projectId ?? null,
+        taskGroupId: draft?.taskGroupId ?? null,
+        draftStorageScope: storageScope,
+      });
+  }, [
+    storageScope,
+    workspaceShellPath,
+    workspaceShellIdentity,
+    workspaceShellRemoteSessionId,
+    composerClientNamespace,
+  ]);
   const restorePersistedSession = useCallback(
     async (...args: Parameters<typeof restoreWorkspaceTabs>) => {
       const restored = await restoreWorkspaceTabs(...args);
-      const restoreDraftIntents = () => {
+      const generation = storageScopeEpoch.current.generation;
+      const restoreDraftIntents = async () => {
         // 无会话恢复目标时先恢复项目范围，再打开首屏门禁，避免 Composer
         // 按未归类范围读取并预热同目录的项目草稿。
         for (const tab of tabStoreApi.getState().tabs) {
@@ -906,12 +1019,27 @@ function RootInner({
           ) {
             continue;
           }
-          const scope = readComposerWorkspaceScope(
+          const targetStorageScope = await resolveStorageScope(
+            tab.workspacePath,
+            tab.workspaceIdentity,
+          ).catch(() => null);
+          // 原因：Root 恢复请求可能晚于实际 profile 重启，旧草稿归属不得写回新域。
+          if (generation !== storageScopeEpoch.current.generation) return;
+          if (!targetStorageScope) continue;
+          const savedScope = readComposerWorkspaceScope(
             tab.workspacePath,
             tab.workspaceIdentity,
             composerClientNamespace,
+            targetStorageScope,
           );
-          if (!scope) continue;
+          if (!savedScope) continue;
+          const scope = resolveComposerScope(
+            savedScope.projectId,
+            tab.workspaceIdentity,
+            composerClientNamespace,
+            targetStorageScope,
+            tab.remoteSessionId,
+          );
           const draft = readV4ComposerDraft(
             tab.workspacePath,
             tab.workspaceIdentity,
@@ -923,6 +1051,7 @@ function RootInner({
             .startDraft(tab.workspacePath, undefined, tab.workspaceIdentity, {
               projectId: scope.projectId,
               taskGroupId: draft?.taskGroupId,
+              draftStorageScope: targetStorageScope,
             });
           logger.info("[Root] 已恢复新建草稿归属", {
             workspacePath: tab.workspacePath,
@@ -931,20 +1060,20 @@ function RootInner({
           });
         }
       };
-      restoreDraftIntents();
+      await restoreDraftIntents();
       return {
         ...restored,
         ...(restored.deferredRestore
           ? {
               deferredRestore: () => {
                 restored.deferredRestore!();
-                restoreDraftIntents();
+                void restoreDraftIntents();
               },
             }
           : {}),
       };
     },
-    [restoreWorkspaceTabs, composerClientNamespace, tabStoreApi, isDesktop],
+    [restoreWorkspaceTabs, composerClientNamespace, tabStoreApi, isDesktop, resolveStorageScope],
   );
 
   const { isRestoring, hasCompletedInitialRestore, hasCompletedFullRestore } = useTabPersistence({
@@ -1025,6 +1154,9 @@ function RootInner({
     initialWorkspacePurpose,
     initialTaskId,
     initialTaskDraft,
+    initialStorageScope,
+    storageScope,
+    resolveStorageScope,
     // Bugfix: 系统右键/Service 冷启动传入 initialWorkspacePath 时，必须先恢复历史 tabs，
     // 再把目标 workspace 合并并激活。否则先 addTab 会被 restoreTabs 整体替换掉；
     // 直接禁用 restoreSession 又会让其他 workspace 全部消失。

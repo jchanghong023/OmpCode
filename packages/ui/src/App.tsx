@@ -15,7 +15,7 @@ import { usePlatform } from "@/hooks/usePlatform.js";
 import { useWorkspaceProviderConfigFile } from "@/hooks/useWorkspaceProviderConfigFile.js";
 import { useWorkspaceActiveTaskState } from "@/hooks/useWorkspaceActiveTaskState.js";
 import { useEnsureWorkspaceMcpLoaded } from "@/hooks/useEnsureWorkspaceMcpLoaded.js";
-import { useTabStore } from "@/store/TabStoreProvider.js";
+import { useTabStore, useTabStoreApi } from "@/store/TabStoreProvider.js";
 import { isWorkspaceReadOnly, isWorkspaceTab } from "@/store/tabStore.js";
 import type { TaskChatMessage as TestChatMessage } from "@/lib/taskChatMessageTypes.js";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
@@ -64,7 +64,22 @@ import {
 } from "@/app-shell/useWorkspaceTaskNavigation.js";
 import { useTaskSidePaneMemoryBridge } from "@/app-shell/useTaskSidePaneMemoryBridge.js";
 import { resolveAppWorkspaceRpcTarget } from "@/app-shell/workspaceRpcTarget.js";
-import { useWorkspaceServicesResolution } from "@/hooks/useWorkspaceServices.js";
+import {
+  useWorkspaceServicesResolution,
+  resolveWorkspaceServicesForTarget,
+  resolveWorkspaceServiceIsRemoteTarget,
+} from "@/hooks/useWorkspaceServices.js";
+import { useOmpStorageScope } from "@/hooks/useZCodeAgentService.js";
+import { useComposerClientNamespace } from "@/hooks/useServices.js";
+import { resolveRemoteWorkspaceSessionIdForTarget } from "@/hooks/useResolvedRemoteWorkspaceSessionId.js";
+import { useRemoteWorkspaceSessionStore } from "@/store/remoteWorkspaceSessionStore.js";
+import {
+  readComposerWorkspaceScope,
+  readV4ComposerDraft,
+  resolveComposerScope,
+  V4_DRAFT_SCOPE_ROOT,
+} from "@/v4/composer/composerDraftStore.js";
+import { toast } from "@/components/ui/toast.js";
 import { useWorkspaceTerminalTaskNotifications } from "@/hooks/useTaskNotifications.js";
 import { useMarketingTaskCompletionRefresh } from "@/components/marketing-touch/useMarketingTaskCompletionRefresh.js";
 import { useOffPeakTaskNotifications } from "@/hooks/useOffPeakTaskNotifications.js";
@@ -200,6 +215,27 @@ export function App({
     workspaceIdentity,
     workspaceRpcTarget.remoteTarget,
   );
+  const actualStorageScope = useOmpStorageScope(
+    workspaceAbsPath,
+    workspaceIdentity,
+    workspaceRpcTarget.remoteSessionId,
+  );
+  const composerClientNamespace = useComposerClientNamespace();
+  const tabStoreApi = useTabStoreApi();
+  const draftNavigationEpoch = useRef({ scope: actualStorageScope, generation: 0, sequence: 0 });
+  if (draftNavigationEpoch.current.scope !== actualStorageScope) {
+    draftNavigationEpoch.current = {
+      scope: actualStorageScope,
+      generation: draftNavigationEpoch.current.generation + 1,
+      sequence: draftNavigationEpoch.current.sequence,
+    };
+  }
+  useEffect(
+    () => () => {
+      draftNavigationEpoch.current.generation++;
+    },
+    [],
+  );
   const workspaceReadOnly = useTabStore((state) =>
     isWorkspaceReadOnly(state, workspaceAbsPath, workspaceIdentity),
   );
@@ -246,6 +282,7 @@ export function App({
     handleOpenSelectionSideChat,
     handleOpenPlanDetail,
     handleOpenPluginUi,
+    handleOpenOmpTeamRun,
     handleOpenWorkflowRun,
     handleOpenWorkflowRunDirectory,
     handleOpenWorkflowActorSession,
@@ -734,7 +771,7 @@ export function App({
     reloadSessionDisabled,
   });
   const handleStartDraftInWorkspace = useCallback(
-    (
+    async (
       targetWorkspacePath: string,
       targetWorkspaceIdentity?: string,
       targetWorkspacePurpose?: WorkspacePurpose,
@@ -748,6 +785,101 @@ export function App({
       if (isWorkspaceReadOnly({ tabs }, targetWorkspacePath, resolvedTargetWorkspaceIdentity)) {
         return;
       }
+      const epoch = draftNavigationEpoch.current.generation;
+      const sequence = ++draftNavigationEpoch.current.sequence;
+      const state = tabStoreApi.getState();
+      const originTabId = state.activeTabId;
+      const matchingTab = state.tabs
+        .filter(isWorkspaceTab)
+        .find((tab) =>
+          resolvedTargetWorkspaceIdentity
+            ? tab.workspaceIdentity === resolvedTargetWorkspaceIdentity
+            : tab.workspacePath === targetWorkspacePath && !tab.workspaceIdentity,
+        );
+      const remoteState = useRemoteWorkspaceSessionStore.getState();
+      if (!resolvedTargetWorkspaceIdentity && workspaceIdentity && !remoteState.baseServices) {
+        toast(intl.formatMessage({ id: "common.ompStorageScopeUnavailable" }), { variant: "info" });
+        return;
+      }
+      const remoteSessionId = resolveRemoteWorkspaceSessionIdForTarget({
+        workspacePath: targetWorkspacePath,
+        workspaceIdentity: resolvedTargetWorkspaceIdentity,
+        preferredRemoteSessionId: matchingTab?.remoteSessionId,
+        activeTab: matchingTab,
+        state: remoteState,
+      });
+      const targetServices = resolveWorkspaceServicesForTarget({
+        currentContextServices: services,
+        baseServices: remoteState.baseServices ?? services,
+        resolvedRemoteSessionId: remoteSessionId,
+        sessionsById: remoteState.sessionsById,
+        isRemoteTarget: resolveWorkspaceServiceIsRemoteTarget({
+          workspacePath: targetWorkspacePath,
+          workspaceIdentity: resolvedTargetWorkspaceIdentity,
+          preferredRemoteSessionId: remoteSessionId,
+          activeTab: matchingTab,
+          workspaceTabs: state.tabs.filter(isWorkspaceTab),
+        }),
+      });
+      const targetKey = resolveWorkspaceKey({
+        workspacePath: targetWorkspacePath,
+        workspaceIdentity: resolvedTargetWorkspaceIdentity,
+      });
+      let stale = false;
+      const restarted = targetServices.zcodeAgentService.onAgentRuntimeRestarted((event) => {
+        if (event.workspaceKey === targetKey) stale = true;
+      });
+      const lifecycle = targetServices.zcodeAgentService.onAgentRuntimeLifecycle?.((event) => {
+        if (event.workspaceKey === targetKey && event.state !== "available") stale = true;
+      });
+      const profile = await targetServices.zcodeAgentService
+        .getOmpProfiles({
+          workspacePath: targetWorkspacePath,
+          workspaceIdentity: resolvedTargetWorkspaceIdentity,
+        })
+        .catch(() => null)
+        .finally(() => {
+          restarted.dispose();
+          lifecycle?.dispose();
+        });
+      // 原因：目录选择可能跨 attachment 或 profile 重启；旧响应不得在新目标中提交导航。
+      if (
+        epoch !== draftNavigationEpoch.current.generation ||
+        sequence !== draftNavigationEpoch.current.sequence ||
+        stale
+      )
+        return;
+      if (
+        tabStoreApi.getState().activeTabId !== originTabId ||
+        (remoteSessionId &&
+          useRemoteWorkspaceSessionStore.getState().sessionsById[remoteSessionId]?.services !==
+            targetServices)
+      )
+        return;
+      const storageScope = profile?.storageScope;
+      if (!storageScope) {
+        toast(intl.formatMessage({ id: "common.ompStorageScopeUnavailable" }), { variant: "info" });
+        return;
+      }
+      const savedScope = readComposerWorkspaceScope(
+        targetWorkspacePath,
+        resolvedTargetWorkspaceIdentity,
+        composerClientNamespace,
+        storageScope,
+      );
+      const scope = resolveComposerScope(
+        savedScope?.projectId ?? null,
+        resolvedTargetWorkspaceIdentity,
+        composerClientNamespace,
+        storageScope,
+        remoteSessionId,
+      );
+      const draft = readV4ComposerDraft(
+        targetWorkspacePath,
+        resolvedTargetWorkspaceIdentity,
+        V4_DRAFT_SCOPE_ROOT,
+        scope,
+      );
       const targetSelectedProvider = resolveWorkspaceSwitchDraftProvider({
         currentSelectedProvider: workspaceShellZCodeState.selectedProvider,
         targetWorkspacePath,
@@ -795,7 +927,12 @@ export function App({
         targetWorkspacePath,
         targetSelectedProvider,
         resolvedTargetWorkspaceIdentity,
-        { createSource: createSource ?? "project" },
+        {
+          createSource: createSource ?? "project",
+          projectId: scope.projectId,
+          taskGroupId: draft?.taskGroupId ?? null,
+          draftStorageScope: storageScope,
+        },
       );
     },
     [
@@ -806,6 +943,10 @@ export function App({
       workspaceIdentity,
       workspaceShellZCodeState.selectedProvider,
       webRemoteControlWorkspaceSwitcher,
+      services,
+      tabStoreApi,
+      composerClientNamespace,
+      intl,
     ],
   );
 
@@ -1315,6 +1456,7 @@ export function App({
           handleSyncSubagentSessionTabs={handleSyncSubagentSessionTabs}
           handleOpenSelectionSideChat={handleOpenSelectionSideChat}
           handleOpenPlanDetail={handleOpenPlanDetail}
+          handleOpenOmpTeamRun={handleOpenOmpTeamRun}
           handleOpenWorkflowRun={handleOpenWorkflowRun}
           handleOpenWorkflowRunDirectory={handleOpenWorkflowRunDirectory}
           handleOpenWorkflowActorSession={handleOpenWorkflowActorSession}

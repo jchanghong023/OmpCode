@@ -18,7 +18,7 @@ export function WindowsTopLeftLogo({
     >
       <span
         role="img"
-        aria-label="ZCode"
+        aria-label="OmpCode"
         data-testid="settings-logo"
         className={cn(
           "pointer-events-none flex size-5 items-center justify-center select-none",

@@ -96,18 +96,16 @@ interface Copy {
   switchToLightTheme: string;
   continueHelp: string;
   downloadZCode: string;
+  downloadUnavailable: string;
   retryOpen: string;
   /** 结果物计数；{count} 占位。中文无复数，英文分单复数。 */
   artifactCountOne: string;
   artifactCountOther: string;
 }
 
-// 站点首页本身就是下载入口，没有 /download 这个 path（单独的下载链接会 404）。
-const ZCODE_DOWNLOAD_URL = "https://zcode.z.ai";
-
 const COPY: Record<ConversationShareLandingLocale, Copy> = {
   "zh-CN": {
-    brand: "ZCode 会话分享",
+    brand: "OmpCode 会话分享",
     loading: "正在加载分享内容",
     loadingDescription: "请稍候，我们正在验证分享链接。",
     loginTitle: "登录后查看分享",
@@ -138,22 +136,23 @@ const COPY: Record<ConversationShareLandingLocale, Copy> = {
     networkDescription: "请检查网络后重试。",
     invalidTitle: "无法读取分享内容",
     invalidDescription: "分享服务返回了无法识别的数据，请提供错误详情。",
-    outdatedTitle: "需要更新 ZCode",
-    outdatedDescription: "这个分享由更新版本的 ZCode 创建，请升级后再查看。",
+    outdatedTitle: "需要更新 OmpCode",
+    outdatedDescription: "这个分享由更新版本的 OmpCode 创建，请升级后再查看。",
     unavailableTitle: "分享不可访问",
     unavailableDescription: "当前账号没有权限，或者分享内容已不存在。",
     retry: "重试",
-    continueInZCode: "去 ZCode 继续",
+    continueInZCode: "去 OmpCode 继续",
     switchToDarkTheme: "切换到深色主题",
     switchToLightTheme: "切换到浅色主题",
-    continueHelp: "如果没有自动打开 ZCode，请先下载客户端，或再次尝试打开。",
-    downloadZCode: "下载 ZCode",
+    continueHelp: "如果没有自动打开 OmpCode，请确认已安装本 fork 客户端，或再次尝试打开。",
+    downloadZCode: "下载 OmpCode",
+    downloadUnavailable: "尚未提供 OmpCode 专属下载入口；上游 ZCode 无法处理此分享链接。",
     artifactCountOne: "{count} 个结果物",
     artifactCountOther: "{count} 个结果物",
     retryOpen: "再次打开",
   },
   "en-US": {
-    brand: "ZCode Conversation Share",
+    brand: "OmpCode Conversation Share",
     loading: "Loading shared conversation",
     loadingDescription: "Please wait while we verify this share link.",
     loginTitle: "Sign in to view this share",
@@ -186,18 +185,21 @@ const COPY: Record<ConversationShareLandingLocale, Copy> = {
     invalidTitle: "Unable to read shared content",
     invalidDescription:
       "The sharing service returned unrecognized data. Provide the error details.",
-    outdatedTitle: "Update ZCode to continue",
+    outdatedTitle: "Update OmpCode to continue",
     outdatedDescription:
-      "This share was created by a newer version of ZCode. Please update to view it.",
+      "This share was created by a newer version of OmpCode. Please update to view it.",
     unavailableTitle: "Share unavailable",
     unavailableDescription:
       "This account is not allowed to view the share, or it no longer exists.",
     retry: "Try again",
-    continueInZCode: "Continue in ZCode",
+    continueInZCode: "Continue in OmpCode",
     switchToDarkTheme: "Switch to dark theme",
     switchToLightTheme: "Switch to light theme",
-    continueHelp: "If ZCode did not open, download the app or try opening it again.",
-    downloadZCode: "Download ZCode",
+    continueHelp:
+      "If OmpCode did not open, make sure this fork is installed, or try opening it again.",
+    downloadZCode: "Download OmpCode",
+    downloadUnavailable:
+      "An OmpCode download is not available. Upstream ZCode cannot open this share link.",
     artifactCountOne: "{count} artifact",
     artifactCountOther: "{count} artifacts",
     retryOpen: "Try again",
@@ -442,9 +444,9 @@ export function ConversationShareLandingPage({
                   ref={brandRef}
                   data-share-brand="true"
                   className="shrink-0 text-ui-lg font-semibold text-foreground"
-                  aria-label="ZCode"
+                  aria-label="OmpCode"
                 >
-                  ZCode
+                  OmpCode
                 </div>
                 <h1
                   ref={titleRef}
@@ -576,9 +578,16 @@ export function ConversationShareLandingPage({
               >
                 {copy.retryOpen}
               </a>
-              <a className="text-brand underline underline-offset-2" href={ZCODE_DOWNLOAD_URL}>
+              {/* 上游下载的 ZCode 不注册 ompcode scheme；没有 fork 发行入口时不能诱导安装上游。 */}
+              <button
+                type="button"
+                className="cursor-not-allowed text-foreground-subtle opacity-60"
+                disabled
+                aria-describedby="share-download-unavailable"
+              >
                 {copy.downloadZCode}
-              </a>
+              </button>
+              <span id="share-download-unavailable">{copy.downloadUnavailable}</span>
             </div>
           </ShareContentInset>
         ) : null}
@@ -740,7 +749,7 @@ export function ConversationShareLandingStatus({
             {isNotFound ? (
               <a
                 className="rounded-md bg-primary px-4 py-2 text-ui-base text-primary-foreground"
-                href={ZCODE_DOWNLOAD_URL}
+                href="https://zcode.z.ai"
               >
                 {copy.backToHome}
               </a>

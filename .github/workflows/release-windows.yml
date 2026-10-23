@@ -1,0 +1,135 @@
+name: Release Windows EXE
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: release-windows-${{ github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 120
+    outputs:
+      release_tag: ${{ steps.release_meta.outputs.release_tag }}
+    permissions:
+      contents: read
+    env:
+      ZCODE_ENV: production
+      ZCODE_SKIP_REMOTE_ASSETS: "1"
+      GITHUB_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate release target
+        id: release_meta
+        shell: pwsh
+        run: |
+          if ($env:GITHUB_REF -ne 'refs/heads/main') {
+            throw 'Windows releases must run from main.'
+          }
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          # 日期时间方便识别，运行 ID 与重试次数保证同秒发布、重新运行不撞号。
+          $releaseTag = "v$([DateTime]::UtcNow.ToString('yyyyMMdd-HHmmss'))-${env:GITHUB_RUN_ID}-${env:GITHUB_RUN_ATTEMPT}"
+          # 修复依据：PowerShell 的 CI 外壳会把 ls-remote --exit-code 的“未找到”(2) 当作失败。
+          $existingTag = git ls-remote --tags origin "refs/tags/$releaseTag"
+          if ($LASTEXITCODE -ne 0) {
+            throw 'Could not check existing release tags.'
+          }
+          if ($existingTag) {
+            throw "Tag $releaseTag already exists."
+          }
+          "APP_VERSION=$version" >> $env:GITHUB_ENV
+          "release_tag=$releaseTag" >> $env:GITHUB_OUTPUT
+          "Release tag: $releaseTag" >> $env:GITHUB_STEP_SUMMARY
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.2
+          run_install: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.14.0
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build Windows installer
+        run: pnpm bundle:desktop -- --os=win --arch=x64
+
+      - name: Prepare release assets
+        shell: pwsh
+        run: |
+          $dist = 'packages/desktop/dist'
+          $name = "OmpCode-$env:APP_VERSION-win-x64.exe"
+          $installer = Join-Path $dist $name
+          if (-not (Test-Path -LiteralPath $installer -PathType Leaf)) {
+            throw "Missing installer: $installer"
+          }
+          if ((Get-Item -LiteralPath $installer).Length -lt 50MB) {
+            throw "Installer is unexpectedly small: $installer"
+          }
+          $hash = (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash.ToLowerInvariant()
+          $checksum = Join-Path $dist "$name.sha256"
+          [System.IO.File]::WriteAllText($checksum, "$hash  $name`n", [System.Text.Encoding]::ASCII)
+          Write-Output "Installer SHA256: $hash"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-release
+          path: |
+            packages/desktop/dist/OmpCode-*-win-x64.exe
+            packages/desktop/dist/OmpCode-*-win-x64.exe.sha256
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ needs.build.outputs.release_tag }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-release
+          path: release-assets
+
+      - name: Verify downloaded assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd release-assets
+          exe=(OmpCode-*-win-x64.exe)
+          [[ ${#exe[@]} -eq 1 && -f ${exe[0]} ]]
+          sha256sum --check "${exe[0]}.sha256"
+
+      - name: Create draft release with installer
+        shell: bash
+        run: |
+          set -euo pipefail
+          assets=(release-assets/OmpCode-*-win-x64.exe)
+          [[ ${#assets[@]} -eq 1 && -f ${assets[0]} ]]
+          args=(--repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "OmpCode $RELEASE_TAG" --notes 'Windows x64 installer. This build is unsigned.' --generate-notes --draft)
+          gh release create "$RELEASE_TAG" "${assets[0]}" "${assets[0]}.sha256" "${args[@]}"
+
+      - name: Verify assets and publish release
+        shell: bash
+        run: |
+          set -euo pipefail
+          exe=(release-assets/OmpCode-*-win-x64.exe)
+          expected_size=$(stat -c %s "${exe[0]}")
+          release_json=$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets,isDraft)
+          [[ $(jq -r '.isDraft' <<< "$release_json") == 'true' ]]
+          actual_size=$(jq -r --arg name "$(basename "${exe[0]}")" '.assets[] | select(.name == $name) | .size' <<< "$release_json")
+          [[ "$actual_size" == "$expected_size" ]]
+          jq -r '.assets[].name' <<< "$release_json" | grep -Fx "$(basename "${exe[0]}.sha256")"
+          gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false
+          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft,url --jq 'select(.isDraft == false) | .url'

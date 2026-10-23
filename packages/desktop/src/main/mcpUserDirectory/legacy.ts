@@ -4,7 +4,6 @@
 
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { homedir } from "node:os";
 import type {
   McpServerConfig,
   MigrateLegacyCommonMcpRequest,
@@ -198,19 +197,7 @@ function buildLegacyCommonMcpStorageCandidates(request?: MigrateLegacyCommonMcpR
     candidates.push(request.legacyStorageDir);
   }
 
-  const localAppData = process.env.LOCALAPPDATA ?? join(homedir(), "AppData", "Local");
-  const appData = process.env.APPDATA ?? join(homedir(), "AppData", "Roaming");
-
-  // 优先从老的 store.json 读取 common MCP 配置
-  candidates.push(join(appData, "ai.z.zcode", "store.json"));
-
-  candidates.push(
-    join(localAppData, "ai.z.work", "EBWebView", "Default", "Local Storage", "leveldb"),
-    join(appData, "ZCode", "Local Storage", "leveldb"),
-    join(appData, "ZCode", "Partitions", "zcode-embedded-browser", "Local Storage", "leveldb"),
-    join(appData, "ZCode Dev", "Local Storage", "leveldb"),
-    join(appData, "ZCode Dev", "Partitions", "zcode-embedded-browser", "Local Storage", "leveldb"),
-  );
+  // OmpCode 不自动探测上游应用的浏览器存储或凭据；仅处理用户显式提供的导入源。
 
   return Array.from(new Set(candidates));
 }

@@ -115,7 +115,20 @@ describe("Windows E2E shard runner", () => {
     const ompSpecs = listDefaultFormalE2ESpecs(resolve(process.cwd(), "packages/desktop"), {
       ZCODE_AGENT_SERVER_COMMAND: "omp app-server",
     });
-    expect(ompSpecs).toContain("./test/e2e/omp-app-server.e2e.ts");
+    for (const spec of [
+      "omp-app-server.e2e.ts",
+      "omp-subagents.e2e.ts",
+      "omp-workflows.e2e.ts",
+      "omp-permissions.e2e.ts",
+      "omp-management.e2e.ts",
+      "omp-team.e2e.ts",
+      "omp-indexes.e2e.ts",
+      "omp-profiles.e2e.ts",
+      "conversation-session/conversation-session-model-switch-restore-repro.test.ts",
+      "conversation-session/conversation-session-v4-mention.test.ts",
+    ]) {
+      expect(ompSpecs).toContain(`./test/e2e/${spec}`);
+    }
     expect(ompSpecs.filter(isTemporarilyExcludedFormalSpec)).toEqual([]);
 
     const sshSpecs = listDefaultFormalE2ESpecs(resolve(process.cwd(), "packages/desktop"), {

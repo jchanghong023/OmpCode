@@ -1,5 +1,8 @@
-const DEEP_LINK_SCHEME = "zcode";
-const DEEP_LINK_RE = /\bzcode:(?:\/\/|\/)?[^\s"'<>]+/i;
+import { ZCODE_PRODUCT_FLAVOR } from "@zcode/shared";
+import { desktopProductIdentities } from "../../scripts/desktop-product-identity.mjs";
+
+const DEEP_LINK_SCHEME = desktopProductIdentities[ZCODE_PRODUCT_FLAVOR].protocolScheme;
+const DEEP_LINK_RE = new RegExp(`\\b${DEEP_LINK_SCHEME}:(?:\\/\\/|\\/)?[^\\s"'<>]+`, "i");
 const OAUTH_CALLBACK_HOSTS = new Set(["oauth"]);
 const PAYMENT_CALLBACK_HOST = "payment";
 const WORKSPACE_OPEN_HOST = "workspace";

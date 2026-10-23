@@ -35,6 +35,7 @@ import {
   openSelectionSideChatPane,
   openPlanDetailSidePane,
   openWorkflowRunSidePane,
+  openOmpTeamRunSidePane,
   replaceWorkflowRunSidePane,
   openWorkflowRunDirectorySidePane,
   openWorkflowActorSessionSidePane,
@@ -76,6 +77,7 @@ import {
   type OpenSelectionSideChatRequest,
   type OpenScopedPlanDetailSideTabRequest,
   type OpenScopedWorkflowRunSideTabRequest,
+  type OpenScopedOmpTeamRunSideTabRequest,
   type OpenScopedWorkflowRunDirectorySideTabRequest,
   type OpenScopedWorkflowActorSessionSideTabRequest,
   type OpenScopedWorkflowArtifactSideTabRequest,
@@ -1052,6 +1054,17 @@ export function useAppPanels(options: {
     [commitOpenedSidePaneState, revealSidePaneForCurrentOwner],
   );
 
+  const handleOpenOmpTeamRun = useCallback(
+    (request: OpenScopedOmpTeamRunSideTabRequest) => {
+      const workspaceKey = request.workspaceIdentity?.trim() || request.workspacePath;
+      revealSidePaneForCurrentOwner();
+      commitOpenedSidePaneState((current) =>
+        openOmpTeamRunSidePane(current, { ...request, workspaceKey }),
+      );
+    },
+    [commitOpenedSidePaneState, revealSidePaneForCurrentOwner],
+  );
+
   const handleOpenWorkflowRun = useCallback(
     (request: OpenScopedWorkflowRunSideTabRequest) => {
       const workspaceKey = request.workspaceIdentity?.trim() || request.workspacePath;
@@ -1683,6 +1696,7 @@ export function useAppPanels(options: {
     handleOpenSelectionSideChat,
     handleOpenPlanDetail,
     handleOpenPluginUi,
+    handleOpenOmpTeamRun,
     handleOpenWorkflowRun,
     handleOpenWorkflowRunDirectory,
     handleOpenWorkflowActorSession,

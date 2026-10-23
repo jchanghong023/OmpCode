@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { createElement, type ReactNode } from "react";
-import { renderHook } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useRootPlatformEffects } from "@/root/useRootPlatformEffects.js";
 import { useRootWorkspaceActions } from "@/root/useRootWorkspaceActions.js";
@@ -16,6 +16,9 @@ import {
 import {
   rememberComposerWorkspaceScope,
   resolveComposerScope,
+  persistV4ComposerDraft,
+  readV4ComposerDraft,
+  V4_DRAFT_SCOPE_ROOT,
 } from "@/v4/composer/composerDraftStore.js";
 import type { CreateTaskOptions } from "@/app-shell/types.js";
 import {
@@ -39,12 +42,20 @@ function bootstrapInitialWorkspace({
   initialTaskId,
   restoreOnStartup = false,
   clientMode = "desktop-continuous",
+  storageScope: initialScope = "scope-a",
+  resolveScope,
+  services = {},
+  activeTarget,
 }: {
   identity?: string;
   initialTaskDraft?: CreateTaskOptions;
   initialTaskId?: string;
   restoreOnStartup?: boolean;
   clientMode?: "desktop-continuous" | "web-remote-replayable";
+  storageScope?: string | null;
+  resolveScope?: (path: string, identity?: string) => Promise<string | null>;
+  services?: Record<string, unknown>;
+  activeTarget?: { workspacePath: string; workspaceIdentity?: string; remoteSessionId?: string };
 } = {}) {
   const path = "/workspace/demo";
   const addTab = vi.fn();
@@ -59,18 +70,27 @@ function bootstrapInitialWorkspace({
     syncWindowTabs: () => {},
     syncActiveTaskSession: () => {},
   } as never;
+  const scopeState = { current: initialScope };
+  const resolveStorageScope = resolveScope ?? (async () => scopeState.current);
   return renderHook(
-    () => {
+    ({ storageScope }: { storageScope: string | null }) => {
+      scopeState.current = storageScope;
       const actions = useRootWorkspaceActions({
         intl,
         platform,
-        services: {} as never,
+        services: services as never,
         tabStoreApi: {
-          getState: () => ({ tabs: [], activeWorkspacePath: null, activeWorkspaceIdentity: null }),
+          getState: () => ({
+            tabs: activeTarget ? [createWorkspaceTab(activeTarget)] : [],
+            activeWorkspacePath: activeTarget?.workspacePath ?? null,
+            activeWorkspaceIdentity: activeTarget?.workspaceIdentity ?? null,
+          }),
         } as never,
         addTab,
-        activeWorkspacePath: null,
-        activeWorkspaceIdentity: null,
+        activeWorkspacePath: activeTarget?.workspacePath ?? null,
+        activeWorkspaceIdentity: activeTarget?.workspaceIdentity ?? null,
+        storageScope,
+        resolveStorageScope,
         supportsSettings: false,
         allowOpenWorkspace: true,
         preferDirectoryBrowser: false,
@@ -79,12 +99,16 @@ function bootstrapInitialWorkspace({
         setOAuthError: vi.fn(),
         setUser: vi.fn(),
         workbenchGroupClientMode: clientMode,
+        openRemoteProjectWorkspace: async () => {},
       });
       useRootPlatformEffects({
         initialWorkspaceAbsPath: path,
         initialWorkspaceIdentity: identity,
         initialTaskDraft,
         initialTaskId,
+        initialStorageScope: storageScope,
+        storageScope,
+        resolveStorageScope,
         clientMode,
         addTab,
         setIsBootstrappingInitialWorkspace: vi.fn(),
@@ -103,8 +127,9 @@ function bootstrapInitialWorkspace({
         intl,
         isRestoringOAuthSession: false,
       });
+      return actions;
     },
-    { wrapper },
+    { wrapper, initialProps: { storageScope: initialScope } },
   );
 }
 
@@ -125,7 +150,11 @@ describe("initial workspace draft and pane restoration priority", () => {
     navigation.reload = reload;
     const path = "/workspace/demo";
     const key = identity ?? path;
-    rememberComposerWorkspaceScope(path, identity, resolveComposerScope("project-a", identity));
+    rememberComposerWorkspaceScope(
+      path,
+      identity,
+      resolveComposerScope("project-a", identity, undefined, "scope-a"),
+    );
     persistPaneSession(key, "session-b");
     bootstrapInitialWorkspace({ identity, restoreOnStartup });
     expect(
@@ -154,10 +183,15 @@ describe("initial workspace draft and pane restoration priority", () => {
     expect(readPersistedPaneSession(key)).toBe("session-b");
   });
 
-  it("keeps an explicit initial draft ahead of a reload target", () => {
+  it("keeps an explicit initial draft ahead of a reload target", async () => {
     navigation.reload = true;
     persistPaneSession("/workspace/demo", "session-b");
     bootstrapInitialWorkspace({ initialTaskDraft: { projectId: "explicit-project" } });
+    await waitFor(() =>
+      expect(
+        useZCodeSessionStore.getState().getWorkspaceState("/workspace/demo").draftProjectId,
+      ).toBe("explicit-project"),
+    );
     const workspace = useZCodeSessionStore.getState().getWorkspaceState("/workspace/demo");
     expect(workspace.activeTaskId).toBeNull();
     expect(workspace.draftFocusVersion).toBeGreaterThan(0);
@@ -166,7 +200,11 @@ describe("initial workspace draft and pane restoration priority", () => {
 
   it("keeps an explicit task ahead of cached project scope", () => {
     navigation.reload = true;
-    rememberComposerWorkspaceScope("/workspace/demo", undefined, resolveComposerScope("project-a"));
+    rememberComposerWorkspaceScope(
+      "/workspace/demo",
+      undefined,
+      resolveComposerScope("project-a", undefined, undefined, "scope-a"),
+    );
     bootstrapInitialWorkspace({ initialTaskId: "explicit-session" });
     expect(useZCodeSessionStore.getState().getWorkspaceState("/workspace/demo").activeTaskId).toBe(
       "explicit-session",
@@ -180,24 +218,196 @@ describe("initial workspace draft and pane restoration priority", () => {
     { reload: true, clientMode: "desktop-continuous" as const },
     { reload: false, clientMode: "desktop-continuous" as const },
     { reload: true, clientMode: "web-remote-replayable" as const },
-  ])("retains project draft when there is no eligible target (%j)", ({ reload, clientMode }) => {
-    navigation.reload = reload;
-    const identity = "remote:server:one:/workspace/demo";
-    rememberComposerWorkspaceScope(
-      "/workspace/demo",
-      identity,
-      resolveComposerScope("project-a", identity),
+  ])(
+    "retains project draft when there is no eligible target (%j)",
+    async ({ reload, clientMode }) => {
+      navigation.reload = reload;
+      const identity = "remote:server:one:/workspace/demo";
+      rememberComposerWorkspaceScope(
+        "/workspace/demo",
+        identity,
+        resolveComposerScope("project-a", identity, undefined, "scope-a"),
+      );
+      // A same-path local pane must not become the remote workspace's restoration target.
+      persistPaneSession("/workspace/demo", "unrelated-local-session");
+      if (clientMode === "web-remote-replayable") persistPaneSession(identity, "desktop-session");
+      bootstrapInitialWorkspace({ identity, clientMode });
+      await waitFor(() =>
+        expect(
+          useZCodeSessionStore.getState().getWorkspaceState("/workspace/demo", identity)
+            .draftProjectId,
+        ).toBe("project-a"),
+      );
+      const workspace = useZCodeSessionStore
+        .getState()
+        .getWorkspaceState("/workspace/demo", identity);
+      expect(workspace.activeTaskId).toBeNull();
+      expect(workspace.draftFocusVersion).toBeGreaterThan(0);
+      expect(workspace.draftProjectId).toBe("project-a");
+    },
+  );
+
+  it("keeps unknown domains inert and never imports an unscoped legacy draft", async () => {
+    const legacyKey = "zcode-v4-composer-drafts:v1:/workspace/demo";
+    localStorage.setItem(
+      legacyKey,
+      JSON.stringify({
+        version: 1,
+        scopes: { __draft__: { text: "legacy", projectId: "old-project", updatedAt: 1 } },
+      }),
     );
-    // A same-path local pane must not become the remote workspace's restoration target.
-    persistPaneSession("/workspace/demo", "unrelated-local-session");
-    if (clientMode === "web-remote-replayable") persistPaneSession(identity, "desktop-session");
-    bootstrapInitialWorkspace({ identity, clientMode });
-    const workspace = useZCodeSessionStore
-      .getState()
-      .getWorkspaceState("/workspace/demo", identity);
-    expect(workspace.activeTaskId).toBeNull();
-    expect(workspace.draftFocusVersion).toBeGreaterThan(0);
-    expect(workspace.draftProjectId).toBe("project-a");
+    const prepareSession = vi.fn();
+    const hook = bootstrapInitialWorkspace({
+      storageScope: null,
+      services: { projectService: { prepareSession } },
+    });
+    await act(async () => {
+      await hook.result.current.startDraftInWorkspace("/workspace/demo", undefined, {
+        initialPrompt: "must not persist",
+      });
+      await hook.result.current.startNewTaskFromActiveWorkspace("test");
+    });
+    expect(prepareSession).not.toHaveBeenCalled();
+    expect(
+      useZCodeSessionStore.getState().getWorkspaceState("/workspace/demo").draftFocusVersion,
+    ).toBe(0);
+    expect(localStorage.getItem(legacyKey)).toContain("legacy");
+    expect(
+      readV4ComposerDraft(
+        "/workspace/demo",
+        undefined,
+        V4_DRAFT_SCOPE_ROOT,
+        resolveComposerScope(null, undefined, undefined, "scope-a"),
+      ),
+    ).toBeNull();
+  });
+
+  it.each([
+    { workspaceIdentity: undefined, remoteSessionId: undefined },
+    {
+      workspaceIdentity: "remote:server:one:/workspace/demo",
+      remoteSessionId: "source-attachment",
+    },
+  ])("passes the actual source target to new-cwd preparation (%j)", async (source) => {
+    const activeTarget = { workspacePath: "/workspace/demo", ...source };
+    const prepareSession = vi.fn(async () => ({
+      workspacePath: "/prepared-source",
+      projectId: "project-target",
+      ...(source.workspaceIdentity
+        ? {
+            workspaceIdentity: "remote:server:one:/prepared-source",
+          }
+        : {}),
+    }));
+    const hook = bootstrapInitialWorkspace({
+      identity: source.workspaceIdentity,
+      activeTarget,
+      initialTaskDraft: { projectId: "project-source" },
+      services: { projectService: { prepareSession } },
+    });
+    await waitFor(() =>
+      expect(
+        useZCodeSessionStore
+          .getState()
+          .getWorkspaceState(activeTarget.workspacePath, source.workspaceIdentity)
+          .draftStorageScope,
+      ).toBe("scope-a"),
+    );
+    await act(async () => {
+      await hook.result.current.startNewTaskFromActiveWorkspace("test", {
+        projectId: "project-target",
+        hostId: source.workspaceIdentity ? "remote-host" : "local",
+      });
+    });
+    expect(prepareSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sourceWorkspace: {
+          workspacePath: activeTarget.workspacePath,
+          ...(source.workspaceIdentity ? { workspaceIdentity: source.workspaceIdentity } : {}),
+          ...(source.remoteSessionId ? { remoteSessionId: source.remoteSessionId } : {}),
+        },
+      }),
+    );
+  });
+
+  it("uses different pending IDs per actual domain and restores the original ID and draft on return", async () => {
+    const prepareSession = vi.fn(async (_options: { draftId?: string }) => ({
+      workspacePath: "/prepared",
+      projectId: null,
+    }));
+    const hook = bootstrapInitialWorkspace({ services: { projectService: { prepareSession } } });
+    await waitFor(() =>
+      expect(
+        useZCodeSessionStore.getState().getWorkspaceState("/workspace/demo").draftStorageScope,
+      ).toBe("scope-a"),
+    );
+    const scopeA = resolveComposerScope(null, undefined, undefined, "scope-a");
+    persistV4ComposerDraft(
+      "/prepared",
+      undefined,
+      V4_DRAFT_SCOPE_ROOT,
+      { text: "profile A" },
+      scopeA,
+    );
+    await act(async () => {
+      await hook.result.current.startNewTaskFromActiveWorkspace("test");
+    });
+    const firstId = prepareSession.mock.calls[0]?.[0]?.draftId;
+    expect(firstId).toEqual(expect.any(String));
+    hook.rerender({ storageScope: "scope-b" });
+    await act(async () => {
+      await hook.result.current.startNewTaskFromActiveWorkspace("test");
+    });
+    expect(prepareSession.mock.calls[1]?.[0]?.draftId).not.toBe(firstId);
+    expect(useZCodeSessionStore.getState().getWorkspaceState("/prepared").draftStorageScope).toBe(
+      "scope-b",
+    );
+    hook.rerender({ storageScope: "scope-a" });
+    await act(async () => {
+      await hook.result.current.startNewTaskFromActiveWorkspace("test");
+    });
+    expect(prepareSession.mock.calls[2]?.[0]?.draftId).toBe(firstId);
+    expect(readV4ComposerDraft("/prepared", undefined, V4_DRAFT_SCOPE_ROOT, scopeA)?.text).toBe(
+      "profile A",
+    );
+    expect(useZCodeSessionStore.getState().getWorkspaceState("/prepared").draftStorageScope).toBe(
+      "scope-a",
+    );
+  });
+
+  it("discards a late prepare callback after the actual profile changes", async () => {
+    const { promise, resolve: finish } = Promise.withResolvers<{
+      workspacePath: string;
+      projectId: null;
+    }>();
+    const prepareSession = vi.fn(() => promise);
+    const hook = bootstrapInitialWorkspace({ services: { projectService: { prepareSession } } });
+    await waitFor(() =>
+      expect(
+        useZCodeSessionStore.getState().getWorkspaceState("/workspace/demo").draftStorageScope,
+      ).toBe("scope-a"),
+    );
+    let pending!: Promise<void>;
+    act(() => {
+      pending = hook.result.current.startNewTaskFromActiveWorkspace("test");
+    });
+    await waitFor(() => expect(prepareSession).toHaveBeenCalledOnce());
+    hook.rerender({ storageScope: "scope-b" });
+    await act(async () => {
+      finish({ workspacePath: "/late-target", projectId: null });
+      await pending;
+    });
+    expect(
+      useZCodeSessionStore.getState().getWorkspaceState("/late-target").draftFocusVersion,
+    ).toBe(0);
+    expect(
+      readV4ComposerDraft(
+        "/late-target",
+        undefined,
+        V4_DRAFT_SCOPE_ROOT,
+        resolveComposerScope(null, undefined, undefined, "scope-b"),
+      ),
+    ).toBeNull();
   });
 });
 function createWorkspaceTab(

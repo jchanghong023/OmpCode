@@ -27,6 +27,41 @@ it("PD07 同一草稿重复准备只分配一个目录，不影响无参调用",
   }
 });
 
+it("新 cwd 在目录交付前继承实际 source 执行域，复用草稿不重写原绑定", async () => {
+  const root = await mkdtemp(join(tmpdir(), "project-profile-prepare-"));
+  const source = {
+    workspacePath: "/existing/source",
+    workspaceIdentity: "source-identity",
+    remoteSessionId: "source-attachment",
+  };
+  const admitted = Promise.withResolvers<void>();
+  const prepareWorkspaceScope = vi.fn(async () => admitted.promise);
+  const service = createProjectService({
+    workspaceDirectory: root,
+    repository: vi.fn(),
+    prepareWorkspaceScope,
+  });
+  const draftId = "cc29167e-5a72-4c24-9e31-adcc584c73b4";
+  try {
+    const preparing = service.prepareSession({ draftId, sourceWorkspace: source });
+    await vi.waitFor(() => expect(prepareWorkspaceScope).toHaveBeenCalledTimes(1));
+    expect(prepareWorkspaceScope).toHaveBeenCalledWith(source, {
+      workspacePath: join(root, `draft-${draftId}`),
+    });
+    expect(await readdir(root)).toEqual([]);
+    admitted.resolve();
+    const result = await preparing;
+    expect(await readdir(root)).toEqual([`draft-${draftId}`]);
+    await expect(
+      service.prepareSession({ draftId, reuseDraft: true, sourceWorkspace: source }),
+    ).resolves.toEqual(result);
+    expect(prepareWorkspaceScope).toHaveBeenCalledTimes(1);
+  } finally {
+    admitted.resolve();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 it("does not return a preparation result after its project was deleted during directory validation", async () => {
   const root = await mkdtemp(join(tmpdir(), "project-prepare-delete-"));
   const project = {

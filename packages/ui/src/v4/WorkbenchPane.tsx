@@ -24,6 +24,7 @@ import type {
   OpenScopedSubagentDirectorySideTabRequest,
   OpenSelectionSideChatRequest,
   OpenScopedPlanDetailSideTabRequest,
+  OpenScopedOmpTeamRunSideTabRequest,
   OpenScopedWorkflowActorSessionSideTabRequest,
   OpenScopedWorkflowArtifactSideTabRequest,
   OpenScopedWorkflowRunSideTabRequest,
@@ -236,6 +237,7 @@ export interface WorkbenchShellBinding {
   onSyncSubagentSessionTabs?: (request: SyncSubagentSessionTabsRequest) => void;
   onOpenSelectionSideChat?: (request: OpenSelectionSideChatRequest) => void;
   onOpenPlanDetail?: (request: OpenScopedPlanDetailSideTabRequest) => void;
+  onOpenOmpTeamRun?: (request: OpenScopedOmpTeamRunSideTabRequest) => void;
   /** 插件 UI 侧栏：与 onOpenPlanDetail 同路径经 shell binding 下发到 SessionPane。 */
   onOpenWorkflowRun?: (request: OpenScopedWorkflowRunSideTabRequest) => void;
   onOpenWorkflowArtifact?: (request: OpenScopedWorkflowArtifactSideTabRequest) => void;
@@ -463,6 +465,7 @@ export function WorkbenchLeafPane({
           onSyncSubagentSessionTabs={shell.onSyncSubagentSessionTabs}
           onOpenSelectionSideChat={shell.onOpenSelectionSideChat}
           onOpenPlanDetail={shell.onOpenPlanDetail}
+          onOpenOmpTeamRun={shell.onOpenOmpTeamRun}
           onOpenWorkflowRun={shell.onOpenWorkflowRun}
           onOpenWorkflowArtifact={shell.onOpenWorkflowArtifact}
           onOpenWorkflowRunDirectory={shell.onOpenWorkflowRunDirectory}

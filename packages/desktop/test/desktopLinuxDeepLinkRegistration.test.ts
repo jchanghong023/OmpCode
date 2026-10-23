@@ -9,7 +9,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 type CommandCall = { command: string; args: string[] };
 
@@ -35,7 +35,7 @@ describe("desktop Linux deep link registration helpers", () => {
 
     expect(command.executablePath).toBe("/home/alice/Downloads/ZCode-2.8.0-linux-x64.AppImage");
     expect(entry).toContain('Exec="/home/alice/Downloads/ZCode-2.8.0-linux-x64.AppImage" %U');
-    expect(entry).toContain("MimeType=x-scheme-handler/zcode;");
+    expect(entry).toContain("MimeType=x-scheme-handler/ompcode-preview;");
   });
 
   it("keeps AppImage sandbox and GPU launch switches for protocol callbacks", async () => {
@@ -52,7 +52,7 @@ describe("desktop Linux deep link registration helpers", () => {
         "--disable-software-rasterizer",
         "--use-gl=swiftshader",
         "--remote-debugging-port=9229",
-        "zcode://oauth/callback?code=1&state=s",
+        "ompcode-preview://oauth/callback?code=1&state=s",
         "/home/alice/project",
       ],
     });
@@ -104,13 +104,13 @@ describe("desktop Linux deep link registration helpers", () => {
 
     const entry = createLinuxDeepLinkDesktopEntry({
       executablePath: "/opt/ZCode Preview/zcode-preview",
-      productName: "ZCode Preview",
+      productName: "OmpCode Preview",
     });
 
-    expect(entry).toContain("Name=ZCode Preview");
-    expect(entry).toContain("StartupWMClass=ZCode Preview");
+    expect(entry).toContain("Name=OmpCode Preview");
+    expect(entry).toContain("StartupWMClass=OmpCode Preview");
     expect(entry).toContain('Exec="/opt/ZCode Preview/zcode-preview" %U');
-    expect(entry).toContain("MimeType=x-scheme-handler/zcode;");
+    expect(entry).toContain("MimeType=x-scheme-handler/ompcode-preview;");
   });
 
   it("escapes AppImage callback switches before writing desktop Exec", async () => {
@@ -151,6 +151,7 @@ describe("desktop Linux deep link registration helpers", () => {
 
       const result = installLinuxAppImageDesktopIcon({
         dataDir,
+        iconName: "ompcode-preview",
         iconSourcePath,
         logger: { info: () => undefined, warn: () => undefined },
         runCommand: (command, args) => {
@@ -160,7 +161,7 @@ describe("desktop Linux deep link registration helpers", () => {
       });
 
       expect(result).toEqual({
-        iconFilePath: join(dataDir, "icons", "hicolor", "512x512", "apps", "zcode.png"),
+        iconFilePath: join(dataDir, "icons", "hicolor", "512x512", "apps", "ompcode-preview.png"),
         installed: true,
         changed: true,
       });
@@ -176,6 +177,60 @@ describe("desktop Linux deep link registration helpers", () => {
       rmSync(tempRoot, { force: true, recursive: true });
     }
   });
+
+  it.each([
+    { flavor: "production", iconName: "ompcode" },
+    { flavor: "preview", iconName: "ompcode-preview" },
+  ] as const)(
+    "keeps $flavor AppImage icon output consistent with its desktop entry",
+    async ({ flavor, iconName }) => {
+      const tempRoot = mkdtempSync(join(tmpdir(), "ompcode-linux-metadata-"));
+      const dataDir = join(tempRoot, "xdg-data");
+      const iconDir = join(dataDir, "icons", "hicolor", "512x512", "apps");
+      const upstreamIconPath = join(iconDir, "zcode.png");
+      const upstreamSentinel = Buffer.from("upstream ZCode icon must remain unchanged");
+      const iconSourcePath = join(import.meta.dirname, "..", "build", "icons", "512x512.png");
+      vi.resetModules();
+      // 编译期 flavor 只能在加载模块前隔离替换；实际 desktop/icon writer 不做 mock。
+      vi.doMock("@zcode/shared", () => ({
+        ZCODE_PRODUCT_FLAVOR: flavor,
+      }));
+
+      try {
+        mkdirSync(iconDir, { recursive: true });
+        writeFileSync(upstreamIconPath, upstreamSentinel);
+        // 必须重新加载模块，才能分别覆盖 production/preview 的编译期身份。
+        const { registerLinuxDeepLinkProtocol } =
+          await import("../src/main/desktopLinuxDeepLinkRegistration.js");
+        registerLinuxDeepLinkProtocol({
+          executablePath: `/tmp/.mount_OmpCode/${iconName}`,
+          homeDir: join(tempRoot, "home"),
+          iconSourcePath,
+          env: {
+            APPIMAGE: join(tempRoot, "OmpCode.AppImage"),
+            XDG_DATA_HOME: dataDir,
+          },
+          systemApplicationDirs: [join(tempRoot, "empty-system-applications")],
+          logger: { info: () => undefined, warn: () => undefined },
+          runCommand: () => ({ status: 0, stderr: "" }),
+        });
+
+        const entry = readFileSync(join(dataDir, "applications", `${iconName}.desktop`), "utf8");
+        const installedIconName = entry
+          .split("\n")
+          .find((line) => line.startsWith("Icon="))
+          ?.slice(5);
+        expect(installedIconName).toBe(iconName);
+        const installedIconPath = join(iconDir, `${installedIconName}.png`);
+        expect(readFileSync(installedIconPath)).toEqual(readFileSync(iconSourcePath));
+        expect(readFileSync(upstreamIconPath)).toEqual(upstreamSentinel);
+      } finally {
+        vi.doUnmock("@zcode/shared");
+        vi.resetModules();
+        rmSync(tempRoot, { force: true, recursive: true });
+      }
+    },
+  );
 
   it("uses XDG_DATA_HOME for user-level desktop entries and icons", async () => {
     const { resolveLinuxUserDataDir } =
@@ -220,7 +275,13 @@ describe("desktop Linux deep link registration helpers", () => {
         },
       });
 
-      const desktopFilePath = join(homeDir, ".local", "share", "applications", "zcode.desktop");
+      const desktopFilePath = join(
+        homeDir,
+        ".local",
+        "share",
+        "applications",
+        "ompcode-preview.desktop",
+      );
       expect(existsSync(desktopFilePath)).toBe(true);
       expect(readFileSync(desktopFilePath, "utf8")).toContain(
         'Exec="/home/alice/Applications/ZCode.AppImage" %U',
@@ -235,7 +296,7 @@ describe("desktop Linux deep link registration helpers", () => {
         },
         {
           command: "xdg-mime",
-          args: ["default", "zcode.desktop", "x-scheme-handler/zcode"],
+          args: ["default", "ompcode-preview.desktop", "x-scheme-handler/ompcode-preview"],
         },
       ]);
     } finally {
@@ -268,7 +329,13 @@ describe("desktop Linux deep link registration helpers", () => {
     const tempRoot = mkdtempSync(join(tmpdir(), "zcode-linux-system-entry-"));
     const homeDir = join(tempRoot, "home");
     const systemApplicationsDir = join(tempRoot, "system", "applications");
-    const desktopFilePath = join(homeDir, ".local", "share", "applications", "zcode.desktop");
+    const desktopFilePath = join(
+      homeDir,
+      ".local",
+      "share",
+      "applications",
+      "ompcode-preview.desktop",
+    );
     const infos: unknown[][] = [];
     const commandCalls: CommandCall[] = [];
 
@@ -276,7 +343,7 @@ describe("desktop Linux deep link registration helpers", () => {
       // 模拟 rpm/deb 安装产物：/usr/share/applications/zcode.desktop。
       mkdirSync(systemApplicationsDir, { recursive: true });
       writeFileSync(
-        join(systemApplicationsDir, "zcode.desktop"),
+        join(systemApplicationsDir, "ompcode-preview.desktop"),
         "[Desktop Entry]\nName=ZCode\nExec=/opt/ZCode/zcode %U\n",
         "utf8",
       );
@@ -287,9 +354,9 @@ describe("desktop Linux deep link registration helpers", () => {
         [
           "[Desktop Entry]",
           "Name=ZCode",
-          "Comment=ZCode Desktop App",
+          "Comment=OmpCode Desktop App",
           'Exec="/home/alice/Downloads/ZCode-2.8.0-linux-x64.AppImage" %U',
-          "MimeType=x-scheme-handler/zcode;",
+          "MimeType=x-scheme-handler/ompcode-preview;",
           "",
         ].join("\n"),
         "utf8",
@@ -319,7 +386,7 @@ describe("desktop Linux deep link registration helpers", () => {
         },
         {
           command: "xdg-mime",
-          args: ["default", "zcode.desktop", "x-scheme-handler/zcode"],
+          args: ["default", "ompcode-preview.desktop", "x-scheme-handler/ompcode-preview"],
         },
       ]);
       expect(
@@ -336,13 +403,19 @@ describe("desktop Linux deep link registration helpers", () => {
     const tempRoot = mkdtempSync(join(tmpdir(), "zcode-linux-custom-entry-"));
     const homeDir = join(tempRoot, "home");
     const systemApplicationsDir = join(tempRoot, "system", "applications");
-    const desktopFilePath = join(homeDir, ".local", "share", "applications", "zcode.desktop");
+    const desktopFilePath = join(
+      homeDir,
+      ".local",
+      "share",
+      "applications",
+      "ompcode-preview.desktop",
+    );
     const warnings: unknown[][] = [];
 
     try {
       mkdirSync(systemApplicationsDir, { recursive: true });
       writeFileSync(
-        join(systemApplicationsDir, "zcode.desktop"),
+        join(systemApplicationsDir, "ompcode-preview.desktop"),
         "[Desktop Entry]\nName=ZCode\nExec=/opt/ZCode/zcode %U\n",
         "utf8",
       );
@@ -383,14 +456,20 @@ describe("desktop Linux deep link registration helpers", () => {
     const tempRoot = mkdtempSync(join(tmpdir(), "zcode-linux-appimage-system-"));
     const homeDir = join(tempRoot, "home");
     const systemApplicationsDir = join(tempRoot, "system", "applications");
-    const desktopFilePath = join(homeDir, ".local", "share", "applications", "zcode.desktop");
+    const desktopFilePath = join(
+      homeDir,
+      ".local",
+      "share",
+      "applications",
+      "ompcode-preview.desktop",
+    );
     const iconSourcePath = join(import.meta.dirname, "..", "build", "icons", "512x512.png");
     const commandCalls: CommandCall[] = [];
 
     try {
       mkdirSync(systemApplicationsDir, { recursive: true });
       writeFileSync(
-        join(systemApplicationsDir, "zcode.desktop"),
+        join(systemApplicationsDir, "ompcode-preview.desktop"),
         "[Desktop Entry]\nName=ZCode\nExec=/opt/ZCode/zcode %U\n",
         "utf8",
       );
@@ -422,7 +501,7 @@ describe("desktop Linux deep link registration helpers", () => {
         },
         {
           command: "xdg-mime",
-          args: ["default", "zcode.desktop", "x-scheme-handler/zcode"],
+          args: ["default", "ompcode-preview.desktop", "x-scheme-handler/ompcode-preview"],
         },
       ]);
     } finally {
@@ -435,7 +514,13 @@ describe("desktop Linux deep link registration helpers", () => {
       await import("../src/main/desktopLinuxDeepLinkRegistration.js");
     const tempRoot = mkdtempSync(join(tmpdir(), "zcode-linux-no-system-"));
     const homeDir = join(tempRoot, "home");
-    const desktopFilePath = join(homeDir, ".local", "share", "applications", "zcode.desktop");
+    const desktopFilePath = join(
+      homeDir,
+      ".local",
+      "share",
+      "applications",
+      "ompcode-preview.desktop",
+    );
 
     try {
       registerLinuxDeepLinkProtocol({
@@ -461,10 +546,16 @@ describe("desktop Linux deep link registration helpers", () => {
     const homeDir = join(tempRoot, "home");
     // 系统目录下的 zcode.desktop 是一个目录而非普通文件，不得视为有效系统条目。
     const systemApplicationsDir = join(tempRoot, "system", "applications");
-    const desktopFilePath = join(homeDir, ".local", "share", "applications", "zcode.desktop");
+    const desktopFilePath = join(
+      homeDir,
+      ".local",
+      "share",
+      "applications",
+      "ompcode-preview.desktop",
+    );
 
     try {
-      mkdirSync(join(systemApplicationsDir, "zcode.desktop"), { recursive: true });
+      mkdirSync(join(systemApplicationsDir, "ompcode-preview.desktop"), { recursive: true });
       registerLinuxDeepLinkProtocol({
         executablePath: "/opt/ZCode/zcode",
         homeDir,
@@ -487,14 +578,20 @@ describe("desktop Linux deep link registration helpers", () => {
     const tempRoot = mkdtempSync(join(tmpdir(), "zcode-linux-unreadable-"));
     const homeDir = join(tempRoot, "home");
     const systemApplicationsDir = join(tempRoot, "system", "applications");
-    const desktopFilePath = join(homeDir, ".local", "share", "applications", "zcode.desktop");
+    const desktopFilePath = join(
+      homeDir,
+      ".local",
+      "share",
+      "applications",
+      "ompcode-preview.desktop",
+    );
     const warnings: unknown[][] = [];
     const commandCalls: CommandCall[] = [];
 
     try {
       mkdirSync(systemApplicationsDir, { recursive: true });
       writeFileSync(
-        join(systemApplicationsDir, "zcode.desktop"),
+        join(systemApplicationsDir, "ompcode-preview.desktop"),
         "[Desktop Entry]\nName=ZCode\nExec=/opt/ZCode/zcode %U\n",
         "utf8",
       );
@@ -533,7 +630,7 @@ describe("desktop Linux deep link registration helpers", () => {
         },
         {
           command: "xdg-mime",
-          args: ["default", "zcode.desktop", "x-scheme-handler/zcode"],
+          args: ["default", "ompcode-preview.desktop", "x-scheme-handler/ompcode-preview"],
         },
       ]);
     } finally {
@@ -548,13 +645,19 @@ describe("desktop Linux deep link registration helpers", () => {
     const tempRoot = mkdtempSync(join(tmpdir(), "zcode-linux-crlf-"));
     const homeDir = join(tempRoot, "home");
     const systemApplicationsDir = join(tempRoot, "system", "applications");
-    const desktopFilePath = join(homeDir, ".local", "share", "applications", "zcode.desktop");
+    const desktopFilePath = join(
+      homeDir,
+      ".local",
+      "share",
+      "applications",
+      "ompcode-preview.desktop",
+    );
     const infos: unknown[][] = [];
 
     try {
       mkdirSync(systemApplicationsDir, { recursive: true });
       writeFileSync(
-        join(systemApplicationsDir, "zcode.desktop"),
+        join(systemApplicationsDir, "ompcode-preview.desktop"),
         "[Desktop Entry]\nName=ZCode\nExec=/opt/ZCode/zcode %U\n",
         "utf8",
       );
@@ -565,9 +668,9 @@ describe("desktop Linux deep link registration helpers", () => {
         [
           "[Desktop Entry]",
           "Name=ZCode",
-          "Comment=ZCode Desktop App",
+          "Comment=OmpCode Desktop App",
           'Exec="/home/alice/Downloads/ZCode.AppImage" %U',
-          "MimeType=x-scheme-handler/zcode;",
+          "MimeType=x-scheme-handler/ompcode-preview;",
           "",
         ].join("\r\n"),
         "utf8",
@@ -608,21 +711,21 @@ describe("desktop Linux deep link registration helpers", () => {
       const homeDir = join(tempRoot, "home");
       const systemApplicationsDir = join(tempRoot, "system", "applications");
       const applicationsDir = join(homeDir, ".local", "share", "applications");
-      const desktopFilePath = join(applicationsDir, "zcode.desktop");
+      const desktopFilePath = join(applicationsDir, "ompcode-preview.desktop");
       const warnings: unknown[][] = [];
       const commandCalls: CommandCall[] = [];
 
       try {
         mkdirSync(systemApplicationsDir, { recursive: true });
         writeFileSync(
-          join(systemApplicationsDir, "zcode.desktop"),
+          join(systemApplicationsDir, "ompcode-preview.desktop"),
           "[Desktop Entry]\nName=ZCode\nExec=/opt/ZCode/zcode %U\n",
           "utf8",
         );
         mkdirSync(applicationsDir, { recursive: true });
         writeFileSync(
           desktopFilePath,
-          '[Desktop Entry]\nComment=ZCode Desktop App\nExec="/old/ZCode.AppImage" %U\n',
+          '[Desktop Entry]\nComment=OmpCode Desktop App\nExec="/old/ZCode.AppImage" %U\n',
           "utf8",
         );
         // 目录去掉写权限后 rmSync 失败（EPERM）：删除失败必须只降级，不得抛出或阻断注册。
@@ -654,7 +757,7 @@ describe("desktop Linux deep link registration helpers", () => {
           },
           {
             command: "xdg-mime",
-            args: ["default", "zcode.desktop", "x-scheme-handler/zcode"],
+            args: ["default", "ompcode-preview.desktop", "x-scheme-handler/ompcode-preview"],
           },
         ]);
       } finally {

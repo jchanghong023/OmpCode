@@ -149,7 +149,6 @@ export function GeneralSectionContent({
   httpProxy = "",
   httpProxyNoProxy = "",
   httpProxyCaCertPath = "",
-  defaultHomeDir,
   isDesktop,
   isWindowsDesktop,
   isLinuxDesktop,
@@ -166,8 +165,6 @@ export function GeneralSectionContent({
   zcodeInteractionBehavior,
   askUserQuestionAutoResolutionEnabled = true,
   modelIoFullRetentionEnabled = false,
-  onDataBaseDirChange,
-  onSelectDataBaseDir,
   onTerminalInheritSystemProfileChange = async () => {},
   onTerminalFontFamilyChange = async () => {},
   onIntegratedTerminalShellChange = async () => {},
@@ -211,7 +208,6 @@ export function GeneralSectionContent({
   httpProxy?: string;
   httpProxyNoProxy?: string;
   httpProxyCaCertPath?: string;
-  defaultHomeDir: string;
   isDesktop?: boolean;
   isWindowsDesktop?: boolean;
   /** Linux 桌面端（isDesktop 且非 win/mac）；关闭驻留托盘设置在 Linux 上按能力自适应展示 */
@@ -238,8 +234,6 @@ export function GeneralSectionContent({
   zcodeInteractionBehavior: ZCodeInteractionBehavior;
   askUserQuestionAutoResolutionEnabled?: boolean;
   modelIoFullRetentionEnabled?: boolean;
-  onDataBaseDirChange: (dir: string) => Promise<void>;
-  onSelectDataBaseDir: () => Promise<string | null>;
   onTerminalInheritSystemProfileChange: (enabled: boolean) => Promise<void>;
   onTerminalFontFamilyChange: (fontFamily: string) => Promise<void>;
   onIntegratedTerminalShellChange?: (selection: IntegratedTerminalShellSelection) => Promise<void>;
@@ -956,14 +950,7 @@ export function GeneralSectionContent({
           description={intl.formatMessage({
             id: "settings.dataBaseDirDescription",
           })}
-          control={
-            <DataBaseDirControl
-              dataBaseDir={dataBaseDir}
-              defaultHomeDir={defaultHomeDir}
-              onDataBaseDirChange={onDataBaseDirChange}
-              onSelectDataBaseDir={onSelectDataBaseDir}
-            />
-          }
+          control={<DataBaseDirControl dataBaseDir={dataBaseDir} />}
         />
       </SettingsGroupCard>
 

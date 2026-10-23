@@ -558,6 +558,9 @@ describe("useZCodeSessionStore provider preference", () => {
     const taskModel = "provider-a/model-a";
     const workspaceModel = "account:bigmodel-individual-coding-plan/GLM-5.2";
 
+    useZCodeSessionStore.getState().startDraft(workspacePath, undefined, undefined, {
+      draftStorageScope: "scope-a",
+    });
     useZCodeSessionStore
       .getState()
       .setConfigOptions(workspacePath, [createModelConfigOption(workspaceModel)]);
@@ -570,7 +573,9 @@ describe("useZCodeSessionStore provider preference", () => {
         createThoughtConfigOption("max"),
       ]);
 
-    useZCodeSessionStore.getState().startDraft(workspacePath, "glm");
+    useZCodeSessionStore.getState().startDraft(workspacePath, "glm", undefined, {
+      draftStorageScope: "scope-a",
+    });
 
     const workspaceState = useZCodeSessionStore.getState().getWorkspaceState(workspacePath);
     expect(workspaceState.activeTaskId).toBeNull();
@@ -580,6 +585,26 @@ describe("useZCodeSessionStore provider preference", () => {
       workspaceState.configOptions?.find((option) => option.category === "thought_level")
         ?.currentValue,
     ).toBe("max");
+  });
+
+  it.each(["scope-a", null])("实际域从 %s 进入新域时不认领旧临时模型种子", (previousScope) => {
+    const path = "/profile-domain-model-seed";
+    const store = useZCodeSessionStore.getState();
+    store.startDraft(path, undefined, undefined, { draftStorageScope: previousScope });
+    store.setConfigOptions(path, [createModelConfigOption("old-workspace-model")]);
+    store.setActiveTaskId(path, "old-task");
+    store.setTaskConfigOptions(path, "old-task", [createModelConfigOption("old-task-model")]);
+    store.startDraft(path, undefined, undefined, {
+      draftStorageScope: "scope-b",
+      projectId: "project-b",
+    });
+    expect(useZCodeSessionStore.getState().getWorkspaceState(path)).toMatchObject({
+      activeTaskId: null,
+      draftStorageScope: "scope-b",
+      draftProjectId: "project-b",
+      configOptions: [],
+      configOptionsStatus: "idle",
+    });
   });
 
   it("草稿态重复点击新建任务时不应清空 slashCommands", () => {

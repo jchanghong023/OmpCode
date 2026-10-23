@@ -13,6 +13,7 @@ import {
   PERSONAL_PROVIDER_CONFIG_FILE_NAME,
 } from "@zcode/provider-node";
 import { ZAI_PROVIDER_ID } from "@zcode/shared";
+import { resolveOmpCodeDataRoot } from "@zcode/shared/node";
 import {
   TID_COMPOSER_WORKSPACE_TRIGGER,
   TID_V4_SESSION_PANE,
@@ -36,9 +37,9 @@ const E2E_HOME_DIR =
   // 修复原因：WDIO worker 环境不稳定时，helper 曾回落到真实 HOME，
   // 导致 provider 诊断和清理读写开发者本机配置，而不是当前 e2e sandbox。
   DEFAULT_E2E_HOME_DIR;
-// Bug 根因：storage profile 回滚删除了该共享根字段，但多个 E2E 仍需定位 CLI 数据。
-// 隔离由测试 HOME 保证，目录名保持生产历史语义 .zcode。
-const E2E_STORAGE_ROOT = join(E2E_HOME_DIR, ".zcode");
+// runner 在加载 worker 前建立本轮 OMP_CONFIG_ROOT；仅消费实际环境事实，
+// 不猜测稍后 fixture 的目录，也不回退读取上游 .zcode。
+const E2E_STORAGE_ROOT = resolveOmpCodeDataRoot(process.env, E2E_HOME_DIR);
 const E2E_APP_DATA_DIR = join(E2E_STORAGE_ROOT, "v2");
 export const DEFAULT_WORKSPACE = join(E2E_HOME_DIR, "ZCodeProject");
 export const DEFAULT_CONVERSATION_WORKSPACE = join(E2E_STORAGE_ROOT, "workspace", "default");

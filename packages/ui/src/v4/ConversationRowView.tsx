@@ -1,4 +1,5 @@
 import { GenUiMessageResponse } from "@/gen-ui/index.js";
+import { TeamChatCard } from "@/omp-configuration/module.js";
 import { ConversationUserInputBubble } from "@/v4/ConversationUserInputBubble.js";
 import { expandTopicInputMessages } from "@/v4/topicInputMessages.js";
 import { ConnectedBotGroupDeliveryAction } from "@/v4/BotGroupDeliveryAction.js";
@@ -2338,6 +2339,22 @@ function ConversationRowViewImpl({
   reasoningContentVariant,
   userInputStatus,
 }: ConversationRowViewProps) {
+  // Team 身份只读原生 dispatch 的持久化锚点，不能从模型正文或 /team 文本猜测。
+  const teamRun = row.entityId ? context.teamRunByDispatchEntityId?.get(row.entityId) : undefined;
+  if (teamRun && context.onOpenTeamRun) {
+    return (
+      <RowShell rowId={row.rowId} className="py-2">
+        <TeamChatCard
+          run={teamRun}
+          connected={context.teamRunsConnected === true}
+          busy={context.teamRunsBusy === true}
+          error={context.teamRunsError}
+          onOpenDetails={() => context.onOpenTeamRun?.(teamRun.jobId)}
+          onStop={context.onStopTeamRun ? () => context.onStopTeamRun?.(teamRun.jobId) : undefined}
+        />
+      </RowShell>
+    );
+  }
   switch (row.kind) {
     case "userInput":
       return (

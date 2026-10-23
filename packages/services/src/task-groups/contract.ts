@@ -2,6 +2,11 @@ import { ServiceChannels, type ZCodeTaskMeta } from "@zcode/shared";
 import { createServiceDescriptor } from "#src/descriptors.js";
 
 export type TaskGroupColor = "gray" | "red" | "orange" | "yellow" | "green" | "blue" | "purple";
+export interface TaskGroupWorkspaceTarget {
+  workspacePath: string;
+  workspaceIdentity?: string;
+  remoteSessionId?: string;
+}
 export interface TaskGroup {
   id: string;
   title: string;
@@ -13,6 +18,7 @@ export interface GroupTaskRef {
   hostId: string;
   workspacePath: string;
   workspaceIdentity?: string;
+  remoteSessionId?: string;
   taskId: string;
 }
 export type GroupNode = { type: "group"; groupId: string } | { type: "task"; task: GroupTaskRef };
@@ -20,6 +26,12 @@ export interface TaskGroupStructure {
   groups: TaskGroup[];
   members: Array<{ groupId: string; workspaceKey: string; taskId: string; sortOrder: number }>;
   order: Array<{ type: "group" | "task"; key: string; sortOrder: number }>;
+}
+export interface TaskGroupDomainStructure extends TaskGroupStructure {
+  storageScope: string;
+  target: TaskGroupWorkspaceTarget;
+  /** 本次读取中，经真实 owner 解析确认属于该域的全部 workspace。 */
+  targets: TaskGroupWorkspaceTarget[];
 }
 export interface MoveGroupNode {
   node: GroupNode;
@@ -35,10 +47,15 @@ export type GroupTaskFact = GroupTaskRef &
     deleted?: boolean;
   };
 export interface ITaskGroupService {
-  read(): Promise<TaskGroupStructure>;
-  save(input: { id?: string; title?: string; color?: TaskGroupColor }): Promise<TaskGroup>;
-  ungroup(id: string): Promise<void>;
-  move(input: MoveGroupNode): Promise<void>;
+  read(targets: TaskGroupWorkspaceTarget[]): Promise<TaskGroupDomainStructure[]>;
+  save(input: {
+    target: TaskGroupWorkspaceTarget;
+    id?: string;
+    title?: string;
+    color?: TaskGroupColor;
+  }): Promise<TaskGroup>;
+  ungroup(input: { target: TaskGroupWorkspaceTarget; id: string }): Promise<void>;
+  move(input: MoveGroupNode & { target: TaskGroupWorkspaceTarget }): Promise<void>;
   /** Host 验证存在性和类型后首次登记；读取结构本身不写数据。 */
   admit(input: {
     tasks: GroupTaskRef[];

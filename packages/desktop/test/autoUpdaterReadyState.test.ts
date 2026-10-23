@@ -248,7 +248,7 @@ describe("autoUpdater ready state sync", () => {
     readFileMock.mockRejectedValue(new Error("missing update config"));
   });
 
-  it("Preview 禁用更新器时不注册 IPC、事件或启动检查", async () => {
+  it("没有 fork feed 时不注册 IPC、事件或启动检查", async () => {
     const { initAutoUpdater } = await import("../src/main/autoUpdater.js");
 
     await initAutoUpdater({ enabled: false });
@@ -261,7 +261,7 @@ describe("autoUpdater ready state sync", () => {
     );
   });
 
-  it("Preview 禁用更新器后，漏改的手动检查入口也不能触碰未初始化的 updater", async () => {
+  it("没有 fork feed 时手动检查只说明不可用，不触碰未初始化的 updater", async () => {
     // Bugfix: 托盘/命令入口若仍按 ZCODE_ENV 放行，会对占位 feed 发真实 checkForUpdates；
     // 禁用语义必须在 autoUpdater 模块内 fail-closed，而不是依赖每个调用点各自判断。
     const win = {
@@ -762,8 +762,7 @@ describe("autoUpdater ready state sync", () => {
     expect(autoUpdaterMock.setFeedURL).toHaveBeenCalledWith(
       expect.objectContaining({
         provider: "custom",
-        manifestUrl:
-          "https://zcode.z.ai/api/v1/releases/electron/manifest?platform=old&channel=1",
+        manifestUrl: "https://zcode.z.ai/api/v1/releases/electron/manifest?platform=old&channel=1",
         releasePlatform: "darwin-aarch64",
       }),
     );

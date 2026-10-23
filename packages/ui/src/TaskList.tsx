@@ -17,6 +17,14 @@ import { buildTaskWorkspaceKey } from "@/lib/taskQueryCache.js";
 import { compareZCodeTaskListItems } from "@/lib/taskListOrdering.js";
 import { logger } from "@/logger.js";
 import { ControlHintTooltip } from "@/ControlHintTooltip.js";
+import { useOmpStorageScope } from "@/hooks/useZCodeAgentService.js";
+import { useComposerClientNamespace } from "@/hooks/useServices.js";
+import {
+  readComposerWorkspaceScope,
+  readV4ComposerDraft,
+  resolveComposerScope,
+  V4_DRAFT_SCOPE_ROOT,
+} from "@/v4/composer/composerDraftStore.js";
 
 export { deriveTaskLeadingIndicator } from "@/lib/taskListItemPresentation.js";
 
@@ -82,6 +90,11 @@ export const TaskList = memo(function TaskList({
   onOpenFileTree?: () => void | Promise<void>;
 }) {
   const { intl } = useZCodeIntl();
+  const storageScope = useOmpStorageScope(workspacePath, workspaceIdentity, remoteSessionId);
+  const clientNamespace = useComposerClientNamespace();
+  const createDisabledReason =
+    readOnlyReason ??
+    (!storageScope ? intl.formatMessage({ id: "common.ompStorageScopeUnavailable" }) : undefined);
   const pinnedTaskIdSet = useMemo(
     () => new Set(pinnedTasks.map((task) => task.taskId)),
     [pinnedTasks],
@@ -128,14 +141,41 @@ export const TaskList = memo(function TaskList({
   }, []);
 
   const handleCreateTask = useCallback(() => {
-    if (readOnlyReason) {
+    if (createDisabledReason || !storageScope) {
       return;
     }
     // 新建会话如果在按钮点击时就立即 createTask，会把"空任务"也持久化到列表里，
     // 用户只是想先打开输入框，侧边栏却会平白多出一条没有任何消息的记录。
     // 这里改成进入 workspace 级草稿态，等用户真正发送首条消息时再自动创建 task。
-    startDraft(workspacePath, undefined, workspaceIdentity, { createSource: "project" });
-  }, [readOnlyReason, startDraft, workspaceIdentity, workspacePath]);
+    const savedScope = readComposerWorkspaceScope(
+      workspacePath,
+      workspaceIdentity,
+      clientNamespace,
+      storageScope,
+    );
+    const scope = resolveComposerScope(
+      savedScope?.projectId ?? null,
+      workspaceIdentity,
+      clientNamespace,
+      storageScope,
+      remoteSessionId,
+    );
+    const draft = readV4ComposerDraft(workspacePath, workspaceIdentity, V4_DRAFT_SCOPE_ROOT, scope);
+    startDraft(workspacePath, undefined, workspaceIdentity, {
+      createSource: "project",
+      projectId: scope.projectId,
+      taskGroupId: draft?.taskGroupId ?? null,
+      draftStorageScope: storageScope,
+    });
+  }, [
+    createDisabledReason,
+    storageScope,
+    clientNamespace,
+    remoteSessionId,
+    startDraft,
+    workspaceIdentity,
+    workspacePath,
+  ]);
 
   const handleArchiveTaskFromInline = useCallback(
     async (e: React.MouseEvent, taskId: string) => {
@@ -431,12 +471,12 @@ export const TaskList = memo(function TaskList({
       {showCreateButton ? (
         <div className="border-b p-3">
           <ControlHintTooltip
-            title={readOnlyReason ?? intl.formatMessage({ id: "taskList.newThread" })}
+            title={createDisabledReason ?? intl.formatMessage({ id: "taskList.newThread" })}
           >
             <div>
               <NewTaskButtonGroup
                 onCreateTask={handleCreateTask}
-                disabled={Boolean(readOnlyReason)}
+                disabled={Boolean(createDisabledReason)}
               />
             </div>
           </ControlHintTooltip>

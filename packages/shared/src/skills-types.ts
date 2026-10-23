@@ -26,11 +26,23 @@ export interface SkillSummary {
   /** plugin scope 时为来源插件完整 ID（name@marketplace）；旧 payload 可缺省。 */
   pluginId?: string;
   metadata?: SkillMetadata;
+  /** 原生发现来源；Shared 标识由执行端提供，不能通过路径推断。 */
+  source?: {
+    provider: string;
+    providerName: string;
+    path: string;
+    level: "user" | "project" | "native";
+    origin?: string;
+    pluginName?: string;
+  };
+  disabledReason?: "item-disabled" | "provider-disabled" | "user-opt-in";
 }
 
 export interface SkillsCapability {
   userScopeAvailable: boolean;
   userScopeReason?: "desktop_only";
+  /** 启停写入当前 OMP profile 用户层；缺省时沿用技能原有 scope 语义。 */
+  toggleScope?: "profile";
 }
 
 export type SkillDiagnosticSeverity = "warning" | "error";
@@ -63,6 +75,8 @@ export interface SkillsListResult {
   skills: SkillSummary[];
   capability: SkillsCapability;
   diagnostics: SkillDiagnostic[];
+  /** 执行端 OMP_SKILLS_DIR；仅展示，不由 GUI 写入。 */
+  sharedDirectory?: { path: string; readOnly: true };
 }
 
 export interface SkillsPromptContext {

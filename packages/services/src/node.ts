@@ -16,6 +16,10 @@ import {
   IProjectService,
   shouldRescanTaskAutoArchive,
 } from "#src/project/index.js";
+import {
+  resolveProjectWorkspaceSource,
+  type ProjectRepositoryContract,
+} from "#src/project-storage/index.js";
 export { createLegacySingleRootProjectService } from "#src/project/index.js";
 export { createRemoteProjectService } from "#src/remote-projects/index.js";
 import { getZCodeDataRootDir as projectDataRoot } from "#src/paths.js";
@@ -111,13 +115,13 @@ export {
   getZCodeDataRootDir,
   getConversationWorkspaceDir,
   getAppConfigDir,
+  getTasksIndexDatabasePath,
   getExportLogStageDir,
   getExportLogDir,
   getFeedbackRootDir,
   getFeedbackAttachmentDir,
   getFeedbackLogArchiveDir,
   getGitCheckpointIndexRootDir,
-  copyDataDirectory,
   validateDataBaseDirTarget,
   ZCODE_WINDOWS_APP_INSTALL_DIR_ENV,
 } from "./paths.js";
@@ -138,6 +142,7 @@ export { createZCodeTaskServiceAdapter } from "./zcode-agent/zcodeTaskServiceAda
 export { createZCodeSessionService } from "./zcode-session/zcodeSessionService.js";
 export {
   resolveDefaultZCodeAgentCommand,
+  applyOmpProfileToCommand,
   ZCodeAgentProcessManager,
 } from "./zcode-agent/zcodeAgentProcessManager.js";
 export type {
@@ -1648,7 +1653,9 @@ export function createLocalServices(options: {
       }),
   };
   // mcpSync/hooks 里引用 zcodeAgentService 的闭包是惰性调用，声明顺序不影响初始化。
-  const skillsService = createSkillsService({ isDesktopRuntime: true });
+  const skillsService = createSkillsService({
+    manageNativeSkills: (params) => zcodeAgentService.manageNativeSkills(params),
+  });
   const mcpSyncService = createMcpSyncService({
     // mcp/list 的 host 消费点收拢到 mcpSync 服务；真实状态检查仍在 agent 进程。
     listMcpServerStatuses: (params) => zcodeAgentService.listMcpServerStatuses(params),
@@ -2137,11 +2144,45 @@ export function createLocalServices(options: {
           resolveOffPeakClientConfig: () => codingPlanSubscriptionService.getOffPeakClientConfig(),
           resolveOffPeakTaskService: () => offPeakTaskServiceForAgent,
         };
+  type OrganizationTarget = Parameters<TaskIndexRepo["forWorkspace"]>[0];
+  const defaultOrganizationTarget = (settings: AppSettings): OrganizationTarget =>
+    settings.lastActiveWorkspace?.kind === "local"
+      ? { workspacePath: settings.lastActiveWorkspace.workspacePath }
+      : { workspacePath: join(projectDataRoot(), "workspace") };
+  const activeProjectRepositories = async () => {
+    const settings = await settingService.get();
+    const targets = new Map<string, OrganizationTarget>();
+    const candidates: OrganizationTarget[] = [
+      ...taskIndexRepo.getWorkspaceTargets(),
+      ...(settings.lastWorkspaceSession ?? []).flatMap((entry) =>
+        entry.kind === "local" ? [{ workspacePath: entry.workspacePath }] : [],
+      ),
+      defaultOrganizationTarget(settings),
+    ];
+    for (const target of candidates)
+      targets.set(target.workspaceIdentity?.trim() || target.workspacePath, target);
+    const repositories = new Set<TaskIndexRepo>();
+    for (const target of targets.values())
+      repositories.add(await taskIndexRepo.forWorkspace(target));
+    // 项目根仍只存在原域；只拿它们发现当前执行目标，不复制定义或任务到新域。
+    for (const owner of [...repositories]) {
+      const tree = (await owner.getProjectRepository()).readTree({ includeTasks: false });
+      for (const project of tree.projects) {
+        for (const root of project.roots)
+          await taskIndexRepo.forWorkspace({ workspacePath: root.rootPath });
+      }
+    }
+    return Promise.all(
+      taskIndexRepo.getActiveRepositories().map((owner) => owner.getProjectRepository()),
+    );
+  };
   const setWorkspaceProjection =
     options?.setWorkspaceProjection ?? localSettings?.setWorkspaceProjection;
   setWorkspaceProjection?.(async (settings) => {
     const db = await taskIndexRepo.getOrganizationDatabase();
-    const repository = await taskIndexRepo.getProjectRepository();
+    const repositories = await Promise.all(
+      taskIndexRepo.getActiveRepositories().map((owner) => owner.getProjectRepository()),
+    );
     db.exec("BEGIN");
     try {
       const directory =
@@ -2149,10 +2190,38 @@ export function createLocalServices(options: {
           ? readRemoteProjectDirectory(db)
           : { hosts: [], entries: [] };
       const projection = projectWorkspaceSettings(
-        repository.readTree({ includeTasks: false }).projects,
+        repositories.flatMap((repository) =>
+          repository.readTree({ includeTasks: false }).projects.filter(
+            (project) =>
+              // 空项目的 owner 就是当前活跃仓库，不能借默认 workspace 把 A 域空项目隐藏。
+              !project.roots.length ||
+              project.roots.some((root) =>
+                taskIndexRepo.isActiveProjectOwner({ workspacePath: root.rootPath }, repository),
+              ),
+          ),
+        ),
         directory,
         settings,
       );
+      // 原因：首次读取尚未确认所有 workspace 的原生域，不能先清空其导航线索再做作用域发现。
+      projection.lastWorkspaceSession ??= [];
+      projection.recentProjects ??= [];
+      const unresolved = (settings.lastWorkspaceSession ?? []).filter(
+        (entry) => entry.kind === "local" && !taskIndexRepo.hasWorkspaceScope(entry),
+      );
+      for (const entry of unresolved) {
+        if (
+          !projection.lastWorkspaceSession.some(
+            (item) => item.kind === "local" && item.workspacePath === entry.workspacePath,
+          )
+        )
+          projection.lastWorkspaceSession.push(entry);
+        if (!projection.recentProjects.includes(entry.workspacePath))
+          projection.recentProjects = [...projection.recentProjects, entry.workspacePath].slice(
+            0,
+            10,
+          );
+      }
       db.exec("COMMIT");
       return projection;
     } catch (error) {
@@ -2178,12 +2247,96 @@ export function createLocalServices(options: {
     },
     ownerHostId: options?.projectStorageHostId,
     resolveHost: options?.resolveProjectHostService,
-    repository: () => taskIndexRepo.getProjectRepository(),
+    repository: async (target) =>
+      taskIndexRepo.getProjectRepository(
+        target ?? defaultOrganizationTarget(await settingService.get()),
+      ),
+    repositories: activeProjectRepositories,
+    projectWorkspaceSource: (repository, preferred) =>
+      resolveProjectWorkspaceSource(taskIndexRepo, repository, preferred),
+    prepareWorkspaceScope: async (source, destination) => {
+      const sourceTarget = source ?? defaultOrganizationTarget(await settingService.get());
+      const authority =
+        remoteHostIdFromWorkspaceIdentity(sourceTarget.workspaceIdentity ?? "") ??
+        options?.projectStorageHostId ??
+        "local";
+      if (authority !== (options?.projectStorageHostId ?? "local"))
+        throw new Error("project.host-mismatch");
+      // 首次空白窗口也先取得源原生只读事实；继承 owner 仍只接受 existing-only 的同一进程。
+      await projectService.getOrganizationScope(sourceTarget);
+      await zcodeAgentService.prepareNewWorkspaceOmpProfile(sourceTarget, destination);
+    },
+    organizationScope: async (target) => {
+      const facts = await zcodeAgentService.getOmpProfiles(target);
+      if (!facts.configRoot || !facts.storageScope)
+        throw Object.assign(new Error("Native OMP organization scope is unavailable"), {
+          code: "omp.storageScopeUnavailable",
+        });
+      return {
+        configRoot: facts.configRoot,
+        activeProfile: facts.activeProfile,
+        storageScope: facts.storageScope,
+      };
+    },
+    filterTree: async (repository, tree) => {
+      const owners = new Map<string, Promise<ProjectRepositoryContract>>();
+      const ownerFor = (target: OrganizationTarget) => {
+        const key = target.workspaceIdentity?.trim() || target.workspacePath;
+        let owner = owners.get(key);
+        if (!owner) {
+          owner = taskIndexRepo.getProjectRepository(target);
+          owners.set(key, owner);
+        }
+        return owner;
+      };
+      // 仓库集合已经限定为实际活动域；空项目没有 root，归属只能来自其 SQLite owner。
+      const projects = await Promise.all(
+        tree.projects.map(async (project) => {
+          const targets = project.roots.length
+            ? project.roots.map((root) => ({ workspacePath: root.rootPath }))
+            : [];
+          return !targets.length || (await Promise.all(targets.map(ownerFor))).includes(repository)
+            ? project
+            : null;
+        }),
+      );
+      const tasks = await Promise.all(
+        tree.tasks.map(async (task) => ((await ownerFor(task)) === repository ? task : null)),
+      );
+      const deletedTasks = await Promise.all(
+        (tree.deletedTasks ?? []).map(async (task) =>
+          (await ownerFor(task)) === repository ? task : null,
+        ),
+      );
+      return {
+        ...tree,
+        projects: projects.filter((project) => project !== null),
+        tasks: tasks.filter((task) => task !== null),
+        ...(tree.deletedTasks
+          ? { deletedTasks: deletedTasks.filter((task) => task !== null) }
+          : {}),
+      };
+    },
     workspaceDirectory: join(projectDataRoot(), "workspace"),
     afterChange: publishProjectChange,
   });
   const taskGroupService = createTaskGroupService({
-    database: () => taskIndexRepo.getOrganizationDatabase(),
+    database: async (target) => {
+      const authority =
+        remoteHostIdFromWorkspaceIdentity(target.workspaceIdentity ?? "") ?? "local";
+      const facts = await projectService.getOrganizationScope(target, authority);
+      return {
+        database: await taskIndexRepo
+          .forOmpScope({
+            configRoot: facts.configRoot,
+            profileId: facts.activeProfile,
+            authority:
+              authority === (options?.projectStorageHostId ?? "local") ? undefined : authority,
+          })
+          .getOrganizationDatabase(),
+        storageScope: facts.storageScope,
+      };
+    },
     resolveTasks: async (refs) => {
       // 只读所属 Host 的权威目录；项目路由不会为分组建立连接或启动 Agent。
       const hostIds = [...new Set(refs.map((task) => task.hostId))];
@@ -2215,10 +2368,53 @@ export function createLocalServices(options: {
     hostId: options?.projectStorageHostId ?? "local",
     workspaceIdentity: undefined,
   });
+  let ompProfilePreferenceWrite = Promise.resolve();
   const zcodeAgentService = createZCodeAgentService({
+    resolveOmpProfile: async (target) =>
+      (await settingService.get()).ompProfileSelections?.[
+        target.workspaceIdentity?.trim() || target.workspacePath
+      ],
+    resolveOmpConfigRoot: async (target) =>
+      (await settingService.get()).ompProfileLaunchRoots?.[
+        target.workspaceIdentity?.trim() || target.workspacePath
+      ],
+    prepareNewWorkspaceOmpProfilePreference: (target, facts) => {
+      const write = ompProfilePreferenceWrite.then(async () => {
+        const settings = await settingService.get();
+        const key = target.workspaceIdentity?.trim() || target.workspacePath;
+        const profile = settings.ompProfileSelections?.[key];
+        const configRoot = settings.ompProfileLaunchRoots?.[key];
+        if (profile !== undefined || configRoot !== undefined) {
+          if (profile === facts.profile && configRoot === facts.configRoot) return;
+          throw Object.assign(
+            new Error("Workspace already has a different native profile launch preference"),
+            { code: "omp.profileInheritanceConflict" },
+          );
+        }
+        await settingService.update({
+          ompProfileSelections: { ...settings.ompProfileSelections, [key]: facts.profile },
+          ompProfileLaunchRoots: { ...settings.ompProfileLaunchRoots, [key]: facts.configRoot },
+        });
+      });
+      ompProfilePreferenceWrite = write.catch(() => {});
+      return write;
+    },
+    saveOmpProfile: (target, profile) => {
+      const write = ompProfilePreferenceWrite.then(async () => {
+        const settings = await settingService.get();
+        await settingService.update({
+          ompProfileSelections: {
+            ...settings.ompProfileSelections,
+            [target.workspaceIdentity?.trim() || target.workspacePath]: profile,
+          },
+        });
+      });
+      ompProfilePreferenceWrite = write.catch(() => {});
+      return write;
+    },
     prepareProjectExecution,
     prepareSessionCreation: async (target) =>
-      (await taskIndexRepo.getProjectRepository()).reserveCreatedTask({
+      (await taskIndexRepo.getProjectRepository(target)).reserveCreatedTask({
         task: { ...target, taskId: target.sessionId },
         projectId: target.projectId,
         additionalDirectories: target.additionalDirectories,
@@ -2433,6 +2629,16 @@ export function createLocalServices(options: {
           },
         }),
   });
+  taskIndexRepo.setOmpScopeResolver(async (target) => {
+    const authority =
+      remoteHostIdFromWorkspaceIdentity(target.workspaceIdentity ?? "") ??
+      options?.projectStorageHostId ??
+      "local";
+    if (authority !== (options?.projectStorageHostId ?? "local"))
+      throw new Error("project.host-mismatch");
+    const facts = await projectService.getOrganizationScope(target);
+    return { configRoot: facts.configRoot, profileId: facts.activeProfile };
+  });
   providerConnectivityAgentService = zcodeAgentService;
   // Helper health probe 短暂超时不应在 Computer Use turn 中途回收 Agent。resolver 会把 restart
   // 推迟到下一个 request/turn 边界；若 broker 确实已失效，当前 turn 会自然失败并由下一次请求恢复。
@@ -2457,7 +2663,23 @@ export function createLocalServices(options: {
         activeTasks: zcodeTaskIndexSyncer.activeTaskRefs(),
       };
     },
-    repository: () => taskIndexRepo.getProjectRepository(),
+    repository: async () => {
+      const repositories = await Promise.all(
+        taskIndexRepo.getActiveRepositories().map((owner) => owner.getProjectRepository()),
+      );
+      return {
+        archiveInactive: (policy) =>
+          repositories.flatMap((repository) =>
+            repository.archiveInactive({
+              ...policy,
+              workspaceKeys: taskIndexRepo
+                .getWorkspaceTargets()
+                .filter((target) => taskIndexRepo.isActiveProjectOwner(target, repository))
+                .map((target) => target.workspaceIdentity?.trim() || target.workspacePath),
+            }),
+          ),
+      };
+    },
     afterChange: publishProjectChange,
   });
   // The plugin can be toggled at runtime. Do not let a previously created resolver continue

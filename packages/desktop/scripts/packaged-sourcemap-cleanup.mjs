@@ -117,8 +117,6 @@ export async function cleanupPackagedSourcemaps({
   const mapSummary = { filesRemoved: 0 };
   if (existsSync(resourcesDir)) {
     for (const entry of readdirSync(resourcesDir)) {
-      // OMP 已由固定 manifest 摘要封存，整个目录必须保留原始字节。
-      if (entry === "omp") continue;
       const entryPath = resolve(resourcesDir, entry);
       const stripped = stripSourceMappingUrlCommentsInDirectory(entryPath);
       stripSummary.filesChanged += stripped.filesChanged;

@@ -149,25 +149,25 @@ pnpm --config.use-node-version=24.14.0 test:unit
 
 ### 目标与权威边界
 
-带着 `ZCODE_AGENT_SERVER_COMMAND=omp` 启动 ZCode，由现有 Host 拉起支持 ZCode 协议的 OMP，保留 ZCode 的界面与宿主框架，以 OMP 作为实际 Agent 核心。
+OMP 是用户必须预先独立安装的外部运行依赖，不随 OmpCode 分发。OmpCode 的安装包、ZIP 及其他发行归档均不得携带 OMP 可执行文件或其私有运行时资产。启动时优先使用 `ZCODE_AGENT_SERVER_COMMAND` 显式指定的程序；未设置时直接调用当前终端继承环境中可执行的 `omp`，由操作系统按 PATH 解析。开发态与打包态、Windows／Linux／macOS 规则一致，不扫描安装目录，不维护发现缓存，不表示 OmpCode 内置 OMP。
 
 - 外部协议及既有产品合同以本仓库的 [ZCode Protocol](docs/zcode-protocol.md)、对应 spec 和固定兼容提交中的公开 schema 为准，不通过大改协议迁就 OMP，也不把 OMP 当作原 Agent 的 Model provider。
 - OMP 入口、独立协议目录、与 AgentSession 同进程的业务 API 调用、存储准备生产端及功能／权限合同由 `F:/code2026/oh-my-pi/docs-zh-CN/requirements/rpc-ui-protocol.md` 维护；本节只维护 ZCode 侧启动消费、发行装配、宿主边界和源码保留。下文时序图是引用，不在本仓库另立一份 OMP 合同。
 - 本仓库的接入逻辑集中在启动、初始化、打包、远端分发和必要的能力展示；协议适配由 OMP 负责，不散落到 UI、Host 或原 Agent 核心中。不得为迁就 OMP 改变既有问答字段、命令准入及 CAS 刷新路径，也不在 ZCode 回放夹具中建立第二套协议翻译层或改写原有行为断言。
+- 在 OMP 全力适配后仍无法实现的功能，ZCode 原有 UI 页面、入口和控件也不能删除或隐藏；保留可见并明确显示真实不可用原因，可禁用或在点击时返回明确不支持，不伪造可用性，不自动回退旧 Agent。
 - [OMP 需求在线入口（浮动 main）](https://github.com/jchanghong023/oh-my-pi/blob/main/docs-zh-CN/requirements/rpc-ui-protocol.md) 仅用于发布导航，不能证明已包含本地确认的合同。未取得双方真实需求发布提交前，以各仓本地需求文件为准；发布时分别记录实际提交并更新引用，不虚构 SHA，也不把固定协议源码提交当作新需求已发布的证据。
 
 ### 启动选择与发行装配
 
 - `ZCODE_AGENT_SERVER_COMMAND` 选择可执行程序，不自动转换协议。默认调用 `omp app-server --stdio`，桌面追加 `--surface desktop`；OMP 入口与桌面呈现的具体行为引用 OMP 需求，不在此重复定义。直接运行 `omp` 仍是 OMP 原生 TUI。
-- 开发／手动启动保留显式环境变量覆盖的优先级；正式发行在 `packages/desktop/src/main/desktopRuntimeEnv.ts` 的 `buildHostProcessEnv()` 中，在没有显式覆盖时将已校验的随包 OMP 绝对路径和启动参数注入对应 Window Host 的子进程环境。不是由安装器写系统环境变量，也不修改用户 PATH、shell 配置或 OMP 偏好。
-- `ZCODE_AGENT_SERVER_ARGS_JSON`、`ZCODE_AGENT_SERVER_CWD` 覆盖默认值时仍须满足同一 app-server、stdio、surface、cwd 和 profile 合同；不能因参数被清空而启动 TUI。准备与正常运行使用同一已解析产物、有效参数、profile 和执行环境。
+- 显式非空 `ZCODE_AGENT_SERVER_COMMAND` 具有最高优先级，显式空值报错。未设置该变量时默认命令就是 `omp`，复用当前终端继承的 PATH 与既有进程启动机制；不自行遍历 PATH、扫描安装目录或预先探测候选可执行文件，也不维护异步发现及缓存。显式配置错误或实际启动失败时直接报错，不回退到 PATH 中另一个 OMP、随包副本或原 Agent。入口注入统一位于 `packages/desktop/src/main/desktopRuntimeEnv.ts`，不下载／安装工具，不写系统环境变量，不修改用户 PATH、shell 配置或 OMP 偏好。
+- `ZCODE_AGENT_SERVER_ARGS_JSON`、`ZCODE_AGENT_SERVER_CWD` 独立覆盖默认值，不因自动发现命令而被改写；覆盖后仍须满足同一 app-server、stdio、surface、cwd 和 profile 合同，不能因参数被清空而启动 TUI。准备与正常运行使用同一已解析产物、有效参数、profile 和执行环境。
 - 源码联调可将命令设为 Bun 绝对路径，参数设为 `["run","<OMP 仓库绝对路径>/packages/coding-agent/src/cli.ts","app-server","--stdio","--surface","desktop"]`；仍由 Host 注入实际 workspace 的 cwd，不将 `ZCODE_AGENT_SERVER_CWD` 改成 OMP 源码仓库。该路径直接加载当前源码，无需反复编译 exe；已有 OMP 源码依赖及本机 native addon 仍是前提，不将其结果冒充打包产物验收。
-- 显式选择 OMP 后，版本、参数、初始化或启动失败必须报错，不能静默回退原 Agent。不新增通用多 runtime 注册框架或长期双 Agent 设置开关。
-- 本地和远端分别解析执行端路径、版本与环境；本地变量不代表 SSH、WSL 或 Docker 已部署 OMP。远端资产网络与发布接入遵守[现有远端部署说明](docs/remote/zcode-agent-remote-deployment.md)及其引用的 R3／Server CLI 规范，不重建旧 Remote Host 或平行下载策略。
-- 装配输入为显式 `ZCODE_OMP_ARTIFACT_ROOT`，根 `omp-release.json` 固定 `{version, commit, protocolBaseline, artifacts: {<目标平台>: <该平台 manifest 的 SHA-256>}}`；每个 `<os>-<arch>/omp-artifact.json` 记录 `schemaVersion: 1`、同一版本／完整源码提交／协议基线、`target`、相对 `executable` 与 `files: {<完整运行资产相对路径>: <SHA-256>}`。协议基线固定为 `c7c190724f3a00a2de998a0a5511201d5a2ba1a0`；manifest 不允许越界文件、符号链接或未列入校验表的入口。输入必须是真实构建产物，不能以示例版本、虚构摘要或另一平台二进制替代。
-- `scripts/omp-artifact.mjs` 为 Desktop 和 Source Server 共用的装配／校验入口：Desktop `prepare-runtime-assets.mjs` 放入 `bundled-agents/<target>/omp`，electron-builder 放入 `resources/omp`；R3 `stageRelease()` 放入 `runtime/omp` 并纳入既有 `agent-runtime` 内容哈希与完整 archive。SSH、WSL、Docker 复用该目标平台 archive 的安装、更新、网络策略与原子切换，不增加独立下载器，也不借本机 OMP 执行远端任务。
-- Desktop Main 在 `app.whenReady()` 内、创建任何 Window Host／scheduler 前通过 `prepareBundledOmpHostEnv()` 异步校验完整执行端资产；`buildHostProcessEnv()` 只消费校验成功的冻结结果，并拒绝未准备或执行端根／平台变化。Source Server `agentWiring.ts` 同样异步校验后注入绝对入口，Supervisor 等待候选发行校验／启动，stop/update 撤销代际并等待回收迟到自有进程后才释放锁。摘要使用流式读取，避免把大型内嵌 native 的可执行文件同步读入 Main。缺文件、版本／提交格式错误、协议／平台不匹配或任何文件摘要错误均阻断，不能退回保留的 `zcode.cjs`。显式命令及参数优先，空命令报错；参数是否满足 app-server 合同仍由现有启动解析负责。原 Agent 源码、Node runtime 与既有 TUI bundle 保留，不作为 OMP 失败后的备用 Agent。装配代码存在不代表已生成兼容发行组合或完成真实远端验收。
-- OMP 平台签名／公证必须先于 manifest 摘要生成；Windows signer 与 macOS `signIgnore` 保留 `resources/omp` 原始字节，应用本身及其他资源仍遵循原签名策略。未签名本地构建只可作为明确的开发验证输入，不能据此宣称生产发行或公证通过。
+- 选定 OMP 后，文件不可用、版本或协议不兼容、参数错误、初始化或启动失败必须明确报错，提示用户先安装或更新兼容 OMP；保留诊断信息。不自动下载、安装、升级或替换用户的 OMP，不回退原 Agent、源码运行器或随包副本；不新增通用多 runtime 注册框架或长期双 Agent 设置开关。
+- 本地和远端分别要求用户预先安装各自执行端所需的 OMP，并在该执行环境设置命令或 PATH；本地安装／变量不代表 SSH、WSL 或 Docker 已具备 OMP。OmpCode 的远端归档同样不携带 OMP，既有远端 Host／Server 的安装、更新及网络策略不因此扩展为 OMP 安装器，不借本机 OMP 执行远端任务。
+- OmpCode 构建、准备资产、安装、更新与发行装配不得从 `ZCODE_OMP_ARTIFACT_ROOT` 或其他来源复制 OMP，不生成 `bundled-agents/<target>/omp`、`resources/omp`、`runtime/omp` 等内置运行副本，也不把 OMP 装入桌面安装包、ZIP 或远端 runtime archive。原先要求校验 OMP manifest 后随包装配、签名豁免或自动分发的合同取消；OMP 自身的独立发行与完整性校验仍由 OMP 项目维护。
+- Desktop 和 Source Server 仅解析、验证并启动外部 OMP。准备与正常运行复用同一实际命令、参数、执行环境和 profile；现有存储准备、协议初始化及能力校验负责判断兼容性，不要求用户安装目录具备 OmpCode 私有的随包 manifest。不得因发现到一个可执行文件就伪报兼容成功；不可用时明确阻断并说明原因。原 Agent 源码、Node runtime 与既有 TUI bundle 的保留不构成备用 Agent。
+- 验收须覆盖显式环境变量优先于 PATH、未配置时使用终端 PATH、完全未安装、错误显式路径及不兼容 OMP；显式配置失败不得回退，未安装／不兼容时不自动修补依赖，也不启动备用 Agent。实际检查桌面安装包、ZIP 与远端发行归档均不包含 OMP 及其私有运行资产；不以源码联调或清空某个资源目录代替发行产物验收。需求更新本身不代表现有装配实现已完成迁移。
 
 ### 存储启动消费与监督
 
@@ -215,7 +215,7 @@ sequenceDiagram
 
 - 尽量保留 `apps/zcode-cli/` 及原 runtime、工具和配套源码，继续合并 ZCode 上游；不为更换核心批量删除、搬迁或重写上游实现，也不整体回灌旧 `main`。
 - Fork 产品通过装配替换运行入口。源码保留不等于长期暴露两个 Agent；清理限于 Fork 自有临时开关和重复适配，不以删除上游源码实现切换。
-- ZCode 依赖固定版本、可校验的 OMP 发行物，不跨仓深路径引用私有实现。发布组合记录 ZCode 协议基线、OMP 版本／提交与实际能力；schema 校验不替代行为联调。
+- OmpCode 依赖用户预先独立安装的兼容 OMP，不跨仓深路径引用私有实现。发行说明记录兼容的 OMP 版本／提交范围、ZCode 协议基线与实际能力，但不把固定 OMP 发行物嵌入 OmpCode；schema 校验不替代行为联调。
 - 合并上游、升级目标发行或修改协议、Host、启动、UI 消费链时，必须执行 OMP 需求中约定的兼容评估；只有目标合同变化才重钉基线并适配／验证，纯注释或排版变化不机械触发重钉。
 
 ### OMP 模型配置 GUI 与可选协议扩展
@@ -223,6 +223,10 @@ sequenceDiagram
 - `session/configure` 是向后兼容的可选公开方法；仅支持显式 `sessionId` 与 `operation`：`get_model_roles`、`set_model_role`、`get_team_config`、`get_team_models`、`set_team_config`。参数由对应严格 schema 校验，成功返回 `{operation,data}`，失败使用数值协议错误及结构化 `data`（保留保存回执）。不封装或调用内部 RPC；服务器直接调用所属会话的共享配置服务。
 - 服务能力通过 `get_team_config` 的明确方法发现读取；旧 Agent 的 `-32601` 禁用此专用入口并说明原因，不回读文件、不假称支持。OMP 必须实现全部操作，不能以能力发现缩小交付。
 - GUI 复用公开 `IZCodeAgentService` 与 hook，不使用 `window.zcode`。主模型临时切换使用既有会话模型命令，不持久化默认值；role 编辑展示完整目录、未配置及自定义 role、用户值／项目值／有效来源，使用对应 role revision 保存。
+- 多 profile 是核心设置能力，设置页枚举 OMP 配置根下的默认及已有命名 profile，显示执行端、实际运行 profile 和已保存的下次启动选择；名称、目录与配置保存复用 OMP 原生机制，不复制凭据、不修改系统环境。
+- profile 选择由 App Settings 持久化，保存后完整退出并重启应用才生效，不热切换当前会话。待重启期间，设置页与会话工具栏的角色编辑器均明确显示原因并禁止向旧 profile 保存角色，Host 同时拒绝该持久写入；临时模型仍作用于当前实际运行会话。任务不可变归属与完整隔离合同见下节。
+- Host 的 `omp/profiles/*` 控制请求使用所属进程启动时记录的实际 cwd，身份仍保留原 workspaceKey／workspaceIdentity。历史目录失效而执行目录回退时，只调整 profile 控制请求的路径，不改历史会话 cwd、任务归属或偏好存储 key；读取项目树不得因两者不同而失败。OMP 的目录校验保持启用。
+- 多 role 与临时模型界面必须保持原生差异：role 完整目录、自定义角色和独立 CAS 保存，临时模型仅作用当前会话且不写持久配置。验收分别证明双 profile 配置／会话隔离、role 保存后重启读回、临时模型不影响其他或新会话默认值；业务权威见 OMP 需求「多 profile、多 role 与临时模型界面」。
 - 专用 Team 面板完整展示用户、持久、有效三份无损名单、读取状态、主模型、来源及问题。成员草稿可添加、替换、复制、排序、删除、清除及恢复默认；预览携带 `clientRevision`，只读计算与实际快照分开。保存全量具体身份与 CAS revision；失效原槽位保留直至用户修复，不写入原始 selector。
 - 草稿由所属面板唯一持有，服务端独占已保存事实。事件／焦点刷新不覆盖脏草稿，显式重新读取可比较最新快照但不自动更新旧 CAS 基线；取消不保存。完整、覆盖、部分、未知、冲突分别显示，失败／断连先重读，不自动重放。会话／profile／连接代际及草稿版本的迟到结果不得改变当前面板。
 - 自动化验收包括编辑／取消、预览版本、冲突与部分／未知回执、脏草稿外部刷新，以及切换目标后旧响应隔离；真实 GUI 保存与重启读回是完整交付验收的一部分。
@@ -232,7 +236,7 @@ sequenceDiagram
 
 - 子代理创建配置、模型／思考隔离、真实 child 派生、转父问答、过程／历史、消息、停止恢复和失败结算，以及完整工作流定义管理、真实 actor 过程／交互、产物／历史、恢复／失败／取消，均为本次替换的核心范围；行为与协议事实的唯一权威为 OMP 需求的「子代理核心能力」「既有界面的工作流与记忆消费」。本节仅规定既有 GUI 的消费和验收边界，不另立执行状态或参数合同。
 - 不用 `/workflowz` 或脚本编排替代 GUI actor 过程／历史，不用旧 `zcode-cli`、旧工具别名或平行 runtime 迁就 fixture。Host 仍只路由和持有组织态，UI 仍只持有草稿和展示；子代理／工作流执行事实不能迁入 Host。desktop-continuous 与 web-remote-replayable 隔离不变。
-- 原 permission dock／v4 permission 交互和 `plugin_reference`／插件目录排除保持；技能、Provider、MCP、通用 jobs 等其他独立管理面也不因此恢复。依赖 permission 的混合旧 case 不代表不依赖该面板的子代理问答、消息或控制被排除。
+- v4 permission 工具审批纳入完整替换范围，复用既有权限面板、`resolveInteraction` 和双 delivery profile，具体授权／取消／隔离合同以 OMP 需求「权限与提问」为唯一权威。Host／UI 不记录另一份授权规则，不把一次批准扩大为全访问。Skill、Provider 管理在 OMP 已有原生能力范围内尽力完整桥接，仅修改适配与消费侧，不改变核心执行语义；原生没有等价能力的操作明确反馈限制。`plugin_reference`／插件目录、MCP 及其他管理面不因此扩大。
 - 新增验收 ID `OMP-SA01`–`OMP-SA06`、`OMP-WF01`–`OMP-WF05` 的动作／证据见 [case catalog](docs/conversation-session-case-catalog.md#omp-native-子代理与工作流核心验收)，执行范围与状态见 [coverage matrix](docs/testing/conversation-session-e2e-coverage-matrix.md#omp-native-子代理与工作流核心验收)。全部当前为新增规划／未验证，需求更新不证明真实适配完成。
 
 ```mermaid
@@ -244,6 +248,35 @@ flowchart LR
     J --> P
     P --> U
 ```
+
+### Tan 原生后台委派
+
+- 接入 OMP `/tan <任务>`／“后台委派”，保留原有 `/side` 与 fork；Tan 是父 Agent 负责的原生后台工作，不是另开普通侧聊。原生继承、owner/job/registry、结果回投、取消与安全合同以 OMP 需求「Tan 原生后台委派」为权威。
+- 不新增 Tan 专页，复用既有后台任务卡与子会话侧面板展示过程、结果、错误、停止及完成历史；关闭查看面板不能取消任务，关闭 owner 按原生生命周期处理。Host 只路由、UI 只持有输入草稿与可重建展示；缺能力的入口保留可见并给出原因。
+- 真实 GUI 与协议验收使用隔离本地模型，证明父回合继续、结果只回所属 Main、并发／profile 隔离、独立取消与 EOF、双 delivery 恢复及旧 side／fork 不退化；不把 SDK 可创建普通会话当作完整 Tan 验收。
+
+### 原生工具权限审批
+
+- OMP 原生策略要求审批时，现有 GUI 必须展示真实 permission pending interaction、工具身份与原生提供的选项；允许一次、拒绝、取消及原生可用的会话／持久授权必须回到同一原生工具调用，不使用普通问答冒充权限。
+- 权限等待／工具状态／任务计数来自 OMP 投影；UI 只保存当前应答 pending overlay。重复点击、桌面／手机竞争和迟到应答不能重复执行、扩大授权或改变其他会话。停止、关闭、EOF 和连接关闭按 OMP 合同取消，普通切换查看与订阅恢复不得另起审批。
+- 新增 OMP-native GUI 验收使用真实 Desktop、Host、当前 OMP、隔离本地模型与真实文件副作用，覆盖批准前零执行、允许一次精确执行、拒绝／停止零执行、多会话隔离及刷新恢复；协议回归补齐非法／重复／迟到应答和关闭边界。历史 permission 旧夹具的排除记录仅描述当时执行选择，不再是取消该产品能力的依据。
+
+### Team 聊天命令、设置与 Wiki／Repo 专页
+
+- Team 是当前会话的内置聊天命令，不是独立应用页面。专用设置页只配置成员、模型及顺序，不承载任务输入或运行；聊天中 `/team …` 通过原生 Team 编排器发起讨论，以复用现有工作流组件的流程图卡片呈现，点击在右侧展开阶段、Agent 调用、审查／修订关系和过程详情。完成后卡片与最终方案保留在所属聊天记录，用户在原输入框继续对话；关闭详情不取消运行。不将 Team 转成普通工作流，不另建编排器。完整配置与运行合同见 OMP [Team 2.9–2.10](../oh-my-pi/docs-zh-CN/requirements/team.md#210-team-动态运行视图与交互关系新增需求未验收)。
+- Team 模型与有序成员是当前 OMP 配置根／运行 profile 的全局用户配置，由会话共用，不按聊天会话或项目分别保存。Team 设置入口无需已有会话即可打开、读取和保存；通过可选 `omp/team/configure` 扩展调用原生 TeamConfigService，不创建或激活聊天会话、不发模型请求。工作区及 identity 只用于定位已有执行端及其 profile，不成为另一份 Team 配置的存储 key。会话中 `/team …` 仍只负责发起原生讨论；既有 CAS、未保存草稿、待重启 profile 与双端保存回执规则保留。
+- Team 页就是模型配置页：打开后直接展示全局有序模型成员列表与“添加模型”，允许选择、增删、复制及调整顺序，保存／取消操作始终可达；不再先展示空页面再打开全屏技术配置对话框。默认优先呈现实际已配置、可用的模型，可搜索其他候选；不可用项必须有准确原因，不能把大量未认证 provider 的禁用行当作主选择界面。无可用模型时明确指出需配置模型服务，不伪造认证或自动选择模型。主界面不展示当前会话主模型、运行槽位诊断、shm／NFS／活动端／持久端或 CAS 技术字段；必要的高级来源与双端保存事实放入折叠详情，冲突／部分失败仍须清晰可见，不能隐瞒错误或削减真实保存语义。
+- Wiki 与 Repo 均为 OMP 核心功能，分别设置独立页面和左侧入口，放在“自动化”下方，相邻排列。Wiki 承接 TUI 新增／导入、删除、默认搜索／grep／分页／正文查看，详见 [Wiki 权威需求](../oh-my-pi/docs-zh-CN/requirements/fork.md#zcode-wiki-专页新增需求未实现未验收)；Repo 承接首次确认建立、状态、更新、重建／恢复、删除、进度／取消及文本／符号查询，详见 [Repo 权威需求](../oh-my-pi/docs-zh-CN/requirements/repo-index.md#zcode-repo-专页新增需求未实现未验收)。
+- Wiki／Repo 只增加向后兼容的可选协议扩展及能力发现，禁止改变现有 ZCode 方法、字段、通知、信封、版本或语义，禁止改 vendor 基线。Host 只路由到执行端的原生服务，不另建数据库或索引生命周期。旧客户端／旧 Agent 保持原行为，缺扩展明确不可用；真实专页新增、删除、搜索和生命周期证据不能由 TUI 既有通过记录替代。
+- 上述新增专页及 OMP 模型配置必须遵循 `DESIGN.md`，直接参考 ZCode 现有工作流运行页、资源列表和 Settings 的布局、组件与视觉风格，不另造设计语言。使用统一紧凑页头、明确的主要操作、分组表单、可读的列表／结果与完整空态。执行端长路径作为次级信息，不挤占操作与结果；避免把全宽大表单、调试字段或原始 JSON 直接堆在主页面。
+- Team 运行以聊天中的流程图卡片及右侧过程详情为视觉中心，设置与运行职责分离；禁止独立 Team 任务输入／运行页。Wiki／Repo 区分索引管理、查询和结果；模型设置区分 profile、持久 role／Team 草稿及仅当前会话模型。保留全部原生功能、禁用原因、状态所有者及接口，不借视觉重设计削减能力。
+- 新版界面须在真实 Electron 页面验证，核对深浅主题、窄布局、长路径与长结果；只使用现有语义色与 `text-ui-*` 字级，运行动画响应 reduced-motion，所有交互沿用原有真实边界。
+
+### 最新证据快照（2026-10-23，非整体验收）
+
+Wiki／Repo 新版真实 GUI bg229 PASS（exit 0，170.04s，`desktop-e2e-20261022224641003-p64788-9616faedaa677057`）；mention bg230 PASS（exit 0，246.40s，`desktop-e2e-20261022224640810-p85936-69d818d634ab7f89`）。完整产物路径、Wiki／Repo 查询／生命周期及 mention／SharedSkill 实际覆盖范围见 [coverage matrix](docs/testing/conversation-session-e2e-coverage-matrix.md#omp-native-wikirepo-与-mention-最新真实-gui-证据2026-10-23)，本轮门禁结果见 [联调记录](docs/testing/omp-integration-blockers.md#最新局部验证与未完成项2026-10-23)。根 UT 最新为当前白名单 100 文件、1905 passed／31 skipped，不代表原全仓；历史基线和原需求保留。
+
+**整体仍未完成／未验收**：新聊天 Team bg240 失败，profile 四阶段 GUI 尚在运行，默认安装版启动待处理。既有 permission、M01／M02、model restore、Tan 子代理／工作流通过保持原范围；旧独立 Team 页通过不得转记新聊天 Team。当前源码和 localhost 模型证据不冒充安装版、真实模型、手机、远端或其他平台通过。
 
 ### 单次完整交付与验收
 
@@ -304,7 +337,82 @@ flowchart LR
 
 上述通过记录仅覆盖当时既定选择；新增的子代理／工作流完整核心合同尚待真实适配与 `OMP-SA01`–`OMP-SA06`、`OMP-WF01`–`OMP-WF05` 新 E2E 验收，整体替换不能据旧收口记录宣称完成。本次不扩跑 UT、旧 E2E 或门禁，执行证据由新增 E2E 的实际结果单独记录。
 
-## 7. 后续需求记录规则
+## 7. FORK-004：OmpCode 产品身份、独立数据与 profile 隔离
+
+### 产品身份与双装
+
+- 面向用户的产品名称为 `OmpCode`，覆盖桌面窗口、菜单、托盘、关于页、Web 页面与安装包；保留 ZCode 来源引用和现有协议、包名等不影响双装的内部标识，不做全仓字符串替换。
+- OmpCode 与上游 ZCode 可以同时安装、同时运行、分别卸载，安装目录、应用 ID／AUMID、深链 scheme、操作系统菜单注册、单实例锁、更新缓存、凭据及 Electron 用户数据均独立。不得沿用 main 旧合同中允许共享 appId／scheme 的例外。
+- OmpCode 不查询、安装上游 ZCode 自动更新，也不受其强制更新阻止启动；没有本 fork 专属更新来源时保留相关 UI 并明确说明不可用，不伪造更新成功。不得操作或结束现有 ZCode／OMP 进程。
+
+### 应用数据根与只读目录
+
+- OmpCode 默认业务数据根为 `~/.ompcode`，不读取、迁移、复制、覆盖或删除上游 `~/.zcode`；配置、日志、任务组织索引、应用凭据及内部工作区均由独立根派生。
+- 迁移 main 的环境规则：有效的绝对 `OMP_CONFIG_ROOT=xx/bb` 决定 OmpCode 数据根为 `xx/bb_ompcode`，支持 `~` 展开；无有效覆盖时使用默认根。`PI_CONFIG_DIR` 只影响 OMP 自身的既有解析，不改变 OmpCode 数据根。OMP 原始环境继续原样传递，不把应用派生根传回 OMP 作为配置根。
+- 应用启动最早期在设置、日志及 Electron 存储初始化前确定根并向 Host 传递同一事实；旧 `setting.json` 的 `dataBaseDir` 及旧目录选择／迁移机制均不能覆盖它。环境变量变更只在完整退出重启后生效，不自动搬运任何旧数据。
+- 设置页面只读显示实际路径及 Windows／Linux 环境变量设置方法，不提供目录选择、保存或数据迁移；服务端同样拒绝修改目录，不仅禁用按钮。
+
+### 实际 OMP 根／profile 的状态域
+
+- OMP 拥有实际配置根、运行 profile、模型角色与会话历史。Host 以真实启动后的根／profile 事实建立作用域，不能使用待重启的选择、客户端猜测值或只含 workspacePath 的 key 代替。
+- 任务组织索引、未提交草稿和 Recent 模型偏好均随实际 OMP 根及运行 profile 隔离，并保留 workspaceIdentity／remoteSessionId 的现有隔离；三者各复用原有持久化所有者，不新增第二套事实存储。
+- 任务 UUID、分组、排序、置顶、归档、未读等组织信息在切换根／profile 时不串入目标域，切回时原样恢复；不迁移、删除或重新绑定旧会话。
+- 草稿内容、临时模型与 Recent 记录不能跨根／profile 回流。保存待重启 profile 不改变当前运行域；重启后仅加载目标域，切回后恢复原草稿与偏好。域切换、断连及请求代际变化时丢弃迟到结果。
+
+### 验收
+
+- 用隔离 HOME 和两个真实临时 OMP 根验证默认／命名 profile 枚举、保存重启、双角色入口及 Host 拒写；旧 profile 的配置保持不变。
+- 用真实应用设置页核对 OmpCode 名称、实际根及只读目录；向上游数据目录预置哨兵，启动、保存与重启后哨兵内容及目录树不变，空新根不导入旧设置。
+- 验证两根／两 profile 的任务组织、草稿和 Recent 往返隔离及切回恢复；安装元数据、协议与更新边界使用现有构建配置及隔离运行验证，不将配置检查冒充已安装双包实测。
+
+## 8. FORK-005：OMP 内置命令最小接入
+
+本节为本次命令接入的优先合同；已有需求与本节冲突时以本节为准。用户原始消息逐字保存在 `local://original-omp-command-requirements.txt`，不以实现摘要替代。
+
+在现有会话输入框中，支持 OMP 全部非 TUI 专属内置命令及其参数，保留命令名补全和用法提示；尽量减少 ZCode 改动，不改变现有协议。
+
+### 功能要求
+
+1. 真实命令目录：命令名称、别名、说明及参数用法来自当前目标工作区 OMP 的实际注册信息，不维护人工命令白名单。
+2. 命令名补全：输入 `/` 时可浏览、筛选和选择命令，展示命令说明及已有的参数用法提示。
+3. 完整参数提交：支持手工输入命令的全部合法参数，保留引号、换行及内部空白，由 OMP 原生处理器解析和校验。
+4. 原生命令优先：OMP 运行时下，目录中已注册的命令不得被 ZCode 同名本地逻辑截获、改写或丢失参数。
+5. 统一结果展示：命令输出、错误及执行状态进入所属会话的现有时间线；选择、确认和文本输入复用已有交互组件。
+6. 真实失败反馈：非法参数显示 OMP 返回的用法或错误；不能改成普通模型问题，不能以受理成功代替执行完成。
+7. 终端能力边界：仅依赖 TUI 专属界面的命令或子操作明确提示不可用，不影响同一命令中可独立执行的其他操作。
+8. 执行边界不变：继续复用现有会话身份、队列准入、停止和去重机制，不另建命令执行链路。
+
+### 最小改动约束
+
+- 继续使用现有 `createSession.firstInput.text`、`sendText.text` 和交互应答通道。
+- 不新增逐命令接口、参数字段或协议版本。
+- ZCode 不复制 OMP 的参数解析、校验及业务逻辑。
+- 改动集中于命令目录投影、提交优先级和必要的结果／交互映射。
+- 新增普通 OMP 内置命令后，应通过目录发现并复用通用提交路径，不要求同步增加 ZCode 命令分支。
+
+### 不包含
+
+- 动态参数补全，例如参数位置的模型、路径或子命令候选。
+- 命令专属参数表单、页面和设置面板。
+- 终端编辑器、终端选择器及其他 TUI 专属界面。
+
+### 验收条件
+
+1. `/` 面板与目标 OMP 实际命令目录一致，能展示说明和参数用法。
+2. 从现有输入框执行非 TUI 专属命令及其合法参数，行为与 OMP 原生处理一致。
+3. `/goal show`、`/goal pause` 不再被旧本地解析拒绝，`/compact` 参数完整到达 OMP。
+4. 非法参数和 TUI 专属操作返回真实错误，不误发模型、不伪造成功。
+5. 命令的输出、交互、取消及历史恢复沿用现有会话机制，不串会话、不重复执行。
+6. 既有普通对话、按钮操作及上游 Agent 路径不因本次接入改变。
+
+## Windows 打包与发布
+
+- `.github/workflows/release-windows.yml` 从本 fork 原 main 的 Windows 流水线迁入，手动从 `main` 触发；仅安装构建依赖、构建 Windows x64 NSIS 安装包、生成并核对 SHA256、上传与发布，不运行测试、E2E、smoke、lint 或独立类型检查门禁。生成产物所需的 TypeScript 编译及包资源／体积完整性检查仍属于构建，不另增测试作业。
+- 正式产品身份为 OmpCode；应用版本来自根 `package.json`，Release 标签沿用 UTC 时间、GitHub run ID 与 attempt 的唯一组合。Release 精确指向本轮 `GITHUB_SHA`，先创建草稿、核对安装包与校验文件后才公开；未签名的 Windows 产物明确说明。外部 OMP 不随包分发、不自动安装或替换。
+- 切换发布主线时，以当前 dev 的完整历史和工作内容为 main 的新历史，不合入旧 main 的产品实现；旧 main 须有可验证备份，远端替换使用所观测旧 SHA 的精确 lease，不能覆盖未知并发提交。仅操作本 ZCode／OmpCode 仓库，不提交、推送或发布 OMP 仓。
+- 本轮发布验收以新 main 的准确 SHA、对应 Windows workflow 成功结果、公开 Release、安装包和 SHA256 为准，不以历史绿色 run、其他平台 Release 或旧草稿代替。Team 模型配置与当前聊天工作流式卡片须先经本机真实入口 E2E 通过。
+
+## 9. 后续需求记录规则
 
 - 新增或修改行为前，先记录对应需求，再实现代码。
 - 每项需求明确目标、产品规则、状态所有者、接口边界和验收场景。

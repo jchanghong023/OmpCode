@@ -1,5 +1,6 @@
 export const SSH_FORMAL_SPEC_GLOB: string;
 export const MANUAL_REVIEW_SPEC_GLOB: string;
+export const OMP_DEFAULT_E2E_SPECS: string[];
 export const FORK_TEMPORARY_E2E_EXCLUDES: string[];
 export const FORK_DEFERRED_E2E_SPECS: string[];
 

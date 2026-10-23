@@ -29,6 +29,23 @@ describe("electron-builder Linux 打包目标", () => {
     expect(desktopBuilderConfig.pacman?.packageName).toBe(identity.linuxPackageName);
   });
 
+  it("安装器、桌面条目、协议与更新缓存只使用 fork 身份", () => {
+    const identity = resolveDesktopProductIdentity();
+    expect(desktopBuilderConfig).toMatchObject({
+      appId: identity.appId,
+      productName: identity.productName,
+      extraMetadata: {
+        name: identity.linuxPackageName,
+        updaterCacheDirName: `${identity.linuxPackageName}-updater`,
+      },
+      linux: {
+        executableName: identity.linuxExecutableName,
+        desktop: { entry: { StartupWMClass: identity.productName } },
+      },
+      protocols: [{ name: identity.productName, schemes: [identity.protocolScheme] }],
+    });
+  });
+
   it("rpm 通过 fpm 追加 Electron 实际需要的运行库 Requires", () => {
     // electron-builder 的 rpm 默认 Requires 不含 mesa-libgbm / alsa-lib（Electron ELF 的
     // DT_NEEDED 实际依赖），最小化 RHEL 上装完会启动失败；必须以 fpm -d 追加而不是

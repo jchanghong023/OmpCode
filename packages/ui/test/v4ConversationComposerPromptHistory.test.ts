@@ -14,6 +14,8 @@ import {
 import {
   persistV4ComposerDraft,
   readV4ComposerDraft,
+  resolveComposerScope,
+  composerScopeKey,
   V4_DRAFT_SCOPE_ROOT,
   type V4ComposerDraft,
 } from "@/v4/composer/composerDraftStore.js";
@@ -25,6 +27,14 @@ import type {
   ConversationSnapshot,
 } from "@zcode/shared/zcode-protocol-v4";
 import type { ComposerSubmissionConfig } from "@/v4/composer/composerSubmissionConfig.js";
+
+// 真实草稿合同要求可信 profile/storage scope；fixture 的读写与 Composer 绑定同一域。
+const fixtureComposerScope = resolveComposerScope(
+  "fixture-project",
+  undefined,
+  "fixture-client",
+  "fixture-native-root:default",
+);
 
 const { attachmentState, chatPromptEditorProps, dialogOpenStates, inputClear, inputSetText } =
   vi.hoisted(() => ({
@@ -307,10 +317,11 @@ function renderComposerElement(
     content: Pick<V4ComposerDraft, "text" | "editorStateJson" | "mention">,
   ) => void,
   submissionReady = true,
+  nativeSlashCommandNames?: readonly string[] | null,
 ) {
   const scopeId = sessionId ?? V4_DRAFT_SCOPE_ROOT;
   let ownedDraft = composerDraft ??
-    readV4ComposerDraft("/workspace", undefined, scopeId) ?? {
+    readV4ComposerDraft("/workspace", undefined, scopeId, fixtureComposerScope) ?? {
       text: "",
       updatedAt: 0,
     };
@@ -318,7 +329,7 @@ function renderComposerElement(
     updateComposerContent ??
     ((content: Pick<V4ComposerDraft, "text" | "editorStateJson" | "mention">) => {
       ownedDraft = { ...ownedDraft, ...content };
-      persistV4ComposerDraft("/workspace", undefined, scopeId, ownedDraft);
+      persistV4ComposerDraft("/workspace", undefined, scopeId, ownedDraft, fixtureComposerScope);
     });
   return createElement(
     ZCodeIntlProvider,
@@ -330,11 +341,14 @@ function renderComposerElement(
       onSendText,
       createSubmissionFromComposer,
       submissionReady,
+      nativeSlashCommandNames,
       composerDraft: ownedDraft,
+      rootDraftScopeKey: composerScopeKey(fixtureComposerScope),
+      storageScope: fixtureComposerScope.storageScope,
       updateComposerContent: persistOwnedContent,
       replaceComposerDraft: (next) => {
         ownedDraft = { ...next, updatedAt: Date.now() };
-        persistV4ComposerDraft("/workspace", undefined, scopeId, ownedDraft);
+        persistV4ComposerDraft("/workspace", undefined, scopeId, ownedDraft, fixtureComposerScope);
       },
       onStop: vi.fn(),
       onSwitchMode: vi.fn(),
@@ -384,6 +398,83 @@ afterEach(() => {
 });
 
 describe("ConversationComposer prompt history", () => {
+  it.each([
+    "/goal show",
+    "/goal pause",
+    '/compact  "keep  spaces"\nnext line  ',
+    '/compress\t"quoted argument"  ',
+    "/plan --invalid-option",
+  ])("registered native input reaches the send consumer unchanged: %s", async (text) => {
+    const container = installMinimalDom();
+    const root = createRoot(container);
+    const received: string[] = [];
+    act(() =>
+      root.render(
+        renderComposerElement(
+          async (submitted) => {
+            received.push(submitted);
+          },
+          "native-session",
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          true,
+          ["goal", "compact", "compress", "plan"],
+        ),
+      ),
+    );
+    await act(async () => {
+      (chatPromptEditorProps.at(-1)!.onSubmit as (value: string) => boolean)(text);
+      await flushAsyncWork();
+    });
+    expect(received).toEqual([text]);
+    await act(async () => root.unmount());
+  });
+
+  it.each([
+    { names: undefined, text: '  /compact  "legacy"  ', expected: '/compact  "legacy"' },
+    { names: ["goal"], text: "  /unknown  ordinary input  ", expected: "/unknown  ordinary input" },
+    {
+      names: null,
+      text: '  /compact  "cold  catalog"\nnext  ',
+      expected: '  /compact  "cold  catalog"\nnext  ',
+    },
+    { names: null, text: "  /goal pause  ", expected: "  /goal pause  " },
+    { names: null, text: "  /plan --invalid  ", expected: "  /plan --invalid  " },
+  ])(
+    "retains legacy/unknown ordinary input serialization: $text",
+    async ({ names, text, expected }) => {
+      const container = installMinimalDom();
+      const root = createRoot(container);
+      const received: string[] = [];
+      act(() =>
+        root.render(
+          renderComposerElement(
+            async (submitted) => {
+              received.push(submitted);
+            },
+            "session-a",
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            true,
+            names,
+          ),
+        ),
+      );
+      await act(async () => {
+        (chatPromptEditorProps.at(-1)!.onSubmit as (value: string) => boolean)(text);
+        await flushAsyncWork();
+      });
+      expect(received).toEqual([expected]);
+      await act(async () => root.unmount());
+    },
+  );
+
   it("真实编辑器文本变更会推进草稿 revision，保护迟到的推荐 Prompt", async () => {
     const { root } = renderComposer(vi.fn(async () => {}));
     const revisionBefore = getComposerDraftRevision("/workspace");
@@ -569,11 +660,11 @@ describe("ConversationComposer prompt history", () => {
       modelSelection: selection,
       updatedAt: 1,
     };
-    persistV4ComposerDraft("/workspace", undefined, "session-a", draft);
+    persistV4ComposerDraft("/workspace", undefined, "session-a", draft, fixtureComposerScope);
     const updateContent = vi.fn(
       (content: Pick<V4ComposerDraft, "text" | "editorStateJson" | "mention">) => {
         draft = { ...draft, ...content };
-        persistV4ComposerDraft("/workspace", undefined, "session-a", draft);
+        persistV4ComposerDraft("/workspace", undefined, "session-a", draft, fixtureComposerScope);
       },
     );
     act(() =>
@@ -593,7 +684,9 @@ describe("ConversationComposer prompt history", () => {
       (chatPromptEditorProps.at(-1)!.onSubmit as (text: string) => boolean)("会被发送");
       await flushAsyncWork();
     });
-    expect(readV4ComposerDraft("/workspace", undefined, "session-a")).toBeNull();
+    expect(
+      readV4ComposerDraft("/workspace", undefined, "session-a", fixtureComposerScope),
+    ).toBeNull();
     expect(draft).toMatchObject({
       text: "",
       mode: "yolo",
@@ -624,7 +717,9 @@ describe("ConversationComposer prompt history", () => {
       await flushAsyncWork();
     });
     expect(inputClear).not.toHaveBeenCalled();
-    expect(readV4ComposerDraft("/workspace", undefined, V4_DRAFT_SCOPE_ROOT)?.text).toBe("下一条");
+    expect(
+      readV4ComposerDraft("/workspace", undefined, V4_DRAFT_SCOPE_ROOT, fixtureComposerScope)?.text,
+    ).toBe("下一条");
     await act(async () => root.unmount());
   });
 
@@ -713,9 +808,9 @@ describe("ConversationComposer prompt history", () => {
     expect(inputClear).not.toHaveBeenCalled();
     expect(attachmentState.adoptSentAttachments).not.toHaveBeenCalled();
     expect(readPromptHistoryEntries("/workspace")).toEqual([]);
-    expect(readV4ComposerDraft("/workspace", undefined, V4_DRAFT_SCOPE_ROOT)?.text).toBe(
-      "/goal 保留这段输入",
-    );
+    expect(
+      readV4ComposerDraft("/workspace", undefined, V4_DRAFT_SCOPE_ROOT, fixtureComposerScope)?.text,
+    ).toBe("/goal 保留这段输入");
 
     await act(async () => {
       root.unmount();
@@ -736,9 +831,9 @@ describe("ConversationComposer prompt history", () => {
     expect(inputClear).not.toHaveBeenCalled();
     expect(attachmentState.adoptSentAttachments).not.toHaveBeenCalled();
     expect(readPromptHistoryEntries("/workspace")).toEqual([]);
-    expect(readV4ComposerDraft("/workspace", undefined, V4_DRAFT_SCOPE_ROOT)?.text).toBe(
-      "等待确认的消息",
-    );
+    expect(
+      readV4ComposerDraft("/workspace", undefined, V4_DRAFT_SCOPE_ROOT, fixtureComposerScope)?.text,
+    ).toBe("等待确认的消息");
 
     await act(async () => root.unmount());
   });
@@ -821,14 +916,18 @@ describe("ConversationComposer prompt history", () => {
     });
 
     rerenderSession("session-1");
-    expect(readV4ComposerDraft("/workspace", undefined, V4_DRAFT_SCOPE_ROOT)).toBeNull();
+    expect(
+      readV4ComposerDraft("/workspace", undefined, V4_DRAFT_SCOPE_ROOT, fixtureComposerScope),
+    ).toBeNull();
 
     await act(async () => {
       resolveSend?.();
       await flushAsyncWork();
     });
 
-    expect(readV4ComposerDraft("/workspace", undefined, V4_DRAFT_SCOPE_ROOT)).toBeNull();
+    expect(
+      readV4ComposerDraft("/workspace", undefined, V4_DRAFT_SCOPE_ROOT, fixtureComposerScope),
+    ).toBeNull();
 
     await act(async () => {
       root.unmount();

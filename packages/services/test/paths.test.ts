@@ -1,17 +1,8 @@
-import {
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  symlinkSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-const originalHome = process.env.HOME;
 const tempHomes: string[] = [];
 
 function makeTempHome(): string {
@@ -21,7 +12,8 @@ function makeTempHome(): string {
 }
 
 afterEach(() => {
-  process.env.HOME = originalHome;
+  vi.unstubAllEnvs();
+  vi.resetModules();
   while (tempHomes.length > 0) {
     const home = tempHomes.pop();
     if (home) {
@@ -31,58 +23,51 @@ afterEach(() => {
 });
 
 describe("paths", () => {
-  it("copyDataDirectory 会复制普通文件并跳过 workspace 里的共享目录软链", async () => {
-    const oldBase = makeTempHome();
-    const newBase = makeTempHome();
-    process.env.HOME = oldBase;
+  it("应用路径只由启动 OMP 环境确定，不读取上游或旧重定向", async () => {
+    const home = makeTempHome();
+    vi.stubEnv("HOME", home);
+    vi.stubEnv("ZCODE_DESKTOP_HOME_DIR", home);
+    vi.stubEnv("OMP_CONFIG_ROOT", "");
+    vi.stubEnv("ZCODE_DATA_BASE_DIR", join(home, "legacy-target"));
+    vi.stubEnv("PI_CONFIG_DIR", join(home, "native-pi"));
+    const upstream = join(home, ".zcode", "v2");
+    mkdirSync(upstream, { recursive: true });
+    const oldSettings = '{"dataBaseDir":"/old","memoryEnabled":true}';
+    writeFileSync(join(upstream, "setting.json"), oldSettings);
+    // 必须重新加载模块：生产路径在启动导入时固定，不能静态导入后切 HOME。
     vi.resetModules();
-
-    const { copyDataDirectory } = await import("../src/paths.js");
-    const oldV2Dir = join(oldBase, ".zcode", "v2");
-    const oldSharedSkillRoot = join(oldV2Dir, "agent-config", "claude", "skills");
-    const oldSharedPluginRoot = join(oldV2Dir, "agent-config", "claude", "plugins");
-    const oldWorkspaceRoot = join(oldV2Dir, "agent-config", "claude", "workspace-hash-1");
-    mkdirSync(join(oldSharedSkillRoot, "demo-skill"), { recursive: true });
-    writeFileSync(join(oldSharedSkillRoot, "demo-skill", "SKILL.md"), "demo", "utf-8");
-    mkdirSync(oldSharedPluginRoot, { recursive: true });
-    writeFileSync(join(oldSharedPluginRoot, "installed_plugins.json"), '{"plugins":{}}', "utf-8");
-    mkdirSync(oldWorkspaceRoot, { recursive: true });
-    writeFileSync(join(oldWorkspaceRoot, "settings.json"), '{"model":"demo"}', "utf-8");
-    const linkType: "dir" | "junction" = process.platform === "win32" ? "junction" : "dir";
-    symlinkSync(oldSharedSkillRoot, join(oldWorkspaceRoot, "skills"), linkType);
-    symlinkSync(oldSharedPluginRoot, join(oldWorkspaceRoot, "plugins"), linkType);
-
-    await copyDataDirectory(oldBase, newBase);
-
-    const newV2Dir = join(newBase, ".zcode", "v2");
-    const newWorkspaceRoot = join(newV2Dir, "agent-config", "claude", "workspace-hash-1");
-    const newSkillLink = join(newWorkspaceRoot, "skills");
-    const newPluginLink = join(newWorkspaceRoot, "plugins");
-
-    expect(readFileSync(join(newWorkspaceRoot, "settings.json"), "utf-8")).toBe('{"model":"demo"}');
-    expect(existsSync(newSkillLink)).toBe(false);
-    expect(existsSync(newPluginLink)).toBe(false);
+    const paths = await import("../src/paths.js");
+    const root = join(home, ".ompcode");
+    expect(paths.getDataBaseDir()).toBe(root);
+    expect(paths.getZCodeDataRootDir()).toBe(root);
+    expect(paths.getAppConfigDir()).toBe(join(root, "v2"));
+    expect(paths.getConversationWorkspaceDir()).toBe(join(root, "workspace", "default"));
+    expect(paths.getTasksIndexDatabasePath()).toBe(join(root, "v2", "tasks-index.sqlite"));
+    process.env.OMP_CONFIG_ROOT = join(home, "next");
+    expect(paths.getDataBaseDir()).toBe(root);
+    expect(readFileSync(join(upstream, "setting.json"), "utf8")).toBe(oldSettings);
+    expect(existsSync(root)).toBe(false);
+    expect(existsSync(join(home, "legacy-target"))).toBe(false);
   });
 
-  it("copyDataDirectory 会跳过 setting.json 及其原子写入瞬时文件", async () => {
-    const oldBase = makeTempHome();
-    const newBase = makeTempHome();
-    const oldV2Dir = join(oldBase, ".zcode", "v2");
-    const newV2Dir = join(newBase, ".zcode", "v2");
-    mkdirSync(oldV2Dir, { recursive: true });
-    writeFileSync(join(oldV2Dir, "setting.json"), '{"dataBaseDir":"/old"}', "utf-8");
-    writeFileSync(join(oldV2Dir, "setting.json.lock"), "lock", "utf-8");
-    writeFileSync(join(oldV2Dir, "setting.json.123.tmp"), "temp", "utf-8");
-    writeFileSync(join(oldV2Dir, "app-canary.txt"), "app-data", "utf-8");
-
+  it("任务索引路径按实际配置根和 profile 隔离且切回稳定", async () => {
     vi.resetModules();
-    const { copyDataDirectory } = await import("../src/paths.js");
-    await copyDataDirectory(oldBase, newBase);
-
-    expect(readFileSync(join(newV2Dir, "app-canary.txt"), "utf-8")).toBe("app-data");
-    expect(existsSync(join(newV2Dir, "setting.json"))).toBe(false);
-    expect(existsSync(join(newV2Dir, "setting.json.lock"))).toBe(false);
-    expect(existsSync(join(newV2Dir, "setting.json.123.tmp"))).toBe(false);
+    const { getTasksIndexDatabasePath } = await import("../src/paths.js");
+    const configRoot = makeTempHome();
+    const first = getTasksIndexDatabasePath({ configRoot, profileId: null });
+    const named = getTasksIndexDatabasePath({ configRoot, profileId: "work" });
+    const otherRoot = getTasksIndexDatabasePath({ configRoot: makeTempHome(), profileId: null });
+    expect(new Set([first, named, otherRoot]).size).toBe(3);
+    expect(getTasksIndexDatabasePath({ configRoot, profileId: null })).toBe(first);
+    expect(getTasksIndexDatabasePath({ configRoot, profileId: null, authority: "local" })).toBe(
+      first,
+    );
+    const remoteA = getTasksIndexDatabasePath({ configRoot, profileId: null, authority: "host-a" });
+    const remoteB = getTasksIndexDatabasePath({ configRoot, profileId: null, authority: "host-b" });
+    expect(new Set([first, remoteA, remoteB]).size).toBe(3);
+    expect(getTasksIndexDatabasePath({ configRoot, profileId: null, authority: "host-a" })).toBe(
+      remoteA,
+    );
   });
 
   it("Windows 数据目录不能选择 ZCode 安装目录或其子目录", async () => {

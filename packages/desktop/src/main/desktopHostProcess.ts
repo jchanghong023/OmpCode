@@ -11,6 +11,7 @@ import {
   type HostMcpTelemetryResponse,
   type HostSessionCreateTelemetryResponse,
   type HostPluginTelemetryResponse,
+  type HostStartupWorkspaceTarget,
   type RemoteTarget,
   type TaskRealtimeHostDeliveryKind,
   type WorkspacePurpose,
@@ -82,10 +83,7 @@ export interface HostInitMessage {
   feedbackApiBase?: string;
   workspacePath?: string;
   workspaceIdentity?: string;
-  agentWarmupTargets?: Array<{
-    workspacePath: string;
-    workspaceIdentity?: string;
-  }>;
+  agentWarmupTargets?: HostStartupWorkspaceTarget[];
   agentSpawnFallbackCwd?: string;
   remoteAssets?: RemoteAssetDirs;
   /** Main 解析后的 ZCode Built-in Provider Config 路径；Host/Services 不感知 Electron 安装布局。 */
@@ -251,6 +249,8 @@ export function spawnHostProcess(
   const child = electronUtilityProcess.fork(hostModulePath, [], {
     serviceName: formatZCodeHostProcessName(label),
     execArgv,
+    // 原因：utilityProcess 默认继承 stdio，首状态前的异常无法进入下方已有日志转发与诊断。
+    stdio: "pipe",
     env: {
       ...buildHostProcessEnv(dependencies.hostProcessLocalEnv),
       ...buildHostE2ECoverageEnv(),

@@ -12,6 +12,7 @@ import { spawnCancellableStep, startStepExecution } from "./e2e-step-process.mjs
 import { loadE2ELocalEnv } from "./e2e-local-env.mjs";
 import {
   FORK_DEFERRED_E2E_SPECS,
+  OMP_DEFAULT_E2E_SPECS,
   hasRequiredSshE2EEnvironment,
   isSshFormalSpec,
   isTemporarilyExcludedFormalSpec,
@@ -123,11 +124,7 @@ export function listDefaultFormalE2ESpecs(desktopDir, env = process.env) {
   };
   visit(e2eDir);
   if (env.ZCODE_AGENT_SERVER_COMMAND?.trim()) {
-    specs.push(
-      "./test/e2e/omp-app-server.e2e.ts",
-      "./test/e2e/omp-subagents.e2e.ts",
-      "./test/e2e/omp-workflows.e2e.ts",
-    );
+    specs.push(...OMP_DEFAULT_E2E_SPECS);
   }
   return specs;
 }

@@ -1,3 +1,4 @@
+import { ZCODE_PRODUCT_FLAVOR } from "@zcode/shared";
 import {
   conversationShareErrorEnvelopeSchema,
   classifyConversationShareError,
@@ -67,7 +68,7 @@ export function buildShareImportDeepLink(shareCode: string): string {
   if (!isSafeConversationShareCode(shareCode)) {
     throw new TypeError("Invalid conversation share code");
   }
-  return `zcode://share/import?code=${encodeURIComponent(shareCode)}`;
+  return `${ZCODE_PRODUCT_FLAVOR === "preview" ? "ompcode-preview" : "ompcode"}://share/import?code=${encodeURIComponent(shareCode)}`;
 }
 
 export interface ConversationSharePreviewClientOptions {

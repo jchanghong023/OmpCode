@@ -4,7 +4,7 @@
  */
 export const ompConfigurationModule = {
   id: "omp-configuration",
-  requires: ["shared", "ui"],
+  requires: ["shared", "ui", "services", "omp-index-protocol"],
   provides: ["omp-configuration"],
   publicEntrypoints: ["contract.ts", "module.ts"],
 } as const;
@@ -13,3 +13,9 @@ export const ompConfigurationModule = {
 export { OmpConfigurationController } from "./controller.js";
 export { OmpConfigurationPanel } from "./OmpConfigurationPanel.js";
 export { OmpConfigurationEntry } from "./OmpConfigurationEntry.js";
+export { TeamPage, OmpWorkspaceProfiles, type TeamPageProps } from "./TeamPage.js";
+export { WikiPage } from "./WikiPage.js";
+export { RepoPage } from "./RepoPage.js";
+export { useTeamRuns } from "./useTeamRuns.js";
+export { TeamChatCard, TeamRunView } from "./TeamRunView.js";
+export { OmpTeamRunSidePane } from "./OmpTeamRunSidePane.js";

@@ -29,7 +29,6 @@ import { normalizeSubagentModelSelection } from "./subagentModelSelection.js";
 import { serializeSubagentMarkdown, parseSubagentMarkdown } from "./subagentMarkdown.js";
 import {
   resolveSubagentStateFile,
-  resolveUserHomeDir,
   resolveUserSubagentRoot,
   resolveWorkspaceSubagentRoot,
   resolveZCodeStorageRoot,
@@ -407,7 +406,7 @@ async function discoverPluginAgents(params: {
 
 async function readPluginConfig(options?: SubagentStorageOptions): Promise<PluginConfigSummary> {
   try {
-    const configPath = join(resolveUserHomeDir(options), ".zcode", "cli", "config.json");
+    const configPath = join(await resolveZCodeStorageRoot(options), "cli", "config.json");
     const raw = await readFile(configPath, "utf-8");
     const parsed = JSON.parse(raw) as unknown;
     if (!isRecord(parsed)) return { enabledPlugins: {}, suppressedBuiltins: [] };

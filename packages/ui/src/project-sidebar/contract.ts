@@ -39,6 +39,8 @@ export type {
   TaskGroup,
   TaskGroupColor,
   TaskGroupStructure,
+  TaskGroupDomainStructure,
+  TaskGroupWorkspaceTarget,
   GroupTaskRef,
   GroupNode,
   MoveGroupNode,
@@ -145,6 +147,8 @@ export interface ProjectSidebarProps {
   onOpenPluginStore?: () => void;
   automationsActive?: boolean;
   pluginStoreActive?: boolean;
+  onOpenOmpPage?: (page: "wiki" | "repo" | "team") => void;
+  ompPageActive?: "wiki" | "repo" | "team";
   onFileTreeOpenChange?: (open: boolean) => void;
   onWebRemoteTaskOpen?: (options: { crossWorkspace: boolean }) => void;
   onWebRemoteTaskSwitchingChange?: (switching: boolean) => void;

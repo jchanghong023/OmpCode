@@ -24,6 +24,8 @@ export type V4VisibleSlashCommand =
 
 export interface V4VisibleSlashCommandParseOptions {
   contextAttachmentCount?: number;
+  /** 仅由 OMP 启动事实和实际目录提供；null 表示原生已知但目录尚不可判定，旧 Agent 不传。 */
+  nativeCommandNames?: readonly string[] | null;
 }
 
 export interface SelectionSideSlashCommand {
@@ -40,11 +42,26 @@ export interface SelectionSideSlashCommandParseOptions {
 
 const GOAL_COMMAND_RE = /^\/(?:goal|target)(?:\s|$)/i;
 
+/** 只识别名称归属，不解析参数；原生目录未就绪时保留 slash 输入交给原生判定。 */
+export function isRegisteredNativeSlashCommand(
+  content: string,
+  nativeCommandNames: readonly string[] | null = [],
+): boolean {
+  const name = /^\s*\/([^\s]+)/.exec(content)?.[1]?.toLowerCase();
+  return (
+    name !== undefined &&
+    (nativeCommandNames === null ||
+      nativeCommandNames.some((candidate) => candidate.replace(/^\/+/, "").toLowerCase() === name))
+  );
+}
+
 export function parseV4VisibleSlashCommand(
   content: string,
   attachments: readonly unknown[] = [],
   options: V4VisibleSlashCommandParseOptions = {},
 ): V4VisibleSlashCommand | null {
+  // Bug 原因：旧 goal/compact parser 会拒绝合法 OMP 子操作并丢弃参数；已注册命令交回原生。
+  if (isRegisteredNativeSlashCommand(content, options.nativeCommandNames)) return null;
   const displayText = content.trim();
   if (!displayText.startsWith("/")) return null;
   const match = /^\/([^\s]+)(?:\s+([\s\S]*))?$/.exec(displayText);

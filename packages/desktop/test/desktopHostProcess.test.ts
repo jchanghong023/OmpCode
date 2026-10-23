@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HostMessageTypes, HostResponseTypes } from "@zcode/shared";
 import {
   disposeHostProcess,
@@ -20,6 +20,11 @@ const electronMock = vi.hoisted(() => ({
   fork: vi.fn(),
   isPackaged: false,
 }));
+
+beforeEach(() => {
+  // 该消息分发夹具不做可执行文件发现；显式命令避免依赖真实 Main 的异步启动准备。
+  vi.stubEnv("ZCODE_AGENT_SERVER_COMMAND", process.execPath);
+});
 
 afterEach(() => {
   vi.unstubAllEnvs();

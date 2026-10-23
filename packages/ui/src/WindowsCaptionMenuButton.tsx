@@ -1,6 +1,5 @@
-import { DesktopCommandIds } from "@zcode/shared";
-import type { UpdateStatePayload } from "@zcode/shared";
-import { useCallback, useEffect, useState } from "react";
+import { DesktopCommandIds, type UpdateStatePayload } from "@zcode/shared";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useFeedbackStore } from "@/feedback/feedbackStore.js";
 import { usePlatform } from "@/hooks/usePlatform.js";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
@@ -22,14 +21,77 @@ import {
 import { WINDOWS_CAPTION_CONTROL_CLASS } from "@/windowCaptionControls.js";
 import { ChevronDownIcon } from "lucide-react";
 
-import {
-  shouldShowDesktopUpdateEntry,
-  getUpdateMenuLabelId,
-  getUpdateMenuLabelValues,
-} from "@/lib/desktopUpdateMenu.js";
-export { shouldShowDesktopUpdateEntry } from "@/lib/desktopUpdateMenu.js";
-
 const WINDOWS_CAPTION_MENU_ALIGN_OFFSET = -12;
+
+export function useDesktopUpdateMenu(isDesktop: boolean) {
+  const platform = usePlatform();
+  // 无 fork feed 时仍保留说明入口；main 负责拒绝联网/安装并返回不可用原因。
+  const visible = isDesktop;
+  const [state, setState] = useState<UpdateStatePayload | null>(null);
+
+  const activeRef = useRef(false);
+  const updateGeneration = useRef(0);
+  const refresh = useCallback(async () => {
+    if (!visible || !activeRef.current || !platform.getUpdateState) return;
+    const generation = ++updateGeneration.current;
+    try {
+      const payload = await platform.getUpdateState();
+      if (activeRef.current && generation === updateGeneration.current) setState(payload);
+    } catch (error) {
+      logger.warn("[HelpMenu] 同步自动更新状态失败", { error });
+    }
+  }, [platform, visible]);
+
+  useEffect(() => {
+    if (!visible) return;
+    activeRef.current = true;
+    // 原因：两个菜单共用同一订阅所有者；晚到的拉取结果不能覆盖更新事件或新请求。
+    const dispose = platform.onUpdateStateChanged?.((payload) => {
+      updateGeneration.current++;
+      if (activeRef.current) setState(payload);
+    });
+    void refresh();
+    return () => {
+      activeRef.current = false;
+      updateGeneration.current++;
+      dispose?.();
+    };
+  }, [platform, visible, refresh]);
+
+  let labelId = "titleBar.menu.help.checkForUpdates";
+  let labelValues: Record<string, string> | undefined;
+  switch (state?.kind) {
+    case "checking":
+      labelId = "desktopMenu.help.checkingForUpdates";
+      break;
+    case "update-available":
+      labelId = "desktopMenu.help.updateAvailableVersion";
+      labelValues = { version: state.version };
+      break;
+    case "download-progress":
+      labelId = "desktopMenu.help.downloadingUpdateProgress";
+      labelValues = { progress: state.progress };
+      break;
+    case "update-downloaded":
+      labelId = "desktopMenu.help.restartToUpdate";
+      labelValues = { version: state.version };
+      break;
+  }
+
+  return {
+    visible,
+    disabled: state?.enabled === false,
+    labelId,
+    labelValues,
+    refresh,
+    checkForUpdates: () => {
+      void (async () => {
+        await platform.executeDesktopCommand(DesktopCommandIds.CheckForUpdates);
+        await refresh();
+      })();
+    },
+  };
+}
 
 export function WindowsCaptionMenuButton({
   readOnlyReason,
@@ -65,26 +127,12 @@ export function WindowsCaptionMenuButton({
     intl,
     openSubmit: openFeedbackSubmit,
   });
-  const [updateState, setUpdateState] = useState<UpdateStatePayload | null>(null);
+  const updateMenu = useDesktopUpdateMenu(true);
   const [stdioTapDevState, setStdioTapDevState] = useState({
     enabled: false,
     visible: false,
   });
   const [showCommunityMenuItem, setShowCommunityMenuItem] = useState(false);
-  const showDesktopUpdateEntry = shouldShowDesktopUpdateEntry();
-
-  const syncUpdateState = useCallback(async () => {
-    if (!platform.getUpdateState) {
-      return;
-    }
-
-    try {
-      const payload = await platform.getUpdateState();
-      setUpdateState(payload);
-    } catch (error) {
-      logger.warn("[WindowsCaptionMenuButton] 同步自动更新状态失败", { error });
-    }
-  }, [platform]);
 
   const syncStdioTapDevState = useCallback(async () => {
     if (!platform.getZCodeStdioTapDevState) {
@@ -102,16 +150,8 @@ export function WindowsCaptionMenuButton({
   }, [platform]);
 
   useEffect(() => {
-    if (showDesktopUpdateEntry) {
-      void syncUpdateState();
-    }
     void syncStdioTapDevState();
-    return showDesktopUpdateEntry
-      ? (platform.onUpdateStateChanged?.((payload) => {
-          setUpdateState(payload);
-        }) ?? (() => {}))
-      : undefined;
-  }, [platform, showDesktopUpdateEntry, syncStdioTapDevState, syncUpdateState]);
+  }, [syncStdioTapDevState]);
 
   useEffect(() => {
     let isCancelled = false;
@@ -147,14 +187,7 @@ export function WindowsCaptionMenuButton({
   const handleExecuteDesktopCommand = (
     command: (typeof DesktopCommandIds)[keyof typeof DesktopCommandIds],
   ) => {
-    void (async () => {
-      await platform.executeDesktopCommand(command);
-      if (command === DesktopCommandIds.CheckForUpdates) {
-        // Bugfix: 这个 Windows 合并菜单才是截图里的入口。
-        // 点击后菜单会关闭，重新打开前主动拉取 main 中的 updater 状态，避免一直显示静态“检查更新”。
-        await syncUpdateState();
-      }
-    })();
+    void platform.executeDesktopCommand(command);
   };
 
   const handleToggleStdioTapDevProxy = () => {
@@ -168,9 +201,7 @@ export function WindowsCaptionMenuButton({
     <DropdownMenu
       onOpenChange={(open) => {
         if (open) {
-          if (showDesktopUpdateEntry) {
-            void syncUpdateState();
-          }
+          void updateMenu.refresh();
           void syncStdioTapDevState();
         }
       }}
@@ -245,17 +276,9 @@ export function WindowsCaptionMenuButton({
         <DropdownMenuItem onSelect={() => handleExecuteDesktopCommand(DesktopCommandIds.ShowAbout)}>
           {intl.formatMessage({ id: "titleBar.menu.help.about" })}
         </DropdownMenuItem>
-        {showDesktopUpdateEntry ? (
-          <DropdownMenuItem
-            disabled={updateState?.enabled === false}
-            onSelect={() => handleExecuteDesktopCommand(DesktopCommandIds.CheckForUpdates)}
-          >
-            {intl.formatMessage(
-              { id: getUpdateMenuLabelId(updateState) },
-              getUpdateMenuLabelValues(updateState),
-            )}
-          </DropdownMenuItem>
-        ) : null}
+        <DropdownMenuItem disabled={updateMenu.disabled} onSelect={updateMenu.checkForUpdates}>
+          {intl.formatMessage({ id: updateMenu.labelId }, updateMenu.labelValues)}
+        </DropdownMenuItem>
         <DropdownMenuItem
           onSelect={() => handleExecuteDesktopCommand(DesktopCommandIds.OpenResourceManager)}
         >

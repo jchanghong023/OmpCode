@@ -6,10 +6,11 @@ import {
   type OmpSaveReceipt,
   type OmpTeamConfig,
   type OmpTeamModels,
+  type OmpTeamConfigureRequest,
   type ZCodeSessionConfigureParams,
   type ZCodeSessionConfigureResult,
 } from "@zcode/shared";
-import type { OmpConfigurationService, OmpConfigurationTarget } from "./contract.js";
+import type { OmpConfigurationPanelTarget, OmpConfigurationService } from "./contract.js";
 
 export type TeamDraftMember = OmpModelRef | { rawSelector: string };
 /** Local messages are resolved by the view; backend messages remain opaque data. */
@@ -24,6 +25,7 @@ export type OmpConfigurationMessage =
         | "omp.configuration.saveIncomplete"
         | "omp.configuration.roleSaved"
         | "omp.configuration.temporaryModelSwitched"
+        | "omp.configuration.profileRestartRequired"
         | "omp.configuration.connectionChanged";
       values?: Record<string, string | number>;
     };
@@ -45,6 +47,7 @@ export interface OmpConfigurationState {
   externalChange: boolean;
   busy: boolean;
   supported: boolean | null;
+  roleWritesBlocked: boolean;
   error: OmpConfigurationMessage | null;
   errorCode: string | null;
   notice: OmpConfigurationMessage | null;
@@ -76,7 +79,7 @@ function errorDetails(error: unknown): {
 /** One controller per mounted target. No accepted/persisted truth is owned here. */
 export class OmpConfigurationController {
   readonly #service: OmpConfigurationService;
-  readonly #target: OmpConfigurationTarget;
+  readonly #target: OmpConfigurationPanelTarget;
   readonly #onTemporaryModelSelected?: (model: OmpModelRef) => void;
   readonly #listeners = new Set<() => void>();
   readonly #requestedRoleIds = new Set<string>();
@@ -99,6 +102,7 @@ export class OmpConfigurationController {
     externalChange: false,
     busy: false,
     supported: null,
+    roleWritesBlocked: false,
     error: null,
     errorCode: null,
     notice: null,
@@ -107,7 +111,7 @@ export class OmpConfigurationController {
   };
   constructor(
     service: OmpConfigurationService,
-    target: OmpConfigurationTarget,
+    target: OmpConfigurationPanelTarget,
     onTemporaryModelSelected?: (model: OmpModelRef) => void,
   ) {
     this.#service = service;
@@ -125,7 +129,19 @@ export class OmpConfigurationController {
     for (const listener of this.#listeners) listener();
   }
   #request(params: ZCodeSessionConfigureParams): Promise<ZCodeSessionConfigureResult> {
-    return this.#service.configureOmpSession({ ...this.#target, ...params });
+    return this.#service.configureOmpSession({
+      workspacePath: this.#target.workspacePath,
+      workspaceIdentity: this.#target.workspaceIdentity,
+      ...params,
+    });
+  }
+  #teamRequest(request: OmpTeamConfigureRequest): Promise<ZCodeSessionConfigureResult> {
+    // Team 配置属于执行端全局 profile，不能因已有聊天而绕回 session/configure。
+    return this.#service.configureOmpTeam({
+      workspacePath: this.#target.workspacePath,
+      workspaceIdentity: this.#target.workspaceIdentity,
+      request,
+    });
   }
   #current(generation: number): boolean {
     return !this.#disposed && generation === this.#generation;
@@ -134,7 +150,18 @@ export class OmpConfigurationController {
     if (this.#state.team && team.profile !== this.#state.team.profile) {
       // An attachment/profile change invalidates drafts instead of transplanting them.
       this.#generation++;
+      this.#requestedRoleIds.clear();
       this.#patch({
+        team: null,
+        roles: [],
+        models: [],
+        members: undefined,
+        expectedRevision: null,
+        roleDrafts: {},
+        dirty: false,
+        externalChange: false,
+        notice: null,
+        receipt: null,
         error: { id: "omp.configuration.profileChanged" },
         requiresReadback: true,
         busy: false,
@@ -161,14 +188,29 @@ export class OmpConfigurationController {
           }),
     });
   }
+  async #readProfileGuard(generation: number): Promise<boolean> {
+    if (!this.#service.getOmpProfiles) return true;
+    const sequence = this.#readSequence;
+    // preference 已保存不代表旧进程已切换；读取完成前也不能向旧 profile 保存角色。
+    this.#patch({ roleWritesBlocked: true });
+    const profile = await this.#service.getOmpProfiles({
+      workspacePath: this.#target.workspacePath,
+      workspaceIdentity: this.#target.workspaceIdentity,
+    });
+    if (!this.#current(generation) || sequence !== this.#readSequence) return false;
+    const blocked = profile.pending || profile.selectedProfile !== profile.activeProfile;
+    this.#patch({ roleWritesBlocked: blocked });
+    return !blocked;
+  }
   async refresh(): Promise<void> {
     const generation = this.#generation;
     const sequence = ++this.#readSequence;
     try {
-      const result = await this.#request({
-        sessionId: this.#target.sessionId,
-        operation: "get_team_config",
-      });
+      if (this.#service.getOmpProfiles) {
+        await this.#readProfileGuard(generation);
+        if (!this.#current(generation) || sequence !== this.#readSequence) return;
+      }
+      const result = await this.#teamRequest({ operation: "get_team_config" });
       if (
         !this.#current(generation) ||
         sequence !== this.#readSequence ||
@@ -177,12 +219,15 @@ export class OmpConfigurationController {
         return;
       this.#applyTeam(result.data);
       if (!this.#current(generation)) return;
+      const sessionId = this.#target.sessionId;
       const [roles, models] = await Promise.all([
-        this.#request({ sessionId: this.#target.sessionId, operation: "get_model_roles" }),
-        this.#request({ sessionId: this.#target.sessionId, operation: "get_team_models" }),
+        sessionId
+          ? this.#request({ sessionId, operation: "get_model_roles" })
+          : Promise.resolve(null),
+        this.#teamRequest({ operation: "get_team_models" }),
       ]);
       if (!this.#current(generation) || sequence !== this.#readSequence) return;
-      if (roles.operation === "get_model_roles") {
+      if (roles?.operation === "get_model_roles" && sessionId) {
         const present = new Set(roles.data.roles.map((role) => role.roleId));
         // 自定义 role 可能不在目录中，必须定向重读，不能沿用旧事实。
         const missing = new Set([
@@ -190,13 +235,15 @@ export class OmpConfigurationController {
           ...Object.keys(this.#state.roleDrafts),
         ]);
         const additional = await Promise.all(
-          [...missing].filter((roleId) => !present.has(roleId)).map((roleId) =>
-            this.#request({
-              sessionId: this.#target.sessionId,
-              operation: "get_model_roles",
-              roleId,
-            }),
-          ),
+          [...missing]
+            .filter((roleId) => !present.has(roleId))
+            .map((roleId) =>
+              this.#request({
+                sessionId,
+                operation: "get_model_roles",
+                roleId,
+              }),
+            ),
         );
         if (!this.#current(generation) || sequence !== this.#readSequence) return;
         for (const result of additional) {
@@ -210,7 +257,7 @@ export class OmpConfigurationController {
       }
       this.#patch({
         requiresReadback: false,
-        ...(roles.operation === "get_model_roles"
+        ...(roles?.operation === "get_model_roles"
           ? {
               roles: roles.data.roles,
               externalChange:
@@ -240,8 +287,7 @@ export class OmpConfigurationController {
       return;
     }
     try {
-      const result = await this.#request({
-        sessionId: this.#target.sessionId,
+      const result = await this.#teamRequest({
         operation: "get_team_models",
         query,
       });
@@ -284,8 +330,7 @@ export class OmpConfigurationController {
     const { clientRevision, members } = this.#state;
     if (members === undefined) return;
     try {
-      const result = await this.#request({
-        sessionId: this.#target.sessionId,
+      const result = await this.#teamRequest({
         operation: "get_team_config",
         preview: { clientRevision, members },
       });
@@ -308,6 +353,7 @@ export class OmpConfigurationController {
   }
   async saveTeam(): Promise<void> {
     const { members, expectedRevision, busy, requiresReadback } = this.#state;
+    if (this.#state.roleWritesBlocked) return;
     if (
       members === undefined ||
       busy ||
@@ -326,8 +372,12 @@ export class OmpConfigurationController {
     this.#readSequence++;
     this.#patch({ busy: true, error: null, receipt: null });
     try {
-      const result = await this.#request({
-        sessionId: this.#target.sessionId,
+      if (this.#service.getOmpProfiles && !(await this.#readProfileGuard(generation))) {
+        if (this.#current(generation))
+          this.#patch({ error: { id: "omp.configuration.profileRestartRequired" } });
+        return;
+      }
+      const result = await this.#teamRequest({
         operation: "set_team_config",
         scope: "user",
         expectedRevision,
@@ -387,14 +437,21 @@ export class OmpConfigurationController {
     }
   }
   async saveRole(roleId: string): Promise<void> {
+    const sessionId = this.#target.sessionId;
+    if (!sessionId) return;
     const draft = this.#state.roleDrafts[roleId];
     if (!draft || this.#state.busy || this.#state.requiresReadback) return;
     const generation = this.#generation;
     this.#readSequence++;
     this.#patch({ busy: true, error: null });
     try {
+      if (this.#service.getOmpProfiles && !(await this.#readProfileGuard(generation))) {
+        if (this.#current(generation))
+          this.#patch({ error: { id: "omp.configuration.profileRestartRequired" } });
+        return;
+      }
       const result = await this.#request({
-        sessionId: this.#target.sessionId,
+        sessionId,
         operation: "set_model_role",
         roleId,
         scope: "user",
@@ -432,12 +489,14 @@ export class OmpConfigurationController {
     this.#disposed = false;
   }
   async switchTemporaryModel(model: OmpModelRef): Promise<void> {
-    if (this.#state.busy) return;
+    const sessionId = this.#target.sessionId;
+    if (!sessionId || this.#state.busy) return;
     const generation = this.#generation;
     this.#patch({ busy: true, error: null });
     try {
       await this.#service.setModel({
         ...this.#target,
+        sessionId,
         model: { providerId: model.provider, modelId: model.modelId },
         persistAsWorkspaceLastUsed: false,
       });
@@ -452,10 +511,12 @@ export class OmpConfigurationController {
     }
   }
   async addRole(roleId: string): Promise<void> {
+    const sessionId = this.#target.sessionId;
+    if (!sessionId) return;
     const generation = this.#generation;
     try {
       const result = await this.#request({
-        sessionId: this.#target.sessionId,
+        sessionId,
         operation: "get_model_roles",
         roleId,
       });
@@ -489,6 +550,17 @@ export class OmpConfigurationController {
     this.#generation++;
     this.#readSequence++;
     this.#patch({
+      // 断线/重启后旧 profile 的草稿和成功提示不能进入新 runtime；必须重新读取。
+      team: null,
+      roles: [],
+      models: [],
+      members: undefined,
+      expectedRevision: null,
+      roleDrafts: {},
+      dirty: false,
+      externalChange: false,
+      notice: null,
+      receipt: null,
       requiresReadback: true,
       busy: false,
       preview: null,

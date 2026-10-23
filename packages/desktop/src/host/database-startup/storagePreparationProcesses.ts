@@ -3,9 +3,17 @@ import { realpath } from "node:fs/promises";
 import { isAbsolute, resolve as resolvePath } from "node:path";
 import { Worker } from "node:worker_threads";
 import {
+  applyOmpProfileToCommand,
+  createSettingService,
+  getTasksIndexDatabasePath,
+} from "@zcode/services/node";
+import {
   type DatabaseMigrationFacts,
   zcodeStoragePreparationFrameSchema,
+  ompStartupProfileNotificationSchema,
+  type OmpStartupProfileParams,
   type DatabaseStartupState,
+  type HostStartupWorkspaceTarget,
 } from "@zcode/shared";
 import {
   resolveDefaultZCodeAgentCommand,
@@ -90,6 +98,7 @@ export function prepareHostStorage(
 /** Prepare the selected runtime through its explicit Worker or executable boundary. */
 export async function prepareSessionStorage(options: {
   cwd: string;
+  workspaceTarget?: HostStartupWorkspaceTarget;
   env?: Record<string, string>;
   signal: AbortSignal;
   report: (
@@ -99,18 +108,44 @@ export async function prepareSessionStorage(options: {
   preparedPaths?: Set<string>;
   observePath: (path: string) => Promise<void>;
 }): Promise<void> {
-  const command = resolveDefaultZCodeAgentCommand({
-    workspacePath: options.cwd,
-    workspaceKey: options.cwd,
+  const target = options.workspaceTarget ?? { workspacePath: options.cwd };
+  const workspaceKey = target.workspaceIdentity?.trim() || target.workspacePath;
+  const settings = await createSettingService().get();
+  const inheritedRoot = settings.ompProfileLaunchRoots?.[workspaceKey];
+  const spawnEnv = {
+    ...options.env,
+    ...(inheritedRoot ? { OMP_CONFIG_ROOT: inheritedRoot } : {}),
+  };
+  const resolvedCommand = resolveDefaultZCodeAgentCommand({
+    ...target,
+    workspaceKey,
     presentationSurface: "desktop",
-    env: { ...process.env, ...options.env },
+    env: { ...process.env, ...spawnEnv },
   });
+  // cwd 可能已回退到宿主目录，保存的 profile 仍必须按原始目标与正常启动同键读取。
+  const profile = settings.ompProfileSelections?.[workspaceKey];
+  const command = resolvedCommand
+    ? applyOmpProfileToCommand(resolvedCommand, profile)
+    : resolvedCommand;
+  if (
+    inheritedRoot &&
+    command?.env?.OMP_CONFIG_ROOT &&
+    resolvePath(command.env.OMP_CONFIG_ROOT) !== resolvePath(inheritedRoot)
+  )
+    throw Object.assign(
+      new Error("Explicit launch root conflicts with inherited workspace profile root"),
+      { code: "omp.profileRootPinned" },
+    );
   if (!command?.supportsStorageStartup || !command.storagePreparation)
     throw statusError("unsupported_runtime");
   options.signal.throwIfAborted();
   const preparation = command.storagePreparation;
   // 与正常启动一致：清洗继承环境后合入可信补丁，命令环境优先。
-  const env = buildZCodeAgentCommandEnv(process.env, { ...options.env, ...command.env });
+  const env = buildZCodeAgentCommandEnv(
+    process.env,
+    { ...spawnEnv, ...command.env },
+    target.workspaceIdentity,
+  );
   const cwd = command.cwd ?? options.cwd;
   const completion = Promise.withResolvers<void>();
   const spawnedAt = Date.now();
@@ -153,6 +188,8 @@ export async function prepareSessionStorage(options: {
     let prepared = false;
     let pathReceived = false;
     let preparedPath: string | undefined;
+    let preparedIndexPath: string | undefined;
+    let profileFacts: OmpStartupProfileParams | undefined;
     let pathConfirmed = false;
     let reused = false;
     let state:
@@ -234,6 +271,7 @@ export async function prepareSessionStorage(options: {
         failure ??= options.signal.reason ?? statusError("transport_closed");
       if (code === 0 && prepared && !failure && buffer.length === 0) {
         if (preparedPath) options.preparedPaths?.add(preparedPath);
+        if (preparedIndexPath) options.preparedPaths?.add(preparedIndexPath);
         resolve();
       } else reject(failure ?? statusError("transport_closed"));
     };
@@ -267,12 +305,37 @@ export async function prepareSessionStorage(options: {
       try {
         if (prepared || failure || Buffer.byteLength(line, "utf8") > 65536)
           throw statusError("transport_closed");
-        const frame = zcodeStoragePreparationFrameSchema.parse(JSON.parse(line));
+        const raw: unknown = JSON.parse(line);
+        const profile = ompStartupProfileNotificationSchema.safeParse(raw);
+        if (profile.success) {
+          if (profileFacts || pathReceived || !isAbsolute(profile.data.params.configRoot))
+            throw statusError("transport_closed");
+          profileFacts = profile.data.params;
+          return;
+        }
+        const frame = zcodeStoragePreparationFrameSchema.parse(raw);
         if (frame.method === "startup/storagePath") clearTimeout(firstStateTimer);
         if (frame.method === "startup/storagePath") {
+          if (!profileFacts) throw statusError("unsupported_runtime");
+          const indexPath = getTasksIndexDatabasePath({
+            configRoot: profileFacts.configRoot,
+            profileId: profileFacts.activeProfile,
+          });
           if (pathReceived || !isAbsolute(frame.params.path)) throw statusError("transport_closed");
           pathReceived = true;
           void (async () => {
+            // 原生进程确认的实际 root/profile 同时决定 Host 索引库，不能拿 pending 偏好选库。
+            if (!options.preparedPaths?.has(indexPath)) {
+              await options.observePath(indexPath);
+              await prepareHostStorage(
+                indexPath,
+                (phase, migration) =>
+                  options.report(phase, { databaseId: "tasks-index", migration }),
+                options.signal,
+              );
+              // 原因：取消/进程清理未完成时不能发布本 attempt 的成功 memo；实际库无需回滚。
+              preparedIndexPath = indexPath;
+            }
             // 仅复用同一次准备中已成功关闭的真实库，不能按不同 cwd 误判为不同数据库。
             preparedPath = await realpath(frame.params.path).catch(
               (error: NodeJS.ErrnoException) => {

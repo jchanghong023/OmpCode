@@ -22,10 +22,16 @@ const incomingAttachments = new Map<
 >();
 
 /** 读取编辑器当前值，避免把尚未到持久化时点的文字丢在旧工作区。 */
-export function registerV4ComposerDraftReader(workspaceKey: string, read: DraftReader): () => void {
-  draftReaders.set(workspaceKey, read);
+export function registerV4ComposerDraftReader(
+  workspaceKey: string,
+  read: DraftReader,
+  storageScope?: string | null,
+): () => void {
+  if (!storageScope) return () => {};
+  const key = JSON.stringify([storageScope, workspaceKey]);
+  draftReaders.set(key, read);
   return () => {
-    if (draftReaders.get(workspaceKey) === read) draftReaders.delete(workspaceKey);
+    if (draftReaders.get(key) === read) draftReaders.delete(key);
   };
 }
 
@@ -33,19 +39,29 @@ export function captureV4ComposerDraftHandoff(
   workspacePath: string,
   workspaceIdentity?: string,
   clientNamespace = "desktop",
+  storageScope: string | null = null,
 ): ComposerDraftHandoff {
   const sourceWorkspaceKey = getWorkspaceKey(workspacePath, workspaceIdentity);
   // 重建 Root 后编辑器可能尚未挂载；交接回退也要读取同一客户端的项目草稿。
-  const scope = readComposerWorkspaceScope(workspacePath, workspaceIdentity, clientNamespace);
+  const scope = readComposerWorkspaceScope(
+    workspacePath,
+    workspaceIdentity,
+    clientNamespace,
+    storageScope,
+  );
   return {
     sourceWorkspaceKey,
-    ...(draftReaders.get(sourceWorkspaceKey)?.() ?? {
+    ...((storageScope
+      ? draftReaders.get(JSON.stringify([storageScope, sourceWorkspaceKey]))?.()
+      : undefined) ?? {
       draft: readV4ComposerDraft(workspacePath, workspaceIdentity, V4_DRAFT_SCOPE_ROOT, scope) ?? {
         text: "",
       },
-      attachments: readComposerAttachmentScope(
-        `${sourceWorkspaceKey}\0${V4_DRAFT_SCOPE_ROOT}${scope ? `:${composerScopeKey(scope)}` : ""}`,
-      ),
+      attachments: storageScope
+        ? readComposerAttachmentScope(
+            `${sourceWorkspaceKey}\0${V4_DRAFT_SCOPE_ROOT}${scope ? `:${composerScopeKey(scope)}` : ""}`,
+          )
+        : [],
     }),
   };
 }
@@ -56,8 +72,13 @@ export function stageV4ComposerDraftAttachments(
   workspaceIdentity: string | undefined,
   draftFocusVersion: number,
   handoff: ComposerDraftHandoff,
+  storageScope: string | null = null,
 ): void {
-  const targetKey = getWorkspaceKey(workspacePath, workspaceIdentity);
+  if (!storageScope) return;
+  const targetKey = JSON.stringify([
+    storageScope,
+    getWorkspaceKey(workspacePath, workspaceIdentity),
+  ]);
   // 同目录的新项目也有独立的附件 scope；显式创建交接不能因 cwd 相同而跳过。
   incomingAttachments.set(targetKey, { draftFocusVersion, attachments: handoff.attachments });
 }
@@ -65,9 +86,12 @@ export function stageV4ComposerDraftAttachments(
 export function consumeV4ComposerDraftAttachments(
   workspaceKey: string,
   draftFocusVersion: number,
+  storageScope: string | null = null,
 ): readonly ChatComposerAttachment[] | null {
-  const pending = incomingAttachments.get(workspaceKey);
-  incomingAttachments.delete(workspaceKey);
+  if (!storageScope) return null;
+  const key = JSON.stringify([storageScope, workspaceKey]);
+  const pending = incomingAttachments.get(key);
+  incomingAttachments.delete(key);
   // 目标草稿若已换代，晚挂载的输入区不能接收旧命令。
   return pending?.draftFocusVersion === draftFocusVersion ? pending.attachments : null;
 }

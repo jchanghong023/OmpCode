@@ -1,3 +1,4 @@
+import type { OmpIndexMethod } from "@zcode/shared/omp-indexes";
 import { ZCodeStorageStartupGate } from "#src/zcode-agent/zcodeStorageStartupGate.js";
 import { Emitter } from "@zcode/rpc";
 import type { IDisposable } from "@zcode/rpc";
@@ -13,7 +14,19 @@ import type { z } from "zod";
 import type { ZCodeProtocolTransport } from "./zcodeProtocolTransport.js";
 
 /** 客户端可发的方法名：旧 zcodeProtocolMethods + v4/*（M3 起并存，M5 波次 2 收敛为 v4）。 */
-export type ZCodeProtocolClientMethod = ZCodeProtocolMethod | V4Method;
+export type ZCodeProtocolClientMethod =
+  | ZCodeProtocolMethod
+  | V4Method
+  | "skills/manage"
+  | "omp/team"
+  | "omp/team/configure"
+  | "omp/tan/start"
+  | "omp/tan/list"
+  | "omp/tan/stop"
+  | "omp/profiles/list"
+  | "omp/profiles/prepareSwitch"
+  | "omp/profiles/cancelSwitch"
+  | OmpIndexMethod;
 
 interface ZCodeProtocolClientOptions {
   requireStorageStartup?: boolean;
@@ -95,6 +108,8 @@ export class ZCodeProtocolClient implements IDisposable {
     return this.disposed;
   }
 
+  /** Host-owned session routing admission, before allocating/sending a protocol request. */
+  requestAdmission?: (method: ZCodeProtocolClientMethod, params: unknown) => Promise<void>;
   readonly onNotification = this.notificationEmitter.event;
   readonly onRequest = this.requestEmitter.event;
   readonly onRequestTimeout = this.requestTimeoutEmitter.event;
@@ -163,6 +178,8 @@ export class ZCodeProtocolClient implements IDisposable {
     if (this.storageStartup.isWaiting) await this.storageStartup.wait(options?.signal);
     this.assertNotDisposed();
     options?.signal?.throwIfAborted();
+    await this.requestAdmission?.(method, params);
+    this.assertNotDisposed();
     const id = this.nextRequestId++;
     const requestKey = String(id);
     const requestTimeoutMs = options?.timeoutMs ?? this.requestTimeoutMs;

@@ -243,6 +243,27 @@ export interface OpenPlanDetailSideTabRequest {
   planFilePath?: string;
 }
 
+export interface OpenOmpTeamRunSideTabRequest {
+  parentSessionId: string;
+  jobId: string;
+  label?: string;
+}
+
+export interface OpenScopedOmpTeamRunSideTabRequest extends OpenOmpTeamRunSideTabRequest {
+  workspacePath: string;
+  workspaceIdentity?: string;
+  remoteSessionId?: string;
+}
+
+/** Native Team job identity is not a workflow run identity. Closing only drops this view. */
+export interface OmpTeamRunSidePaneTab extends OpenScopedOmpTeamRunSideTabRequest {
+  id: string;
+  type: "omp-team-run";
+  workspaceKey: string;
+  ownerTaskId: string;
+  openedAt?: number;
+}
+
 /**
  * workflow run 的详情页 tab。
  *
@@ -582,6 +603,7 @@ export type WorkspaceSidePaneTab =
   | SelectionSideChatPaneTab
   | PlanDetailSidePaneTab
   | PluginUiSidePaneTab
+  | OmpTeamRunSidePaneTab
   | WorkflowRunSidePaneTab
   | WorkflowRunDirectorySidePaneTab
   | WorkflowActorSessionSidePaneTab
@@ -1181,6 +1203,7 @@ export function isSidePaneTabVisibleInScope(
     case "selection-side-chat":
     case "plan-detail":
     case "plugin-ui":
+    case "omp-team-run":
     case "workflow-run":
     case "workflow-directory":
     case "workflow-actor-session":
@@ -1994,6 +2017,30 @@ export function openPlanDetailSidePane(
   return activateSidePaneTab(current, existing ? { ...existing, ...nextTab } : nextTab);
 }
 
+export function openOmpTeamRunSidePane(
+  current: WorkspaceSidePaneState | null,
+  options: OpenScopedOmpTeamRunSideTabRequest & { workspaceKey: string },
+): WorkspaceSidePaneState {
+  const id = [
+    "omp-team-run",
+    encodeSidePaneTabIdPart(options.workspaceKey),
+    encodeSidePaneTabIdPart(options.parentSessionId),
+    encodeSidePaneTabIdPart(options.jobId),
+  ].join(":");
+  const existing = current?.tabs.find(
+    (tab): tab is OmpTeamRunSidePaneTab => tab.type === "omp-team-run" && tab.id === id,
+  );
+  return activateSidePaneTab(current, {
+    ...existing,
+    ...options,
+    id,
+    type: "omp-team-run",
+    // 修复异步打开时被当前会话盖写归属的问题：归属只能来自原生 Team 的父会话。
+    ownerTaskId: options.parentSessionId,
+    openedAt: existing?.openedAt ?? Date.now(),
+  });
+}
+
 /**
  * 打开或复用一个 workflow run 详情 tab。
  *
@@ -2170,6 +2217,7 @@ export function selectSidePaneTabsForScope(
         tab.type === "subagent-directory" ||
         tab.type === "selection-side-chat" ||
         tab.type === "plan-detail" ||
+        tab.type === "omp-team-run" ||
         tab.type === "workflow-run" ||
         tab.type === "workflow-actor-session" ||
         tab.type === "workflow-workspace" ||

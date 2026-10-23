@@ -1,5 +1,6 @@
 import { flushSync } from "react-dom";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useShallow } from "zustand/react/shallow";
 import type {
   ProjectTree,
   ProjectTaskRef,
@@ -11,6 +12,9 @@ import { stabilizeProjectTree, applyProjectTaskActivities } from "@/project-side
 import { useBaseWorkspaceServices } from "@/hooks/useWorkspaceServices.js";
 import { useTabStore } from "@/store/TabStoreProvider.js";
 import { isWorkspaceTab } from "@/store/tabStore.js";
+import { useRemoteWorkspaceSessionStore } from "@/store/remoteWorkspaceSessionStore.js";
+import { resolveRemoteWorkspaceSessionIdForTarget } from "@/hooks/useResolvedRemoteWorkspaceSessionId.js";
+import { resolveWorkspaceServices } from "@/lib/workspaceServiceResolver.js";
 import { useZCodeSessionStore } from "@/store/zcodeSessionStore.js";
 import { useWorkspaceSessionsIndexItems } from "@/v4/useWorkspaceSessionsIndexItems.js";
 import { getTaskListRowActivity } from "@/v4/taskListRowActivity.js";
@@ -43,6 +47,13 @@ export function useProjectTree(isDesktop = false) {
   const directoryRevision = registry?.getDirectoryRevision() ?? 0;
   const sourceRevision = registry?.getSourceRevision() ?? 0;
   const tabs = useTabStore((state) => state.tabs);
+  const remoteState = useRemoteWorkspaceSessionStore(
+    useShallow((state) => ({
+      sessionsById: state.sessionsById,
+      sessionIdByWorkspaceIdentity: state.sessionIdByWorkspaceIdentity,
+      sessionIdByWorkspacePath: state.sessionIdByWorkspacePath,
+    })),
+  );
   const version = useZCodeSessionStore((state) =>
     Object.values(state.workspaces).reduce((n, workspace) => n + workspace.taskListVersion, 0),
   );
@@ -242,6 +253,72 @@ export function useProjectTree(isDesktop = false) {
   useEffect(() => {
     void refresh();
   }, [refresh, version, tabs, directoryRevision]);
+  const runtimeTargets = useMemo(() => {
+    const targets = new Map<
+      string,
+      { workspacePath: string; workspaceIdentity?: string; remoteSessionId?: string }
+    >();
+    for (const item of [...tabs.filter(isWorkspaceTab), ...tree.tasks]) {
+      const target = {
+        workspacePath: item.workspacePath,
+        workspaceIdentity: item.workspaceIdentity ?? undefined,
+        remoteSessionId:
+          resolveRemoteWorkspaceSessionIdForTarget({
+            ...item,
+            preferredRemoteSessionId:
+              "remoteSessionId" in item && typeof item.remoteSessionId === "string"
+                ? item.remoteSessionId
+                : undefined,
+            state: remoteState,
+          }) ?? undefined,
+      };
+      if (resolveWorkspaceServices({ ...item, ...target }, services, remoteState))
+        targets.set(
+          JSON.stringify([
+            target.workspaceIdentity || target.workspacePath,
+            target.remoteSessionId,
+          ]),
+          target,
+        );
+    }
+    return JSON.stringify([...targets.values()]);
+  }, [tabs, tree.tasks, services, remoteState]);
+  useEffect(() => {
+    const targets = JSON.parse(runtimeTargets) as Array<{
+      workspacePath: string;
+      workspaceIdentity?: string;
+      remoteSessionId?: string;
+    }>;
+    const agents = new Set(
+      targets.map(
+        (target) =>
+          resolveWorkspaceServices(target, services, remoteState)?.services.zcodeAgentService,
+      ),
+    );
+    const invalidate = (reload: boolean) => {
+      // 原因：旧域的目录行不能在原生 profile 换代后作为新域的未分组任务继续展示。
+      serial.current++;
+      reads.flight = null;
+      reads.dirty = false;
+      accepted.current = null;
+      setTree(EMPTY);
+      setLoading(true);
+      for (const pending of pendingCommits.current)
+        pending.finish(new Error("omp.storageScopeChanged"));
+      if (reload) void refresh();
+    };
+    const subscriptions = [...agents].flatMap((agent) => {
+      if (!agent) return [];
+      const restarted = agent.onAgentRuntimeRestarted(() => invalidate(true));
+      const lifecycle = agent.onAgentRuntimeLifecycle?.((event) =>
+        invalidate(event.state === "available"),
+      );
+      return lifecycle ? [restarted, lifecycle] : [restarted];
+    });
+    return () => {
+      for (const subscription of subscriptions) subscription.dispose();
+    };
+  }, [runtimeTargets, services, remoteState, reads, refresh]);
   const scopes = useMemo(() => {
     const byKey = new Map<string, { workspacePath: string; workspaceIdentity?: string }>();
     for (const task of tree.tasks) byKey.set(task.workspaceIdentity || task.workspacePath, task);

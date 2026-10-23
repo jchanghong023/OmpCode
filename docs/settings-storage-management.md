@@ -1,7 +1,7 @@
 # 存储管理（Storage Management）规划
 
-> Bash 输出优先写入系统 tmp，目录不可用时复用 `cli/exec`。本页统计仍仅覆盖现有 `.zcode` 数据根：
-> tmp 输出暂不计入占用数字，也不增加清理入口；历史及降级的 `cli/exec` 继续归入工具输出与临时缓存。
+> Bash 输出优先写入系统 tmp，目录不可用时复用 `cli/exec`。本页统计仅覆盖当前 OmpCode 应用数据根：
+> tmp 输出暂不计入占用数字，也不增加清理入口；应用根内的 `cli/exec` 继续归入工具输出与临时缓存。
 > 文件读取和打开入口使用实际输出路径，不受统计范围影响。路径合同见 `tmpdir-storage-paths-spec.md`。
 
 > 状态：**已实现（2026-09-10）**。裁决记录见 §8，实现落点见 §11。
@@ -13,34 +13,23 @@
 
 打开分区后立即开始计算 ZCode 的磁盘占用，展示：
 
-- 每块磁盘（卷）上 `.zcode` 占了多少空间；
+- 当前 OmpCode 应用数据根在所在磁盘（卷）上占了多少空间；
 - 每块磁盘里的数据按类别拆分（数据库、日志、轨迹……），每类可下钻看明细；
 - 可清理的类别（如模型调用轨迹）提供清理动作。
 
-### 1.2 历史包袱：数据根目录实际上有两个
+### 1.2 当前应用数据根与隔离边界
 
-App 允许设置「数据存储路径」（`setting.json.dataBaseDir`），但**只有 app 侧的 `v2` 跟着走**，agent 侧数据始终留在用户家目录。当前事实：
+路径由 `packages/services/src/paths.ts` 的 `getDataBaseDir()` 唯一提供，已经是完整应用根，
+不能再追加 `.zcode`。默认根为 `~/.ompcode`；有效 `OMP_CONFIG_ROOT` 对应的派生根规则见
+`fork.md` FORK-005。环境事实在启动时固定，不读取旧设置覆盖它，也不自动迁移数据。
 
-| 写入方                                         | 根目录解析                                                                                       | 是否跟随「数据存储路径」 | 代码                                                                             |
-| ---------------------------------------------- | ------------------------------------------------------------------------------------------------ | ------------------------ | -------------------------------------------------------------------------------- |
-| app services（host 进程）                      | `{dataBaseDir}/.zcode`，默认 `~/.zcode`                                                          | 是                       | `packages/services/src/paths.ts` `getZCodeDataRootDir()`                         |
-| 「数据存储路径」切换时的迁移                   | 只复制 `.zcode/v2`，且是复制不是移动                                                             | —                        | `packages/services/src/paths.ts` `copyDataDirectory()`                           |
-| zcode-cli（agent 进程）                        | `~/.zcode/cli/config.json` 的 `storage.dir`，默认 `~/.zcode`；app **不下发** `ZCODE_STORAGE_DIR` | 否                       | `apps/zcode-cli/packages/bootstrap/src/app/create-app.ts:184`                    |
-| 模型调用轨迹 model-io                          | 直接 `homedir()/.zcode/cli/{debug,rollout}`                                                      | 否（硬编码）             | `apps/zcode-cli/packages/adapters/src/model/runner-debug.ts` `getModelIOBaseDir` |
-| hooks 信任库 / subagents / skills / commands   | 读 `~/.zcode/cli/config.json` 的 `storage.dir`                                                   | 否                       | `packages/services/src/hooks/hooksService.ts:153-173` 等                         |
-| Computer Use Helper、日志导出对 cli 目录的引用 | `homedir()/.zcode/...`                                                                           | 否（硬编码）             | `packages/desktop/src/main/exportLogs.ts:34-48`                                  |
-| `v2/setting.json` 本身                         | 永远写在真实 HOME（bootstrap 文件）                                                              | 刻意不跟随               | `packages/services/src/setting/settingService.ts:36-46`                          |
-| GLM provider 的 workspace 配置目录             | `getDataBaseDir()/.zcode/cli/...`，与上面 CLI 读 `~/.zcode/cli` 两套口径并存                     | 是                       | `packages/services/src/paths.ts:295-299, 355-362`                                |
-| 轨迹查看器读 model-io                          | 同时扫 `homedir()` 与 `dataBaseDir` 两处                                                         | 两处都读                 | `packages/services/src/zcode-agent/modelTrajectoryFileTail.ts:16-22`             |
+存储管理只扫描、展示、定位和清理这个根，不追加 HOME 根，不扫描上游 `~/.zcode`、
+OMP 原生配置根或其他历史根。即使它们包含可清理类别匹配文件，也不读取或删除。
+根解析仍通过 `RootsResolverPort` 注入，desktop 和 clean 共用同一解析所有者。
 
-结论：存储管理必须同时扫描两个根：
-
-```text
-R1 = ~/.zcode                       （永远存在：cli/、agents/、computer-use/、旧 v2 副本……）
-R2 = {dataBaseDir}/.zcode           （仅在设置了数据存储路径且 ≠ HOME 时存在：v2/、workspace/、export-log/、feedback/……）
-```
-
-本期只**如实展示**两个根，不修复分裂本身；是否让 CLI 跟随 `dataBaseDir` 是独立设计决策（见 §8）。注意现有 E2E `conversation-session-configurable-data-directory.test.ts` 明确断言「切换后 `{custom}/.zcode/cli` 不存在、`~/.zcode/cli/db/db.sqlite` 仍在」，即这是当前有意保留的产品边界。
+验收：隔离 HOME，分别使用默认根与环境派生根，预置上游 `.zcode` 哨兵及本应用候选；
+真实扫描只能计入本应用文件，真实清理只能删除授权类别的本应用候选，上游目录及内容完全不变。
+既有类别、保护白名单、二次确认、取消及符号链接／越界保护保持不变。
 
 ### 1.3 真实机器目录普查（2026-09-10，开发机，总计 25 GB）
 
@@ -80,16 +69,16 @@ R2 = {dataBaseDir}/.zcode           （仅在设置了数据存储路径且 ≠ 
 
 目标：
 
-- 新增设置分区「存储管理」，打开即异步扫描两个数据根，按磁盘（卷）汇总并按类别拆分，扫描过程中展示进度。
+- 打开存储管理即异步扫描当前应用数据根，按磁盘（卷）汇总并按类别拆分，扫描过程中展示进度。
 - 每个类别可下钻查看明细（子目录 / 文件、大小、所属根目录）。
 - 对标记为可清理的类别提供清理动作，带确认与结果反馈。
 - 分类规则是单一事实源（services 层 catalog），单测覆盖。
 
 非目标：
 
-- 不改变任何模块的写入路径，不修复「CLI 不跟随数据存储路径」（§8 单独立项）。
+- 不改变任何模块的写入路径，不迁移历史根或上游数据。
 - 不做自动定时清理、不做配额告警（可后续基于同一 catalog 扩展）。
-- 不清理 `.zcode` 之外的任何路径（例如 `~/.claude`、系统 TMPDIR）。
+- 不清理当前 OmpCode 应用数据根之外的任何路径（包括上游 `~/.zcode`、OMP 配置根和系统 TMPDIR）。
 - 手机 `/remote` 与 Web 端首期不显示该分区（§6.3）。
 
 ## 3. 分类目录（catalog）

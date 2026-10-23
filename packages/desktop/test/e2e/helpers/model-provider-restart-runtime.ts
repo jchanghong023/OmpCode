@@ -81,9 +81,10 @@ export async function restartIntoWorkspaceRestoringPreferences(
             // Model Selection recent 键，导致冷启动断言看到 storedConfig=null 并
             // 回退 preferredSelection。两类键必须在同一退出屏障后一起恢复。
             key.startsWith(modelSelectionRecentKeyPrefix) ||
-            key.startsWith("zcode-composer-recent:v2:") ||
-            key.startsWith("zcode-v4-composer-project-drafts:v1:") ||
-            key.startsWith("zcode-composer-workspace-scope:v1:"),
+            key.startsWith("zcode-composer-recent:v3:") ||
+            key.startsWith("zcode-v4-composer-project-drafts:v2:") ||
+            key.startsWith("zcode-v4-composer-drafts:v2:") ||
+            key.startsWith("zcode-composer-workspace-scope:v2:"),
         ),
       ),
     MODEL_SELECTION_RECENT_KEY_PREFIX,

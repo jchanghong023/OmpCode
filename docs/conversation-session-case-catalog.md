@@ -1,8 +1,78 @@
 # Conversation Session Case Catalog
 
+## OMP-native Wiki／Repo 与 mention 实测范围（2026-10-23）
+
+最新真实 GUI 结果、完整 run 路径及截图见 [coverage matrix](testing/conversation-session-e2e-coverage-matrix.md#omp-native-wikirepo-与-mention-最新真实-gui-证据2026-10-23)，此处不另立产品需求：
+
+- Wiki／Repo：`desktop-e2e-20261022224641003-p64788-9616faedaa677057`，bg229 PASS、exit 0，170.04s；Wiki 新增／完整正文／grep 边界空白／原生纯空白错误／字面 `[ ]`／删除，Repo 文本／真实 Python 符号与路径／更新／重建／删除均过；原始 `test-results.ndjson` 与 `omp-indexes-evidence.json` 记录 `modelRequests=0`、`sourcePreserved=true`，有明亮及 900px 窄屏截图。
+- mention：`desktop-e2e-20261022224640810-p85936-69d818d634ab7f89`，bg230 PASS、exit 0，246.40s；同一个 `it` 覆盖原 `@`／`#`／`$`／`¥`／`￥`、session catalog 生命周期和真实 SharedSkill 提交后的 assistant 执行结果，localhost 响应不冒充真实模型。
+- 以上为本机 Electron 与当前源码的局部通过；不代表手机、其他平台、安装版或全产品完成。profile 四阶段真实 GUI 与全局 Team 聊天完整 GUI 均已通过，见下述当前证据及范围。
+
+## OMP-native Team 聊天命令验收（已通过）
+
+`packages/desktop/test/e2e/omp-team.e2e.ts` 使用隔离 localhost Provider；Team 设置页仅维护有序成员和模型，不是独立任务运行页。当前聊天原样提交 `/team …`，由原生 TeamController 唯一执行，聊天卡片与右侧详情只读原生 live/journal 观测，不转成普通 workflow、不注入业务状态。
+
+| ID | GUI 动作 | 必须观察的结果 |
+| --- | --- | --- |
+| OMP-T01 | 未选择或创建聊天时打开 Team 设置、保存相同模型的两个有序成员槽，再从已有聊天重读 | 当前运行 profile 的全局 config.yml 保留两个有序重复槽；无需 session，不创建 native session、不发模型请求；不同聊天读取同一配置，设置页无任务输入或启动按钮 |
+| OMP-T02 | 原输入框提交 `/team OMP_E2E_TEAM_COMPLETE: investigate read-only options`，点同聊天卡片展开右侧详情 | 独立调用 ID；investigation/alignment/review/revision/synthesis 原生阶段；reviews/revises 的 source/target 对应真实调用；可读 proposal/review/revision/report 和真实 yield 参数，不以 raw JSON 或非空替代 |
+| OMP-T03 | 执行期间关闭详情、完成后从原输入框续发普通消息，再启动可取消讨论并点击取消 | 关闭只收起详情、不停止；最终方案和终态卡片留在原聊天；普通消息获得真实 localhost 模型回复且 session 不变；取消呈现原生 cancelled |
+| OMP-T04 | 刷新 renderer，再退出重启并重新打开同一聊天及右侧详情 | 完成／取消 job 与调用数量恢复；无重复卡片、无新增 Provider 请求、不重跑讨论；最终方案仍在聊天 |
+
+CAS、配置作用域、相同模型槽隔离及断线不可取消等已有有效单元／服务验收不因入口迁移删除。全局原生公开 stdio 配置回归已通过 2 项、50 断言，覆盖无 session 读取／预览／保存、过期 CAS 拒写和已有会话共享。Parent bg323 的真实 Electron `omp-team.e2e.ts` 整 spec 1／1 PASS，exit 0，墙钟 146.93s，无重试，run `desktop-e2e-20261023002309604-p63584-57f2834ff080b229`；OMP-T01～T04 在同一完整复合场景通过。全局模型配置 inline 无需 session、优先已配置可用模型、选择／复制／排序／保存及跨两个 session 读取均已验证；原生讨论阶段、节点角色／模型／边与工具详情、折叠不取消、完成后同会话续聊、取消、刷新及冷启动恢复均通过。该 run 保留 `test-results.ndjson`、summary、配置 saved／relations／cancelled／reopened 截图、native completed journal、Provider requests 与 `omp-team-chat-history.txt`。早期 helper、工具 details 夹具与 navigation 输入覆盖问题不再是当前阻塞，未以旧独立运行页结果替代。本次仅记录 Windows 源码 Electron 与隔离 localhost 模型的 ZCode 验证，不代表真实模型、手机、其他平台、安装版、OMP 发布或全产品验收。
+
+## OMP profile 与外部运行时验证（2026-10-23）
+
+`omp-profiles.e2e.ts` 的四个真实 Electron 生命周期场景均通过，`retryIndex=0`，run `desktop-e2e-20261022231440976-p75200-2d94462b9ef5c7c9`：无 session 选择、待重启角色禁写、原生 role 持久化、仅当前会话的临时模型，以及切回 profile 后任务／分组／草稿／Recent／role 恢复；上游 `.zcode` sentinel 未变化。浅色及窄屏截图位于同一 run。
+
+当前终端 PATH 的已安装 OMP 18.12.5 已通过真实启动界面验证为不支持所需存储准备协议；必须显式报告 `unsupported_runtime`，不能自动换源、下载或覆盖安装。独立编译的当前源码 exe 不等于已安装版本；两者的启动证据分别记录，不混用。Windows NSIS、ZIP 与 app.asar 已实际生成并检查，没有随包 OMP；正式签名发行、双产品实际同时安装和其他平台未验证。
+
+
+## OMP-native Skill／Provider 管理验收（2026-10-23）
+
+Dedicated `omp-management.e2e.ts` 的 M01、M02 已经真实 GUI 验证通过，运行证据与边界集中在 [coverage matrix](testing/conversation-session-e2e-coverage-matrix.md#omp-native-skillprovider-管理验收2026-10-23)。只消费 OMP 已有原生能力，不改 core，不扩展 MCP；权威见 [OMP 协议需求](../../oh-my-pi/docs-zh-CN/requirements/rpc-ui-protocol.md)。测试输入为隔离 workspace 中合法 Skill 与 localhost 模型响应，不伪造运行状态。
+
+```text
+Settings Skill GUI → Host → skills/manage → 原生 profile config.yml（唯一开关 owner）
+                                              ↓ list/refresh 投影
+Settings 模型连接按钮 → Host → provider/testModelConnectivity → localhost probe ledger
+```
+
+| ID | Setup／GUI 动作 | 必须观察的结果 |
+| --- | --- | --- |
+| OMP-M01 | 临时 workspace `.agents/skills/omp-management-e2e/SKILL.md`；Settings Skill 页面选工作区、禁用、刷新、启用 | 原生列表显示真实文件；profile 用户层且影响同 profile 工作区的提示可见；禁用写 `disabledExtensions`，刷新后仍禁用，启用移除禁用项；旧 workspace／user `.zcode` Skill 配置无持久变更 |
+| OMP-M02 | Settings 选择已有隔离 provider 模型行并点击连接测试；本地 provider 分别返回最小有效 SSE 与明确 401 | UI 分别成功／失败，服务端确有原生 `Reply OK.` probe、目标 model 和 stream 请求；不直接调用服务，不发真实模型请求 |
+
+精确单 spec 命令、实际运行 ID 与截图／ledger 名见上述 coverage matrix；单项通过不代表整批次或真实模型能力通过。
+
+## OMP-native 工具权限闭环验收（2026-10-23）
+
+本节定义的 P01–P04 已经真实 GUI 验证通过，证据与未验证边界见 [coverage matrix](testing/conversation-session-e2e-coverage-matrix.md#omp-native-工具权限闭环验收2026-10-23)。行为权威见 [OMP 接入需求](../../oh-my-pi/docs-zh-CN/requirements/rpc-ui-protocol.md) 与 [FORK-003](../fork.md)。仅本节显式替换此前 native permission“不支持”的裁定；不恢复旧 CLI fixture 或大范围解除其他排除。
+
+公共 setup：`omp-permissions.e2e.ts` 加入专用 `OMP_CORE_INTEGRATION_SPECS`，复用隔离 localhost provider、独立 OMP config/profile 和现有 response 分发。启动当前 OMP 源码 app-server，GUI 选择 guarded，隔离配置显式 `tools.approval.write/_write: prompt`。模型按实际广告名发送原生文件工具调用；会话、执行、permission request 和文件工具都来自真实运行，不 seed 状态，不直接调用服务替 GUI 回答。
+
+```text
+GUI prompt → Host → 当前 OMP session（唯一执行／权限 owner）
+                         → 原生 write 审批等待 → v4 permission dock
+GUI option button → resolveInteraction → 原生选项映射 → 本次工具执行／拒绝
+GUI Esc Stop → 原生取消等待；旧请求／旧按钮不得使工具复活
+```
+
+| ID | GUI 动作／前置 | 必须观察的结果 |
+| --- | --- | --- |
+| OMP-P01 | 连续两个不同路径的真实 write；首个 dock 点 Allow once，第二个 dock 点拒绝 | 批准前两个文件均不存在；首个文件生成且内容准确；第二个请求有不同 requestId，证明 once 不升级为 session；拒绝后第二文件不存在，第一文件 mtime 不变，实际 provider transcript 仅一条首文件 assistant tool call |
+| OMP-P02 | 真实 write 触发 dock 后点拒绝按钮 | 文件始终不存在，原生 tool result 回到 localhost provider 并输出终态，不挂起 |
+| OMP-P03 | 审批等待时按正式 GUI Esc Stop，再触发保留的旧 DOM Allow once 按钮点击，启动另一会话 | 等待消失且可停执行结束；另一会话正常完成；旧文件不存在。此处只证明迟到 GUI 点击，不冒充伪造协议应答验收 |
+| OMP-P04 | A 审批等待时 GUI 新建 B 并完成；切回 A，再刷新 renderer | B 不受阻；普通换视图不取消 A，requestId 不变；刷新保持原请求或呈现明确取消／中断终态；拒绝仍保留的请求后零文件，无静默放行 |
+
+GUI 使用现有 permission dock、`allowOnce`／`reject*` 选项语义与真实 requestId 摘要；由生产 UI 将其绑定的原生 optionId 走现有 resolveInteraction。未知 optionId、伪造 content/action、无原生 toolCall、连接关闭与迟到协议响应的拒绝由 OMP 协议测试另行验证，不把旧 DOM 点击当作已发出的协议命令。desktop-continuous 的 renderer 刷新是本节边界，不冒充手机 replayable 实机验证。
+
+精确命令、隔离环境、实际运行 ID 与截图／Provider ledger 路径见上述 coverage matrix；不把 GUI 迟到点击等同于全部协议攻击场景。
+
+
 ## OMP-native 子代理与工作流核心验收
 
-本节是本次新增 E2E 的用例规划，不是功能／测试已完成声明；所有 ID 当前均为 **planned／未验证**。执行行为与协议事实唯一权威见 [OMP 接入需求](../../oh-my-pi/docs-zh-CN/requirements/rpc-ui-protocol.md) 的「子代理核心能力」「既有界面的工作流与记忆消费」；ZCode 宿主边界见 [FORK-003](../fork.md#子代理与工作流核心范围引用)。本节仅定义测试动作与可观察证据，不复制参数或状态协议。
+本节定义 OMP-native 子代理与工作流核心验收；各 ID 的真实状态与执行证据统一见 [coverage matrix](testing/conversation-session-e2e-coverage-matrix.md#omp-native-子代理与工作流核心验收)，不继承旧 Agent fixture 的结果。执行行为与协议事实唯一权威见 [OMP 接入需求](../../oh-my-pi/docs-zh-CN/requirements/rpc-ui-protocol.md)；ZCode 宿主边界见 [FORK-003](../fork.md#子代理与工作流核心范围引用)。本节仅定义测试动作与可观察证据，不复制参数或状态协议。
 
 公共 setup：隔离项目、配置／数据根与 localhost 模型，明确选择当前 OMP app-server；真实 GUI→Host→公开协议→原生 AgentSession/registry/task owner，不启动旧 zcode-cli，不伪造子会话／run 数据，不注入 UI 状态或补旧工具别名。模型可受控，派生、工具、文件产物和持久化必须真实。捕获原始 Provider 请求、协议 ACK／投影、父子／run 身份及 GUI 断言；不采真实凭据，不把模型桩当作真实模型能力证据。
 

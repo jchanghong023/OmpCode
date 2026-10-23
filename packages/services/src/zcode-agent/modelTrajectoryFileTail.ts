@@ -1,7 +1,6 @@
 import { open } from "node:fs/promises";
-import { homedir } from "node:os";
 import { join } from "node:path";
-import { getDataBaseDir } from "#src/paths.js";
+import { getProviderWorkspaceConfigDir } from "#src/paths.js";
 
 // 32 MiB 足以覆盖常规最近调用，同时避免 64/256 MiB 诊断文件造成 Host 内存峰值。
 const MAX_TRAJECTORY_READ_BYTES = 32 * 1024 * 1024;
@@ -12,13 +11,10 @@ export interface TrajectoryFileTail {
   truncated: boolean;
 }
 
-// debug（开发态）与 rollout（生产态）都尝试，避免数据目录环境变量差异导致读不到。
+// 诊断只读取当前应用拥有的目录，不能回退扫描上游 ~/.zcode。
 export function resolveModelIODirs(): string[] {
-  const roots = new Set<string>([
-    join(homedir(), ".zcode", "cli"),
-    join(getDataBaseDir(), ".zcode", "cli"),
-  ]);
-  return [...roots].flatMap((root) => [join(root, "debug"), join(root, "rollout")]);
+  const root = getProviderWorkspaceConfigDir();
+  return [join(root, "debug"), join(root, "rollout")];
 }
 
 // 与 runner-debug.ts 的 sanitizeFileSegment 保持一致：仅保留文件名安全字符。

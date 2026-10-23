@@ -22,11 +22,7 @@ import {
   validateUninstallTarget,
 } from "./runtime/paths.js";
 import { validateServerInstallOwnership } from "./runtime/installationOwnership.js";
-import {
-  createReleaseAgentWiring,
-  resolveBundledAgentWiring,
-  type BundledAgentWiring,
-} from "./runtime/agentWiring.js";
+import { resolveExternalAgentWiring } from "./runtime/agentWiring.js";
 import { writeStableLauncher } from "./runtime/stableLauncher.js";
 import {
   runLocalArchiveUpdateCommand,
@@ -59,7 +55,6 @@ export interface CliIO {
 }
 
 export interface ServerCliRuntimeOptions {
-  bundledAgentWiring?: BundledAgentWiring | null;
   proxyStdioStreams?: { input: Readable; output: Writable };
   workspaceAliasRepo?: Pick<SourceServerWorkspaceAliasRepo, "retryFailedWorkspace">;
   /** process/service manager 是更新协调器的外部边界；测试可注入受控实现。 */
@@ -166,7 +161,7 @@ export async function runServerCli(
     }
     switch (command) {
       case "serve":
-        return await runServe(parsed.argv.slice(1), io, json, layout, runtimeOptions);
+        return await runServe(parsed.argv.slice(1), io, json, layout);
       case "status":
       case "running-tasks":
       case "stop":
@@ -262,7 +257,6 @@ async function runServe(
   io: CliIO,
   json: boolean,
   layout: ReturnType<typeof resolveServerLayout>,
-  runtimeOptions: ServerCliRuntimeOptions,
 ): Promise<number> {
   const daemonRequested = args.includes("--daemon");
   const supervisorProcess = args.includes("--supervisor");
@@ -402,21 +396,14 @@ async function runServe(
           ZCODE_DATA_BASE_DIR: layout.dataBaseDir,
           ZCODE_SERVER_ROOT: layout.serverRoot,
         };
-        // Metadata/status commands never need runtime assets. Resolve wiring only when
-        // this Supervisor actually launches a Core, including every candidate release.
-        const releaseWiring = runtimeRoot
-          ? await createReleaseAgentWiring(runtimeRoot, inheritedEnv)
-          : runtimeOptions.bundledAgentWiring !== undefined
-            ? runtimeOptions.bundledAgentWiring
-            : await resolveBundledAgentWiring(
-                dirname(fileURLToPath(import.meta.url)),
-                inheritedEnv,
-              );
+        // Metadata/status commands do not start OMP. Each actual Core launch selects
+        // the explicit command or omp; its spawn uses this endpoint's inherited PATH.
+        const agentWiring = resolveExternalAgentWiring(inheritedEnv);
         return fork(corePath, [String(generation)], {
           execPath: runtimeNode,
           env: {
             ...inheritedEnv,
-            ...releaseWiring,
+            ...agentWiring,
             ...(runtimeRoot ? { ZCODE_SERVER_RUNTIME_ROOT: runtimeRoot } : {}),
             ...(release?.releaseId ? { ZCODE_SERVER_RELEASE_ID: release.releaseId } : {}),
           },

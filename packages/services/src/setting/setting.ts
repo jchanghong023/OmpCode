@@ -20,7 +20,7 @@ export interface ISettingService {
       | "providerFamilyDomainUpdatedAt"
     >,
   ): Promise<void>;
-  /** Change the data base directory: copy data from old → new location, then persist the setting. */
+  /** Read-only in OmpCode: always rejects; change startup OMP_CONFIG_ROOT instead. */
   updateDataBaseDir(newDir: string | undefined): Promise<void>;
 }
 

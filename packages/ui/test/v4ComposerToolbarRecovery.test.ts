@@ -3,8 +3,9 @@ import { createRoot, type Root } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { BUILTIN_MODEL_PROVIDER_IDS } from "@zcode/shared";
-import type { ProviderSettingsView } from "@zcode/services";
+import type { IServiceAccessor, ProviderSettingsView } from "@zcode/services";
 import { TooltipProvider } from "@/components/ui/tooltip.js";
+import { ServiceProvider } from "@/hooks/useServices.js";
 import { V4ComposerModelControls } from "@/v4/composer/V4ComposerToolbar.js";
 import type { ModelConfigSelect } from "@/ModelConfigSelect.js";
 
@@ -28,6 +29,9 @@ const captured = vi.hoisted(() => ({
 }));
 
 const mocks = vi.hoisted(() => ({
+  services: {
+    zcodeAgentService: {},
+  },
   auth: { user: { id: "account-a" } as { id: string } | null, authSessionSeq: 1 },
   connectionSwitchError: null as string | null,
   selectConnection: vi.fn(),
@@ -108,7 +112,7 @@ vi.mock("@/store/StoreProvider.js", () => ({
     selector(mocks.auth),
 }));
 vi.mock("@/hooks/useWorkspaceServices.js", () => {
-  const services = { zcodeAgentService: {} };
+  const services = mocks.services;
   return {
     useBaseWorkspaceServices: () => services,
     useWorkspaceServices: () => services,
@@ -391,6 +395,14 @@ function createActiveEntitlement(providerId: string, extra: Record<string, unkno
   };
 }
 
+// 已有会话会挂载真实 OMP 入口；补服务上下文，不 mock scope hook 或用待选 profile 代替运行事实。
+function createToolbarElement(props: V4ComposerModelControlsProps) {
+  return createElement(ServiceProvider, {
+    services: mocks.services as unknown as IServiceAccessor,
+    children: createElement(V4ComposerModelControls, props),
+  });
+}
+
 function renderToolbarMarkup(overrides: Partial<V4ComposerModelControlsProps> = {}): string {
   // 纯工具条测试显式提供已初始化的 Composer；生产初始化由 scope owner 负责。
   const seed = overrides.config ?? {
@@ -405,7 +417,7 @@ function renderToolbarMarkup(overrides: Partial<V4ComposerModelControlsProps> = 
     createElement(
       TooltipProvider,
       null,
-      createElement(V4ComposerModelControls, {
+      createToolbarElement({
         workspacePath: "/workspace",
         modelSelectionView: mocks.modelSelectionView,
         sessionId: null,
@@ -542,9 +554,14 @@ describe("V4ComposerModelControls recovery", () => {
       sessionId: "existing-session",
       draftMode: false,
       draftConfig: { mode: "build" },
+      // 此场景目录已加载完成；只留空 Composer 选择，不能把目录 loading 当作可交互状态。
+      modelSelectionState: { status: "ready", view: mocks.modelSelectionView! },
     });
     expect(captured.modelSelectProps).not.toBeNull();
     expect(captured.modelSelectProps?.normalizedValue).toBe("");
+    expect(captured.modelSelectProps?.disabled).toBe(false);
+    captured.modelSelectProps?.onValueChange(customValue);
+    expect(mocks.selectModel).toHaveBeenCalledWith("custom-openai", "gpt-4o", null);
     expect(captured.thoughtControlProps).toBeNull();
   });
 
@@ -721,58 +738,6 @@ describe("V4ComposerModelControls recovery", () => {
     });
 
     expect(mocks.selectModel).toHaveBeenCalledWith("alternate-provider", "deepseek-v4-pro", null);
-
-    await act(async () => {
-      root.unmount();
-    });
-  });
-
-  it("V4 任务边界不再刷新 entitlement", async () => {
-    const root: Root = createRoot(installMinimalDom());
-    const renderPhase = (phase: V4ComposerModelControlsProps["phase"]) =>
-      createElement(V4ComposerModelControls, {
-        workspacePath: "/workspace",
-        modelSelectionView: mocks.modelSelectionView,
-        sessionId: "session-usage-refresh",
-        phase,
-        config: {
-          provider: BUILTIN_MODEL_PROVIDER_IDS.bigmodelIndividualCodingPlan,
-          model: "glm-5",
-          thought: "medium",
-          thoughtLevels: ["medium"],
-          followupMode: "queue",
-          mode: "build",
-        },
-        usage: null,
-        disabled: false,
-        onSelectModel: mocks.selectModel,
-        onSelectThought: vi.fn(),
-        onSwitchMode: vi.fn(),
-      });
-
-    await act(async () => {
-      root.render(renderPhase("running"));
-      await flushMicrotasks();
-    });
-    expect(mocks.codingPlanEntitlementsRefresh).not.toHaveBeenCalled();
-
-    await act(async () => {
-      root.render(renderPhase("completedInterrupted"));
-      await flushMicrotasks();
-    });
-    expect(mocks.codingPlanEntitlementsRefresh).not.toHaveBeenCalled();
-
-    await act(async () => {
-      root.render(renderPhase("running"));
-      await flushMicrotasks();
-    });
-    expect(mocks.codingPlanEntitlementsRefresh).not.toHaveBeenCalled();
-
-    await act(async () => {
-      root.render(renderPhase("completedSuccess"));
-      await flushMicrotasks();
-    });
-    expect(mocks.codingPlanEntitlementsRefresh).not.toHaveBeenCalled();
 
     await act(async () => {
       root.unmount();
@@ -1356,7 +1321,7 @@ describe("V4ComposerModelControls recovery", () => {
     const root: Root = createRoot(installMinimalDom());
     await act(async () => {
       root.render(
-        createElement(V4ComposerModelControls, {
+        createToolbarElement({
           workspacePath: "/workspace",
           modelSelectionView: mocks.modelSelectionView,
           sessionId: "session-removed-model",

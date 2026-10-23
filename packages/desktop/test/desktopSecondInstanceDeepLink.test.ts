@@ -82,10 +82,10 @@ describe("desktop second-instance workspace deep link routing", () => {
     targetWindow.webContents.send.mockClear();
     const handled = handleSecondInstanceWorkspaceRequest({
       additionalData: createDeepLinkSingleInstanceData([
-        "ZCode",
+        "OmpCode",
         buildWorkspaceOpenUrl(workspacePath),
       ]),
-      argv: ["ZCode"],
+      argv: ["OmpCode"],
       focusForceUpdateGateWindow: vi.fn(),
       forceUpdateBlocked: false,
       handleDeepLink: (url, options) =>
@@ -124,11 +124,11 @@ describe("desktop second-instance workspace deep link routing", () => {
 
     const handled = handleSecondInstanceWorkspaceRequest({
       additionalData: createDeepLinkSingleInstanceData([
-        "ZCode",
+        "OmpCode",
         "--open-workspace",
         workspacePath,
       ]),
-      argv: ["ZCode"],
+      argv: ["OmpCode"],
       focusForceUpdateGateWindow: vi.fn(),
       forceUpdateBlocked: false,
       handleDeepLink: vi.fn(() => false),
@@ -160,10 +160,10 @@ describe("desktop second-instance workspace deep link routing", () => {
 
     const handled = handleSecondInstanceWorkspaceRequest({
       additionalData: createDeepLinkSingleInstanceData([
-        "ZCode",
+        "OmpCode",
         buildWorkspaceOpenUrl(workspacePath),
       ]),
-      argv: ["ZCode"],
+      argv: ["OmpCode"],
       focusForceUpdateGateWindow: vi.fn(),
       forceUpdateBlocked: false,
       handleDeepLink: (url, options) =>
@@ -201,10 +201,10 @@ describe("desktop second-instance workspace deep link routing", () => {
 
     const handled = handleSecondInstanceWorkspaceRequest({
       additionalData: createDeepLinkSingleInstanceData([
-        "ZCode",
+        "OmpCode",
         buildWorkspaceOpenUrl("\\\\attacker\\share"),
       ]),
-      argv: ["ZCode"],
+      argv: ["OmpCode"],
       focusForceUpdateGateWindow: vi.fn(),
       forceUpdateBlocked: false,
       handleDeepLink: (url, options) =>
@@ -267,5 +267,5 @@ function createMockWindow(webContentsId: number) {
 }
 
 function buildWorkspaceOpenUrl(workspacePath: string): string {
-  return `zcode://workspace/open?path=${encodeURIComponent(workspacePath)}`;
+  return `ompcode-preview://workspace/open?path=${encodeURIComponent(workspacePath)}`;
 }

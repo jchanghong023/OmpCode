@@ -89,12 +89,14 @@ export function normalizeSlashCommandValue(name: string): string {
   return name.trim().replace(/^\/+/, "");
 }
 
-export function buildSlashSuggestions(commands: ZCodeSlashCommand[]): PromptInputSuggestionItem[] {
+export function buildSlashSuggestions(
+  commands: ZCodeSlashCommand[],
+  nativeRuntime = false,
+): PromptInputSuggestionItem[] {
   return commands.flatMap((command) => {
     const value = normalizeSlashCommandValue(command.name);
-    // Plan 是 Composer 本地操作。旧 Agent 仍可能广播同名命令，不能让它重新
-    // 变成插入文本、等到发送时才切模式的旧入口；其余命令仍以 CLI catalog 为准。
-    if (!value || value.toLowerCase() === "plan") {
+    // 旧 Agent 的 Plan 仍是本地模式开关；OMP 实际注册的同名命令必须保留原生归属。
+    if (!value || (!nativeRuntime && value.toLowerCase() === "plan")) {
       return [];
     }
     return [

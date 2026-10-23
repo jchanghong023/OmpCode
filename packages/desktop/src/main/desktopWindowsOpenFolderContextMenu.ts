@@ -1,13 +1,17 @@
 import { spawn } from "node:child_process";
 import { resolve } from "node:path";
 import type { Locale } from "@zcode/shared";
+import { ZCODE_PRODUCT_FLAVOR } from "@zcode/shared";
+import { desktopProductIdentities } from "../../scripts/desktop-product-identity.mjs";
 
-const MENU_KEY_NAME = "ZCode.OpenInZCode";
+const identity = desktopProductIdentities[ZCODE_PRODUCT_FLAVOR];
+// 上游键会被 reg /f 覆盖；使用 fork/flavor 的 appId，双装菜单互不改写。
+const MENU_KEY_NAME = `${identity.appId}.OpenFolder`;
 const DIRECTORY_MENU_KEY = `HKCU\\Software\\Classes\\Directory\\shell\\${MENU_KEY_NAME}`;
 const DRIVE_MENU_KEY = `HKCU\\Software\\Classes\\Drive\\shell\\${MENU_KEY_NAME}`;
 const MENU_LABELS: Record<Locale, string> = {
-  "zh-CN": "在ZCode中打开",
-  "en-US": "Open in ZCode",
+  "zh-CN": `在 ${identity.productName} 中打开`,
+  "en-US": `Open in ${identity.productName}`,
 };
 
 type Logger = {

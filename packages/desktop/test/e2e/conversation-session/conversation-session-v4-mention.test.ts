@@ -15,6 +15,7 @@ import {
   setInputValueByTestIdDom,
 } from "../helpers/desktop-app.js";
 import { TID_CHAT_ATTACHMENT_BUTTON, TID_V4_COMPOSER_INPUT } from "@zcode/shared/test-ids";
+import { OMP_MODEL_ID, OMP_PROVIDER_ID } from "../helpers/omp-integration-fixture.js";
 import {
   clickV4SlashOption,
   getV4ComposerText,
@@ -23,18 +24,21 @@ import {
   prepareV4ConversationE2E,
   selectV4TaskById,
   sendV4Prompt,
+  switchV4Model,
+  waitForV4AssistantMessageContaining,
   waitForV4MentionOptionPrefix,
   waitForV4Pane,
   waitForV4TimelineContaining,
 } from "../helpers/v4-conversation.js";
 
 const SESSION_SKILL_NAME = "e2e-session-skill-catalog";
-const SESSION_SKILL_DIRECTORY = join(
-  getE2EAppDataPaths().workspace,
-  ".zcode",
-  "skills",
-  SESSION_SKILL_NAME,
-);
+const nativeOmp = Boolean(process.env.ZCODE_AGENT_SERVER_COMMAND?.trim());
+// 原生 session 必须发现其真实 profile catalog，不能继续向旧 .zcode 目录写夹具。
+const skillRoot = nativeOmp
+  ? process.env.PI_CODING_AGENT_DIR
+  : join(getE2EAppDataPaths().workspace, ".zcode");
+if (!skillRoot) throw new Error("Isolated native OMP profile required for mention E2E");
+const SESSION_SKILL_DIRECTORY = join(skillRoot, "skills", SESSION_SKILL_NAME);
 const SESSION_SKILL_PATH = join(SESSION_SKILL_DIRECTORY, "SKILL.md");
 
 function isSessionSkillOption(optionId: string) {
@@ -112,7 +116,13 @@ describe("S01 / S05 / S08：composer 候选入口与 Session Skill catalog", () 
   });
 
   it("@ 与 # 共用 sessions-index，+ 菜单突出 @、/ 和 $", async () => {
-    await prepareV4ConversationE2E();
+    await prepareV4ConversationE2E({ skipProvider: nativeOmp });
+    if (nativeOmp) {
+      // 原因：冷启可停留在其他项目的空草稿；会话只会在首次发送后创建，不能先等 session。
+      // 与原生 Team 的准备顺序一致，先从侧栏显式选择夹具项目，再通过真实模型菜单选模。
+      await openWorkspaceDraftFromSidebar(getE2EAppDataPaths().workspace);
+      await switchV4Model(OMP_PROVIDER_ID, OMP_MODEL_ID, "disabled");
+    }
 
     // 1) 建立一个 session（供 @ / # 目录共同命中）
     await sendV4Prompt("E2E_V4_MENTION_SEED 建立可被 mention 的会话");
@@ -127,12 +137,16 @@ describe("S01 / S05 / S08：composer 候选入口与 Session Skill catalog", () 
       throw new Error(`没有拿到可引用的 seed session: ${JSON.stringify(seedPane)}`);
     }
 
+    // 原生会话标题由模型自动生成，实际 seed 标题可为 V4_MENTION_SEED_OK，
+    // 不保证包含首条用户输入；以真实绑定的 sessionId 查询同一目录，避免误判索引缺失。
+    const sessionMentionQuery = seedSessionId;
+
     // 2) 新建 draft → 干净输入框
     // 全局新建会分配虚拟目录；Hook、Skill 与会话候选必须继续使用夹具所属项目。
     await openWorkspaceDraftFromSidebar(getE2EAppDataPaths().workspace);
 
     // 3) `@` 聚合入口加载 sessions-index，并仍写入 # canonical mention。
-    await setInputValueByTestIdDom(TID_V4_COMPOSER_INPUT, "@E2E_V4_MENTION_SEED", {
+    await setInputValueByTestIdDom(TID_V4_COMPOSER_INPUT, `@${sessionMentionQuery}`, {
       timeout: 15000,
       timeoutMsg: "v4 composer 输入框没有出现或不可输入",
     });
@@ -152,7 +166,7 @@ describe("S01 / S05 / S08：composer 候选入口与 Session Skill catalog", () 
     });
 
     // 4) 兼容 `#` 面板继续工作，并与 @ 使用同一 sessions-index authority。
-    await setInputValueByTestIdDom(TID_V4_COMPOSER_INPUT, "#E2E_V4_MENTION_SEED", {
+    await setInputValueByTestIdDom(TID_V4_COMPOSER_INPUT, `#${sessionMentionQuery}`, {
       timeout: 15000,
       timeoutMsg: "v4 composer 输入框没有出现或不可输入",
     });
@@ -175,10 +189,14 @@ describe("S01 / S05 / S08：composer 候选入口与 Session Skill catalog", () 
     let expectedSkillOptionId: string | undefined;
     let expectedSkillMarkdown: string | undefined;
     for (const skillTrigger of ["$", "¥", "￥"] as const) {
-      await setInputValueByTestIdDom(TID_V4_COMPOSER_INPUT, skillTrigger, {
-        timeout: 15000,
-        timeoutMsg: `无法输入 Skills 兼容触发器 ${skillTrigger}`,
-      });
+      await setInputValueByTestIdDom(
+        TID_V4_COMPOSER_INPUT,
+        `${skillTrigger}${nativeOmp ? "e2e-mention-execution" : ""}`,
+        {
+          timeout: 15000,
+          timeoutMsg: `无法输入 Skills 兼容触发器 ${skillTrigger}`,
+        },
+      );
       const skillOptionId = await waitForV4MentionOptionPrefix("skill:");
       expect(skillOptionId.startsWith("skill:")).toBe(true);
       if (expectedSkillOptionId) {
@@ -209,6 +227,22 @@ describe("S01 / S05 / S08：composer 候选入口与 Session Skill catalog", () 
         timeout: 15000,
         timeoutMsg: `选中 ${skillTrigger} Skill 候选后面板没有关闭`,
       });
+    }
+
+    if (nativeOmp) {
+      if (!expectedSkillMarkdown)
+        throw new Error("Selected native skill canonical mention missing");
+      // 新 draft 使用 workspace 默认模型，不继承 seed session 的临时选择；
+      // 提交前显式选择本 case 的原生模型夹具，避免请求落入未配置的上游路由。
+      await switchV4Model(OMP_PROVIDER_ID, OMP_MODEL_ID, "disabled");
+      await sendV4Prompt(`${expectedSkillMarkdown} E2E_V4_MENTION_EXECUTE`);
+      // Skill 展开的用户行也包含完成标记，必须由 assistant 正文证明真实执行。
+      await waitForV4AssistantMessageContaining("V4_MENTION_SKILL_EXECUTED", 45000);
+      await waitForV4Pane(
+        (pane) => !pane.canStop,
+        "Selected native skill execution did not settle",
+        45000,
+      );
     }
 
     // 6) + 菜单以底部提示介绍快捷输入；提示不再是可点击的菜单项。
@@ -248,6 +282,22 @@ describe("S01 / S05 / S08：composer 候选入口与 Session Skill catalog", () 
     // Bug 根因：旧 Composer 曾长期复用 workspace mount 时的 UI 快照，导致新任务也看不到文件变化；
     // 这里固定正确边界是旧 resident Session 不热更新，而新任务创建的新 runtime 会重新发现。
     await selectV4TaskById(seedSessionId);
+    // 原因：侧栏选择只等 pane 的 sessionId；真实日志中 snapshot 随后才恢复。
+    // DOM bridge 即使 editor 不可编辑也能写值，但 disabled 的 SlashCommandPlugin 不会打开面板。
+    // 等当前会话实际恢复到可输入后，再写文件和触发候选查询，不能把无查询误报成 catalog 未完成。
+    await browser.waitUntil(
+      async () =>
+        browser.execute(
+          (inputTestId) =>
+            document.querySelector<HTMLElement>(`[data-testid="${inputTestId}"]`)
+              ?.isContentEditable === true,
+          TID_V4_COMPOSER_INPUT,
+        ),
+      {
+        timeout: 15000,
+        timeoutMsg: "旧 Session composer 尚未恢复为可编辑状态",
+      },
+    );
     await mkdir(SESSION_SKILL_DIRECTORY, { recursive: true });
     await writeFile(
       SESSION_SKILL_PATH,

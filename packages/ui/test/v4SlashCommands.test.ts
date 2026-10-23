@@ -1,11 +1,103 @@
 import { describe, expect, it } from "vitest";
 import {
   parseSelectionSideSlashCommand,
+  isRegisteredNativeSlashCommand,
   parseV4VisibleSlashCommand,
   v4QueuedCommandText,
 } from "@/v4/slashCommands.js";
 
 describe("parseV4VisibleSlashCommand", () => {
+  it.each([
+    "/goal show",
+    "/goal pause",
+    "/goal --invalid-action",
+    "/target show",
+    '/compact  "summary  hint"\nnext  ',
+    "/compress --invalid",
+    "/plan --invalid",
+    "/move",
+    "/wt --invalid",
+  ])("does not consume registered native commands or validate their arguments: %s", (text) => {
+    const nativeCommandNames = ["goal", "target", "compact", "compress", "plan", "move", "wt"];
+    expect(isRegisteredNativeSlashCommand(text, nativeCommandNames)).toBe(true);
+    expect(parseV4VisibleSlashCommand(text, [], { nativeCommandNames })).toBeNull();
+  });
+
+  it.each([
+    "/goal show",
+    "/goal pause",
+    '/compact  "keep  spaces"\nnext  ',
+    "/compress --invalid",
+    "/plan",
+    "/side auxiliary input",
+    "/unknown --invalid",
+  ])("does not let legacy parsers claim OMP slash input before catalog arrives: %s", (text) => {
+    expect(isRegisteredNativeSlashCommand(text, null)).toBe(true);
+    expect(parseV4VisibleSlashCommand(text, [], { nativeCommandNames: null })).toBeNull();
+  });
+
+  it("keeps cold OMP ownership distinct from legacy empty catalog and normal chat", () => {
+    expect(isRegisteredNativeSlashCommand("普通对话 /goal show", null)).toBe(false);
+    expect(isRegisteredNativeSlashCommand("  普通对话  ", null)).toBe(false);
+    expect(isRegisteredNativeSlashCommand("/goal show", [])).toBe(false);
+    expect(parseV4VisibleSlashCommand("/goal show", [], { nativeCommandNames: [] })).toMatchObject({
+      kind: "unsupportedGoal",
+      action: "show",
+    });
+    expect(parseV4VisibleSlashCommand("/compact", [], { nativeCommandNames: [] })).toMatchObject({
+      kind: "compact",
+    });
+    expect(isRegisteredNativeSlashCommand("/unknown", ["goal"])).toBe(false);
+  });
+
+  it("uses exact catalog names and leaves legacy behavior intact without OMP ownership", () => {
+    expect(isRegisteredNativeSlashCommand("/goalkeeper show", ["goal"])).toBe(false);
+    expect(isRegisteredNativeSlashCommand("/UNKNOWN ordinary input", ["goal"])).toBe(false);
+    expect(isRegisteredNativeSlashCommand('/COMPRESS  "alias"', ["compress"])).toBe(true);
+    expect(parseV4VisibleSlashCommand("/goal show")).toMatchObject({
+      kind: "unsupportedGoal",
+      action: "show",
+    });
+    expect(parseV4VisibleSlashCommand("/compact anything")).toMatchObject({ kind: "compact" });
+    expect(
+      parseV4VisibleSlashCommand("/goal pause", [], { nativeCommandNames: ["compact"] }),
+    ).toMatchObject({ kind: "unsupportedGoal", action: "pause" });
+  });
+
+  it("recognizes only the command token, not quoted or multiline arguments", () => {
+    const nativeCommandNames = ["/compact", "/compress"];
+    for (const text of [
+      '  /COMPACT  "keep  both spaces"\nnext line  ',
+      "/compress\n--not-a-ui-option",
+      '/compact "unterminated',
+    ]) {
+      expect(isRegisteredNativeSlashCommand(text, nativeCommandNames)).toBe(true);
+      expect(parseV4VisibleSlashCommand(text, [], { nativeCommandNames })).toBeNull();
+    }
+    expect(isRegisteredNativeSlashCommand("普通对话 /compact", nativeCommandNames)).toBe(false);
+    expect(isRegisteredNativeSlashCommand("/compact-extra", nativeCommandNames)).toBe(false);
+    expect(parseV4VisibleSlashCommand("/unknown --invalid", [], { nativeCommandNames })).toBeNull();
+  });
+
+  it("keeps legacy button parser behavior when no native catalog is supplied", () => {
+    expect(parseV4VisibleSlashCommand("/compact")).toEqual({
+      kind: "compact",
+      displayText: "/compact",
+    });
+    expect(parseV4VisibleSlashCommand("/compress legacy instructions")).toEqual({
+      kind: "compact",
+      displayText: "/compress legacy instructions",
+    });
+    expect(parseV4VisibleSlashCommand("/goal resume")).toEqual({
+      kind: "resumeGoal",
+      displayText: "/goal resume",
+    });
+    expect(parseV4VisibleSlashCommand("/target objective")).toMatchObject({
+      kind: "sendGoalCommand",
+      objective: "objective",
+    });
+  });
+
   it("parses /goal and /target into a goal command objective", () => {
     expect(parseV4VisibleSlashCommand("/goal 修复登录", [])).toMatchObject({
       kind: "sendGoalCommand",

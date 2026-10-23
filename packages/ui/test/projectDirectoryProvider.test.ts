@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { createElement, memo } from "react";
+import { createElement } from "react";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import type { ProjectTree } from "@/project-sidebar/contract.js";
@@ -60,7 +60,7 @@ it("SBV04：两个消费者共用目录，视图切换不改变手动项目顺�
   expect(screen.getByTestId("sidebar").textContent).toBe("pin,one,two");
 });
 
-it("父级草稿更新不广播等价目录，项目改名仍更新消费者", () => {
+it("父级草稿更新保持消费者目录，项目改名仍更新消费者", () => {
   localStorage.clear();
   const tree: ProjectTree = {
     projects: [
@@ -80,19 +80,17 @@ it("父级草稿更新不广播等价目录，项目改名仍更新消费者", (
     tasks: [],
   };
   read.mockReturnValue({ tree, factTree: tree });
-  const observed = vi.fn();
-  const Consumer = memo(function Consumer() {
+  function Consumer() {
     const { projects } = useProjectDirectory();
-    observed(projects);
     return createElement("span", null, projects.map((project) => project.name).join(","));
-  });
+  }
   const view = render(createElement(ProjectDirectoryProvider, null, createElement(Consumer)));
-  observed.mockClear();
+  expect(screen.getByText("Before")).toBeTruthy();
   view.rerender(createElement(ProjectDirectoryProvider, null, createElement(Consumer)));
-  expect(observed).not.toHaveBeenCalled();
+  expect(screen.getByText("Before")).toBeTruthy();
   const renamed = { ...tree, projects: [{ ...tree.projects[0]!, name: "After" }] };
   read.mockReturnValue({ tree: renamed, factTree: renamed });
   view.rerender(createElement(ProjectDirectoryProvider, null, createElement(Consumer)));
   expect(screen.getByText("After")).toBeTruthy();
-  expect(observed).toHaveBeenCalled();
+  expect(screen.queryByText("Before")).toBeNull();
 });

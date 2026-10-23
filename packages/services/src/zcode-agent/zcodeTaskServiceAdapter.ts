@@ -9,7 +9,6 @@ import { uploadBotGroupAttachments } from "./groupAttachmentUpload.js";
 import { createHash, randomUUID } from "node:crypto";
 import { createZCodeAgentConnectionScope } from "#src/zcode-agent/zcodeAgentConnectionScope.js";
 import { existsSync, readFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import {
   Emitter,
@@ -159,6 +158,7 @@ import {
   sendHostCasCommandV4,
 } from "./zcodeV4HostCommand.js";
 import {
+  getZCodeDataRootDir,
   getLegacyDeletedTaskSessionSnapshotPath,
   getLegacyTaskSessionSnapshotPath,
 } from "#src/paths.js";
@@ -193,6 +193,7 @@ interface TaskTarget {
   taskId: string;
   workspacePath: string;
   workspaceIdentity?: string;
+  ompProfile?: string | null;
   cronAutomationId?: string;
   remoteSessionId?: string;
 }
@@ -239,7 +240,7 @@ function formatZCodeAgentLogDate(now: Date): string {
 
 function resolveZCodeAgentCurrentLogFilePath(now = new Date()): string {
   const configuredLogDir = process.env.ZCODE_LOG_DIR?.trim();
-  const logDir = configuredLogDir || join(homedir(), ".zcode", "cli", "log");
+  const logDir = configuredLogDir || join(getZCodeDataRootDir(), "cli", "log");
   return join(logDir, `zcode-${formatZCodeAgentLogDate(now)}.jsonl`);
 }
 
@@ -285,6 +286,10 @@ export function createZCodeTaskServiceAdapter(
     taskEmitters: taskEmitters.size,
   }));
   const taskIndexRepo = options.taskIndexRepo ?? new TaskIndexRepo();
+  if (typeof options.zcodeAgentService.getOmpProfiles === "function")
+    taskIndexRepo.configureNativeOmpScope((target) =>
+      options.zcodeAgentService.getOmpProfiles(target),
+    );
   const taskIndexSyncer = options.taskIndexSyncer;
 
   // 之前 adapter 自带 notifySyncerSession 时把 syncer 视为可选；现在 syncer 是构造必填项，
@@ -988,6 +993,8 @@ export function createZCodeTaskServiceAdapter(
       // turn 的工具权限。resume/onDynamicTaskEvent 等入口不带值时仍需保留权威归属；明确设置
       // 或清除只能走 rememberIndexedTaskMeta。
       cronAutomationId: params.cronAutomationId ?? existing?.cronAutomationId,
+      // null 是已确认的默认 profile，不能用 ?? 将它当成未知。
+      ompProfile: params.ompProfile !== undefined ? params.ompProfile : existing?.ompProfile,
     });
   }
 
@@ -1324,6 +1331,7 @@ export function createZCodeTaskServiceAdapter(
       title: deriveTitleFromSnapshot(snapshot),
       workspacePath: snapshot.session.workspace.workspacePath,
       workspaceIdentity: snapshot.session.workspace.workspaceIdentity,
+      ompProfile: taskTargets.get(snapshot.session.sessionId)?.ompProfile,
       createdAt: snapshot.session.createdAt,
       updatedAt: snapshot.session.updatedAt,
       mode: fromZCodeMode(snapshot.session.mode),
@@ -1361,6 +1369,7 @@ export function createZCodeTaskServiceAdapter(
       workspacePath: meta.workspacePath,
       workspaceIdentity: meta.workspaceIdentity,
       cronAutomationId: meta.cronAutomationId,
+      ompProfile: meta.ompProfile !== undefined ? meta.ompProfile : existing?.ompProfile,
     });
     return meta;
   }
