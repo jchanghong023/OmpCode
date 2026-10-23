@@ -5513,7 +5513,6 @@ export function createZCodeAgentService(
         zcodeSessionConfigureResultSchema,
       );
     },
-
     async configureOmpSession(params) {
       const client = await getClient(params);
       const {

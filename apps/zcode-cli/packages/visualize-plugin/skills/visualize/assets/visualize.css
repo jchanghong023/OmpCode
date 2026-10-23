@@ -1328,3 +1328,129 @@ svg.lucide {
 .text-destructive {
   color: var(--destructive);
 }
+
+/* Chromium 120 cannot resolve light-dark(), including inside custom properties.
+   Keep the modern declarations above authoritative on supporting browsers.
+   These branches use the same palette and host-token precedence as those
+   declarations; explicit host appearance wins over standalone system appearance. */
+@supports not (color: light-dark(white, black)) {
+  :root {
+    background-color: var(--background) !important;
+    --background: var(--color-background-primary, rgb(255 255 255));
+    --foreground: var(--color-text-primary, rgb(26 28 31));
+    --card: var(--gen-ui-card, #ffffff);
+    --card-foreground: var(--color-text-primary, rgb(26 28 31));
+    --popover: var(--color-background-secondary, rgb(255 255 255));
+    --popover-foreground: var(--color-text-primary, rgb(26 28 31));
+    --primary: var(--gen-ui-primary, #000000);
+    --content-accent: var(--color-text-info, rgb(51 156 255));
+    --primary-foreground: var(--gen-ui-primary-foreground, rgb(255 255 255));
+    --secondary: var(--gen-ui-secondary, rgb(230 230 230));
+    --secondary-foreground: var(--color-text-primary, rgb(26 28 31));
+    --muted-foreground: var(--color-text-secondary, rgb(26 28 31 / 49.4%));
+    --accent: var(--color-background-info, rgb(229 242 255));
+    --accent-foreground: var(--color-text-info, rgb(51 156 255));
+    --destructive: var(--color-text-warning, rgb(226 85 7));
+    --border: var(--color-border-secondary, rgb(26 28 31 / 8%));
+    --input: var(--color-border-primary, rgb(26 28 31 / 11.8%));
+    --ring: var(--gen-ui-input-border-focused, rgb(51 156 255));
+    --blue: rgb(51 156 255);
+    --orange: rgb(226 85 7);
+    --green: rgb(0 162 64);
+    --red: rgb(224 46 42);
+    --purple: rgb(146 79 247);
+    --yellow: rgb(255 195 0);
+    --viz-series-2: rgb(243 136 59);
+    --viz-series-3: rgb(93 201 119);
+    --viz-series-4: rgb(235 119 177);
+    --viz-series-5: rgb(155 121 236);
+    --viz-series-6: rgb(58 185 177);
+    --input-bg: var(--gen-ui-input, #ffffff);
+    --gen-ui-legacy-carousel-hover: color-mix(in srgb, var(--foreground) 5.4%, transparent);
+    --gen-ui-legacy-carousel-shadow: rgb(0 0 0 / 6%);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --background: var(--color-background-primary, rgb(24 24 24));
+      --foreground: var(--color-text-primary, rgb(255 255 255));
+      --card: var(--gen-ui-card, #2b2b2b);
+      --card-foreground: var(--color-text-primary, rgb(255 255 255));
+      --popover: var(--color-background-secondary, rgb(45 45 45));
+      --popover-foreground: var(--color-text-primary, rgb(255 255 255));
+      --primary: var(--gen-ui-primary, #ffffff);
+      --content-accent: var(--color-text-info, rgb(131 195 255));
+      --primary-foreground: var(--gen-ui-primary-foreground, rgb(0 0 0));
+      --secondary: var(--gen-ui-secondary, rgb(54 54 54));
+      --secondary-foreground: var(--color-text-primary, rgb(255 255 255));
+      --muted-foreground: var(--color-text-secondary, rgb(255 255 255 / 49.8%));
+      --accent: var(--color-background-info, rgb(13 39 63));
+      --accent-foreground: var(--color-text-info, rgb(131 195 255));
+      --destructive: var(--color-text-warning, rgb(255 133 73));
+      --border: var(--color-border-secondary, rgb(255 255 255 / 8.2%));
+      --input: var(--color-border-primary, color-mix(in oklab, rgb(0 0 0) 10%, transparent));
+      --ring: var(--gen-ui-input-border-focused, rgb(131 195 255 / 76%));
+      --orange: rgb(251 106 34);
+      --green: rgb(64 201 119);
+      --red: rgb(255 103 100);
+      --purple: rgb(173 123 249);
+      --yellow: rgb(255 210 64);
+      --viz-series-2: rgb(245 154 86);
+      --viz-series-3: rgb(116 213 139);
+      --viz-series-4: rgb(240 143 192);
+      --viz-series-5: rgb(170 145 239);
+      --viz-series-6: rgb(90 203 194);
+      --input-bg: var(--gen-ui-input, #2b2b2b);
+      --gen-ui-legacy-carousel-hover: color-mix(in srgb, var(--foreground) 7.8%, transparent);
+      --gen-ui-legacy-carousel-shadow: rgb(0 0 0 / 25%);
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --background: var(--color-background-primary, rgb(24 24 24));
+    --foreground: var(--color-text-primary, rgb(255 255 255));
+    --card: var(--gen-ui-card, #2b2b2b);
+    --card-foreground: var(--color-text-primary, rgb(255 255 255));
+    --popover: var(--color-background-secondary, rgb(45 45 45));
+    --popover-foreground: var(--color-text-primary, rgb(255 255 255));
+    --primary: var(--gen-ui-primary, #ffffff);
+    --content-accent: var(--color-text-info, rgb(131 195 255));
+    --primary-foreground: var(--gen-ui-primary-foreground, rgb(0 0 0));
+    --secondary: var(--gen-ui-secondary, rgb(54 54 54));
+    --secondary-foreground: var(--color-text-primary, rgb(255 255 255));
+    --muted-foreground: var(--color-text-secondary, rgb(255 255 255 / 49.8%));
+    --accent: var(--color-background-info, rgb(13 39 63));
+    --accent-foreground: var(--color-text-info, rgb(131 195 255));
+    --destructive: var(--color-text-warning, rgb(255 133 73));
+    --border: var(--color-border-secondary, rgb(255 255 255 / 8.2%));
+    --input: var(--color-border-primary, color-mix(in oklab, rgb(0 0 0) 10%, transparent));
+    --ring: var(--gen-ui-input-border-focused, rgb(131 195 255 / 76%));
+    --orange: rgb(251 106 34);
+    --green: rgb(64 201 119);
+    --red: rgb(255 103 100);
+    --purple: rgb(173 123 249);
+    --yellow: rgb(255 210 64);
+    --viz-series-2: rgb(245 154 86);
+    --viz-series-3: rgb(116 213 139);
+    --viz-series-4: rgb(240 143 192);
+    --viz-series-5: rgb(170 145 239);
+    --viz-series-6: rgb(90 203 194);
+    --input-bg: var(--gen-ui-input, #2b2b2b);
+    --gen-ui-legacy-carousel-hover: color-mix(in srgb, var(--foreground) 7.8%, transparent);
+    --gen-ui-legacy-carousel-shadow: rgb(0 0 0 / 25%);
+  }
+
+  html > body {
+    --color-background-primary: var(--background);
+    --color-text-primary: var(--foreground);
+    --color-border-secondary: var(--border);
+  }
+
+  .viz-carousel-controls {
+    --viz-carousel-hover: var(--gen-ui-legacy-carousel-hover);
+  }
+
+  .viz-carousel-options {
+    box-shadow: 0 4px 12px var(--gen-ui-legacy-carousel-shadow);
+  }
+}

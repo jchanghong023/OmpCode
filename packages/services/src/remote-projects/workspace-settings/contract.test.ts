@@ -1,7 +1,7 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import { DatabaseSync } from "@zcode/shared/sqlite-migrations";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { projectStorage } from "#src/project-storage/index.js";
 import {

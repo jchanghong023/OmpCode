@@ -1,3 +1,5 @@
+// Node 18 默认缺少全局 crypto；先复用共享 Node 引导，确保依赖中的 uuidv7 首次调用可用。
+import "@zcode/shared/node";
 import { ToolSearchModeSchema } from "@zcode/contracts";
 import {
   STORAGE_MIGRATION_COMMAND,

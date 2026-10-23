@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { randomUUID } from "node:crypto";
 import { basename } from "node:path";
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseSync } from "@zcode/shared/sqlite-migrations";
 import {
   generateTraceId,
   isRemoteWorkspaceIdentity,

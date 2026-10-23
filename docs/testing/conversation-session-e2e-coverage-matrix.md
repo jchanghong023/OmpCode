@@ -68,7 +68,6 @@ pnpm --filter @zcode/desktop test:e2e --spec test/e2e/omp-permissions.e2e.ts
 
 在 `packages/desktop` 目录可直接使用 `pnpm test:e2e --spec test/e2e/omp-permissions.e2e.ts`。证据目录为 `.e2e-artifacts/desktop-e2e-20261022211634200-p52808-69a045b85eac9c70/`：`test-results.ndjson` 前四项通过，保留 `omp-permission-*-pending.png`、末态截图及 `*-provider-requests.json`。该批次随后在 management spec 失败，整体保持非零；不把权限四项通过扩称整轮通过。只验证隔离本地模型与 desktop-continuous，不代表真实模型或手机实机验收。
 
-
 ## OMP-native 子代理与工作流核心验收
 
 本次新增范围的 setup、动作与断言见 [case catalog](../conversation-session-case-catalog.md#omp-native-子代理与工作流核心验收)，行为权威只引用 [OMP 需求](../../../oh-my-pi/docs-zh-CN/requirements/rpc-ui-protocol.md)，宿主消费见 [FORK-003](../../fork.md#子代理与工作流核心范围引用)。状态仅依据本次新增 OMP-native E2E 的实际断言，不继承本页旧 Agent E2E 的 passed 状态。

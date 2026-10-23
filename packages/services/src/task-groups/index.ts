@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { remoteHostIdFromWorkspaceIdentity } from "@zcode/shared";
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseSync } from "@zcode/shared/sqlite-migrations";
 import type {
   GroupTaskFact,
   GroupTaskRef,

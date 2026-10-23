@@ -10,6 +10,9 @@ CLI 与 Host 共用的 SQLite 升级基础设施；不理解 session、project �
 - previousIds 仅用于开发分支迁移后移：所有已存在 ID 校验同一 SQL checksum，旧 ID 已完成时复制记账到新 ID，不重跑转换，不改旧记录。
 - 空间不足尝试后续卷；全部不足记录 skipped，调用者必须提示。正常读取及正常降级不消费备份。
 - 恢复保留加法 schema，新列取默认；恢复后删除相应 migration 记录。未知迁移 ID 保留。
-- 唯一副作用入口为 migrate / restore；index.ts 是启动组合入口，contract.ts 是稳定端口。SQLite 使用 Node 唯一可用的同步 API，文件系统操作均异步。
+- index.ts 是启动组合与 SQLite 公共入口，contract.ts 是迁移稳定端口。唯一驱动按完整合同能力选择：Node 22.16+ 的 22.x 与 Node 24+ 原样导出 node:sqlite 构造器与 backup；其余 runtime 懒加载 better-sqlite3 9.6.0。Node 22.5 仅代表模块出现，不代表具备 backup/isTransaction/timeout；这些能力在 [22.16 版本文档](https://nodejs.org/download/release/v22.16.0/docs/api/sqlite.html) 标注新增于 22.16，主线为 24.0，不能据此假设 23.x 支持。原生加载或打开失败直接抛错，绝不切换驱动、复制数据库或双写。
+- 兼容连接只拥有驱动句柄，保持同步 SQL、只读/延迟打开/关闭、事务状态、外键、WAL 和 busy_timeout；statement 保留位置/具名前缀绑定、整数范围错误、BigInt、BLOB、NULL 及迭代生命周期。在线 backup 异步分批复制，source/rate/progress 明确映射，非 main target 与原生新目标库一样拒绝。文件系统操作均异步。
+- run/get/all/iterate 的显式 undefined 位置或具名绑定均抛 TypeError，code 为 ERR_INVALID_ARG_TYPE；省略参数、缺失具名属性仍绑定 NULL，显式 null 保持 NULL。此校验只在兼容 statement 内执行，原生构造器与 statement 不包装。
+- 兼容驱动仅为真实 SqliteError 补充启动所需的 primary errcode：BUSY/LOCKED 锁分类，以及 PERM、READONLY、IOERR、NOMEM、CORRUPT、NOTADB、FULL、CANTOPEN 启动故障分类；扩展码折叠到对应 primary，不仿真完整 SQLite 数字错误码表。保留同一错误对象、message、stack、cause、原 code 和已有 errcode，不改变原生路径、不截获无关异常。行结果使用原生 null prototype，不复制行。
 
 启动进程共用 storage-migrate 命令名及 version=1 的严格 JSON 完成 schema；SQL 仍只由持库 CLI 的 runner 执行。完成结果传 applied / backupPath / backupSkipped，错误以非零退出呈现，不伪造完成帧。

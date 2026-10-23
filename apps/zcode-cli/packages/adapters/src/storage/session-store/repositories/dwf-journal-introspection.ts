@@ -8,7 +8,7 @@
  * 引擎的 `JournalStorePort` 写面不在这里——这里没有任何写入者。
  */
 
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseSync } from "@zcode/shared/sqlite-migrations";
 import type { NodeRecord, NodeRecordStatus, RunStatus, StoredEvent } from "@zcode/dynamic-workflow";
 import type { DwfArtifactItem, DwfArtifactItemsQuery } from "./dwf-journal-artifacts.js";
 import type { DwfEventPageQuery } from "./dwf-journal-pages.js";

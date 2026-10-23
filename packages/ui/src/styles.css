@@ -2277,3 +2277,11 @@ html[data-document-hidden] *::after {
   [data-sidebar-divider-extension] {
   display: none;
 }
+
+/* Chromium 120 不支持 anchor；变量由侧栏原分隔区域按共同容器坐标更新。 */
+@supports not (left: anchor(--sidebar-task-list-divider right)) {
+  [data-sidebar-divider-extension] {
+    left: var(--sidebar-divider-left, -4px);
+    top: var(--sidebar-divider-top, -1px);
+  }
+}

@@ -581,8 +581,8 @@ export default {
   electronLanguages: ["en-US", "zh-CN"],
   // pnpm workspace + semver range（如 ^41.0.3）下，electron-builder
   // 有时无法从依赖树里稳定推导出 Electron 版本，导致 bundle 直接中断。
-  // 显式写死当前桌面端使用的 Electron 版本，避免打包阶段再做不可靠的猜测。
-  electronVersion: "41.0.3",
+  // The isolated CentOS workspace selects 28; the source manifest retains the Windows baseline.
+  electronVersion: desktopElectronVersion,
   // 旧 Windows 协议注册可能在应用 JS 重写注册表前注入 --inspect-brk。
   // 在签名前关闭原生 Inspector 参数，覆盖升级后首次启动；保留 Agent 所需的 RunAsNode。
   ...(targetPlatform.os === "win32"
@@ -677,8 +677,12 @@ export default {
     runTimedSync("afterPack:assertPackagedNodePtyPrebuild", () =>
       assertPackagedNodePtyPrebuild(context),
     );
-    runTimedSync("afterPack:assertPackagedCuaSharp", () => assertPackagedCuaSharp(context));
-    runTimedSync("afterPack:assertPackagedCuaKoffi", () => assertPackagedCuaKoffi(context));
+    // CentOS app/native jobs are independent: the ZIP assembler overlays and verifies native
+    // plugin assets after this intermediate tree. Modern packages remain complete at afterPack.
+    if (!(targetPlatform.os === "linux" && desktopElectronVersion === "28.3.3")) {
+      runTimedSync("afterPack:assertPackagedCuaSharp", () => assertPackagedCuaSharp(context));
+      runTimedSync("afterPack:assertPackagedCuaKoffi", () => assertPackagedCuaKoffi(context));
+    }
     runTimedSync("afterPack:assertPackagedCuaHelper", () => assertPackagedCuaHelper(context));
     if (actualWindowsTarget && shouldPackageComputerUseHelper) {
       await runTimedAsync("afterPack:finalizePackagedWindowsCuaHelper", () =>

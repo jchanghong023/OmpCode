@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseSync } from "./driver.js";
 
 /** 历史 SQL 是 checksum 输入，发布后不可修改；apply 只供带数据回填的迁移使用。 */
 export interface SqliteMigration {

@@ -21,6 +21,12 @@ const buildTimeConfigDefines = createBuildTimeConfigDefines(
 
 const buildMetadata = getBuildMetadata();
 
+// 临时发行工作区的精确 Electron manifest 是唯一 profile 输入，不向 UI 注入性能标记。
+const desktopElectronVersion = JSON.parse(
+  readFileSync(new URL("./package.json", import.meta.url), "utf8"),
+).devDependencies.electron;
+const legacyDesktopRuntime = desktopElectronVersion === "28.3.3";
+
 function resolveZCodeEnv(value: string | undefined): "test" | "production" {
   return value?.trim().toLowerCase() === "production" ? "production" : "test";
 }
@@ -179,12 +185,26 @@ export function resolveDesktopTsupBundleSecurityOptions(
 type DesktopTsupEsbuildOptions = {
   chunkNames?: string;
   legalComments?: "none" | "inline" | "eof" | "linked" | "external";
+  define?: Record<string, string>;
+  banner?: { js?: string };
 };
 
 export function applyDesktopTsupEsbuildSecurityOptions(options: DesktopTsupEsbuildOptions) {
   // 生产压缩时 esbuild 默认可能保留 license/legal 注释，
   // 发布包不应在 main/host/preload 里留下源码注释或 sourcemap 入口注释。
   options.legalComments = "none";
+  // Node18 无 import.meta.dirname；使用产物自身 URL，不能嵌入构建机的绝对源码路径。
+  if (legacyDesktopRuntime) {
+    options.define = {
+      ...options.define,
+      "import.meta.dirname": "__ompcodeModuleDirname",
+      "import.meta.filename": "__ompcodeModuleFilename",
+    };
+    options.banner = {
+      ...options.banner,
+      js: `import { fileURLToPath as __ompcodeFileURLToPath } from "node:url"; import { dirname as __ompcodeDirname } from "node:path"; const __ompcodeModuleFilename = __ompcodeFileURLToPath(import.meta.url); const __ompcodeModuleDirname = __ompcodeDirname(__ompcodeModuleFilename);`,
+    };
+  }
 }
 
 const desktopTsupBundleSecurityOptions = resolveDesktopTsupBundleSecurityOptions();
@@ -258,6 +278,7 @@ export default defineConfig([
     // node:sqlite 只有带前缀的内置入口；tsup 去掉 node: 会错误加载第三方 sqlite 包。
     removeNodeProtocol: false,
     target: "node22",
+    ...(legacyDesktopRuntime ? { target: "node18" } : {}),
     // undici 如果被 main ESM bundle 直接内联，运行时会落到它内部的 CommonJS require("assert")，
     // Electron 加载 main 产物时会报 Dynamic require of "assert" is not supported。
     // desktop 保持 undici 为外部依赖，remote 单文件 bundle 再单独内联。
@@ -306,12 +327,14 @@ export default defineConfig([
     // node:sqlite 只有带前缀的内置入口；tsup 去掉 node: 会错误加载第三方 sqlite 包。
     removeNodeProtocol: false,
     target: "node22",
+    ...(legacyDesktopRuntime ? { target: "node18" } : {}),
     external: ["electron"],
     noExternal: ["@zcode/shared"],
     outExtension: () => ({ js: ".cjs" }),
     define: createSharedDefines(),
     esbuildOptions(options) {
-      applyDesktopTsupEsbuildSecurityOptions(options);
+      // sandbox preload 是 CJS，不能注入 ESM banner。
+      options.legalComments = "none";
     },
     onSuccess: createDevReadyMarkerHook("preload"),
     ...desktopTsupBundleSecurityOptions,
@@ -331,12 +354,13 @@ export default defineConfig([
     format: "iife",
     platform: "browser",
     target: "es2022",
+    ...(legacyDesktopRuntime ? { target: "chrome120" } : {}),
     // 沙箱页面没有 node_modules：SDK（ext-apps / client / core / zod）必须全部打进 IIFE。
     noExternal: [/.*/],
     outExtension: () => ({ js: ".js" }),
     define: createSharedDefines(),
     esbuildOptions(options) {
-      applyDesktopTsupEsbuildSecurityOptions(options);
+      options.legalComments = "none";
     },
     ...desktopTsupBundleSecurityOptions,
   },
@@ -352,6 +376,7 @@ export default defineConfig([
     // node:sqlite 只有带前缀的内置入口；tsup 去掉 node: 会错误加载第三方 sqlite 包。
     removeNodeProtocol: false,
     target: "node22",
+    ...(legacyDesktopRuntime ? { target: "node18" } : {}),
     // host 与 main 共用同一套 services 图，继续内联 undici 会在 Electron ESM runtime 里触发同样的 dynamic require 崩溃。
     // 这里同样保留为外部依赖，避免 desktop 开发态和打包态 host 进程启动失败。
     external: desktopNodeRuntimeExternals,
@@ -383,6 +408,7 @@ export default defineConfig([
     // node:sqlite 只有带前缀的内置入口；tsup 去掉 node: 会错误加载第三方 sqlite 包。
     removeNodeProtocol: false,
     target: "node22",
+    ...(legacyDesktopRuntime ? { target: "node18" } : {}),
     // 与 host 同构：常驻 cron scheduler 进程复用 @zcode/services（tasks-index + cron），
     // 同样保留 undici 等为外部依赖，避免 Electron ESM runtime 的 dynamic require 崩溃。
     external: desktopNodeRuntimeExternals,

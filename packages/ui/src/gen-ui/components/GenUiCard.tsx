@@ -110,6 +110,10 @@ export function GenUiCard({
     if (snapshot.escapeSequence) setExpanded(false);
   }, [snapshot.escapeSequence]);
   const title = reference.title || label("title");
+  // Chromium 120 的 guest 固定在窗口承载层；局部 z-index 无法盖过它，
+  // 操作栏必须退出页面区域，不能靠重挂 guest 或抬高虚拟消息的层级解决。
+  const fixedPagePlane =
+    typeof Element !== "undefined" && typeof Element.prototype.moveBefore !== "function";
   const loading = supported && online && snapshot.phase !== "error" && !acquisitionError;
   const status = !supported
     ? label("desktopOnly")
@@ -125,7 +129,9 @@ export function GenUiCard({
       className={
         preview
           ? "flex shrink-0 items-center justify-end gap-1 p-2"
-          : "absolute right-0 bottom-0 z-20 flex gap-1 rounded-lg bg-popover p-1 shadow-sm opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 data-[visible=true]:opacity-100 [@media(hover:none)]:opacity-100"
+          : fixedPagePlane
+            ? "relative mt-2 flex justify-end gap-1 rounded-lg bg-popover p-1 shadow-sm"
+            : "absolute right-0 bottom-0 z-20 flex gap-1 rounded-lg bg-popover p-1 shadow-sm opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 data-[visible=true]:opacity-100 [@media(hover:none)]:opacity-100"
       }
       data-visible={snapshot.hovered || tweaks}
       data-testid="gen-ui-actions"

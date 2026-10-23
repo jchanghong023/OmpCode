@@ -198,6 +198,11 @@ export class ProjectAccessTokenCache {
 
 /** 仅用于拒绝某一代 PAT 的比较，不作为账号身份，也不传给模型上游。 */
 export async function projectAccessTokenFingerprint(token: string): Promise<string> {
+  // Node 18 默认没有全局 WebCrypto；按需加载 Node 实现，浏览器仍走原生 subtle。
+  if (!globalThis.crypto?.subtle) {
+    const { createHash } = await import("node:crypto");
+    return createHash("sha256").update(token, "utf8").digest("hex");
+  }
   const digest = await globalThis.crypto.subtle.digest("SHA-256", new TextEncoder().encode(token));
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }

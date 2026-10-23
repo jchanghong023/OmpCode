@@ -1,9 +1,12 @@
 import { runTasksDatabaseMigrations } from "#src/session/tasksDatabase/migrations.js";
 import { cancelConflictingOffPeakBindings } from "#src/session/offPeakWorkspaceIdentityMigration.js";
-import { runSessionDatabaseIdentityMigration } from "@zcode/shared/sqlite-migrations";
+import {
+  backup,
+  DatabaseSync,
+  runSessionDatabaseIdentityMigration,
+} from "@zcode/shared/sqlite-migrations";
 /* eslint-disable max-lines -- R3 canonical alias、双库备份、ledger 与幂等合并属于同一迁移事务边界。 */
 import { createHash, randomUUID } from "node:crypto";
-import { createRequire } from "node:module";
 import { mkdir, readFile, readdir, rename, rm, stat } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import {
@@ -19,8 +22,6 @@ import {
 import { getDataBaseDir, getTasksIndexDatabasePath, getWorkspaceHash } from "#src/paths.js";
 
 type Database = InstanceType<typeof DatabaseSync>;
-const require = createRequire(import.meta.url);
-const { backup, DatabaseSync } = require("node:sqlite") as typeof import("node:sqlite");
 
 export interface SourceServerWorkspaceAliasRepoOptions {
   taskDbPath?: string;

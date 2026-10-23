@@ -193,7 +193,6 @@ export const ompTeamStopResultSchema = z
 export type OmpTeamRequest = z.infer<typeof ompTeamRequestSchema>;
 export type OmpTeamRun = z.infer<typeof ompTeamRunSchema>;
 export type OmpTeamNode = z.infer<typeof ompTeamNodeSchema>;
-
 export type ZCodeAgentBinaryKind = "native-binary";
 
 export interface ZCodeAgentRuntimeDescriptor {

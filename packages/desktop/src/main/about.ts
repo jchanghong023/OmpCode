@@ -1,11 +1,8 @@
-import type {
-  AboutPanelOptionsOptions,
-  BrowserWindow,
-  MessageBoxReturnValue,
-} from "electron";
+import type { AboutPanelOptionsOptions, BrowserWindow, MessageBoxReturnValue } from "electron";
 import { existsSync, readFileSync } from "node:fs";
 import { arch, hostname, platform, release, type, version as osVersion } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   DEFAULT_LOCALE,
   type Locale,
@@ -16,6 +13,8 @@ import {
 } from "@zcode/shared";
 import { createCustomAboutDialogHtml } from "./aboutWindow.js";
 
+// Node 18 没有 import.meta.dirname；按输出模块 URL 定位，保持打包后可重定位。
+const moduleDirname = dirname(fileURLToPath(import.meta.url));
 interface DesktopBuildMetadata {
   appVersion?: string;
   buildCommitId?: string;
@@ -118,7 +117,7 @@ function readJsonFile<T>(filePath: string): T | null {
 }
 
 function resolveBuildMetadataPath(): string {
-  return join(import.meta.dirname, "../metadata/build-meta.json");
+  return join(moduleDirname, "../metadata/build-meta.json");
 }
 
 export function readBuildMetadata(
@@ -136,7 +135,7 @@ function resolveElectronBuilderVersion(buildMetadata: DesktopBuildMetadata | nul
   }
 
   const packageJson = readJsonFile<{ devDependencies?: Record<string, string> }>(
-    join(import.meta.dirname, "../../package.json"),
+    join(moduleDirname, "../../package.json"),
   );
   return normalizePackageVersion(packageJson?.devDependencies?.["electron-builder"]);
 }
@@ -232,7 +231,7 @@ export function createSystemAboutPanelOptions(
 function resolveAboutIconPath(isPackaged: boolean): string {
   return isPackaged
     ? join(process.resourcesPath, "icon.png")
-    : join(import.meta.dirname, "../../build/icon.png");
+    : join(moduleDirname, "../../build/icon.png");
 }
 
 export async function showAboutDialog(

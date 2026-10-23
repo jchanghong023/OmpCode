@@ -1239,12 +1239,16 @@ export class ZCodeAgentProcessManager {
       ...(this.lane ? { lane: this.lane } : {}),
       workspaceKey,
     };
-    const exitDiagnostics = Promise.withResolvers<void>();
+    // Node 18 没有 withResolvers；同步捕获 resolver，保持退出诊断的完成时序不变。
+    let resolveExitDiagnostics!: () => void;
+    const exitDiagnosticsCompleted = new Promise<void>((resolve) => {
+      resolveExitDiagnostics = resolve;
+    });
     const managed: ManagedZCodeAgentProcess = {
       child,
       client,
       exited: false,
-      exitDiagnosticsCompleted: exitDiagnostics.promise,
+      exitDiagnosticsCompleted,
       readyReported: false,
       runtimeIdentity,
       runtimeInstanceId,
@@ -1356,7 +1360,7 @@ export class ZCodeAgentProcessManager {
         }),
       );
       if (child.pid == null) {
-        exitDiagnostics.resolve();
+        resolveExitDiagnostics();
         this.ownedProcesses.delete(managed);
       }
     });
@@ -1422,7 +1426,7 @@ export class ZCodeAgentProcessManager {
           );
         }
       } finally {
-        exitDiagnostics.resolve();
+        resolveExitDiagnostics();
       }
     });
     client.onRequestTimeout((event) => {

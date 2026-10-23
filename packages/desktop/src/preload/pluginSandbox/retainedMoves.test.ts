@@ -39,4 +39,12 @@ describe("sandbox retained moves", () => {
     page.disconnectedCallback();
     expect(disconnected).toHaveBeenCalledTimes(2);
   });
+  it("does not patch guest lifecycle when atomic DOM moves are missing", () => {
+    vi.stubGlobal("Element", class {});
+    const define = vi.fn();
+    vi.stubGlobal("customElements", { define });
+    expect(enableSandboxRetainedMoves()).toBe(false);
+    expect(customElements.define).toBe(define);
+    expect(define).not.toHaveBeenCalled();
+  });
 });

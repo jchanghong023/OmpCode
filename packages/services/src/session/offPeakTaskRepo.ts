@@ -9,7 +9,7 @@ import {
    与 automation 共用 tasks-index.sqlite 与 Repo 模式，但表/状态机/常量全部独立，
    禁止往 automations 表或 ZCodeAutomation 类型上加字段。 */
 import { mkdir } from "node:fs/promises";
-import { createRequire } from "node:module";
+import { DatabaseSync } from "@zcode/shared/sqlite-migrations";
 import { dirname } from "node:path";
 import { randomUUID } from "node:crypto";
 import {
@@ -24,8 +24,6 @@ import {
 import { getTasksIndexDatabasePath } from "#src/paths.js";
 import { runTasksDatabaseMigrations } from "#src/session/tasksDatabase/migrations.js";
 
-const require = createRequire(import.meta.url);
-const { DatabaseSync } = require("node:sqlite") as typeof import("node:sqlite");
 type DatabaseSyncInstance = InstanceType<typeof DatabaseSync>;
 
 /** 认领超时回收：claim_running=1 超过该时长仍未结算，视为持有者已崩溃，允许重新认领。

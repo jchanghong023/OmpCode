@@ -1,9 +1,11 @@
-import { chmod, mkdir } from "node:fs/promises";
+import { chmod, mkdir, readFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { build } from "esbuild";
 
 const defaultPackageRoot = resolve(import.meta.dirname, "..");
+const desktopManifest = JSON.parse(await readFile(resolve(defaultPackageRoot, "../../../../packages/desktop/package.json"), "utf8"));
+const runtimeTarget = desktopManifest.devDependencies?.electron === "28.3.3" ? "node18" : "node24";
 const executableFileMode = 0o755;
 
 // esbuild 以 format: "esm" 打包时，会把 CJS 依赖里的 require() 替换成一个 __require shim：
@@ -29,7 +31,7 @@ const createBundleOptions = ({ entryPoint, outfile }) => ({
   legalComments: "none",
   outfile,
   platform: "node",
-  target: "node24",
+  target: runtimeTarget,
   external: ["sharp"],
 });
 

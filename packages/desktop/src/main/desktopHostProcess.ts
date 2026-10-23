@@ -38,7 +38,10 @@ import {
   MessageChannelMain,
 } from "electron";
 import { randomUUID } from "node:crypto";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+// Node 18 没有 import.meta.dirname；renderer 相对输出模块解析，不能依赖启动 cwd。
+const moduleDirname = dirname(fileURLToPath(import.meta.url));
 import { BroadcastHub } from "./broadcastHub.js";
 import { bindDatabaseStartupRelay } from "./databaseStartupRelay.js";
 import { getMainLaunchPartialMarks } from "./desktopLaunchMarks.js";
@@ -149,7 +152,7 @@ export function loadWindow(
     }
     return win.loadURL(url.toString());
   } else {
-    return win.loadFile(join(import.meta.dirname, `../renderer/${page}.html`), {
+    return win.loadFile(join(moduleDirname, `../renderer/${page}.html`), {
       query,
     });
   }

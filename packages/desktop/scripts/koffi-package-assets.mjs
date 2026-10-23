@@ -3,7 +3,8 @@
 // The CUA server externalizes koffi because esbuild cannot bundle its
 // platform-dispatching `.node` requires. The installed agent has no hoisted
 // node_modules, so keep only the target binary beside the plugin.
-import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { copyFile, mkdir, readdir, rm } from "node:fs/promises";
 import { resolve } from "node:path";
 
 function resolveKoffiRoot(koffiPackageRoot) {
@@ -37,7 +38,7 @@ function koffiPlatformKey(targetPlatform) {
   return `${targetPlatform.os}_${targetPlatform.arch}`;
 }
 
-export function stageKoffiIntoBundledAgents({ koffiPackageRoot, glmDir, targetPlatform }) {
+export async function stageKoffiIntoBundledAgents({ koffiPackageRoot, glmDir, targetPlatform }) {
   if (!koffiPackageRoot || !glmDir || !targetPlatform?.os || !targetPlatform?.arch) {
     throw new Error(
       "[koffi-package-assets] koffiPackageRoot, glmDir and targetPlatform are required",
@@ -53,12 +54,15 @@ export function stageKoffiIntoBundledAgents({ koffiPackageRoot, glmDir, targetPl
   }
 
   const targetRoot = resolve(glmDir, "node_modules", "koffi");
-  rmSync(targetRoot, { recursive: true, force: true });
-  mkdirSync(resolve(targetRoot, "build", "koffi", platformKey), { recursive: true });
-  for (const file of ["index.js", "package.json", "index.d.ts"]) {
-    cpSync(resolve(sourceRoot, file), resolve(targetRoot, file));
+  await rm(targetRoot, { recursive: true, force: true });
+  await mkdir(resolve(targetRoot, "build", "koffi", platformKey), { recursive: true });
+  const licenses = (await readdir(sourceRoot)).filter((name) =>
+    /^(?:licen[cs]e|copying|notice|copyright)(?:[._-]|$)/iu.test(name),
+  );
+  for (const file of ["index.js", "package.json", "index.d.ts", ...licenses]) {
+    await copyFile(resolve(sourceRoot, file), resolve(targetRoot, file));
   }
-  cpSync(
+  await copyFile(
     resolve(sourceNativeDir, "koffi.node"),
     resolve(targetRoot, "build", "koffi", platformKey, "koffi.node"),
   );

@@ -1,4 +1,4 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseSync } from "@zcode/shared/sqlite-migrations";
 import type { ProjectMigrationContext } from "#src/project-storage/contract.js";
 
 export const INITIAL_WORKSPACE_ORDER_SQL =

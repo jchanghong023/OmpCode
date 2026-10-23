@@ -1,4 +1,4 @@
-import { webContents, type Session } from "electron";
+import { webContents, type Session, type WebContents, type WebFrameMain } from "electron";
 import type { PluginSandboxRegistryPort } from "./contract.js";
 import type { PluginSandboxPermissionGate } from "./permissionGate.js";
 import { createGenUiVendorResources, resolveGenUiVendorRedirect } from "./genUiVendor.js";
@@ -10,6 +10,20 @@ import {
 } from "./protocol.js";
 
 const preparedSessions = new WeakSet<Session>();
+
+function isCurrentChildFrame(guest: WebContents, frame: WebFrameMain | undefined): boolean {
+  if (!frame) return false;
+  // Keep native liveness checks where available. On Electron 28, membership in
+  // the owner's current frame tree rejects disposed/replaced frames without detached.
+  try {
+    if (typeof frame.isDestroyed === "function" && frame.isDestroyed()) return false;
+    if ("detached" in frame && frame.detached) return false;
+    return guest.mainFrame.frames.includes(frame);
+  } catch {
+    // Only Electron frame-state access is inside this boundary, never permission logic.
+    return false;
+  }
+}
 
 /**
  * 每个可信 App 身份一个持久 partition（多个沙箱共享）。首次使用时把 partition session 锁死：
@@ -114,9 +128,7 @@ export function preparePluginSandboxSession(input: {
         permission,
         guestUrl,
         isCurrent: () =>
-          !guest.isDestroyed() &&
-          guest.getURL() === guestUrl &&
-          Boolean(frame && !frame.detached && guest.mainFrame.frames.includes(frame)),
+          !guest.isDestroyed() && guest.getURL() === guestUrl && isCurrentChildFrame(guest, frame),
         requestingUrl: details.requestingUrl,
         ...(mediaTypes ? { mediaTypes } : {}),
       })

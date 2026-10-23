@@ -343,10 +343,15 @@ contextBridge.exposeInMainWorld("zcode", {
     ipcRenderer.invoke(PlatformChannels.PrintToPdf),
   /** 从系统拖拽/文件输入得到的 Web File 解析真实本地路径 */
   getPathForFile: (file: File): string | null => {
-    // Electron 32 起移除了非标准 File.path，renderer 不能再直接从拖拽 File 上取路径。
-    // webUtils 只能在 preload 安全使用；取不到路径时返回 null，让 Web/内联附件逻辑继续兜底。
-    const path = webUtils.getPathForFile(file).trim();
-    return path.length > 0 ? path : null;
+    // Electron 32 起移除了 File.path；现代 API 即使返回空值也有最终优先权。
+    // 旧版只接受真实 File，不能把普通对象的 path 冒充系统附件。
+    const path =
+      typeof webUtils?.getPathForFile === "function"
+        ? webUtils.getPathForFile(file)
+        : file instanceof File
+          ? (file as File & { path?: string }).path
+          : undefined;
+    return typeof path === "string" && path.trim().length > 0 ? path.trim() : null;
   },
   /** 长文本粘贴落盘为真正的本地附件，避免正文和 prompt payload 被撑大 */
   createTempTextAttachment: (payload: CreateTempTextAttachmentRequest) =>

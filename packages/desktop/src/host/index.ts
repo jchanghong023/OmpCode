@@ -148,7 +148,11 @@ import {
   createSourceSettingsServiceCollection,
   shouldDetachSourceSettingsAttachment,
 } from "./sourceSettingsServiceCollection.js";
-import { shouldReportHostConsoleError, stringifyHostLogArg } from "./hostLog.js";
+import {
+  createHostRawConsole,
+  shouldReportHostConsoleError,
+  stringifyHostLogArg,
+} from "./hostLog.js";
 import { flushHostE2ECoverage } from "./e2eCoverage.js";
 import { runHostShutdownPhases, type HostShutdownResult } from "./hostShutdownPhases.js";
 import { initializeHostApiNetworkTransportOwner } from "./hostInitialization.js";
@@ -349,11 +353,15 @@ function reportHostLog(level: HostLogLevel, args: unknown[]): void {
   }
 }
 
-const rawConsole = {
-  log: console.log.bind(console),
-  warn: console.warn.bind(console),
-  error: console.error.bind(console),
-};
+const rawConsole = createHostRawConsole(
+  {
+    log: console.log.bind(console),
+    warn: console.warn.bind(console),
+    error: console.error.bind(console),
+  },
+  process.stdout,
+  process.stderr,
+);
 
 const remoteConnectionProgressContext = createRemoteConnectionProgressContext({
   emit: ({ requestId, level, args }) => {

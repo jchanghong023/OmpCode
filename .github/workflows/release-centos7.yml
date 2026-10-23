@@ -1,0 +1,283 @@
+name: Release CentOS 7 ZIP
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # 默认单 pending 会被后来的请求取消；多 pending 队列保留等待中的手动发布。
+  group: release-centos7
+  queue: max
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      release_tag: ${{ steps.metadata.outputs.release_tag }}
+      app_version: ${{ steps.metadata.outputs.app_version }}
+      native_image: ${{ steps.metadata.outputs.native_image }}
+    env:
+      CENTOS7_NATIVE_IMAGE: ${{ vars.CENTOS7_NATIVE_IMAGE }}
+    steps:
+      - name: Require release branch
+        run: |
+          [[ "$GITHUB_REF" == refs/heads/dev-centos7 ]] || { echo 'CentOS releases must run from dev-centos7.' >&2; exit 1; }
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.14.0
+      - name: Validate immutable inputs and resolve metadata
+        id: metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -n "$CENTOS7_NATIVE_IMAGE" && ! "$CENTOS7_NATIVE_IMAGE" =~ ^[^[:space:]]+@sha256:[a-f0-9]{64}$ ]]; then
+            echo 'CENTOS7_NATIVE_IMAGE override must be an immutable image@sha256:digest; otherwise leave unset to build the checked-in recipe.' >&2
+            exit 1
+          fi
+          version=$(node -p 'require("./package.json").version')
+          tag="v$(date -u +%Y%m%d-%H%M%S)-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          git check-ref-format "refs/tags/$tag"
+          existing=$(git ls-remote --tags "https://github.com/$GITHUB_REPOSITORY.git" "refs/tags/$tag")
+          [[ -z "$existing" ]] || { echo 'Release tag already exists.' >&2; exit 1; }
+          {
+            echo "app_version=$version"
+            echo "release_tag=$tag"
+            echo "native_image=$CENTOS7_NATIVE_IMAGE"
+          } >> "$GITHUB_OUTPUT"
+
+  desktop:
+    needs: preflight
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      ZCODE_ENV: production
+      ZCODE_SKIP_REMOTE_ASSETS: "1"
+      ZCODE_TARGET_OS: linux
+      ZCODE_TARGET_ARCH: x64
+      CSC_IDENTITY_AUTO_DISCOVERY: "false"
+      GITHUB_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.2
+          run_install: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.14.0
+          cache: pnpm
+      - name: Create isolated dependency workspace
+        run: node scripts/prepare-centos7-build.mjs create "$RUNNER_TEMP/centos7-workspace"
+      - name: Install exact temporary dependency closure
+        run: pnpm --dir "$RUNNER_TEMP/centos7-workspace" install --frozen-lockfile --ignore-scripts
+      - name: Compile and assemble Electron 28 desktop
+        working-directory: ${{ runner.temp }}/centos7-workspace
+        shell: bash
+        run: |
+          set -euo pipefail
+          node packages/desktop/node_modules/electron/install.js
+          pnpm exec tsc -b packages/shared
+          # The placeholder CUA package's build is only tsc --noEmit, not artifact compilation.
+          pnpm -r --filter "./packages/*" --filter "!@zcode/desktop" --filter "!@zcode/zcode-cua" build
+          pnpm --filter @zcode/desktop build:no-runtime-assets
+          pnpm prepare:desktop-runtime
+          [[ -s packages/desktop/out/renderer/index.html ]]
+          pnpm --filter @zcode/desktop exec electron-builder --config electron-builder.config.js --linux --x64 --dir --publish never
+          tar -C packages/desktop/dist -cf "$RUNNER_TEMP/linux-unpacked.tar" linux-unpacked
+      - uses: actions/upload-artifact@v4
+        with:
+          name: centos7-desktop-stage
+          path: ${{ runner.temp }}/linux-unpacked.tar
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+
+  native:
+    needs: preflight
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      ZCODE_ENV: production
+      ZCODE_TARGET_OS: linux
+      ZCODE_TARGET_ARCH: x64
+      CENTOS7_NATIVE_IMAGE: ${{ needs.preflight.outputs.native_image }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.2
+          run_install: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.14.0
+          cache: pnpm
+      - name: Create isolated native dependency workspace
+        run: node scripts/prepare-centos7-build.mjs create "$RUNNER_TEMP/centos7-workspace"
+      - name: Install native build inputs with modern build Node
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm --dir "$RUNNER_TEMP/centos7-workspace" install --frozen-lockfile --ignore-scripts
+          node "$RUNNER_TEMP/centos7-workspace/packages/desktop/node_modules/electron/install.js"
+      - name: Prepare verified Node 20 glibc 2.17 native host
+        shell: bash
+        run: |
+          set -euo pipefail
+          tools="$RUNNER_TEMP/centos7-native-tools"
+          mkdir -p "$tools/bin"
+          curl -fL --retry 3 -o "$tools/node.tar.xz" https://unofficial-builds.nodejs.org/download/release/v20.19.0/node-v20.19.0-linux-x64-glibc-217.tar.xz
+          echo "b06697853d80cbc2ca77408276a26234a83e9587a32a77161df2215cc3889a7f  $tools/node.tar.xz" | sha256sum --check
+          tar -xJf "$tools/node.tar.xz" --strip-components=1 -C "$tools"
+      - name: Resolve immutable native builder
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "$CENTOS7_NATIVE_IMAGE" ]]; then
+            docker build --file scripts/publish/centos7/Dockerfile --tag ompcode-centos7-native:local .
+            image=$(docker image inspect --format '{{.Id}}' ompcode-centos7-native:local)
+          else
+            docker pull "$CENTOS7_NATIVE_IMAGE"
+            image="$CENTOS7_NATIVE_IMAGE"
+          fi
+          echo "NATIVE_IMAGE=$image" >> "$GITHUB_ENV"
+          echo "Native builder: $image (checked-in pinned base and CentOS 7.9.2009 vault recipe, or immutable configured override)." >> "$GITHUB_STEP_SUMMARY"
+      - name: Fresh native compilation and glibc 2.17 runtime collection
+        shell: bash
+        run: |
+          set -euo pipefail
+          workspace="$RUNNER_TEMP/centos7-workspace"
+          electron_root=$(cd "$workspace" && node --input-type=module -e 'import { createRequire } from "node:module"; import { dirname } from "node:path"; const require = createRequire(process.cwd() + "/packages/desktop/package.json"); console.log(dirname(require.resolve("electron/package.json")) + "/dist")')
+          electron_root="/workspace${electron_root#"$workspace"}"
+          docker run --rm \
+            --volume "$workspace:/workspace" \
+            --volume "$RUNNER_TEMP/centos7-native-tools:/toolchain:ro" \
+            --env "CENTOS7_ELECTRON_ROOT=$electron_root" \
+            --env ZCODE_TARGET_OS=linux --env ZCODE_TARGET_ARCH=x64 \
+            --workdir /workspace "$NATIVE_IMAGE" bash -ceu '
+              bash scripts/publish/centos7/build-native-assets.sh /workspace
+            '
+          sudo chown -R "$(id -u):$(id -g)" "$workspace/packages/desktop/dist/centos7-native"
+          tar -C "$workspace/packages/desktop/dist" -cf "$RUNNER_TEMP/centos7-native.tar" centos7-native
+      - uses: actions/upload-artifact@v4
+        with:
+          name: centos7-native-stage
+          path: ${{ runner.temp }}/centos7-native.tar
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+
+  package:
+    needs: [preflight, desktop, native]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      APP_VERSION: ${{ needs.preflight.outputs.app_version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.2
+          run_install: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.14.0
+          cache: pnpm
+      - name: Install packaging-only dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends zip unzip binutils
+          pnpm install --frozen-lockfile --ignore-scripts
+      - uses: actions/download-artifact@v4
+        with:
+          name: centos7-desktop-stage
+          path: release-inputs
+      - uses: actions/download-artifact@v4
+        with:
+          name: centos7-native-stage
+          path: release-inputs
+      - name: Merge stages and create final ZIP with integrity checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p packages/desktop/dist
+          tar -C packages/desktop/dist -xf release-inputs/linux-unpacked.tar
+          tar -C packages/desktop/dist -xf release-inputs/centos7-native.tar
+          bash scripts/publish/centos7/build-zip.sh \
+            packages/desktop/dist/linux-unpacked packages/desktop/dist/centos7-native \
+            "$APP_VERSION" packages/desktop/dist
+          (cd packages/desktop/dist && sha256sum --check "OmpCode-$APP_VERSION-centos7-x64.zip.sha256")
+      - uses: actions/upload-artifact@v4
+        with:
+          name: centos7-release
+          path: |
+            packages/desktop/dist/OmpCode-*-centos7-x64.zip
+            packages/desktop/dist/OmpCode-*-centos7-x64.zip.sha256
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+
+  publish:
+    needs: [preflight, package]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ needs.preflight.outputs.release_tag }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: centos7-release
+          path: release-assets
+      - name: Verify downloaded archive bytes
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd release-assets
+          assets=(OmpCode-*-centos7-x64.zip)
+          [[ ${#assets[@]} -eq 1 && -s ${assets[0]} ]]
+          sha256sum --check "${assets[0]}.sha256"
+      - name: Create draft release
+        shell: bash
+        run: |
+          set -euo pipefail
+          assets=(release-assets/OmpCode-*-centos7-x64.zip)
+          gh release create "$RELEASE_TAG" "${assets[0]}" "${assets[0]}.sha256" \
+            --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "OmpCode $RELEASE_TAG" \
+            --notes "CentOS 7 x64 ZIP, glibc 2.17. Extract under HOME and run bin/ompcode-centos7 without root. Unsigned; Electron 28/Chromium 120 are end-of-life and sandboxing is disabled: avoid untrusted workspaces. Source: $GITHUB_SHA. No GUI, SSH or target-machine acceptance tests were executed by this workflow." --generate-notes --draft
+      - name: Verify uploaded bytes and promote draft
+        shell: bash
+        run: |
+          set -euo pipefail
+          assets=(release-assets/OmpCode-*-centos7-x64.zip)
+          metadata=$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets,isDraft)
+          [[ $(jq -r '.isDraft' <<< "$metadata") == true ]]
+          [[ $(jq '.assets | length' <<< "$metadata") -eq 2 ]]
+          for file in "${assets[0]}" "${assets[0]}.sha256"; do
+            actual=$(jq -r --arg name "$(basename "$file")" '.assets[] | select(.name == $name) | .size' <<< "$metadata")
+            [[ "$actual" == "$(stat -c %s "$file")" ]]
+          done
+          mkdir uploaded
+          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --dir uploaded
+          (cd uploaded && sha256sum --check *.sha256)
+          cmp "${assets[0]}.sha256" "uploaded/$(basename "${assets[0]}.sha256")"
+          gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false
+          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft,url --jq 'select(.isDraft == false) | .url'

@@ -483,20 +483,22 @@ it("closes an ACK-waiting external stdin and reports a surviving root when ident
   }
 });
 
-it("prepares each original workspace profile with normal-launch argv and identity, even at a shared fallback cwd and inherited root", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "zcode-preparation-profile-"));
-  const entry = join(dir, "profile.cjs");
-  const capture = join(dir, "launch.json");
-  const originalPath = join(dir, "historical-project");
-  const envRoot = join(dir, "environment-root");
-  await writeFile(
-    entry,
-    `
+it.each(["inherited", "options", "command"] as const)(
+  "prepares original workspace profiles with normal-launch argv, identity, and raw %s OMP environment",
+  async (envSource) => {
+    const dir = await mkdtemp(join(tmpdir(), "zcode-preparation-profile-"));
+    const entry = join(dir, "profile.cjs");
+    const capture = join(dir, "launch.json");
+    const originalPath = join(dir, "historical-project");
+    const envRoot = join(dir, "environment-root");
+    await writeFile(
+      entry,
+      `
     const fs = require('node:fs');
     const argv = process.argv.slice(2);
     const profileIndex = argv.indexOf('--profile');
     const profile = profileIndex < 0 ? 'default' : argv[profileIndex + 1];
-    fs.writeFileSync(process.env.CAPTURE, JSON.stringify({argv, identity: process.env.ZCODE_WORKSPACE_IDENTITY, root: process.env.OMP_CONFIG_ROOT}));
+    fs.writeFileSync(process.env.CAPTURE, JSON.stringify({argv, identity: process.env.ZCODE_WORKSPACE_IDENTITY, root: process.env.OMP_CONFIG_ROOT, env: Object.fromEntries(['OMP_OFFLINE','PI_CONFIG_DIR','OMP_FUTURE_RAW_OPTION','OMP_FUTURE_EMPTY_OPTION'].map(key => [key, process.env[key]]))}));
     const send = frame => process.stdout.write(JSON.stringify(frame) + '\\n');
     require('node:readline').createInterface({input:process.stdin}).once('line', () => {
       send({method:'startup/storageState',params:{schemaVersion:1,attemptId:'a',sequence:1,databaseId:profile,databaseKind:'session',phase:'checking',elapsedMs:0}});
@@ -506,86 +508,116 @@ it("prepares each original workspace profile with normal-launch argv and identit
     send({method:'omp/startup/profile',params:{configRoot:process.env.OMP_CONFIG_ROOT,activeProfile:profile,storageScope:'scope:'+profile}});
     send({method:'startup/storagePath',params:{path:require('node:path').join(process.cwd(), profile + '.sqlite')}});
   `,
-  );
-  const command: StorageStartup.ZCodeAgentCommand = {
-    command: process.execPath,
-    args: [entry, "app-server", "--stdio", "--surface", "desktop"],
-    env: { CAPTURE: capture },
-    supportsStorageStartup: true,
-    storagePreparation: { kind: "command" },
-  };
-  resolver.mockReturnValue(command);
-  profileSettings.selections = {
-    "remote:alpha": "alpha",
-    "remote:beta": "beta",
-    [originalPath]: "historical",
-    [dir]: "wrong-fallback",
-  };
-  profileSettings.roots = {
-    "remote:alpha": join(dir, "alpha-root"),
-    "remote:beta": join(dir, "beta-root"),
-    [originalPath]: join(dir, "historical-root"),
-    [dir]: join(dir, "wrong-fallback-root"),
-  };
-  const cases = [
-    {
-      target: { workspacePath: dir, workspaceIdentity: "remote:alpha" },
-      profile: "alpha",
-      root: join(dir, "alpha-root"),
-    },
-    {
-      target: { workspacePath: dir, workspaceIdentity: "remote:beta" },
-      profile: "beta",
-      root: join(dir, "beta-root"),
-    },
-    {
-      target: { workspacePath: originalPath },
-      profile: "historical",
-      root: join(dir, "historical-root"),
-    },
-    { target: { workspacePath: join(dir, "unknown-history") }, profile: undefined, root: envRoot },
-  ];
-  try {
-    for (const { target, profile, root } of cases) {
-      const paths: string[] = [];
-      await prepareSessionStorage({
-        cwd: dir,
-        workspaceTarget: target,
-        env: { OMP_CONFIG_ROOT: envRoot },
-        signal: new AbortController().signal,
-        report: () => {},
-        observePath: async (path) => {
-          paths.push(path);
-        },
-      });
-      const normalCommand = applyOmpProfileToCommand(command, profile);
-      const launch = JSON.parse(await readFile(capture, "utf8"));
-      expect(launch.argv).toEqual([
-        ...normalCommand.args!.slice(1),
-        "--cwd",
-        dir,
-        "--prepare-storage",
-      ]);
-      expect(launch.identity).toBe(target.workspaceIdentity);
-      expect(launch.root).toBe(root);
-      expect(paths).toEqual([
-        getTasksIndexDatabasePath({ configRoot: root, profileId: profile ?? "default" }),
-        join(dir, `${profile ?? "default"}.sqlite`),
-      ]);
-      expect(resolver).toHaveBeenLastCalledWith(
-        expect.objectContaining({
-          ...target,
-          workspaceKey: target.workspaceIdentity?.trim() || target.workspacePath,
-          env: expect.objectContaining({ OMP_CONFIG_ROOT: root }),
-        }),
-      );
+    );
+    const command: StorageStartup.ZCodeAgentCommand = {
+      command: process.execPath,
+      args: [entry, "app-server", "--stdio", "--surface", "desktop"],
+      env: { CAPTURE: capture },
+      supportsStorageStartup: true,
+      storagePreparation: { kind: "command" },
+    };
+    resolver.mockReturnValue(command);
+    profileSettings.selections = {
+      "remote:alpha": "alpha",
+      "remote:beta": "beta",
+      [originalPath]: "historical",
+      [dir]: "wrong-fallback",
+    };
+    profileSettings.roots = {
+      "remote:alpha": join(dir, "alpha-root"),
+      "remote:beta": join(dir, "beta-root"),
+      [originalPath]: join(dir, "historical-root"),
+      [dir]: join(dir, "wrong-fallback-root"),
+    };
+    const inheritedEnv = {
+      OMP_OFFLINE: " \tTrUe \n",
+      PI_CONFIG_DIR: " \t.pi-inherited ",
+      OMP_FUTURE_RAW_OPTION: " \tInherited Value \n",
+      OMP_FUTURE_EMPTY_OPTION: "",
+    };
+    const optionEnv = {
+      OMP_OFFLINE: " \tFaLsE \n",
+      PI_CONFIG_DIR: " \t.pi-options ",
+      OMP_FUTURE_RAW_OPTION: " \tOptions Value \n",
+      OMP_FUTURE_EMPTY_OPTION: "",
+    };
+    const commandEnv = {
+      OMP_OFFLINE: "",
+      PI_CONFIG_DIR: " \t.pi-command ",
+      OMP_FUTURE_RAW_OPTION: " \tCommand Value \n",
+      OMP_FUTURE_EMPTY_OPTION: "",
+    };
+    for (const [key, value] of Object.entries(inheritedEnv)) vi.stubEnv(key, value);
+    if (envSource === "command") command.env = { ...command.env, ...commandEnv };
+    const optionsEnv = envSource === "inherited" ? {} : optionEnv;
+    const expectedEnv =
+      envSource === "command" ? commandEnv : envSource === "options" ? optionEnv : inheritedEnv;
+    const cases = [
+      {
+        target: { workspacePath: dir, workspaceIdentity: "remote:alpha" },
+        profile: "alpha",
+        root: join(dir, "alpha-root"),
+      },
+      {
+        target: { workspacePath: dir, workspaceIdentity: "remote:beta" },
+        profile: "beta",
+        root: join(dir, "beta-root"),
+      },
+      {
+        target: { workspacePath: originalPath },
+        profile: "historical",
+        root: join(dir, "historical-root"),
+      },
+      {
+        target: { workspacePath: join(dir, "unknown-history") },
+        profile: undefined,
+        root: envRoot,
+      },
+    ];
+    try {
+      for (const { target, profile, root } of cases) {
+        const paths: string[] = [];
+        await prepareSessionStorage({
+          cwd: dir,
+          workspaceTarget: target,
+          env: { ...optionsEnv, OMP_CONFIG_ROOT: envRoot },
+          signal: new AbortController().signal,
+          report: () => {},
+          observePath: async (path) => {
+            paths.push(path);
+          },
+        });
+        const normalCommand = applyOmpProfileToCommand(command, profile);
+        const launch = JSON.parse(await readFile(capture, "utf8"));
+        expect(launch.argv).toEqual([
+          ...normalCommand.args!.slice(1),
+          "--cwd",
+          dir,
+          "--prepare-storage",
+        ]);
+        expect(launch.identity).toBe(target.workspaceIdentity);
+        expect(launch.root).toBe(root);
+        expect(launch.env).toEqual(expectedEnv);
+        expect(paths).toEqual([
+          getTasksIndexDatabasePath({ configRoot: root, profileId: profile ?? "default" }),
+          join(dir, `${profile ?? "default"}.sqlite`),
+        ]);
+        expect(resolver).toHaveBeenLastCalledWith(
+          expect.objectContaining({
+            ...target,
+            workspaceKey: target.workspaceIdentity?.trim() || target.workspacePath,
+            env: expect.objectContaining({ OMP_CONFIG_ROOT: root }),
+          }),
+        );
+      }
+    } finally {
+      profileSettings.selections = {};
+      profileSettings.roots = {};
+      vi.unstubAllEnvs();
+      await rm(dir, { recursive: true, force: true });
     }
-  } finally {
-    profileSettings.selections = {};
-    profileSettings.roots = {};
-    await rm(dir, { recursive: true, force: true });
-  }
-});
+  },
+);
 
 it("rejects a pinned command root conflicting with the original workspace's inherited root before spawn", async () => {
   const dir = await mkdtemp(join(tmpdir(), "zcode-preparation-pinned-root-"));

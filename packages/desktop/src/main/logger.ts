@@ -34,13 +34,13 @@ function isBrokenPipeError(error: unknown): boolean {
     typeof error === "object" &&
     error !== null &&
     "code" in error &&
-    (error as { code?: unknown }).code === "EPIPE"
+    (error.code === "EPIPE" || error.code === "EBADF")
   );
 }
 
 function ignoreBrokenPipeStreamError(error: Error): void {
-  // WDIO / dev runner 结束后可能先关闭 stdout/stderr 管道，随后主进程日志还在刷新。
-  // stream error 是异步事件，try/catch 包 console.log 不一定兜得住；这里统一吞掉 EPIPE。
+  // 父终端或 Citrix 会话可能先关闭 stdout/stderr，留下断管或无效描述符。
+  // stream error 是异步事件；只隔离 EPIPE/EBADF，文件日志仍继续，其他异常保留原路径。
   if (!isBrokenPipeError(error)) {
     throw error;
   }
@@ -55,8 +55,8 @@ function safeConsoleWrite(level: LogLevel, ...args: unknown[]): void {
   try {
     consoleFn(...args);
   } catch (error) {
-    // dev 脚本或父终端退出后，Electron main 的 stdout/stderr 管道可能已关闭。
-    // 这时 console.* 会抛 EPIPE，不能让日志输出反过来杀掉主进程；文件日志仍会继续写入。
+    // 父终端或 Citrix 关闭输出描述符后，console.* 可能同步抛 EPIPE/EBADF。
+    // 仅忽略原始输出失效，不能让它阻断后续文件日志。
     if (!isBrokenPipeError(error)) {
       throw error;
     }

@@ -10,6 +10,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Trash2Icon } from "lucide-react";
 import type { FileContents, LineAnnotation, SupportedLanguages } from "@pierre/diffs";
 import { File, type FileOptions } from "@pierre/diffs/react";
+import { wrapCoreCSS } from "@pierre/diffs";
 import type { BundledTheme } from "shiki";
 
 import { cn } from "@/components/lib/utils.js";
@@ -76,6 +77,49 @@ export function resolveCodeViewerColorScheme(theme?: BundledTheme): "light" | "d
   }
 
   return isDarkCodePreviewTheme(theme) ? "dark" : "light";
+}
+
+const compatibleDiffsCSS = new Map<string, string>();
+
+/**
+ * Chromium 120 不认识 light-dark()，仅指定 color-scheme 不会恢复 token 颜色。
+ * 从依赖的公开 CSS 入口展开真实规则（包括嵌套 var/color-mix），不复制第三方调色板。
+ */
+export function getDiffsCompatibilityCSS(scheme: "light" | "dark", singleTheme = false): string {
+  if (typeof CSS === "undefined" || CSS.supports("color", "light-dark(white, black)")) return "";
+  const key = `${scheme}:${singleTheme}`;
+  const cached = compatibleDiffsCSS.get(key);
+  if (cached !== undefined) return cached;
+  const source = wrapCoreCSS("");
+  let result = "";
+  let cursor = 0;
+  while (cursor < source.length) {
+    const start = source.indexOf("light-dark(", cursor);
+    if (start < 0) {
+      result += source.slice(cursor);
+      break;
+    }
+    result += source.slice(cursor, start);
+    const argumentsStart = start + "light-dark(".length;
+    let depth = 1;
+    let comma = -1;
+    let end = argumentsStart;
+    for (; end < source.length; end += 1) {
+      const character = source[end];
+      if (character === "(") depth += 1;
+      else if (character === ")") {
+        depth -= 1;
+        if (depth === 0) break;
+      } else if (character === "," && depth === 1) comma = end;
+    }
+    result +=
+      scheme === "light" ? source.slice(argumentsStart, comma) : source.slice(comma + 1, end);
+    cursor = end + 1;
+  }
+  // 单主题的前景/背景由依赖 rendered 层给出，不能被兼容 base 层覆盖。
+  if (singleTheme) result = result.replace(/--diffs-(?:fg|bg):[^;]*;/g, "");
+  compatibleDiffsCSS.set(key, result);
+  return result;
 }
 
 function setOptionalRefValue<T>(ref: Ref<T> | undefined, value: T | null) {
@@ -694,7 +738,10 @@ export function CodeViewer({
       onGutterUtilityClick: canUseCommentGutterUtility ? handleGutterUtilitySelection : undefined,
       // 内建 comment + 默认贴在行号右侧，用户拖拽时容易和代码起点混在一起。
       // 这里只调整 Shadow DOM 内 gutter utility 的位置，不接管 pointer 事件，避免破坏多行拖拽 range。
-      unsafeCSS: CODE_VIEWER_UNSAFE_CSS + markedLinesCss,
+      unsafeCSS:
+        getDiffsCompatibilityCSS(resolveCodeViewerColorScheme(theme), typeof theme === "string") +
+        CODE_VIEWER_UNSAFE_CSS +
+        markedLinesCss,
     }),
     [
       canUseCommentGutterUtility,

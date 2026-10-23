@@ -27,6 +27,8 @@ export async function copyGenUiRuntimeAssets(destination) {
   await mkdir(destination, { recursive: true });
   await mkdir(join(destination, "vendor"), { recursive: true });
   await Promise.all(
+    // visualize.css owns its capability-guarded legacy theme fallback so raw
+    // copies and render.py standalone exports retain exactly the same tokens.
     [
       "visualize.css",
       "visualize.html",

@@ -244,7 +244,6 @@ describe("S01 / S05 / S08：composer 候选入口与 Session Skill catalog", () 
         45000,
       );
     }
-
     // 6) + 菜单以底部提示介绍快捷输入；提示不再是可点击的菜单项。
     // 放在 mention 断言之后，避免 Radix 菜单的关闭焦点与 Lexical 输入竞争。
     await setInputValueByTestIdDom(TID_V4_COMPOSER_INPUT, "", {

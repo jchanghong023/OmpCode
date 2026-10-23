@@ -1,7 +1,7 @@
 import { readdir, readFile, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { isAbsolute, join } from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import { DatabaseSync } from "@zcode/shared/sqlite-migrations";
 
 /**
  * 引导资格的"本机使用证据"判定（docs/onboarding-record-spec.md §4）。
@@ -115,7 +115,7 @@ export async function resolveAgentSessionDbPath(
  * Agent 会话库只读检查：session 表存在且至少一行。库文件不存在 = 从未持久化会话 =
  * 无证据（stat 保留错误码，仅 ENOENT 视为无证据——评审 CR-02：existsSync 会把
  * EACCES/ENOTDIR 吞成 false）；WAL 未 checkpoint 的行对只读连接同样可见，与回填
- * 时序无关；其他打开/查询失败上抛，由 UI 保守判不弹。node:sqlite 仅提供同步 API，
+ * 时序无关；其他打开/查询失败上抛，由 UI 保守判不弹。共享 SQLite 合同仅提供同步查询 API，
  * 与 TaskIndexRepo 同一先例。
  */
 export async function hasAnyAgentSessionRow(dbPath: string): Promise<boolean> {

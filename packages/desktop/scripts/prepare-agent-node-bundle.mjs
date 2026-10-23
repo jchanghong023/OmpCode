@@ -3,16 +3,16 @@
 // 桌面打包态的 agent 运行时资产：把 agent 的 JS bundle（zcode.cjs）放进 bundled-agents/<platform>/glm，
 // 由 app 内置的 Electron Node runtime（ELECTRON_RUN_AS_NODE）执行，替代以前随包内置的独立 Node 二进制。
 //
-// 为什么这么做：
-// - agent 没有任何原生 NAPI 插件（ripgrep 是 WASM，其余纯 JS），可直接跑在 Electron 的 Node 上；
-// - Electron 41 内置 Node 24.x，与 zcode-cli 的目标运行时一致；
-// - 单平台体积从 ~180MB 降到 ~16MB，且同一份 JS 跨平台通用；
-// - app-server 命令路径不会加载 @zcode/tui，所以这里天然不打包 TUI。
+// Electron provides the Node runtime; no standalone build Node enters the app.
+// Native Sharp/Koffi assets remain external and are staged beside their plugins.
+// The temporary CentOS manifest selects Electron 28 / Node 18; the repository
+// and normal desktop builds retain Electron 41.
 //
 // 远端（SSH/WSL/Docker）没有 Electron，由 Source Server archive 自带目标 Node，互不影响。
 
 // 修复原因：bootstrap 清理旧插件 dist 时使用 rmSync，漏导入会在构建前抛出 ReferenceError。
 import { cpSync, existsSync, mkdirSync, rmSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { basename, dirname, resolve } from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
@@ -21,12 +21,15 @@ import { stageAgentBundle } from "./stage-agent-bundle.mjs";
 import {
   isSharpRequiredByComputerUse,
   stageSharpIntoBundledAgents,
+  stageCentos7SharpIntoBundledAgents,
 } from "./sharp-package-assets.mjs";
 import { stageKoffiIntoBundledAgents } from "./koffi-package-assets.mjs";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const desktopRoot = resolve(scriptDir, "..");
 const repoRoot = resolve(desktopRoot, "..", "..");
+const desktopManifest = JSON.parse(await readFile(resolve(desktopRoot, "package.json"), "utf8"));
+const isCentos7Runtime = desktopManifest.devDependencies?.electron === "28.3.3";
 const cliBundlePath = resolve(repoRoot, "apps/zcode-cli/packages/cli/dist/zcode.cjs");
 const adaptersRoot = resolve(repoRoot, "apps/zcode-cli/packages/adapters");
 const pnpmRunEnv = {
@@ -436,7 +439,7 @@ function stageBundledSkillPack() {
   console.log(`[prepare:agent-bundle] staged bundled skill pack ${bundledSkillPack.stagedPath}`);
 }
 
-function stageSharpForNodeReplPlugin() {
+async function stageSharpForNodeReplPlugin() {
   if (!isSharpRequiredByComputerUse({ desktopPackageRoot: desktopRoot })) {
     console.log(
       "[prepare:agent-bundle] Computer Use package does not declare sharp, skip sharp staging",
@@ -459,9 +462,15 @@ function stageSharpForNodeReplPlugin() {
       console.log(`[prepare:agent-bundle] ${packageName} not staged, skip sharp staging`);
       continue;
     }
-    stageSharpIntoBundledAgents({
+    const stageSharp = isCentos7Runtime
+      ? stageCentos7SharpIntoBundledAgents
+      : stageSharpIntoBundledAgents;
+    await stageSharp({
       desktopPackageRoot: desktopRoot,
       glmDir: pluginStagedDir,
+      // Parallel desktop/native jobs meet only in the final ZIP assembly.
+      // Native builder stages the complete addon/vendor tree; final audit is mandatory.
+      includeNativeAssets: !isCentos7Runtime,
       targetPlatform: { os: platform, arch },
     });
     console.log(
@@ -470,13 +479,13 @@ function stageSharpForNodeReplPlugin() {
   }
 }
 
-function stageKoffiForCuaPlugin() {
+async function stageKoffiForCuaPlugin() {
   const cuaPluginStagedDir = resolve(glmDir, "packages", "zcode-cua-plugin");
   if (!existsSync(resolve(cuaPluginStagedDir, ".zcode-plugin", "plugin.json"))) {
     console.log("[prepare:agent-bundle] zcode-cua-plugin not staged, skip koffi staging");
     return;
   }
-  stageKoffiIntoBundledAgents({
+  await stageKoffiIntoBundledAgents({
     koffiPackageRoot: adaptersRoot,
     glmDir: cuaPluginStagedDir,
     targetPlatform: { os: platform, arch },
@@ -497,5 +506,5 @@ buildOfficialPluginRuntimes();
 stageBundle();
 stageOfficialPlugins();
 stageBundledSkillPack();
-stageKoffiForCuaPlugin();
-stageSharpForNodeReplPlugin();
+await stageKoffiForCuaPlugin();
+await stageSharpForNodeReplPlugin();

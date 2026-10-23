@@ -22,7 +22,16 @@
 // before afterPack because extraResources already ships the whole glm/
 // directory; afterPack then verifies the final app tree.
 
-import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+} from "node:fs";
+import { cp, mkdir, readFile, rm } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { dirname, resolve } from "node:path";
 
@@ -207,6 +216,53 @@ export function stageSharpIntoBundledAgents({ desktopPackageRoot, glmDir, target
   return staged;
 }
 
+// CentOS uses Sharp 0.32.6's legacy vendor layout (N-API 7 / libvips 8.14.5).
+// Staging is not ABI evidence: the native builder replaces the addon and the
+// recursive ELF verifier must reject incompatible addon or vendor library bytes.
+export async function stageCentos7SharpIntoBundledAgents({
+  desktopPackageRoot,
+  glmDir,
+  includeNativeAssets = true,
+}) {
+  const sourceRoot = resolvePackageRoot("sharp", desktopPackageRoot);
+  const manifest = JSON.parse(await readFile(resolve(sourceRoot, "package.json"), "utf8"));
+  if (manifest.version !== "0.32.6") {
+    throw new Error(`CentOS 7 packaging requires sharp@0.32.6, got ${manifest.version}`);
+  }
+  const staged = [];
+  async function copyDependency(name, source, target) {
+    const metadata = JSON.parse(await readFile(resolve(source, "package.json"), "utf8"));
+    await rm(target, { recursive: true, force: true });
+    await mkdir(dirname(target), { recursive: true });
+    await cp(source, target, {
+      recursive: true,
+      dereference: false,
+      filter: (path) => {
+        if (path === source) return true;
+        const entryName = path.split(/[\\/]/u).at(-1);
+        if (["node_modules", "test", "tests", ".git"].includes(entryName)) return false;
+        if (name === "sharp" && entryName === "vendor" && !includeNativeAssets) return false;
+        return name !== "sharp" || !["build", "src", "install"].includes(entryName);
+      },
+    });
+    if (name === "sharp" && includeNativeAssets) {
+      const addon = "build/Release/sharp-linux-x64.node";
+      await mkdir(resolve(target, "build", "Release"), { recursive: true });
+      await cp(resolve(source, addon), resolve(target, addon));
+    }
+    staged.push({ name, version: metadata.version, sourceRoot: source, targetRoot: target });
+    for (const dependency of Object.keys(metadata.dependencies ?? {})) {
+      await copyDependency(
+        dependency,
+        resolvePackageRoot(dependency, source),
+        resolve(target, "node_modules", dependency),
+      );
+    }
+  }
+  await copyDependency("sharp", sourceRoot, resolve(glmDir, "node_modules", "sharp"));
+  return staged;
+}
+
 /**
  * Resolve the absolute path of the staged sharp directory inside the packaged
  * app, for afterPack assertion. This is where Node's resolution walk lands
@@ -265,6 +321,23 @@ export function verifyStagedSharp({
   }
   if (!existsSync(resolve(sharpDir, "lib"))) {
     problems.push(`missing sharp lib/ dir: ${sharpDir}/lib`);
+  }
+  const sharpManifestPath = resolve(sharpDir, "package.json");
+  if (
+    targetPlatform.os === "linux" &&
+    existsSync(sharpManifestPath) &&
+    JSON.parse(readFileSync(sharpManifestPath, "utf8")).version === "0.32.6"
+  ) {
+    const addon = resolve(sharpDir, "build", "Release", `sharp-${suffix}.node`);
+    const vendorLib = resolve(sharpDir, "vendor", "8.14.5", suffix, "lib");
+    if (!existsSync(addon)) problems.push(`missing legacy Sharp native addon: ${addon}`);
+    if (
+      !existsSync(vendorLib) ||
+      !readdirSync(vendorLib).some((name) => /\.so(?:\.\d+)*$/u.test(name))
+    ) {
+      problems.push(`missing Sharp 0.32.6 libvips 8.14.5 runtime: ${vendorLib}`);
+    }
+    return problems;
   }
 
   const nativeDir = resolvePackagedSharpNativeDir({

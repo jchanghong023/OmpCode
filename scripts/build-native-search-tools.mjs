@@ -17,13 +17,13 @@ function fail(message) {
   throw new Error(message);
 }
 
-export function buildNativeSearchTools(options = {}) {
+export async function buildNativeSearchTools(options = {}) {
   const platform = normalizeNativeSearchPlatform(options.platform ?? process.platform);
   let plan;
   switch (platform) {
     case "darwin":
     case "linux":
-      plan = buildNativeSearchToolsUnix({ ...options, platform });
+      plan = await buildNativeSearchToolsUnix({ ...options, platform });
       break;
     case "win32":
       plan = buildNativeSearchToolsWindows({ ...options, platform });
@@ -66,7 +66,7 @@ function readJobs() {
   return jobs;
 }
 
-function main() {
+async function main() {
   const options = {
     platform: readOption("platform") ?? process.env.ZCODE_TARGET_OS ?? process.platform,
     arch: readOption("arch") ?? process.env.ZCODE_TARGET_ARCH ?? process.arch,
@@ -79,12 +79,12 @@ function main() {
   if (jobs !== undefined) {
     options.jobs = jobs;
   }
-  buildNativeSearchTools(options);
+  await buildNativeSearchTools(options);
 }
 
 if (resolve(process.argv[1] ?? "") === scriptPath) {
   try {
-    main();
+    await main();
   } catch (error) {
     console.error(error instanceof Error ? error.stack : error);
     process.exitCode = 1;

@@ -12,11 +12,39 @@ function parkingRoot(): HTMLElement {
   return root;
 }
 
+function cssZoom(node: HTMLElement): number {
+  const native = (node as HTMLElement & { currentCSSZoom?: number }).currentCSSZoom;
+  if (typeof native === "number" && native > 0) return native;
+  // Chromium 120 尚无 currentCSSZoom；zoom 是累积值，不能只读直接父元素。
+  let zoom = 1;
+  for (let current: HTMLElement | null = node; current; current = current.parentElement) {
+    const value = getComputedStyle(current).zoom;
+    const factor = value.endsWith("%") ? Number.parseFloat(value) / 100 : Number(value);
+    if (Number.isFinite(factor) && factor > 0) zoom *= factor;
+  }
+  return zoom;
+}
+
+function isVisible(node: HTMLElement): boolean {
+  if (typeof node.checkVisibility === "function")
+    return node.checkVisibility({ visibilityProperty: true, checkVisibilityCSS: true });
+  // visibility 可由后代覆盖；display/content-visibility:hidden 则隐藏整个子树。
+  if (getComputedStyle(node).visibility !== "visible") return false;
+  for (let current: HTMLElement | null = node; current; current = current.parentElement) {
+    const style = getComputedStyle(current);
+    if (style.display === "none" || style.contentVisibility === "hidden") return false;
+  }
+  return node.getClientRects().length > 0;
+}
+
 /** 实例与锚点分离；普通内联与正文在同一滚动树内，不用屏幕坐标追赶滚动。 */
 export function createPluginUiPagePlane(events: {
   onVisibility(visible: boolean): void;
   onCrash(): void;
 }) {
+  // 没有原子移动时，guest 从创建到释放始终连接唯一的窗口承载层；
+  // 卡片/侧栏只交接锚点，不重挂 iframe/webview，否则 Chromium 会丢失页面状态。
+  const fixedPlane = typeof Element.prototype.moveBefore !== "function";
   const anchors = new Map<symbol, { placement: SandboxPagePlacement; visible: boolean }>();
   const root = document.createElement("div");
   root.dataset.sandboxPageRoot = "true";
@@ -41,6 +69,7 @@ export function createPluginUiPagePlane(events: {
   };
   const move = (parent: HTMLElement) => {
     if (root.parentElement === parent) return;
+    if (fixedPlane) return;
     if (!frame) parent.append(root);
     else {
       // appendChild 会触发 Electron guest 的断开重建。preload 为沙箱注册移动回调后才允许迁移。
@@ -61,17 +90,66 @@ export function createPluginUiPagePlane(events: {
   const position = (node: HTMLElement, container: HTMLElement, fixed: boolean, layer: number) => {
     const rect = node.getBoundingClientRect();
     const parent = container.getBoundingClientRect();
-    const zoom = (container as HTMLElement & { currentCSSZoom?: number }).currentCSSZoom || 1;
+    const zoom = cssZoom(container);
+    const planeZoom = fixedPlane ? cssZoom(root) : fixed ? 1 : zoom;
     Object.assign(root.style, {
       position: fixed ? "fixed" : "absolute",
       inset: "auto",
       zIndex: String(layer),
-      top: `${fixed ? rect.top : (rect.top - parent.top) / zoom + container.scrollTop - container.clientTop}px`,
-      left: `${fixed ? rect.left : (rect.left - parent.left) / zoom + container.scrollLeft - container.clientLeft}px`,
-      width: `${rect.width / (fixed ? 1 : zoom)}px`,
-      height: `${rect.height / (fixed ? 1 : zoom)}px`,
+      top: `${fixed ? rect.top / planeZoom : (rect.top - parent.top) / zoom + container.scrollTop - container.clientTop}px`,
+      left: `${fixed ? rect.left / planeZoom : (rect.left - parent.left) / zoom + container.scrollLeft - container.clientLeft}px`,
+      width: `${rect.width / planeZoom}px`,
+      height: `${rect.height / planeZoom}px`,
       borderRadius: getComputedStyle(node).borderRadius,
     });
+  };
+  const positionFixed = (node: HTMLElement, layer: number) => {
+    position(node, parkingRoot(), true, layer);
+    const rect = node.getBoundingClientRect();
+    let top = Math.max(0, rect.top),
+      left = Math.max(0, rect.left);
+    let right = Math.min(window.innerWidth, rect.right);
+    let bottom = Math.min(window.innerHeight, rect.bottom);
+    root.style.maskImage = "none";
+    root.style.webkitMaskImage = "none";
+    for (let parent = node.parentElement; parent; parent = parent.parentElement) {
+      const style = getComputedStyle(parent);
+      const bounds = parent.getBoundingClientRect();
+      const zoom = cssZoom(parent);
+      if (/(auto|scroll|hidden|clip)/.test(style.overflowX)) {
+        left = Math.max(left, bounds.left + parent.clientLeft * zoom);
+        right = Math.min(right, bounds.left + (parent.clientLeft + parent.clientWidth) * zoom);
+      }
+      if (/(auto|scroll|hidden|clip)/.test(style.overflowY)) {
+        top = Math.max(top, bounds.top + parent.clientTop * zoom);
+        bottom = Math.min(bottom, bounds.top + (parent.clientTop + parent.clientHeight) * zoom);
+      }
+      if (parent.dataset.sandboxPageMask && style.maskImage !== "none") {
+        // fixed-plane 脱离消息树后不会继承 composer mask；只投影消息 owner 的现有状态，
+        // 不在页面层重复贴底判定或维护另一组 composer 高度。
+        const planeZoom = cssZoom(root);
+        const transparentY = parent.dataset.sandboxPageMaskTransparentY;
+        if (transparentY !== undefined && Number.isFinite(Number(transparentY)))
+          bottom = Math.min(bottom, bounds.top + Number(transparentY) * zoom);
+        const [x = "0", y = "0"] = style.maskPosition.split(/\s+/);
+        const [, height = "auto"] = style.maskSize.split(/\s+/);
+        const maskPosition = `${(bounds.left - rect.left + parseFloat(x) * zoom) / planeZoom}px ${(bounds.top - rect.top + parseFloat(y) * zoom) / planeZoom}px`;
+        const maskSize = `${bounds.width / planeZoom}px ${height === "auto" ? height : `${(parseFloat(height) * zoom) / planeZoom}px`}`;
+        Object.assign(root.style, {
+          maskImage: style.maskImage,
+          webkitMaskImage: style.maskImage,
+          maskPosition,
+          webkitMaskPosition: maskPosition,
+          maskSize,
+          webkitMaskSize: maskSize,
+          maskRepeat: style.maskRepeat,
+          webkitMaskRepeat: style.maskRepeat,
+        });
+      }
+    }
+    const zoom = cssZoom(root);
+    // 固定承载层不在原滚动树，必须显式保留其裁剪，不能覆盖正文/工具栏。
+    root.style.clipPath = `inset(${Math.max(0, top - rect.top) / zoom}px ${Math.max(0, rect.right - right) / zoom}px ${Math.max(0, rect.bottom - bottom) / zoom}px ${Math.max(0, left - rect.left) / zoom}px)`;
   };
   const endPreview = () => {
     stopPreview?.();
@@ -82,11 +160,27 @@ export function createPluginUiPagePlane(events: {
   };
   const track = (node: HTMLElement, update: () => void) => {
     // 承载层尺寸完全由锚点决定；反向观察承载层会在 popover 切换时形成 ResizeObserver 回环。
-    const stop = autoUpdate(node, root, update, { elementResize: false });
+    const stop = autoUpdate(node, root, update, {
+      elementResize: false,
+      ...(fixedPlane ? { animationFrame: true } : {}),
+    });
     const resize = new ResizeObserver(update);
     resize.observe(node);
+    // composer 形态可只改 mask 而不移动锚点；不能仅依赖 autoUpdate 的矩形变化。
+    const maskObserver =
+      fixedPlane && typeof MutationObserver !== "undefined"
+        ? new MutationObserver(update)
+        : undefined;
+    if (maskObserver)
+      for (let parent = node.parentElement; parent; parent = parent.parentElement)
+        if (parent.dataset.sandboxPageMask)
+          maskObserver.observe(parent, {
+            attributes: true,
+            attributeFilter: ["style", "data-sandbox-page-mask-transparent-y"],
+          });
     return () => {
       resize.disconnect();
+      maskObserver?.disconnect();
       stop();
     };
   };
@@ -96,12 +190,7 @@ export function createPluginUiPagePlane(events: {
     const candidates = [...anchors].filter(([, a]) => {
       const node = a.placement.node;
       const rect = node.getBoundingClientRect();
-      return (
-        node.isConnected &&
-        node.checkVisibility({ visibilityProperty: true }) &&
-        rect.width > 0 &&
-        rect.height > 0
-      );
+      return node.isConnected && isVisible(node) && rect.width > 0 && rect.height > 0;
     });
     const chosen = candidates.find(([, a]) => a.placement.kind === "sidebar") ?? candidates.at(-1);
     visibility(Boolean(chosen && (chosen[1].visible || preview)));
@@ -136,14 +225,16 @@ export function createPluginUiPagePlane(events: {
     const { node, kind, container, layer = 10 } = chosen[1].placement;
     const parent = kind === "sidebar" ? parkingRoot() : (container ?? node);
     move(parent);
-    if (kind !== "flow" && parent !== node)
+    if (fixedPlane || (kind !== "flow" && parent !== node))
       stopLayout = track(node, () => {
+        if (fixedPlane && preview) return;
         const rect = node.getBoundingClientRect();
-        if (!node.checkVisibility({ visibilityProperty: true }) || !rect.width || !rect.height) {
+        if (!isVisible(node) || !rect.width || !rect.height) {
           layout();
           return;
         }
-        position(node, parent, kind === "sidebar", layer);
+        if (fixedPlane) positionFixed(node, layer);
+        else position(node, parent, kind === "sidebar", layer);
       });
   };
   const intersection = new IntersectionObserver((entries) => {

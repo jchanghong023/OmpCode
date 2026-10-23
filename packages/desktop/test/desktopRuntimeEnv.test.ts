@@ -14,6 +14,7 @@ import { join } from "node:path";
 async function loadRuntimeEnv() {
   // Tests intentionally reload Electron module constants after resetModules.
   const runtime = await import("../src/main/desktopRuntimeEnv.js");
+
   return runtime;
 }
 
@@ -460,7 +461,6 @@ describe("desktopRuntimeEnv buildHostProcessEnv", () => {
       restoreEnvValue(key, originalOmpInstallEnv[key]);
     }
   });
-
   afterAll(() => {
     restoreEnvValue("NODE_NO_WARNINGS", originalNodeNoWarnings);
     restoreEnvValue("ZCODE_DYNAMIC_WORKFLOW_MODE", originalDynamicWorkflowMode);

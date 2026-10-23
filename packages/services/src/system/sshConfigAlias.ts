@@ -1,9 +1,11 @@
 /* eslint-disable max-lines -- SSH config alias 解析链路包含扫描、回退和受控执行，暂集中在同一文件。 */
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { glob, readFile } from "node:fs/promises";
+import * as fsPromises from "node:fs/promises";
+import { access, readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { delimiter, dirname, isAbsolute, join, resolve } from "node:path";
+import glob from "fast-glob";
 import type { SSHConfigAliasOption } from "@zcode/shared";
 
 const CACHE_TTL_MS = 30_000;
@@ -164,7 +166,7 @@ function splitSshTokens(line: string): string[] {
 
 function hasGlobPattern(value: string): boolean {
   // Windows 绝对路径天然包含 `\`，但这不代表 Include 是 glob。
-  // 这里只识别 SSH Include 真正的 glob 元字符：`* ? [ ]`。
+  // 旧基线只识别 *?[]；把花括号算作元字符会误展开原本应按字面读取的文件名。
   return /[*?[\]]/.test(value);
 }
 
@@ -185,6 +187,21 @@ function expandHomeToken(rawPath: string): string {
   return withHomeVariable;
 }
 
+async function* expandIncludeGlob(pattern: string): AsyncIterable<string> {
+  if (typeof fsPromises.glob === "function") {
+    yield* fsPromises.glob(pattern);
+    return;
+  }
+
+  // Node 18 没有原生 glob；复用异步匹配器，不能用单层 readdir 丢失嵌套模式。
+  yield* await glob(process.platform === "win32" ? pattern.replaceAll("\\", "/") : pattern, {
+    absolute: true,
+    onlyFiles: false,
+    followSymbolicLinks: false,
+    suppressErrors: false,
+  });
+}
+
 async function resolveIncludeTargets(includeTokens: string[], baseDir: string): Promise<string[]> {
   const results: string[] = [];
   const visited = new Set<string>();
@@ -198,15 +215,20 @@ async function resolveIncludeTargets(includeTokens: string[], baseDir: string): 
     const absolutePattern = isAbsolute(expanded) ? expanded : resolve(baseDir, expanded);
 
     if (!hasGlobPattern(absolutePattern)) {
-      if (existsSync(absolutePattern) && !visited.has(absolutePattern)) {
-        visited.add(absolutePattern);
-        results.push(absolutePattern);
+      try {
+        await access(absolutePattern);
+        if (!visited.has(absolutePattern)) {
+          visited.add(absolutePattern);
+          results.push(absolutePattern);
+        }
+      } catch {
+        // 与 glob 和配置读取一致，不可访问的 Include 不阻塞其他配置。
       }
       continue;
     }
 
     try {
-      for await (const match of glob(absolutePattern)) {
+      for await (const match of expandIncludeGlob(absolutePattern)) {
         const resolvedMatch = resolve(match);
         if (visited.has(resolvedMatch)) {
           continue;

@@ -104,7 +104,7 @@ async function resolveNativeSearchPlan(outputDir) {
         ? "ZCODE_BFS_BINARY, ZCODE_RG_BINARY, and ZCODE_UGREP_BINARY must be provided together"
         : "ZCODE_RG_BINARY and ZCODE_UGREP_BINARY must be provided together",
     );
-    buildNativeSearchTools({
+    await buildNativeSearchTools({
       platform: targetPlatform,
       arch: targetArch,
       outputDir,

@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer } from "electron";
+import { installPreloadMainWorldScript } from "./runtime-compat/mainWorld.js";
 import {
   CodingPlanWebviewChannels,
   isTrustedCodingPlanWebviewOrigin,
@@ -16,11 +17,9 @@ import {
 // - getLang 读 main world 的 window.__zcodeLang__（由 App executeJavaScript 注入）；
 //   onLangChange 在 main world 监听 zcode-coding-plan-lang-change CustomEvent
 //   （同样由 App executeJavaScript 在 locale 变化时派发）。
-//   因为整个 bridge 通过 contextBridge.executeInMainWorld 挂在 main world，
-//   与页面脚本共享同一 window，事件能通。
+//   bridge 安装在页面主世界，与页面脚本共享同一 window，事件能通。
 // - 官网页主世界拿不到 Node / ipcRenderer 原语，只暴露业务函数。
-// 参照 embeddedBrowserJavaScriptDialog.ts 的 contextBridge.executeInMainWorld 模式
-// （sandbox=true + contextIsolation=true 下可用，已有先例）。
+// Electron 41 优先原生 executeInMainWorld；缺能力时由 preload 执行固定安装函数。
 //
 // 注入时机：Electron webview 在 will-attach-webview 钩子里按 params.src 判断为官网购买页时，
 // 把 webPreferences.preload 切到本文件（见 desktopWindowChrome.ts）。
@@ -101,7 +100,7 @@ if (isTrustedCodingPlanBridgeLocation()) {
     },
   } satisfies CodingPlanNativeBridge);
 
-  contextBridge.executeInMainWorld({
+  installPreloadMainWorldScript({
     func: (
       publicBridgeKey: string,
       nativeBridgeKey: string,

@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import { DatabaseSync } from "./driver.js";
 import { z } from "zod";
 import { BACKUP_DATABASE_FILE } from "./backup.js";
 import { identifier, insertSnapshot, snapshotTable } from "./table-snapshot.js";

@@ -1,4 +1,4 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseSync } from "@zcode/shared/sqlite-migrations";
 
 export const PROJECT_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS hosts (

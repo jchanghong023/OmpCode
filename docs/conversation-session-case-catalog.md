@@ -93,7 +93,6 @@ GUI 使用现有 permission dock、`allowOnce`／`reject*` 选项语义与真实
 
 精确命令、隔离环境、实际运行 ID 与截图／Provider ledger 路径见上述 coverage matrix；不把 GUI 迟到点击等同于全部协议攻击场景。
 
-
 ## OMP-native 子代理与工作流核心验收
 
 本节定义 OMP-native 子代理与工作流核心验收；各 ID 的真实状态与执行证据统一见 [coverage matrix](testing/conversation-session-e2e-coverage-matrix.md#omp-native-子代理与工作流核心验收)，不继承旧 Agent fixture 的结果。执行行为与协议事实唯一权威见 [OMP 接入需求](../../oh-my-pi/docs-zh-CN/requirements/rpc-ui-protocol.md)；ZCode 宿主边界见 [FORK-003](../fork.md#子代理与工作流核心范围引用)。本节仅定义测试动作与可观察证据，不复制参数或状态协议。

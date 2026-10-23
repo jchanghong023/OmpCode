@@ -2,7 +2,8 @@ import type { MigrationResult } from "@zcode/shared/sqlite-migrations";
 import { mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import * as permissionFullAccessRepository from "./repositories/permission-full-access.js";
-import { DatabaseSync } from "node:sqlite";
+// Node 18 没有 node:sqlite；值与仓储类型统一走共享驱动，避免 CLI 根入口静态加载失败。
+import { DatabaseSync } from "@zcode/shared/sqlite-migrations";
 import type {
   CollaborationMode,
   ClaimLegacySessionWorkspaceInput,

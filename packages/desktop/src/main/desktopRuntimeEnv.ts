@@ -1,6 +1,7 @@
 /* eslint-disable max-lines -- desktop runtime/env 解析需要集中维护 main/host/remote assets 的启动边界，拆分会扩大远程连接回归面。 */
 import { existsSync, readFileSync } from "node:fs";
-import { join, resolve, win32 } from "node:path";
+import { dirname, join, resolve, win32 } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { ConnectOptions } from "@zcode/server/remote";
 import { listSSHConfigAliasesFromLocalConfig } from "@zcode/services/node";
 import { DEV_HELPER_APP_NAME, HELPER_APP_NAME } from "@zcode/zcode-cua/broker/helperConstants";
@@ -40,6 +41,9 @@ import {
 import { getElectronAppPath, isElectronAppPackaged } from "./desktopElectronApp.js";
 
 declare const __ZCODE_PACKAGED_AGENT_TELEMETRY_ENV__: Readonly<Record<string, string>> | undefined;
+
+// Electron 28 内嵌 Node 18 尚无 import.meta.dirname，现代运行时保持原生路径。
+const moduleDirname = import.meta.dirname ?? dirname(fileURLToPath(import.meta.url));
 
 const isLocalDevelopmentRuntime = !isElectronAppPackaged();
 export const desktopRuntimeEnv: ZCodeRuntimeEnv = isLocalDevelopmentRuntime
@@ -87,8 +91,8 @@ export const runtimeSessionDataPath =
 // Chromedriver 会注入临时 --user-data-dir，并在该目录等待 DevToolsActivePort。
 // e2e 如果再用 app.setPath 覆盖 userData/sessionData，端口文件会被写到另一个目录，
 // 导致 Electron 已启动但 WebDriver session 一直创建失败。测试态打开该开关后保留 Chromedriver 的目录。
-export const hostModulePath = join(import.meta.dirname, "../host/index.js");
-export const schedulerModulePath = join(import.meta.dirname, "../scheduler/index.js");
+export const hostModulePath = join(moduleDirname, "../host/index.js");
+export const schedulerModulePath = join(moduleDirname, "../scheduler/index.js");
 export function getCredentialsDir() {
   return getAppConfigDir();
 }
@@ -168,7 +172,7 @@ function parseDotenv(content: string): Record<string, string> {
 }
 
 function resolveWorkspaceRootForEnvFiles(): string | null {
-  const workspaceRootCandidate = resolve(import.meta.dirname, "../../../..");
+  const workspaceRootCandidate = resolve(moduleDirname, "../../../..");
   return existsSync(join(workspaceRootCandidate, "pnpm-workspace.yaml"))
     ? workspaceRootCandidate
     : null;
@@ -179,7 +183,7 @@ export function loadHostProcessEnvFromLocalFiles(): Record<string, string> {
     return resolvePackagedAgentTelemetryEnv();
   }
 
-  const desktopRoot = resolve(import.meta.dirname, "../..");
+  const desktopRoot = resolve(moduleDirname, "../..");
   const workspaceRoot = resolveWorkspaceRootForEnvFiles();
   const fileCandidates = [
     ...(workspaceRoot
@@ -244,7 +248,7 @@ export function resolvePackagedAgentTelemetryEnv(
 }
 
 function resolveDevelopmentMockCdnDir(): string {
-  return join(import.meta.dirname, "../../mock-cdn");
+  return join(moduleDirname, "../../mock-cdn");
 }
 
 function resolveAvailableDevelopmentMockCdnDir(): string | undefined {
@@ -403,7 +407,7 @@ function resolveBundledZCodeAgentBinaryPath(): string | undefined {
       ...entrySegments,
     ),
     join(
-      import.meta.dirname,
+      moduleDirname,
       "../../bundled-agents",
       platformKey,
       runtime.bundledResourceDir,
@@ -424,7 +428,7 @@ function resolveBundledRuntimeToolBinaryPath(
       ? join(process.resourcesPath, "tools", toolDir, candidateBinaryName)
       : null,
     join(
-      import.meta.dirname,
+      moduleDirname,
       "../../bundled-tools",
       resolvePlatformKeyForPackagedApp(),
       toolDir,

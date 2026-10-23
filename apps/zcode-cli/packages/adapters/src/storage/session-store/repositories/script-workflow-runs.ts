@@ -1,4 +1,4 @@
-import type { DatabaseSync, SQLInputValue } from "node:sqlite";
+import type { DatabaseSync, SQLInputValue } from "@zcode/shared/sqlite-migrations";
 import type {
   CreateScriptWorkflowRunInput,
   ScriptWorkflowDefinitionRecord,

@@ -42,7 +42,7 @@ export async function packageNativeSearchTools({
   buildOutputDir,
   jobs,
 } = {}) {
-  const buildPlan = buildNativeSearchTools({
+  const buildPlan = await buildNativeSearchTools({
     platform,
     arch,
     outputDir: buildOutputDir,

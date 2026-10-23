@@ -1,5 +1,6 @@
 import { accessSync, constants, existsSync } from "node:fs";
 import { delimiter, dirname, join, resolve as resolvePath } from "node:path";
+import { fileURLToPath } from "node:url";
 import { getRuntimeToolRuntime, type RuntimeToolId } from "@zcode/shared";
 
 function isExecutableFile(path: string): boolean {
@@ -25,7 +26,10 @@ function resolveExistingPath(candidates: Array<string | null | undefined>): stri
   return null;
 }
 
-function resolveCommandOnPath(command: string, env: NodeJS.ProcessEnv = process.env): string | null {
+function resolveCommandOnPath(
+  command: string,
+  env: NodeJS.ProcessEnv = process.env,
+): string | null {
   const pathEnv = env.PATH;
   if (!pathEnv) {
     return null;
@@ -35,10 +39,7 @@ function resolveCommandOnPath(command: string, env: NodeJS.ProcessEnv = process.
     process.platform === "win32"
       ? (env.PATHEXT?.split(";").filter(Boolean) ?? [".EXE", ".CMD", ".BAT", ".COM"])
       : [""];
-  const extensions =
-    process.platform === "win32" && !command.includes(".")
-      ? windowsPathExt
-      : [""];
+  const extensions = process.platform === "win32" && !command.includes(".") ? windowsPathExt : [""];
 
   for (const pathEntry of pathEnv.split(delimiter)) {
     if (!pathEntry) {
@@ -62,7 +63,9 @@ function resolvePlatformScopedBundledToolRoots(moduleDir?: string): Array<string
     resolvePath(process.cwd(), "bundled-tools", platformKey),
     resolvePath(process.cwd(), "packages", "desktop", "bundled-tools", platformKey),
     resolvePath(process.cwd(), "..", "desktop", "bundled-tools", platformKey),
-    moduleDir ? resolvePath(moduleDir, "..", "..", "..", "desktop", "bundled-tools", platformKey) : null,
+    moduleDir
+      ? resolvePath(moduleDir, "..", "..", "..", "desktop", "bundled-tools", platformKey)
+      : null,
     moduleDir ? resolvePath(moduleDir, "..", "..", "desktop", "bundled-tools", platformKey) : null,
   ];
 }
@@ -114,10 +117,21 @@ export function findRuntimeToolBinary(
       ? (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath
       : null;
   const runtimeRoot = env.ZCODE_SERVER_RUNTIME_ROOT?.trim();
-  const moduleDir: string | undefined = import.meta.dirname;
+  // Node 18 不提供 import.meta.dirname，不能因此跳过模块相对的工具资源。
+  const moduleDir =
+    import.meta.dirname ??
+    (typeof __dirname === "string"
+      ? __dirname
+      : import.meta.url
+        ? dirname(fileURLToPath(import.meta.url))
+        : undefined);
   const candidate = resolveExistingPath([
-    runtimeRoot ? resolvePath(runtimeRoot, "tools", runtime.bundledResourceDir, ...entrySegments) : null,
-    resourcesPath ? resolvePath(resourcesPath, "tools", runtime.bundledResourceDir, ...entrySegments) : null,
+    runtimeRoot
+      ? resolvePath(runtimeRoot, "tools", runtime.bundledResourceDir, ...entrySegments)
+      : null,
+    resourcesPath
+      ? resolvePath(resourcesPath, "tools", runtime.bundledResourceDir, ...entrySegments)
+      : null,
     ...resolvePlatformScopedBundledToolRoots(moduleDir).map((root) =>
       root ? resolvePath(root, runtime.bundledResourceDir, ...entrySegments) : null,
     ),

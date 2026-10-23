@@ -1,5 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { EventEmitter } from "node:events";
+import { describe, expect, it, vi } from "vitest";
 import {
+  createHostRawConsole,
   shouldReportHostConsoleError,
   stringifyHostLogArg,
 } from "../src/host/hostLog.js";
@@ -22,5 +24,42 @@ describe("host log formatting", () => {
       ]),
     ).toBe(false);
     expect(shouldReportHostConsoleError(["remote handshake failed"])).toBe(true);
+  });
+});
+
+describe("host raw console descriptor isolation", () => {
+  it("isolates synchronous EBADF from the remaining output", () => {
+    const failure = Object.assign(new Error("stdout unavailable"), { code: "EBADF" });
+    const stdout = new EventEmitter();
+    const stderr = new EventEmitter();
+    const raw = {
+      log: vi.fn(() => {
+        throw failure;
+      }),
+      warn: vi.fn(),
+      error: vi.fn(),
+    };
+    const guarded = createHostRawConsole(raw, stdout, stderr);
+    expect(() => guarded.log("first")).not.toThrow();
+    expect(() => guarded.log("second")).not.toThrow();
+    guarded.warn("stderr is independent");
+    expect(raw.log).toHaveBeenCalledTimes(1);
+    expect(raw.warn).toHaveBeenCalledWith("stderr is independent");
+  });
+
+  it("disables the failed sink after asynchronous EPIPE", () => {
+    const stdout = new EventEmitter();
+    const stderr = new EventEmitter();
+    const raw = { log: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const guarded = createHostRawConsole(raw, stdout, stderr);
+    const failure = Object.assign(new Error("stderr unavailable"), { code: "EPIPE" });
+
+    expect(() => stderr.emit("error", failure)).not.toThrow();
+    guarded.warn("unavailable");
+    guarded.error("also unavailable");
+    guarded.log("stdout is independent");
+    expect(raw.warn).not.toHaveBeenCalled();
+    expect(raw.error).not.toHaveBeenCalled();
+    expect(raw.log).toHaveBeenCalledWith("stdout is independent");
   });
 });

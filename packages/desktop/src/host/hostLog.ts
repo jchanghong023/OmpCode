@@ -55,3 +55,46 @@ function serializeErrorForHostLog(error: Error): {
   }
   return serialized;
 }
+
+interface HostOutputStream {
+  on(event: "error", listener: (error: unknown) => void): unknown;
+}
+
+/**
+ * 原始 console 与结构化 parentPort 日志互不依赖；失效描述符只关闭对应输出 sink。
+ */
+export function createHostRawConsole(
+  rawConsole: Pick<Console, "log" | "warn" | "error">,
+  stdout: HostOutputStream,
+  stderr: HostOutputStream,
+): Pick<Console, "log" | "warn" | "error"> {
+  function createSink(stream: HostOutputStream) {
+    let available = true;
+    function handleError(error: unknown): void {
+      const code =
+        typeof error === "object" && error !== null && "code" in error ? error.code : undefined;
+      if (code !== "EBADF" && code !== "EPIPE") {
+        throw error;
+      }
+      // Citrix／shell 关闭描述符时，异步 error 与同步 write 都可能失败；不递归写日志。
+      available = false;
+    }
+    stream.on("error", handleError);
+    return (write: (...args: unknown[]) => void, args: unknown[]): void => {
+      if (!available) return;
+      try {
+        write(...args);
+      } catch (error) {
+        handleError(error);
+      }
+    };
+  }
+
+  const writeStdout = createSink(stdout);
+  const writeStderr = createSink(stderr);
+  return {
+    log: (...args: unknown[]) => writeStdout(rawConsole.log, args),
+    warn: (...args: unknown[]) => writeStderr(rawConsole.warn, args),
+    error: (...args: unknown[]) => writeStderr(rawConsole.error, args),
+  };
+}

@@ -42,6 +42,7 @@ FORK-004 取代原有 ZCode 目录选择、复制及启动指针机制。OmpCode
 全局子代理定义及状态分别使用 `<applicationRoot>/agents`、`<applicationRoot>/v2/agents-state.json`，插件配置仅在应用根的 `cli/config.json` 读取。旧 HOME 下的 `.zcode/cli/config.json.storage.dir` 不再参与应用根选择或触发跨根迁移。项目 `workspacePath/.zcode/agents` 仍为合法项目资源，监听与读写语义不变。Agent 日志回退路径使用应用根的 `cli/log`，保留显式 `ZCODE_LOG_DIR` 优先级。
 
 
+
 ## 只读接口
 
 - 设置页面直接显示 `settingService.get().dataBaseDir` 返回的实际应用根，并说明 Windows/Linux 环境变量设置方式。

@@ -15,7 +15,7 @@
  * 与 dwf-journal-codecs.ts 同一种分法。
  */
 
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseSync } from "@zcode/shared/sqlite-migrations";
 import type { NodeRecord } from "@zcode/dynamic-workflow";
 import { decodeNode, type DwfNodeRow } from "./dwf-journal-codecs.js";
 import { listArtifactFieldItems } from "./dwf-journal-fields.js";

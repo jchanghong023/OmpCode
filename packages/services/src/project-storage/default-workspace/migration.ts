@@ -1,4 +1,4 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseSync } from "@zcode/shared/sqlite-migrations";
 import type { ProjectMigrationContext } from "#src/project-storage/contract.js";
 
 // 原因：旧 settings 的 purpose 缺失/误标会把系统任务目录迁成项目。

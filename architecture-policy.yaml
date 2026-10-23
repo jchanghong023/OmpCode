@@ -153,7 +153,7 @@ modules:
     roots:
       - packages/services/src/remote-projects
     managed: true
-    requires: [services, shared, project-storage]
+    requires: [services, shared, project-storage, sqlite-migrations]
     publicEntrypoints:
       - packages/services/src/remote-projects/index.ts
       - packages/services/src/remote-projects/contract.ts
@@ -649,6 +649,7 @@ modules:
       - services
       - session
       - shared
+      - sqlite-migrations
     publicEntrypoints:
       - packages/services/src/task-groups/index.ts
       - packages/services/src/task-groups/contract.ts
@@ -796,6 +797,15 @@ global:
   acceptedUpstreamSnapshot: scripts/architecture/upstream-snapshot.json
 
 exceptions:
+  - id: centos7-existing-runtime-compatibility
+    rule: unmanaged-new-file
+    paths:
+      - packages/desktop/src/preload/rewardsWebview.ts
+      - packages/services/src/session/offPeakWorkspaceIdentityMigration.ts
+      - packages/services/src/session/tasksDatabase/prepared.ts
+      - packages/services/src/session/tasksDatabase/source-server-schema-v5.ts
+      - packages/shared/src/project-access-token.ts
+    reason: 已在 b19b2fda 快照存在的准入文件，仅切换共享 SQLite 公开类型、可信 preload 安装入口或 Node18 加密 API；保持原有状态所有者与模块边界，不将兼容改造扩大为整个 legacy 模块接管。
   - id: side-pane-full-view-shortcut-command-edit
     rule: unmanaged-new-file
     paths: [packages/shared/src/shortcutCommands.ts]

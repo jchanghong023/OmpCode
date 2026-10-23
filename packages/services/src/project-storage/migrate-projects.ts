@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { posix, win32 } from "node:path";
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseSync } from "@zcode/shared/sqlite-migrations";
 import { buildRemoteWorkspaceIdentity, buildServerRemoteWorkspaceIdentity } from "@zcode/shared";
 import type { ProjectMigrationContext } from "#src/project-storage/contract.js";
 import {

@@ -4,7 +4,7 @@
  */
 export const remoteProjectsModule = {
   id: "remote-projects",
-  requires: ["services", "shared", "project-storage"],
+  requires: ["services", "shared", "project-storage", "sqlite-migrations"],
   provides: ["remote-projects"],
   publicEntrypoints: ["index.ts", "contract.ts"],
 } as const;

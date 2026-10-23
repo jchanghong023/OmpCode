@@ -100,3 +100,4 @@ export interface OmpProfileService {
     listener: (event: { workspaceKey: string; state: "available" | "unavailable" }) => void,
   ): OmpConfigurationDisposable;
 }
+

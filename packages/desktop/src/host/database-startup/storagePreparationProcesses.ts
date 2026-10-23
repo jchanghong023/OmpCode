@@ -147,10 +147,15 @@ export async function prepareSessionStorage(options: {
     target.workspaceIdentity,
   );
   const cwd = command.cwd ?? options.cwd;
-  const completion = Promise.withResolvers<void>();
+  // Node 18 没有 Promise.withResolvers；保持同一完成屏障及原有结算时序。
+  let resolve!: () => void;
+  let reject!: (reason?: unknown) => void;
+  const completion = new Promise<void>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
   const spawnedAt = Date.now();
   let exitedAt: number | undefined;
-  const { resolve, reject } = completion;
   {
     const args = [...(command.args ?? [])];
     if (!args.includes("--cwd") && !args.some((arg) => arg.startsWith("--cwd=")))
@@ -438,5 +443,5 @@ export async function prepareSessionStorage(options: {
       });
     if (options.signal.aborted) abort();
   }
-  await completion.promise;
+  await completion;
 }

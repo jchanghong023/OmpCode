@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, resolve as resolvePath } from "node:path";
+import { fileURLToPath } from "node:url";
 import { ZCODE_AGENT_RUNTIME, sanitizeZCodeRuntimeEnvInPlace } from "@zcode/shared";
 import { getDataBaseDir, getProviderWorkspaceConfigDir } from "../paths.js";
 import { buildRuntimeProcessEnvPatch } from "./runtimeCommandEnv.js";
@@ -121,10 +122,14 @@ export function findZCodeAgentRuntimeBinary(): string | null {
     return envPath;
   }
 
-  // import.meta.dirname 在打包后的 CJS bundle（zcode-server.cjs）中是 undefined，
-  // 直接传给 resolvePath 会报 "paths[0]" argument must be of type string。
-  // 这里做空值保护，只有 import.meta.dirname 存在时才构建对应的候选路径。
-  const moduleDir: string | undefined = import.meta.dirname;
+  // Node 18 缺少 dirname；ESM 从 URL 恢复，CJS 保留真实模块目录，不能丢失资源候选。
+  const moduleDir =
+    import.meta.dirname ??
+    (typeof __dirname === "string"
+      ? __dirname
+      : import.meta.url
+        ? dirname(fileURLToPath(import.meta.url))
+        : undefined);
   const platformScopedRoots = resolvePlatformScopedBundledAgentRoots(moduleDir);
   const legacyRoots = resolveLegacyBundledResourceRoots(moduleDir);
 
@@ -150,9 +155,14 @@ export function findZCodeAgentRuntimeNodeBundle(): string | null {
   const entrySegments = runtime.resolveNodeBundleSegments();
   const resourceSegments = [runtime.bundledResourceDir, ...entrySegments];
 
-  // 与 findZCodeAgentRuntimeBinary 一致，打包后的 CJS bundle 里 import.meta.dirname 为 undefined，
-  // 这里做空值保护后再构建仓库内候选路径。
-  const moduleDir: string | undefined = import.meta.dirname;
+  // 与原生 dirname 的候选顺序一致，只在旧 runtime 缺能力时补齐目录。
+  const moduleDir =
+    import.meta.dirname ??
+    (typeof __dirname === "string"
+      ? __dirname
+      : import.meta.url
+        ? dirname(fileURLToPath(import.meta.url))
+        : undefined);
   const platformScopedRoots = resolvePlatformScopedBundledAgentRoots(moduleDir);
   const legacyRoots = resolveLegacyBundledResourceRoots(moduleDir);
 

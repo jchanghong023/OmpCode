@@ -13,9 +13,18 @@ export const NATIVE_SEARCH_DEPENDENCIES_DIR = join(
 
 export const MACOS_NATIVE_SEARCH_DEPLOYMENT_TARGET = "12.0";
 export const LINUX_NATIVE_SEARCH_GLIBC_BASELINE = "2.28";
+// CentOS 只在显式选择的发行构建中降基线，不能污染通用 Linux producer 的 2.28 合同。
+export const CENTOS7_NATIVE_SEARCH_GLIBC_BASELINE = "2.17";
 
 export const LEGACY_REMOTE_RIPGREP_VERSION = "v13.0.0-10";
 export const NATIVE_SEARCH_RIPGREP_REVISION = "4649aa9700";
+// 现有 musl 归档只有 rg；同一提交的源码归档补齐 ripgrep/依赖的再分发许可，不替换二进制计划。
+export const CENTOS7_RIPGREP_LICENSE_SOURCE = Object.freeze({
+  id: "ripgrep",
+  version: "14.1.1",
+  url: "https://codeload.github.com/BurntSushi/ripgrep/tar.gz/4649aa9700619f94cf9c66876e9549d83420e16c",
+  sha256: "0e815611527b663310e024ea73e0672c8f6a4fa277207037affad1d8905f515c",
+});
 
 // Darwin remote 仍使用 legacy ripgrep release；下载器与新的预编译工具链共用同一份
 // “下载前必须具备可信摘要”的合同，不能因为该 release 较旧就跳过归档验真。

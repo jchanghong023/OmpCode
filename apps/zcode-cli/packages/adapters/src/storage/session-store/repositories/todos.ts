@@ -1,4 +1,4 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseSync } from "@zcode/shared/sqlite-migrations";
 import type { SessionId, TodoItem } from "@zcode/contracts";
 import { decodeTodoRow } from "../codecs.js";
 import type { TodoRow } from "../rows.js";

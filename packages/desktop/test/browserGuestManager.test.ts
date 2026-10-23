@@ -174,6 +174,15 @@ function makeGuest(id: number, spy: GuestSpy) {
           spy.viewport = { width: metrics.width, height: metrics.height };
         } else if (method === "Emulation.clearDeviceMetricsOverride") {
           spy.viewport = { width: 800, height: 600 };
+        } else if (method === "Page.getNavigationHistory") {
+          return {
+            currentIndex: spy.historyActiveIndex,
+            entries: spy.historyEntries.map((entry, index) => ({
+              id: index + 1,
+              url: entry.url,
+              title: entry.title ?? "",
+            })),
+          };
         } else if (method === "Page.getLayoutMetrics") {
           return {
             visualViewport: {
@@ -408,6 +417,256 @@ describe("BrowserGuestManager", () => {
     expect(r.state?.title).toBe("Example");
     // attach 时调 debugger.attach。
     expect(spy.attached).toBe(true);
+  });
+
+  it("history capability preserves the modern native branch and legacy live back/forward", async () => {
+    const { guest } = registerGuest(901);
+    const modernBack = vi.spyOn(guest.navigationHistory, "goBack");
+    const legacyBack = vi.fn();
+    const legacyForward = vi.fn();
+    Object.assign(guest, {
+      canGoBack: () => true,
+      canGoForward: () => true,
+      goBack: legacyBack,
+      goForward: legacyForward,
+    });
+    const manager = new BrowserGuestManager();
+    manager.attachGuest("modern-history", 901);
+    await manager.execute("modern-history", { method: "back" });
+    expect(modernBack).toHaveBeenCalledOnce();
+    expect(legacyBack).not.toHaveBeenCalled();
+
+    const legacy = registerGuest(902);
+    Reflect.deleteProperty(legacy.guest, "navigationHistory");
+    Object.assign(legacy.guest, {
+      canGoBack: () => true,
+      canGoForward: () => true,
+      goBack: legacyBack,
+      goForward: legacyForward,
+    });
+    manager.attachGuest("legacy-history", 902);
+    expect((await manager.execute("legacy-history", { method: "back" })).ok).toBe(true);
+    expect((await manager.execute("legacy-history", { method: "forward" })).ok).toBe(true);
+    expect(legacyBack).toHaveBeenCalledOnce();
+    expect(legacyForward).toHaveBeenCalledOnce();
+  });
+
+  it("legacy restore retains every URL/title/index without replaying unselected entries", async () => {
+    const { guest, spy } = registerGuest(903);
+    Reflect.deleteProperty(guest, "navigationHistory");
+    const toolbarBack = vi.fn();
+    Object.assign(guest, {
+      canGoBack: () => false,
+      canGoForward: () => false,
+      goBack: toolbarBack,
+      goForward: vi.fn(),
+    });
+    vi.spyOn(guest, "loadURL").mockImplementation(async (url) => {
+      spy.url = url;
+      spy.loadedUrl = url;
+      spy.historyEntries = [{ url, title: "Selected" }];
+      spy.historyActiveIndex = 0;
+    });
+    const manager = new BrowserGuestManager();
+    manager.attachGuest("restored-history", 903);
+    // 只在 UT 中访问 manager 的私有适配器，不扩大产品导出接口。
+    const historyAccess = manager as unknown as {
+      guestHistory(contents: unknown): {
+        restore(snapshot: {
+          entries: Array<{ url: string; title: string; pageState?: string }>;
+          index: number;
+        }): Promise<void>;
+        getAllEntries(): Array<{ url: string; title?: string; pageState?: string }>;
+        getActiveIndex(): number;
+        canGoBack(): boolean;
+        canGoForward(): boolean;
+        goBack(): void;
+        goForward(): void;
+      };
+    };
+    const history = historyAccess.guestHistory(guest);
+    await history.restore({
+      entries: [
+        { url: "https://first.example", title: "First" },
+        { url: "https://selected.example", title: "Selected", pageState: "opaque-native-state" },
+        { url: "https://last.example", title: "Last" },
+      ],
+      index: 1,
+    });
+    expect(guest.loadURL).toHaveBeenCalledExactlyOnceWith("https://selected.example");
+    expect(history.getAllEntries()).toEqual([
+      { url: "https://first.example", title: "First" },
+      { url: "https://selected.example", title: "Selected" },
+      { url: "https://last.example", title: "Last" },
+    ]);
+    expect(history.getActiveIndex()).toBe(1);
+    expect(history.canGoBack()).toBe(true);
+    expect(history.canGoForward()).toBe(true);
+    // Electron 28 的 webview IPC 直接调用 main guest 方法；工具栏必须与 Agent 共用适配器。
+    const toolbar = guest as unknown as {
+      canGoBack(): boolean;
+      canGoForward(): boolean;
+      goBack(): void;
+      goForward(): void;
+    };
+    expect(toolbar.canGoBack()).toBe(true);
+    expect(toolbar.canGoForward()).toBe(true);
+    toolbar.goBack();
+    await vi.waitFor(() => expect(history.getActiveIndex()).toBe(0));
+    expect(spy.loadedUrl).toBe("https://first.example");
+    expect(history.getAllEntries().map((entry) => entry.url)).toEqual([
+      "https://first.example",
+      "https://selected.example",
+      "https://last.example",
+    ]);
+    expect(toolbarBack).not.toHaveBeenCalled();
+    await manager.execute("restored-history", { method: "forward" });
+    await vi.waitFor(() => expect(history.getActiveIndex()).toBe(1));
+    expect(spy.loadedUrl).toBe("https://selected.example");
+    toolbar.goForward();
+    await vi.waitFor(() => expect(history.getActiveIndex()).toBe(2));
+    expect(spy.loadedUrl).toBe("https://last.example");
+  });
+
+  it("legacy refresh merges every native entry and preserves replacement, branching and late-response guards", async () => {
+    const { guest, spy } = registerGuest(904);
+    Reflect.deleteProperty(guest, "navigationHistory");
+    let native = {
+      currentIndex: 0,
+      entries: [{ id: 10, url: "https://b.example", title: "B" }],
+    };
+    vi.spyOn(guest, "loadURL").mockImplementation(async (url) => {
+      spy.url = url;
+    });
+    const send = guest.debugger.sendCommand.bind(guest.debugger);
+    vi.spyOn(guest.debugger, "sendCommand").mockImplementation(async (method, params) =>
+      method === "Page.getNavigationHistory" ? native : send(method, params),
+    );
+    const manager = new BrowserGuestManager();
+    manager.attachGuest("merge-history", 904);
+    const access = manager as unknown as {
+      guestHistory(contents: unknown): {
+        restore(snapshot: { entries: Array<{ url: string }>; index: number }): Promise<void>;
+        refresh(): Promise<void>;
+        getAllEntries(): Array<{ url: string }>;
+        getActiveIndex(): number;
+      };
+    };
+    const history = access.guestHistory(guest);
+    await history.restore({
+      entries: ["a", "b", "old-forward"].map((name) => ({ url: `https://${name}.example` })),
+      index: 1,
+    });
+    native = {
+      currentIndex: 2,
+      entries: [
+        native.entries[0]!,
+        { id: 11, url: "https://c.example", title: "C" },
+        { id: 12, url: "https://d.example", title: "D" },
+      ],
+    };
+    await history.refresh();
+    expect(history.getAllEntries().map(({ url }) => url)).toEqual(
+      ["a", "b", "c", "d"].map((name) => `https://${name}.example`),
+    );
+    expect(history.getActiveIndex()).toBe(3);
+    native = {
+      ...native,
+      entries: [
+        ...native.entries.slice(0, 2),
+        { id: 17, url: "https://replacement-only.example", title: "Replacement only" },
+      ],
+    };
+    await history.refresh();
+    expect(history.getAllEntries()).toHaveLength(4);
+    expect(history.getAllEntries().at(-1)?.url).toBe("https://replacement-only.example");
+    // replace 后立即 push；即使旧活动 id 已消失，也不能把替换项误当成最终活动项。
+    native = {
+      currentIndex: 3,
+      entries: [
+        ...native.entries.slice(0, 2),
+        { id: 13, url: "https://replaced.example", title: "Replaced" },
+        { id: 14, url: "https://replaced.example", title: "Same URL, new entry" },
+      ],
+    };
+    await history.refresh();
+    expect(history.getAllEntries().map(({ url }) => url)).toEqual(
+      ["a", "b", "c", "replaced", "replaced"].map((name) => `https://${name}.example`),
+    );
+    native = { ...native, currentIndex: 1 };
+    await history.refresh();
+    native = {
+      currentIndex: 2,
+      entries: [
+        ...native.entries.slice(0, 2),
+        { id: 15, url: "https://branch.example", title: "Branch" },
+      ],
+    };
+    await history.refresh();
+    expect(history.getAllEntries().map(({ url }) => url)).toEqual(
+      ["a", "b", "c", "branch"].map((name) => `https://${name}.example`),
+    );
+    const deferred = Promise.withResolvers<typeof native>();
+    vi.mocked(guest.debugger.sendCommand).mockImplementationOnce(() => deferred.promise);
+    const late = history.refresh();
+    native = {
+      ...native,
+      entries: [...native.entries, { id: 16, url: "https://latest.example", title: "Latest" }],
+      currentIndex: 3,
+    };
+    await history.refresh();
+    deferred.resolve({ currentIndex: 0, entries: [native.entries[0]!] });
+    await late;
+    expect(history.getAllEntries().at(-1)?.url).toBe("https://latest.example");
+    expect(history.getActiveIndex()).toBe(4);
+    native = {
+      currentIndex: 0,
+      entries: [{ id: 20, url: "https://b.example", title: "B" }],
+    };
+    await history.restore({
+      entries: ["a", "b", "old-forward"].map((name) => ({ url: `https://${name}.example` })),
+      index: 1,
+    });
+    native = {
+      currentIndex: 1,
+      entries: [
+        { id: 21, url: "https://replacement.example", title: "Replacement" },
+        { id: 22, url: "https://next.example", title: "Next" },
+      ],
+    };
+    await history.refresh();
+    expect(history.getAllEntries().map(({ url }) => url)).toEqual(
+      ["a", "replacement", "next"].map((name) => `https://${name}.example`),
+    );
+    expect(history.getActiveIndex()).toBe(2);
+  });
+
+  it("legacy rebind discards a stale in-memory snapshot before URL recovery", async () => {
+    const { guest, spy } = registerGuest(905);
+    Reflect.deleteProperty(guest, "navigationHistory");
+    const manager = new BrowserGuestManager();
+    manager.attachGuest("stale-legacy-history", 905);
+    const access = manager as unknown as {
+      tabs: Map<
+        string,
+        {
+          cachedUrl: string;
+          legacyHistorySnapshot?: { entries: Array<{ url: string }>; index: number };
+        }
+      >;
+      restoreGuestState(tab: unknown, contents: unknown): Promise<boolean>;
+      guestHistory(contents: unknown): { refresh(): Promise<void> };
+    };
+    await access.guestHistory(guest).refresh();
+    const tab = access.tabs.get("stale-legacy-history")!;
+    tab.cachedUrl = "https://b.example";
+    tab.legacyHistorySnapshot = { entries: [{ url: "https://a.example" }], index: 0 };
+    const load = vi.spyOn(guest, "loadURL");
+    expect(await access.restoreGuestState(tab, guest)).toBe(true);
+    expect(load).toHaveBeenCalledExactlyOnceWith("https://b.example");
+    expect(spy.loadedUrl).toBe("https://b.example");
+    expect(tab.cachedUrl).toBe("https://b.example");
+    expect(tab.legacyHistorySnapshot).toBeUndefined();
   });
 
   it("BVR01: 同一 WebView 异步录制动作并在 status 返回 WebM 元数据", async () => {

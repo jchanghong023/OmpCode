@@ -1,10 +1,16 @@
 /* eslint-disable max-lines -- 原生搜索构建步骤按依赖顺序共享同一套编译环境，集中维护更容易审计。 */
-import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { chmod, copyFile, mkdir, mkdtemp, readdir, rm, writeFile, lstat } from "node:fs/promises";
+import { createReadStream } from "node:fs";
+import { createHash } from "node:crypto";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { cpus, tmpdir } from "node:os";
 import { basename, dirname, join, relative } from "node:path";
 import process from "node:process";
 import {
   LINUX_NATIVE_SEARCH_GLIBC_BASELINE,
+  CENTOS7_NATIVE_SEARCH_GLIBC_BASELINE,
+  CENTOS7_RIPGREP_LICENSE_SOURCE,
   MACOS_NATIVE_SEARCH_DEPLOYMENT_TARGET,
   NATIVE_SEARCH_BFS_CONFIGURE_ARGS,
   NATIVE_SEARCH_TOOL_VERSIONS,
@@ -13,9 +19,107 @@ import {
   normalizeNativeSearchArch,
   normalizeNativeSearchPlatform,
   resolveNativeSearchBuildPlan,
+  resolveNativeSearchPrebuiltPlan,
 } from "./native-search-tools-config.mjs";
-import { downloadAndExtractSources, run, runCapture } from "./native-search-tools-process.mjs";
+import { run, runCapture } from "./native-search-tools-process.mjs";
 import { verifyBuiltNativeSearchProducerOutputs } from "./native-search-tools-verify.mjs";
+
+const execFileAsync = promisify(execFile);
+
+async function digestFile(path) {
+  const hash = createHash("sha256");
+  for await (const chunk of createReadStream(path)) hash.update(chunk);
+  return hash.digest("hex");
+}
+
+async function downloadAndExtractSources({ sources, workDir, env }) {
+  const paths = {};
+  for (const source of sources) {
+    const archive = join(workDir, `${source.id}.tar.gz`);
+    await execFileAsync("curl", ["--fail", "--location", "--output", archive, source.url], { env });
+    if ((await digestFile(archive)) !== source.sha256) {
+      throw new Error(`Source checksum mismatch for ${source.id} ${source.version}`);
+    }
+    const destination = join(workDir, "sources", source.id);
+    await mkdir(destination, { recursive: true });
+    await execFileAsync("tar", ["-xzf", archive, "-C", destination, "--strip-components=1"], {
+      env,
+    });
+    paths[source.id] = destination;
+  }
+  return paths;
+}
+
+async function copySourceLicenses(sourceRoot, destination) {
+  let copied = 0;
+  async function copyDirectoryLicenses(directory, targetDirectory) {
+    for (const entry of await readdir(directory, { withFileTypes: true })) {
+      const source = join(directory, entry.name);
+      const target = join(targetDirectory, entry.name);
+      if (entry.isDirectory()) {
+        await copyDirectoryLicenses(source, target);
+      } else if (
+        entry.isFile() &&
+        /^(?:licen[cs]e|copying|copyright|notice)(?:[._-]|$)/iu.test(entry.name)
+      ) {
+        // 固定 zstd 源归档含零字节许可占位；源码头明确适用根目录 BSD LICENSE / GPL COPYING。
+        // 空文件不承载条款，不能作为发行资产；非空许可仍按原文和相对路径完整复制。
+        if ((await lstat(source)).size === 0) continue;
+        await mkdir(targetDirectory, { recursive: true });
+        await copyFile(source, target);
+        copied += 1;
+      }
+    }
+  }
+  await copyDirectoryLicenses(sourceRoot, destination);
+  // 按整个依赖来源计数，而非要求每个子目录都有许可；全为空或缺失时必须拒绝。
+  if (copied === 0) throw new Error(`No non-empty source licenses found in ${sourceRoot}`);
+}
+
+async function stageCentos7Ripgrep(plan, workDir, env) {
+  // 当前计划已经固定含 PCRE2 的静态 musl 资产；不能换成现代 GNU prebuild 或删掉 -P 能力。
+  const artifact = resolveNativeSearchPrebuiltPlan({
+    platform: plan.platform,
+    arch: plan.arch,
+    outputDir: plan.outputDir,
+    env,
+  }).artifacts.find(({ toolId }) => toolId === "ripgrep");
+  const archive = join(workDir, artifact.releaseFileName);
+  if (artifact.downloadUrl) {
+    await execFileAsync(
+      "curl",
+      ["--fail", "--location", "--output", archive, artifact.downloadUrl],
+      { env },
+    );
+  } else {
+    await copyFile(artifact.archivePath, archive);
+  }
+  const extracted = join(workDir, "ripgrep");
+  await mkdir(extracted, { recursive: true });
+  const { stdout: listing } = await execFileAsync("tar", ["-tzf", archive], { env });
+  for (const entry of listing.trim().split("\n")) {
+    if (entry.startsWith("/") || entry.split("/").includes("..")) {
+      throw new Error(`Unsafe ripgrep archive entry ${entry}`);
+    }
+  }
+  await execFileAsync("tar", ["-xzf", archive, "-C", extracted], { env });
+  const binaryEntries = listing
+    .trim()
+    .split("\n")
+    .filter((entry) => basename(entry) === artifact.binaryName);
+  if (binaryEntries.length !== 1)
+    throw new Error("Pinned ripgrep archive must contain exactly one rg");
+  const binary = join(extracted, binaryEntries[0]);
+  if (!(await lstat(binary)).isFile()) throw new Error("Pinned ripgrep executable missing");
+  await mkdir(dirname(plan.rgPath), { recursive: true });
+  await copyFile(binary, plan.rgPath);
+  await chmod(plan.rgPath, 0o755);
+  return {
+    version: artifact.version,
+    release: artifact.release,
+    archiveSha256: artifact.archiveSha256,
+  };
+}
 
 const MACOS_BFS_CPP_FLAGS = Object.freeze([
   // macOS 26 SDK 会让 bfs 优先选择 26.0 才存在的标准函数；屏蔽后沿用 10.15 起可用的 _np 版本。
@@ -36,26 +140,26 @@ export function assertLinuxNativeSearchBuildEnvironment({
   glibcVersion,
   gccVersion,
   cxxVersion,
+  centos7Baseline = false,
 }) {
-  if (readVersionMajor(nodeVersion) !== 24) {
+  const expectedNode = centos7Baseline ? "20.19.0" : null;
+  const expectedGcc = centos7Baseline ? 11 : 12;
+  const expectedGlibc = centos7Baseline
+    ? CENTOS7_NATIVE_SEARCH_GLIBC_BASELINE
+    : LINUX_NATIVE_SEARCH_GLIBC_BASELINE;
+  if (expectedNode ? nodeVersion !== expectedNode : readVersionMajor(nodeVersion) !== 24) {
     throw new Error(
-      `Linux native search producer requires Node 24; received ${nodeVersion || "<missing>"}`,
+      `Linux native search requires Node ${expectedNode ?? "24"}; got ${nodeVersion}`,
     );
   }
-  if (String(glibcVersion).trim() !== LINUX_NATIVE_SEARCH_GLIBC_BASELINE) {
-    throw new Error(
-      `Linux native search producer requires builder glibc ${LINUX_NATIVE_SEARCH_GLIBC_BASELINE}; received ${glibcVersion || "<missing>"}`,
-    );
+  if (String(glibcVersion).trim() !== expectedGlibc) {
+    throw new Error(`Linux native search requires glibc ${expectedGlibc}; got ${glibcVersion}`);
   }
-  if (readVersionMajor(gccVersion) !== 12) {
-    throw new Error(
-      `Linux native search producer requires GCC 12; received ${gccVersion || "<missing>"}`,
-    );
+  if (readVersionMajor(gccVersion) !== expectedGcc) {
+    throw new Error(`Linux native search requires GCC ${expectedGcc}; got ${gccVersion}`);
   }
-  if (readVersionMajor(cxxVersion) !== 12) {
-    throw new Error(
-      `Linux native search producer requires G++ 12 via CXX; received ${cxxVersion || "<missing>"}`,
-    );
+  if (readVersionMajor(cxxVersion) !== expectedGcc) {
+    throw new Error(`Linux native search requires G++ ${expectedGcc}; got ${cxxVersion}`);
   }
 }
 
@@ -72,6 +176,7 @@ function verifyLinuxNativeSearchBuildEnvironment(config) {
     glibcVersion,
     gccVersion,
     cxxVersion,
+    centos7Baseline: config.centos7Baseline,
   });
   console.log(
     `==> Linux producer environment Node ${process.versions.node}, glibc ${glibcVersion}, GCC ${gccVersion}, G++ ${cxxVersion}`,
@@ -84,6 +189,7 @@ export function resolveNativeUnixBuildConfig({
   hostPlatform = process.platform,
   hostArch = process.arch,
   env = process.env,
+  centos7Baseline = false,
 } = {}) {
   const normalizedPlatform = normalizeNativeSearchPlatform(platform);
   const normalizedArch = normalizeNativeSearchArch(arch);
@@ -107,6 +213,9 @@ export function resolveNativeUnixBuildConfig({
       `native Unix search build must run natively for ${normalizedPlatform}-${normalizedArch}; host is ${normalizedHostPlatform}-${normalizedHostArch}`,
     );
   }
+  if (centos7Baseline && (normalizedPlatform !== "linux" || normalizedArch !== "x64")) {
+    throw new Error("CentOS 7 native search requires linux-x64");
+  }
 
   const targetCompilerArgs =
     normalizedPlatform === "darwin" ? ["-arch", normalizedArch === "x64" ? "x86_64" : "arm64"] : [];
@@ -119,6 +228,7 @@ export function resolveNativeUnixBuildConfig({
   return {
     platform: normalizedPlatform,
     arch: normalizedArch,
+    centos7Baseline,
     cc: env.CC?.trim() || (normalizedPlatform === "darwin" ? "clang" : "gcc"),
     cxx: env.CXX?.trim() || (normalizedPlatform === "darwin" ? "clang++" : "g++"),
     ar: env.AR?.trim() || "ar",
@@ -181,7 +291,7 @@ function buildZlib(sourcePath, prefix, jobs, env, quiet) {
   run("make", ["install"], { cwd: sourcePath, env, quiet });
 }
 
-function buildBzip2(sourcePath, prefix, jobs, env, quiet, config) {
+async function buildBzip2(sourcePath, prefix, jobs, env, quiet, config) {
   console.log("==> Build bzip2 (static)");
   // release sidecar 不携带调试信息，避免 DWARF 记录随机构建目录。
   run(
@@ -195,8 +305,8 @@ function buildBzip2(sourcePath, prefix, jobs, env, quiet, config) {
     ],
     { cwd: sourcePath, env, quiet },
   );
-  copyFileSync(join(sourcePath, "libbz2.a"), join(prefix, "lib", "libbz2.a"));
-  copyFileSync(join(sourcePath, "bzlib.h"), join(prefix, "include", "bzlib.h"));
+  await copyFile(join(sourcePath, "libbz2.a"), join(prefix, "lib", "libbz2.a"));
+  await copyFile(join(sourcePath, "bzlib.h"), join(prefix, "include", "bzlib.h"));
 }
 
 function buildZstd(sourcePath, prefix, jobs, env, quiet) {
@@ -213,7 +323,7 @@ function buildZstd(sourcePath, prefix, jobs, env, quiet) {
   );
 }
 
-function compileBrotliLibrary({
+async function compileBrotliLibrary({
   sourcePath,
   buildPath,
   sourceGroup,
@@ -224,9 +334,9 @@ function compileBrotliLibrary({
 }) {
   const sourceDir = join(sourcePath, "c", sourceGroup);
   const objectDir = join(buildPath, sourceGroup);
-  mkdirSync(objectDir, { recursive: true });
+  await mkdir(objectDir, { recursive: true });
 
-  const objectPaths = readdirSync(sourceDir)
+  const objectPaths = (await readdir(sourceDir))
     .filter((name) => name.endsWith(".c"))
     .sort()
     .map((name) => {
@@ -254,7 +364,7 @@ function compileBrotliLibrary({
   run(config.ar, ["crs", libraryPath, ...objectPaths], { env, quiet });
 }
 
-function buildBrotli(sourcePath, prefix, workDir, env, quiet, config) {
+async function buildBrotli(sourcePath, prefix, workDir, env, quiet, config) {
   console.log("==> Build Brotli (static)");
   const buildPath = join(workDir, "brotli-build");
   const libraries = [
@@ -264,7 +374,7 @@ function buildBrotli(sourcePath, prefix, workDir, env, quiet, config) {
   ];
 
   for (const [sourceGroup, libraryName] of libraries) {
-    compileBrotliLibrary({
+    await compileBrotliLibrary({
       sourcePath,
       buildPath,
       sourceGroup,
@@ -277,9 +387,9 @@ function buildBrotli(sourcePath, prefix, workDir, env, quiet, config) {
 
   const includeSource = join(sourcePath, "c", "include", "brotli");
   const includeDestination = join(prefix, "include", "brotli");
-  mkdirSync(includeDestination, { recursive: true });
-  for (const name of readdirSync(includeSource).filter((entry) => entry.endsWith(".h"))) {
-    copyFileSync(join(includeSource, name), join(includeDestination, name));
+  await mkdir(includeDestination, { recursive: true });
+  for (const name of (await readdir(includeSource)).filter((entry) => entry.endsWith(".h"))) {
+    await copyFile(join(includeSource, name), join(includeDestination, name));
   }
 }
 
@@ -351,7 +461,7 @@ function buildUgrep(sourcePath, prefix, jobs, env, quiet, runUpstreamTests, conf
   return join(sourcePath, "src", "ugrep");
 }
 
-export function buildNativeSearchToolsUnix({
+export async function buildNativeSearchToolsUnix({
   platform = process.platform,
   arch = process.arch,
   hostPlatform = process.platform,
@@ -362,6 +472,8 @@ export function buildNativeSearchToolsUnix({
   quiet = false,
   runUpstreamTests = false,
   processEnv = process.env,
+  centos7Baseline = false,
+  licenseDir,
 } = {}) {
   const config = resolveNativeUnixBuildConfig({
     platform,
@@ -369,18 +481,25 @@ export function buildNativeSearchToolsUnix({
     hostPlatform,
     hostArch,
     env: processEnv,
+    centos7Baseline,
   });
   const plan = resolveNativeSearchBuildPlan({
     platform: config.platform,
     arch: config.arch,
     outputDir,
   });
+  const sourceArchives = [
+    ...getNativeSearchSourceArchivesForTarget({ platform: plan.platform, arch: plan.arch }),
+    ...(centos7Baseline && licenseDir ? [CENTOS7_RIPGREP_LICENSE_SOURCE] : []),
+  ];
+  if (centos7Baseline && runUpstreamTests) {
+    throw new Error("CentOS 7 packaging does not run upstream tests");
+  }
   if (config.platform === "linux") {
-    // 只靠最终 binary smoke 会让高版本 runner 产出的 GLIBC_2.34/2.36
-    // 误进入固定 release。下载源码前先锁住 producer 环境，产物阶段再由 readelf gate 复核。
+    // 下载源码前锁定 producer 环境。
     verifyLinuxNativeSearchBuildEnvironment(config);
   }
-  const workDir = mkdtempSync(join(tmpdir(), "zcode-native-search-build-"));
+  const workDir = await mkdtemp(join(tmpdir(), "zcode-native-search-build-"));
   const prefix = join(workDir, "prefix");
   const env = {
     ...processEnv,
@@ -397,8 +516,8 @@ export function buildNativeSearchToolsUnix({
       : {}),
     RANLIB: config.ranlib,
   };
-  mkdirSync(join(prefix, "include"), { recursive: true });
-  mkdirSync(join(prefix, "lib", "pkgconfig"), { recursive: true });
+  await mkdir(join(prefix, "include"), { recursive: true });
+  await mkdir(join(prefix, "lib", "pkgconfig"), { recursive: true });
 
   console.log("==> ZCode native search build");
   console.log(`    target:  ${plan.platformKey}`);
@@ -406,21 +525,23 @@ export function buildNativeSearchToolsUnix({
   console.log(`    workdir: ${workDir}`);
 
   try {
-    const sources = downloadAndExtractSources({
-      sources: getNativeSearchSourceArchivesForTarget({
-        platform: plan.platform,
-        arch: plan.arch,
-      }),
+    const sources = await downloadAndExtractSources({
+      sources: sourceArchives,
       workDir,
       env,
       quiet,
     });
+    if (licenseDir) {
+      for (const [id, source] of Object.entries(sources)) {
+        await copySourceLicenses(source, join(licenseDir, id));
+      }
+    }
     buildOniguruma(sources.oniguruma, prefix, jobs, env, quiet);
     buildPcre2(sources.pcre2, prefix, jobs, env, quiet, config);
     buildZlib(sources.zlib, prefix, jobs, env, quiet);
-    buildBzip2(sources.bzip2, prefix, jobs, env, quiet, config);
+    await buildBzip2(sources.bzip2, prefix, jobs, env, quiet, config);
     buildZstd(sources.zstd, prefix, jobs, env, quiet);
-    buildBrotli(sources.brotli, prefix, workDir, env, quiet, config);
+    await buildBrotli(sources.brotli, prefix, workDir, env, quiet, config);
 
     const builtBfsPath = buildBfs(sources.bfs, prefix, jobs, env, quiet, runUpstreamTests, config);
     const builtUgrepPath = buildUgrep(
@@ -432,27 +553,48 @@ export function buildNativeSearchToolsUnix({
       runUpstreamTests,
       config,
     );
-    verifyBuiltNativeSearchProducerOutputs({
-      bfsPath: builtBfsPath,
-      ugrepPath: builtUgrepPath,
-      platform: plan.platform,
-      arch: plan.arch,
-      producerOutputIds: plan.producerOutputIds,
-    });
+    // CentOS 发行只允许静态产物完整性检查，不执行工具的版本或搜索 smoke。
+    if (!centos7Baseline)
+      verifyBuiltNativeSearchProducerOutputs({
+        bfsPath: builtBfsPath,
+        ugrepPath: builtUgrepPath,
+        platform: plan.platform,
+        arch: plan.arch,
+        producerOutputIds: plan.producerOutputIds,
+      });
 
-    mkdirSync(dirname(plan.bfsPath), { recursive: true });
-    mkdirSync(dirname(plan.ugrepPath), { recursive: true });
-    copyFileSync(builtBfsPath, plan.bfsPath);
-    copyFileSync(builtUgrepPath, plan.ugrepPath);
-    chmodSync(plan.bfsPath, 0o755);
-    chmodSync(plan.ugrepPath, 0o755);
-    verifyBuiltNativeSearchProducerOutputs({
-      bfsPath: plan.bfsPath,
-      ugrepPath: plan.ugrepPath,
-      platform: plan.platform,
-      arch: plan.arch,
-      producerOutputIds: plan.producerOutputIds,
-    });
+    await mkdir(dirname(plan.bfsPath), { recursive: true });
+    await mkdir(dirname(plan.ugrepPath), { recursive: true });
+    await copyFile(builtBfsPath, plan.bfsPath);
+    await copyFile(builtUgrepPath, plan.ugrepPath);
+    await chmod(plan.bfsPath, 0o755);
+    await chmod(plan.ugrepPath, 0o755);
+    if (centos7Baseline) {
+      const ripgrep = await stageCentos7Ripgrep(plan, workDir, env);
+      if (licenseDir) {
+        await mkdir(licenseDir, { recursive: true });
+        await writeFile(
+          join(licenseDir, "search-build-manifest.json"),
+          `${JSON.stringify(
+            {
+              glibcBaseline: CENTOS7_NATIVE_SEARCH_GLIBC_BASELINE,
+              sources: sourceArchives,
+              ripgrep,
+              bfsConfigureArgs: NATIVE_SEARCH_BFS_CONFIGURE_ARGS,
+            },
+            null,
+            2,
+          )}\n`,
+        );
+      }
+    } else
+      verifyBuiltNativeSearchProducerOutputs({
+        bfsPath: plan.bfsPath,
+        ugrepPath: plan.ugrepPath,
+        platform: plan.platform,
+        arch: plan.arch,
+        producerOutputIds: plan.producerOutputIds,
+      });
     console.log(`==> Built ${plan.bfsPath}`);
     console.log(`==> Built ${plan.ugrepPath}`);
     return plan;
@@ -460,7 +602,7 @@ export function buildNativeSearchToolsUnix({
     if (keepWorkdir) {
       console.log(`==> Preserved workdir ${workDir}`);
     } else {
-      rmSync(workDir, { recursive: true, force: true });
+      await rm(workDir, { recursive: true, force: true });
     }
   }
 }
