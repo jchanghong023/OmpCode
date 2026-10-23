@@ -100,9 +100,9 @@ flowchart LR
 
 ## 8. 双平台 workflow 与本轮验收
 
-保留 `.github/workflows/release-windows.yml` 和 `release-centos7.yml` 两个手动入口，仅接受 `dev-centos7`，构建和发布使用触发 SHA。正常编译／打包／发布，不运行 UT、E2E、typecheck、lint、architecture、SSH 回环握手、许可处理或包审计；不要由 bundle hook 间接恢复取消的检查。不装配 OMP，不把 GitHub 发布成功冒充本轮启动结果，本轮不 dispatch 或实际发布。
+保留 `.github/workflows/release-windows.yml` 和 `release-centos7.yml` 两个手动入口，仅接受 `dev-centos7`，构建和发布使用触发 SHA。正常编译／打包／发布，不运行 UT、E2E、typecheck、lint、architecture、SSH 回环握手、许可处理或包审计；不要由 bundle hook 间接恢复取消的检查。不装配 OMP，不把 GitHub 发布成功冒充本轮启动结果。2026-10-23 用户已明确要求发布 CentOS 7 直到成功：将当前已合并源码快进到既有发行分支，执行 CentOS workflow 并公开 Release，下载同一 ZIP 在隔离 CentOS 7 环境实际启动。
 
-Windows 正常构建 NSIS EXE；CentOS 正常在隔离副本构建 desktop、在兼容构建器构建 native，tar artifact 装配 ZIP。沿用既有 tag、draft、权限与产物链；SHA256 可选供用户使用，不复验阻断。CentOS 发布固定 `release-centos7` 并发组、`cancel-in-progress: false`、`queue: max`，保留每个请求触发 SHA 和 GitHub 100 pending 上限，不另建队列。可选 `CENTOS7_NATIVE_IMAGE` 沿用现有不可变镜像配置，未设时使用现有 Dockerfile，不要求额外私有构建输入。
+Windows 正常构建 NSIS EXE；CentOS 正常在隔离副本构建 desktop、在兼容构建器构建 native，tar artifact 装配 ZIP。沿用既有 tag、draft、权限与产物链；SHA256 可选供用户使用，不在装配、下载或公开草稿前复验，也不下载已上传资产进行完整性检查。CentOS 发布固定 `release-centos7` 并发组、`cancel-in-progress: false`、`queue: max`，保留每个请求触发 SHA 和 GitHub 100 pending 上限，不另建队列。可选 `CENTOS7_NATIVE_IMAGE` 沿用现有不可变镜像配置，未设时使用现有 Dockerfile，不要求额外私有构建输入。
 
 本轮完成条件：同一真实 ZIP 在 CentOS 7 可启动、实际界面加载，Main／Host／renderer／原始 stderr 无功能性启动报错。使用真实独立外部 OMP，隔离安装及数据，修复真实根因，不过滤错误、降低日志等级、吞异常或伪造依赖。记录实际场景与结果，不提前宣称通过。
 

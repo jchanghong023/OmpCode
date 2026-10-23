@@ -212,7 +212,7 @@ jobs:
         with:
           name: centos7-native-stage
           path: release-inputs
-      - name: Merge stages and create final ZIP with integrity checks
+      - name: Merge stages and create final ZIP
         shell: bash
         run: |
           set -euo pipefail
@@ -222,7 +222,6 @@ jobs:
           bash scripts/publish/centos7/build-zip.sh \
             packages/desktop/dist/linux-unpacked packages/desktop/dist/centos7-native \
             "$APP_VERSION" packages/desktop/dist
-          (cd packages/desktop/dist && sha256sum --check "OmpCode-$APP_VERSION-centos7-x64.zip.sha256")
       - uses: actions/upload-artifact@v4
         with:
           name: centos7-release
@@ -247,14 +246,6 @@ jobs:
         with:
           name: centos7-release
           path: release-assets
-      - name: Verify downloaded archive bytes
-        shell: bash
-        run: |
-          set -euo pipefail
-          cd release-assets
-          assets=(OmpCode-*-centos7-x64.zip)
-          [[ ${#assets[@]} -eq 1 && -s ${assets[0]} ]]
-          sha256sum --check "${assets[0]}.sha256"
       - name: Create draft release
         shell: bash
         run: |
@@ -263,21 +254,9 @@ jobs:
           gh release create "$RELEASE_TAG" "${assets[0]}" "${assets[0]}.sha256" \
             --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "OmpCode $RELEASE_TAG" \
             --notes "CentOS 7 x64 ZIP, glibc 2.17. Extract under HOME and run bin/ompcode-centos7 without root. Unsigned; Electron 28/Chromium 120 are end-of-life and sandboxing is disabled: avoid untrusted workspaces. Source: $GITHUB_SHA. No GUI, SSH or target-machine acceptance tests were executed by this workflow." --generate-notes --draft
-      - name: Verify uploaded bytes and promote draft
+      - name: Promote draft release
         shell: bash
         run: |
           set -euo pipefail
-          assets=(release-assets/OmpCode-*-centos7-x64.zip)
-          metadata=$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets,isDraft)
-          [[ $(jq -r '.isDraft' <<< "$metadata") == true ]]
-          [[ $(jq '.assets | length' <<< "$metadata") -eq 2 ]]
-          for file in "${assets[0]}" "${assets[0]}.sha256"; do
-            actual=$(jq -r --arg name "$(basename "$file")" '.assets[] | select(.name == $name) | .size' <<< "$metadata")
-            [[ "$actual" == "$(stat -c %s "$file")" ]]
-          done
-          mkdir uploaded
-          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --dir uploaded
-          (cd uploaded && sha256sum --check *.sha256)
-          cmp "${assets[0]}.sha256" "uploaded/$(basename "${assets[0]}.sha256")"
           gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false
           gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft,url --jq 'select(.isDraft == false) | .url'
