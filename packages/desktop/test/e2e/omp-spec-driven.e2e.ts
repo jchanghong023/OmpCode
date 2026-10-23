@@ -6,6 +6,7 @@ import {
   TID_CHAT_ERROR_BANNER,
   TID_CHAT_ERROR_DETAILS_BUTTON,
   TID_V4_COMPOSER_INPUT,
+  TID_V4_SESSION_PANE,
 } from "@zcode/shared/test-ids";
 import { DEFAULT_WORKSPACE, setInputValueByTestIdDom } from "./helpers/desktop-app.js";
 import {
@@ -368,7 +369,39 @@ describe("OMP native /spec / real Electron command consumer", () => {
     await submit(
       `/spec start omp-greeting-failure ${SPEC_FIXTURE_MARKER} OMP_E2E_SPEC_FORCE_FAILURE`,
     );
-    await waitForV4TimelineContaining("OMP_E2E_SPEC_EXPECTED_PROVIDER_FAILURE", 90000);
+    try {
+      await waitForV4TimelineContaining("OMP_E2E_SPEC_EXPECTED_PROVIDER_FAILURE", 90000);
+    } catch (error) {
+      // 诊断：首个 main pane 仍为 draft，但日志已有会话投影；保留全部 pane 的真实 DOM，
+      // 区分观测错位与首发晋升失败，不改选择状态、不重发命令，也不掩盖原始断言。
+      await Promise.allSettled([
+        artifact("omp-spec-provider-failure-diagnostics"),
+        browser
+          .execute(
+            (panePrefix) =>
+              Array.from(
+                document.querySelectorAll<HTMLElement>(`[data-testid^="${panePrefix}-"]`),
+              ).map((pane) => {
+                const bounds = pane.getBoundingClientRect();
+                return {
+                  testId: pane.dataset.testid,
+                  sessionId: pane.dataset.sessionId,
+                  projectionSeq: pane.dataset.projectionSeq,
+                  visible: Boolean(pane.getClientRects().length && bounds.width && bounds.height),
+                  text: pane.innerText,
+                };
+              }),
+            TID_V4_SESSION_PANE,
+          )
+          .then((panes) =>
+            writeFile(
+              resolve(process.env.ZCODE_E2E_ARTIFACT_DIR!, "omp-spec-provider-failure-panes.json"),
+              JSON.stringify(panes, null, 2),
+            ),
+          ),
+      ]);
+      throw error;
+    }
     await idle();
     const failureRequests = (await requests()).slice(requestStart);
     expect(

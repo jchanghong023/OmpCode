@@ -330,9 +330,16 @@ export function useProjectTree(isDesktop = false, fullHistory = false) {
     () => () => {
       serial.current++;
       reads.flight = null;
-      for (const pending of pendingCommits.current) pending.finish();
     },
     [reads],
+  );
+  useEffect(
+    () => () => {
+      // 根因：首发活动改变 includeKey 时只换查询，不换目录 owner；曾在 [reads] 清理中
+      // 静默完成 pending，导致已接受输入仍显示草稿。仅服务换代/卸载取消待提升导航。
+      for (const pending of pendingCommits.current) pending.finish();
+    },
+    [service, remoteService],
   );
   useEffect(() => {
     void refresh();

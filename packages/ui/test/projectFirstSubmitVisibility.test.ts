@@ -100,6 +100,41 @@ it("FSV03：持续失效合并读取，首发目录与详情同次提交，按�
   expect(mocks.read).toHaveBeenCalledTimes(2);
 });
 
+it("FSV03：查询窗口变化丢弃旧读取但保留首发，真实新目录与详情同时提交", async () => {
+  const old = deferred<ReturnType<typeof resultOf>>();
+  const current = deferred<ReturnType<typeof resultOf>>();
+  mocks.read.mockReturnValueOnce(old.promise).mockReturnValueOnce(current.promise);
+  render(createElement(App));
+  const commit = vi.fn(() => setDetail(task.taskId));
+  let completed!: Promise<void>;
+  let finished = false;
+  act(() => {
+    completed = owner.commitCreatedTask(task, commit).then(() => {
+      finished = true;
+    });
+    owner.setShowAllHistory(true);
+  });
+  expect(mocks.read).toHaveBeenCalledTimes(2);
+  await act(async () => {
+    old.resolve(resultOf([task]));
+  });
+  expect(finished).toBe(false);
+  expect(commit).not.toHaveBeenCalled();
+  expect(owner.tree.tasks).toEqual([]);
+  expect(screen.getByTestId("detail").textContent).toBe("draft");
+  await act(async () => {
+    current.resolve(resultOf([task]));
+    await completed;
+  });
+  expect(commit).toHaveBeenCalledOnce();
+  expect(screen.getByTestId("detail").textContent).toBe(task.taskId);
+  expect(
+    frames
+      .filter((frame) => frame.detail === task.taskId)
+      .every((frame) => frame.rows.includes(task.taskId)),
+  ).toBe(true);
+});
+
 it("FSV04：导航取消后迟到目录不调用原 pane 回调", async () => {
   const read = deferred<ReturnType<typeof resultOf>>();
   mocks.read.mockReturnValue(read.promise);

@@ -23,7 +23,7 @@ CommandInbox 接受输入 → 现有 deferred 提升 → publishCurrentSummaryTo
 - CLI persistence 决定是否为未提交草稿，runtime phase 只表达执行状态。未提交预热不发布到 sessions-index；已提交但未 TurnStarted 的摘要允许落入 Host 索引。
 - task-facts 仍是 CLI 事实摄入入口，project Host 仍拥有 projectId/pin/archive。首次摘要落库后直接发布 task_created，不为了补行读取完整会话或等待模型/Hook。
 - 共享目录仍只接受 Host readTree 的真实行。首发回调等待完整 workspaceKey + taskId 匹配，目录与原导航在同次 React 提交中更新；不构造 optimistic 项目行。
-- 目录刷新合并重叠请求，在途期间收到失效通知只追加一次读取。当前读取可提交，不因持续活动饿死；切换 service/attachment 或卸载后旧结果失效。
+- 目录刷新合并重叠请求，在途期间收到失效通知只追加一次读取。当前读取可提交，不因持续活动饿死；活动 includeKey 或历史窗口改变只使旧查询失效，保留等待真实行的首发回调；切换 service/attachment 或卸载才取消旧 owner 的待完成导航。
 - accepted 回调仅是 UI 在途完成工作，不是第二份输入队列。读取失败向调用方报告，离开原 pane 取消导航；都不得自动重发已接受输入。重复通知不会重复导航或生成任务。
 - 桌面 continuous 与手机 replayable 共用该 UI/事实链；保留原 owner/lease、CommandInbox 去重及 replay gap/snapshot 恢复，不改 main/relay 或 runtime 创建路径。远端匹配使用 workspaceIdentity，携带原 remoteSessionId。
 - 无数据库迁移。不改变已有任务发送、fork、历史打开、项目归属与排序策略。
@@ -34,7 +34,7 @@ CommandInbox 接受输入 → 现有 deferred 提升 → publishCurrentSummaryTo
 | --- | --- | --- | --- |
 | FSV01 | 预热草稿首发，初始化未产生下一事件 | accepted 前发布已提升摘要；未提交草稿仍不进列表 | CLI 单测 |
 | FSV02 | 收到已持久化、phase=draft 摘要 | 真任务行 + task_created；零 readSession/resumeSession；重复摘要不重复创建广播 | Host 单测 |
-| FSV03 | 首发完成时已有目录读取在途，持续失效通知 | 不并发堆叠、不饿死；目录含行与详情绑定同次提交；同 cwd 不同 identity 不匹配 | UI 单测 |
+| FSV03 | 首发完成时已有目录读取在途，持续失效通知或查询窗口改变 | 不并发堆叠、不饿死；查询换代不丢失首发回调；目录含行与详情绑定同次提交；同 cwd 不同 identity 不匹配 | UI 单测 |
 | FSV04 | service 切换/卸载、目录错误 | 旧响应不导航，错误可观察，不重新提交输入 | UI 单测 |
 | FSV05 | 真实桌面发送草稿 | 每帧采样：首次详情帧已有侧栏行且选中；CLI/Host 存在对应事实；未首发时无任务行 | pending E2E |
 
