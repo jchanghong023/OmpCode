@@ -32,7 +32,7 @@
 
 - 斜杠命令使用当前 OMP app-server 原生目录与补全，workspace-config／presentation 只投影同一事实；命中原生目录时 UI 不抢占本地同名逻辑。已识别的 TUI 专属操作明确拒绝，不转成模型正文。
 - 本地命令的输出、受理、完成与错误按当前公开协议投影及原生 admission 处理，不恢复旧独立 RPC 的 `prompt_result` 等私有帧。无模型推理的命令也须真实完成才能报告，失败不得伪装成功；迟到结果不关闭后续轮次。
-- 原生 `/spec` 按 OMP [规范驱动编排需求](../../../oh-my-pi/docs-zh-CN/requirements/spec-driven-orchestration.md) 的三阶段流程执行，ZCode 仅通过同一命令目录、composer 和既有确认／选择交互消费 OMP 输出。规格、候选、计划及验收版本、暂停／恢复和任务状态均由 OMP 唯一持有；不复制 GUI 工作流状态，不新增工作流设计器（AC15）。隔离 localhost provider 的 Electron 验收只脚本化模型响应，文件、工具执行、Team、审批与本地提交仍由实际 OMP 完成。
+- 原生 `/spec` 按 OMP [规范驱动编排需求](../../../oh-my-pi/docs-zh-CN/requirements/spec-driven-orchestration.md) 的三阶段流程执行，ZCode 仅通过同一命令目录、composer 和既有确认／选择交互消费 OMP 输出。规格、候选、计划及验收版本、暂停／恢复和任务状态均由 OMP 唯一持有；不复制 GUI 工作流状态，不新增工作流设计器（AC15）。隔离 localhost provider 的 Electron 验收只脚本化模型响应，文件、工具执行、Team、审批与本地提交仍由实际 OMP 完成。Computer Use 另经真实窗口输入完成全部批准门禁并观察到 `completed`、验证／审查、本地任务提交与规格同步归档，未用 WDIO／CDP 或界面状态注入替代；当前证据和平台边界统一见 OMP [需求目录](../../../oh-my-pi/docs-zh-CN/requirements/README.md)。
 - 模型、role、测试与命令均保留 workspaceIdentity、remoteSessionId、profile 和连接代际路由。桌面与手机使用同一个原生 owner，desktop-continuous 与 web-remote-replayable 分别保持各自订阅／恢复语义，不另起手机 Agent 或第二份队列。
 
 ```mermaid
