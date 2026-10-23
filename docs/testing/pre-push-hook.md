@@ -59,11 +59,13 @@ Push 要求已暂存、未暂存、未跟踪改动均为空（忽略 Git 已忽�
 - 选择精度靠准确的模块图，不靠选择规则：官方选择是文件级传递闭包，经由 barrel 的 `export *` 会把一个模块的改动传给所有导入 barrel 的测试。高扇入的纯常量模块因此只走子路径，不进根 barrel。`packages/shared/src/test-ids.ts` 的常量只从 `@zcode/shared/test-ids` 导入，根入口不再 re-export，从根入口导入这些常量会被 typecheck 拒绝；工作流一族 `test-ids-workflow.ts` 仍由根入口导出，不在本规则内。原因：根入口由 100 多条 `export *` 汇总，改 test-ids 曾选中 1379/2638 个测试，其中直接引用 test-ids 的约 50 个。
 - 测试失败 exit 1；Git、参数、基线、Vitest 错误以及脏工作区 exit 2；全量跳过 exit 0，不代表测试通过。绝不自动回退全量、追加全量重试或静默吞掉选择器异常。pnpm test / pnpm test:unit 显式执行当前根套件；临时白名单启用时并非原完整根 UT 的旁路。
 - 输出选中数量与基线；跳过全量时说明官方选中整个套件，列出官方 related 改动文件。dry-run 列精确规格，JSON 包含 runner/project/pool/path，不伪造逐文件关联原因。
-- Git/文件操作异步；保留 hook local env 清理和 lint-staged JSON manifest，Windows 不经 shell 展开文件名。不修改工作区和 index。
+- Git/文件操作异步；手动入口保留 Git local env 清理和 lint-staged JSON manifest，Windows 不经 shell 展开文件名。不修改工作区和 index，不安装 Git 钩子。
 
-全量跳过适用于工作区、任务结束、Push 和显式文件入口。Push 的 lint、数据库兼容、架构规则单测、脏工作区、基线及实际局部测试失败仍会阻止推送；仓库架构合规扫描不再属于推送阻断项。跳过全量只放行 affected UT 这一项，不代表测试已通过。
+全量跳过适用于工作区、任务结束、Push scope 和显式文件入口。手动 `verify:pre-push` 的 lint、数据库兼容、架构规则单测、脏工作区、基线及实际局部测试失败仍使该命令失败，但不由 Git 自动执行或阻止推送；仓库架构合规扫描继续使用独立手动入口。跳过全量只跳过 affected UT 这一项，不代表测试已通过。
 
 ### 回归验收
+
+下述 Git hook 场景仅在临时测试仓库夹具中验证 Push scope 的选择与错误边界，不代表本 fork 安装或启用了推送钩子。
 
 使用临时 Git 仓库、真实 Vitest 和命令入口验证：局部选择与预览/执行一致、未选择文件不执行、任务跨 commit 与旧 WIP、新增测试、配置与公共 setup 全量跳过、共同依赖全量跳过、真实 git push 在全量跳过后成功推送、无关联成功退出、测试失败、无效基线、首次/已有分支 Push、脏工作区和非 HEAD 推送阻止、多个 ref 与删除 ref、集成合并正常参与选择、lint-staged manifest 和 Git local env 隔离。夹具移除外层 push/基线环境后再注入本场景参数，避免真实仓库 SHA 污染临时仓库。
 
