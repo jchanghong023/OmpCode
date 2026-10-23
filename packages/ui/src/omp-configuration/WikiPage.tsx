@@ -1,4 +1,14 @@
 import { useEffect, useState } from "react";
+import {
+  BookOpen,
+  FileText,
+  FolderOpen,
+  Plus,
+  RefreshCw,
+  Search as SearchIcon,
+  Trash2,
+} from "lucide-react";
+import { SettingsSearchInput } from "@/settings/SettingsSearchInput.js";
 import type { WikiList, WikiQuery } from "@zcode/shared/omp-indexes";
 import { Button } from "@/components/ui/button.js";
 import { useOmpIndexes } from "./useOmpIndexes.js";
@@ -55,7 +65,8 @@ export function WikiPage(props: IndexPageProps) {
         ? submitted
         : {
             action: mode,
-            query: query.trim(),
+            // 原生 grep 将首尾空格视为正则的一部分；只有默认技术检索沿用 trim 语义。
+            query: mode === "grep" ? query : query.trim(),
             ...(index ? { index } : {}),
             limit,
             characterBudget: 1000000,
@@ -99,97 +110,132 @@ export function WikiPage(props: IndexPageProps) {
       progress={api.progress}
       onCancel={() => void api.cancel()}
     >
-      <section className="space-y-3" aria-label={m("indexes")}>
+      <section className="min-w-0 space-y-3" aria-label={m("indexes")}>
         <div className="flex items-center justify-between gap-3">
-          <h2 className="text-ui-lg font-medium">{m("indexes")}</h2>
+          <h2 className="flex items-center gap-2 text-ui-base font-medium">
+            {m("indexes")}{" "}
+            <span className="text-ui-sm font-normal text-foreground-subtle">{indexes.length}</span>
+          </h2>
           <Button
             variant="outline"
             disabled={disabled}
             onClick={() => void refresh()}
             data-testid="omp-wiki-refresh"
           >
+            <RefreshCw aria-hidden="true" />
             {m("refresh")}
           </Button>
         </div>
-        <form
-          className="grid gap-2 md:grid-cols-[1fr_1fr_auto]"
-          onSubmit={(event) => {
-            event.preventDefault();
-            setConfirmation({ action: "init", name: name.trim(), directory: directory.trim() });
-          }}
-        >
-          <input
-            className={indexInputClass}
-            aria-label={m("directory")}
-            placeholder={m("directory")}
-            value={directory}
-            onChange={(event) => setDirectory(event.target.value)}
-            required
-            disabled={disabled}
-            data-testid="omp-wiki-directory"
-          />
-          <input
-            className={indexInputClass}
-            aria-label={m("name")}
-            placeholder={m("name")}
-            value={name}
-            onChange={(event) => setName(event.target.value)}
-            required
-            disabled={disabled}
-            data-testid="omp-wiki-name"
-          />
-          <Button
-            type="submit"
-            disabled={disabled || !name.trim() || !directory.trim()}
-            data-testid="omp-wiki-init"
+        <div className="grid min-w-0 gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,20rem)]">
+          <form
+            className="order-2 grid min-w-0 content-start gap-3 rounded-lg border border-border p-3 lg:order-2"
+            onSubmit={(event) => {
+              event.preventDefault();
+              setConfirmation({ action: "init", name: name.trim(), directory: directory.trim() });
+            }}
           >
-            {m("add")}
-          </Button>
-        </form>
-        <p className="text-ui-caption text-foreground-subtle">{m("directoryHint")}</p>
-        <ul
-          className="divide-y divide-border rounded-md border border-border"
-          data-testid="omp-wiki-indexes"
-        >
-          {indexes.map((item) => (
-            <li
-              key={item.id}
-              className="flex items-center justify-between gap-3 p-3"
-              data-index-name={item.name}
-            >
-              <div className="min-w-0">
-                <strong>{item.name}</strong>
-                <p className="break-all text-ui-caption">{item.rootPath}</p>
-                <p className="text-ui-caption text-foreground-subtle">
-                  {item.documentCount} {m("documents")} · {item.sectionCount} {m("sections")}
-                </p>
-              </div>
-              <Button
-                variant="outline"
+            <label className="flex min-w-0 flex-col gap-1.5 text-ui-caption text-foreground-subtle">
+              {m("directory")}
+              <input
+                className={indexInputClass}
+                aria-label={m("directory")}
+                placeholder={m("directory")}
+                value={directory}
+                onChange={(event) => setDirectory(event.target.value)}
+                required
                 disabled={disabled}
-                onClick={() => setConfirmation({ action: "remove", name: item.name })}
-                aria-label={`${m("remove")} ${item.name}`}
+                data-testid="omp-wiki-directory"
+              />
+            </label>
+            <label className="flex min-w-0 flex-col gap-1.5 text-ui-caption text-foreground-subtle">
+              {m("name")}
+              <input
+                className={indexInputClass}
+                aria-label={m("name")}
+                placeholder={m("name")}
+                value={name}
+                onChange={(event) => setName(event.target.value)}
+                required
+                disabled={disabled}
+                data-testid="omp-wiki-name"
+              />
+            </label>
+            <Button
+              type="submit"
+              variant="outline"
+              className="justify-self-start"
+              disabled={disabled || !name.trim() || !directory.trim()}
+              data-testid="omp-wiki-init"
+            >
+              <Plus aria-hidden="true" />
+              {m("add")}
+            </Button>
+            <p className="text-ui-caption leading-relaxed text-foreground-subtle">
+              {m("directoryHint")}
+            </p>
+          </form>
+          <ul
+            className="order-1 min-w-0 divide-y divide-border overflow-hidden rounded-lg bg-surface lg:order-1"
+            data-testid="omp-wiki-indexes"
+          >
+            {indexes.map((item) => (
+              <li
+                key={item.id}
+                className="flex min-w-0 items-start justify-between gap-3 p-3"
+                data-index-name={item.name}
               >
-                {m("remove")}
-              </Button>
-            </li>
-          ))}
-        </ul>
-        {!indexes.length && !api.busy ? <p>{m("empty")}</p> : null}
+                <div className="min-w-0">
+                  <strong className="flex items-center gap-2 break-all text-ui-base font-medium">
+                    <BookOpen
+                      className="size-4 shrink-0 text-foreground-subtle"
+                      aria-hidden="true"
+                    />
+                    {item.name}
+                  </strong>
+                  <p
+                    className="mt-1 truncate font-mono text-ui-caption text-foreground-subtle"
+                    title={item.rootPath}
+                  >
+                    {item.rootPath}
+                  </p>
+                  <p className="mt-1 text-ui-caption text-foreground-subtle">
+                    {item.documentCount} {m("documents")} · {item.sectionCount} {m("sections")}
+                  </p>
+                </div>
+                <Button
+                  variant="ghost"
+                  className="text-destructive"
+                  disabled={disabled}
+                  onClick={() => setConfirmation({ action: "remove", name: item.name })}
+                  aria-label={`${m("remove")} ${item.name}`}
+                >
+                  <Trash2 aria-hidden="true" />
+                  {m("remove")}
+                </Button>
+              </li>
+            ))}
+            {!indexes.length && !api.busy ? (
+              <li className="flex min-h-28 flex-col items-center justify-center gap-2 p-4 text-ui-caption text-foreground-subtle">
+                <FolderOpen className="size-6" aria-hidden="true" />
+                {m("empty")}
+              </li>
+            ) : null}
+          </ul>
+        </div>
       </section>
-      <section className="space-y-3" aria-label={m("query")}>
-        <h2 className="text-ui-lg font-medium">{m("query")}</h2>
+      <section className="min-w-0 space-y-4 border-t border-border pt-5" aria-label={m("query")}>
+        <h2 className="text-ui-lg font-semibold">{m("query")}</h2>
         <form
-          className="flex flex-wrap items-end gap-2"
+          className="grid min-w-0 grid-cols-2 items-end gap-3 rounded-lg bg-surface p-3 sm:grid-cols-4"
           onSubmit={(event) => {
             event.preventDefault();
             void search(false);
           }}
         >
-          <label className="flex min-w-48 flex-1 flex-col gap-1">
+          <label className="col-span-2 flex min-w-0 flex-col gap-1.5 text-ui-caption text-foreground-subtle sm:col-span-3">
             {m("query")}
-            <input
-              className={indexInputClass}
+            <SettingsSearchInput
+              containerClassName="min-w-0"
               required
               value={query}
               onChange={(event) => setQuery(event.target.value)}
@@ -197,7 +243,7 @@ export function WikiPage(props: IndexPageProps) {
               data-testid="omp-wiki-query"
             />
           </label>
-          <label className="flex flex-col gap-1">
+          <label className="flex min-w-0 flex-col gap-1.5 text-ui-caption text-foreground-subtle">
             {m("mode")}
             <select
               className={indexInputClass}
@@ -209,7 +255,7 @@ export function WikiPage(props: IndexPageProps) {
               <option value="grep">Grep / Regex</option>
             </select>
           </label>
-          <label className="flex flex-col gap-1">
+          <label className="flex min-w-0 flex-col gap-1.5 text-ui-caption text-foreground-subtle">
             {m("index")}
             <select
               className={indexInputClass}
@@ -225,10 +271,10 @@ export function WikiPage(props: IndexPageProps) {
               ))}
             </select>
           </label>
-          <label className="flex flex-col gap-1">
+          <label className="flex min-w-0 flex-col gap-1.5 text-ui-caption text-foreground-subtle">
             {m("pageSize")}
             <input
-              className={`${indexInputClass} w-20`}
+              className={indexInputClass}
               type="number"
               min={1}
               max={200}
@@ -238,7 +284,7 @@ export function WikiPage(props: IndexPageProps) {
             />
           </label>
           {mode === "grep" ? (
-            <label className="flex items-center gap-2">
+            <label className="flex min-h-8 items-center gap-2 text-ui-caption text-foreground-subtle">
               <input
                 type="checkbox"
                 checked={caseSensitive}
@@ -248,28 +294,40 @@ export function WikiPage(props: IndexPageProps) {
               {m("caseSensitive")}
             </label>
           ) : null}
-          <Button type="submit" disabled={disabled || !query.trim()} data-testid="omp-wiki-search">
+          <Button
+            type="submit"
+            disabled={disabled || !(mode === "grep" ? query : query.trim())}
+            className="col-start-2 row-start-2 h-9 sm:col-start-4 sm:row-start-1"
+            data-testid="omp-wiki-search"
+          >
+            <SearchIcon aria-hidden="true" />
             {m("search")}
           </Button>
         </form>
         {result ? (
           <div className="space-y-3" data-testid="omp-wiki-results">
-            <p role="status">
+            <p role="status" className="text-ui-caption text-foreground-subtle">
               {result.total} {m("matches")} · {result.exactNameMatches} {m("exactMatches")}
               {result.technicalName ? ` · ${result.technicalName}` : ""}
             </p>
             {result.sections.map((section, position) => (
               <article
                 key={`${section.sectionId}:${position}`}
-                className="space-y-2 rounded-md border border-border p-3"
+                className="min-w-0 space-y-3 rounded-lg border border-border bg-card p-4"
               >
-                <h3 className="text-ui-lg font-medium">{section.headingPath || section.path}</h3>
-                <p className="break-all text-ui-caption text-foreground-subtle">
+                <h3 className="flex min-w-0 items-start gap-2 text-ui-base font-semibold [overflow-wrap:anywhere]">
+                  <FileText
+                    className="mt-0.5 size-4 shrink-0 text-foreground-subtle"
+                    aria-hidden="true"
+                  />
+                  {section.headingPath || section.path}
+                </h3>
+                <p className="break-all font-mono text-ui-caption leading-relaxed text-foreground-subtle">
                   {m("source")}: {section.index} · {section.path}:{section.lineStart}–
                   {section.lineEnd} · {section.matchKind} · {section.shape}
                 </p>
                 <pre
-                  className="whitespace-pre-wrap break-words text-ui-base"
+                  className="whitespace-pre-wrap break-words rounded-md bg-surface p-3 font-sans text-ui-base leading-relaxed [overflow-wrap:anywhere]"
                   data-testid="omp-wiki-section-body"
                 >
                   {section.text}
@@ -287,7 +345,12 @@ export function WikiPage(props: IndexPageProps) {
               </Button>
             ) : null}
           </div>
-        ) : null}
+        ) : (
+          <div className="flex min-h-40 flex-col items-center justify-center gap-3 rounded-lg border border-dashed border-border px-4 py-8 text-center text-ui-caption text-foreground-subtle">
+            <SearchIcon className="size-6" aria-hidden="true" />
+            <p>{m("technicalSearch")} · Grep / Regex</p>
+          </div>
+        )}
       </section>
       <IndexConfirmation
         open={Boolean(confirmation)}

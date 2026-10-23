@@ -1,6 +1,7 @@
 import type { ModelSelection, OmpProfileState, OmpTeamRequest, OmpTeamRun } from "@zcode/shared";
 import type {
   OmpModelRef,
+  OmpTeamConfigureRequest,
   ZCodeSessionConfigureParams,
   ZCodeSessionConfigureResult,
 } from "@zcode/shared";
@@ -11,6 +12,10 @@ export interface OmpConfigurationTarget {
   workspaceIdentity?: string;
   sessionId: string;
 }
+/** Global Team configuration needs an execution target, never a chat attachment. */
+export type OmpConfigurationPanelTarget = Omit<OmpConfigurationTarget, "sessionId"> & {
+  sessionId?: string;
+};
 export interface OmpConfigurationEntryProps extends OmpConfigurationTarget {
   /** Updates the existing per-session composer intent only after runtime success. */
   onTemporaryModelSelected?: (model: OmpModelRef) => void;
@@ -22,6 +27,9 @@ export interface OmpConfigurationDisposable {
 /** Configuration commands are implemented by the Host's typed public service. */
 export interface OmpConfigurationService {
   getOmpProfiles?: OmpProfileService["getOmpProfiles"];
+  configureOmpTeam(
+    params: Omit<OmpConfigurationTarget, "sessionId"> & { request: OmpTeamConfigureRequest },
+  ): Promise<ZCodeSessionConfigureResult>;
   configureOmpSession(
     params: OmpConfigurationTarget & ZCodeSessionConfigureParams,
   ): Promise<ZCodeSessionConfigureResult>;
@@ -44,10 +52,17 @@ export interface OmpConfigurationPanelService extends OmpConfigurationService {
     listener: (event: { workspaceKey: string; state: "available" | "unavailable" }) => void,
   ): OmpConfigurationDisposable;
 }
-export interface OmpConfigurationPanelProps extends OmpConfigurationEntryProps {
+export type OmpConfigurationPanelProps = {
   service: OmpConfigurationPanelService;
-  onClose: () => void;
-}
+} & (
+  | (OmpConfigurationEntryProps & { mode?: "all"; onClose: () => void })
+  | (OmpConfigurationPanelTarget &
+      Omit<OmpConfigurationEntryProps, "sessionId"> & {
+        mode: "team-only";
+        /** Inline cancellation resets the existing controller rather than closing the page. */
+        onClose?: () => void;
+      })
+);
 
 /** Shell supplies the active execution target; the hook resolves its existing Host services. */
 export interface IndexPageProps {
@@ -83,3 +98,4 @@ export interface OmpProfileService {
     listener: (event: { workspaceKey: string; state: "available" | "unavailable" }) => void,
   ): OmpConfigurationDisposable;
 }
+

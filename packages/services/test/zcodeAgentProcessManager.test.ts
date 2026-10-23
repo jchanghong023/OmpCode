@@ -401,7 +401,9 @@ describe("resolveDefaultZCodeAgentCommand", () => {
 
     command.resolve({
       command: process.execPath,
-      args: ["-e", "setInterval(() => {}, 1000);"],
+      // 本用例只验证并发复用；真实 Agent 在 stdin EOF 后退出，夹具也必须遵守该生命周期，
+      // 避免无限定时器把严格等待式清理变成无关的 Windows 强杀竞速。
+      args: ["-e", "process.stdin.resume(); process.stdin.on('end', () => process.exit(0));"],
       cwd: workspacePath,
     });
 
@@ -447,7 +449,9 @@ describe("resolveDefaultZCodeAgentCommand", () => {
     const admissionReached = createDeferred<void>();
     const commandResolver = () => ({
       command: process.execPath,
-      args: ["-e", "setInterval(() => {}, 1000);"],
+      // 本用例验证 admission 恢复与 pending start 复用，不验证强杀；使用真实 EOF 退出，
+      // 让 disposeAllAndWait 观察真实 child exit/close，而不是遗留无限定时器。
+      args: ["-e", "process.stdin.resume(); process.stdin.on('end', () => process.exit(0));"],
       cwd: workspacePath,
     });
     const manager = new ZCodeAgentProcessManager({
@@ -615,7 +619,7 @@ require("node:readline").createInterface({ input: process.stdin }).on("line", li
     createdDirs.push(workspacePath);
     const commandResolver = vi.fn<() => ZCodeAgentCommand>(() => ({
       command: process.execPath,
-      args: ["-e", "setInterval(() => {}, 1000);"],
+      args: ["-e", "process.stdin.resume(); process.stdin.on('end', () => process.exit(0));"],
       cwd: workspacePath,
     }));
     const manager = new ZCodeAgentProcessManager({ commandResolver });
@@ -667,7 +671,8 @@ require("node:readline").createInterface({ input: process.stdin }).on("line", li
     const manager = new ZCodeAgentProcessManager({
       commandResolver: () => ({
         command: process.execPath,
-        args: ["-e", "setInterval(() => {}, 1000);"],
+        // 普通 stdio runtime 在 EOF 后退出；无限计时器会把身份换代测试变成无关的强杀竞速。
+        args: ["-e", "process.stdin.resume(); process.stdin.on('end', () => process.exit(0));"],
         cwd: workspacePath,
       }),
     });
@@ -696,7 +701,7 @@ require("node:readline").createInterface({ input: process.stdin }).on("line", li
     const manager = new ZCodeAgentProcessManager({
       commandResolver: () => ({
         command: process.execPath,
-        args: ["-e", "setInterval(() => {}, 1000);"],
+        args: ["-e", "process.stdin.resume(); process.stdin.on('end', () => process.exit(0));"],
         cwd: workspacePath,
       }),
     });
@@ -725,7 +730,7 @@ require("node:readline").createInterface({ input: process.stdin }).on("line", li
     createdDirs.push(workspacePath);
     let command: ZCodeAgentCommand = {
       command: process.execPath,
-      args: ["-e", "setInterval(() => {}, 1000);"],
+      args: ["-e", "process.stdin.resume(); process.stdin.on('end', () => process.exit(0));"],
       cwd: workspacePath,
     };
     const manager = new ZCodeAgentProcessManager({
@@ -767,7 +772,8 @@ require("node:readline").createInterface({ input: process.stdin }).on("line", li
         "-e",
         `
 require("node:fs").writeFileSync(${JSON.stringify(markerPath)}, "spawned");
-setInterval(() => {}, 1000);
+process.stdin.resume();
+process.stdin.on("end", () => process.exit(0));
 `,
       ],
       cwd: workspacePath,
@@ -1017,7 +1023,6 @@ require("node:readline").createInterface({ input: process.stdin }).on("line", li
         provider: "glm",
         workspacePath,
         command: process.execPath,
-        args: ["-e", "setTimeout(() => process.exit(7), 20);"],
       });
       expect(spawnEvent.pid).toEqual(expect.any(Number));
       expect(spawnEvent.startedAt).toEqual(expect.any(Number));
@@ -1199,7 +1204,7 @@ require("node:readline").createInterface({ input: process.stdin }).on("line", li
     const manager = new ZCodeAgentProcessManager({
       commandResolver: () => ({
         command: process.execPath,
-        args: ["-e", "setInterval(() => {}, 1000);"],
+        args: ["-e", "process.stdin.resume(); process.stdin.on('end', () => process.exit(0));"],
         cwd: workspacePath,
       }),
       processLifecycleReporter: reporter,
@@ -1233,7 +1238,7 @@ require("node:readline").createInterface({ input: process.stdin }).on("line", li
     const manager = new ZCodeAgentProcessManager({
       commandResolver: () => ({
         command: process.execPath,
-        args: ["-e", "setInterval(() => {}, 1000);"],
+        args: ["-e", "process.stdin.resume(); process.stdin.on('end', () => process.exit(0));"],
         cwd: workspacePath,
       }),
       processLifecycleReporter: reporter,
@@ -1399,7 +1404,7 @@ require("node:readline").createInterface({ input: process.stdin }).on("line", li
     const manager = new ZCodeAgentProcessManager({
       commandResolver: () => ({
         command: process.execPath,
-        args: ["-e", "setInterval(() => {}, 1000);"],
+        args: ["-e", "process.stdin.resume(); process.stdin.on('end', () => process.exit(0));"],
         cwd: workspacePath,
       }),
       processLifecycleReporter: reporter,
@@ -1482,7 +1487,7 @@ require("node:readline").createInterface({ input: process.stdin }).on("line", li
         command: process.execPath,
         args: [
           "-e",
-          `require("node:fs").writeFileSync(${JSON.stringify(markerPath)}, process.cwd()); setInterval(() => {}, 1000);`,
+          `require("node:fs").writeFileSync(${JSON.stringify(markerPath)}, process.cwd()); process.stdin.resume(); process.stdin.on("end", () => process.exit(0));`,
         ],
         cwd: requestedWorkspacePath,
       }),
@@ -1587,7 +1592,7 @@ process.stdin.on("end", () => process.exit(0));
         command: process.execPath,
         args: [
           "-e",
-          `require("node:fs").writeFileSync(${JSON.stringify(markerPath)}, process.cwd()); setInterval(() => {}, 1000);`,
+          `require("node:fs").writeFileSync(${JSON.stringify(markerPath)}, process.cwd()); process.stdin.resume(); process.stdin.on("end", () => process.exit(0));`,
         ],
         cwd: customCwd,
       }),

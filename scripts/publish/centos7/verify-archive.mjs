@@ -6,7 +6,6 @@ import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, relative, resolve, isAbsolute } from "node:path";
 import { fileURLToPath } from "node:url";
-import { verifyOmpArtifact } from "../../omp-artifact.mjs";
 import { findDesktopNativePackageViolations } from "../../../packages/desktop/scripts/desktop-native-package-policy.mjs";
 import { isSharpRequiredByComputerUse } from "../../../packages/desktop/scripts/sharp-package-assets.mjs";
 
@@ -211,18 +210,6 @@ try {
         throw new Error(`Missing Sharp addon/vendor provenance: ${plugin}`);
     }
   }
-  const ompRoot = join(resources, "omp");
-  const omp = await verifyOmpArtifact(ompRoot, "linux-x64");
-  await regular(omp.command, true);
-  await walk(ompRoot, async (path, entry) => {
-    if (entry.isDirectory()) return;
-    const name = relative(ompRoot, path).split("\\").join("/");
-    if (
-      entry.isSymbolicLink() ||
-      (name !== "omp-artifact.json" && !Object.hasOwn(omp.manifest.files, name))
-    )
-      throw new Error(`Unlisted OMP asset: ${name}`);
-  });
   let ripgrep = 0;
   await walk(join(resources, "tools/ripgrep"), async (path, entry) => {
     if (entry.isFile() && /^(?:rg|ripgrep)$/.test(entry.name)) {

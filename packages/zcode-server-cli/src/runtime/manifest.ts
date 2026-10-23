@@ -18,7 +18,7 @@ export interface ServerRuntimeManifest {
   target: ServerTarget;
   appVersion: string;
   nodeVersion: string;
-  entrypoints: { cli: string; core: string; agent: string };
+  entrypoints: { cli: string; core: string };
   native: string[];
   tools?: string[];
   plugins?: string[];
@@ -37,7 +37,7 @@ export const serverRuntimeManifestSchema = z
     target: z.enum(supportedServerTargets),
     appVersion: z.string().min(1),
     nodeVersion: z.string().min(1),
-    entrypoints: z.object({ cli: z.string(), core: z.string(), agent: z.string() }).strict(),
+    entrypoints: z.object({ cli: z.string(), core: z.string() }).strict(),
     native: z.array(z.string()),
     tools: z.array(z.string()).optional(),
     plugins: z.array(z.string()).optional(),
@@ -75,12 +75,11 @@ export function createRuntimeManifest(
     target,
     appVersion,
     nodeVersion: SERVER_RUNTIME_NODE_VERSION,
-    // 入口是 ESM `.js`（tsup 产物）：server-cli 通过 `new URL("./server-core.js")` fork Core、
-    // 通过同目录 zcode.cjs 委派既有 CLI，三者必须同目录且文件名与产物一致。
+    // 此 manifest 只声明 Source Server 的内部入口；外部 OMP 由运行环境提供，
+    // 保留的 zcode.cjs 是 CLI/TUI 资产，不是 Agent 备用入口。
     entrypoints: {
       cli: "runtime/server-cli.js",
       core: "runtime/server-core.js",
-      agent: "runtime/zcode.cjs",
     },
     native: ["node-pty"],
     ...extras,

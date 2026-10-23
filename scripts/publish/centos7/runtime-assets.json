@@ -65,7 +65,7 @@
     "file": "/usr/share/fonts/wqy-zenhei/wqy-zenhei.ttc"
   },
   "evidenceLimitations": [
-    "ELF auditing inspects filesystem ELF files, not native payloads embedded in Bun executables. OMP bytes retain the existing omp-release/omp-artifact integrity contract; this scan does not prove embedded native compatibility. Archive assembly extracts ASAR payloads before auditing them.",
+    "ELF auditing covers discoverable filesystem ELF files in the application archive, including extracted ASAR payloads. OMP is a separately preinstalled external dependency and is neither packaged nor covered by this asset manifest or scan; no OMP artifact manifest or producer input is required. This scan does not establish compatibility of user-installed OMP or native payloads embedded in its executable.",
     "Static ELF and closure checks do not establish Linux 3.10 syscall support, GUI/session, driver, Citrix, or input-method behavior."
   ]
 }

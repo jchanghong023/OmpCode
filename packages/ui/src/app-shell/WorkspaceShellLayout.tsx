@@ -412,6 +412,7 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
   handleSyncSubagentSessionTabs,
   handleOpenSelectionSideChat,
   handleOpenPlanDetail,
+  handleOpenOmpTeamRun,
   handleOpenWorkflowRun,
   handleOpenWorkflowRunDirectory,
   handleOpenWorkflowActorSession,
@@ -2253,6 +2254,7 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
                   onOpenSubagentDirectory={handleOpenSubagentDirectory}
                   onSyncSubagentSessionTabs={handleSyncSubagentSessionTabs}
                   onOpenPlanDetail={handleOpenPlanDetail}
+                  onOpenOmpTeamRun={handleOpenOmpTeamRun}
                   onOpenWorkflowRun={handleOpenWorkflowRun}
                   onOpenWorkflowArtifact={handleOpenWorkflowArtifact}
                   onOpenWorkflowRunDirectory={handleOpenWorkflowRunDirectory}
@@ -2710,6 +2712,7 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
                                 onSyncSubagentSessionTabs={handleSyncSubagentSessionTabs}
                                 onOpenSelectionSideChat={handleOpenSelectionSideChat}
                                 onOpenPlanDetail={handleOpenPlanDetail}
+                                onOpenOmpTeamRun={handleOpenOmpTeamRun}
                                 onOpenWorkflowRun={handleOpenWorkflowRun}
                                 onOpenWorkflowArtifact={handleOpenWorkflowArtifact}
                                 onOpenWorkflowRunDirectory={handleOpenWorkflowRunDirectory}

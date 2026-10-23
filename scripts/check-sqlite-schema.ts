@@ -6,10 +6,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
-import { TaskIndexRepo } from "../packages/services/src/session/taskIndexRepo.js";
-import { AutomationRepo } from "../packages/services/src/session/automationRepo.js";
-import { OffPeakTaskRepo } from "../packages/services/src/session/offPeakTaskRepo.js";
-import { getTasksIndexDatabasePath, setDataBaseDir } from "../packages/services/src/paths.js";
 import { SQLITE_MIGRATIONS } from "../apps/zcode-cli/packages/adapters/src/storage/session-store/migrations.js";
 import { DatabaseSync, sqliteMigrations } from "../packages/shared/src/sqlite-migrations/index.js";
 import { assertAdditiveSchema, dumpSqliteSchema } from "./sqlite-schema-contract.mjs";
@@ -22,12 +18,27 @@ const exec = promisify(execFile);
 await exec("git", ["rev-parse", "--verify", `${base}^{commit}`]);
 const directory = await mkdtemp(join(tmpdir(), "zcode-schema-check-"));
 const cli = new DatabaseSync(":memory:");
-// 修复原因：b19b2fda 将目录注入限制为测试；构建期 schema 校验使用临时库，等同测试夹具。
-process.env.VITEST = "true";
-setDataBaseDir(directory);
-const repos = [new AutomationRepo(), new OffPeakTaskRepo(), new TaskIndexRepo()];
+const repos: { ensureReady(): Promise<void>; close(): void }[] = [];
 try {
-  for (const repo of repos) await repo.ensureReady();
+  // paths 在导入时固定生产数据根；必须先设置启动环境，不能调用仅供测试的 setter。
+  // 绝对 OMP_CONFIG_ROOT 会派生同级 *_ompcode 目录，使用临时目录的子路径确保数据库仍在本次清理范围内。
+  process.env.OMP_CONFIG_ROOT = join(directory, "config");
+  const [
+    { TaskIndexRepo },
+    { AutomationRepo },
+    { OffPeakTaskRepo },
+    { getTasksIndexDatabasePath },
+  ] = await Promise.all([
+    import("../packages/services/src/session/taskIndexRepo.js"),
+    import("../packages/services/src/session/automationRepo.js"),
+    import("../packages/services/src/session/offPeakTaskRepo.js"),
+    import("../packages/services/src/paths.js"),
+  ]);
+  for (const Repo of [AutomationRepo, OffPeakTaskRepo, TaskIndexRepo]) {
+    const repo = new Repo();
+    repos.push(repo);
+    await repo.ensureReady();
+  }
   const app = new DatabaseSync(getTasksIndexDatabasePath(), { readOnly: true });
   let appSql: string;
   try {
@@ -69,6 +80,5 @@ try {
 } finally {
   for (const repo of repos.toReversed()) repo.close();
   cli.close();
-  setDataBaseDir(null);
   await rm(directory, { recursive: true, force: true });
 }

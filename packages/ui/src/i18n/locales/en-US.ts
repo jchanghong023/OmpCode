@@ -611,9 +611,9 @@ const enUS: Record<string, string> = {
   "startup.global.error.startup_status_timeout":
     "No startup status was received. Exit and reopen OmpCode. If it fails again, provide the diagnostics to support.",
   "startup.global.error.transport_closed":
-    "The preparation process exited or disconnected. Exit and reopen OmpCode to check the migration records again.",
+    "The preparation process exited or disconnected. Check the diagnostic logs and confirm that the configured OMP, or omp on the inherited terminal PATH, can run.",
   "startup.global.error.unsupported_runtime":
-    "The configured Agent does not support storage preparation. Restore the bundled Agent, then reopen OmpCode.",
+    "OMP does not support the required storage preparation protocol. Install or update a compatible OMP and check ZCODE_AGENT_SERVER_COMMAND or the inherited terminal PATH before reopening OmpCode.",
 
   "startup.database.checking": "Checking history",
   "startup.database.waiting_for_lock": "Waiting for another window to prepare data",

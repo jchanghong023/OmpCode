@@ -11,7 +11,8 @@ for arg in "$@"; do
 
 所有其他参数原样传给桌面；启动器不增加 profile 参数或配置 API。
 所有 OMP_* 和 PI_CONFIG_DIR（包括空值）原样继承，由 OMP 解释。
-未设置 ZCODE_AGENT_SERVER_COMMAND 时选择随包 OMP；已设置值原样保留。
+未设置 ZCODE_AGENT_SERVER_COMMAND 时由桌面通过继承的 PATH 调用外部 omp；
+显式非空命令优先，显式空值由桌面报错。发行包不内置或下载 OMP。
 X11 下按当前 UID 和完整 DISPLAY 选择 IBus，失败告警后继续启动。
 需要可用图形会话。Electron 28 已停止维护；应用禁用 sandbox 和 GPU，
 保留软件渲染，请避免打开不可信工作区。
@@ -37,43 +38,6 @@ done
 [[ -n $executable && -s "$app/resources/app.asar" &&
    -d "$package_root/lib" && -s "$package_root/fonts/fonts.conf" ]] ||
    incomplete 'Electron, app.asar, lib or fonts/fonts.conf missing'
-
-# ${var+x} 区分未设置和显式空值；后者必须留给当前解析器明确报错。
-# 外部命令不使用随包 OMP，不能因无关 manifest 缺失而阻止启动。
-if [[ ! ${ZCODE_AGENT_SERVER_COMMAND+x} ]]; then
-  [[ -s "$app/resources/omp/omp-artifact.json" ]] || incomplete 'OMP manifest missing'
-# 入口是 manifest 的相对 executable，不假定固定 omp/omp，也不依赖宿主现代 Node。
-# 完整摘要与闭包校验归现有装配器；这里拒绝越界/链接入口。
-# 探测 Electron 单独使用包内库，避免把宿主 IBus/总线切到另一套动态库。
-bundled_command=$(LD_LIBRARY_PATH="$package_root/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" ELECTRON_RUN_AS_NODE=1 "$executable" -e '
-const fs = require("fs");
-const path = require("path");
-try {
-  const root = process.argv[1];
-  const manifestPath = path.join(root, "omp-artifact.json");
-  if (fs.lstatSync(manifestPath).isSymbolicLink()) throw Error("manifest symlink");
-  const m = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
-  const name = m.executable;
-  if (m.schemaVersion !== 1 || m.target !== "linux-x64" ||
-      typeof name !== "string" || !name || /[\\\r\n\x00]/.test(name) ||
-      path.isAbsolute(name) || !m.files || !Object.prototype.hasOwnProperty.call(m.files, name))
-    throw Error("invalid executable manifest");
-  const command = path.resolve(root, name);
-  const relative = path.relative(root, command);
-  if (!relative || relative === ".." || relative.startsWith("../")) throw Error("escaping executable");
-  let cursor = command;
-  while (cursor !== root) {
-    if (fs.lstatSync(cursor).isSymbolicLink()) throw Error("executable symlink");
-    cursor = path.dirname(cursor);
-  }
-  if (!fs.statSync(command).isFile()) throw Error("executable is not a file");
-  fs.accessSync(command, fs.constants.X_OK);
-  process.stdout.write(command);
-} catch (error) { console.error("OmpCode: " + error.message); process.exitCode = 1; }
-' "$app/resources/omp") || incomplete 'invalid OMP executable manifest'
-[[ -n $bundled_command ]] || incomplete 'empty OMP executable'
-  export ZCODE_AGENT_SERVER_COMMAND="$bundled_command"
-fi
 
 original_uid=$EUID
 original_display=${DISPLAY-}

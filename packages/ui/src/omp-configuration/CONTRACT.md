@@ -1,8 +1,10 @@
 # OMP configuration
 
-Owner: conversation UI. This module owns only unsaved role and Team drafts. Persisted facts belong to the target OMP AgentSession's configuration service.
+Owner: conversation UI. This module owns only unsaved role and Team drafts. Persisted Team members/models/order are the native runtime profile's global user configuration shared by every session, never per-conversation state.
 
-The public panel receives an explicit workspace/session target and calls `IZCodeAgentService.configureOmpSession`; it never accesses files, credentials or `window.zcode`. Profile comes from the trusted server response. Draft preview is read-only and revision correlated. A scope change, close, disconnect or process generation change invalidates in-flight callbacks. External changes refresh saved facts but never overwrite dirty drafts or their original CAS revision. Only explicit Save submits; cancellation and defaults only edit local state. Conflict, partial and unknown outcomes never replay saves automatically.
+Team reads, previews, model catalogs and saves call the public `IZCodeAgentService.configureOmpTeam` workspace-routing port and optional `omp/team/configure {workspace,request}` extension. No session is needed or created, including when opened from an existing chat. Roles and temporary session model controls retain the explicit-session `configureOmpSession`/`setModel` ports. The UI never accesses files, credentials or `window.zcode`. Profile comes from the trusted server response; workspace/identity route to that execution endpoint, not a separate Team configuration store. Draft preview is read-only and revision correlated. Scope, close, disconnect or process generation changes invalidate in-flight callbacks. External changes never overwrite dirty drafts or their original CAS revision. Only explicit Save submits; cancellation and defaults only edit local state. Conflict, partial and unknown outcomes never replay saves automatically.
+
+Before the first native Team configuration baseline is available, editing controls are disabled; Refresh and Close remain usable. A local draft must not become dirty before its authoritative CAS baseline is known. Once the baseline is read, the existing editing and revision-checked save behavior resumes.
 
 The mounted controller is scoped to service and workspace/session identity, not composer callback identity. Replacing a callback preserves the same target's dirty drafts and confirmed operation notices; completion uses the current callback. A different target still disposes the old controller and rejects its late results.
 
@@ -14,21 +16,21 @@ Model search uses the shared `get_team_models {query}` operation, including its 
 
 `contract.ts` contains only shared-schema types and command/lifecycle ports; it does not import a service implementation or re-export runtime values. `module.ts` is the public composition entrypoint consumed by the toolbar. Implementations depend on the contract, never the reverse. Regression tests exercise preview races, scope isolation, conflict preservation, cancellation and receipt states through this composition entrypoint. Parent owns all test execution.
 
-## Independent native Team page
+## Global native Team settings and chat execution
 
-`module.ts` exports `TeamPage({workspacePath,workspaceIdentity?,remoteSessionId?,sessionId?})`. The existing configuration panel remains the sole editor for ordered Team members, duplicate/unresolved slots, preview, revision-checked Save and Cancel. Navigation is owned by the shell, not this module.
+`module.ts` exports `TeamPage({workspacePath,workspaceIdentity?,remoteSessionId?,sessionId?})`. Opening it directly shows the global ordered model editor, without selecting/creating a session or opening a second full-screen configuration dialog. The existing controller remains the sole draft owner; the page supports selecting, adding, duplicating, removing and reordering native models plus explicit Save/Cancel. Default candidates prioritize genuinely selectable configured models; unavailable candidates retain accurate reasons and are not enabled by hiding authentication failures. Empty availability gives an actionable model-provider configuration explanation. The main surface contains no session-model prerequisite, runtime slot diagnostic, storage-side cards or revision fields; advanced source/storage/save facts remain available in collapsed details, and conflicts/partial failures remain visible. Role and temporary session configuration retain their existing chat entry. No task input or discussion start belongs on this page. Navigation is shell-owned.
 
-```text
-TeamPage → public sendConversationCommandV4(sendText /team) → native Team manager
-TeamPage → optional observeOmpTeam(list/stop) → native live manager / persisted observation journal
-                                              ↓
-                                nodes + explicit causal edges + invocation timeline
+```mermaid
+sequenceDiagram
+    participant UI as Team settings
+    participant H as Execution Host
+    participant T as Native TeamConfigService
+    UI->>H: configureOmpTeam(workspace, request)
+    H->>T: omp/team/configure (trusted runtime profile)
+    T-->>UI: Native config, CAS revision, save receipt
+    Note over UI,T: No session creation and no model request
 ```
 
-Execution, membership and terminal status remain native-owned. Polling is read-only, workspace/session scoped and generation guarded; disconnect retains the last observation but disables animation and cancellation. Reconnection replaces the projection without replaying commands. Historical reads do not activate a runtime. Missing observation metadata is presented as unavailable, never synthesized as nodes, relationships or successful completion. Child IDs, not model names, identify invocation slots. Active animations honor reduced-motion and stop for terminal, disconnected and journal-only observations. Details expose only the bridge's read-only sanitized messages/tools/output, not hidden reasoning.
+Discussion remains `/team …` in the current chat, executed only by the native Team manager. Chat cards and the existing right SidePane read the same live/journal observations. Closing details does not stop work. Invocation IDs identify slots and actual causal edges; completed output stays in chat, renderer/cold recovery never reruns work. Disconnect disables live animation/cancellation, retains the last observation, and reconnect only rereads. Both desktop-continuous and web-remote-replayable consume the same native owner.
 
-Launch uses the existing public `sendText` admission with `/team` and a read-only investigation instruction. It does not supply model, skill, provider or permission overrides. Without a currently selected session the page permits only explicit historical-session reads; configuration and launch remain disabled. Optional capability absence is reported as unavailable rather than falling back to a replacement orchestration engine.
-
-Unavailable functionality must not remove or hide UI. The page, configuration entry, investigation input and launch control remain visible when no session, capability or connection is available; unsafe actions are disabled with an explicit explanation. Native capability failures never silently fall back to the old Agent.
-
-The configuration dialog follows the same rule: an unsupported `session/configure` response retains all original Team and role sections under a disabled fieldset, displays the unsupported reason, and does not fabricate model/member data. Refresh and Close remain available.
+Missing optional capability retains the settings entry and sections with the real unsupported reason; never create a dummy session or fall back to the old Agent. Refresh and Close remain available. Pending profile selection must not write into the old active profile.

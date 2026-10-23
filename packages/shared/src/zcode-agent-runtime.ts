@@ -151,6 +151,7 @@ export const ompTeamRunSchema = z
   .object({
     jobId: z.string(),
     sessionId: z.string(),
+    dispatchEntityId: z.string().optional(),
     label: z.string(),
     status: z.enum(["running", "completed", "failed", "cancelled", "unavailable"]),
     stage: z.string().optional(),
@@ -192,7 +193,6 @@ export const ompTeamStopResultSchema = z
 export type OmpTeamRequest = z.infer<typeof ompTeamRequestSchema>;
 export type OmpTeamRun = z.infer<typeof ompTeamRunSchema>;
 export type OmpTeamNode = z.infer<typeof ompTeamNodeSchema>;
-
 export type ZCodeAgentBinaryKind = "native-binary";
 
 export interface ZCodeAgentRuntimeDescriptor {

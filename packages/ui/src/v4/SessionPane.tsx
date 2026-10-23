@@ -1,5 +1,6 @@
-import type { OmpTanJob } from "@zcode/shared";
+import type { OmpTanJob, OmpTeamRun } from "@zcode/shared";
 import { Button } from "@/components/ui/button.js";
+import { useTeamRuns } from "@/omp-configuration/module.js";
 import { Textarea } from "@/components/ui/textarea.js";
 import {
   Dialog,
@@ -333,6 +334,7 @@ import type {
   OpenScopedWorkflowActorSessionSideTabRequest,
   OpenScopedWorkflowArtifactSideTabRequest,
   OpenScopedWorkflowRunSideTabRequest,
+  OpenScopedOmpTeamRunSideTabRequest,
   OpenWorkflowActorSessionSideTabRequest,
   OpenWorkflowArtifactSideTabRequest,
   OpenScopedWorkflowRunDirectorySideTabRequest,
@@ -436,6 +438,7 @@ export interface SessionPaneProps {
   onOpenSelectionSideChat?: (request: OpenSelectionSideChatRequest) => void;
   onOpenPlanDetail?: (request: OpenScopedPlanDetailSideTabRequest) => void;
   onOpenWorkflowRun?: (request: OpenScopedWorkflowRunSideTabRequest) => void;
+  onOpenOmpTeamRun?: (request: OpenScopedOmpTeamRunSideTabRequest) => void;
   /** 通知行的产物 chip → 全尺寸查看 tab。 */
   onOpenWorkflowArtifact?: (request: OpenScopedWorkflowArtifactSideTabRequest) => void;
   onOpenWorkflowRunDirectory?: (request: OpenScopedWorkflowRunDirectorySideTabRequest) => void;
@@ -858,6 +861,7 @@ export function SessionPane({
   onOpenSelectionSideChat,
   onOpenPlanDetail,
   onOpenWorkflowRun,
+  onOpenOmpTeamRun,
   onOpenWorkflowArtifact,
   onOpenWorkflowRunDirectory,
   onOpenWorkflowActorSession,
@@ -890,6 +894,7 @@ export function SessionPane({
     usageStatsService,
     zcodeSessionService,
     zcodeTaskService,
+    zcodeAgentService,
   } = useServices();
   const { intl, locale } = useZCodeIntl();
   const slashCommands = useSlashCommands(workspacePath, workspaceIdentity);
@@ -955,6 +960,35 @@ export function SessionPane({
       sessionId: sessionId ?? "",
     }),
     [workspacePath, workspaceIdentity, remoteSessionId, sessionId],
+  );
+  const teamObservation = useTeamRuns(zcodeAgentService, tanTarget);
+  const teamRunByDispatchEntityId = useMemo(() => {
+    const byEntity = new Map<string, OmpTeamRun>();
+    for (const run of teamObservation.runs) {
+      if (run.sessionId === sessionId && run.dispatchEntityId) {
+        byEntity.set(run.dispatchEntityId, run);
+      }
+    }
+    return byEntity;
+  }, [teamObservation.runs, sessionId]);
+  const handleOpenTeamRun = useCallback(
+    (jobId: string) => {
+      if (!sessionId) return;
+      onOpenOmpTeamRun?.({
+        parentSessionId: sessionId,
+        jobId,
+        workspacePath,
+        ...(workspaceIdentity ? { workspaceIdentity } : {}),
+        ...(remoteSessionId ? { remoteSessionId } : {}),
+      });
+    },
+    [onOpenOmpTeamRun, sessionId, workspacePath, workspaceIdentity, remoteSessionId],
+  );
+  const handleStopTeamRun = useCallback(
+    (jobId: string) => {
+      void teamObservation.stop(jobId);
+    },
+    [teamObservation.stop],
   );
   // SessionPane 已位于目标 Workspace 的 ServiceProvider 内，直接订阅该 Host Service；
   // 不再从展示组件二次解析 workspace/remote 路由。
@@ -3310,6 +3344,12 @@ export function SessionPane({
       workflowGraphByToolCallId,
       workflowFillGraphByRunId,
       workflowDraftByToolCallId,
+      teamRunByDispatchEntityId,
+      teamRunsConnected: teamObservation.connected,
+      teamRunsBusy: teamObservation.busy,
+      teamRunsError: teamObservation.error,
+      onOpenTeamRun: onOpenOmpTeamRun ? handleOpenTeamRun : undefined,
+      onStopTeamRun: readOnly ? undefined : handleStopTeamRun,
       fetchFileChanges: runtimeReady ? handleFetchFileChanges : undefined,
       previewFileRewind:
         runtimeReady && workspaceFileRewindEnabled ? handlePreviewFileRewind : undefined,
@@ -3371,6 +3411,13 @@ export function SessionPane({
       workflowGraphByToolCallId,
       workflowFillGraphByRunId,
       workflowDraftByToolCallId,
+      teamRunByDispatchEntityId,
+      teamObservation.connected,
+      teamObservation.busy,
+      teamObservation.error,
+      onOpenOmpTeamRun,
+      handleOpenTeamRun,
+      handleStopTeamRun,
       workspaceFileRewindEnabled,
       handleFetchFileChanges,
       handlePreviewFileRewind,

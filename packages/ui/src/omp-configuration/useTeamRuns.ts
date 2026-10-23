@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { OmpTeamRun } from "@zcode/shared";
 import type { OmpTeamService } from "./contract.js";
 
@@ -11,6 +11,11 @@ export function useTeamRuns(
     sessionId: string;
   },
 ) {
+  const scope = useMemo(
+    () => ({ service, ...target }),
+    [service, target.workspacePath, target.workspaceIdentity, target.sessionId],
+  );
+  const [observedScope, setObservedScope] = useState(scope);
   const [runs, setRuns] = useState<OmpTeamRun[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [connected, setConnected] = useState(false);
@@ -22,7 +27,12 @@ export function useTeamRuns(
     const generation = epoch.current;
     const sequence = ++readSequence.current;
     try {
-      const result = await service.observeOmpTeam({ ...target, action: "list" });
+      const result = await service.observeOmpTeam({
+        workspacePath: target.workspacePath,
+        workspaceIdentity: target.workspaceIdentity,
+        sessionId: target.sessionId,
+        action: "list",
+      });
       if (generation !== epoch.current || sequence !== readSequence.current) return;
       setRuns(result.runs ?? []);
       setConnected(true);
@@ -35,6 +45,7 @@ export function useTeamRuns(
   }, [service, target.workspacePath, target.workspaceIdentity, target.sessionId]);
   useEffect(() => {
     epoch.current++;
+    setObservedScope(scope);
     setRuns([]);
     setConnected(false);
     setError(null);
@@ -54,22 +65,41 @@ export function useTeamRuns(
       epoch.current++;
       clearTimeout(timer);
     };
-  }, [refresh, target.sessionId]);
-  const stop = async (jobId: string) => {
-    const generation = epoch.current;
-    setBusy(true);
-    try {
-      const result = await service.observeOmpTeam({ ...target, action: "stop", jobId });
-      if (generation !== epoch.current) return;
-      if (!result.accepted)
-        throw new Error("Team cancellation was not accepted; historical runs cannot be stopped");
-      await refresh();
-    } catch (reason) {
-      if (generation === epoch.current)
-        setError(reason instanceof Error ? reason.message : String(reason));
-    } finally {
-      if (generation === epoch.current) setBusy(false);
-    }
+  }, [refresh, scope, target.sessionId]);
+  const stop = useCallback(
+    async (jobId: string) => {
+      if (!target.sessionId) return;
+      const generation = epoch.current;
+      setBusy(true);
+      try {
+        const result = await service.observeOmpTeam({
+          workspacePath: target.workspacePath,
+          workspaceIdentity: target.workspaceIdentity,
+          sessionId: target.sessionId,
+          action: "stop",
+          jobId,
+        });
+        if (generation !== epoch.current) return;
+        if (!result.accepted)
+          throw new Error("Team cancellation was not accepted; historical runs cannot be stopped");
+        await refresh();
+      } catch (reason) {
+        if (generation === epoch.current)
+          setError(reason instanceof Error ? reason.message : String(reason));
+      } finally {
+        if (generation === epoch.current) setBusy(false);
+      }
+    },
+    [service, target.workspacePath, target.workspaceIdentity, target.sessionId, refresh],
+  );
+  // 切换目标后的首帧 effect 尚未清空旧观测；必须按 owner scope 隔离，避免历史卡串会话。
+  const current = observedScope === scope;
+  return {
+    runs: current ? runs : [],
+    error: current ? error : null,
+    connected: current && connected,
+    busy: current && busy,
+    refresh,
+    stop,
   };
-  return { runs, error, connected, busy, refresh, stop };
 }

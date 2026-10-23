@@ -191,6 +191,7 @@ export function useRootWorkspaceActions({
       workspaceIdentity?: string,
       options?: CreateTaskOptions,
       expectedStorageScope?: string,
+      commit?: { isCurrent: () => boolean; onCommitted: () => void },
     ) => {
       const sequence = ++draftSequence.current;
       const generation = scopeGeneration.current.generation;
@@ -202,7 +203,8 @@ export function useRootWorkspaceActions({
         !targetStorageScope ||
         generation !== scopeGeneration.current.generation ||
         sequence !== draftSequence.current ||
-        (expectedStorageScope !== undefined && expectedStorageScope !== targetStorageScope)
+        (expectedStorageScope !== undefined && expectedStorageScope !== targetStorageScope) ||
+        commit?.isCurrent() === false
       )
         return;
       const projectId =
@@ -297,6 +299,7 @@ export function useRootWorkspaceActions({
           .getState()
           .requestComposerTextInsert(workspacePath, initialPrompt, workspaceIdentity, mention);
       }
+      commit?.onCommitted();
     },
     [workbenchGroupClientMode, composerClientNamespace, resolveStorageScope, tabStoreApi],
   );
@@ -513,12 +516,6 @@ export function useRootWorkspaceActions({
           });
           if (generation !== scopeGeneration.current.generation) return;
         }
-        // 目录准备成功才提交导航；失败保留当前会话和分屏。
-        if (!hostId || hostId === "local")
-          addTab(target.workspacePath, {
-            workspacePurpose: target.projectId ? "project" : "conversation",
-            ...(target.workspaceIdentity ? { workspaceIdentity: target.workspaceIdentity } : {}),
-          });
         await startDraftInWorkspace(
           target.workspacePath,
           target.workspaceIdentity,
@@ -528,14 +525,32 @@ export function useRootWorkspaceActions({
             projectId: target.projectId,
           },
           targetStorageScope,
+          {
+            isCurrent: () =>
+              hostId && hostId !== "local"
+                ? generation === scopeGeneration.current.generation &&
+                  sequence === navigationSequence.current &&
+                  (typeof request !== "object" || request.isCurrent?.() !== false)
+                : isCurrent(),
+            onCommitted: () => {
+              // 原因：先导航会让 shell 的实际域经历 A→null→B，误伤本次合法草稿。
+              // 唯一 draft owner 完成目标绑定后才提交本地导航，不放宽迟到请求的代际检查。
+              if (!hostId || hostId === "local")
+                addTab(target.workspacePath, {
+                  workspacePurpose: target.projectId ? "project" : "conversation",
+                  ...(target.workspaceIdentity
+                    ? { workspaceIdentity: target.workspaceIdentity }
+                    : {}),
+                });
+              if (typeof request === "object") request.onComplete?.();
+              setWorkspaceActionError(null);
+              logger.info(`[Root] ${source}`, {
+                workspacePath: target.workspacePath,
+                projectId: target.projectId,
+              });
+            },
+          },
         );
-        if (generation !== scopeGeneration.current.generation) return;
-        if (typeof request === "object") request.onComplete?.();
-        setWorkspaceActionError(null);
-        logger.info(`[Root] ${source}`, {
-          workspacePath: target.workspacePath,
-          projectId: target.projectId,
-        });
       } catch (error) {
         if (!isCurrent()) return;
         logger.error("[Root] 准备新任务失败", error);

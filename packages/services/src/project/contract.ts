@@ -56,7 +56,11 @@ export interface IProjectService {
     addMissingRoot?: boolean;
   }): Promise<void>;
   reorderProjects(ids: string[], hostId?: string): Promise<void>;
-  /** 固化本次创建 cwd 并复检主目录；已配置目录失效时拒绝，空项目或全局任务才创建默认目录。 */
+  /**
+   * 固化本次创建 cwd 并复检主目录；已配置目录失效时拒绝，空项目或全局任务才创建默认目录。
+   * 空项目以项目仓库的实际原生域为准：sourceWorkspace 仅为候选源，跨域时选择同域活源；
+   * 没有可信同域源或生成目录的实际 owner 不一致时，在写入 root 前拒绝，不重绑旧任务或既有 workspace。
+   */
   prepareSession(params?: {
     projectId?: string;
     hostId?: string;

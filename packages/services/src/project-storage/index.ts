@@ -1,6 +1,9 @@
 import { ProjectRepository } from "#src/project-storage/project-repository.js";
 import { sqliteMigrations } from "@zcode/shared/sqlite-migrations";
-import type { ProjectStorageContract } from "#src/project-storage/contract.js";
+import type {
+  ProjectRepositoryContract,
+  ProjectStorageContract,
+} from "#src/project-storage/contract.js";
 import { reconcileLegacy, admitTaskIdentity } from "#src/project-storage/legacy-tasks.js";
 import { migrateProjects } from "#src/project-storage/migrate-projects.js";
 import {
@@ -70,3 +73,37 @@ export const projectStorage: ProjectStorageContract = {
   admitTaskIdentity,
   repository: (db, hostId) => new ProjectRepository(db, hostId),
 };
+
+type WorkspaceScopeTarget = {
+  workspacePath: string;
+  workspaceIdentity?: string;
+  remoteSessionId?: string;
+};
+
+/** 复用 TaskIndex 的真实 owner 解析；不解析 storageScope，也不缓存另一份项目域事实。 */
+export async function resolveProjectWorkspaceSource(
+  owner: {
+    getWorkspaceTargets(): WorkspaceScopeTarget[];
+    getProjectRepository(target: WorkspaceScopeTarget): Promise<ProjectRepositoryContract>;
+  },
+  repository: ProjectRepositoryContract,
+  preferred?: WorkspaceScopeTarget,
+): Promise<WorkspaceScopeTarget> {
+  const key = (target: WorkspaceScopeTarget) =>
+    target.workspaceIdentity?.trim() || target.workspacePath;
+  const targets = owner.getWorkspaceTargets();
+  const preferredKey = preferred && key(preferred);
+  // 原因：只从已登记 workspace 中选活源；不能为 caller 任意路径启动替代 runtime 或重绑已有 profile。
+  const candidates = [
+    ...targets.filter((target) => key(target) === preferredKey),
+    ...targets.filter((target) => key(target) !== preferredKey),
+  ];
+  for (const target of candidates) {
+    try {
+      if ((await owner.getProjectRepository(target)) === repository) return target;
+    } catch {
+      // 已退出/域事实未知的源不是可继承的 owner，继续查找同一项目域的其他活源。
+    }
+  }
+  throw new Error("project.workspace-source-unavailable");
+}

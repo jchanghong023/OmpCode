@@ -9,7 +9,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 type CommandCall = { command: string; args: string[] };
 
@@ -151,6 +151,7 @@ describe("desktop Linux deep link registration helpers", () => {
 
       const result = installLinuxAppImageDesktopIcon({
         dataDir,
+        iconName: "ompcode-preview",
         iconSourcePath,
         logger: { info: () => undefined, warn: () => undefined },
         runCommand: (command, args) => {
@@ -160,7 +161,7 @@ describe("desktop Linux deep link registration helpers", () => {
       });
 
       expect(result).toEqual({
-        iconFilePath: join(dataDir, "icons", "hicolor", "512x512", "apps", "zcode.png"),
+        iconFilePath: join(dataDir, "icons", "hicolor", "512x512", "apps", "ompcode-preview.png"),
         installed: true,
         changed: true,
       });
@@ -176,6 +177,60 @@ describe("desktop Linux deep link registration helpers", () => {
       rmSync(tempRoot, { force: true, recursive: true });
     }
   });
+
+  it.each([
+    { flavor: "production", iconName: "ompcode" },
+    { flavor: "preview", iconName: "ompcode-preview" },
+  ] as const)(
+    "keeps $flavor AppImage icon output consistent with its desktop entry",
+    async ({ flavor, iconName }) => {
+      const tempRoot = mkdtempSync(join(tmpdir(), "ompcode-linux-metadata-"));
+      const dataDir = join(tempRoot, "xdg-data");
+      const iconDir = join(dataDir, "icons", "hicolor", "512x512", "apps");
+      const upstreamIconPath = join(iconDir, "zcode.png");
+      const upstreamSentinel = Buffer.from("upstream ZCode icon must remain unchanged");
+      const iconSourcePath = join(import.meta.dirname, "..", "build", "icons", "512x512.png");
+      vi.resetModules();
+      // 编译期 flavor 只能在加载模块前隔离替换；实际 desktop/icon writer 不做 mock。
+      vi.doMock("@zcode/shared", () => ({
+        ZCODE_PRODUCT_FLAVOR: flavor,
+      }));
+
+      try {
+        mkdirSync(iconDir, { recursive: true });
+        writeFileSync(upstreamIconPath, upstreamSentinel);
+        // 必须重新加载模块，才能分别覆盖 production/preview 的编译期身份。
+        const { registerLinuxDeepLinkProtocol } =
+          await import("../src/main/desktopLinuxDeepLinkRegistration.js");
+        registerLinuxDeepLinkProtocol({
+          executablePath: `/tmp/.mount_OmpCode/${iconName}`,
+          homeDir: join(tempRoot, "home"),
+          iconSourcePath,
+          env: {
+            APPIMAGE: join(tempRoot, "OmpCode.AppImage"),
+            XDG_DATA_HOME: dataDir,
+          },
+          systemApplicationDirs: [join(tempRoot, "empty-system-applications")],
+          logger: { info: () => undefined, warn: () => undefined },
+          runCommand: () => ({ status: 0, stderr: "" }),
+        });
+
+        const entry = readFileSync(join(dataDir, "applications", `${iconName}.desktop`), "utf8");
+        const installedIconName = entry
+          .split("\n")
+          .find((line) => line.startsWith("Icon="))
+          ?.slice(5);
+        expect(installedIconName).toBe(iconName);
+        const installedIconPath = join(iconDir, `${installedIconName}.png`);
+        expect(readFileSync(installedIconPath)).toEqual(readFileSync(iconSourcePath));
+        expect(readFileSync(upstreamIconPath)).toEqual(upstreamSentinel);
+      } finally {
+        vi.doUnmock("@zcode/shared");
+        vi.resetModules();
+        rmSync(tempRoot, { force: true, recursive: true });
+      }
+    },
+  );
 
   it("uses XDG_DATA_HOME for user-level desktop entries and icons", async () => {
     const { resolveLinuxUserDataDir } =

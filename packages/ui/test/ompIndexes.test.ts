@@ -165,7 +165,7 @@ describe("OMP index consumers", () => {
     await waitFor(() =>
       expect(fixture.wiki).toHaveBeenCalledWith(expect.objectContaining({ action: "list" })),
     );
-    fireEvent.change(screen.getByTestId("omp-wiki-query"), { target: { value: "NativeApi" } });
+    fireEvent.change(screen.getByTestId("omp-wiki-query"), { target: { value: "  NativeApi  " } });
     fireEvent.click(screen.getByTestId("omp-wiki-search"));
     await screen.findByText(/first complete body/);
     fireEvent.change(screen.getByTestId("omp-wiki-query"), { target: { value: "different" } });
@@ -175,6 +175,28 @@ describe("OMP index consumers", () => {
       expect.objectContaining({ query: "NativeApi", cursor: "opaque-native-cursor" }),
     );
     expect(screen.getByTestId("omp-wiki-results").textContent).toContain("/remote/docs/api.md:1–8");
+  });
+  it("keeps empty grep disabled but allows whitespace expressions without changing search validation", async () => {
+    fixture.wiki.mockResolvedValue({ indexes: [] });
+    render(
+      createElement(ZCodeIntlProvider, {
+        initialLocale: "en-US",
+        children: createElement(WikiPage, { workspacePath: "/remote/project" }),
+      }),
+    );
+    const button = screen.getByTestId("omp-wiki-search") as HTMLButtonElement;
+    await waitFor(() =>
+      expect(screen.getByTestId("omp-wiki-query").hasAttribute("disabled")).toBe(false),
+    );
+    expect(button.disabled).toBe(true);
+    fireEvent.change(screen.getByTestId("omp-wiki-query"), { target: { value: "   " } });
+    expect(button.disabled).toBe(true);
+    fireEvent.change(screen.getByRole("combobox", { name: "Mode" }), {
+      target: { value: "grep" },
+    });
+    expect(button.disabled).toBe(false);
+    fireEvent.change(screen.getByTestId("omp-wiki-query"), { target: { value: "" } });
+    expect(button.disabled).toBe(true);
   });
   it("does not submit an index build before explicit directory/name confirmation", async () => {
     fixture.wiki.mockResolvedValue({ indexes: [] });

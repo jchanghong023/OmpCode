@@ -19,6 +19,7 @@ export type ZCodeProtocolClientMethod =
   | V4Method
   | "skills/manage"
   | "omp/team"
+  | "omp/team/configure"
   | "omp/tan/start"
   | "omp/tan/list"
   | "omp/tan/stop"

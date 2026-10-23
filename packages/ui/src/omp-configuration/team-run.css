@@ -1,13 +1,27 @@
 .omp-team-flow {
   stroke-dasharray: 5 4;
 }
+.omp-team-invocation {
+  overflow-wrap: anywhere;
+}
+.omp-team-invocation[data-running="true"] {
+  border-color: var(--color-warning);
+}
 @media (prefers-reduced-motion: no-preference) {
   .omp-team-flow[data-active="true"] {
     animation: omp-team-edge-flow 1.2s linear infinite;
+  }
+  .omp-team-invocation[data-running="true"] .omp-team-node-lamp {
+    animation: omp-team-node-activity 1.8s ease-in-out infinite;
   }
 }
 @keyframes omp-team-edge-flow {
   to {
     stroke-dashoffset: -18;
+  }
+}
+@keyframes omp-team-node-activity {
+  50% {
+    opacity: 0.4;
   }
 }

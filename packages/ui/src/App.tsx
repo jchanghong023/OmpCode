@@ -282,6 +282,7 @@ export function App({
     handleOpenSelectionSideChat,
     handleOpenPlanDetail,
     handleOpenPluginUi,
+    handleOpenOmpTeamRun,
     handleOpenWorkflowRun,
     handleOpenWorkflowRunDirectory,
     handleOpenWorkflowActorSession,
@@ -1455,6 +1456,7 @@ export function App({
           handleSyncSubagentSessionTabs={handleSyncSubagentSessionTabs}
           handleOpenSelectionSideChat={handleOpenSelectionSideChat}
           handleOpenPlanDetail={handleOpenPlanDetail}
+          handleOpenOmpTeamRun={handleOpenOmpTeamRun}
           handleOpenWorkflowRun={handleOpenWorkflowRun}
           handleOpenWorkflowRunDirectory={handleOpenWorkflowRunDirectory}
           handleOpenWorkflowActorSession={handleOpenWorkflowActorSession}

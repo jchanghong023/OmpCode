@@ -4,9 +4,6 @@ const { resolve } = require("node:path");
 const signScriptPath = resolve(__dirname, "../../../scripts/sign-windows.ps1");
 
 async function sign(configuration) {
-  // OMP 是已固定摘要的发行输入；再次签名会改变字节并使启动校验失败。
-  // Windows OMP 的发布签名必须在生成 omp-artifact.json 之前完成。
-  if (/[\\/]resources[\\/]omp[\\/]/i.test(configuration.path)) return;
   if (configuration.isNest) {
     // Bugfix: electron-builder 会按 sha1/sha256 多次调用 Windows signer，
     // 但 vsigntool 这套封装本身会完成完整签名流程，重复再签只会增加不确定性。

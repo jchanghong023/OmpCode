@@ -423,7 +423,7 @@ async function injectHoistedRuntimeModulesIntoAsar(context) {
 async function stripPackagedSourcemapReferences(context) {
   // electron-builder 的 files 规则能排除 .map 文件，但无法删除 JS/CSS 末尾
   // 指向 sourcemap 的注释；afterPack 注入运行时依赖后也可能重新带入第三方 sourceMappingURL。
-  // 清理 app.asar 与 unpacked/extraResources；resources/omp 已封存摘要，保留原始字节。
+  // 清理 app.asar 与 unpacked/extraResources 中的 sourcemap 引用。
   await cleanupPackagedSourcemaps({
     appAsarPath: resolveAppAsarPath(context),
     resourcesDir: resolvePackagedResourcesDir(context),
@@ -790,18 +790,10 @@ export default {
         ]
       : []),
     {
-      // agent 运行时资产，打包到 resources/glm。
-      // 桌面端内置的是 agent 的 JS bundle（glm/zcode.cjs，由 prepare:agent-bundle 生成），
-      // Host 进程用 app 自带的 Electron Node runtime（ELECTRON_RUN_AS_NODE）执行 `zcode.cjs app-server --stdio`，
-      // 不再随包内置独立 Node 二进制。远端 SSH/WSL 仍走原生二进制（无 Electron）。
+      // 保留原 Agent 的 JS bundle 资产，不作为外部 OMP 不可用时的备用运行时。
       from: `bundled-agents/${targetPlatform.key}/glm`,
       to: "glm",
       filter: ["**/*", "!**/*.map"],
-    },
-    {
-      from: `bundled-agents/${targetPlatform.key}/omp`,
-      to: "omp",
-      filter: ["**/*"],
     },
     {
       // agent shell 之前完全依赖宿主系统 PATH，GUI 启动时经常拿不到用户自己装的 rg。
@@ -862,7 +854,6 @@ export default {
     signIgnore: [
       "[/\\\\]Contents[/\\\\]Resources[/\\\\]cua-helper([/\\\\]|$)",
       "[/\\\\]Contents[/\\\\]Resources[/\\\\]glm([/\\\\]|$)",
-      "[/\\\\]Contents[/\\\\]Resources[/\\\\]omp([/\\\\]|$)",
       "[/\\\\]Contents[/\\\\]Resources[/\\\\]tools([/\\\\]|$)",
     ],
   },

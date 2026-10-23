@@ -36,7 +36,6 @@ export function resolveOmpCodeDataRoot(
     ? join(dirname(normalize(expanded)), `${basename(normalize(expanded))}_ompcode`)
     : join(homePath, ".ompcode");
 }
-
 export { acquireFileLock } from "./node/atomicFileLock.js";
 export { createNodeNetworkCapture, withoutNetworkCapture } from "./node/networkCapture.js";
 export {

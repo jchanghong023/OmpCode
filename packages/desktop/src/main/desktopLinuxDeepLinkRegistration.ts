@@ -228,11 +228,13 @@ export function registerLinuxDeepLinkProtocol(options: RegisterLinuxDeepLinkProt
     argv: options.argv,
   });
   const dataDir = resolveLinuxUserDataDir({ env: options.env, homeDir: options.homeDir });
+  const iconName = desktopProductIdentities[ZCODE_PRODUCT_FLAVOR].linuxExecutableName;
   const desktopFilePath = resolveLinuxDeepLinkDesktopFilePath(dataDir);
   const applicationsDir = dirname(desktopFilePath);
   const desktopEntry = createLinuxDeepLinkDesktopEntry({
     ...command,
     productName: options.productName,
+    iconName,
   });
   let protocolRegistered = false;
   const runCommand = options.runCommand ?? runXdgCommand;
@@ -323,6 +325,7 @@ export function registerLinuxDeepLinkProtocol(options: RegisterLinuxDeepLinkProt
     ? null
     : installLinuxAppImageDesktopIconBestEffort({
         dataDir,
+        iconName,
         env: options.env,
         iconSourcePath: options.iconSourcePath,
         logger: options.logger,

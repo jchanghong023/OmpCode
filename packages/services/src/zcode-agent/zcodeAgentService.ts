@@ -1,3 +1,4 @@
+import { zcodeSessionReadParamsSchema } from "@zcode/shared";
 import {
   ompTanStartParamsSchema,
   ompTanListParamsSchema,
@@ -38,6 +39,7 @@ import {
   ompTeamListResultSchema,
   ompTeamReadResultSchema,
   ompTeamStopResultSchema,
+  ompTeamConfigureParamsSchema,
 } from "@zcode/shared";
 import { z } from "zod";
 import { zcodeRuntimeCapabilitiesSchema } from "@zcode/shared";
@@ -1326,6 +1328,13 @@ export function createZCodeAgentService(
     ZCodeProtocolClient,
     Promise<z.infer<typeof ompProfilesListResultSchema> | undefined>
   >();
+  function buildProfileWorkspaceRef(target: ZCodeAgentWorkspaceTarget): ZCodeWorkspaceRef {
+    // 历史目录失效时进程使用备用 cwd；profile 校验的是执行目录，身份和会话归属仍用原 key。
+    return {
+      ...buildWorkspaceRef(target),
+      workspacePath: processManager.getLaunchFacts(target).cwd,
+    };
+  }
 
   function readNativeProfileFacts(client: ZCodeProtocolClient, target: ZCodeAgentWorkspaceTarget) {
     let fact = profileFacts.get(client);
@@ -1344,7 +1353,7 @@ export function createZCodeAgentService(
         if (capabilities.ompProfiles !== true) return undefined;
         return client.request(
           "omp/profiles/list",
-          ompProfilesListParamsSchema.parse({ workspace: buildWorkspaceRef(target) }),
+          ompProfilesListParamsSchema.parse({ workspace: buildProfileWorkspaceRef(target) }),
           ompProfilesListResultSchema,
         );
       })();
@@ -1382,6 +1391,22 @@ export function createZCodeAgentService(
   ) {
     if (!options?.resolveOmpProfile) return;
     if (!raw || typeof raw !== "object" || method.startsWith("omp/profiles/")) return;
+    if (method === "omp/team/configure") {
+      const { request } = ompTeamConfigureParamsSchema.parse(raw);
+      if (request.operation !== "set_team_config") return;
+      const facts = await readNativeProfileFacts(client, workspace);
+      if (!facts) return;
+      const selected = await options.resolveOmpProfile(workspace);
+      // Team 属于当前运行 profile 的全局配置；切换待重启时不能把新选择写进旧 profile。
+      if (selected !== undefined && selected !== facts.activeProfile)
+        throw Object.assign(
+          new Error(
+            "Profile selection is pending restart; restart before saving Team configuration",
+          ),
+          { code: "omp.profileRestartRequired" },
+        );
+      return;
+    }
     const params = z
       .object({
         type: z.string().optional(),
@@ -1435,7 +1460,8 @@ export function createZCodeAgentService(
       try {
         const snapshot = await client.request(
           zcodeProtocolMethods.sessionRead,
-          { workspace: buildWorkspaceRef(workspace), sessionId },
+          // session/read 是 session 级严格协议；加入 workspace 会被原生拒绝，导致 unknown 绑定永远无法确认。
+          zcodeSessionReadParamsSchema.parse({ sessionId }),
           zcodeSessionStateSnapshotSchema,
         );
         if (snapshot.session.sessionId !== sessionId)
@@ -1486,7 +1512,7 @@ export function createZCodeAgentService(
       };
     const facts = await client.request(
       "omp/profiles/list",
-      ompProfilesListParamsSchema.parse({ workspace: buildWorkspaceRef(target) }),
+      ompProfilesListParamsSchema.parse({ workspace: buildProfileWorkspaceRef(target) }),
       ompProfilesListResultSchema,
     );
     const pinned = processManager.getLaunchFacts(target).profilePinned;
@@ -4285,7 +4311,7 @@ export function createZCodeAgentService(
         const validated = await client.request(
           "omp/profiles/list",
           ompProfilesListParamsSchema.parse({
-            workspace: buildWorkspaceRef(params),
+            workspace: buildProfileWorkspaceRef(params),
             candidate: params.profile,
           }),
           ompProfilesListResultSchema,
@@ -4319,7 +4345,7 @@ export function createZCodeAgentService(
         const barrier = await client.request(
           "omp/profiles/prepareSwitch",
           ompProfilesPrepareSwitchParamsSchema.parse({
-            workspace: buildWorkspaceRef(params),
+            workspace: buildProfileWorkspaceRef(params),
             expectedProfile: state.activeProfile,
           }),
           ompProfilesPrepareSwitchResultSchema,
@@ -4339,7 +4365,7 @@ export function createZCodeAgentService(
             await client.request(
               "omp/profiles/cancelSwitch",
               ompProfilesCancelSwitchParamsSchema.parse({
-                workspace: buildWorkspaceRef(params),
+                workspace: buildProfileWorkspaceRef(params),
                 token: barrier.token,
               }),
               ompProfilesCancelSwitchResultSchema,
@@ -6072,6 +6098,19 @@ export function createZCodeAgentService(
       return client.request("omp/team", request, ompTeamStopResultSchema);
     },
 
+    async configureOmpTeam(params) {
+      const request = ompTeamConfigureParamsSchema.shape.request.parse(params.request);
+      // Team 全局设置不依赖会话；只启动已有 workspace 路由的 app-server，不进入模型执行准入。
+      const client = await getReadOnlyClient(params);
+      return client.request(
+        "omp/team/configure",
+        ompTeamConfigureParamsSchema.parse({
+          workspace: buildProfileWorkspaceRef(params),
+          request,
+        }),
+        zcodeSessionConfigureResultSchema,
+      );
+    },
     async configureOmpSession(params) {
       const client = await getClient(params);
       const {

@@ -2,7 +2,7 @@
 
 ## 1. 权威、状态与实现边界
 
-本规范记录 `dev-centos7` 从当前上游基线重新实现 CentOS 7 桌面发行的 slice 0–4 合同及当前交付证据；不是旧 `main` 的整体回灌。旧资料只通过 `git show main:<path>` 阅读，不 merge、cherry-pick 或 rebase `main`。没有因为旧代码存在就认定新实现完成。
+本规范记录 `dev-centos7` 的 CentOS 7 桌面发行 slice 0–4 合同及当前交付证据。此次明确合并新 `main`，产品功能以 `main` 为准，仅保留本分支必要的底层兼容与构建适配；不再沿用迁移初期禁止 merge／cherry-pick／rebase main 的操作限制。旧 main 材料仍仅作为历史依据，不因旧代码或历史通过记录存在就认定本次发行完成。
 
 根 [fork.md](../fork.md) 是需求入口。根文档已有 **FORK-004：OmpCode 产品身份、独立数据与 profile 隔离**，其编号、正文和效力不变；本次用户请求的 **FORK-004：CentOS 7 桌面发行** 是另一项同号请求，以根文档显式锚点 `fork-004-centos7-desktop-release` 和本文路径区分，不能默默重编号或覆盖原要求。现有 FORK-005 同样保留。
 
@@ -11,7 +11,7 @@
 ### 1.1 不变基线与明确排除
 
 - **仅 CentOS 固定旧 runtime**。Windows、macOS 等其他平台跟随当前上游 Desktop manifest／lockfile，正常合并上游升级，不建立永久版本钉死规则。本次源码 Electron **41.0.3** 是迁移开始时的历史当前基线，本次不修改其值；它不是其他平台的长期约束。CentOS 覆盖不得回写仓库 manifest／lockfile。
-- CentOS 7 x64 目标为 Linux 3.10、glibc **2.17**、Electron **28.3.3**（内嵌 Node **18.18.2**、Chromium 120）。非 root 在 HOME 解压后启动，不安装宿主包，不联网补齐运行资产，不替换宿主 glibc、OMP 或用户安装。
+- CentOS 7 x64 目标为 Linux 3.10、glibc **2.17**、Electron **28.3.3**（内嵌 Node **18.18.2**、Chromium 120）。用户须预先独立安装适配该宿主与 ZCode 协议的兼容 OMP，并配置命令或 PATH；应用可由非 root 在 HOME 解压后启动，不联网补齐运行资产，不替换宿主 glibc、OMP 或用户安装。Electron、原生模块、库与字体等应用资产仍须自包含，OMP 不在包内。
 - 不修改 UI 结构、入口、语言默认值、推荐内容、流式输出、动画或性能策略；不新增 `__OMPCODE_CENTOS7_DESKTOP__` 性能标记。不移植旧 CentOS zh-CN 默认值、网络锁定／离线拦截、遥测策略或日志静默策略。
 - 不解析或归一化 `OMP_OFFLINE`，不派生 `OMPCODE_CENTOS7_LOCAL_ONLY`，不注入 `--offline`。OMP 自己解释所有 OMP 环境变量。不得以兼容打包名义恢复旧离线功能。
 - 不修改业务根、sessions-index、tasks-index 的归属／迁移或 shm 活动根，不搬运用户数据，不创建 `~/.omp`／`~/.ompcode` 链接。不移植旧 shm、备份和自动恢复行为。身份与根目录遵循根文档已有合同，不在本文另立规则。
@@ -32,7 +32,7 @@
 | 3c    | Host stdio 兼容                     | 无效描述符不终止 Host、RPC、业务与结构化日志                                                                                                          |
 | 4     | 原生资产、打包与双平台发布 workflow | 新鲜构建 glibc 2.17 native、完整资源／库／字体／许可及静态 ELF／manifest／ZIP 检查；重新实现 Windows 与 CentOS 两个入口，不运行测试、不实际触发／发布 |
 
-实现复用当前仓库的 runtime assets、依赖闭包、asar 重组、native search、身份和 OMP artifact 所有者，不建立第二套平行发行系统。保留与本轮无关的上游源码及行为；只删除被本次切换直接淘汰的 fork 自有适配。
+实现复用当前仓库的 runtime assets、依赖闭包、asar 重组、native search 与身份所有者，不建立第二套平行发行系统。OMP 是用户预装的外部依赖，不保留 artifact 装配所有者。产品功能遵循此次合入的 main；仅保留必要兼容适配，删除被本次切换直接淘汰的 fork 自有适配。
 
 ## 3. 构建工具链与临时依赖降级
 
@@ -53,22 +53,20 @@
 
 Windows 保持正常 frozen-lockfile 安装；CentOS 在临时 manifest 上生成／使用精确锁定状态，必要的 `--no-frozen-lockfile` 只允许发生在该临时工作区。构建产物记录实际依赖闭包；只靠“顶层钉版”不足以证明可重现。
 
-## 4. 当前 OMP artifact 与执行合同
+## 4. 外部 OMP 与执行合同
 
-### 4.1 单一权威与装配输入
+### 4.1 单一权威与外部依赖
 
 OMP 接入沿用根 FORK-003 及其引用的 OMP 权威需求。实际业务为**外部 OMP app-server 进程内的 AgentSession 直接调用**，不是旧随包 JS adapter、旧 `glm/omp/omp`、`ELECTRON_RUN_AS_NODE` OMP 适配器或每个会话再起 RPC 子进程。不能回退旧 Agent、伪造准备结果或在 Host／UI 翻译协议。
 
-- 显式非空 `ZCODE_AGENT_SERVER_COMMAND` 优先，显式空值报错。通用 Windows／默认发现合同不变：未设置时 Windows 标准安装位置后继承 PATH，Linux／macOS 继承 PATH。自包含 CentOS ZIP 的专用启动器可仅在用户未设置该变量时，将其设置为本包 `app/resources/omp` 中经 manifest 验证的真实入口；不覆盖用户命令、不把此选择扩展为通用默认发现规则。
+- 显式非空 `ZCODE_AGENT_SERVER_COMMAND` 优先，显式空值报错。未设置时默认命令为 `omp`，复用继承 PATH 和既有进程启动机制，由操作系统解析。Windows／Linux／macOS、开发态与打包态相同；不遍历 PATH、不扫描安装目录、不探测候选、不维护发现缓存。CentOS 启动器只透传显式命令与继承 PATH，不注入包内入口、不改写用户 PATH；配置错误或启动失败直接报错，不回退其他 OMP 或旧 Agent。
 - 默认参数 `omp app-server --stdio --surface desktop`，独立 args／cwd 覆盖、实际 workspace cwd、profile 及准备进程遵循现有合同。`--profile <name>`／`--profile=<name>` 如由启动器接受，应沿用有效名称规则、缺值／非法值报错和本次运行覆盖优先级，不建立新的 profile 设置体系。
 - 外部 OMP 拥有配置、凭据、正文／队列、原生会话与工作流事实。Host 拥有连接／attachment 路由、监督与组织元数据。每个 window Host 的 workspaceKey 最多一个 app-server，可有多个同进程主会话；短生命周期 prepare-storage 进程不改变这一点。
 - 准备和业务启动使用同一已解析执行端、参数、profile 和环境。沿用真实 storagePath／确认／storagePrepared／exit 0 监督合同；异常、EOF、取消或失败阻断业务启动。
 
-装配输入为 `ZCODE_OMP_ARTIFACT_ROOT`。根 `omp-release.json` 精确包含 `{version, commit, protocolBaseline, artifacts: {<target>: <该平台 manifest SHA-256>}}`；平台 `<os>-<arch>/omp-artifact.json` 包含 `schemaVersion: 1`、相同版本／完整源码提交／协议基线、`target`、相对 `executable`、`files: {<完整运行资产相对路径>: <SHA-256>}`。协议基线为 **`c7c190724f3a00a2de998a0a5511201d5a2ba1a0`**。
+用户分别为本地和远端执行环境预装兼容 OMP。OmpCode 不下载、安装、升级或分发 OMP，不消费 `ZCODE_OMP_ARTIFACT_ROOT`、OMP producer run／token、`omp-release.json` 或 `omp-artifact.json` 作为打包输入，不生成 `bundled-agents/<target>/omp`、`resources/omp` 或 `runtime/omp`。OMP 自身独立发行与完整性合同由 OMP 项目维护；OmpCode 不要求用户目录带有私有 manifest。
 
-由现有 `scripts/omp-artifact.mjs` 验证／装配；Desktop staging 为 `bundled-agents/<target>/omp`，发行位置为 `app/resources/omp`。Source Server 的 `runtime/omp` 及远端原有 archive 链路不在本轮另建。禁止越界文件、manifest 内符号链接、未列出的入口、另一平台二进制、虚构版本／提交／摘要；记录真实 OMP 版本／提交与 ZCode 触发提交。签名先于摘要，装配后不得改写 OMP 字节。
-
-CentOS 输入不仅需标为 linux-x64，还必须实际满足 glibc 2.17、Linux 3.10 与完整 runtime closure；不能因 manifest schema 合法就认定现代 Linux OMP 可在 CentOS 运行。缺少真实兼容 OMP artifact 是明确的发行阻断，不得绕过、下载替代或拿旧 adapter 顶替。外部命令不强制具备随包 manifest；沿用既有准备／启动门验证可运行性。随包执行端在使用前按现有异步、流式摘要校验完整资产。
+CentOS 用户预装的 OMP 必须适配 glibc 2.17、Linux 3.10 和当前协议。现有存储准备、初始化与能力校验负责判断实际兼容性；缺失、显式路径错误或不兼容时保留诊断，提示安装／更新兼容 OMP 并阻断业务启动，不自动修补依赖。外部 OMP 未预装不阻断 OmpCode 应用归档的装配，但不代表用户环境可运行；发行说明须明确这一前提。包内 Electron／native／库／字体的完整性约束不变。
 
 ### 4.2 环境所有权（slice 2）
 
@@ -112,7 +110,6 @@ OmpCode-<version>-centos7-x64/
   app/<Electron executable and its complete distribution resources>
   app/resources/app.asar
   app/resources/app.asar.unpacked/<native runtime module paths>
-  app/resources/omp/<validated linux-x64 OMP artifact and manifest>
   app/resources/tools/bfs/bfs
   app/resources/tools/ugrep/ugrep
   app/resources/tools/ripgrep/<existing runtime plan executable>
@@ -140,15 +137,15 @@ SSH 使用 `ssh2` 的 JS 路径和 Electron 内建 crypto；**asar 与 unpacked 
 
 ### 6.2 ELF 与动态库完整性
 
-对 native stage、组装树以及最终 ZIP 解包树中的**每一个 ELF**递归检查，不以扩展名筛选：Electron、本地可执行文件、`.node`、`.so`、搜索、OMP 及其内嵌／外置可发现 native 都在范围内。记录 x86-64 架构、解释器、DT_NEEDED、RPATH／RUNPATH、版本符号与解析来源。
+对 native stage、组装树以及最终 ZIP 解包树中的**每一个 ELF**递归检查，不以扩展名筛选：Electron、本地可执行文件、`.node`、`.so` 和搜索工具均在范围内。记录 x86-64 架构、解释器、DT_NEEDED、RPATH／RUNPATH、版本符号与解析来源。用户独立安装的外部 OMP 不进入应用资产清单或该包内扫描范围。
 
-- 任一 `GLIBC_*` 需求大于 **2.17** 即失败；不捆绑 glibc、动态 loader 或以 LD_PRELOAD 替换宿主 libc。无法检查 OMP 内嵌 native 的输入必须提供可核对的生产清单和兼容证据，不能直接略过。
+- 任一包内 ELF 的 `GLIBC_*` 需求大于 **2.17** 即失败；不捆绑 glibc、动态 loader 或以 LD_PRELOAD 替换宿主 libc。
 - 核对完整传递 DT_NEEDED 闭包；缺少宿主基线保证的非 glibc 库必须随包提供。C++ 运行时含 `libstdc++.so.6`／`libgcc_s.so.1` 及各自所需 GLIBCXX／CXXABI 符号，来自 glibc 2.17 可用工具链，不从现代 runner 任意拷贝。
 - GTK／GLib／GObject／GIO、ATK／AT-SPI、Pango／Cairo／GdkPixbuf、X11／XCB／XKB、NSS／NSPR、ALSA、DRM／GBM、fontconfig／FreeType 及图形相关库按实际 ELF 闭包收集兼容版本，保留 SONAME 链接与合法 loader／font 配置。不能用一份有限名字清单取代完整解析。
 - 区分宿主固有内核／图形会话服务和包内库；不声称静态 ELF 合格足以保证 Citrix XKB／GLX。拒绝构建器绝对 RPATH、越界链接、解析到现代构建器库或未声明的用户路径。
 - 新增其他 native（如实际启用的图像、FFI、CUA 依赖）必须进入同一清单和 ABI／ELF 审计，不能只验三个已知 addon。无需本轮功能的其他平台资源按现有策略排除，不删除上游功能源码。
 
-最终静态检查覆盖解出的 asar、unpacked 与 extraResources 中可发现的全部 ELF；这仍不能证明 Bun 可执行文件内嵌 native 或 Linux 3.10 内核兼容性。OMP 沿用既有 `omp-release.json`／`omp-artifact.json` 与 SHA 校验合同，不虚构另一个 CentOS 兼容 manifest；真实兼容性证据缺口保持明确，不用 ELF 扫描替代实际运行证据。
+最终静态检查覆盖解出的 asar、unpacked 与 extraResources 中可发现的全部 ELF；这仍不能证明 Linux 3.10 内核兼容性，也不验证用户独立安装的 OMP 或其内嵌 native。OMP 实际运行兼容性缺口保持明确，不用应用 ELF 扫描替代真实运行证据，不新增 OMP manifest 要求。
 
 ### 6.3 字体、许可与归档
 
@@ -156,9 +153,9 @@ SSH 使用 `ssh2` 的 JS 路径和 Electron 内建 crypto；**asar 与 unpacked 
 
 保留项目 LICENSE／NOTICE、Electron／Chromium notices、native 模块、搜索、库和字体的全部适用再分发许可及归属。来源／摘要／许可缺失、空文件、必需文件缺失、非可执行权限、悬空／逃逸链接都阻断打包。
 
-阶段间使用 tar 经 workflow artifact 传输以保留权限与符号链接。ZIP 创建保留 Unix 执行位和包内相对符号链接，重定位和含空格路径可用；最终检查归档结构、CRC、唯一顶层根、实际条目模式、无绝对／`..` 路径、无 PRoot/rootfs、无构建 Node／编译器。OMP manifest 的禁止链接规则独立于 ZIP 库 SONAME 合法链接规则。
+阶段间使用 tar 经 workflow artifact 传输以保留权限与符号链接。ZIP 创建保留 Unix 执行位和包内相对符号链接，重定位和含空格路径可用；最终检查归档结构、CRC、唯一顶层根、实际条目模式、无绝对／`..` 路径、无 PRoot/rootfs、无构建 Node／编译器，并确认不含 OMP 可执行文件或其私有运行资产。
 
-最终字节生成后写 SHA256 sidecar，格式为 `<lowercase sha256>  <archive basename>`；下载阶段重验同一文件。不能先计算摘要再改资源／签名／重压缩。只输出已满足 ELF、manifest、依赖闭包、字体许可和布局约束的 ZIP。
+最终字节生成后写 SHA256 sidecar，格式为 `<lowercase sha256>  <archive basename>`；下载阶段重验同一文件。不能先计算摘要再改资源／签名／重压缩。只输出已满足应用 ELF、依赖闭包、字体许可和布局约束且不携带 OMP 的 ZIP。
 
 ## 7. 启动器与 IBus（slice 1，P0）
 
@@ -224,7 +221,7 @@ Main 创建 Host／工具子进程时使用自有 stdout／stderr 管道及既�
 ### 8.1 共同行为
 
 - 两个 workflow 都保持手动 `workflow_dispatch`。只接受 **`refs/heads/dev-centos7`**；错误分支立即失败，不继续从 main 构建。每个 checkout／构建／打包 job 固定 **触发的 `github.sha`**，不能再次解析移动分支头；发布 `--target` 使用同一 SHA。
-- OMP 外部输入由 repository variables **`OMP_ARTIFACT_REPOSITORY`、`OMP_ARTIFACT_RUN_ID`、`OMP_ARTIFACT_COMMIT`** 和 secret **`OMP_ARTIFACT_TOKEN`** 提供：固定生产仓库、已成功完成的 producer run ID 及完整源码提交，从该 run 下载对应平台 **`omp-zcode-<target>`** artifact，`<target>` 沿用现有 OMP artifact 平台合同。下载前核对 producer run 成功状态及源码提交，验证 manifest 时将该提交传为 `expectedSHA`，确保真实来源与预期一致。token 仅用于读取该生产 artifact，不代替发布用的默认 token。这些真实固定输入是打包前提；缺失或不匹配明确失败，不取 latest、不虚构值、不从移动分支推导替代提交。
+- 两个 workflow 均不下载、固定 producer run、校验或装配 OMP，不要求 `OMP_ARTIFACT_REPOSITORY`、`OMP_ARTIFACT_RUN_ID`、`OMP_ARTIFACT_COMMIT` 或 `OMP_ARTIFACT_TOKEN`。不恢复已删除的 OMP artifact 脚本。发行说明明确要求用户在对应执行环境预装兼容 OMP，并使用显式命令或继承 PATH。
 - 使用 Node 24.14.0／pnpm 10.33.2。生成日期时间 tag `v<UTC yyyyMMdd-HHmmss>-<run_id>-<run_attempt>`，校验 ref 格式、远端不存在同 tag；网络检查失败不当作不存在。tag 由校验／构建 job 单次生成并输出，发布 job 精确消费，重跑全部 jobs 不复用旧 tag。
 - GitHub **不运行 UT、E2E、GUI／启动器／SSH 握手或其他执行测试，也不单独运行 typecheck、lint 或 architecture 质量门禁**。这不是禁止所有静态检查：第 6 节产物约束必须保留，但不再执行 runtime API audit。安装使用 `--ignore-scripts` 避免生命周期间接执行占位 CUA 包的 standalone `tsc --noEmit`，随后显式运行生成真实 JS／声明文件的编译步骤；不能用 standalone `pnpm typecheck`／`tsc --noEmit` 冒充打包必需项。检查打包脚本调用链，不能顶层删除 test step 后仍由 bundle hook 间接运行测试。
 - 保留纯产物完整性约束：必需资产／大小、运行闭包、manifest／SHA256、ELF／ABI 静态信息、asar／ZIP 布局、权限／链接、CRC 与许可。这些是打包失败条件，不是测试通过证据。**旧 `verify-ssh.mjs` 回环握手即使曾称为完整性约束，本轮也不得执行或间接调用。**
@@ -234,13 +231,13 @@ Main 创建 Host／工具子进程时使用自有 stdout／stderr 管道及既�
 
 ### 8.2 Windows workflow
 
-使用 `windows-latest` 构建 Windows x64，正常 frozen lockfile，Electron 使用当前上游 Desktop manifest／lockfile 版本，复用现有 `pnpm bundle:desktop -- --os=win --arch=x64` 装配链及当前 OMP artifact 合同。不添加 Electron 41.0.3 等值拒绝、额外通用版本校验或版本选择旋钮；不得应用 CentOS 临时覆盖或降级 Windows runtime。
+使用 `windows-latest` 构建 Windows x64，正常 frozen lockfile，Electron 使用当前上游 Desktop manifest／lockfile 版本，复用现有 `pnpm bundle:desktop -- --os=win --arch=x64` 装配链并遵循外部 OMP 合同。不添加 Electron 41.0.3 等值拒绝、额外通用版本校验或版本选择旋钮；不得应用 CentOS 临时覆盖或降级 Windows runtime。
 
-输出 `OmpCode-<version>-win-x64.exe` 与 `.exe.sha256`，保持旧发行的唯一安装器、存在性及至少 50 MiB 大小约束；保留 installer 归属、项目许可和 OMP manifest 校验。签名状态必须真实，不把 unsigned 打包当作签名安装／双装验收。发布 job 下载固定本次 artifact，验证 SHA256 后按共同规则发布。
+输出 `OmpCode-<version>-win-x64.exe` 与 `.exe.sha256`，保持旧发行的唯一安装器、存在性及至少 50 MiB 大小约束；保留 installer 归属与项目许可，检查产物不含 OMP 及其私有运行资产。签名状态必须真实，不把 unsigned 打包当作签名安装／双装验收。发布 job 下载固定本次 artifact，验证 SHA256 后按共同规则发布。
 
 ### 8.3 CentOS workflow
 
-`preflight` 输出应用版本和 tag；通过后 `desktop` 与 `native` 在不同 runner 并行，新鲜构建。前者在临时依赖工作区产出 Electron 28 desktop，后者在 glibc 2.17／GCC 11 环境产出 native 和库。所有阶段固定触发 SHA、同一 OMP release 输入与精确依赖计划。
+`preflight` 输出应用版本和 tag；通过后 `desktop` 与 `native` 在不同 runner 并行，新鲜构建。前者在临时依赖工作区产出 Electron 28 desktop，后者在 glibc 2.17／GCC 11 环境产出 native 和库。所有阶段固定触发 SHA 与精确依赖计划，不接入 OMP release 输入。
 
 CentOS 手动发布的唯一调度所有者为 GitHub Actions：固定 `release-centos7` 并发组，`cancel-in-progress: false`，并设置 `queue: max`。默认单 pending 会让 C 取消等待中的 B；多 pending 队列须保留这些请求，每个请求仍固定其触发 SHA。最多 100 个 pending，超过上限由 GitHub 取消新增请求；不另建队列、重试或状态存储。
 
@@ -259,15 +256,17 @@ sequenceDiagram
     G->>W: 执行 C
 ```
 
-`CENTOS7_NATIVE_IMAGE` 是可选 repository variable：非空时必须为不可变 `image@sha256:<64 hex>`；未设置时 workflow 自行从 `scripts/publish/centos7/Dockerfile` 构建，使用固定 manylinux digest 与 CentOS **7.9.2009 vault** 配方。因此“必须另行提供自定义镜像”不是前置条件。必填的三个 OMP variables 和读 artifact 的 token 见 8.1；其真实值未由本轮伪造，必须指向同一成功 producer run、精确 head SHA 和对应平台命名 artifact。构建 runner 需能取得锁定依赖、镜像／vault／源码与 Electron headers；这些是构建输入，不是用户宿主安装要求。
+`CENTOS7_NATIVE_IMAGE` 是可选 repository variable：非空时必须为不可变 `image@sha256:<64 hex>`；未设置时 workflow 自行从 `scripts/publish/centos7/Dockerfile` 构建，使用固定 manylinux digest 与 CentOS **7.9.2009 vault** 配方。因此“必须另行提供自定义镜像”不是前置条件。构建 runner 需能取得锁定依赖、镜像／vault／源码与 Electron headers；这些是构建输入，不是用户宿主安装要求。不要求 OMP producer 配置、读取 token 或固定 artifact。
 
-两组产物 tar 经 artifact 传递到依赖它们的 `package` job，重组 asar／unpacked、字体、库、OMP 与 launcher，再按第 6 节进行完整静态校验、生成 ZIP 和 SHA256。`publish` 仅下载此 package job 的 ZIP／sidecar。禁止缓存 native stage、最终 ZIP 或解包 app；依赖下载缓存不能代替每次原生编译与校验。构建器内部安装开发依赖不等于要求最终用户 root／宿主装包。
+两组产物 tar 经 artifact 传递到依赖它们的 `package` job，重组 asar／unpacked、字体、库与 launcher，不装入 OMP，再按第 6 节进行完整静态校验、生成 ZIP 和 SHA256。`publish` 仅下载此 package job 的 ZIP／sidecar。禁止缓存 native stage、最终 ZIP 或解包 app；依赖下载缓存不能代替每次原生编译与校验。构建器内部安装开发依赖不等于要求最终用户 root／宿主装包。
 
 ## 9. Windows 门禁、证据与未验证清单
 
 ### 9.1 执行政策与当前证据
 
 最终用户要求保留 **Windows 受影响测试与必要检查**，由主执行者整合后执行；此前 code-only／不执行测试仅是阶段性执行政策，不能据此永久取消测试。代码编辑子任务不运行测试、门禁、构建或 formatter；GitHub package-only 政策和不运行 CentOS／Linux 专项测试的边界不变。以下保留此前实际观察，不因政策变化改写历史结果，不重跑既有失败来确认用户报告，也不把静态检查或零选中 affected UT 改记为测试通过。新增验证证据待主执行者提供。
+
+此次 main 合并及外部 OMP 文档更新未运行任何检查；下列记录均为合并前的历史观察，不能据此宣称合并后的 typecheck、lint、架构、UT 或发行检查通过。
 
 | 项目                  | 实际观察                                                                                                                                                                          | 证据边界                                                                                                                      |
 | --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
@@ -297,7 +296,7 @@ sequenceDiagram
 
 ### 9.3 必须保持未验证标记的项目
 
-- 新 CentOS ZIP 的真实构建、所有实际 ELF／库闭包、Electron ABI 加载、字体发现与 OMP glibc 2.17 兼容性；
+- 新 CentOS ZIP 的真实构建、所有实际 ELF／库闭包、Electron ABI 加载、字体发现；用户预装外部 OMP 的 glibc 2.17／Linux 3.10 与协议兼容性也未验证，但不是包内资产装配条件；
 - Linux 3.10 非 root GUI、终端、搜索、SSH、真实 OMP 会话和存储准备；
 - Citrix X Server XKB／GLX、软件渲染、无 CJK 宿主中文显示、真实 IBus 分裂总线／自动启动／并发／多 DISPLAY；
 - 安装目录搬迁、真实 HOME 空格路径、全部 target 图形依赖和用户环境组合；
@@ -305,4 +304,4 @@ sequenceDiagram
 - 两个新 workflow 的 GitHub 运行、默认 token／分支策略、artifact 传输、tag 生成、draft 到发布及最终线上资产；
 - 整合后 Windows 受影响检查的实际执行结果；不能将第 9.1 节已有静态结果重复列作“全部尚未执行”，也不能推导每个 slice 的完整四项均已通过。runtime API audit 已按第 5.3 节撤销，不再列为待执行项。
 
-这些是准确的证据边界，不是新增 Linux 测试计划，也不能把“不要求执行”写成“已通过”。**不新增 CentOS 7 专项测试；中文输入、GUI、SSH 与 CentOS 实机运行由用户自行在内网验证，不作为本次代码交付的自动验收阻塞项。** Windows 受影响测试由主执行者整合后执行；package-only 产物完整性约束继续保留，runtime API audit 不再保留。本文保留的历史记录没有本轮 Linux／WSL／VM／Citrix、实际 ZIP／EXE 打包、workflow dispatch、release 或 push 证据，后续只能凭实际结果更新。缺少 OMP 真实兼容产物、许可来源或静态闭包证据时仍阻断对应发行产物装配，并指出具体缺项；这些静态打包约束不同于用户实机验收，不能给占位文件或宣称完整发行已验收。
+这些是准确的证据边界，不是新增 Linux 测试计划，也不能把“不要求执行”写成“已通过”。**不新增 CentOS 7 专项测试；中文输入、GUI、SSH 与 CentOS 实机运行由用户自行在内网验证，不作为本次代码交付的自动验收阻塞项。** Windows 受影响测试由主执行者整合后执行；package-only 产物完整性约束继续保留，runtime API audit 不再保留。本文保留的历史记录没有本轮 Linux／WSL／VM／Citrix、实际 ZIP／EXE 打包、workflow dispatch、release 或 push 证据，后续只能凭实际结果更新。缺少应用包内资产的许可来源或静态闭包证据仍阻断对应发行装配；外部 OMP 则由用户预装，不作为打包输入。不得用占位文件或文档更新宣称完整发行或用户 OMP 环境已验收。

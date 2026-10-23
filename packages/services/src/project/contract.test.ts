@@ -5,27 +5,14 @@ import { describe, expect, it, vi } from "vitest";
 import type { ProjectRepositoryContract, VirtualProject } from "#src/project-storage/contract.js";
 import type { IProjectService } from "#src/project/contract.js";
 import { createProjectService } from "#src/project/index.js";
+import { primaryDirectoryProject } from "./test-fixture.js";
 
 it("projects live primary directory status without changing roots, and rejects stale create requests", async () => {
   const root = await mkdtemp(join(tmpdir(), "project-primary-"));
   const primary = join(root, "primary");
   const extra = join(root, "extra");
   const moved = join(root, "moved");
-  const project: VirtualProject = {
-    id: "project",
-    hostId: "local",
-    name: "Project",
-    nameOverridden: true,
-    roots: [
-      { rootPath: extra, position: 0, isPrimary: false },
-      { rootPath: primary, position: 1, isPrimary: true },
-    ],
-    pinned: false,
-    deleted: false,
-    position: 0,
-    createdAt: 1,
-    updatedAt: 1,
-  };
+  const project = primaryDirectoryProject(primary, extra);
   const readTree = vi.fn(() => ({ projects: [project], tasks: [] }));
   const initializeProjectRoot = vi.fn();
   const afterChange = vi.fn();

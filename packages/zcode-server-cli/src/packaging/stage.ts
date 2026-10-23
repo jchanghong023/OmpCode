@@ -11,7 +11,6 @@ import {
   resolveProductionPackageClosure,
 } from "./stageDependencies.js";
 import { createComponentArchive, hashPaths, runPackagingCommand } from "./stageArchives.js";
-import { stageOmpArtifact } from "../../../../scripts/omp-artifact.mjs";
 
 export { collectBareModuleSpecifiers, isNodePtyRuntimePath, resolveProductionPackageClosure };
 
@@ -38,8 +37,6 @@ export interface StageOptions {
   nativeToolsDir?: string;
   /** 官方插件源码或已 seed 的 packages 目录。 */
   officialPluginsDir?: string;
-  /** Immutable multi-platform OMP release input; same root as Desktop assembly. */
-  ompArtifactRoot?: string;
   /** 是否同时产出 tar.gz（默认 true） */
   archive?: boolean;
   /** 是否生成独立组件归档（默认 true）；关闭时仍保留组件内容哈希和大小。 */
@@ -239,11 +236,6 @@ export async function stageRelease(options: StageOptions): Promise<StagedRelease
   await cp(options.agentBundlePath, join(runtimeDir, "zcode.cjs"), {
     dereference: true,
   });
-  const ompArtifact = await stageOmpArtifact({
-    sourceRoot: options.ompArtifactRoot ?? process.env.ZCODE_OMP_ARTIFACT_ROOT,
-    destination: join(runtimeDir, "omp"),
-    target: options.target,
-  });
   // 修复原因：dynamic-workflows 已迁出插件，按 -plugin 复制会漏带工作流的必需技能。
   // 随 Agent 组件独立交付并参与内容哈希，不能依赖服务器旧版本的插件缓存。
   for (const file of ["SKILL.md", "patterns.md", "examples.md"]) {
@@ -352,12 +344,7 @@ export async function stageRelease(options: StageOptions): Promise<StagedRelease
     },
     {
       id: "agent-runtime",
-      paths: [
-        "runtime/omp",
-        "runtime/zcode.cjs",
-        "runtime/packages/bundled-skills",
-        "runtime/licenses/agent",
-      ],
+      paths: ["runtime/zcode.cjs", "runtime/packages/bundled-skills", "runtime/licenses/agent"],
     },
     ...(plugins.length > 0
       ? [
@@ -389,7 +376,6 @@ export async function stageRelease(options: StageOptions): Promise<StagedRelease
     plugins,
     components: componentMeta,
   });
-  manifest.entrypoints.agent = `runtime/omp/${ompArtifact.manifest.executable}`;
   // SSH 开发验证只安装整包；独立组件归档会重复哈希、复制和压缩同一批内容。
   // 仅跳过归档生成，保留上方组件身份计算和完整资源校验；默认发布链仍生成组件包。
   if (options.componentArchives !== false) {

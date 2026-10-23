@@ -12,7 +12,7 @@ import type { WorkflowDraftPosition, WorkflowRunCardSummary } from "@/ToolCallBl
 import type { WorkflowFillGraph } from "@/v4/workflowRunCardJoin.js";
 import type { Theme } from "@/useTheme.js";
 import type { ModelSelectionView } from "@zcode/services";
-import type { ZCodeWorkflowsForRunCandidate } from "@zcode/shared";
+import type { OmpTeamRun, ZCodeWorkflowsForRunCandidate } from "@zcode/shared";
 import type { ConversationAttachmentReadParams, ConversationTransport } from "@/v4/transport.js";
 import type {
   OpenPlanDetailSideTabRequest,
@@ -160,6 +160,13 @@ export interface ConversationRowRenderContext {
    * 实时状态词与进度，联接一次就把它们算完（`workflowRunCardJoin.ts`）。
    */
   workflowRunByToolCallId?: ReadonlyMap<string, WorkflowRunCardSummary>;
+  /** Session-owned native observation, joined only by the persisted dispatch row identity. */
+  teamRunByDispatchEntityId?: ReadonlyMap<string, OmpTeamRun>;
+  teamRunsConnected?: boolean;
+  teamRunsBusy?: boolean;
+  teamRunsError?: string | null;
+  onOpenTeamRun?: (jobId: string) => void;
+  onStopTeamRun?: (jobId: string) => void;
   /**
    * runId 键的同源联接表（`workflowRunCardJoin.buildWorkflowRunByRunId`）。给
    * ResumeWorkflowRun 的工具行用：投影里 run.toolCallId 跨 resume 沿用**原始

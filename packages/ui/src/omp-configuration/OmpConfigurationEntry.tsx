@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Settings2 } from "lucide-react";
 import { Button } from "@/components/ui/button.js";
 import { useZCodeAgentService } from "@/hooks/useZCodeAgentService.js";
 import { useZCodeIntl } from "@/i18n/index.js";
@@ -15,9 +16,12 @@ export function OmpConfigurationEntry(target: OmpConfigurationEntryProps) {
       <Button
         type="button"
         variant="ghost"
+        size="sm"
+        className="shrink-0 gap-1.5 text-foreground-subtle hover:text-foreground"
         data-testid="omp-config-open"
         onClick={() => setOpen(true)}
       >
+        <Settings2 className="size-3.5" aria-hidden="true" />
         {intl.formatMessage({ id: "omp.configuration.open" })}
       </Button>
       {open ? (

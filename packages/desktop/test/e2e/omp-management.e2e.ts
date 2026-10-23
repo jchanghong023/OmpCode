@@ -170,6 +170,8 @@ describe("OMP native management / real Settings GUI and isolated profile", () =>
     await refresh.click();
     await waitSkillState(false);
     await browser.refresh();
+    // 完整刷新恢复工作区而非临时设置页；通过真实入口重新打开后核对原生保存结果。
+    await click(TID_TASK_SETTINGS_BUTTON);
     await openSkills();
     await waitSkillState(false);
     await $('[data-skill-toggle-scope="profile"]').waitForDisplayed({ timeout: 30000 });

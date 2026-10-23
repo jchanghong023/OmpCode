@@ -3,6 +3,8 @@ import { resolve } from "node:path";
 import {
   TID_PROMPT_SUGGESTION_OPTION,
   TID_V4_COMPOSER_INPUT,
+  TID_V4_USER_INPUT_DIALOG,
+  TID_V4_USER_INPUT_OPTION,
   testId,
 } from "@zcode/shared/test-ids";
 import { DEFAULT_WORKSPACE, setInputValueByTestIdDom } from "./helpers/desktop-app.js";
@@ -113,10 +115,12 @@ describe("OMP native slash commands / actual Electron input and runtime", () => 
 
     const beforeCancel = (await requests()).length;
     await submit("/goal drop");
-    const dialog = $('[data-elicitation-dialog-body="true"]');
+    // 原生 confirm 是无 toolName 的 userInput，复用 V4UserInputDialog；
+    // ElicitationDialog 的 body/footer 只属于 AskUserQuestion 等结构化问答。
+    const dialog = $(`[data-testid="${TID_V4_USER_INPUT_DIALOG}"]`);
     await dialog.waitForDisplayed({ timeout: 30000 });
     expect(await dialog.getText()).toContain("Drop goal?");
-    const cancel = $('[data-elicitation-dialog-footer="true"] button:first-child');
+    const cancel = dialog.$(`[data-testid="${testId(TID_V4_USER_INPUT_OPTION, "no")}"]`);
     await cancel.waitForDisplayed({ timeout: 10000 });
     await cancel.click();
     await browser.waitUntil(async () => !(await dialog.isExisting()), {
@@ -143,7 +147,7 @@ describe("OMP native slash commands / actual Electron input and runtime", () => 
     await waitForV4TimelineContaining("/compact snapcompact does not take focus instructions");
     await idle();
     await submit("/display");
-    await waitForV4TimelineContaining("TUI");
+    await waitForV4TimelineContaining("requires a terminal UI");
     await idle();
     expect((await requests()).length).toBe(beforeErrors);
     expect((await getV4PaneSnapshot()).timelineText).not.toContain("OMP_E2E_STOP_COMMAND_GOAL");
@@ -183,9 +187,23 @@ describe("OMP native slash commands / actual Electron input and runtime", () => 
     await idle();
     const summaries = (await requests()).slice(start).filter(isOmpCompactionSummaryRequest);
     expect(summaries).toHaveLength(1);
+    // HTTP content 可以是文本块数组；直接读取原文，不能用 JSON 转义后的字符串验证引号与换行。
     const instruction = summaries[0]!.messages
-      .map((message) =>
-        typeof message.content === "string" ? message.content : JSON.stringify(message.content),
+      .flatMap(({ content }) =>
+        typeof content === "string"
+          ? [content]
+          : Array.isArray(content)
+            ? content.flatMap((part: unknown) =>
+                part &&
+                typeof part === "object" &&
+                "type" in part &&
+                part.type === "text" &&
+                "text" in part &&
+                typeof part.text === "string"
+                  ? [part.text]
+                  : [],
+              )
+            : [],
       )
       .join("\n");
     expect(instruction).toContain(customInstructions);

@@ -30,6 +30,7 @@ import type {
   OpenSelectionSideChatRequest,
   OpenScopedPlanDetailSideTabRequest,
   OpenScopedWorkflowRunSideTabRequest,
+  OpenScopedOmpTeamRunSideTabRequest,
   OpenScopedWorkflowActorSessionSideTabRequest,
   OpenScopedWorkflowArtifactSideTabRequest,
   OpenScopedWorkflowWorkspaceSideTabRequest,
@@ -357,6 +358,7 @@ export interface WorkspaceShellLayoutProps extends Omit<AppProps, "baseFeedbackS
   ) => void;
   handleOpenSelectionSideChat: (request: OpenSelectionSideChatRequest) => void;
   handleOpenPlanDetail: (request: OpenScopedPlanDetailSideTabRequest) => void;
+  handleOpenOmpTeamRun: (request: OpenScopedOmpTeamRunSideTabRequest) => void;
   handleOpenWorkflowRun: (request: OpenScopedWorkflowRunSideTabRequest) => void;
   handleOpenWorkflowRunDirectory: (
     request: import("@/lib/workspaceSidePane.js").OpenScopedWorkflowRunDirectorySideTabRequest,

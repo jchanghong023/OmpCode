@@ -53,18 +53,20 @@ async function assertNativeModelRequest(prompt: string, model: string | null) {
   const url = process.env.OMP_E2E_PROVIDER_URL;
   if (!url || new URL(url).hostname !== "127.0.0.1")
     throw new Error("Local native OMP fixture required");
-  const response = await fetch(`${url}/__requests`);
+  const response = await fetch(`${url}/__restore_requests`);
   if (!response.ok) throw new Error(`Native fixture ledger failed: ${response.status}`);
-  const requests = (await response.json()) as ModelRequest[];
-  const matching = requests.filter(
-    (request) =>
-      Boolean(request.tools?.length) &&
-      request.messages.some(
-        (message) => message.role === "user" && JSON.stringify(message.content).includes(prompt),
-      ),
-  );
+  const requests = (await response.json()) as Array<{ body: ModelRequest; status: number }>;
+  const matching = requests.filter(({ body }) => {
+    const latestUser = [...body.messages].reverse().find((message) => message.role === "user");
+    return (
+      Boolean(body.tools?.length) && JSON.stringify(latestUser?.content ?? "").includes(prompt)
+    );
+  });
   expect(matching.length).toBeGreaterThan(0);
-  expect(matching.every((request) => request.model === model)).toBe(true);
+  expect(matching.every(({ body }) => body.model === model)).toBe(true);
+  expect(
+    matching.every(({ status }) => status === (prompt.includes(FAIL_MARKER) ? 429 : 200)),
+  ).toBe(true);
 }
 
 describe("会话区模型配置恢复吞消息复现探针", () => {
@@ -81,11 +83,19 @@ describe("会话区模型配置恢复吞消息复现探针", () => {
     const runId = Date.now();
     const failingPrompt = `${FAIL_MARKER}_${runId}: trigger quota-like failure.`;
     await sendPromptAndRequireUser(failingPrompt, "restore repro direct: 失败态 prompt");
-    await waitForSessionSettled("restore repro: 失败态没有收口");
+    const failed = await waitForSessionSettled("restore repro: 失败态没有收口");
+    const unchangedConfig = await getV4ModelConfig();
+    await assertNativeModelRequest(failingPrompt, unchangedConfig.model);
 
     const successPrompt = `${SUCCESS_MARKER}_${runId}: reply with the repro token.`;
     await sendPromptAndRequireUser(successPrompt, "restore repro direct: 429 后成功 prompt");
     await assertAssistantSurvivesRendererReload(successPrompt);
+    const recovered = await getV4ConversationState();
+    expect(recovered.sessionId).toBe(failed.sessionId);
+    expect(await getV4ModelConfig()).toEqual(unchangedConfig);
+    const restoredUsers = await getV4Messages("user");
+    expect(restoredUsers.some((message) => message.text.includes(failingPrompt))).toBe(true);
+    expect(restoredUsers.some((message) => message.text.includes(successPrompt))).toBe(true);
   });
 
   it("失败态后切思考深度发送成功，renderer reload 后 assistant 应仍可见", async function () {
@@ -97,9 +107,11 @@ describe("会话区模型配置恢复吞消息复现探针", () => {
     const failingPrompt = `${FAIL_MARKER}_${runId}: trigger quota-like failure.`;
     await sendPromptAndRequireUser(failingPrompt, "restore repro switch: 失败态 prompt");
     await waitForSessionSettled("restore repro: 失败态没有收口");
+    await assertNativeModelRequest(failingPrompt, (await getV4ModelConfig()).model);
 
     if (nativeOmp) {
       await selectUpstreamThoughtLevelValue("high");
+      expect((await getV4ModelConfig()).thought).toBe("high");
     } else if (UPSTREAM_SECONDARY_THOUGHT_LEVEL) {
       await selectUpstreamThoughtLevelValue(UPSTREAM_SECONDARY_THOUGHT_LEVEL);
     }
@@ -223,11 +235,15 @@ async function assertAssistantSurvivesRendererReload(successPrompt: string) {
   const modelAfterReload = await getV4ModelConfig();
   expect(modelAfterReload.model).toBe(modelBeforeReload.model);
   expect(modelAfterReload.provider).toBe(modelBeforeReload.provider);
+  expect(modelAfterReload.thought).toBe(modelBeforeReload.thought);
 }
 
 async function waitForSessionSettled(timeoutMsg: string) {
-  await waitForV4ConversationState(
-    (snapshot) => snapshot.state !== "streaming" && snapshot.queueCount === 0,
+  return waitForV4ConversationState(
+    (snapshot) =>
+      (nativeOmp ? snapshot.state === "idle" : snapshot.state !== "streaming") &&
+      snapshot.queueCount === 0 &&
+      snapshot.activeInputId === null,
     timeoutMsg,
     90000,
   );
@@ -322,6 +338,7 @@ async function assertAssistantSurvivesAppSessionReload(successPrompt: string) {
   const modelAfterReload = await getV4ModelConfig();
   expect(modelAfterReload.model).toBe(modelBeforeReload.model);
   expect(modelAfterReload.provider).toBe(modelBeforeReload.provider);
+  expect(modelAfterReload.thought).toBe(modelBeforeReload.thought);
 }
 
 async function waitForAnyRendererReadyAfterReloadSession() {

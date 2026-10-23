@@ -283,6 +283,10 @@ export async function prepareOmpIntegrationFixture(options: {
     return undefined;
   }
   const requests: ModelRequest[] = [];
+  const restoreFixture = options.specs.some((spec) =>
+    spec.endsWith("model-switch-restore-repro.test.ts"),
+  );
+  const restoreRequests: Array<{ body: ModelRequest; status: number }> = [];
   const managementFixture = options.specs.some((spec) => spec.endsWith("omp-management.e2e.ts"));
   const managementRequests: Array<{ path: string; body: ModelRequest; status: number }> = [];
   const activeResponses = new Set<ServerResponse>();
@@ -290,6 +294,11 @@ export async function prepareOmpIntegrationFixture(options: {
     if (request.url === "/__requests") {
       response.setHeader("content-type", "application/json");
       response.end(JSON.stringify(requests));
+      return;
+    }
+    if (request.url === "/__restore_requests") {
+      response.setHeader("content-type", "application/json");
+      response.end(JSON.stringify(restoreRequests));
       return;
     }
     if (request.url === "/__management_requests") {
@@ -349,8 +358,10 @@ export async function prepareOmpIntegrationFixture(options: {
       const latestInput = [...body.messages].reverse().find((message) => message.role === "user");
       const latestText = JSON.stringify(latestInput?.content ?? "");
       const restoreFailure =
-        options.specs.some((spec) => spec.endsWith("model-switch-restore-repro.test.ts")) &&
-        latestText.includes("E2E_MODEL_SWITCH_RESTORE_REPRO_FAIL");
+        restoreFixture && latestText.includes("E2E_MODEL_SWITCH_RESTORE_REPRO_FAIL");
+      if (restoreFixture && /E2E_MODEL_SWITCH_RESTORE_REPRO_(?:FAIL|SUCCESS)/u.test(latestText)) {
+        restoreRequests.push({ body, status: restoreFailure ? 429 : 200 });
+      }
       if (restoreFailure) {
         response.writeHead(429, { "content-type": "application/json" });
         response.end(
@@ -391,7 +402,14 @@ export async function prepareOmpIntegrationFixture(options: {
           ? { text: "E2E_MODEL_SWITCH_RESTORE_REPRO_ASSISTANT_VISIBLE" }
           : undefined) ??
         respondOmpTanRequest(body) ??
-        respondOmpTeamRequest(body) ??
+        (options.specs.some((spec) => spec.endsWith("omp-team.e2e.ts")) &&
+        latestText.includes("OMP_E2E_TEAM_SECOND_SESSION_READY")
+          ? { text: "OMP_E2E_TEAM_SECOND_SESSION_READY: a second real conversation." }
+          : undefined) ??
+        (options.specs.some((spec) => spec.endsWith("omp-team.e2e.ts")) &&
+        latestText.includes("OMP_E2E_TEAM_FOLLOWUP")
+          ? { text: "OMP_E2E_TEAM_FOLLOWUP_OK: continued in the original conversation." }
+          : respondOmpTeamRequest(body)) ??
         respondOmpPermissionRequest(body) ??
         respondOmpSubagentRequest(body) ??
         respondOmpWorkflowRequest(body);
@@ -589,6 +607,20 @@ export async function prepareOmpIntegrationFixture(options: {
       document.setIn(["retry", "fallbackChains", role], [model]);
     }
     document.setIn(["tools", "xdev"], false);
+    if (
+      options.specs.some(
+        (spec) => spec.endsWith("omp-indexes.e2e.ts") || spec.endsWith("omp-team.e2e.ts"),
+      )
+    ) {
+      // bg277 的七条 Skill 描述缓存证明启动压缩污染 Team 的零请求验收；沿用 Index 隔离，
+      // 仅关闭该夹具 profile 的描述压缩，不过滤或屏蔽真实 Index、Team 及聊天模型请求。
+      document.set("skillful", false);
+    }
+    if (restoreFixture) {
+      // 真实日志显示 429 被原生默认重试继续执行；本用例验收终态后发送，不验收重试策略。
+      // 仅关闭该隔离 profile 的会话级重试，保留实际 HTTP 429 和原生终态投影。
+      document.setIn(["retry", "enabled"], false);
+    }
     if (options.specs.some((spec) => spec.endsWith("omp-permissions.e2e.ts"))) {
       // 权限专用夹具显式 ask；只调整隔离配置，不依赖 guarded 默认允许写入的层级。
       document.setIn(["tools", "approval", "write"], "prompt");

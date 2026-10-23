@@ -31,7 +31,7 @@ async function writeOfficialPluginFixture(
 ): Promise<string> {
   const root = join(
     home,
-    ".zcode",
+    ".ompcode",
     "cli",
     "plugins",
     "cache",
@@ -39,7 +39,7 @@ async function writeOfficialPluginFixture(
     pluginName,
     version,
   );
-  await mkdir(join(home, ".zcode", "cli", "plugins"), { recursive: true });
+  await mkdir(join(home, ".ompcode", "cli", "plugins"), { recursive: true });
   await mkdir(join(root, ".zcode-plugin"), { recursive: true });
   await mkdir(join(root, "agents"), { recursive: true });
   await writeFile(
@@ -76,7 +76,7 @@ describe("subagent markdown helpers", () => {
     const home = await makeTempHome();
     const workspacePath = join(home, "workspace");
     for (const [scope, root] of [
-      ["user", join(home, ".zcode", "agents")],
+      ["user", join(home, ".ompcode", "agents")],
       ["project", join(workspacePath, ".zcode", "agents")],
     ] as const) {
       await mkdir(join(root, "nested"), { recursive: true });
@@ -131,7 +131,7 @@ describe("subagent markdown helpers", () => {
     // browser-use 默认启用，但被用户「卸载」进入 suppressedBuiltins，同样不能贡献 agent。
     await writeOfficialPluginFixture(home, "browser-use", "0.5.0", "browser-auditor");
     await writeFile(
-      join(home, ".zcode", "cli", "config.json"),
+      join(home, ".ompcode", "cli", "config.json"),
       JSON.stringify({
         plugins: {
           suppressedBuiltins: ["browser-use@zcode-plugins-official"],
@@ -157,7 +157,7 @@ describe("subagent markdown helpers", () => {
       result.agents.filter((agent) => agent.source === "plugin").map((agent) => agent.name),
     ).toEqual(["documents:visual-judge", "visual-judge"]);
     await writeFile(
-      join(home, ".zcode", "cli", "config.json"),
+      join(home, ".ompcode", "cli", "config.json"),
       JSON.stringify({
         plugins: {
           enabledPlugins: { "documents@zcode-plugins-official": false },
@@ -205,7 +205,7 @@ describe("subagent markdown helpers", () => {
       "utf8",
     );
     await writeFile(
-      join(home, ".zcode", "cli", "plugins", "installed_plugins.json"),
+      join(home, ".ompcode", "cli", "plugins", "installed_plugins.json"),
       JSON.stringify({
         version: 1,
         plugins: [
@@ -222,7 +222,7 @@ describe("subagent markdown helpers", () => {
       "utf8",
     );
     await writeFile(
-      join(home, ".zcode", "cli", "config.json"),
+      join(home, ".ompcode", "cli", "config.json"),
       JSON.stringify({
         plugins: { enabledPlugins: { "documents@zcode-plugins-official": true } },
       }),
@@ -236,7 +236,7 @@ describe("subagent markdown helpers", () => {
       join(installedRoot, "agents", "visual-judge.md"),
     ]);
     await writeFile(
-      join(home, ".zcode", "cli", "config.json"),
+      join(home, ".ompcode", "cli", "config.json"),
       JSON.stringify({
         plugins: {
           enabledPlugins: { "documents@zcode-plugins-official": true },
@@ -246,7 +246,7 @@ describe("subagent markdown helpers", () => {
     );
     expect((await service.list({ workspacePath, provider: "glm" })).pluginAgents).toEqual([]);
     await writeFile(
-      join(home, ".zcode", "cli", "config.json"),
+      join(home, ".ompcode", "cli", "config.json"),
       JSON.stringify({
         plugins: { enabledPlugins: { "documents@zcode-plugins-official": false } },
       }),
@@ -257,7 +257,7 @@ describe("subagent markdown helpers", () => {
   it("插件覆盖按稳定身份原子保存，别名一致，清除后回到未修改的插件默认", async () => {
     const home = await makeTempHome();
     const pluginRoot = join(home, "installed", "fixture");
-    const pluginStorage = join(home, ".zcode", "cli", "plugins");
+    const pluginStorage = join(home, ".ompcode", "cli", "plugins");
     const pluginId = "fixture@personal";
     const agentId = "plugin:fixture@personal:visual-judge";
     const path = join(pluginRoot, "agents", "visual-judge.md");
@@ -279,7 +279,7 @@ describe("subagent markdown helpers", () => {
       }),
     );
     await writeFile(
-      join(home, ".zcode", "cli", "config.json"),
+      join(home, ".ompcode", "cli", "config.json"),
       JSON.stringify({
         plugins: { enabledPlugins: { [pluginId]: true } },
       }),
@@ -537,7 +537,7 @@ prompt`,
 });
 
 describe("subagent storage roots", () => {
-  it("uses runtime storage.dir agents root for user subagents", async () => {
+  it("ignores legacy HOME storage.dir and keeps global subagents inside OmpCode", async () => {
     const home = await makeTempHome();
     const storageRoot = join(home, "custom-storage");
     await mkdir(join(home, ".zcode", "cli"), { recursive: true });
@@ -548,11 +548,26 @@ describe("subagent storage roots", () => {
     );
 
     await expect(resolveUserSubagentRoot({ homeDir: home })).resolves.toBe(
-      join(storageRoot, "agents"),
+      join(home, ".ompcode", "agents"),
     );
     await expect(resolveSubagentStateFile({ homeDir: home })).resolves.toBe(
-      join(storageRoot, "v2", "agents-state.json"),
+      join(home, ".ompcode", "v2", "agents-state.json"),
     );
+    const oldConfig = await readFile(join(home, ".zcode", "cli", "config.json"), "utf8");
+    const service = createSubagentsService({ homeDir: home, isDesktopRuntime: true });
+    try {
+      const result = await service.createAgent({
+        provider: "glm",
+        config: { name: "isolated", description: "Isolated", systemPrompt: "Own root" },
+      });
+      expect(result.agent.path).toBe(join(home, ".ompcode", "agents", "isolated.md"));
+      await expect(readFile(result.agent.path, "utf8")).resolves.toContain("Own root");
+      await expect(readFile(join(home, ".zcode", "cli", "config.json"), "utf8")).resolves.toBe(
+        oldConfig,
+      );
+    } finally {
+      service.disposeAll();
+    }
   });
 });
 
@@ -598,7 +613,7 @@ describe("createSubagentsService", () => {
   it("损坏的 Subagent state 不阻塞整个会话启动，也不覆盖原文件", async () => {
     const home = await makeTempHome();
     const path = await resolveSubagentStateFile({ homeDir: home });
-    await mkdir(join(home, ".zcode", "v2"), { recursive: true });
+    await mkdir(join(home, ".ompcode", "v2"), { recursive: true });
     const original = '{"builtInModelOverrides":';
     await writeFile(path, original);
     await expect(
@@ -610,7 +625,7 @@ describe("createSubagentsService", () => {
   it("启动准备将旧内置选择落盘，让独立 Agent loader 不必等待用户编辑", async () => {
     const home = await makeTempHome();
     const statePath = await resolveSubagentStateFile({ homeDir: home });
-    await mkdir(join(home, ".zcode", "v2"), { recursive: true });
+    await mkdir(join(home, ".ompcode", "v2"), { recursive: true });
     const legacy = {
       builtInModelOverrides: { Explore: "custom:builtin%3Azai-coding-plan:GLM-5.3-Flash" },
       builtInThoughtLevelOverrides: { Explore: "high" },
@@ -638,7 +653,7 @@ describe("createSubagentsService", () => {
   it("并发启动导入与新版手动清空，写队列保留用户结果", async () => {
     const home = await makeTempHome();
     const statePath = await resolveSubagentStateFile({ homeDir: home });
-    await mkdir(join(home, ".zcode", "v2"), { recursive: true });
+    await mkdir(join(home, ".ompcode", "v2"), { recursive: true });
     await writeFile(
       statePath,
       JSON.stringify({ builtInModelOverrides: { Explore: "custom:builtin%3Azai-coding-plan:m" } }),
@@ -657,7 +672,7 @@ describe("createSubagentsService", () => {
   it("旧内置模型覆盖导入并随正常保存固定；旧字段仅保留供回滚", async () => {
     const home = await makeTempHome();
     const statePath = await resolveSubagentStateFile({ homeDir: home });
-    await mkdir(join(home, ".zcode", "v2"), { recursive: true });
+    await mkdir(join(home, ".ompcode", "v2"), { recursive: true });
     const legacy = {
       builtInModelOverrides: { Explore: "custom:builtin%3Azai-coding-plan:GLM-5.3-Flash" },
       builtInThoughtLevelOverrides: { Explore: "high" },
@@ -809,10 +824,10 @@ describe("createSubagentsService", () => {
   it("settings user-only list hides workspace agents but keeps built-ins and user agents", async () => {
     const home = await makeTempHome();
     const workspacePath = join(home, "workspace");
-    await mkdir(join(home, ".zcode", "agents"), { recursive: true });
+    await mkdir(join(home, ".ompcode", "agents"), { recursive: true });
     await mkdir(join(workspacePath, ".zcode", "agents"), { recursive: true });
     await writeFile(
-      join(home, ".zcode", "agents", "code-reviewer.md"),
+      join(home, ".ompcode", "agents", "code-reviewer.md"),
       serializeSubagentMarkdown({
         name: "code-reviewer",
         description: "提交前审查代码",
@@ -867,7 +882,7 @@ describe("createSubagentsService", () => {
     const workspacePath = join(home, "workspace");
     const pluginRoot = join(
       home,
-      ".zcode",
+      ".ompcode",
       "cli",
       "plugins",
       "cache",
@@ -875,11 +890,11 @@ describe("createSubagentsService", () => {
       "feature-dev",
       "0.0.0",
     );
-    await mkdir(join(home, ".zcode", "cli", "plugins"), { recursive: true });
+    await mkdir(join(home, ".ompcode", "cli", "plugins"), { recursive: true });
     await mkdir(join(pluginRoot, ".claude-plugin"), { recursive: true });
     await mkdir(join(pluginRoot, "agents"), { recursive: true });
     await writeFile(
-      join(home, ".zcode", "cli", "config.json"),
+      join(home, ".ompcode", "cli", "config.json"),
       JSON.stringify({
         plugins: {
           enabledPlugins: {
@@ -890,7 +905,7 @@ describe("createSubagentsService", () => {
       "utf8",
     );
     await writeFile(
-      join(home, ".zcode", "cli", "plugins", "installed_plugins.json"),
+      join(home, ".ompcode", "cli", "plugins", "installed_plugins.json"),
       JSON.stringify({
         version: 1,
         plugins: [
@@ -1020,7 +1035,7 @@ tools:
       },
     });
 
-    expect(result.agent.path).toBe(join(home, ".zcode", "agents", "code-reviewer.md"));
+    expect(result.agent.path).toBe(join(home, ".ompcode", "agents", "code-reviewer.md"));
     await expect(readFile(result.agent.path, "utf8")).resolves.toContain("你是严格的代码审查员。");
   });
 

@@ -252,7 +252,7 @@ export function spawnHostProcess(
   const child = electronUtilityProcess.fork(hostModulePath, [], {
     serviceName: formatZCodeHostProcessName(label),
     execArgv,
-    // Citrix／父终端可能关闭继承的描述符，Host 原始日志必须走 Main 自有管道。
+    // 原因：utilityProcess 默认继承 stdio，首状态前的异常无法进入下方已有日志转发与诊断。
     stdio: "pipe",
     env: {
       ...buildHostProcessEnv(dependencies.hostProcessLocalEnv),

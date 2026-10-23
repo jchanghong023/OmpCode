@@ -92,6 +92,11 @@ export function createProjectService(options: {
     workspaceIdentity?: string;
     remoteSessionId?: string;
   }): Promise<OmpStartupProfileParams>;
+  /** 从现有 TaskIndex owner 及原生事实选择项目域活源；调用方 source 不能覆盖项目 owner。 */
+  projectWorkspaceSource?(
+    repository: ProjectRepositoryContract,
+    preferred: Parameters<IProjectService["getOrganizationScope"]>[0] | undefined,
+  ): Promise<Parameters<IProjectService["getOrganizationScope"]>[0]>;
   prepareWorkspaceScope?(
     source:
       | { workspacePath: string; workspaceIdentity?: string; remoteSessionId?: string }
@@ -340,8 +345,19 @@ export function createProjectService(options: {
         if (!project.roots.length) {
           // 多窗口为同一空项目生成同一个目录，不依赖进程间定时锁。
           const path = join(options.workspaceDirectory, id);
-          await options.prepareWorkspaceScope?.(params?.sourceWorkspace, { workspacePath: path });
+          // 原因：caller 可能仍在 B 域；空项目 A 的新 cwd 必须继承 A 的活源，不能把 B 写进 A。
+          const source = options.projectWorkspaceSource
+            ? await options.projectWorkspaceSource(repo, params?.sourceWorkspace)
+            : params?.sourceWorkspace;
+          if (options.repositories && !options.projectWorkspaceSource)
+            throw new Error("project.workspace-source-unavailable");
+          await options.prepareWorkspaceScope?.(source, { workspacePath: path });
           await mkdir(path, { recursive: true });
+          if (
+            options.projectWorkspaceSource &&
+            (await options.repository({ workspacePath: path })) !== repo
+          )
+            throw new Error("project.workspace-domain-mismatch");
           // 空判断和 INSERT 必须共用写事务，防止另一 Host 的 roots 编辑被覆盖。
           project = repo.initializeProjectRoot(id, path);
           await changed();

@@ -20,10 +20,6 @@ jobs:
       ZCODE_ENV: production
       ZCODE_SKIP_REMOTE_ASSETS: "1"
       CSC_IDENTITY_AUTO_DISCOVERY: "false"
-      OMP_ARTIFACT_REPOSITORY: ${{ vars.OMP_ARTIFACT_REPOSITORY }}
-      OMP_ARTIFACT_RUN_ID: ${{ vars.OMP_ARTIFACT_RUN_ID }}
-      OMP_ARTIFACT_COMMIT: ${{ vars.OMP_ARTIFACT_COMMIT }}
-      OMP_ARTIFACT_TOKEN: ${{ secrets.OMP_ARTIFACT_TOKEN }}
       GITHUB_TOKEN: ${{ github.token }}
     steps:
       - name: Require release branch
@@ -42,12 +38,10 @@ jobs:
         with:
           node-version: 24.14.0
           cache: pnpm
-      - name: Validate pinned inputs and release tag
+      - name: Validate release tag
         id: release_meta
         shell: pwsh
         run: |
-          node scripts/publish/fetch-omp-artifact.mjs check
-          if ($LASTEXITCODE -ne 0) { throw 'Invalid pinned OMP producer run.' }
           $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
           $tag = "v$([DateTime]::UtcNow.ToString('yyyyMMdd-HHmmss'))-${env:GITHUB_RUN_ID}-${env:GITHUB_RUN_ATTEMPT}"
           git check-ref-format "refs/tags/$tag"
@@ -66,9 +60,6 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Electron installation failed.' }
           pnpm --filter @zcode/desktop exec node scripts/node-pty-rebuild.mjs
           if ($LASTEXITCODE -ne 0) { throw 'node-pty preparation failed.' }
-      - name: Download and verify pinned Windows OMP
-        shell: pwsh
-        run: node scripts/publish/fetch-omp-artifact.mjs download win32-x64 "$env:RUNNER_TEMP/omp-release"
       - name: Build unsigned production Windows installer
         run: pnpm bundle:desktop -- --os=win --arch=x64
       - name: Prepare unique installer and checksum

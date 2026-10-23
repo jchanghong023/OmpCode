@@ -96,14 +96,12 @@ interface Copy {
   switchToLightTheme: string;
   continueHelp: string;
   downloadZCode: string;
+  downloadUnavailable: string;
   retryOpen: string;
   /** 结果物计数；{count} 占位。中文无复数，英文分单复数。 */
   artifactCountOne: string;
   artifactCountOther: string;
 }
-
-// 站点首页本身就是下载入口，没有 /download 这个 path（单独的下载链接会 404）。
-const ZCODE_DOWNLOAD_URL = "https://zcode.z.ai";
 
 const COPY: Record<ConversationShareLandingLocale, Copy> = {
   "zh-CN": {
@@ -148,6 +146,7 @@ const COPY: Record<ConversationShareLandingLocale, Copy> = {
     switchToLightTheme: "切换到浅色主题",
     continueHelp: "如果没有自动打开 OmpCode，请确认已安装本 fork 客户端，或再次尝试打开。",
     downloadZCode: "下载 OmpCode",
+    downloadUnavailable: "尚未提供 OmpCode 专属下载入口；上游 ZCode 无法处理此分享链接。",
     artifactCountOne: "{count} 个结果物",
     artifactCountOther: "{count} 个结果物",
     retryOpen: "再次打开",
@@ -199,6 +198,8 @@ const COPY: Record<ConversationShareLandingLocale, Copy> = {
     continueHelp:
       "If OmpCode did not open, make sure this fork is installed, or try opening it again.",
     downloadZCode: "Download OmpCode",
+    downloadUnavailable:
+      "An OmpCode download is not available. Upstream ZCode cannot open this share link.",
     artifactCountOne: "{count} artifact",
     artifactCountOther: "{count} artifacts",
     retryOpen: "Try again",
@@ -577,9 +578,16 @@ export function ConversationShareLandingPage({
               >
                 {copy.retryOpen}
               </a>
-              <a className="text-brand underline underline-offset-2" href={ZCODE_DOWNLOAD_URL}>
+              {/* 上游下载的 ZCode 不注册 ompcode scheme；没有 fork 发行入口时不能诱导安装上游。 */}
+              <button
+                type="button"
+                className="cursor-not-allowed text-foreground-subtle opacity-60"
+                disabled
+                aria-describedby="share-download-unavailable"
+              >
                 {copy.downloadZCode}
-              </a>
+              </button>
+              <span id="share-download-unavailable">{copy.downloadUnavailable}</span>
             </div>
           </ShareContentInset>
         ) : null}
@@ -741,7 +749,7 @@ export function ConversationShareLandingStatus({
             {isNotFound ? (
               <a
                 className="rounded-md bg-primary px-4 py-2 text-ui-base text-primary-foreground"
-                href={ZCODE_DOWNLOAD_URL}
+                href="https://zcode.z.ai"
               >
                 {copy.backToHome}
               </a>

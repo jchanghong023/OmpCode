@@ -2,7 +2,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { parseDocument } from "yaml";
 import { DEFAULT_WORKSPACE, getE2EAppDataPaths } from "./helpers/desktop-app.js";
-import { startDraftFromProject } from "./helpers/project-sidebar.js";
+import { startDraftFromProject, waitForProjectRow } from "./helpers/project-sidebar.js";
 import {
   getV4ModelConfig,
   prepareV4ConversationE2E,
@@ -20,6 +20,7 @@ import {
   OMP_PROVIDER_ID,
   type ModelRequest,
 } from "./helpers/omp-integration-fixture.js";
+import { setPluginPresentation } from "./helpers/plugin-management-lifecycle.js";
 
 const tid = (id: string) => $(`[data-testid="${id}"]`);
 async function click(id: string) {
@@ -61,16 +62,29 @@ async function assertRequestModel(marker: string, model: string) {
 async function saveRole(role: string, model: string) {
   const control = tid(`omp-role-select-${role}`);
   await control.waitForDisplayed({ timeout: 30000 });
+  expect(await control.isEnabled()).toBe(true);
   await control.scrollIntoView();
-  await control.selectByAttribute(
-    "value",
-    JSON.stringify({ provider: OMP_PROVIDER_ID, modelId: model }),
-  );
+  // JSON value 中的双引号会破坏 WDIO selectByAttribute 生成的 XPath；按真实 option 的索引选择。
+  const value = JSON.stringify({ provider: OMP_PROVIDER_ID, modelId: model });
+  const values = await control.$$("option").map((option) => option.getAttribute("value"));
+  const index = values.indexOf(value);
+  expect(index).toBeGreaterThanOrEqual(0);
+  await control.selectByIndex(index);
+  expect(await control.getValue()).toBe(value);
+  expect(await tid(`omp-role-save-${role}`).isEnabled()).toBe(true);
   await click(`omp-role-save-${role}`);
   await browser.waitUntil(
-    async () =>
-      (await tid("omp-config-notice").getAttribute("data-message-id")) ===
-      "omp.configuration.roleSaved",
+    async () => {
+      // notice 仅在保存成功后渲染；等待时读取真实错误，不能让缺失 notice 掩盖 CAS/原生失败。
+      const result = await browser.execute(() => ({
+        notice: document
+          .querySelector('[data-testid="omp-config-notice"]')
+          ?.getAttribute("data-message-id"),
+        error: document.querySelector('[data-testid="omp-config-error"]')?.textContent,
+      }));
+      if (result.error) throw new Error(`Native CAS role save failed: ${result.error}`);
+      return result.notice === "omp.configuration.roleSaved";
+    },
     { timeout: 30000, timeoutMsg: "Native CAS role save did not complete" },
   );
 }
@@ -93,47 +107,203 @@ async function expectModel(model: string) {
     timeoutMsg: `Composer did not restore model ${model}`,
   });
 }
+async function sidebarView(view: "projects" | "grouped") {
+  // 分组入口只在分组视图挂载；默认项目视图不能直接查找新建分组按钮。
+  // 使用真实视图菜单切换，随后恢复项目视图，保留项目新建草稿与任务选择的原有路径。
+  await click("sidebar-view-menu");
+  await click(`sidebar-view-${view}`);
+  if (view === "grouped") {
+    await tid("task-group-add").waitForDisplayed({ timeout: 30000 });
+    // 按钮可用才表示实际运行域的组织读取完成，避免把加载中的空列表当成 B 域隔离成功。
+    await tid("task-group-add").waitForClickable({ timeout: 30000 });
+  } else {
+    await waitForProjectRow(DEFAULT_WORKSPACE);
+  }
+}
 async function expectNoTasks(ids: string[]) {
   for (const id of ids) expect(await tid(`task-item-${id}`).isExisting()).toBe(false);
 }
 async function pendingRolesReadOnly() {
   await tid("omp-role-profile-pending").waitForDisplayed({ timeout: 30000 });
-  // fieldset disabled 不保证子元素自身有 disabled 属性，检查浏览器有效禁用语义。
-  for (const id of [
+  // 一次读取全部真实控件，保留缺失与fieldset继承差异；失败输出必须标出具体id。
+  const ids = [
     "omp-role-select-smol",
     "omp-role-save-smol",
     "omp-custom-role-id",
     "omp-custom-role-add",
-  ]) {
-    expect(
-      await browser.execute(
-        (testId) =>
-          document.querySelector(`[data-testid="${testId}"]`)?.matches(":disabled") ?? false,
-        id,
+  ];
+  // pending 提示由 profile guard 先发布；角色目录在后续原生读取完成后才渲染，不能把提示当成目录 ready。
+  await browser.waitUntil(
+    async () =>
+      browser.execute(
+        (testIds) =>
+          testIds.every((id) => document.querySelector(`[data-testid="${id}"]`) !== null),
+        ids,
       ),
-    ).toBe(true);
+    { timeout: 30000, timeoutMsg: "Native pending-profile role controls did not load" },
+  );
+  const controls = await browser.execute(
+    (testIds) =>
+      testIds.map((id) => {
+        const element = document.querySelector<HTMLElement>(`[data-testid="${id}"]`);
+        const fieldsets: Array<{ testId: string | null; disabled: boolean }> = [];
+        for (let parent = element?.parentElement; parent; parent = parent.parentElement) {
+          if (parent instanceof HTMLFieldSetElement) {
+            fieldsets.push({
+              testId: parent.getAttribute("data-testid"),
+              disabled: parent.disabled,
+            });
+          }
+        }
+        return {
+          id,
+          exists: Boolean(element),
+          disabled: element?.matches(":disabled") ?? false,
+          ownDisabled: element?.hasAttribute("disabled") ?? false,
+          fieldsets,
+        };
+      }),
+    ids,
+  );
+  await writeFile(
+    resolve(process.env.ZCODE_E2E_ARTIFACT_DIR!, `omp-pending-role-controls-${Date.now()}.json`),
+    JSON.stringify(controls, null, 2),
+  );
+  expect(controls.map(({ id, exists, disabled }) => ({ id, exists, disabled }))).toEqual(
+    ids.map((id) => ({ id, exists: true, disabled: true })),
+  );
+}
+
+async function captureProfilePresentation(rootTestId: string, label: string) {
+  const targetUrl = await browser.getUrl();
+  const originalSize = await browser.electron.execute((electron, url) => {
+    const target = electron.BrowserWindow.getAllWindows().find(
+      (window) => !window.isDestroyed() && window.webContents.getURL() === url,
+    );
+    if (!target) throw new Error("Profile presentation requires the current Electron window");
+    const [width, height] = target.getContentSize();
+    if (
+      typeof width !== "number" ||
+      typeof height !== "number" ||
+      !Number.isFinite(width) ||
+      !Number.isFinite(height) ||
+      width <= 0 ||
+      height <= 0
+    ) {
+      throw new Error(
+        `Invalid current Electron content size: ${JSON.stringify({ width, height })}`,
+      );
+    }
+    return { width, height };
+  }, targetUrl);
+  const originalTheme = await browser.execute(() =>
+    document.documentElement.classList.contains("theme-zai-light") ? "zai-light" : "zai-dark",
+  );
+  const savedSettings: { locale?: unknown } = JSON.parse(
+    await readFile(resolve(getE2EAppDataPaths().appDataDir, "setting.json"), "utf8"),
+  );
+  const locale = savedSettings.locale === "en-US" ? "en-US" : "zh-CN";
+  try {
+    for (const viewport of [
+      { width: 1440, height: 1000, name: "wide" },
+      { width: 900, height: 720, name: "narrow" },
+    ]) {
+      await setPluginPresentation({ locale, theme: "zai-light", ...viewport });
+      await tid(rootTestId).waitForDisplayed({ timeout: 30000 });
+      await browser.waitUntil(
+        async () =>
+          browser.execute(
+            () =>
+              document.documentElement.classList.contains("theme-zai-light") &&
+              document
+                .getAnimations()
+                .every(
+                  (animation) =>
+                    animation.playState !== "running" ||
+                    animation.effect?.getTiming().iterations === Infinity,
+                ),
+          ),
+        {
+          timeout: 30000,
+          timeoutMsg: "Profile presentation did not reach its light-theme stable layout",
+        },
+      );
+      const layout = await browser.execute((testId) => {
+        const root = document.querySelector<HTMLElement>(`[data-testid="${testId}"]`);
+        if (!root) throw new Error(`Missing profile presentation surface: ${testId}`);
+        const surfaces = [
+          root,
+          ...Array.from(root.querySelectorAll<HTMLElement>("main, div")).filter(
+            (element) => getComputedStyle(element).overflowY === "auto",
+          ),
+        ];
+        return {
+          viewportWidth: window.innerWidth,
+          documentWidth: document.documentElement.scrollWidth,
+          surfaces: surfaces.map((element) => {
+            const rect = element.getBoundingClientRect();
+            return {
+              clientWidth: element.clientWidth,
+              scrollWidth: element.scrollWidth,
+              left: rect.left,
+              right: rect.right,
+            };
+          }),
+        };
+      }, rootTestId);
+      expect(layout.documentWidth).toBeLessThanOrEqual(layout.viewportWidth + 1);
+      for (const surface of layout.surfaces) {
+        expect(surface.clientWidth).toBeGreaterThan(0);
+        expect(surface.scrollWidth).toBeLessThanOrEqual(surface.clientWidth + 1);
+        expect(surface.left).toBeGreaterThanOrEqual(-1);
+        expect(surface.right).toBeLessThanOrEqual(layout.viewportWidth + 1);
+      }
+      await browser.saveScreenshot(
+        resolve(process.env.ZCODE_E2E_ARTIFACT_DIR!, `${label}-zai-light-${viewport.name}.png`),
+      );
+    }
+  } finally {
+    await setPluginPresentation({ locale, theme: originalTheme, ...originalSize });
   }
 }
 
 describe("OMP workspace profiles / native role and temporary model GUI", () => {
-  it("configures without a session, isolates profiles, reads roles after restart, and changes only the selected session temporarily", async function () {
-    this.timeout(300000);
-    const root = process.env.OMP_CONFIG_ROOT;
+  // WDIO 在进入 body 前固定单个 it 的 120 秒外层期限，body 内 this.timeout 无法覆盖。
+  // 按原生 Profile 生命周期串行验收；共享真实磁盘与会话，不重置 fixture，也不放宽期限。
+  let root: string;
+  let originalProfile: string;
+  let secondAgent: string;
+  let sentinelPath: string;
+  let originalConfigPath: string;
+  let sentinel: string;
+  let product: { name: string; windows: string[] };
+  let a: string;
+  let existing: string;
+  let other: string;
+  let b: string;
+  let groupId: string | null;
+  let savedA: string;
+  let beforeB: string;
+
+  it("configures profiles without a session, blocks pending role writes, and saves native roles", async () => {
+    // 与原用例一致，在 runner 完成隔离 fixture 初始化后读取环境。
+    root = process.env.OMP_CONFIG_ROOT ?? "";
     const originalAgent = process.env.PI_CODING_AGENT_DIR;
+    originalProfile = process.env.OMP_PROFILE || "default";
+    secondAgent = resolve(root, "profiles", "profile-b", "agent");
+    sentinelPath = process.env.OMP_E2E_UPSTREAM_SENTINEL ?? "";
     if (!root || !originalAgent) throw new Error("Isolated native profile directories required");
-    const originalProfile = process.env.OMP_PROFILE || "default";
-    const secondAgent = resolve(root, "profiles", "profile-b", "agent");
-    const sentinelPath = process.env.OMP_E2E_UPSTREAM_SENTINEL;
+    originalConfigPath = resolve(originalAgent, "config.yml");
     if (
       !sentinelPath ||
       !sentinelPath.startsWith(resolve(getE2EAppDataPaths().homeDir, ".zcode"))
     ) {
       throw new Error("Runner-owned upstream sentinel required");
     }
-    const sentinel = await readFile(sentinelPath, "utf8");
+    sentinel = await readFile(sentinelPath, "utf8");
     expect(sentinel).toBe('{"upstream":"must-remain-untouched"}\n');
     await prepareV4ConversationE2E({ skipProvider: true });
-    const product = await browser.electron.execute((electron) => ({
+    product = await browser.electron.execute((electron) => ({
       name: electron.app.getName(),
       windows: electron.BrowserWindow.getAllWindows()
         .filter((window) => window.isVisible())
@@ -150,41 +320,49 @@ describe("OMP workspace profiles / native role and temporary model GUI", () => {
     expect(await tid("settings-data-base-dir-save").isExisting()).toBe(false);
     await click("settings-section-nav-modelProvider");
     await tid("omp-workspace-profiles").waitForDisplayed({ timeout: 30000 });
+    // 容器和默认 option 在目录读取前已渲染；active/selected 仅在原生 profiles 结果落入同一 state 后才发布。
+    await profileState(originalProfile);
     const profileOptions = await tid("omp-profile-select")
       .$$("option")
       .map((option) => option.getAttribute("value"));
     expect(profileOptions).toContain("");
     expect(profileOptions).toContain("profile-b");
-    await click("settings-back-button");
-    await click("omp-team-sidebar-open");
-    await tid("omp-workspace-profiles").waitForDisplayed({ timeout: 30000 });
-    await profileState(originalProfile);
+    await captureProfilePresentation("settings-page", "omp-profile-settings");
+    // Profile 属于模型供应商设置；Team 设置仅编辑成员，角色与临时模型使用当前会话配置入口。
     // Workspace selection exists before any chat; next-start must not switch the runtime.
     await tid("omp-profile-select").selectByAttribute("value", "profile-b");
     await click("omp-profile-save-next");
     await profileState(originalProfile, "profile-b");
+    // 已保存下次启动选择仍可撤销；pending 只约束旧域角色持久写，不锁选择器。
+    expect(await tid("omp-profile-select").isEnabled()).toBe(true);
+    expect(await tid("omp-profile-save-next").isEnabled()).toBe(true);
     await tid("omp-profile-select").selectByAttribute(
       "value",
       originalProfile === "default" ? "" : originalProfile,
     );
     await click("omp-profile-save-next");
     await profileState(originalProfile);
+    await click("settings-back-button");
     await startDraftFromProject(DEFAULT_WORKSPACE);
     await switchV4Model(OMP_PROVIDER_ID, OMP_MODEL_ID, "disabled");
-    const a = (await run("OMP_E2E_PROFILE_A_BASE")).sessionId!;
+    a = (await run("OMP_E2E_PROFILE_A_BASE")).sessionId!;
     await startDraftFromProject(DEFAULT_WORKSPACE);
     await switchV4Model(OMP_PROVIDER_ID, OMP_MODEL_ID, "disabled");
-    const existing = (await run("OMP_E2E_PROFILE_EXISTING_BASE")).sessionId!;
+    existing = (await run("OMP_E2E_PROFILE_EXISTING_BASE")).sessionId!;
     await selectV4TaskById(a);
-    await click("omp-team-sidebar-open");
+    await settings("modelProvider");
     await tid("omp-profile-select").selectByAttribute("value", "profile-b");
     await click("omp-profile-save-next");
     await profileState(originalProfile, "profile-b");
-    await click("omp-team-configure");
+    await click("settings-back-button");
+    await selectV4TaskById(a);
+    await click("omp-config-open");
     await pendingRolesReadOnly();
     await click("omp-config-cancel");
     await settings("modelProvider");
     await profileState(originalProfile, "profile-b");
+    expect(await tid("omp-profile-select").isEnabled()).toBe(true);
+    expect(await tid("omp-profile-save-next").isEnabled()).toBe(true);
     await click("settings-back-button");
     await selectV4TaskById(a);
     await click("omp-config-open");
@@ -195,24 +373,28 @@ describe("OMP workspace profiles / native role and temporary model GUI", () => {
       (pane) => pane.sessionId === a,
       "Saving pending profile changed the running task",
     );
-    await click("omp-team-sidebar-open");
+    await settings("modelProvider");
     await tid("omp-profile-select").selectByAttribute(
       "value",
       originalProfile === "default" ? "" : originalProfile,
     );
     await click("omp-profile-save-next");
     await profileState(originalProfile);
-    await click("omp-team-configure");
+    await click("settings-back-button");
+    await selectV4TaskById(a);
+    await click("omp-config-open");
     await saveRole("smol", "omp-alternate");
     await tid("omp-custom-role-id").setValue("e2e-reviewer");
     await click("omp-custom-role-add");
     await saveRole("e2e-reviewer", "omp-alternate");
-    const originalConfigPath = resolve(originalAgent, "config.yml");
-    const savedA = await readFile(originalConfigPath, "utf8");
+    savedA = await readFile(originalConfigPath, "utf8");
     expect(parseDocument(savedA).getIn(["modelRoles", "smol"])).toBe(
       `${OMP_PROVIDER_ID}/omp-alternate`,
     );
     await click("omp-config-cancel");
+  });
+
+  it("reads native roles after restart and isolates temporary models to the selected session", async () => {
     await restartIntoWorkspacePreservingProfile(DEFAULT_WORKSPACE);
     await selectV4TaskById(a);
     await click("omp-config-open");
@@ -228,6 +410,7 @@ describe("OMP workspace profiles / native role and temporary model GUI", () => {
         (await tid("omp-role-e2e-reviewer").getText()).includes(`${OMP_PROVIDER_ID}/omp-alternate`),
       { timeout: 30000, timeoutMsg: "Custom role was not read back after restart" },
     );
+    await captureProfilePresentation("omp-configuration-panel", "omp-profile-roles-restored");
     const temporary = tid("omp-temporary-model");
     await temporary.scrollIntoView();
     await temporary.selectByVisibleText(`${OMP_PROVIDER_ID}/omp-alternate`);
@@ -246,16 +429,17 @@ describe("OMP workspace profiles / native role and temporary model GUI", () => {
     await assertRequestModel("OMP_E2E_PROFILE_EXISTING_UNCHANGED", OMP_MODEL_ID);
     await startDraftFromProject(DEFAULT_WORKSPACE);
     await switchV4Model(OMP_PROVIDER_ID, OMP_MODEL_ID, "disabled");
-    const other = (await run("OMP_E2E_PROFILE_A_NEW")).sessionId!;
+    other = (await run("OMP_E2E_PROFILE_A_NEW")).sessionId!;
     expect(other).not.toBe(a);
     await assertRequestModel("OMP_E2E_PROFILE_A_NEW", OMP_MODEL_ID);
     await selectV4TaskById(a);
     await run("OMP_E2E_PROFILE_A_TEMP_AGAIN");
     await assertRequestModel("OMP_E2E_PROFILE_A_TEMP_AGAIN", "omp-alternate");
-    const beforeB = await readFile(resolve(secondAgent, "config.yml"), "utf8");
+    beforeB = await readFile(resolve(secondAgent, "config.yml"), "utf8");
     await selectV4TaskById(other);
     await run("OMP_E2E_PROFILE_A_RECENT_BASE");
     await assertRequestModel("OMP_E2E_PROFILE_A_RECENT_BASE", OMP_MODEL_ID);
+    await sidebarView("grouped");
     await click("task-group-add");
     const groupTitle = tid("task-group-title-input");
     await groupTitle.waitForDisplayed({ timeout: 30000 });
@@ -264,16 +448,19 @@ describe("OMP workspace profiles / native role and temporary model GUI", () => {
     await browser.keys("Enter");
     const group = $('[data-task-group-title="OMP_PROFILE_A_GROUP"]');
     await group.waitForDisplayed({ timeout: 30000 });
-    const groupId = await group.getAttribute("data-task-group-id");
+    groupId = await group.getAttribute("data-task-group-id");
     expect(groupId).toBeTruthy();
+    await browser.keys("Escape");
+    await sidebarView("projects");
     await startDraftFromProject(DEFAULT_WORKSPACE);
     await expectModel(OMP_MODEL_ID);
     await switchV4Model(OMP_PROVIDER_ID, "omp-alternate", "disabled");
     await setV4ComposerText("OMP_PROFILE_A_UNSENT");
-    await click("omp-team-sidebar-open");
+    await settings("modelProvider");
     await tid("omp-profile-select").selectByAttribute("value", "profile-b");
     await click("omp-profile-save-next");
     await profileState(originalProfile, "profile-b");
+    await click("settings-back-button");
     await startDraftFromProject(DEFAULT_WORKSPACE);
     await waitForV4ComposerText(
       "OMP_PROFILE_A_UNSENT",
@@ -282,10 +469,16 @@ describe("OMP workspace profiles / native role and temporary model GUI", () => {
     await expectModel("omp-alternate");
     expect(await readFile(originalConfigPath, "utf8")).toBe(savedA);
     expect(await readFile(resolve(secondAgent, "config.yml"), "utf8")).toBe(beforeB);
+  });
+
+  it("isolates profile B tasks, groups, draft, Recent and persisted role configuration", async () => {
     await restartIntoWorkspacePreservingProfile(DEFAULT_WORKSPACE);
-    await click("omp-team-sidebar-open");
+    await settings("modelProvider");
     await profileState("profile-b");
+    await click("settings-back-button");
+    await sidebarView("grouped");
     expect(await $(`[data-task-group-id="${groupId}"]`).isExisting()).toBe(false);
+    await sidebarView("projects");
     await expectNoTasks([a, existing, other]);
     await browser.saveScreenshot(
       resolve(process.env.ZCODE_E2E_ARTIFACT_DIR!, "omp-profile-b-active.png"),
@@ -293,7 +486,7 @@ describe("OMP workspace profiles / native role and temporary model GUI", () => {
     await startDraftFromProject(DEFAULT_WORKSPACE);
     await waitForV4ComposerText("", "Profile B leaked profile A draft");
     await switchV4Model(OMP_PROVIDER_ID, OMP_MODEL_ID, "disabled");
-    const b = (await run("OMP_E2E_PROFILE_B_BASE")).sessionId!;
+    b = (await run("OMP_E2E_PROFILE_B_BASE")).sessionId!;
     expect(b).not.toBe(a);
     expect(b).not.toBe(other);
     await assertRequestModel("OMP_E2E_PROFILE_B_BASE", OMP_MODEL_ID);
@@ -321,26 +514,33 @@ describe("OMP workspace profiles / native role and temporary model GUI", () => {
     await expectModel("omp-alternate");
     await switchV4Model(OMP_PROVIDER_ID, OMP_MODEL_ID, "disabled");
     await setV4ComposerText("OMP_PROFILE_B_UNSENT");
-    await click("omp-team-sidebar-open");
+    await settings("modelProvider");
     await tid("omp-profile-select").selectByAttribute(
       "value",
       originalProfile === "default" ? "" : originalProfile,
     );
     await click("omp-profile-save-next");
     await profileState("profile-b", originalProfile);
+    await click("settings-back-button");
     await startDraftFromProject(DEFAULT_WORKSPACE);
     await waitForV4ComposerText(
       "OMP_PROFILE_B_UNSENT",
       "Pending A selection changed actual B draft",
     );
     await expectModel(OMP_MODEL_ID);
+  });
+
+  it("restores each profile's own native roles, draft and Recent across profile restarts", async () => {
     await restartIntoWorkspacePreservingProfile(DEFAULT_WORKSPACE);
-    await click("omp-team-sidebar-open");
+    await settings("modelProvider");
     await profileState(originalProfile);
+    await click("settings-back-button");
     await expectNoTasks([b]);
+    await sidebarView("grouped");
     await $(
       `[data-task-group-id="${groupId}"][data-task-group-title="OMP_PROFILE_A_GROUP"]`,
     ).waitForDisplayed({ timeout: 30000 });
+    await sidebarView("projects");
     await selectV4TaskById(a);
     await click("omp-config-open");
     await browser.waitUntil(
@@ -374,12 +574,15 @@ describe("OMP workspace profiles / native role and temporary model GUI", () => {
       resolve(process.env.ZCODE_E2E_ARTIFACT_DIR!, "omp-profile-a-restored.png"),
     );
     // 同一 OMP root 下的两个实际运行 profile；两物理 root 的 SQLite 隔离另由后端验收。
-    await click("omp-team-sidebar-open");
+    await settings("modelProvider");
     await tid("omp-profile-select").selectByAttribute("value", "profile-b");
     await click("omp-profile-save-next");
+    await click("settings-back-button");
     await restartIntoWorkspacePreservingProfile(DEFAULT_WORKSPACE);
     await expectNoTasks([a, existing, other]);
+    await sidebarView("grouped");
     expect(await $(`[data-task-group-id="${groupId}"]`).isExisting()).toBe(false);
+    await sidebarView("projects");
     await startDraftFromProject(DEFAULT_WORKSPACE);
     await waitForV4ComposerText("OMP_PROFILE_B_UNSENT", "Profile B draft did not recover");
     await expectModel(OMP_MODEL_ID);

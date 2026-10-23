@@ -135,7 +135,7 @@ interface ManagedZCodeAgentProcess {
   readyReported: boolean;
   runtimeIdentity: ZCodeAgentRuntimeIdentity;
   runtimeInstanceId: string;
-  launchFacts: { profilePinned: boolean; configRoot: string | null };
+  launchFacts: { cwd: string; profilePinned: boolean; configRoot: string | null };
   spawned: boolean;
   startedAt: number;
   terminationIntent?: AgentProcessTerminationIntent;
@@ -1249,7 +1249,11 @@ export class ZCodeAgentProcessManager {
       readyReported: false,
       runtimeIdentity,
       runtimeInstanceId,
-      launchFacts: { profilePinned, configRoot: commandEnv.OMP_CONFIG_ROOT?.trim() || null },
+      launchFacts: {
+        cwd: spawnPreflight.cwd,
+        profilePinned,
+        configRoot: commandEnv.OMP_CONFIG_ROOT?.trim() || null,
+      },
       spawned: false,
       startedAt,
       workspace: {

@@ -17,6 +17,145 @@ import type { OmpProfileState } from "@zcode/shared";
 
 afterEach(cleanup);
 
+it.each(["all", "team-only"] as const)(
+  "keeps %s editing disabled until the native baseline, then previews and saves with its revision",
+  async (mode) => {
+    const model = { provider: "fixture", modelId: "chat" };
+    const team: OmpTeamConfig = {
+      profile: null,
+      revision: "initial-native-revision",
+      userMembers: [{ index: 0, rawSelector: "fixture/chat", model, status: "available" }],
+      persistentMembers: null,
+      effectiveMembers: [model],
+      source: "global",
+      sessionModel: null,
+      participants: [],
+      issues: [],
+      writableScopes: ["user"],
+      storage: {
+        mode: "single",
+        syncState: "not_applicable",
+        active: { readState: "present" },
+        persistent: { readState: "not_applicable" },
+      },
+    };
+    const baseline = Promise.withResolvers<OmpTeamConfig>();
+    const configureOmpTeam = vi.fn<OmpConfigurationPanelService["configureOmpTeam"]>(
+      async ({ request }) => {
+        if (request.operation === "get_team_config") {
+          if (request.preview)
+            return {
+              operation: request.operation,
+              data: {
+                ...team,
+                preview: {
+                  clientRevision: request.preview.clientRevision,
+                  userMembers: [],
+                  effectiveMembers: [],
+                  source: "global",
+                  participants: [],
+                  issues: [],
+                },
+              },
+            };
+          return { operation: request.operation, data: await baseline.promise };
+        }
+        if (request.operation === "get_team_models")
+          return {
+            operation: request.operation,
+            data: { models: [{ model, name: "Chat", selectable: true }] },
+          };
+        if (request.operation === "set_team_config")
+          return {
+            operation: request.operation,
+            data: {
+              saveState: "complete",
+              writes: { active: { status: "saved" }, persistent: { status: "not_applicable" } },
+              config: { ...team, revision: "saved-native-revision", userMembers: [] },
+              effectiveMatchesRequested: true,
+            },
+          };
+        throw new Error(`Unexpected operation: ${request.operation}`);
+      },
+    );
+    const configureOmpSession = vi.fn<OmpConfigurationPanelService["configureOmpSession"]>(
+      async () => ({ operation: "get_model_roles", data: { roles: [] } }),
+    );
+    const service: OmpConfigurationPanelService = {
+      configureOmpSession,
+      configureOmpTeam,
+      setModel: vi.fn<OmpConfigurationPanelService["setModel"]>(),
+      onDynamicWorkspaceConfigFrame: () => () => ({ dispose() {} }),
+      onAgentRuntimeRestarted: () => ({ dispose() {} }),
+    };
+    const view = render(
+      createElement(ZCodeIntlProvider, {
+        initialLocale: "en-US",
+        children: createElement(OmpConfigurationPanel, {
+          workspacePath: "/initial",
+          sessionId: "native-session",
+          service,
+          mode,
+          onClose: vi.fn(),
+        }),
+      }),
+    );
+    const restore = view.getByTestId("omp-team-default") as HTMLButtonElement;
+    expect(Boolean(view.queryByTestId("omp-role-panel"))).toBe(mode === "all");
+    expect(Boolean(view.queryByTestId("omp-temporary-model"))).toBe(mode === "all");
+    expect(view.queryByTestId("omp-team-task")).toBeNull();
+    expect(view.queryByTestId("omp-team-start")).toBeNull();
+    expect(view.queryByTestId("omp-team-run")).toBeNull();
+    expect(restore.matches(":disabled")).toBe(true);
+    expect(view.getByTestId("omp-team-save").matches(":disabled")).toBe(true);
+    expect(view.getByTestId("omp-config-refresh").matches(":disabled")).toBe(false);
+    expect(view.getByTestId("omp-config-cancel").matches(":disabled")).toBe(false);
+    act(() => {
+      restore.click();
+      (view.getByTestId("omp-team-save") as HTMLButtonElement).click();
+    });
+    expect(
+      configureOmpTeam.mock.calls.some(
+        ([{ request }]) => request.operation === "get_team_config" && request.preview,
+      ),
+    ).toBe(false);
+    expect(
+      configureOmpTeam.mock.calls.some(([{ request }]) => request.operation.startsWith("set_")),
+    ).toBe(false);
+    await act(async () => {
+      baseline.resolve(team);
+      await baseline.promise;
+    });
+    await waitFor(() => expect(restore.matches(":disabled")).toBe(false));
+    expect(view.getByTestId("omp-team-member-0").querySelector("select")!.value).toBe(
+      JSON.stringify(model),
+    );
+    expect(view.getByTestId("omp-team-save").matches(":disabled")).toBe(true);
+    fireEvent.click(restore);
+    await waitFor(() => expect(view.getByTestId("omp-team-save").matches(":disabled")).toBe(false));
+    expect(
+      configureOmpTeam.mock.calls.some(
+        ([{ request }]) =>
+          request.operation === "get_team_config" && request.preview?.members?.length === 0,
+      ),
+    ).toBe(true);
+    fireEvent.click(view.getByTestId("omp-team-save"));
+    await waitFor(() =>
+      expect(view.getByTestId("omp-team-receipt").getAttribute("data-save-state")).toBe("complete"),
+    );
+    expect(configureOmpTeam).toHaveBeenCalledWith({
+      workspacePath: "/initial",
+      workspaceIdentity: undefined,
+      request: {
+        operation: "set_team_config",
+        scope: "user",
+        expectedRevision: "initial-native-revision",
+        members: [],
+      },
+    });
+  },
+);
+
 it("retains the mounted target's notice and dirty draft when composer callbacks change", async () => {
   const model = { provider: "fixture", modelId: "chat" };
   const team: OmpTeamConfig = {
@@ -45,8 +184,8 @@ it("retains the mounted target's notice and dirty draft when composer callbacks 
       persistent: { readState: "not_applicable" },
     },
   };
-  const configureOmpSession = vi.fn<OmpConfigurationPanelService["configureOmpSession"]>(
-    async (p) => {
+  const configureOmpTeam = vi.fn<OmpConfigurationPanelService["configureOmpTeam"]>(
+    async ({ request: p }) => {
       if (p.operation === "get_team_config")
         return {
           operation: p.operation,
@@ -71,13 +210,16 @@ it("retains the mounted target's notice and dirty draft when composer callbacks 
           operation: p.operation,
           data: { models: [{ model, name: "Chat", selectable: true }] },
         };
-      if (p.operation === "get_model_roles") return { operation: p.operation, data: { roles: [] } };
       throw new Error("unexpected save");
     },
+  );
+  const configureOmpSession = vi.fn<OmpConfigurationPanelService["configureOmpSession"]>(
+    async () => ({ operation: "get_model_roles", data: { roles: [] } }),
   );
   const setModel = vi.fn<OmpConfigurationPanelService["setModel"]>();
   const service: OmpConfigurationPanelService = {
     configureOmpSession,
+    configureOmpTeam,
     setModel,
     onDynamicWorkspaceConfigFrame: () => () => ({ dispose() {} }),
     onAgentRuntimeRestarted: () => ({ dispose() {} }),
@@ -179,13 +321,6 @@ it("keeps dirty standard role controls available after adding a custom-only look
   };
   const configureOmpSession = vi.fn<OmpConfigurationPanelService["configureOmpSession"]>(
     async (params) => {
-      if (params.operation === "get_team_config")
-        return { operation: params.operation, data: team };
-      if (params.operation === "get_team_models")
-        return {
-          operation: params.operation,
-          data: { models: [{ model, name: "Chat", selectable: true }] },
-        };
       if (params.operation === "get_model_roles")
         return { operation: params.operation, data: { roles: params.roleId ? [custom] : roles } };
       if (params.operation === "set_model_role")
@@ -198,6 +333,18 @@ it("keeps dirty standard role controls available after adding a custom-only look
   );
   const service: OmpConfigurationPanelService = {
     configureOmpSession,
+    configureOmpTeam: vi.fn<OmpConfigurationPanelService["configureOmpTeam"]>(
+      async ({ request }) => {
+        if (request.operation === "get_team_config")
+          return { operation: request.operation, data: team };
+        if (request.operation === "get_team_models")
+          return {
+            operation: request.operation,
+            data: { models: [{ model, name: "Chat", selectable: true }] },
+          };
+        throw new Error("unexpected global save");
+      },
+    ),
     setModel: vi.fn<OmpConfigurationPanelService["setModel"]>(),
     onDynamicWorkspaceConfigFrame: () => () => ({ dispose() {} }),
     onAgentRuntimeRestarted: () => ({ dispose() {} }),
@@ -266,14 +413,19 @@ it("merges a custom-only role lookup without hiding the standard directory or re
     async (params) => {
       if (params.operation === "get_model_roles")
         return { operation: params.operation, data: { roles } };
-      if (params.operation === "get_team_models")
+      throw new Error("unexpected save");
+    },
+  );
+  const configureOmpTeam = vi.fn<OmpConfigurationPanelService["configureOmpTeam"]>(
+    async ({ request }) => {
+      if (request.operation === "get_team_models")
         return {
-          operation: params.operation,
+          operation: request.operation,
           data: { models: [{ model, name: "Chat", selectable: true }] },
         };
-      if (params.operation === "get_team_config")
+      if (request.operation === "get_team_config")
         return {
-          operation: params.operation,
+          operation: request.operation,
           data: {
             profile: null,
             revision: "team-r1",
@@ -293,11 +445,15 @@ it("merges a custom-only role lookup without hiding the standard directory or re
             },
           },
         };
-      throw new Error("unexpected save");
+      throw new Error("unexpected global save");
     },
   );
   const controller = new OmpConfigurationController(
-    { configureOmpSession, setModel: vi.fn<OmpConfigurationPanelService["setModel"]>() },
+    {
+      configureOmpTeam,
+      configureOmpSession,
+      setModel: vi.fn<OmpConfigurationPanelService["setModel"]>(),
+    },
     { workspacePath: "/a", sessionId: "a" },
   );
   await controller.refresh();
@@ -342,49 +498,69 @@ it("merges a custom-only role lookup without hiding the standard directory or re
   });
 });
 
-it("retains original Team and role controls when native configuration is unsupported", async () => {
-  const configureOmpSession = vi.fn<OmpConfigurationPanelService["configureOmpSession"]>(
-    async () => {
-      throw Object.assign(new Error("Native session/configure is unsupported"), { code: -32601 });
-    },
-  );
-  const onClose = vi.fn();
-  const service: OmpConfigurationPanelService = {
-    configureOmpSession,
-    setModel: vi.fn<OmpConfigurationPanelService["setModel"]>(),
-    onDynamicWorkspaceConfigFrame: () => () => ({ dispose() {} }),
-    onAgentRuntimeRestarted: () => ({ dispose() {} }),
-  };
-  const view = render(
-    createElement(ZCodeIntlProvider, {
-      initialLocale: "en-US",
-      children: createElement(OmpConfigurationPanel, {
-        workspacePath: "/unsupported",
-        sessionId: "native-session",
-        service,
-        onClose,
+it.each(["all", "team-only"] as const)(
+  "retains visible disabled %s controls and the native unsupported reason",
+  async (mode) => {
+    const configureOmpSession = vi.fn<OmpConfigurationPanelService["configureOmpSession"]>(
+      async () => {
+        throw Object.assign(new Error("Native session/configure is unsupported"), { code: -32601 });
+      },
+    );
+    const onClose = vi.fn();
+    const service: OmpConfigurationPanelService = {
+      configureOmpSession,
+      configureOmpTeam: vi.fn<OmpConfigurationPanelService["configureOmpTeam"]>(async () => {
+        throw Object.assign(new Error("Native omp/team/configure is unsupported"), {
+          code: -32601,
+        });
       }),
-    }),
-  );
-  await waitFor(() => expect(view.getByTestId("omp-config-unsupported").textContent).not.toBe(""));
-  expect(view.getByTestId("omp-configuration-panel")).toBeTruthy();
-  expect(view.getByTestId("omp-team-panel")).toBeTruthy();
-  expect(view.getByTestId("omp-role-panel")).toBeTruthy();
-  expect(view.getByTestId("omp-config-controls").getAttribute("disabled")).not.toBeNull();
-  expect(view.getByTestId("omp-team-model-search").matches(":disabled")).toBe(true);
-  expect(view.getByTestId("omp-team-default").matches(":disabled")).toBe(true);
-  expect(view.getByTestId("omp-team-save").matches(":disabled")).toBe(true);
-  expect(view.getByTestId("omp-temporary-model").matches(":disabled")).toBe(true);
-  expect(view.queryByTestId("omp-team-member-0")).toBeNull();
-  expect(view.getByTestId("omp-team-model-catalog").querySelector("button")).toBeNull();
-  expect(view.getByTestId("omp-config-refresh").matches(":disabled")).toBe(false);
-  expect(view.getByTestId("omp-config-cancel").matches(":disabled")).toBe(false);
-  expect(
-    configureOmpSession.mock.calls.every(([request]) => !request.operation.startsWith("set_")),
-  ).toBe(true);
-  fireEvent.click(view.getByTestId("omp-config-cancel"));
-  expect(onClose).toHaveBeenCalledOnce();
-});
+      setModel: vi.fn<OmpConfigurationPanelService["setModel"]>(),
+      onDynamicWorkspaceConfigFrame: () => () => ({ dispose() {} }),
+      onAgentRuntimeRestarted: () => ({ dispose() {} }),
+    };
+    const view = render(
+      createElement(ZCodeIntlProvider, {
+        initialLocale: "en-US",
+        children: createElement(OmpConfigurationPanel, {
+          workspacePath: "/unsupported",
+          sessionId: "native-session",
+          service,
+          mode,
+          onClose,
+        }),
+      }),
+    );
+    await waitFor(() =>
+      expect(view.getByTestId("omp-config-unsupported").textContent).not.toBe(""),
+    );
+    expect(view.getByTestId("omp-configuration-panel")).toBeTruthy();
+    expect(view.getByTestId("omp-team-panel")).toBeTruthy();
+    expect(Boolean(view.queryByTestId("omp-role-panel"))).toBe(mode === "all");
+    expect(view.getByTestId("omp-config-controls").getAttribute("disabled")).not.toBeNull();
+    expect(view.getByTestId("omp-team-model-search").matches(":disabled")).toBe(true);
+    expect(view.getByTestId("omp-team-default").matches(":disabled")).toBe(true);
+    expect(view.getByTestId("omp-team-save").matches(":disabled")).toBe(true);
+    expect(
+      mode === "all"
+        ? view.getByTestId("omp-temporary-model").matches(":disabled")
+        : view.queryByTestId("omp-temporary-model") === null,
+    ).toBe(true);
+    expect(view.queryByTestId("omp-team-member-0")).toBeNull();
+    expect(view.getByTestId("omp-team-model-catalog").querySelector("button")).toBeNull();
+    expect(view.getByTestId("omp-config-refresh").matches(":disabled")).toBe(false);
+    expect(view.getByTestId("omp-config-cancel").matches(":disabled")).toBe(false);
+    expect(
+      configureOmpSession.mock.calls.every(([request]) => !request.operation.startsWith("set_")),
+    ).toBe(true);
+    fireEvent.click(view.getByTestId("omp-config-cancel"));
+    if (mode === "all") expect(onClose).toHaveBeenCalledOnce();
+    else {
+      await waitFor(() => expect(view.getByTestId("omp-config-unsupported")).toBeTruthy());
+      expect(view.queryByRole("dialog")).toBeNull();
+      expect(view.getByTestId("omp-team-save").matches(":disabled")).toBe(true);
+    }
+  },
+);
 
 it("selects workspace profiles without a session, keeps active separate from next-start, and ignores late old-workspace saves", async () => {
   const initial: OmpProfileState = {
@@ -435,7 +611,11 @@ it("selects workspace profiles without a session, keeps active separate from nex
     expectedRuntimeIdentity: "runtime-a",
     apply: "next-start",
   });
-  expect(view.getByTestId("omp-profile-state").textContent).toContain("Selected: Default profile");
+  expect((view.getByTestId("omp-profile-select") as HTMLSelectElement).value).toBe("profile-b");
+  expect(view.getByTestId("omp-profile-state").getAttribute("data-selected-profile")).toBe(
+    "default",
+  );
+  expect(view.getByTestId("omp-profile-state").getAttribute("data-active-profile")).toBe("default");
   view.rerender(panel("/b"));
   await waitFor(() =>
     expect(view.getByTestId("omp-profile-state").getAttribute("data-runtime-identity")).toBe(
@@ -449,7 +629,13 @@ it("selects workspace profiles without a session, keeps active separate from nex
   expect(view.getByTestId("omp-profile-state").getAttribute("data-runtime-identity")).toBe(
     "runtime-b",
   );
-  expect(view.getByTestId("omp-profile-state").textContent).toContain("Active: profile-b");
+  expect(view.getByTestId("omp-profile-state").getAttribute("data-active-profile")).toBe(
+    "profile-b",
+  );
+  expect(view.getByTestId("omp-profile-state").getAttribute("data-selected-profile")).toBe(
+    "profile-b",
+  );
+  expect((view.getByTestId("omp-profile-select") as HTMLSelectElement).value).toBe("profile-b");
 });
 
 it("keeps unsupported profile controls visible and offers no hot-switch action while native work runs", async () => {
@@ -532,7 +718,7 @@ it("does not acknowledge a failed new-profile save or replay it on reload", asyn
   expect(service.selectOmpProfile).toHaveBeenCalledTimes(1);
 });
 
-it("disables persistent roles while a saved profile awaits restart and rechecks pending selection before a stale save", async () => {
+it("blocks global Team and persistent role writes while a saved profile awaits restart and rechecks before a stale save", async () => {
   const model = { provider: "fixture", modelId: "chat" };
   const role: OmpRoleDescriptor = {
     roleId: "smol",
@@ -577,21 +763,26 @@ it("disables persistent roles while a saved profile awaits restart and rechecks 
   const getOmpProfiles = vi.fn<OmpProfileService["getOmpProfiles"]>().mockResolvedValue(pending);
   const configureOmpSession = vi.fn<OmpConfigurationPanelService["configureOmpSession"]>(
     async (params) => {
-      if (params.operation === "get_team_config")
-        return { operation: params.operation, data: team };
       if (params.operation === "get_model_roles")
         return { operation: params.operation, data: { roles: [role] } };
-      if (params.operation === "get_team_models")
-        return {
-          operation: params.operation,
-          data: { models: [{ model, name: "chat", selectable: true }] },
-        };
       throw new Error("Must not save to the old native profile");
     },
   );
   const service: OmpConfigurationPanelService = {
     getOmpProfiles,
     configureOmpSession,
+    configureOmpTeam: vi.fn<OmpConfigurationPanelService["configureOmpTeam"]>(
+      async ({ request }) => {
+        if (request.operation === "get_team_config")
+          return { operation: request.operation, data: team };
+        if (request.operation === "get_team_models")
+          return {
+            operation: request.operation,
+            data: { models: [{ model, name: "chat", selectable: true }] },
+          };
+        throw new Error("Must not save to the old native profile");
+      },
+    ),
     setModel: vi.fn(),
     onDynamicWorkspaceConfigFrame: () => () => ({ dispose() {} }),
     onAgentRuntimeRestarted: () => ({ dispose() {} }),
@@ -613,6 +804,8 @@ it("disables persistent roles while a saved profile awaits restart and rechecks 
   expect(view.getByTestId("omp-role-profile-pending").textContent).toContain(
     "takes effect after restart",
   );
+  fireEvent.click(view.getByTestId("omp-team-default"));
+  expect(view.getByTestId("omp-team-save").matches(":disabled")).toBe(true);
   getOmpProfiles.mockResolvedValue({ ...pending, selectedProfile: null });
   fireEvent.click(view.getByTestId("omp-config-refresh"));
   await waitFor(() =>
@@ -627,6 +820,12 @@ it("disables persistent roles while a saved profile awaits restart and rechecks 
     ),
   );
   expect(view.getByTestId("omp-role-save-smol").matches(":disabled")).toBe(true);
+  expect(view.getByTestId("omp-team-save").matches(":disabled")).toBe(true);
+  expect(
+    vi
+      .mocked(service.configureOmpTeam)
+      .mock.calls.some(([{ request }]) => request.operation === "set_team_config"),
+  ).toBe(false);
   expect(
     configureOmpSession.mock.calls.some(([params]) => params.operation === "set_model_role"),
   ).toBe(false);

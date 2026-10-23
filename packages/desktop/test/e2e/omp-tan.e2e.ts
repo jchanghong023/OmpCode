@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { TID_V4_SESSION_PANE, TID_V4_ROW, TID_V4_STOP, testId } from "@zcode/shared/test-ids";
 import {
@@ -14,6 +14,7 @@ import {
   type ModelRequest,
 } from "./helpers/omp-integration-fixture.js";
 import { DEFAULT_WORKSPACE } from "./helpers/desktop-app.js";
+import { startDraftFromProject } from "./helpers/project-sidebar.js";
 
 const main = () => $(`[data-testid="${testId(TID_V4_SESSION_PANE, V4_MAIN_PANE_ID)}"]`);
 async function requests(): Promise<ModelRequest[]> {
@@ -93,9 +94,37 @@ async function close(child: string) {
 }
 
 describe("OMP Tan / real native desktop delegation", () => {
+  afterEach(async function () {
+    if (this.currentTest?.state !== "failed") return;
+    const artifactDir = process.env.ZCODE_E2E_ARTIFACT_DIR;
+    if (!artifactDir)
+      throw new Error("Tan failure diagnostics require the isolated artifact directory");
+    let providerRequests: ModelRequest[] | { error: string };
+    try {
+      providerRequests = await requests();
+    } catch (error) {
+      providerRequests = { error: error instanceof Error ? error.message : String(error) };
+    }
+    const pane = await browser.execute(
+      (paneTestId) => {
+        const element = document.querySelector<HTMLElement>(`[data-testid="${paneTestId}"]`);
+        return {
+          sessionId: element?.getAttribute("data-session-id") ?? null,
+          text: element?.innerText ?? "",
+        };
+      },
+      testId(TID_V4_SESSION_PANE, V4_MAIN_PANE_ID),
+    );
+    await writeFile(
+      resolve(artifactDir, "omp-tan-failure.json"),
+      JSON.stringify({ providerRequests, pane }, null, 2),
+    );
+    await browser.saveScreenshot(resolve(artifactDir, "omp-tan-failure.png"));
+  });
   it("OMP-TAN01 minimal: busy parent, real UI dispatch/tool, close view and owner result with parked history", async function () {
     this.timeout(180000);
     await prepareV4ConversationE2E({ skipProvider: true });
+    await startDraftFromProject(DEFAULT_WORKSPACE);
     await switchV4Model(OMP_PROVIDER_ID, OMP_MODEL_ID, "disabled");
     await switchV4Mode("yolo");
     await sendV4Prompt("OMP_E2E_TAN_CHECKPOINT");

@@ -1,13 +1,39 @@
 # Conversation Session E2E Coverage Matrix
 
+## OMP-native Wiki／Repo 与 mention 最新真实 GUI 证据（2026-10-23）
+
+以下只记录本机 Windows Electron → Host → 当前 OMP 源码 app-server 的实测结果，不代表安装版、真实模型、手机、远端或其他平台验收。run 目录均位于 `packages/desktop/.e2e-artifacts/`。
+
+| 场景／入口 | 最新结果与证据路径 | 实际覆盖范围 |
+| --- | --- | --- |
+| `omp-indexes.e2e.ts`：Wiki／Repo 独立专页 | bg229，PASS、exit 0，runner 170.04s；[run test-results.ndjson](../../packages/desktop/.e2e-artifacts/desktop-e2e-20261022224641003-p64788-9616faedaa677057/test-results.ndjson)，1 个复合 case 通过；[omp-indexes-evidence.json](../../packages/desktop/.e2e-artifacts/desktop-e2e-20261022224641003-p64788-9616faedaa677057/omp-indexes-evidence.json) | Wiki 新增、完整正文、grep 边界空白、纯空白查询的原生错误、字面 `[ ]` 查询及删除；Repo 建立、文本查询、真实 Python 符号及 `omp-index-symbol-beacon.py:1–2` 路径、更新、重建和删除。`wikiBodyMatched=true`、`repoTextAndSymbolMatched=true`、`sourcePreserved=true`、`modelRequests=0` |
+| `conversation-session-v4-mention.test.ts`：S01／S05／S08 | bg230，PASS、exit 0，runner 246.40s；[run test-results.ndjson](../../packages/desktop/.e2e-artifacts/desktop-e2e-20261022224640810-p85936-69d818d634ab7f89/test-results.ndjson)，1 个复合 case 通过 | `@`／`#` 共用 sessions-index、写入同一 canonical session mention；`$`／`¥`／`￥` 同一 Skill 候选及 canonical mention，`+` 菜单；旧 session catalog 冻结、新任务重新发现真实 SKILL.md；选中真实 SharedSkill 后提交，assistant 正文出现 `V4_MENTION_SKILL_EXECUTED`，不以用户行中的标记冒充执行成功。模型响应仅来自隔离 localhost Provider |
+
+Wiki／Repo 同一 run 已由 Parent 读取明亮主题及 900px 窄屏截图：`omp-wiki-full-body-zai-light.png`、`omp-wiki-full-body-zai-light-narrow.png`、`omp-repo-rebuilt-zai-light.png`、`omp-repo-rebuilt-zai-light-narrow.png`；其余截图及原始结果保留在上述 run。窄屏 Electron 不等于真实手机。
+
+当前全局 Team 聊天完整 GUI 已通过，证据见下节；profile 四阶段真实 Electron 生命周期已通过，准确范围与外部 OMP／Windows 打包边界见 [当前 profile 与运行时证据](../conversation-session-case-catalog.md#omp-profile-与外部运行时验证2026-10-23)。旧独立 Team 运行页证据未转记为新聊天 Team 通过。下文 permission、M01／M02、model restore 及 Tan 子代理／工作流既有有效通过记录保持其原有范围。
+
+## OMP-native Team 当前聊天验收（已通过）
+
+场景定义见 [case catalog](../conversation-session-case-catalog.md#omp-native-team-聊天命令验收已通过)。Parent bg323 的真实 Electron `omp-team.e2e.ts` 整 spec 1／1 PASS，exit 0，墙钟 146.93s，无重试；[run test-results.ndjson](../../packages/desktop/.e2e-artifacts/desktop-e2e-20261023002309604-p63584-57f2834ff080b229/test-results.ndjson)。同一 run 保留 summary、配置 saved／relations／cancelled／reopened 截图、native completed journal、Provider requests 与聊天历史。此前两轮已验证的全局模型配置 inline 无需 session、优先已配置可用模型、选择／复制／排序／保存及跨两个 session 读取，在本轮完整复合场景中通过；早期关闭 helper、工具 details 夹具与 navigation 输入覆盖问题不再是当前阻塞。不沿用旧独立 Team 运行页结果；本次范围仅 Windows 源码 Electron 与隔离 localhost 模型，不代表真实模型、手机、其他平台、安装版、OMP 发布或全产品验收。
+
+| Case | 当前状态 | 必须保留的证据 |
+| --- | --- | --- |
+| OMP-T01 | 通过（本轮完整复合 spec） | 本轮 `omp-team-without-session.json`、`omp-team-config-saved.png`、原生全局 config.yml；inline 无 session 读写、无创建 session／模型请求、优先已配置可用模型、选择／复制／排序／保存，以及两个聊天共享同一有序重复配置 |
+| OMP-T02 | 通过（本轮完整复合 spec） | `omp-team-native-stage.png`、`omp-team-relations-and-details.png`、`omp-team-provider-requests.json` 与 native completed journal；节点角色／模型／边、原生 yield schema、真实阶段／调用 ID／reviews 与 revises，详情呈现结构化可读正文和工具参数 |
+| OMP-T03 | 通过（本轮完整复合 spec） | 同 session 完成卡片与最终方案、普通 localhost 模型续聊、`omp-team-cancelled.png`；关闭右侧详情不停止 |
+| OMP-T04 | 通过（本轮完整复合 spec） | `omp-team-reopened-history.png`、`omp-team-chat-history.txt`；renderer 刷新及冷启动均恢复原 job，Provider 请求账本不增加、无重复运行 |
+
+Presentation helper 仅改主题、语言与 viewport；不通过 store/service 调用制造 Team 运行。fixture 保持 localhost 与原上游隔离边界。CAS／作用域等既有 focused tests 的证据边界不变，不声称此单个 GUI 场景覆盖全部协议攻击或手机恢复语义。
+
 ## OMP-native Skill／Provider 管理验收（2026-10-23）
 
-`packages/desktop/test/e2e/omp-management.e2e.ts` 为 dedicated OMP spec，复用隔离 HOME/profile 与 localhost provider；当前均 **待验证**，未声明 GUI 已通过。
+`packages/desktop/test/e2e/omp-management.e2e.ts` 为 dedicated OMP spec，复用隔离 HOME/profile 与 localhost provider；M01、M02 已经真实 Electron GUI 验证通过。
 
 | Case | GUI 与真实边界 | 状态／证据名 |
 | --- | --- | --- |
-| OMP-M01 | Settings Skill 页面发现临时 workspace `.agents/skills/omp-management-e2e/SKILL.md`；显示 profile 用户层作用范围；禁用→原生 config.yml `disabledExtensions`→刷新仍禁用→启用；旧 `.zcode` Skill 配置不变 | 待父级运行；`omp-management-skill-disabled.png`、`omp-management-skill-refreshed.png`、`omp-management-skill-enabled.png` |
-| OMP-M02 | Settings 模型行连接按钮→Host→原生 `provider/testModelConnectivity`→localhost SSE 成功与 HTTP 401 认证失败；UI 分别显示成功／错误，服务端记录真实 probe | 待父级运行；`omp-management-provider-success.png`、`omp-management-provider-auth-error.png`、`omp-management-provider-requests.json` |
+| OMP-M01 | Settings Skill 页面发现临时 workspace `.agents/skills/omp-management-e2e/SKILL.md`；显示 profile 用户层作用范围；禁用→原生 config.yml `disabledExtensions`→刷新仍禁用→启用；旧 `.zcode` Skill 配置不变 | GUI 通过；`omp-management-skill-disabled.png`、`omp-management-skill-refreshed.png`、`omp-management-skill-enabled.png` |
+| OMP-M02 | Settings 模型行连接按钮→Host→原生 `provider/testModelConnectivity`→localhost SSE 成功与 HTTP 401 认证失败；UI 分别显示成功／错误，服务端记录真实 probe | GUI 通过；`omp-management-provider-success.png`、`omp-management-provider-auth-error.png`、`omp-management-provider-requests.json` |
 
 ```powershell
 $env:ZCODE_AGENT_SERVER_COMMAND = (Get-Command bun -ErrorAction Stop).Source
@@ -16,7 +42,7 @@ Remove-Item Env:ZCODE_AGENT_SERVER_CWD -ErrorAction SilentlyContinue
 pnpm --filter @zcode/desktop test:e2e --spec test/e2e/omp-management.e2e.ts
 ```
 
-证据位于 runner 的 `ZCODE_E2E_ARTIFACT_DIR`。只使用真实 GUI 控件，不通过 renderer 服务调用替代；Skill 文件是合法测试输入，Provider 响应只在 localhost，不访问真实模型、不 seed 运行状态，不改变 permission 分支。原生 profile 是开关持久化唯一 owner，workspace 仅承担 Skill 发现；本节不宣称 workspace 层写入或手机链路通过。父级实跑后登记实际 run ID、失败或通过与未到达断言。
+证据目录为 `packages/desktop/.e2e-artifacts/desktop-e2e-20261022212443190-p86540-72a92679b81115ae/`；`test-results.ndjson` 前两项通过，后续 Team spec 失败使该批次非零，不将本节两项通过冒充整轮通过。只使用真实 GUI 控件，不通过 renderer 服务调用替代；Skill 文件是合法测试输入，Provider 响应只在 localhost，不访问真实模型、不 seed 运行状态。原生 profile 是开关持久化唯一 owner，workspace 仅承担 Skill 发现；本节不宣称 workspace 层写入或手机链路通过。
 
 ## OMP-native 工具权限闭环验收（2026-10-23）
 
@@ -24,14 +50,14 @@ pnpm --filter @zcode/desktop test:e2e --spec test/e2e/omp-management.e2e.ts
 
 | Case | 真实边界／验收证据 | 当前状态 |
 | --- | --- | --- |
-| OMP-P01 | GUI→Host→当前 OMP 源码→广告中的原生 write；批准前零文件，Allow once 只执行当前写入，第二次写入重新询问；拒绝第二次后首文件内容／mtime 不变且零第二文件 | 新增，待父级执行；未验证 |
-| OMP-P02 | 真实 permission dock 的拒绝按钮→原生 tool result→终态；零文件 | 新增，待父级执行；未验证 |
-| OMP-P03 | GUI Esc Stop→取消等待；保留的旧 DOM 批准按钮迟到点击不写入，另一会话可完成 | 新增，待父级执行；未验证 |
-| OMP-P04 | A 等待时 B 正常完成；切回 A 请求身份不变；刷新后保留同请求或出现明确取消终态，不静默执行 | 新增，待父级执行；未验证 |
+| OMP-P01 | GUI→Host→当前 OMP 源码→广告中的原生 write；批准前零文件，Allow once 只执行当前写入，第二次写入重新询问；拒绝第二次后首文件内容／mtime 不变且零第二文件 | GUI 通过 |
+| OMP-P02 | 真实 permission dock 的拒绝按钮→原生 tool result→终态；零文件 | GUI 通过 |
+| OMP-P03 | GUI Esc Stop→取消等待；保留的旧 DOM 批准按钮迟到点击不写入，另一会话可完成 | GUI 通过 |
+| OMP-P04 | A 等待时 B 正常完成；切回 A 请求身份不变；刷新后保留同请求或出现明确取消终态，不静默执行 | GUI 通过 |
 
 专用 localhost provider 与 OMP profile／数据根复用 `omp-integration-fixture.ts`，仅该 spec 显式设置原生 `tools.approval.write/_write: prompt`（原生配置的 ask 值为 `prompt`），GUI 选择 guarded。根据实际广告名调用 `_write`／`write`；不生成旧 `Write` 别名、不 seed 会话／permission、不通过服务替 GUI 应答。GUI 迟到点击不等于伪造协议应答；未知 optionId、伪造内容、连接关闭及迟到协议应答由 OMP 协议 E2E 单独取证。
 
-从仓库根目录启动（父级执行；本节未运行）：
+从仓库根目录启动：
 
 ```powershell
 $env:ZCODE_AGENT_SERVER_COMMAND = (Get-Command bun -ErrorAction Stop).Source
@@ -40,8 +66,7 @@ Remove-Item Env:ZCODE_AGENT_SERVER_CWD -ErrorAction SilentlyContinue
 pnpm --filter @zcode/desktop test:e2e --spec test/e2e/omp-permissions.e2e.ts
 ```
 
-在 `packages/desktop` 目录可直接使用 `pnpm test:e2e --spec test/e2e/omp-permissions.e2e.ts`。不得指向旧 CLI、真实模型或共享桌面。证据写入 runner 的 `ZCODE_E2E_ARTIFACT_DIR`：`omp-permission-*-pending.png`、每项末态截图与 `*-provider-requests.json`；运行 ID、真实通过／失败与未到达断言由父级执行后登记，不预填 PASS。
-
+在 `packages/desktop` 目录可直接使用 `pnpm test:e2e --spec test/e2e/omp-permissions.e2e.ts`。证据目录为 `.e2e-artifacts/desktop-e2e-20261022211634200-p52808-69a045b85eac9c70/`：`test-results.ndjson` 前四项通过，保留 `omp-permission-*-pending.png`、末态截图及 `*-provider-requests.json`。该批次随后在 management spec 失败，整体保持非零；不把权限四项通过扩称整轮通过。只验证隔离本地模型与 desktop-continuous，不代表真实模型或手机实机验收。
 
 ## OMP-native 子代理与工作流核心验收
 

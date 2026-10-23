@@ -366,12 +366,10 @@ describe("useDraftConfigControl slash command hydration", () => {
       return null;
     }
     act(() =>
-      useZCodeSessionStore
-        .getState()
-        .startDraft(workspacePath, undefined, undefined, {
-          projectId: "p",
-          draftStorageScope: actualStorageScope,
-        }),
+      useZCodeSessionStore.getState().startDraft(workspacePath, undefined, undefined, {
+        projectId: "p",
+        draftStorageScope: actualStorageScope,
+      }),
     );
     await act(async () => root.render(createElement(Probe)));
     act(() => {
@@ -380,12 +378,10 @@ describe("useDraftConfigControl slash command hydration", () => {
     });
     const stale = control!.updateComposerContent;
     act(() =>
-      useZCodeSessionStore
-        .getState()
-        .startDraft(workspacePath, undefined, undefined, {
-          projectId: "q",
-          draftStorageScope: actualStorageScope,
-        }),
+      useZCodeSessionStore.getState().startDraft(workspacePath, undefined, undefined, {
+        projectId: "q",
+        draftStorageScope: actualStorageScope,
+      }),
     );
     expect(control!.composerDraft.text).toBe("");
     act(() => {
@@ -394,12 +390,10 @@ describe("useDraftConfigControl slash command hydration", () => {
     });
     expect(control!.composerDraft.text).toBe("Q");
     act(() =>
-      useZCodeSessionStore
-        .getState()
-        .startDraft(workspacePath, undefined, undefined, {
-          projectId: "p",
-          draftStorageScope: actualStorageScope,
-        }),
+      useZCodeSessionStore.getState().startDraft(workspacePath, undefined, undefined, {
+        projectId: "p",
+        draftStorageScope: actualStorageScope,
+      }),
     );
     expect(control!.composerDraft.text).toBe("P");
     expect(control!.draftConfig.mode).toBe("yolo");

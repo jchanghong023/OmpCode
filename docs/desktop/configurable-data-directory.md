@@ -39,6 +39,9 @@ FORK-004 取代原有 ZCode 目录选择、复制及启动指针机制。OmpCode
 ```
 
 根在设置、日志和 Electron 存储 IO 之前确定。早期 bootstrap 不再读取磁盘上的旧设置，不存在设置覆盖环境的第二条写入路径。显式测试隔离的 Electron userData/sessionData 参数保留给 Chromedriver；不改变业务数据根。
+全局子代理定义及状态分别使用 `<applicationRoot>/agents`、`<applicationRoot>/v2/agents-state.json`，插件配置仅在应用根的 `cli/config.json` 读取。旧 HOME 下的 `.zcode/cli/config.json.storage.dir` 不再参与应用根选择或触发跨根迁移。项目 `workspacePath/.zcode/agents` 仍为合法项目资源，监听与读写语义不变。Agent 日志回退路径使用应用根的 `cli/log`，保留显式 `ZCODE_LOG_DIR` 优先级。
+
+
 
 ## 只读接口
 

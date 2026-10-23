@@ -176,7 +176,6 @@ import {
   listAvailableDockerContainers,
   listAvailableWSLDistros,
   loadHostProcessEnvFromLocalFiles,
-  prepareOmpHostEnv,
   resolveBundledGlmBinaryPath,
   resolveRemoteAssetDirs,
   resolveZCodeEndpointEnvBaseOrigin,
@@ -594,9 +593,7 @@ mainMemoryDiagnosticsRegistry.register("app", () => ({
   willDownloadListeners: session.defaultSession.listenerCount("will-download"),
 }));
 const hostProcessLocalEnv = loadHostProcessEnvFromLocalFiles();
-const bundledOmpPreparation = app
-  .whenReady()
-  .then(() => prepareOmpHostEnv({ ...hostProcessLocalEnv, ...process.env }));
+
 interface RuntimeProcessEnvPreparation {
   patchPromise: Promise<Record<string, string>>;
   fallbackPatch: Record<string, string>;
@@ -1887,10 +1884,7 @@ function createWindowInstance(startupBootstrap: StartupWindowBootstrap = {}) {
       }),
     windowHostProcessMap,
     onHostProcessReady: (windowKey) => cuaPipFocusRouter.refreshWindow(windowKey),
-    awaitFirstHostSpawnDecision: async () => {
-      await bundledOmpPreparation;
-      await awaitFirstHostSpawnDecision();
-    },
+    awaitFirstHostSpawnDecision,
     spawnHostProcess: (win, label, initMessage) =>
       spawnHostProcess(
         win,
@@ -2058,21 +2052,6 @@ app.on("second-instance", (_event, argv, _workingDirectory, additionalData) => {
 });
 
 app.whenReady().then(async () => {
-  try {
-    await bundledOmpPreparation;
-  } catch (error) {
-    // 产物校验失败时尚无主窗口，必须显示原始错误并退出，不能持锁空转或启动业务服务。
-    try {
-      logger.error("[startup] OMP 准备失败:", error);
-      dialog.showErrorBox(
-        "ZCode 启动失败",
-        error instanceof Error ? (error.stack ?? error.message) : String(error),
-      );
-    } finally {
-      app.exit(1);
-    }
-    return;
-  }
   markMainLaunchAppReady();
   installRequestSecurityDiagnostics(session.defaultSession.webRequest, logger);
   installLocalMediaPreviewProtocol(session.defaultSession.protocol, {

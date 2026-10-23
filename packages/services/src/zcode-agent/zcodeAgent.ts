@@ -10,7 +10,11 @@ import type {
 } from "@zcode/shared/omp-indexes";
 import type { NativeSkillsManageParams } from "../skills/skills.js";
 import type { SkillsListResult } from "@zcode/shared";
-import type { ZCodeSessionConfigureParams, ZCodeSessionConfigureResult } from "@zcode/shared";
+import type {
+  OmpTeamConfigureRequest,
+  ZCodeSessionConfigureParams,
+  ZCodeSessionConfigureResult,
+} from "@zcode/shared";
 import type { PluginUiToolResultNotification } from "@zcode/shared/mcp-apps";
 import type {
   BackgroundBashOutputResult,
@@ -860,6 +864,9 @@ export interface IZCodeAgentService {
   observeOmpTeam(
     params: ZCodeAgentWorkspaceTarget & OmpTeamRequest,
   ): Promise<{ runs?: OmpTeamRun[]; run?: OmpTeamRun; accepted?: boolean }>;
+  configureOmpTeam(
+    params: ZCodeAgentWorkspaceTarget & { request: OmpTeamConfigureRequest },
+  ): Promise<ZCodeSessionConfigureResult>;
   configureOmpSession(
     params: ZCodeAgentSessionTarget & ZCodeSessionConfigureParams,
   ): Promise<ZCodeSessionConfigureResult>;

@@ -1,5 +1,8 @@
 // @vitest-environment jsdom
 import { act, renderHook } from "@testing-library/react";
+import { flushSync } from "react-dom";
+import { createTabStore } from "@/store/tabStore.js";
+import { consumeV4ComposerDraftAttachments } from "@/v4/composer/composerDraftWorkspaceTransfer.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   readV4ComposerDraft,
@@ -98,7 +101,7 @@ function fixture(
     ({ opener }) => useRootWorkspaceActions({ ...options, openRemoteProjectWorkspace: opener }),
     { initialProps: { opener: openRemoteProjectWorkspace } },
   );
-  return { result, rerender, prepareSession, readTree, addTab, state };
+  return { result, rerender, prepareSession, readTree, addTab, state, options };
 }
 beforeEach(() => {
   localStorage.clear();
@@ -510,3 +513,122 @@ it("D3 discards project lookup after the user selects another session", async ()
   expect(prepareSession).not.toHaveBeenCalled();
   expect(addTab).not.toHaveBeenCalled();
 });
+
+function navigationFixture() {
+  const { options, prepareSession } = fixture();
+  const tabs = createTabStore(null);
+  tabs.getState().addTab("/old", {
+    workspaceIdentity: "remote:server:source:/old",
+    remoteSessionId: "source-attachment",
+  });
+  prepareSession.mockResolvedValue({
+    workspacePath: "/new-project",
+    projectId: "p",
+    additionalDirectories: [],
+  });
+  const finalScope = Promise.withResolvers<string | null>();
+  let targetLookups = 0;
+  const resolver = vi.fn(async (path: string) => {
+    if (path === "/new-project" && ++targetLookups === 2)
+      return finalScope.promise;
+    return storageScope;
+  });
+  const hook = renderHook(
+    ({ runtimeScope, settled }: { runtimeScope: string | null; settled: boolean }) => {
+      const activePath = tabs((state) => state.activeWorkspacePath);
+      const activeIdentity = tabs((state) => state.activeWorkspaceIdentity);
+      return useRootWorkspaceActions({
+        ...options,
+        tabStoreApi: tabs,
+        addTab: (path, tabOptions) => {
+          let id!: string;
+          flushSync(() => { id = tabs.getState().addTab(path, tabOptions); });
+          return id;
+        },
+        activeWorkspacePath: activePath,
+        activeWorkspaceIdentity: activeIdentity,
+        storageScope: activePath === "/old" || settled ? runtimeScope : null,
+        resolveStorageScope: resolver,
+      });
+    },
+    { initialProps: { runtimeScope: storageScope as string | null, settled: false } },
+  );
+  return { ...hook, tabs, prepareSession, finish: finalScope.resolve };
+}
+
+it("binds project, group, exact input and attachments before its own A→null→B shell navigation", async () => {
+  const { result, rerender, tabs, finish, prepareSession } = navigationFixture();
+  const onComplete = vi.fn();
+  const attachments = [{
+    id: "draft-file",
+    filename: "notes.txt",
+    mimeType: "text/plain",
+    sizeBytes: 5,
+    file: new File(["notes"], "notes.txt", { type: "text/plain" }),
+  }];
+  let pending!: Promise<void>;
+  await act(async () => {
+    pending = result.current.handleCreateTask({
+      projectId: "p",
+      taskGroupId: "g",
+      initialPrompt: "$creator  \n",
+      initialComposerDraft: {
+        sourceWorkspaceKey: "remote:server:source:/old",
+        draft: { text: "$creator  \n" },
+        attachments,
+      },
+      onComplete,
+    });
+  });
+  expect(tabs.getState().activeWorkspacePath).toBe("/old");
+  await act(async () => {
+    finish(storageScope);
+    await pending;
+  });
+  expect(tabs.getState().activeWorkspacePath).toBe("/new-project");
+  rerender({ runtimeScope: storageScope, settled: true });
+  const draft = useZCodeSessionStore.getState().getWorkspaceState("/new-project");
+  expect(draft).toMatchObject({
+    draftProjectId: "p",
+    draftTaskGroupId: "g",
+    draftStorageScope: storageScope,
+    composerTextInsertRequest: { text: "$creator  \n" },
+  });
+  expect(readV4ComposerDraft("/new-project", undefined, "__draft__",
+    resolveComposerScope("p", undefined, undefined, storageScope))).toMatchObject({
+    text: "$creator  \n", projectId: "p", taskGroupId: "g",
+  });
+  expect(consumeV4ComposerDraftAttachments("/new-project", draft.draftFocusVersion, storageScope))
+    .toEqual(attachments);
+  expect(onComplete).toHaveBeenCalledOnce();
+  expect(prepareSession).toHaveBeenCalledWith(expect.objectContaining({
+    sourceWorkspace: {
+      workspacePath: "/old",
+      workspaceIdentity: "remote:server:source:/old",
+      remoteSessionId: "source-attachment",
+    },
+  }));
+});
+
+it.each(["navigation", "profile", "disconnect"] as const)(
+  "discards a late target scope after independent %s",
+  async (change) => {
+    const { result, rerender, tabs, finish } = navigationFixture();
+    const onComplete = vi.fn();
+    let pending!: Promise<void>;
+    await act(async () => {
+      pending = result.current.handleCreateTask({ projectId: "p", taskGroupId: "g", onComplete });
+    });
+    if (change === "navigation") {
+      rerender({ runtimeScope: storageScope, settled: true });
+      act(() => { tabs.getState().addTab("/chosen-c"); });
+    } else rerender({ runtimeScope: change === "profile" ? "scope-b" : null, settled: false });
+    await act(async () => {
+      finish(storageScope);
+      await pending;
+    });
+    expect(tabs.getState().activeWorkspacePath).toBe(change === "navigation" ? "/chosen-c" : "/old");
+    expect(useZCodeSessionStore.getState().workspaces["/new-project"]).toBeUndefined();
+    expect(onComplete).not.toHaveBeenCalled();
+  },
+);

@@ -36,6 +36,9 @@ const fullForkIsolatedTests = [
   // 组件归档与解包会密集启动真实 tar 子进程；并发桌面联调时曾打穿原有 30 秒。
   // 复用已有串行进程组，不修改用例、归档行为或时间预算。
   "packages/zcode-server-cli/test/packaging.test.ts",
+  // 远端安装器夹具也密集启动真实 POSIX shell；与归档套件使用同一串行进程隔离。
+  // 保留完整失败恢复场景、断言及 30 秒时限，不把启动排队当作安装失败。
+  "packages/server/test/remoteAssetInstaller.test.ts",
   // Sharp 闭包装配后要启动真实 Node 加载原生库；并行热启动曾触发其 15s 子进程限时。
   "packages/desktop/test/dev-cua-plugin-runtime.test.ts",
   // 全量并发时真实心跳与嵌套构建会被调度延迟打穿；单独运行均通过，沿用串行组保留原时限。
@@ -114,7 +117,6 @@ const fullUnitTests = [
   "packages/services/src/gen-ui/**/*.test.ts",
   "scripts/assert-safe-cua-helper-zip.test.mjs",
   "scripts/ci/ci-telemetry-keyword-guard.test.mjs",
-  "scripts/omp-artifact.test.mjs",
 ];
 
 // OMP 对接期仅屏蔽无关 UT，保留全部文件、断言、时限和原全量定义。
@@ -128,6 +130,9 @@ const focusedUnitTests: string[] | null = [
   "packages/desktop/test/fileApplications.test.ts",
   "packages/desktop/test/powershell-command.test.ts",
   "packages/desktop/test/windowsInstallerCompile.test.ts",
+  "packages/desktop/test/desktopRuntimeEnv.test.ts",
+  "packages/desktop/test/desktopHostProcess.test.ts",
+  "packages/desktop/test/storagePreparationWorker.test.ts",
   "packages/desktop/test/hostDatabaseStartup.test.ts",
   "packages/desktop/test/desktopDataBaseDirBootstrap.test.ts",
   "packages/desktop/test/desktopChromiumHardwareAccelerationBootstrap.test.ts",
@@ -151,6 +156,7 @@ const focusedUnitTests: string[] | null = [
   "packages/services/src/project/contract.test.ts",
   "packages/services/src/project-storage/repository/contract.test.ts",
   "packages/services/src/project/preparation-race/contract.test.ts",
+  "packages/services/test/projectNativeDomain.test.ts",
   "packages/provider-node/test/bundled-config-replacement.test.ts",
   "packages/zcode-server-cli/test/remoteAssetRelease.test.ts",
   "packages/zcode-server-cli/test/serviceManager.test.ts",
@@ -162,18 +168,20 @@ const focusedUnitTests: string[] | null = [
   "packages/ui/test/elicitationDialogRequestIdentity.test.ts",
   "packages/ui/test/v4ComposerToolbarRecovery.test.ts",
   "packages/ui/test/v4PendingInteractionAdapter.test.ts",
-  "scripts/omp-artifact.test.mjs",
   "packages/desktop/test/e2eFailFastReporter.test.ts",
   "packages/desktop/test/conversationSessionNetwork.test.ts",
   "packages/ui/src/omp-configuration/contract.test.ts",
   "packages/ui/test/ompConfigurationPanel.test.ts",
   "packages/services/test/skillsService.test.ts",
+  "packages/services/test/storageRootsResolver.test.ts",
   "packages/services/test/taskIndexRepoOffPeakMarker.test.ts",
   "packages/ui/test/skillStore.test.ts",
   "packages/ui/test/skillsSection.test.ts",
   "packages/ui/test/skillsSectionNative.test.ts",
   "packages/ui/test/ompIndexes.test.ts",
   "packages/ui/test/ompTeam.test.ts",
+  "packages/ui/test/ompTeamSettingsPage.test.ts",
+  "packages/ui/test/workspaceSidePane.test.ts",
   "packages/shared/src/omp-index-protocol/contract.test.ts",
   "packages/ui/test/useRootPlatformEffects.test.ts",
   "packages/ui/test/usePaneSessionPersistence.test.ts",
@@ -207,6 +215,9 @@ const focusedUnitTests: string[] | null = [
   "packages/ui/test/slashCommands.test.ts",
   "packages/ui/test/v4ConversationComposerPromptHistory.test.ts",
   "packages/ui/test/useOmpStorageScope.test.ts",
+  "packages/services/test/subagentsService.test.ts",
+  "packages/services/test/subagentRuntimeConfigWatcher.test.ts",
+  "packages/services/test/subagentRuntimeConfig.test.ts",
 ];
 const forkIsolatedTests = focusedUnitTests
   ? fullForkIsolatedTests.filter((test) => focusedUnitTests.includes(test))

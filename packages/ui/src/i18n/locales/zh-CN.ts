@@ -562,9 +562,9 @@ const zhCN: Record<string, string> = {
   "startup.global.error.startup_status_timeout":
     "未能收到启动状态。请退出并重新打开 OmpCode；如果仍失败，请提供诊断信息。",
   "startup.global.error.transport_closed":
-    "数据准备进程意外退出或连接中断。请退出并重新打开 OmpCode，应用会重新检查迁移记录。",
+    "数据准备进程意外退出或连接中断。请检查诊断日志，并确认显式配置的 OMP 或当前终端 PATH 中的 omp 可以正常运行。",
   "startup.global.error.unsupported_runtime":
-    "当前配置的 Agent 不支持独立存储准备。请恢复配套的 Agent 后重新打开 OmpCode。",
+    "当前 OMP 不支持所需的存储准备协议。请自行安装或更新兼容的 OMP，并检查 ZCODE_AGENT_SERVER_COMMAND 或当前终端 PATH 后重新打开 OmpCode。",
 
   "startup.database.checking": "正在检查历史数据",
   "startup.database.waiting_for_lock": "数据库正被其他进程使用，正在等待",

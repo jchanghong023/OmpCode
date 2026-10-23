@@ -15,6 +15,7 @@ import type { OpenAutomationsMain } from "@/lib/taskNavigationHistory.js";
 import type { MessageFileLinkTarget } from "@/components/ai-elements/message.js";
 import type {
   OpenScopedPlanDetailSideTabRequest,
+  OpenScopedOmpTeamRunSideTabRequest,
   OpenScopedWorkflowActorSessionSideTabRequest,
   OpenScopedWorkflowArtifactSideTabRequest,
   OpenScopedWorkflowRunSideTabRequest,
@@ -71,6 +72,7 @@ export interface V4ChatPaneProps {
   onOpenSubagentDirectory?: (request: OpenScopedSubagentDirectorySideTabRequest) => void;
   onSyncSubagentSessionTabs?: (request: SyncSubagentSessionTabsRequest) => void;
   onOpenPlanDetail?: (request: OpenScopedPlanDetailSideTabRequest) => void;
+  onOpenOmpTeamRun?: (request: OpenScopedOmpTeamRunSideTabRequest) => void;
   onOpenWorkflowRun?: (request: OpenScopedWorkflowRunSideTabRequest) => void;
   onOpenWorkflowArtifact?: (request: OpenScopedWorkflowArtifactSideTabRequest) => void;
   onOpenWorkflowRunDirectory?: (request: OpenScopedWorkflowRunDirectorySideTabRequest) => void;
@@ -120,6 +122,7 @@ export function V4ChatPane({
   onOpenSubagentDirectory,
   onSyncSubagentSessionTabs,
   onOpenPlanDetail,
+  onOpenOmpTeamRun,
   onOpenWorkflowRun,
   onOpenWorkflowArtifact,
   onOpenWorkflowRunDirectory,
@@ -185,6 +188,7 @@ export function V4ChatPane({
         onOpenSubagentDirectory={onOpenSubagentDirectory}
         onSyncSubagentSessionTabs={onSyncSubagentSessionTabs}
         onOpenPlanDetail={onOpenPlanDetail}
+        onOpenOmpTeamRun={onOpenOmpTeamRun}
         onOpenWorkflowRun={onOpenWorkflowRun}
         onOpenWorkflowArtifact={onOpenWorkflowArtifact}
         onOpenWorkflowRunDirectory={onOpenWorkflowRunDirectory}

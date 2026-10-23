@@ -16,7 +16,10 @@ import {
   IProjectService,
   shouldRescanTaskAutoArchive,
 } from "#src/project/index.js";
-import type { ProjectRepositoryContract } from "#src/project-storage/index.js";
+import {
+  resolveProjectWorkspaceSource,
+  type ProjectRepositoryContract,
+} from "#src/project-storage/index.js";
 export { createLegacySingleRootProjectService } from "#src/project/index.js";
 export { createRemoteProjectService } from "#src/remote-projects/index.js";
 import { getZCodeDataRootDir as projectDataRoot } from "#src/paths.js";
@@ -2188,14 +2191,14 @@ export function createLocalServices(options: {
           : { hosts: [], entries: [] };
       const projection = projectWorkspaceSettings(
         repositories.flatMap((repository) =>
-          repository
-            .readTree({ includeTasks: false })
-            .projects.filter((project) =>
-              (project.roots.length
-                ? project.roots.map((root) => ({ workspacePath: root.rootPath }))
-                : [defaultOrganizationTarget(settings)]
-              ).some((target) => taskIndexRepo.isActiveProjectOwner(target, repository)),
-            ),
+          repository.readTree({ includeTasks: false }).projects.filter(
+            (project) =>
+              // 空项目的 owner 就是当前活跃仓库，不能借默认 workspace 把 A 域空项目隐藏。
+              !project.roots.length ||
+              project.roots.some((root) =>
+                taskIndexRepo.isActiveProjectOwner({ workspacePath: root.rootPath }, repository),
+              ),
+          ),
         ),
         directory,
         settings,
@@ -2249,6 +2252,8 @@ export function createLocalServices(options: {
         target ?? defaultOrganizationTarget(await settingService.get()),
       ),
     repositories: activeProjectRepositories,
+    projectWorkspaceSource: (repository, preferred) =>
+      resolveProjectWorkspaceSource(taskIndexRepo, repository, preferred),
     prepareWorkspaceScope: async (source, destination) => {
       const sourceTarget = source ?? defaultOrganizationTarget(await settingService.get());
       const authority =
@@ -2284,13 +2289,15 @@ export function createLocalServices(options: {
         }
         return owner;
       };
-      const settings = await settingService.get();
+      // 仓库集合已经限定为实际活动域；空项目没有 root，归属只能来自其 SQLite owner。
       const projects = await Promise.all(
         tree.projects.map(async (project) => {
           const targets = project.roots.length
             ? project.roots.map((root) => ({ workspacePath: root.rootPath }))
-            : [defaultOrganizationTarget(settings)];
-          return (await Promise.all(targets.map(ownerFor))).includes(repository) ? project : null;
+            : [];
+          return !targets.length || (await Promise.all(targets.map(ownerFor))).includes(repository)
+            ? project
+            : null;
         }),
       );
       const tasks = await Promise.all(

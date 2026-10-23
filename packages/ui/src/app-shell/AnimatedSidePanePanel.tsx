@@ -68,6 +68,7 @@ import {
   useOpenPluginUi,
 } from "@/plugin-ui/index.js";
 import { WorkflowRunSidePane } from "@/app-shell/WorkflowRunSidePane.js";
+import { OmpTeamRunSidePane } from "@/omp-configuration/module.js";
 import { WorkflowRunDirectorySidePane } from "@/app-shell/WorkflowRunDirectorySidePane.js";
 import { WorkflowActorSessionSidePane } from "@/app-shell/WorkflowActorSessionSidePane.js";
 import { WorkflowWorkspaceSidePane } from "@/app-shell/WorkflowWorkspaceSidePane.js";
@@ -1268,6 +1269,8 @@ export function AnimatedSidePanePanel({
                             onOpenCodeViewer={onOpenCodeViewer}
                             onOpenFileLink={onOpenFileLink}
                           />
+                        ) : tab.type === "omp-team-run" ? (
+                          <OmpTeamRunSidePane tab={tab} />
                         ) : tab.type === "workflow-run" ? (
                           <WorkflowRunSidePane
                             tab={tab}

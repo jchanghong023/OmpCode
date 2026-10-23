@@ -19,15 +19,8 @@ jobs:
     outputs:
       release_tag: ${{ steps.metadata.outputs.release_tag }}
       app_version: ${{ steps.metadata.outputs.app_version }}
-      omp_repository: ${{ steps.metadata.outputs.omp_repository }}
-      omp_run: ${{ steps.metadata.outputs.omp_run }}
-      omp_commit: ${{ steps.metadata.outputs.omp_commit }}
       native_image: ${{ steps.metadata.outputs.native_image }}
     env:
-      OMP_ARTIFACT_REPOSITORY: ${{ vars.OMP_ARTIFACT_REPOSITORY }}
-      OMP_ARTIFACT_RUN_ID: ${{ vars.OMP_ARTIFACT_RUN_ID }}
-      OMP_ARTIFACT_COMMIT: ${{ vars.OMP_ARTIFACT_COMMIT }}
-      OMP_ARTIFACT_TOKEN: ${{ secrets.OMP_ARTIFACT_TOKEN }}
       CENTOS7_NATIVE_IMAGE: ${{ vars.CENTOS7_NATIVE_IMAGE }}
     steps:
       - name: Require release branch
@@ -45,7 +38,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          node scripts/publish/fetch-omp-artifact.mjs check
           if [[ -n "$CENTOS7_NATIVE_IMAGE" && ! "$CENTOS7_NATIVE_IMAGE" =~ ^[^[:space:]]+@sha256:[a-f0-9]{64}$ ]]; then
             echo 'CENTOS7_NATIVE_IMAGE override must be an immutable image@sha256:digest; otherwise leave unset to build the checked-in recipe.' >&2
             exit 1
@@ -58,9 +50,6 @@ jobs:
           {
             echo "app_version=$version"
             echo "release_tag=$tag"
-            echo "omp_repository=$OMP_ARTIFACT_REPOSITORY"
-            echo "omp_run=$OMP_ARTIFACT_RUN_ID"
-            echo "omp_commit=$OMP_ARTIFACT_COMMIT"
             echo "native_image=$CENTOS7_NATIVE_IMAGE"
           } >> "$GITHUB_OUTPUT"
 
@@ -74,10 +63,6 @@ jobs:
       ZCODE_TARGET_OS: linux
       ZCODE_TARGET_ARCH: x64
       CSC_IDENTITY_AUTO_DISCOVERY: "false"
-      OMP_ARTIFACT_REPOSITORY: ${{ needs.preflight.outputs.omp_repository }}
-      OMP_ARTIFACT_RUN_ID: ${{ needs.preflight.outputs.omp_run }}
-      OMP_ARTIFACT_COMMIT: ${{ needs.preflight.outputs.omp_commit }}
-      OMP_ARTIFACT_TOKEN: ${{ secrets.OMP_ARTIFACT_TOKEN }}
       GITHUB_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
@@ -96,9 +81,6 @@ jobs:
         run: node scripts/prepare-centos7-build.mjs create "$RUNNER_TEMP/centos7-workspace"
       - name: Install exact temporary dependency closure
         run: pnpm --dir "$RUNNER_TEMP/centos7-workspace" install --frozen-lockfile --ignore-scripts
-      - name: Download and verify pinned Linux OMP
-        working-directory: ${{ runner.temp }}/centos7-workspace
-        run: node scripts/publish/fetch-omp-artifact.mjs download linux-x64 "$RUNNER_TEMP/omp-release"
       - name: Compile and assemble Electron 28 desktop
         working-directory: ${{ runner.temp }}/centos7-workspace
         shell: bash

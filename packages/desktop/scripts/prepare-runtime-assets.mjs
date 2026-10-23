@@ -7,7 +7,6 @@ import { resolveNativeSearchReleasePlan } from "../../../scripts/native-search-t
 import { runCommand } from "../../../scripts/spawn-command.mjs";
 import { getTargetPlatform } from "./target-platform.mjs";
 import { isRealComputerUseProducerInstalled } from "./computer-use-producer.mjs";
-import { stageOmpArtifact } from "../../../scripts/omp-artifact.mjs";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const desktopRoot = resolve(scriptDir, "..");
@@ -28,13 +27,8 @@ const shouldPrepareWindowsCuaHelper =
 // 到屏幕底部，仍可用），所以无条件挂在 darwin 上不会让构建变脆。
 const shouldPrepareMacosWindowBounds = target.os === "darwin";
 
-await stageOmpArtifact({
-  sourceRoot: process.env.ZCODE_OMP_ARTIFACT_ROOT,
-  destination: resolve(desktopRoot, "bundled-agents", target.key, "omp"),
-  target: target.key,
-});
-// 本机桌面包不再内置 glm 原生二进制（prepare:glm），改为内置 agent 的 JS bundle（prepare:agent-bundle），
-// 运行时由 app 的 Electron Node runtime 执行。Source Server 资源由独立 stage:remote-assets 入口负责。
+// 保留原 Agent 的 JS bundle 资产，不作为外部 OMP 不可用时的备用运行时。
+// Source Server 资源由独立 stage:remote-assets 入口负责。
 const localRuntimeScripts = [
   "prepare:agent-bundle",
   ...(shouldPrepareWindowsCuaHelper ? ["prepare:windows-cua-helper"] : []),

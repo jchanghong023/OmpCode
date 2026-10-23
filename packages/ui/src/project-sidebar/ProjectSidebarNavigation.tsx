@@ -24,7 +24,7 @@ export function ProjectSidebarNavigation({
   >;
   onCreate(): void;
 }) {
-  const { intl } = useZCodeIntl();
+  const { intl, locale } = useZCodeIntl();
   const deviceNavigation = props.webRemoteControlWorkspaceSwitcher?.deviceNavigation;
   return (
     <div
@@ -53,7 +53,11 @@ export function ProjectSidebarNavigation({
             [
               { page: "wiki", label: "Wiki", Icon: BookOpen },
               { page: "repo", label: "Repo", Icon: Database },
-              { page: "team", label: "Team", Icon: Network },
+              {
+                page: "team",
+                label: locale.startsWith("zh") ? "Team 设置" : "Team settings",
+                Icon: Network,
+              },
             ] as const
           ).map(({ page, label, Icon }) => (
             <Button

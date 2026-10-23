@@ -2,6 +2,7 @@
 import { act, renderHook, waitFor, cleanup } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
+  CONTROLLER_WORKSPACES_TOPIC,
   CONTROLLER_TASKS_INDEX_TOPIC,
   type WindowHostControllerTaskRow,
 } from "@zcode/shared/zcode-protocol-v4";
@@ -13,6 +14,7 @@ import type {
 import { useProjectTree } from "@/project-sidebar/useProjectTree.js";
 import { useTaskGroups } from "@/project-sidebar/useTaskGroups.js";
 import { getTaskListRowActivity } from "@/v4/taskListRowActivity.js";
+import { activityTask } from "./test-fixture.js";
 const mocks = vi.hoisted(() => ({
   services: {} as Record<string, unknown>,
   tabs: [],
@@ -57,19 +59,7 @@ afterEach(cleanup);
 function activityFixture() {
   let receive!: (frame: WindowHostControllerFrame) => void;
   let seq = 0;
-  const task: ProjectTree["tasks"][number] = {
-    taskId: "task",
-    hostId: "local",
-    projectId: null,
-    workspacePath: "/repo",
-    title: "original",
-    traceId: "task",
-    createdAt: 1,
-    updatedAt: 2,
-    mode: "default",
-    pinned: false,
-    archived: false,
-  };
+  const task = activityTask();
   let tree: ProjectTree = { projects: [], tasks: [task] };
   const list = vi.fn(async () => ({ items: [], total: 1, hasMore: false }));
   const admit = vi.fn(async () => undefined);
@@ -141,10 +131,32 @@ function activityFixture() {
             : { kind: "deltas", deltas: [{ op: "task.upserted", task: next }] },
       });
     });
+  const reconnect = async () =>
+    act(async () => {
+      receive({
+        topic: CONTROLLER_WORKSPACES_TOPIC,
+        subscriptionId: CONTROLLER_WORKSPACES_TOPIC,
+        logEpoch: "new-source",
+        fromSeq: 0,
+        toSeq: 0,
+        sentAt: seq,
+        payload: {
+          kind: "snapshot",
+          snapshot: {
+            protocolVersion: 1,
+            logEpoch: "new-source",
+            workspaces: [
+              { workspacePath: "/repo", sourceAvailability: "online", connectionState: "online" },
+            ],
+          },
+        },
+      });
+    });
   return {
     task,
     row,
     send,
+    reconnect,
     list,
     admit,
     setTree(next: ProjectTree) {

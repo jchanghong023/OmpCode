@@ -4381,8 +4381,8 @@ export {
   type BotTopicMessage,
 } from "../bots.js";
 
-// Optional OMP configuration extension. Session identity is explicit; profile is
-// derived by the server from the trusted connection, never supplied by the UI.
+// Optional OMP configuration extension. Roles use explicit session identity; Team
+// uses the trusted workspace runtime's global profile, never a UI-supplied profile.
 export const ompModelRefSchema = z
   .object({
     provider: z.string().min(1),
@@ -4539,6 +4539,36 @@ const ompPreviewInputSchema = z
       .nullable(),
   })
   .strict();
+export const ompTeamConfigureRequestSchema = z.discriminatedUnion("operation", [
+  z
+    .object({
+      operation: z.literal("get_team_config"),
+      preview: ompPreviewInputSchema.optional(),
+    })
+    .strict(),
+  z
+    .object({
+      operation: z.literal("get_team_models"),
+      query: z.string().optional(),
+    })
+    .strict(),
+  z
+    .object({
+      operation: z.literal("set_team_config"),
+      scope: z.literal("user"),
+      expectedRevision: z.string().min(1),
+      members: z.array(ompTeamModelRefSchema).nullable(),
+    })
+    .strict(),
+]);
+export const ompTeamConfigureParamsSchema = z
+  .object({
+    workspace: zcodeWorkspaceRefSchema,
+    request: ompTeamConfigureRequestSchema,
+  })
+  .strict();
+export type OmpTeamConfigureRequest = z.infer<typeof ompTeamConfigureRequestSchema>;
+
 export const zcodeSessionConfigureParamsSchema = z.discriminatedUnion("operation", [
   z
     .object({

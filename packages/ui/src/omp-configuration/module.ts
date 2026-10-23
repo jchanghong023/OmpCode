@@ -16,3 +16,6 @@ export { OmpConfigurationEntry } from "./OmpConfigurationEntry.js";
 export { TeamPage, OmpWorkspaceProfiles, type TeamPageProps } from "./TeamPage.js";
 export { WikiPage } from "./WikiPage.js";
 export { RepoPage } from "./RepoPage.js";
+export { useTeamRuns } from "./useTeamRuns.js";
+export { TeamChatCard, TeamRunView } from "./TeamRunView.js";
+export { OmpTeamRunSidePane } from "./OmpTeamRunSidePane.js";

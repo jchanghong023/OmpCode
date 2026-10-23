@@ -1,10 +1,7 @@
 /* eslint-disable max-lines -- desktop runtime/env 解析需要集中维护 main/host/remote assets 的启动边界，拆分会扩大远程连接回归面。 */
-import { constants, existsSync, readFileSync } from "node:fs";
-import { access, readFile, stat } from "node:fs/promises";
-import { homedir } from "node:os";
-import { dirname, isAbsolute, join, posix, relative, resolve, sep, win32 } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, join, resolve, win32 } from "node:path";
 import { fileURLToPath } from "node:url";
-import { verifyOmpArtifact } from "../../../../scripts/omp-artifact.mjs";
 import type { ConnectOptions } from "@zcode/server/remote";
 import { listSSHConfigAliasesFromLocalConfig } from "@zcode/services/node";
 import { DEV_HELPER_APP_NAME, HELPER_APP_NAME } from "@zcode/zcode-cua/broker/helperConstants";
@@ -515,182 +512,6 @@ export function resolveDynamicWorkflowModeHostEnv(options: {
   return {};
 }
 
-export async function resolveBundledOmpHostEnv(
-  env: Record<string, string | undefined>,
-  packaged: boolean,
-  artifactRoot = join(process.resourcesPath ?? "", "omp"),
-  target = `${process.platform}-${process.arch}`,
-): Promise<Record<string, string>> {
-  if (env.ZCODE_AGENT_SERVER_COMMAND !== undefined && !env.ZCODE_AGENT_SERVER_COMMAND.trim()) {
-    throw new Error("ZCODE_AGENT_SERVER_COMMAND must not be empty");
-  }
-  if (env.ZCODE_AGENT_SERVER_COMMAND?.trim() || !packaged) return {};
-  const { command } = await verifyOmpArtifact(artifactRoot, target);
-  return {
-    ZCODE_AGENT_SERVER_COMMAND: command,
-    ZCODE_AGENT_SERVER_ARGS_JSON:
-      env.ZCODE_AGENT_SERVER_ARGS_JSON ??
-      JSON.stringify(["app-server", "--stdio", "--surface", "desktop"]),
-  };
-}
-
-async function isOmpExecutable(path: string, platform: NodeJS.Platform): Promise<boolean> {
-  try {
-    if (!(await stat(path)).isFile()) return false;
-    await access(path, platform === "win32" ? constants.F_OK : constants.X_OK);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-/** Discover only installed/current-PATH OMP; never execute a shell or require a bundled manifest. */
-export async function resolveOmpHostEnv(
-  env: Record<string, string | undefined>,
-  options: {
-    platform?: NodeJS.Platform;
-    homeDir?: string;
-    isExecutable?: (path: string) => Promise<boolean>;
-  } = {},
-): Promise<Record<string, string>> {
-  if (env.ZCODE_AGENT_SERVER_COMMAND !== undefined) {
-    if (!env.ZCODE_AGENT_SERVER_COMMAND.trim())
-      throw new Error("ZCODE_AGENT_SERVER_COMMAND must not be empty");
-    return {};
-  }
-  const platform = options.platform ?? process.platform;
-  const paths = platform === "win32" ? win32 : posix;
-  const executable = platform === "win32" ? "omp.exe" : "omp";
-  const candidates: string[] = [];
-  if (platform === "win32") {
-    if (env.PI_INSTALL_DIR?.trim()) {
-      candidates.push(win32.resolve(env.PI_INSTALL_DIR.trim(), executable));
-    }
-    candidates.push(
-      win32.resolve(
-        env.LOCALAPPDATA?.trim() || win32.join(options.homeDir ?? homedir(), "AppData", "Local"),
-        "omp",
-        executable,
-      ),
-    );
-  }
-  const inheritedPath =
-    platform === "win32"
-      ? Object.entries(env).find(([key]) => key.toUpperCase() === "PATH")?.[1]
-      : env.PATH;
-  const pathDirectories =
-    inheritedPath === undefined ? [] : inheritedPath.split(platform === "win32" ? ";" : ":");
-  for (const directory of pathDirectories) {
-    // 空 PATH 段表示当前目录；保留系统原有查找语义，不改写环境变量。
-    const pathDirectory = platform === "win32" ? directory.replace(/^"(.*)"$/, "$1") : directory;
-    candidates.push(paths.resolve(pathDirectory, executable));
-  }
-  const isExecutable = options.isExecutable ?? ((path: string) => isOmpExecutable(path, platform));
-  for (const candidate of candidates) {
-    if (await isExecutable(candidate)) {
-      return {
-        ZCODE_AGENT_SERVER_COMMAND: candidate,
-        ZCODE_AGENT_SERVER_ARGS_JSON:
-          env.ZCODE_AGENT_SERVER_ARGS_JSON ??
-          JSON.stringify(["app-server", "--stdio", "--surface", "desktop"]),
-      };
-    }
-  }
-  throw new Error(
-    `OMP executable not found in ${platform === "win32" ? "the installation directories or " : ""}PATH; install OMP or set ZCODE_AGENT_SERVER_COMMAND`,
-  );
-}
-
-function ompDiscoveryEnvKey(env: Record<string, string | undefined>): string {
-  return JSON.stringify([
-    process.platform,
-    process.cwd(),
-    process.platform === "win32"
-      ? Object.entries(env).find(([key]) => key.toUpperCase() === "PATH")?.[1]
-      : env.PATH,
-    process.platform === "win32" ? env.PI_INSTALL_DIR?.trim() : undefined,
-    process.platform === "win32" ? env.LOCALAPPDATA?.trim() : undefined,
-  ]);
-}
-
-function packagedOmpCommandPath(env: Record<string, string | undefined>): string | undefined {
-  const command = env.ZCODE_AGENT_SERVER_COMMAND?.trim();
-  if (!isElectronAppPackaged() || !command || !isAbsolute(command)) return undefined;
-  const root = join(process.resourcesPath ?? "", "omp");
-  const path = relative(root, command);
-  return path && path !== ".." && !path.startsWith(`..${sep}`) && !isAbsolute(path)
-    ? resolve(command)
-    : undefined;
-}
-
-let preparedOmpHostEnv:
-  | Readonly<{ command: string | undefined; envKey: string; verifiedBundledCommand?: string }>
-  | undefined;
-
-/** Main completes asynchronous executable discovery before creating Window Hosts. */
-export async function prepareOmpHostEnv(env: Record<string, string | undefined>): Promise<void> {
-  preparedOmpHostEnv = undefined;
-  const discoveryEnv = { ...env };
-  const envKey = ompDiscoveryEnvKey(discoveryEnv);
-  const resolvedEnv = await resolveOmpHostEnv(discoveryEnv);
-  let verifiedBundledCommand: string | undefined;
-  const bundledCandidate = packagedOmpCommandPath({ ...discoveryEnv, ...resolvedEnv });
-  if (bundledCandidate) {
-    const artifactRoot = join(process.resourcesPath ?? "", "omp");
-    const manifest = JSON.parse(await readFile(join(artifactRoot, "omp-artifact.json"), "utf8"));
-    if (
-      typeof manifest.executable === "string" &&
-      resolve(artifactRoot, manifest.executable) === bundledCandidate
-    ) {
-      // 启动器只选择入口；Main 必须异步校验封存字节，成功后才允许 Host 消费缓存。
-      const { command } = await verifyOmpArtifact(
-        artifactRoot,
-        `${process.platform}-${process.arch}`,
-      );
-      if (resolve(command) !== bundledCandidate)
-        throw new Error("Bundled OMP entry changed during verification");
-      verifiedBundledCommand = bundledCandidate;
-    } else {
-      throw new Error("Bundled OMP command does not match the artifact manifest entry");
-    }
-  }
-  // 缓存仅属于本次 Main 环境；新窗口改变 PATH/安装目录时必须先重新异步准备。
-  preparedOmpHostEnv = Object.freeze({
-    command: resolvedEnv.ZCODE_AGENT_SERVER_COMMAND,
-    envKey,
-    verifiedBundledCommand,
-  });
-}
-
-function readPreparedOmpHostEnv(
-  env: Record<string, string | undefined>,
-): Readonly<Record<string, string>> {
-  if (env.ZCODE_AGENT_SERVER_COMMAND !== undefined) {
-    if (!env.ZCODE_AGENT_SERVER_COMMAND.trim())
-      throw new Error("ZCODE_AGENT_SERVER_COMMAND must not be empty");
-    const bundledCommand = packagedOmpCommandPath(env);
-    if (bundledCommand && preparedOmpHostEnv?.verifiedBundledCommand !== bundledCommand) {
-      throw new Error("Bundled OMP artifact has not completed asynchronous preparation");
-    }
-    return {};
-  }
-  // 同步构建只读取 Main 已完成的异步查找，避免开发态回退旧 Agent、打包态强依赖 manifest。
-  if (!preparedOmpHostEnv?.command) {
-    throw new Error("OMP executable discovery has not completed asynchronous preparation");
-  }
-  if (preparedOmpHostEnv.envKey !== ompDiscoveryEnvKey(env)) {
-    throw new Error(
-      "OMP executable discovery environment changed; repeat asynchronous preparation",
-    );
-  }
-  return {
-    ZCODE_AGENT_SERVER_COMMAND: preparedOmpHostEnv.command,
-    ZCODE_AGENT_SERVER_ARGS_JSON:
-      env.ZCODE_AGENT_SERVER_ARGS_JSON ??
-      JSON.stringify(["app-server", "--stdio", "--surface", "desktop"]),
-  };
-}
-
 export function buildHostProcessEnv(
   hostProcessLocalEnv: Record<string, string>,
 ): Record<string, string> {
@@ -711,8 +532,20 @@ export function buildHostProcessEnv(
     ...readDefinedProcessEnv(),
   };
   const packagedDesktop = isElectronAppPackaged();
-  // 已发现的本机 OMP 只注入当前 Window Host；显式覆盖优先，不改写用户 PATH。
-  const ompHostEnv = readPreparedOmpHostEnv(rawInheritedEnv);
+  // 原因：安装目录扫描和异步缓存会偏离当前终端；仅保留显式覆盖，否则由 spawn 按继承 PATH 查找 omp。
+  const ompCommand = rawInheritedEnv.ZCODE_AGENT_SERVER_COMMAND;
+  if (ompCommand !== undefined && !ompCommand.trim()) {
+    throw new Error("ZCODE_AGENT_SERVER_COMMAND must not be empty");
+  }
+  const ompHostEnv: Record<string, string> =
+    ompCommand === undefined
+      ? {
+          ZCODE_AGENT_SERVER_COMMAND: "omp",
+          ZCODE_AGENT_SERVER_ARGS_JSON:
+            rawInheritedEnv.ZCODE_AGENT_SERVER_ARGS_JSON ??
+            JSON.stringify(["app-server", "--stdio", "--surface", "desktop"]),
+        }
+      : {};
   const bundledCuaHelperAppPath =
     process.platform !== "darwin"
       ? undefined

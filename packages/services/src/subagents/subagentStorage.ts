@@ -1,19 +1,9 @@
-import { readFile } from "node:fs/promises";
-import { homedir } from "node:os";
-import { isAbsolute, join, resolve } from "node:path";
-
-const HOME_PREFIX = "~/";
+import { join } from "node:path";
+import { resolveOmpCodeDataRoot } from "@zcode/shared/node";
+import { getZCodeDataRootDir } from "#src/paths.js";
 
 export interface SubagentStorageOptions {
   homeDir?: string;
-}
-
-export function resolveUserHomeDir(options?: SubagentStorageOptions): string {
-  if (options?.homeDir && options.homeDir.trim().length > 0) {
-    return options.homeDir;
-  }
-  const envHome = process.env.HOME?.trim() || process.env.USERPROFILE?.trim();
-  return envHome && envHome.length > 0 ? envHome : homedir();
 }
 
 export async function resolveUserSubagentRoot(options?: SubagentStorageOptions): Promise<string> {
@@ -29,37 +19,9 @@ export async function resolveSubagentStateFile(options?: SubagentStorageOptions)
 }
 
 export async function resolveZCodeStorageRoot(options?: SubagentStorageOptions): Promise<string> {
-  const config = await readUserCliConfig(options);
-  const storage = isObjectRecord(config.storage) ? config.storage : {};
-  const storageDir =
-    typeof storage.dir === "string" && storage.dir.trim().length > 0
-      ? storage.dir.trim()
-      : "~/.zcode";
-  return resolveConfigPath(storageDir, options);
-}
-
-export function resolveConfigPath(path: string, options?: SubagentStorageOptions): string {
-  const expanded = path.startsWith(HOME_PREFIX)
-    ? join(resolveUserHomeDir(options), path.slice(HOME_PREFIX.length))
-    : path;
-  return isAbsolute(expanded) ? expanded : resolve(expanded);
-}
-
-async function readUserCliConfig(
-  options?: SubagentStorageOptions,
-): Promise<Record<string, unknown>> {
-  try {
-    const raw = await readFile(
-      join(resolveUserHomeDir(options), ".zcode", "cli", "config.json"),
-      "utf8",
-    );
-    const parsed = JSON.parse(raw) as unknown;
-    return isObjectRecord(parsed) ? parsed : {};
-  } catch {
-    return {};
-  }
-}
-
-function isObjectRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+  // 原因：读取旧 HOME/.zcode/cli/config.json 会让子代理迁移写入上游，绕过应用根所有者。
+  // 生产复用已固定的应用根；显式 homeDir 只用于隔离 fixture，不读取旧 storage.dir。
+  return options?.homeDir?.trim()
+    ? resolveOmpCodeDataRoot({}, options.homeDir)
+    : getZCodeDataRootDir();
 }

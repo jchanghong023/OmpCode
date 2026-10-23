@@ -1,4 +1,6 @@
 import { useEffect, useState } from "react";
+import { Code2, Database, FileCode2, RefreshCw, Search as SearchIcon } from "lucide-react";
+import { SettingsSearchInput } from "@/settings/SettingsSearchInput.js";
 import type { RepoStatus, RepoQuery } from "@zcode/shared/omp-indexes";
 import { Button } from "@/components/ui/button.js";
 import { useOmpIndexes } from "./useOmpIndexes.js";
@@ -88,21 +90,28 @@ export function RepoPage(props: IndexPageProps) {
       progress={api.progress}
       onCancel={() => void api.cancel()}
     >
-      <section className="space-y-3" aria-label={m("status")}>
+      <section className="min-w-0 space-y-3" aria-label={m("status")}>
         <div className="flex flex-wrap items-center gap-2">
-          <h2 className="mr-auto text-ui-lg font-medium">{m("status")}</h2>
+          <h2 className="mr-auto flex items-center gap-2 text-ui-base font-medium">
+            <Database className="size-4 text-foreground-subtle" aria-hidden="true" />
+            {m("status")}
+          </h2>
           <Button
             variant="outline"
             disabled={disabled}
             onClick={() => void refresh()}
             data-testid="omp-repo-refresh"
           >
+            <RefreshCw aria-hidden="true" />
             {m("refresh")}
           </Button>
           {(["init", "update", "rebuild", "remove"] as const).map((action) => (
             <Button
               key={action}
               variant="outline"
+              className={
+                action === "remove" || action === "rebuild" ? "text-destructive" : undefined
+              }
               disabled={disabled || !status || (action !== "init" && !status.exists)}
               onClick={() => {
                 if (status) setConfirmation({ action, root: status.root });
@@ -115,32 +124,71 @@ export function RepoPage(props: IndexPageProps) {
         </div>
         {status ? (
           <div
-            className="space-y-2 rounded-md border border-border p-3"
+            className="min-w-0 space-y-3 rounded-lg bg-surface p-4"
             data-testid="omp-repo-status"
             data-generation={status.generation ?? ""}
             data-exists={status.exists}
           >
-            <p className="break-all" data-testid="omp-repo-root">
-              {m("root")}: {status.root}
-            </p>
-            <p>
-              {status.exists ? m("indexed") : m("missing")} · {status.fileCount} {m("files")} ·{" "}
-              {status.symbolCount} {m("symbols")}
-            </p>
-            <p className="break-all text-ui-caption">
-              {m("generation")}: {status.generation ?? "—"} · {m("lastCheck")}:{" "}
-              {status.lastFullCheck === null
-                ? "—"
-                : new Date(status.lastFullCheck).toLocaleString()}
-            </p>
-            <p>
-              {m("failures")}: {status.failureCount} · {m("pending")}: {status.pendingCount} ·{" "}
-              {m("uncertainties")}: {status.uncertainCount}
-            </p>
+            <div className="flex min-w-0 flex-wrap items-start justify-between gap-3">
+              <div className="min-w-0 flex-1 basis-48">
+                <p className="mb-1 text-ui-caption text-foreground-subtle">{m("root")}</p>
+                <p
+                  className="truncate font-mono text-ui-caption"
+                  title={status.root}
+                  data-testid="omp-repo-root"
+                >
+                  {status.root}
+                </p>
+              </div>
+              <span
+                className={`rounded-md px-2 py-1 text-ui-caption font-medium ${status.exists ? "bg-card text-foreground" : "bg-warning-surface text-warning-surface-foreground"}`}
+              >
+                {status.exists ? m("indexed") : m("missing")}
+              </span>
+            </div>
+            <div className="flex flex-wrap gap-x-5 gap-y-2 border-y border-border py-3 text-ui-caption text-foreground-subtle">
+              <span>
+                <strong className="mr-1 text-ui-lg font-semibold tabular-nums text-foreground">
+                  {status.fileCount}
+                </strong>
+                {m("files")}
+              </span>
+              <span>
+                <strong className="mr-1 text-ui-lg font-semibold tabular-nums text-foreground">
+                  {status.symbolCount}
+                </strong>
+                {m("symbols")}
+              </span>
+              <span>
+                {m("failures")}: {status.failureCount}
+              </span>
+              <span>
+                {m("pending")}: {status.pendingCount}
+              </span>
+              <span>
+                {m("uncertainties")}: {status.uncertainCount}
+              </span>
+            </div>
+            <div className="flex min-w-0 flex-wrap gap-x-5 gap-y-1 text-ui-caption text-foreground-subtle">
+              <p className="min-w-0 break-all">
+                {m("generation")}: <code>{status.generation ?? "—"}</code>
+              </p>
+              <p>
+                {m("lastCheck")}:{" "}
+                {status.lastFullCheck === null
+                  ? "—"
+                  : new Date(status.lastFullCheck).toLocaleString()}
+              </p>
+            </div>
             {status.incomplete || status.needsReconcile || status.unchecked ? (
-              <p role="status">{m("incomplete")}</p>
+              <p
+                role="status"
+                className="rounded-md bg-warning-surface px-3 py-2 text-ui-caption text-warning-surface-foreground"
+              >
+                {m("incomplete")}
+              </p>
             ) : null}
-            <ul className="text-ui-caption">
+            <ul className="space-y-1 text-ui-caption leading-relaxed text-foreground-subtle">
               {status.failures.map((failure, position) => (
                 <li key={position} className="break-all">
                   {failure.path} · {failure.kind}: {failure.message}
@@ -160,8 +208,10 @@ export function RepoPage(props: IndexPageProps) {
             ) : null}
             {status.exclusions.length ? (
               <details>
-                <summary>{m("exclusions")}</summary>
-                <ul>
+                <summary className="cursor-pointer text-ui-caption text-foreground-subtle">
+                  {m("exclusions")}
+                </summary>
+                <ul className="mt-2 space-y-1 text-ui-caption text-foreground-subtle">
                   {status.exclusions.map((item) => (
                     <li key={item} className="break-all">
                       {item}
@@ -171,21 +221,25 @@ export function RepoPage(props: IndexPageProps) {
               </details>
             ) : null}
           </div>
-        ) : null}
+        ) : (
+          <div className="rounded-lg bg-surface p-4 text-ui-caption text-foreground-subtle">
+            {m("status")} · —
+          </div>
+        )}
       </section>
-      <section className="space-y-3" aria-label={m("query")}>
-        <h2 className="text-ui-lg font-medium">{m("query")}</h2>
+      <section className="min-w-0 space-y-4 border-t border-border pt-5" aria-label={m("query")}>
+        <h2 className="text-ui-lg font-semibold">{m("query")}</h2>
         <form
-          className="flex flex-wrap items-end gap-2"
+          className="grid min-w-0 grid-cols-2 items-end gap-3 rounded-lg bg-surface p-3 sm:grid-cols-4"
           onSubmit={(event) => {
             event.preventDefault();
             void search(false);
           }}
         >
-          <label className="flex min-w-48 flex-1 flex-col gap-1">
+          <label className="col-span-2 flex min-w-0 flex-col gap-1.5 text-ui-caption text-foreground-subtle sm:col-span-3">
             {m("query")}
-            <input
-              className={indexInputClass}
+            <SettingsSearchInput
+              containerClassName="min-w-0"
               value={query}
               onChange={(event) => setQuery(event.target.value)}
               required
@@ -193,7 +247,7 @@ export function RepoPage(props: IndexPageProps) {
               data-testid="omp-repo-query"
             />
           </label>
-          <label className="flex flex-col gap-1">
+          <label className="flex min-w-0 flex-col gap-1.5 text-ui-caption text-foreground-subtle">
             {m("mode")}
             <select
               className={indexInputClass}
@@ -206,7 +260,7 @@ export function RepoPage(props: IndexPageProps) {
               <option value="symbol">{m("symbols")}</option>
             </select>
           </label>
-          <label className="flex flex-col gap-1">
+          <label className="flex min-w-0 flex-col gap-1.5 text-ui-caption text-foreground-subtle">
             {m("path")}
             <input
               className={indexInputClass}
@@ -216,7 +270,7 @@ export function RepoPage(props: IndexPageProps) {
               data-testid="omp-repo-path"
             />
           </label>
-          <label className="flex flex-col gap-1">
+          <label className="flex min-w-0 flex-col gap-1.5 text-ui-caption text-foreground-subtle">
             {m("category")}
             <select
               className={indexInputClass}
@@ -232,10 +286,10 @@ export function RepoPage(props: IndexPageProps) {
               ))}
             </select>
           </label>
-          <label className="flex flex-col gap-1">
+          <label className="flex min-w-0 flex-col gap-1.5 text-ui-caption text-foreground-subtle">
             {m("pageSize")}
             <input
-              className={`${indexInputClass} w-20`}
+              className={indexInputClass}
               type="number"
               min={1}
               max={50}
@@ -244,36 +298,57 @@ export function RepoPage(props: IndexPageProps) {
               disabled={disabled}
             />
           </label>
-          <Button type="submit" disabled={disabled || !query.trim()} data-testid="omp-repo-search">
+          <Button
+            type="submit"
+            className="col-start-2 row-start-2 h-9 sm:col-start-4 sm:row-start-1"
+            disabled={disabled || !query.trim()}
+            data-testid="omp-repo-search"
+          >
+            <SearchIcon aria-hidden="true" />
             {m("search")}
           </Button>
         </form>
         {result ? (
           <div className="space-y-3" data-testid="omp-repo-results">
-            <p role="status">
+            <p role="status" className="break-words text-ui-caption text-foreground-subtle">
               {result.status === "missing" ? m("missing") : `${result.hits.length} ${m("matches")}`}{" "}
               · {m("generation")}: {result.generation ?? "—"}
             </p>
             {result.warnings.map((warning, position) => (
-              <p key={position} role="status">
+              <p
+                key={position}
+                role="status"
+                className="rounded-lg bg-warning-surface px-3 py-2 text-ui-caption text-warning-surface-foreground"
+              >
                 {warning}
               </p>
             ))}
             {result.hits.map((hit, position) => (
               <article
                 key={`${hit.path}:${hit.startLine}:${position}`}
-                className="space-y-2 rounded-md border border-border p-3"
+                className="min-w-0 space-y-3 rounded-lg border border-border bg-card p-4"
               >
-                <p className="break-all text-ui-caption text-foreground-subtle">
-                  {hit.path}:{hit.startLine}–{hit.endLine} · {hit.category}
+                <p className="flex min-w-0 items-start gap-2 break-all font-mono text-ui-caption leading-relaxed text-foreground-subtle">
+                  <FileCode2 className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+                  <span>
+                    {hit.path}:{hit.startLine}–{hit.endLine} · {hit.category}
+                  </span>
                 </p>
                 {"snippet" in hit ? (
-                  <pre className="whitespace-pre-wrap break-words text-ui-base">{hit.snippet}</pre>
+                  <pre className="whitespace-pre-wrap break-words rounded-md bg-surface p-3 text-ui-base leading-relaxed [overflow-wrap:anywhere]">
+                    {hit.snippet}
+                  </pre>
                 ) : (
                   <>
-                    <h3 className="text-ui-lg font-medium">{hit.qualname || hit.name}</h3>
-                    <p>{hit.kind}</p>
-                    <pre className="whitespace-pre-wrap break-words text-ui-base">
+                    <h3 className="flex min-w-0 items-start gap-2 text-ui-base font-semibold [overflow-wrap:anywhere]">
+                      <Code2
+                        className="mt-0.5 size-4 shrink-0 text-foreground-subtle"
+                        aria-hidden="true"
+                      />
+                      {hit.qualname || hit.name}
+                    </h3>
+                    <p className="text-ui-caption text-foreground-subtle">{hit.kind}</p>
+                    <pre className="whitespace-pre-wrap break-words rounded-md bg-surface p-3 text-ui-base leading-relaxed [overflow-wrap:anywhere]">
                       {hit.signature}
                     </pre>
                   </>
@@ -292,7 +367,14 @@ export function RepoPage(props: IndexPageProps) {
             ) : null}
             {result.truncated ? <p>{m("truncated")}</p> : null}
           </div>
-        ) : null}
+        ) : (
+          <div className="flex min-h-40 flex-col items-center justify-center gap-3 rounded-lg border border-dashed border-border px-4 py-8 text-center text-ui-caption text-foreground-subtle">
+            <SearchIcon className="size-6" aria-hidden="true" />
+            <p>
+              {m("text")} · {m("symbols")}
+            </p>
+          </div>
+        )}
       </section>
       <IndexConfirmation
         open={Boolean(confirmation)}
