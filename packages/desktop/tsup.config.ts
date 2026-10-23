@@ -253,6 +253,8 @@ const desktopNodeRuntimeExternals = [
   "node-forge",
   // ZIP 解包器内部依赖 CommonJS require("fs")，不能内联到 ESM main/host 产物。
   "yauzl",
+  // fast-glob 的 CommonJS 入口会 require("os")；ESM 内联会使真实桌面启动即崩溃。
+  "fast-glob",
 ];
 
 function createDevReadyMarkerHook(target: "main" | "host" | "preload"): string {

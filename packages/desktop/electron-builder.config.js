@@ -119,6 +119,8 @@ const REQUIRED_ASAR_RUNTIME_MODULES = [
   // electron-builder 产物又可能漏掉 hoisted 的 undici，最终 mac 安装包启动即报 Cannot find module "undici"。
   // 这里把 undici 和其他兜底依赖一样强制注入 app.asar，避免用户在已安装应用里主进程直接崩溃。
   "undici",
+  // SSH 配置别名使用的 fast-glob 必须外置；同时带齐其 hoisted 运行闭包，避免启动缺包。
+  "fast-glob",
   // node-forge 一直只写在 bundle.mjs 的校验名单里，靠 electron-builder 自己打进 app.asar；
   // 这与 yauzl 漏 pend 是同一类隐患——校验要求的模块必须有人负责补齐。node-forge 无子依赖，
   // 已在产物里时 afterPack 扫描会跳过它，不改变现有打包结果。

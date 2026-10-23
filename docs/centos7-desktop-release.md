@@ -51,6 +51,7 @@ OMP 是用户预先独立安装、适配目标宿主及当前协议的真实外�
 - SQLite 继续使用单一共享门面：Node 22.x ≥22.16 或 Node ≥24 的完整 API 使用原生驱动，Node 23 及 CentOS Node 18 使用 better-sqlite3；不能只因存在 `node:sqlite` 就假定 backup／isTransaction／timeout 可用。不双写或迁移用户数据，不静态导入缺失 builtin，不泛 catch 静默换驱动。
 - 保留 Electron 文件附件路径、导航、frame 和可信 main-world 脚本执行的真实能力分支。旧 runtime 保留原生历史条目和进程内完整 URL／title／index 栈，不宣称支持 Chromium 不透明 POST／表单／子框架 pageState 导入导出或持久化恢复。
 - 保留 Node glob、import.meta 路径及 Promise 等实际等价回退，不以空数组或 no-op 代替。CSS 保留 field-sizing、retained planes、Pierre 样式及 GenUI 主题能力分支；PDF 使用实际 legacy alias／worker。不删除已实现兼容以取消审计。
+- `fast-glob` 使用既有 CommonJS 外置依赖装配路径，不内联进 Main／Host／scheduler 的 ESM bundle；装配其真实运行闭包，避免 SSH 配置别名模块导入时触发 `Dynamic require of "os" is not supported`。不删除 glob 回退或 SSH 配置能力。
 - CentOS runtime API audit 专用实现、报告和调用链已按用户要求删除，不保留替代入口或待通过要求。
 - Host 使用自有 stdout／stderr 管道和结构化日志；EBADF／EPIPE 仅使相应原始 sink 不可用，不中断 Host／RPC／业务，不产生未捕获异常或递归日志。其他错误保持可见，不全局吞错或降日志等级。
 
