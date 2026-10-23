@@ -50,6 +50,25 @@ OMP 是用户预先独立安装、适配目标宿主及当前协议的真实外�
 - CentOS runtime API audit 专用实现、报告和调用链已按用户要求删除，不保留替代入口或待通过要求。
 - Host 使用自有 stdout／stderr 管道和结构化日志；EBADF／EPIPE 仅使相应原始 sink 不可用，不中断 Host／RPC／业务，不产生未捕获异常或递归日志。其他错误保持可见，不全局吞错或降日志等级。
 
+### 5.1 旧运行时兼容修复验收
+
+- 浏览器历史仍由 Main 的 guest history 唯一持有；工具栏和 Agent 的前进／后退读取、操作同一栈，不在 Renderer 另存历史。
+- 恢复后连续提交多个导航项必须按原顺序保留；replace 不增加条目，分支导航截断 forward，同 URL 的不同条目不合并。
+- crash／rebind 优先保留当前 URL；内存历史快照活动 URL 与当前缓存不一致时，丢弃该快照，继续已有恢复路径。
+- 缺少原子 DOM 移动能力时保留同一 guest，但不能遮挡 Gen UI 复制／调整／放大按钮；不得用重挂页面丢失编辑状态来修复层级。
+- 固定承载页面沿用消息层输入区遮罩边界；滚动时不绘制到 sticky composer 排除区域，浮窗与贴底状态仍遵循原消息层规则。
+- Office 独立 PDF 构建在旧运行时同时选择 legacy 主模块与匹配 worker，保留 CJK 字体补丁；外部链接注释仍生成可点击热区。现代运行时的构建选择不变。
+
+```mermaid
+flowchart LR
+  Toolbar[工具栏] --> History[Main guest history]
+  Agent[Agent] --> History
+  CDP[当前 guest CDP 历史] --> History
+  History --> Snapshot[派生内存快照]
+  Snapshot --> Guard[恢复前比对当前 URL]
+  Guard --> History
+```
+
 ## 6. 真实运行资产与正常 ZIP
 
 外发 CentOS 格式为 `OmpCode-<version>-centos7-x64.zip`，沿用单根目录及既有 `bin/ompcode-centos7`、`app/`、asar／unpacked、`resources/tools`、`lib/`、`fonts/` 布局，不为删除审计迁移路径。
@@ -92,3 +111,7 @@ Windows 正常构建 NSIS EXE；CentOS 正常在隔离副本构建 desktop、在
 此前 Windows typecheck／lint、架构违规、零选中 affected UT 及旧 runtime 报告仅为历史观察，不代表当前 ZIP 已验收，也不形成重跑清单。此前 systemd RPM 校验及 GNU LGPL 下载失败属于已取消的审计链，不再要求修复或补齐许可。
 
 主执行者已报告真实 native 编译和 collector 成功、外部 OMP 非 root 实际 session/list 成功且 stderr 为空。这不等于最终 ZIP、GUI 或完整启动日志通过，仍待同包真实启动结果。旧 Electron／IBus 历史记录、静态结果和 WSLg 结果均不冒充真实 Linux 3.10、Exceed、IBus 中文输入或内网实机验收；Windows 新安装／双装、签名、GitHub 实际发布也不因代码存在就记为通过，且不扩成本轮额外必须项。
+
+2026-10-23 审查后的六项最小兼容修复：两个既有定向测试文件共 135 项通过；遮罩命中修正后重跑受影响的 2 项通过。最终 typecheck、architecture 检查通过，Lint 为 96 warnings／0 errors。默认根测试入口的聚焦列表未选中这两个文件，验证使用仓库外临时配置复用原有 alias／setup，不修改永久测试入口。
+
+WSL CentOS-7 下以真实 Electron 28.3.3／Chromium 120.0.6099.291 执行生产历史适配器与页面承载层：工具栏原生 webview IPC 与适配器混合前进／后退、连续历史项、replace／分支截断、同 guest 未保存内容保留、宿主操作按钮及输入区几何命中验证通过。PDF 旧／现代 profile 均实际构建；旧运行时现代对照复现 `URL.parse` 注释丢失，legacy 实际 worker 保留外部链接和正文。临时夹具的父窗口 `sendInputEvent` 不路由 guest，改用 host CDP 输入路由后通过；未改产品输入逻辑。运行保留了 WSL 系统 D-Bus 与未打包夹具的安全警告，不声称原始 stderr 为空。这些结果是隔离组件烟测，不是完整桌面、最终 ZIP、外部 OMP 或内网实机验收。

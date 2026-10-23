@@ -110,6 +110,8 @@ export function createPluginUiPagePlane(events: {
       left = Math.max(0, rect.left);
     let right = Math.min(window.innerWidth, rect.right);
     let bottom = Math.min(window.innerHeight, rect.bottom);
+    root.style.maskImage = "none";
+    root.style.webkitMaskImage = "none";
     for (let parent = node.parentElement; parent; parent = parent.parentElement) {
       const style = getComputedStyle(parent);
       const bounds = parent.getBoundingClientRect();
@@ -121,6 +123,28 @@ export function createPluginUiPagePlane(events: {
       if (/(auto|scroll|hidden|clip)/.test(style.overflowY)) {
         top = Math.max(top, bounds.top + parent.clientTop * zoom);
         bottom = Math.min(bottom, bounds.top + (parent.clientTop + parent.clientHeight) * zoom);
+      }
+      if (parent.dataset.sandboxPageMask && style.maskImage !== "none") {
+        // fixed-plane 脱离消息树后不会继承 composer mask；只投影消息 owner 的现有状态，
+        // 不在页面层重复贴底判定或维护另一组 composer 高度。
+        const planeZoom = cssZoom(root);
+        const transparentY = parent.dataset.sandboxPageMaskTransparentY;
+        if (transparentY !== undefined && Number.isFinite(Number(transparentY)))
+          bottom = Math.min(bottom, bounds.top + Number(transparentY) * zoom);
+        const [x = "0", y = "0"] = style.maskPosition.split(/\s+/);
+        const [, height = "auto"] = style.maskSize.split(/\s+/);
+        const maskPosition = `${(bounds.left - rect.left + parseFloat(x) * zoom) / planeZoom}px ${(bounds.top - rect.top + parseFloat(y) * zoom) / planeZoom}px`;
+        const maskSize = `${bounds.width / planeZoom}px ${height === "auto" ? height : `${(parseFloat(height) * zoom) / planeZoom}px`}`;
+        Object.assign(root.style, {
+          maskImage: style.maskImage,
+          webkitMaskImage: style.maskImage,
+          maskPosition,
+          webkitMaskPosition: maskPosition,
+          maskSize,
+          webkitMaskSize: maskSize,
+          maskRepeat: style.maskRepeat,
+          webkitMaskRepeat: style.maskRepeat,
+        });
       }
     }
     const zoom = cssZoom(root);
@@ -142,8 +166,21 @@ export function createPluginUiPagePlane(events: {
     });
     const resize = new ResizeObserver(update);
     resize.observe(node);
+    // composer 形态可只改 mask 而不移动锚点；不能仅依赖 autoUpdate 的矩形变化。
+    const maskObserver =
+      fixedPlane && typeof MutationObserver !== "undefined"
+        ? new MutationObserver(update)
+        : undefined;
+    if (maskObserver)
+      for (let parent = node.parentElement; parent; parent = parent.parentElement)
+        if (parent.dataset.sandboxPageMask)
+          maskObserver.observe(parent, {
+            attributes: true,
+            attributeFilter: ["style", "data-sandbox-page-mask-transparent-y"],
+          });
     return () => {
       resize.disconnect();
+      maskObserver?.disconnect();
       stop();
     };
   };

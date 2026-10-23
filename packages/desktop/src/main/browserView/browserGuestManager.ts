@@ -135,6 +135,13 @@ class LegacyGuestHistory implements GuestHistory {
   private nativeIds = new Map<number, number>();
   private revision = 0;
   private navigating = false;
+  private nativeIndex = -1;
+  private readonly nativeHistory: {
+    canGoBack: () => boolean;
+    canGoForward: () => boolean;
+    goBack: () => void;
+    goForward: () => void;
+  };
 
   constructor(
     private readonly guest: GuestWebContents,
@@ -142,25 +149,38 @@ class LegacyGuestHistory implements GuestHistory {
     private readonly assertCurrent: () => void,
     private readonly warn: (error: unknown) => void,
     private readonly onSnapshot: (snapshot: LegacyHistorySnapshot) => void,
-  ) {}
+  ) {
+    // Electron 28 的 webview IPC 按 guest[method] 分派。只在兼容边界接管这四个方法，
+    // 使工具栏与 ControlledView 读写同一历史；先绑定原生方法以免 live 分支递归。
+    this.nativeHistory = {
+      canGoBack: guest.canGoBack?.bind(guest) ?? (() => false),
+      canGoForward: guest.canGoForward?.bind(guest) ?? (() => false),
+      goBack: guest.goBack?.bind(guest) ?? (() => undefined),
+      goForward: guest.goForward?.bind(guest) ?? (() => undefined),
+    };
+    guest.canGoBack = () => this.canGoBack();
+    guest.canGoForward = () => this.canGoForward();
+    guest.goBack = () => this.goBack();
+    guest.goForward = () => this.goForward();
+  }
 
   canGoBack(): boolean {
-    return this.restored ? this.index > 0 : (this.guest.canGoBack?.() ?? false);
+    return this.restored ? this.index > 0 : this.nativeHistory.canGoBack();
   }
 
   canGoForward(): boolean {
     return this.restored
       ? this.index >= 0 && this.index < this.entries.length - 1
-      : (this.guest.canGoForward?.() ?? false);
+      : this.nativeHistory.canGoForward();
   }
 
   goBack(): void {
-    if (!this.restored) return this.guest.goBack?.();
+    if (!this.restored) return this.nativeHistory.goBack();
     if (this.canGoBack()) void this.navigate(this.index - 1).catch(this.warn);
   }
 
   goForward(): void {
-    if (!this.restored) return this.guest.goForward?.();
+    if (!this.restored) return this.nativeHistory.goForward();
     if (this.canGoForward()) void this.navigate(this.index + 1).catch(this.warn);
   }
 
@@ -186,6 +206,8 @@ class LegacyGuestHistory implements GuestHistory {
     }
     const active = history.entries[history.currentIndex];
     if (!active) return;
+    const previousNativeIndex = this.nativeIndex;
+    this.nativeIndex = history.currentIndex;
     const knownIndex = this.nativeIds.get(active.id);
     if (knownIndex !== undefined) {
       this.index = knownIndex;
@@ -193,24 +215,43 @@ class LegacyGuestHistory implements GuestHistory {
       this.publishSnapshot();
       return;
     }
-    // replaceState/location.replace 可能产生新 native id，但不能追加应用历史。
-    for (const [id, position] of this.nativeIds) {
-      if (position === this.index && !history.entries.some((entry) => entry.id === id)) {
-        this.nativeIds.delete(id);
-        this.nativeIds.set(active.id, this.index);
-        this.entries[this.index] = { url: active.url, title: active.title };
-        this.publishSnapshot();
-        return;
+    // 一次采样可能跨越多次 pushState；从最近的已映射左邻锚点合并整个新增段，
+    // 不能只追加 active，否则中间条目（含同 URL 不同 id）会永久丢失。
+    let nativeStart = history.currentIndex;
+    let logicalStart = this.index + 1;
+    for (let position = history.currentIndex - 1; position >= 0; position -= 1) {
+      const mapped = this.nativeIds.get(history.entries[position]!.id);
+      if (mapped !== undefined) {
+        nativeStart = position + 1;
+        logicalStart = mapped + 1;
+        break;
       }
     }
-    // 新的 Chromium entry 截断 forward 分支；同 URL 的不同 entry 不能按 URL 合并。
-    this.entries.splice(this.index + 1);
-    this.entries.push({ url: active.url, title: active.title });
-    this.index = this.entries.length - 1;
-    for (const [id, index] of this.nativeIds) {
-      if (index >= this.index) this.nativeIds.delete(id);
+    const liveIds = new Set(history.entries.map((entry) => entry.id));
+    let replacedCurrent = false;
+    for (const [id, position] of this.nativeIds) {
+      if (position === this.index && !liveIds.has(id)) {
+        replacedCurrent = true;
+        break;
+      }
     }
-    this.nativeIds.set(active.id, this.index);
+    if (replacedCurrent && previousNativeIndex >= 0 && previousNativeIndex < nativeStart) {
+      // 唯一锚点被 replace 后又 push：原 native 槽位是替换项，而非最终活动项。
+      nativeStart = previousNativeIndex;
+      logicalStart = this.index;
+    } else if (replacedCurrent && nativeStart === history.currentIndex) {
+      logicalStart = this.index;
+    }
+    this.entries.splice(logicalStart);
+    for (const [id, position] of this.nativeIds) {
+      if (position >= logicalStart || !liveIds.has(id)) this.nativeIds.delete(id);
+    }
+    for (let position = nativeStart; position < history.entries.length; position += 1) {
+      const entry = history.entries[position]!;
+      this.nativeIds.set(entry.id, this.entries.length);
+      this.entries.push({ url: entry.url, title: entry.title });
+    }
+    this.index = logicalStart + history.currentIndex - nativeStart;
     this.publishSnapshot();
   }
 
@@ -278,6 +319,7 @@ class LegacyGuestHistory implements GuestHistory {
       this.index = index;
       this.entries[index] = { url: active.url, title: active.title };
       this.nativeIds.set(active.id, index);
+      this.nativeIndex = history.currentIndex;
       const liveIds = new Set(history.entries.map((item) => item.id));
       for (const id of this.nativeIds.keys()) {
         if (!liveIds.has(id)) this.nativeIds.delete(id);
@@ -4003,15 +4045,24 @@ export class BrowserGuestManager {
   private async restoreGuestState(tab: ManagedTab, guest: GuestWebContents): Promise<boolean> {
     if (!guest.navigationHistory && tab.legacyHistorySnapshot?.entries.length) {
       const snapshot = tab.legacyHistorySnapshot;
-      try {
-        await this.guestHistory(guest).restore(snapshot);
-        if (tab.guest !== guest || tab.lifecycle === "closed") return false;
-        tab.cachedUrl = guest.getURL();
-        tab.cachedTitle = guest.getTitle();
-        return true;
-      } catch (error) {
-        this.warn(`browser tab legacy history restore failed tabId=${tab.tabId}`, error);
-        return false;
+      const active = snapshot.entries[snapshot.index];
+      if (tab.cachedUrl && active?.url !== tab.cachedUrl) {
+        // 与持久 pageState 使用相同一致性规则：旧进程内快照不能把当前 B 回滚成 A。
+        this.warn(
+          `browser tab stale legacy history ignored tabId=${tab.tabId} shellUrl=${tab.cachedUrl} historyUrl=${active?.url ?? "missing"}`,
+        );
+        tab.legacyHistorySnapshot = undefined;
+      } else {
+        try {
+          await this.guestHistory(guest).restore(snapshot);
+          if (tab.guest !== guest || tab.lifecycle === "closed") return false;
+          tab.cachedUrl = guest.getURL();
+          tab.cachedTitle = guest.getTitle();
+          return true;
+        } catch (error) {
+          this.warn(`browser tab legacy history restore failed tabId=${tab.tabId}`, error);
+          return false;
+        }
       }
     }
     const pageState = await this.residencyOptions.recoveryStore?.getPageState(tab.tabId);

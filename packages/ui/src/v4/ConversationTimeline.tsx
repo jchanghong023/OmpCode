@@ -1008,6 +1008,7 @@ function ConversationTimelineImpl({
       // 继续保留 mask 会无意义地淡出最后一条消息，只有离底滚动时才需要遮罩。
       messageLayer.style.maskImage = "none";
       messageLayer.style.webkitMaskImage = "none";
+      delete messageLayer.dataset.sandboxPageMaskTransparentY;
       return;
     }
 
@@ -1028,6 +1029,11 @@ function ConversationTimelineImpl({
     messageLayer.style.webkitMaskPosition = `0 ${viewportTopInLayer}px`;
     messageLayer.style.maskSize = `100% ${viewportHeight}px`;
     messageLayer.style.webkitMaskSize = `100% ${viewportHeight}px`;
+    // mask 只影响绘制；fixed-plane 用同一 owner 的完全透明边界排除 guest 命中。
+    // 坐标从消息层 border-box 顶边起算，单位为未缩放的本地 CSS px。
+    messageLayer.dataset.sandboxPageMaskTransparentY = String(
+      viewportTopInLayer + transparentStart,
+    );
   }, []);
 
   useLayoutEffect(() => {
@@ -2027,6 +2033,7 @@ function ConversationTimelineImpl({
             <div
               ref={messageLayerRef}
               data-v4-timeline-message-layer="true"
+              data-sandbox-page-mask="true"
               data-sandbox-page-container="true"
               className="relative w-full flex-1 [mask-repeat:no-repeat] [-webkit-mask-repeat:no-repeat]"
             >

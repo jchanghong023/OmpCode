@@ -36,6 +36,9 @@ const dist = join(target, "dist");
 const ui = join(dist, "ui");
 const require = createRequire(import.meta.url);
 const pdfjsRoot = dirname(require.resolve("pdfjs-dist/package.json"));
+// Chromium 120 缺少现代 worker 依赖的 URL.parse，链接注释会被静默丢弃；
+// 主模块与 worker 必须一起选 legacy，不能仅降低 esbuild 的语法 target。
+const pdfjsBuild = runtimeTarget === "node18" ? "legacy/build" : "build";
 const xlsxRoot = dirname(dirname(require.resolve("@extend-ai/react-xlsx")));
 const cjkFontRoot = dirname(require.resolve("@fontsource/noto-sans-sc/package.json"));
 
@@ -51,7 +54,7 @@ if (has("pdf")) {
       filter: (path) => !path.endsWith(".js"),
     });
   }
-  await cp(join(pdfjsRoot, "build/pdf.worker.min.mjs"), join(ui, "pdf-worker.js"));
+  await cp(join(pdfjsRoot, pdfjsBuild, "pdf.worker.min.mjs"), join(ui, "pdf-worker.js"));
 
   // 系统没有 CJK 字体时的兜底字体（ui/cjkFontRuntime.ts）：Noto Sans SC 400 的编号分片，
   // 每片带自己的 unicode-range，作为同一字体族的多个 FontFace 注册。
@@ -134,7 +137,7 @@ const xlsxWorkerUrl = {
 const pdfjsCanvasFonts = {
   name: "pdfjs-canvas-fonts",
   setup(builder) {
-    builder.onLoad({ filter: /pdfjs-dist[\\/]build[\\/]pdf\.mjs$/ }, async (args) => {
+    builder.onLoad({ filter: /pdfjs-dist[\\/](?:legacy[\\/])?build[\\/]pdf\.mjs$/ }, async (args) => {
       const source = await readFile(args.path, "utf8");
       const chain = 'fontObj.systemFontInfo?.css || `"${name}", ${fontObj.fallbackName}`';
       const needle = `const typeface = ${chain};`;
@@ -154,6 +157,10 @@ const pdfjsCanvasFonts = {
 };
 const app = await build({
   plugins: [officeProfile, xlsxWorkerUrl, pdfjsCanvasFonts],
+  alias:
+    runtimeTarget === "node18"
+      ? { "pdfjs-dist": join(pdfjsRoot, pdfjsBuild, "pdf.mjs") }
+      : {},
   metafile: true,
   entryPoints: [join(root, "ui/main.tsx")],
   bundle: true,
