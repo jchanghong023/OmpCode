@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, parse, resolve } from "node:path";
-import { createRequire } from "node:module";
+import { createRequire, isBuiltin } from "node:module";
 
 function findPackageRoot(entryPath) {
   let currentDir = dirname(entryPath);
@@ -19,7 +19,9 @@ function readRuntimePackage(moduleLookupRoots, moduleName, parentPackagePath = n
   if (parentPackagePath) {
     try {
       const requireFromParent = createRequire(parentPackagePath);
-      const entryPath = requireFromParent.resolve(moduleName);
+      // buffer/string_decoder 等 npm 依赖与 builtin 同名；尾斜杠强制解析真实包，
+      // 避免把 builtin 名称当成相对路径，误将整个 cwd 收集进发行包。
+      const entryPath = requireFromParent.resolve(isBuiltin(moduleName) ? `${moduleName}/` : moduleName);
       const packageRoot = findPackageRoot(entryPath);
       if (packageRoot) {
         const packageJsonPath = resolve(packageRoot, "package.json");
