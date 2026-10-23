@@ -88,8 +88,9 @@ CommandInbox 本身是内存结构：
 3. child/fork command fact；
 4. `session_input` ledger 的 promoted/cancelled/discarded/failed 终态。
 
-`v4/commands/query` 先查内存 pinned/LRU，再按以上来源精确查找。查不到返回 `unknown`，由客户端展示并
-让用户决定是否重发；禁止静默重发 stop、fork、输入等有副作用命令。
+`v4/commands/query` 先查内存 pinned/LRU，再按以上持久来源精确查找。可靠查无事实才返回 `unknown`；
+普通 pending 按当前恢复合同静默结算，拥有首发草稿的未知结果保留查询线索。读取不可用不得伪装 unknown；
+stop、fork、输入等有副作用命令均禁止自动重发。明确重启丢弃的 `startNow` 仅允许用户确认后以新 commandId 重发。
 
 `session_input` 是输入生命周期账本，不是可恢复执行队列。`startNow`、`queue`、`guide` 在执行前都先
 durable admission；promotion 与 user message 持久化原子关联。CLI 重启时仍处于 `admitted` 的输入会

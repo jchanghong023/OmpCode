@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { ZCodeTaskMeta } from "@zcode/shared";
 import { setDataBaseDir } from "#src/paths.js";
 import { TaskIndexRepo } from "#src/session/taskIndexRepo.js";
+import type { ZCodeTaskListQuery } from "#src/session/zcodeTaskListTypes.js";
 
 let repo: TaskIndexRepo;
 let tempDir: string;
@@ -66,6 +67,82 @@ function metaJsonWithoutWorkspaceIdentity(meta: ZCodeTaskMeta): string {
 }
 
 describe("TaskIndexRepo workspace identity normalization", () => {
+  it("源端窗口包含边界，例外隔离 identity，游标页互斥且历史 ID 仍可打开", async () => {
+    const identity = "remote:ssh:a:22:user:/workspace/project";
+    const other = "remote:ssh:b:22:user:/workspace/project";
+    for (const [taskId, updatedAt, workspaceIdentity] of [
+      ["new", 21, identity],
+      ["boundary", 20, identity],
+      ["old", 19, identity],
+      ["opened", 19, identity],
+      ["opened", 19, other],
+    ] as const) {
+      await seedTaskIndex(repo, { meta: { ...task({ taskId, workspaceIdentity }), updatedAt } });
+    }
+    const query = {
+      kind: "timeline" as const,
+      sortBy: "updated" as const,
+      limit: 2,
+      updatedSince: 20,
+      workspaceScopes: [
+        { workspacePath: "/workspace/project", workspaceIdentity: identity },
+        { workspacePath: "/workspace/project", workspaceIdentity: other },
+      ],
+      includeTaskIds: [
+        { workspacePath: "/workspace/project", workspaceIdentity: identity, taskId: "opened" },
+      ],
+    };
+    const first = await repo.queryTaskList(query);
+    const second = await repo.queryTaskList({ ...query, cursor: first.nextCursor });
+    expect(first.items.map((item) => item.taskId)).toEqual(["new", "boundary"]);
+    expect(first.hasMore).toBe(true);
+    expect(second.items.map((item) => item.taskId)).toEqual(["opened"]);
+    expect(second.items[0]?.workspaceIdentity).toBe(identity);
+    expect(second.hasMore).toBe(false);
+    expect(
+      await repo.getTaskMeta({
+        workspacePath: "/workspace/project",
+        workspaceIdentity: identity,
+        taskId: "old",
+      }),
+    ).not.toBeNull();
+    expect(
+      (await repo.queryTaskList({ ...query, search: "old" })).items.map((item) => item.taskId),
+    ).toEqual(["old"]);
+  });
+  it("跨原生 profile 的有界游标页合并不重复、不遗漏相同时间的任务", async () => {
+    const first = "remote:ssh:a:22:user:/workspace/project";
+    const second = "remote:ssh:b:22:user:/workspace/project";
+    repo.setOmpScopeResolver(async (target) => ({
+      configRoot: join(tempDir, "native"),
+      profileId: target.workspaceIdentity === first ? null : "work",
+    }));
+    for (const workspaceIdentity of [first, second]) {
+      for (const taskId of ["a", "b", "c"]) {
+        await seedTaskIndex(repo, { meta: task({ taskId, workspaceIdentity }) });
+      }
+    }
+    const query = {
+      kind: "timeline" as const,
+      sortBy: "updated" as const,
+      updatedSince: 20,
+      limit: 2,
+      workspaceScopes: [first, second].map((workspaceIdentity) => ({
+        workspacePath: "/workspace/project",
+        workspaceIdentity,
+      })),
+    };
+    const keys: string[] = [];
+    let cursor: ZCodeTaskListQuery["cursor"];
+    do {
+      const page = await repo.queryTaskList({ ...query, cursor });
+      expect(page.items.length).toBeLessThanOrEqual(2);
+      keys.push(...page.items.map((item) => `${item.workspaceIdentity}:${item.taskId}`));
+      cursor = page.hasMore ? page.nextCursor : undefined;
+    } while (cursor);
+    expect(keys).toHaveLength(6);
+    expect(new Set(keys).size).toBe(6);
+  });
   it("归档条件删除只影响相同路径下指定 identity，冷启动仍保留 tombstone", async () => {
     const first = task({
       taskId: "same-id",

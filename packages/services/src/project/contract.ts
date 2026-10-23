@@ -43,6 +43,10 @@ export interface IProjectService {
     includeDeleted?: boolean;
     includeDeletedTasks?: boolean;
     hostId?: string;
+    updatedSince?: number;
+    includeTaskIds?: ProjectTaskRef[];
+    taskLimit?: number;
+    taskCursor?: ProjectTree["nextTaskCursor"];
   }): Promise<ProjectTree>;
   /** 提交前校验目录存在；root 改动不触碰既有任务 cwd。恢复必须明确给出 ID。 */
   saveProject(input: SaveProjectInput): Promise<VirtualProject>;

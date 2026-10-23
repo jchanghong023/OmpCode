@@ -1,6 +1,8 @@
 import { requestSecurityMessagesZhCN } from "@/request-security-edition/messages.js";
 /** 中文翻译 */
 const zhCN: Record<string, string> = {
+  "project.history.recent": "近 7 天 · 查看全部历史",
+  "project.history.all": "全部历史 · 仅看近 7 天",
   "common.ompStorageScopeUnavailable": "实际运行的 OMP 配置根/profile 尚不可用。",
   "chat.tan.title": "后台委派（Tan）",
   "chat.tan.checking": "连接会话后检查原生后台委派能力。",

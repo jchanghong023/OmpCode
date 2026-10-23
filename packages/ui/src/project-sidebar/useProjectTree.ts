@@ -19,15 +19,43 @@ import { useZCodeSessionStore } from "@/store/zcodeSessionStore.js";
 import { useWorkspaceSessionsIndexItems } from "@/v4/useWorkspaceSessionsIndexItems.js";
 import { getTaskListRowActivity } from "@/v4/taskListRowActivity.js";
 import { getWindowControllerTaskListRegistry } from "@/v4/windowControllerTaskListRegistry.js";
-import { buildRemoteHostWorkspaceIdentity } from "@/project-sidebar/contract.js";
+import {
+  buildRemoteHostWorkspaceIdentity,
+  remoteHostIdFromWorkspaceIdentity,
+} from "@/project-sidebar/contract.js";
 import { logger } from "@/logger.js";
 import { useProjectUnreadSignals } from "@/project-sidebar/useProjectUnreadSignals.js";
 import { areStabilizedValuesEquivalent } from "@/v4/taskListItemStabilization.js";
+import { getSafeLocalStorage } from "@/lib/browserEnvironment.js";
+import { usePaneLayoutStore } from "@/v4/paneLayoutStore.js";
 
 const subscribeToNothing = () => () => {};
 const zeroRevision = () => 0;
 const EMPTY: ProjectTree = { projects: [], tasks: [] };
-export function useProjectTree(isDesktop = false) {
+export function useProjectTree(isDesktop = false, fullHistory = false) {
+  const [showAllHistory, setHistory] = useState(() => {
+    try {
+      return isDesktop && getSafeLocalStorage()?.getItem("zcode-project-sidebar-history") === "all";
+    } catch {
+      return false;
+    }
+  });
+  const setShowAllHistory = useCallback((all: boolean) => {
+    setHistory(all);
+    try {
+      getSafeLocalStorage()?.setItem("zcode-project-sidebar-history", all ? "all" : "recent");
+    } catch {
+      /* 禁用存储时仅保留本窗口选择。 */
+    }
+  }, []);
+  useEffect(() => {
+    if (!isDesktop) return;
+    const receive = (event: StorageEvent) => {
+      if (event.key === "zcode-project-sidebar-history") setHistory(event.newValue === "all");
+    };
+    window.addEventListener("storage", receive);
+    return () => window.removeEventListener("storage", receive);
+  }, [isDesktop]);
   const services = useBaseWorkspaceServices();
   // 远端 bridge 的 base 服务属于 Source；侧栏读写与失效流必须整组来自窗口目录。
   const directoryServices = services.windowProjectDirectory ?? services;
@@ -57,6 +85,56 @@ export function useProjectTree(isDesktop = false) {
   const version = useZCodeSessionStore((state) =>
     Object.values(state.workspaces).reduce((n, workspace) => n + workspace.taskListVersion, 0),
   );
+  const selectedTasks = useZCodeSessionStore(
+    useShallow((state) =>
+      Object.fromEntries(
+        Object.entries(state.workspaces).map(([key, workspace]) => [key, workspace.activeTaskId]),
+      ),
+    ),
+  );
+  const panes = usePaneLayoutStore((state) => state.panes);
+  const includeKey = JSON.stringify([
+    ...tabs.filter(isWorkspaceTab).flatMap((tab) => {
+      const taskId = selectedTasks[tab.workspaceIdentity?.trim() || tab.workspacePath];
+      return taskId
+        ? [
+            {
+              workspacePath: tab.workspacePath,
+              workspaceIdentity: tab.workspaceIdentity,
+              taskId,
+              hostId: remoteHostIdFromWorkspaceIdentity(tab.workspaceIdentity ?? "") ?? "local",
+            },
+          ]
+        : [];
+    }),
+    ...Object.values(panes).flatMap((pane) =>
+      pane.sessionId
+        ? [
+            {
+              ...pane.workspaceScope,
+              taskId: pane.sessionId,
+              hostId:
+                remoteHostIdFromWorkspaceIdentity(pane.workspaceScope.workspaceIdentity ?? "") ??
+                "local",
+            },
+          ]
+        : [],
+    ),
+    ...(registry?.readActivities() ?? [])
+      .filter(
+        ({ activity }) =>
+          activity.phase === "running" ||
+          activity.phase === "prewarming" ||
+          activity.hasBackgroundWork ||
+          (activity.pendingInteractions?.permissionCount ?? 0) +
+            (activity.pendingInteractions?.userInputCount ?? 0) >
+            0,
+      )
+      .map(({ address }) => ({
+        ...address,
+        hostId: remoteHostIdFromWorkspaceIdentity(address.workspaceIdentity ?? "") ?? "local",
+      })),
+  ]);
   const [tree, setTree] = useState<ProjectTree>(EMPTY);
   const [availability, setAvailability] = useState<ReadonlyMap<string, ProjectAvailability>>(
     new Map(),
@@ -67,7 +145,7 @@ export function useProjectTree(isDesktop = false) {
   const serial = useRef(0);
   const reads = useMemo(
     () => ({ flight: null as Promise<void> | null, dirty: false }),
-    [service, remoteService],
+    [service, remoteService, isDesktop, showAllHistory, includeKey, fullHistory],
   );
   const pendingCommits = useRef(
     new Set<{
@@ -90,6 +168,12 @@ export function useProjectTree(isDesktop = false) {
       const result = await readProjectSidebarTree({
         projectService: service,
         remoteProjectService: remoteService,
+        paged: isDesktop || fullHistory,
+        updatedSince:
+          isDesktop && !showAllHistory && !fullHistory
+            ? Date.now() - 7 * 24 * 60 * 60 * 1000
+            : undefined,
+        includeTaskIds: JSON.parse(includeKey),
       });
       if (request === serial.current) {
         const previous = accepted.current;
@@ -187,7 +271,7 @@ export function useProjectTree(isDesktop = false) {
     } finally {
       if (request === serial.current) setLoading(false);
     }
-  }, [service, remoteService, removeTaskState]);
+  }, [service, remoteService, removeTaskState, isDesktop, showAllHistory, includeKey, fullHistory]);
   const refresh = useCallback(() => {
     reads.dirty = true;
     if (reads.flight) return reads.flight;
@@ -350,14 +434,14 @@ export function useProjectTree(isDesktop = false) {
   );
   const observeSources = useCallback(async () => {
     if (!registry || !scopes.length) return;
-    // 原来活动 revision 反复注册观察并重读目录；观察只随 scope/Source 换代。
+    // 观察只随 scope/Source、历史窗口与例外 ID 集合换代，不逐条响应活动时间变化。
     // 返回行不进入项目树，显式刷新仍能重试失败的注册。
     await registry
       .list(
-        "project-sidebar-activity",
+        fullHistory ? "project-archive-activity" : "project-sidebar-activity",
         {
           controllerRevision: sourceRevision,
-          taskListVersionSignature: scopeKey,
+          taskListVersionSignature: `${scopeKey}:${isDesktop && !showAllHistory && !fullHistory}:${includeKey}`,
           workspaceSourceGenerationSignature: `${sourceRevision}:${sourceVersion}`,
         },
         {
@@ -365,10 +449,23 @@ export function useProjectTree(isDesktop = false) {
           workspaceScopes: JSON.parse(scopeKey),
           sortBy: "updated",
           limit: 0,
+          ...(isDesktop && !showAllHistory && !fullHistory
+            ? { updatedSince: Date.now() - 7 * 24 * 60 * 60 * 1000 }
+            : {}),
+          includeTaskIds: JSON.parse(includeKey),
         },
       )
       .catch((cause) => logger.warn("[project-sidebar] Controller 活动订阅失败", cause));
-  }, [registry, scopeKey, sourceRevision, sourceVersion]);
+  }, [
+    registry,
+    scopeKey,
+    sourceRevision,
+    sourceVersion,
+    isDesktop,
+    showAllHistory,
+    includeKey,
+    fullHistory,
+  ]);
   useEffect(() => {
     void observeSources();
   }, [observeSources]);
@@ -433,6 +530,8 @@ export function useProjectTree(isDesktop = false) {
       commitCreatedTask,
       error,
       loading,
+      showAllHistory,
+      setShowAllHistory,
     }),
     [
       displayedTree,
@@ -445,6 +544,8 @@ export function useProjectTree(isDesktop = false) {
       commitCreatedTask,
       error,
       loading,
+      showAllHistory,
+      setShowAllHistory,
     ],
   );
 }

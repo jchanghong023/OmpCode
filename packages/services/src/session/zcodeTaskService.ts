@@ -425,19 +425,23 @@ export interface IZCodeTaskService {
   }): Promise<ZCodeTaskMeta>;
 
   /** 列出 workspace 下所有已持久化的 task */
-  listTasks(params: {
-    workspacePath: string;
-    workspaceIdentity?: string;
-  }): Promise<ZCodeTaskMeta[]>;
+  listTasks(
+    params: {
+      workspacePath: string;
+      workspaceIdentity?: string;
+    } & Pick<ZCodeTaskListQuery, "updatedSince" | "includeTaskIds" | "cursor" | "limit">,
+  ): Promise<ZCodeTaskMeta[]>;
 
   /** 读取全局 pinned task id 列表，真相源为 tasks-index.sqlite */
   listPinnedTaskIds(): Promise<string[]>;
 
   /** 按 tasks-index.sqlite 中的 pinned 状态列出当前 workspace 下所有 pinned task */
-  listPinnedTasks(params: {
-    workspacePath: string;
-    workspaceIdentity?: string;
-  }): Promise<ZCodeTaskMeta[]>;
+  listPinnedTasks(
+    params: {
+      workspacePath: string;
+      workspaceIdentity?: string;
+    } & Pick<ZCodeTaskListQuery, "updatedSince" | "includeTaskIds" | "cursor" | "limit">,
+  ): Promise<ZCodeTaskMeta[]>;
 
   /** 读取 workspace 下已删除 task id；供闲时绑定会话与 Bots tombstone 判断 session 是否已删除 */
   listDeletedTaskIds(params: {
@@ -462,10 +466,12 @@ export interface IZCodeTaskService {
   listTaskList(params: ZCodeTaskListQuery): Promise<ZCodeTaskListResult>;
 
   /** 列出 workspace 下所有已归档 task */
-  listArchivedTasks(params: {
-    workspacePath: string;
-    workspaceIdentity?: string;
-  }): Promise<ZCodeTaskMeta[]>;
+  listArchivedTasks(
+    params: {
+      workspacePath: string;
+      workspaceIdentity?: string;
+    } & Pick<ZCodeTaskListQuery, "updatedSince" | "includeTaskIds" | "cursor" | "limit">,
+  ): Promise<ZCodeTaskMeta[]>;
 
   /** 读取单个 task 的本地持久化快照，用于历史任务首屏展示 */
   getTaskSnapshot(params: {

@@ -1,6 +1,8 @@
 import { requestSecurityMessagesEnUS } from "@/request-security-edition/messages.js";
 /** English translations */
 const enUS: Record<string, string> = {
+  "project.history.recent": "Last 7 days · Show all history",
+  "project.history.all": "All history · Show last 7 days",
   "common.ompStorageScopeUnavailable":
     "The active OMP configuration root/profile is not available yet.",
   "chat.tan.title": "Background delegation (Tan)",

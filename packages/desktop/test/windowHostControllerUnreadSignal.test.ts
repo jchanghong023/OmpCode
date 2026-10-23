@@ -27,6 +27,7 @@ async function fixture() {
     listTasks: async () => [{ ...meta }],
     listPinnedTasks: async () => [],
     listArchivedTasks: async () => [],
+    listTaskList: async () => ({ items: [{ ...meta }], total: 1, hasMore: false }),
     onDynamicWorkspaceEvent: () => events.event,
     setTaskUnread: vi.fn(async () => ({ ...meta, unreadAt: 10 })),
   } as unknown as IZCodeTaskService;

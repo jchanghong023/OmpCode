@@ -62,6 +62,7 @@ export interface ProjectTree {
   tasks: ProjectTask[];
   /** 仅显式请求时返回删除事实；离线缺席不能替代这些引用。 */
   deletedTasks?: Array<ProjectTaskRef & { hostId: string }>;
+  nextTaskCursor?: { updatedAt: number; taskId: string; workspaceKey: string };
 }
 
 export const LEGACY_SINGLE_ROOT_PROJECT_PREFIX = "legacy-single-root:";
@@ -96,6 +97,10 @@ export interface ProjectRepositoryContract {
     includeDeleted?: boolean;
     includeDeletedTasks?: boolean;
     includeTasks?: boolean;
+    updatedSince?: number;
+    includeTaskIds?: ProjectTaskRef[];
+    taskLimit?: number;
+    taskCursor?: ProjectTree["nextTaskCursor"];
   }): ProjectTree;
   saveProject(input: SaveProjectInput): VirtualProject;
   deleteProject(id: string): void;

@@ -9,19 +9,39 @@ import { mergeProjectTrees, resolveEntryProject } from "@/project-sidebar/view.j
 export async function readProjectSidebarTree(input: {
   projectService: IProjectService;
   remoteProjectService?: IRemoteProjectService;
+  updatedSince?: number;
+  includeTaskIds?: Array<{
+    taskId: string;
+    workspacePath: string;
+    workspaceIdentity?: string;
+    hostId?: string;
+  }>;
+  paged?: boolean;
 }) {
   const before = (await input.remoteProjectService?.readDirectory()) ?? { hosts: [], entries: [] };
+  const read = async (hostId?: string): Promise<ProjectTree> => {
+    let taskCursor: ProjectTree["nextTaskCursor"];
+    let result: ProjectTree | undefined;
+    do {
+      const page = await input.projectService.readTree({
+        hostId,
+        includeDeleted: true,
+        includeDeletedTasks: !result,
+        ...(input.paged ? { taskLimit: 250, taskCursor } : {}),
+        ...(input.updatedSince !== undefined ? { updatedSince: input.updatedSince } : {}),
+        includeTaskIds: input.includeTaskIds?.filter(
+          (task) => (task.hostId ?? "local") === (hostId ?? "local"),
+        ),
+      });
+      if (!result) result = { ...page, tasks: [...page.tasks] };
+      else result.tasks.push(...page.tasks);
+      taskCursor = input.paged ? page.nextTaskCursor : undefined;
+    } while (taskCursor);
+    return result!;
+  };
   const [local, results] = await Promise.all([
-    input.projectService.readTree({ includeDeleted: true, includeDeletedTasks: true }),
-    Promise.allSettled(
-      before.hosts.map((host) =>
-        input.projectService.readTree({
-          hostId: host.id,
-          includeDeleted: true,
-          includeDeletedTasks: true,
-        }),
-      ),
-    ),
+    read(),
+    Promise.allSettled(before.hosts.map((host) => read(host.id))),
   ]);
   const remote = new Map<string, ProjectTree>();
   const errors = new Map<string, string>();

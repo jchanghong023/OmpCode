@@ -77,6 +77,7 @@ export const ProjectSidebar = memo(function ProjectSidebar(props: ProjectSidebar
     groups,
     deviceNames,
   } = useProjectDirectory();
+  const { showAllHistory, setShowAllHistory } = useProjectDirectory();
   const { tree, pin } = useProjectPinIntent(authoritativeTree);
   const remoteSync = useProjectRemoteSync(props, directory);
   const diagnostics = useProjectConnectionDiagnostics(directory, props);
@@ -239,6 +240,17 @@ export const ProjectSidebar = memo(function ProjectSidebar(props: ProjectSidebar
                   onViewChange={setView}
                   groupedActionsRef={setGroupedToolbar}
                 />
+                {props.isDesktop && (
+                  <button
+                    type="button"
+                    className="mx-3 mb-2 self-start rounded px-2 py-1 text-ui-caption text-remote-foreground-muted hover:bg-surface-hover"
+                    aria-pressed={showAllHistory}
+                    data-testid="sidebar-history-window"
+                    onClick={() => setShowAllHistory(!showAllHistory)}
+                  >
+                    {msg(showAllHistory ? "history.all" : "history.recent")}
+                  </button>
+                )}
                 {/* 原因：仅设 overflow-y:auto 会让拖拽位移打开水平滚动；列表始终只允许纵向滚动。 */}
                 {/* 原因：项目侧栏迁移后普通滚动容器遗漏边缘渐隐；复用统一 mask，随实际滚动边界更新。 */}
                 <div className="relative flex min-h-0 flex-1 flex-col">

@@ -2247,6 +2247,7 @@ export function createLocalServices(options: {
         target ?? defaultOrganizationTarget(await settingService.get()),
       ),
     repositories: activeProjectRepositories,
+    activeTaskRefs: () => zcodeTaskIndexSyncer.activeTaskRefs(true),
     projectWorkspaceSource: (repository, preferred) =>
       resolveProjectWorkspaceSource(taskIndexRepo, repository, preferred),
     prepareWorkspaceScope: async (source, destination) => {

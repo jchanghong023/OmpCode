@@ -4,12 +4,14 @@ import {
   removeRemoteProjectEntryForRow,
 } from "#e2e/helpers/remote-project-handoff-probe";
 import type { VirtualProject } from "@zcode/services";
+import { createHash } from "node:crypto";
+import type { OmpStartupProfileParams } from "@zcode/shared";
 import { selectNativeProjectDirectories } from "../../../helpers/project-sidebar.js";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { join, basename, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { readFile, writeFile, mkdir, stat } from "node:fs/promises";
 import { ServiceChannels } from "@zcode/shared";
 import {
   TID_TASK_SETTINGS_BUTTON,
@@ -36,6 +38,7 @@ import {
   clickTestIdByDom,
   waitForWorkspaceApp,
   DEFAULT_WORKSPACE,
+  getE2EAppDataPaths,
 } from "../../../helpers/desktop-app.js";
 
 import { waitForUpstreamNetworkCapture } from "../../../helpers/upstream-capture.js";
@@ -394,6 +397,97 @@ describe("虚拟项目", () => {
     } finally {
       await browser.keys("Escape");
       await browser.keys("Escape");
+    }
+  });
+  it("VP7D：桌面默认七天、置顶例外和全部历史切换不删除任务", async function () {
+    this.timeout(90_000);
+    await waitForWorkspaceApp(DEFAULT_WORKSPACE, 45_000);
+    const testHome = process.env.ZCODE_E2E_HOME_DIR;
+    if (!testHome || !basename(testHome).startsWith("zcode-virtual-project-e2e-"))
+      throw new Error("isolated temporary E2E HOME required");
+    await installHandoffRpcProbe();
+    const scope = await callHandoffHost<OmpStartupProfileParams>(
+      ServiceChannels.Project,
+      "getOrganizationScope",
+      [{ workspacePath: DEFAULT_WORKSPACE }],
+    );
+    if (!scope.configRoot) throw new Error("native OMP root unavailable");
+    const key = createHash("sha256")
+      .update(JSON.stringify([scope.configRoot, scope.activeProfile ?? null]))
+      .digest("hex");
+    const project = await callHandoffHost<VirtualProject>(ServiceChannels.Project, "saveProject", [
+      {
+        name: "E2E_7DAY_WINDOW",
+        roots: [DEFAULT_WORKSPACE],
+      },
+    ]);
+    const dbPath = join(getE2EAppDataPaths().appDataDir, "omp-scopes", key, "tasks-index.sqlite");
+    if (!(await stat(dbPath)).isFile()) throw new Error("native task index is not a file");
+    const db = new DatabaseSync(dbPath);
+    const now = Date.now();
+    const ids = ["e2e-7day-recent", "e2e-7day-old", "e2e-7day-pinned"];
+    try {
+      // 路径须同时命中 helper 的 OmpCode 数据根和刚由真实 Host 提交的项目，禁止 seed 另一份库。
+      if (
+        !db
+          .prepare("SELECT project_id FROM projects WHERE project_id=? AND deleted=0")
+          .get(project.id)
+      )
+        throw new Error("E2E task index does not own the Host project");
+      const insert = db.prepare(`INSERT INTO tasks(
+        workspace_key,workspace_path,task_id,title,provider,mode,created_at,updated_at,
+        host_id,root_path,project_id,cli_title,cli_created_at,cli_updated_at,pinned
+      ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+      for (const [index, id] of ids.entries()) {
+        const activity = index === 0 ? now : now - 8 * 24 * 60 * 60 * 1000;
+        insert.run(
+          DEFAULT_WORKSPACE,
+          DEFAULT_WORKSPACE,
+          id,
+          id,
+          "glm",
+          "default",
+          activity,
+          now,
+          "local",
+          DEFAULT_WORKSPACE,
+          project.id,
+          id,
+          activity,
+          activity,
+          index === 2 ? 1 : 0,
+        );
+      }
+      await browser.execute(() => window.dispatchEvent(new Event("focus")));
+      const toggle = $('[data-testid="sidebar-history-window"]');
+      await toggle.waitForDisplayed();
+      if ((await toggle.getAttribute("aria-pressed")) === "true") await toggle.click();
+      const recent = $(`[data-testid="${testId(TID_TASK_ITEM, ids[0]!)}"]`);
+      const old = $(`[data-testid="${testId(TID_TASK_ITEM, ids[1]!)}"]`);
+      const pinned = $(`[data-testid="${testId(TID_TASK_ITEM, ids[2]!)}"]`);
+      await recent.waitForDisplayed();
+      await pinned.waitForDisplayed();
+      expect(await old.isExisting()).toBe(false);
+      await browser.saveScreenshot(join(process.env.ZCODE_E2E_ARTIFACT_DIR!, "VP7D-recent.png"));
+      await toggle.click();
+      await old.waitForDisplayed();
+      await browser.saveScreenshot(
+        join(process.env.ZCODE_E2E_ARTIFACT_DIR!, "VP7D-all-history.png"),
+      );
+      await toggle.click();
+      await old.waitForExist({ reverse: true });
+      expect(
+        db
+          .prepare(
+            "SELECT count(*) AS n FROM tasks WHERE task_id LIKE 'e2e-7day-%' AND deleted=0 AND archived=0",
+          )
+          .get()?.n,
+      ).toBe(3);
+    } finally {
+      db.prepare("DELETE FROM tasks WHERE task_id LIKE 'e2e-7day-%'").run();
+      db.close();
+      await callHandoffHost(ServiceChannels.Project, "deleteProject", [project.id]);
+      await browser.execute(() => window.__remoteProjectHandoffRpc?.restore());
     }
   });
   it("VP01：首个窗口可用时 app 与 CLI 两库的版本化迁移已经完成", async function () {

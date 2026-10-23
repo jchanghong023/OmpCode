@@ -68,7 +68,16 @@ function compareItems(
 ): number {
   const leftAt = sortBy === "created" ? left.createdAt : left.updatedAt;
   const rightAt = sortBy === "created" ? right.createdAt : right.updatedAt;
-  return rightAt - leftAt || left.taskId.localeCompare(right.taskId);
+  const secondary =
+    sortBy === "created" ? right.updatedAt - left.updatedAt : right.createdAt - left.createdAt;
+  const leftKey = left.workspaceIdentity?.trim() || left.workspacePath;
+  const rightKey = right.workspaceIdentity?.trim() || right.workspacePath;
+  return (
+    rightAt - leftAt ||
+    secondary ||
+    (left.taskId < right.taskId ? 1 : left.taskId > right.taskId ? -1 : 0) ||
+    (leftKey < rightKey ? 1 : leftKey > rightKey ? -1 : 0)
+  );
 }
 
 function mutationParams(address: WindowHostTaskAddress) {
@@ -120,9 +129,17 @@ function sessionOverlay(
       phase: summary.phase,
       lastActivityAt: summary.lastActivityAt,
       hasBackgroundWork: summary.hasBackgroundWork,
+      // 旧来源只有当前交互时，仍将真实等待映射为轻量计数，避免列表丢失 attention。
       ...(summary.pendingInteractionSummary
         ? { pendingInteractions: summary.pendingInteractionSummary }
-        : {}),
+        : summary.pendingInteraction
+          ? {
+              pendingInteractions: {
+                permissionCount: summary.pendingInteraction.kind === "permission" ? 1 : 0,
+                userInputCount: summary.pendingInteraction.kind === "userInput" ? 1 : 0,
+              },
+            }
+          : {}),
       ...(summary.workflowActivity ? { workflowActivity: summary.workflowActivity } : {}),
     },
   };
@@ -153,6 +170,10 @@ export function createWindowHostControllerRuntime(options: {
   const sourceAvailability = new Map<string, "online" | "offline">();
   const sourceTaskServices = new Map<string, IZCodeTaskService>();
   const sourceSnapshotTaskServices = new Map<string, IZCodeTaskService>();
+  const sourceListPolicies = new Map<
+    string,
+    Pick<ZCodeTaskListQuery, "updatedSince" | "includeTaskIds">
+  >();
   const sourceEventSubscriptions = new Map<string, { dispose(): void }>();
   const sourceRefreshFlights = new Map<
     string,
@@ -172,6 +193,7 @@ export function createWindowHostControllerRuntime(options: {
     sourceAvailability.delete(key);
     sourceTaskServices.delete(key);
     sourceSnapshotTaskServices.delete(key);
+    sourceListPolicies.delete(key);
     sourceEventSubscriptions.get(key)?.dispose();
     sourceEventSubscriptions.delete(key);
     sourceSessionObservers.get(key)?.observer.dispose();
@@ -213,9 +235,35 @@ export function createWindowHostControllerRuntime(options: {
       },
       onSessionsChange: (sessions) => {
         if (sourceSessionObservers.get(key)?.observer !== observer) return;
+        const activeBefore = (sourceLiveOverlays.get(key) ?? [])
+          .filter(
+            (row) =>
+              row.liveStatus === "running" ||
+              row.liveStatus === "waiting" ||
+              row.activity?.hasBackgroundWork,
+          )
+          .map((row) => row.taskId)
+          .sort()
+          .join("\0");
         const overlays = sessions.map(sessionOverlay);
         sourceLiveOverlays.set(key, overlays);
         projection.replaceSourceSessionOverlays(resolved.scope, overlays);
+        const activeNow = overlays
+          .filter(
+            (row) =>
+              row.liveStatus === "running" ||
+              row.liveStatus === "waiting" ||
+              row.activity?.hasBackgroundWork,
+          )
+          .map((row) => row.taskId)
+          .sort()
+          .join("\0");
+        if (activeBefore !== activeNow) {
+          // 窗口外老任务开始运行时回读 membership；overlay 本身不能凭空创建持久行。
+          void refreshSource(resolved, true).catch((error) =>
+            options.onSourceError?.(resolved.scope, "refresh", error),
+          );
+        }
       },
       onError: (error) => options.onSourceError?.(resolved.scope, "refresh", error),
     });
@@ -413,10 +461,49 @@ export function createWindowHostControllerRuntime(options: {
         ? { workspaceIdentity: resolved.scope.workspaceIdentity }
         : {}),
     };
+    const policy = sourceListPolicies.get(sourceKey(resolved.scope));
+    const includeTaskIds = [
+      ...(policy?.includeTaskIds ?? []),
+      ...(sourceLiveOverlays.get(sourceKey(resolved.scope)) ?? [])
+        .filter(
+          (row) =>
+            row.liveStatus === "running" ||
+            row.liveStatus === "waiting" ||
+            row.activity?.hasBackgroundWork,
+        )
+        .map((row) => ({ ...request, taskId: row.taskId })),
+    ];
+    const updatedSince = policy?.updatedSince;
+    async function readPartition(kind: "active" | "pinned" | "archived") {
+      const items: ZCodeTaskMeta[] = [];
+      let cursor: ZCodeTaskListQuery["cursor"];
+      do {
+        const requestPage = { ...request, updatedSince, includeTaskIds, limit: 250, cursor };
+        const page =
+          kind === "pinned"
+            ? await resolved.taskService!.listPinnedTasks(requestPage)
+            : kind === "archived"
+              ? await resolved.taskService!.listArchivedTasks(requestPage)
+              : await resolved.taskService!.listTasks(requestPage);
+        items.push(...page);
+        const last = page.at(-1);
+        cursor =
+          page.length === 250 && last
+            ? {
+                updatedAt: last.updatedAt,
+                createdAt: last.createdAt,
+                taskId: last.taskId,
+                workspaceKey: last.workspaceIdentity?.trim() || last.workspacePath,
+              }
+            : undefined;
+      } while (cursor);
+      return items;
+    }
+    // 显式三元组保留分区与结果的一一对应，避免 map 将固定分区推断为可缺项数组。
     const [active, pinned, archived] = await Promise.all([
-      resolved.taskService.listTasks(request),
-      resolved.taskService.listPinnedTasks(request),
-      resolved.taskService.listArchivedTasks(request),
+      readPartition("active"),
+      readPartition("pinned"),
+      readPartition("archived"),
     ]);
     const membershipByTaskKey = new Map<
       string,
@@ -557,147 +644,219 @@ export function createWindowHostControllerRuntime(options: {
   async function listTaskList(
     query: ZCodeTaskListQuery,
   ): Promise<WindowHostControllerTaskListResult> {
-    const resolvedSources = resolveQuerySources(query.workspaceScopes);
+    const sources = resolveQuerySources(query.workspaceScopes);
+    if (!query.search?.trim()) {
+      for (const source of sources) {
+        const key = sourceKey(source.scope);
+        const policy = { updatedSince: query.updatedSince, includeTaskIds: query.includeTaskIds };
+        if (JSON.stringify(sourceListPolicies.get(key)) !== JSON.stringify(policy)) {
+          sourceListPolicies.set(key, policy);
+          sourceSnapshotTaskServices.delete(key);
+          // 切换历史窗口不能让较早页覆盖新策略；失效只作用于当前 Source。
+          sourceRefreshGenerations.set(key, (sourceRefreshGenerations.get(key) ?? 0) + 1);
+          sourceRefreshFlights.delete(key);
+        }
+      }
+    }
     await Promise.all(
-      resolvedSources.map(async (source) => {
+      sources.map(async (source) => {
         try {
           await refreshSource(source);
         } catch (error) {
-          // 一个 remote source 的瞬时读取失败不能清空 local 或其他 remote 的可信投影。
           options.onSourceError?.(source.scope, "refresh", error);
         }
       }),
     );
-
-    const search = query.search?.trim();
-    let items: WindowHostControllerTaskListItem[];
-    if (search) {
-      const results = await Promise.all(
-        resolvedSources
-          .filter((source) => source.sourceAvailability === "online" && source.taskService != null)
-          .map(async (source) => {
-            try {
-              const result = await source.taskService!.listTaskList({
-                ...query,
-                workspaceScopes: [
-                  {
-                    workspacePath: source.scope.workspacePath,
-                    ...(source.scope.workspaceIdentity
-                      ? { workspaceIdentity: source.scope.workspaceIdentity }
-                      : {}),
-                  },
-                ],
-                limit: undefined,
-              });
-              return result.items.map((item) => {
-                const normalized = normalizeTaskMeta(item, source.scope);
-                const projected = projection
-                  .getTasks()
-                  .find(
-                    (row) =>
-                      row.address.taskId === normalized.taskId &&
-                      row.address.workspacePath === normalized.workspacePath &&
-                      row.address.workspaceIdentity === normalized.workspaceIdentity &&
-                      row.address.remoteSessionId ===
-                        (source.scope.kind === "remote" ? source.scope.remoteSessionId : undefined),
-                  );
+    const requests = sources.flatMap((source) =>
+      (query.kind === "active" ? (["active", "pinned"] as const) : [query.kind]).map((kind) => ({
+        source,
+        kind,
+      })),
+    );
+    const results = await Promise.all(
+      requests.map(async ({ source, kind }) => {
+        if (query.search?.trim() && (!source.taskService || source.sourceAvailability !== "online"))
+          return { items: [], hasMore: false, total: 0 };
+        const acceptedScope =
+          pendingReplacementByNextSourceKey.get(sourceKey(source.scope)) ?? source.scope;
+        const readCached = () => {
+          const items = projection
+            .getTasks()
+            .filter((row) => {
+              const key = row.address.workspaceIdentity?.trim() || row.address.workspacePath;
+              const cursor = query.cursor;
+              const afterCursor = cursor
+                ? (query.sortBy === "created"
+                    ? cursor.createdAt - row.meta.createdAt
+                    : cursor.updatedAt - row.meta.updatedAt) ||
+                  (query.sortBy === "created"
+                    ? cursor.updatedAt - row.meta.updatedAt
+                    : cursor.createdAt - row.meta.createdAt) ||
+                  (row.meta.taskId < cursor.taskId
+                    ? 1
+                    : row.meta.taskId > cursor.taskId
+                      ? -1
+                      : 0) ||
+                  (key < cursor.workspaceKey ? 1 : key > cursor.workspaceKey ? -1 : 0)
+                : 1;
+              return (
+                afterCursor > 0 &&
+                key === (source.scope.workspaceIdentity?.trim() || source.scope.workspacePath) &&
+                (acceptedScope.kind === "remote"
+                  ? acceptedScope.sourceServerId
+                    ? row.address.sourceServerId === acceptedScope.sourceServerId
+                    : row.address.remoteSessionId === acceptedScope.remoteSessionId
+                  : !row.address.sourceServerId && !row.address.remoteSessionId) &&
+                matchesTaskListMembershipKind(row.membership, kind) &&
+                (kind !== "active" || !row.membership.pinned) &&
+                (query.updatedSince === undefined ||
+                  row.meta.updatedAt >= query.updatedSince ||
+                  row.membership.pinned ||
+                  (row.sourceAvailability === "online" &&
+                    (row.liveStatus === "running" ||
+                      row.liveStatus === "waiting" ||
+                      row.activity?.hasBackgroundWork)) ||
+                  query.includeTaskIds?.some((task) => taskKey(task) === taskKey(row.meta)))
+              );
+            })
+            .map((row) => ({
+              ...row.meta,
+              sourceAvailability: row.sourceAvailability,
+              liveStatus: row.liveStatus,
+              ...(row.address.sourceServerId ? { sourceServerId: row.address.sourceServerId } : {}),
+              ...(row.address.remoteSessionId
+                ? { remoteSessionId: row.address.remoteSessionId }
+                : {}),
+              ...(row.activity ? { activity: row.activity } : {}),
+            }));
+          return { items, total: items.length, hasMore: false };
+        };
+        // 新分页曾绕过首个 snapshot 的失败，从 provisional source 返回 online 行。
+        // 只有完整快照已被当前 generation 接受后才能读源端窗口；否则保留原路由的可信投影。
+        if (
+          !source.taskService ||
+          source.sourceAvailability !== "online" ||
+          pendingReplacementByNextSourceKey.has(sourceKey(source.scope)) ||
+          sourceSnapshotTaskServices.get(sourceKey(source.scope)) !== source.taskService
+        )
+          return readCached();
+        const overlays = sourceLiveOverlays.get(sourceKey(source.scope)) ?? [];
+        const included = overlays
+          .filter(
+            (row) =>
+              row.liveStatus === "running" ||
+              row.liveStatus === "waiting" ||
+              row.activity?.hasBackgroundWork,
+          )
+          .map((row) => ({ ...source.scope, taskId: row.taskId }));
+        const items: WindowHostControllerTaskListItem[] = [];
+        let cursor = query.cursor;
+        let hasMore = false;
+        let total = 0;
+        try {
+          do {
+            const page = await source.taskService.listTaskList({
+              ...query,
+              kind,
+              workspaceScopes: [source.scope],
+              includeTaskIds: [...(query.includeTaskIds ?? []), ...included],
+              // 每次 SQL/RPC 最多 250 行；较大的显式 limit 继续读取下一页。
+              limit: query.limit === undefined ? 250 : Math.min(250, query.limit - items.length),
+              cursor,
+            });
+            if (cursor === query.cursor) total = page.total;
+            hasMore = page.hasMore;
+            cursor = page.nextCursor;
+            const projectedRows = projection.getTasks();
+            items.push(
+              ...page.items.map((item) => {
+                const meta = normalizeTaskMeta(item, source.scope);
+                const overlay = overlays.find((row) => row.taskId === item.taskId);
+                const projected = projectedRows.find(
+                  (row) =>
+                    row.address.taskId === meta.taskId &&
+                    row.address.workspacePath === meta.workspacePath &&
+                    row.address.workspaceIdentity === meta.workspaceIdentity &&
+                    (source.scope.kind === "remote"
+                      ? source.scope.sourceServerId
+                        ? row.address.sourceServerId === source.scope.sourceServerId
+                        : row.address.remoteSessionId === source.scope.remoteSessionId
+                      : !row.address.sourceServerId && !row.address.remoteSessionId),
+                );
                 return {
-                  ...(projected?.meta ?? normalized),
+                  ...(projected?.meta ?? meta),
+                  ...(item.searchSnippets ? { searchSnippets: item.searchSnippets } : {}),
+                  // 完整交互属于 existing-only live overlay，不在轻量 V4 meta 中。
+                  ...(overlay?.pendingInteraction
+                    ? { pendingInteraction: overlay.pendingInteraction }
+                    : {}),
                   ...(source.scope.kind === "remote"
                     ? {
+                        remoteSessionId: source.scope.remoteSessionId,
                         ...(source.scope.sourceServerId
                           ? { sourceServerId: source.scope.sourceServerId }
                           : {}),
                         ...(source.scope.serverDisplayName
                           ? { serverDisplayName: source.scope.serverDisplayName }
                           : {}),
-                        remoteSessionId: source.scope.remoteSessionId,
                       }
                     : {}),
                   sourceAvailability: "online" as const,
-                  liveStatus: projected?.liveStatus ?? liveStatusFromMeta(normalized),
-                  ...(projected?.activity ? { activity: projected.activity } : {}),
-                  ...(item.searchSnippets ? { searchSnippets: item.searchSnippets } : {}),
+                  liveStatus: overlay?.liveStatus ?? liveStatusFromMeta(meta),
+                  ...(overlay?.activity ? { activity: overlay.activity } : {}),
                 };
-              });
-            } catch (error) {
-              options.onSourceError?.(source.scope, "search", error);
-              return [];
-            }
-          }),
-      );
-      items = results.flat();
-    } else {
-      const selectedSources = new Set<string>();
-      for (const source of resolvedSources) {
-        const key = sourceKey(source.scope);
-        selectedSources.add(key);
-        const pendingPreviousScope = pendingReplacementByNextSourceKey.get(key);
-        if (pendingPreviousScope) {
-          // 新 source 的首个 snapshot 失败时继续展示上一代离线可信投影；只有成功的
-          // replaceSourceSnapshot 才会在一个 delta frame 中移除旧 rows 并加入新 rows。
-          selectedSources.add(sourceKey(pendingPreviousScope));
-        }
-      }
-      items = projection
-        .getTasks()
-        .filter((row) => {
-          const scope: WindowHostControllerSourceScope =
-            row.address.sourceServerId || row.address.remoteSessionId
-              ? {
-                  kind: "remote",
-                  ...(row.address.sourceServerId
-                    ? { sourceServerId: row.address.sourceServerId }
-                    : {}),
-                  remoteSessionId: row.address.remoteSessionId,
-                  workspacePath: row.address.workspacePath,
-                  workspaceIdentity: row.address.workspaceIdentity!,
-                }
-              : {
-                  kind: "local",
-                  workspacePath: row.address.workspacePath,
-                  ...(row.address.workspaceIdentity
-                    ? { workspaceIdentity: row.address.workspaceIdentity }
-                    : {}),
-                };
-          return (
-            selectedSources.has(sourceKey(scope)) &&
-            matchesTaskListMembershipKind(row.membership, query.kind)
-          );
-        })
-        .map((row) => {
-          const resolvedSource = resolvedSources.find((source) => {
-            const addressKey = row.address.workspaceIdentity?.trim() || row.address.workspacePath;
-            const scopeKeyValue =
-              source.scope.workspaceIdentity?.trim() || source.scope.workspacePath;
-            return (
-              addressKey === scopeKeyValue &&
-              (source.scope.kind !== "remote" ||
-                (row.address.sourceServerId
-                  ? source.scope.sourceServerId === row.address.sourceServerId
-                  : source.scope.remoteSessionId === row.address.remoteSessionId))
+              }),
             );
-          });
-          return {
-            ...row.meta,
-            ...(row.address.sourceServerId ? { sourceServerId: row.address.sourceServerId } : {}),
-            ...(resolvedSource?.scope.kind === "remote" && resolvedSource.scope.serverDisplayName
-              ? { serverDisplayName: resolvedSource.scope.serverDisplayName }
-              : {}),
-            ...(row.address.remoteSessionId
-              ? { remoteSessionId: row.address.remoteSessionId }
-              : {}),
-            sourceAvailability: row.sourceAvailability,
-            liveStatus: row.liveStatus,
-            ...(row.activity ? { activity: row.activity } : {}),
-            ...(row.searchSnippets ? { searchSnippets: row.searchSnippets } : {}),
-          };
-        });
-    }
+          } while (hasMore && cursor && (query.limit === undefined || items.length < query.limit));
+          return { items, hasMore, total };
+        } catch (error) {
+          options.onSourceError?.(source.scope, query.search?.trim() ? "search" : "refresh", error);
+          return query.search?.trim() ? { items: [], hasMore: false, total: 0 } : readCached();
+        }
+      }),
+    );
+    const items = results.flatMap((result) => result.items);
     items.sort((left, right) => compareItems(left, right, query.sortBy));
-    const total = items.length;
-    const visible = query.limit == null ? items : items.slice(0, query.limit);
-    return { items: visible, total, hasMore: total > visible.length };
+    const visible = query.limit === undefined ? items : items.slice(0, query.limit);
+    const last = visible.at(-1);
+    const projectedByAddress = new Map(
+      projection
+        .getTasks()
+        .map((row) => [
+          `${taskKey(row.meta)}\0${row.address.sourceServerId ?? ""}\0${row.address.remoteSessionId ?? ""}`,
+          row,
+        ]),
+    );
+    return {
+      items: visible.map((item) => {
+        const projected = projectedByAddress.get(
+          `${taskKey(item)}\0${item.sourceServerId ?? ""}\0${item.remoteSessionId ?? ""}`,
+        );
+        return projected?.activity
+          ? {
+              ...item,
+              title: item.titleOverridden ? item.title : projected.meta.title,
+              updatedAt: projected.meta.updatedAt,
+              status: projected.meta.status,
+              // 交互等待属于实时 activity，不属于持久化任务元数据。
+              liveStatus: projected.liveStatus,
+              activity: projected.activity,
+            }
+          : item;
+      }),
+      total: results.reduce((sum, result) => sum + result.total, 0),
+      hasMore: results.some((result) => result.hasMore) || items.length > visible.length,
+      ...(last
+        ? {
+            nextCursor: {
+              updatedAt: last.updatedAt,
+              createdAt: last.createdAt,
+              taskId: last.taskId,
+              workspaceKey: last.workspaceIdentity?.trim() || last.workspacePath,
+            },
+          }
+        : {}),
+    };
   }
 
   function createAttachmentService(
@@ -1025,6 +1184,7 @@ export function createWindowHostControllerRuntime(options: {
       sourceAvailability.clear();
       sourceTaskServices.clear();
       sourceSnapshotTaskServices.clear();
+      sourceListPolicies.clear();
       sourceEventSubscriptions.clear();
       sourceRefreshFlights.clear();
       sourceRefreshGenerations.clear();

@@ -214,6 +214,29 @@ pending interaction 和 session 标题；summary 缺失时保留持久行并禁�
 `task_created`，renderer 必须用该事件换代 task-row/membership 读取。不能只更新 session activity，
 否则旧 membership Promise 会在新行已经落库后继续把它挡在 Project/Timeline/Grouped 之外。
 
+## Desktop 列表窗口（Host 内部查询策略）
+
+桌面项目目录 owner `ProjectDirectoryProvider/useProjectTree` 默认请求过去 `7 * 24h`，
+一次刷新固定 `updatedSince`（epoch ms，包含边界）。偏好可切换“全部历史”，不改变全局 OMP 配置。
+Host 现有 project/task query 执行 SQL：时间只取 `cli_updated_at`，不使用组织 `updated_at` 或文件 mtime。
+集合为窗口内 ∪ 置顶 ∪ 真实 runtime 活跃 ∪ 已打开/选中 ID；例外按完整 workspace identity 隔离，
+仍受所属 Host/profile、归档分区和删除事实约束。membership.active 仅表示非归档成员，不是运行证据。
+
+```text
+desktop preference/open selection + existing-only live activity
+  -> directory owner freezes cutoff + qualified includeTaskIds
+  -> owning Host/profile SQL filter + bounded page
+  -> merge pages -> accepted generation -> existing live overlay
+```
+
+项目树与 task query 使用有界页，跨 DB 每库最多读取本页上限后合并；
+游标携带业务时间、创建时间及 workspace/task identity 的稳定排序键。
+翻页复用同一 cutoff，游标只裁剪匹配集合，不让时间窗口缺席产生删除、归档或 tombstone。
+归档管理页复用同一 `useProjectTree` / Host 查询链显式读取全历史有界页，不继承普通侧栏窗口，
+其搜索和删除确认的候选集合不因侧栏偏好变窄。
+归档与删除事实不因窗口清理；已知 ID 精确打开及全局历史搜索保持全历史。
+V4 sessions-index 全量摘要、schema/seq/snapshot、手机 replayable 恢复及 CLI/TUI 不变。
+
 ## 恢复与多端边界
 
 - 桌面 online continuous 与手机 replayable recovery 可以消费同一份 index 权威，但各 attachment 有独立

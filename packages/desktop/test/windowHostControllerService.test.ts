@@ -5,6 +5,7 @@ import type {
   IZCodeAgentService,
   IZCodeTaskService,
   WindowHostControllerFrame,
+  ZCodeTaskListQuery,
 } from "@zcode/services";
 import {
   CONTROLLER_TASKS_INDEX_TOPIC,
@@ -40,11 +41,18 @@ function taskService(params: {
     listTasks: vi.fn(async () => params.active ?? []),
     listPinnedTasks: vi.fn(async () => params.pinned ?? []),
     listArchivedTasks: vi.fn(async () => params.archived ?? []),
-    listTaskList: vi.fn(async () => ({
-      items: params.search ?? [],
-      total: params.search?.length ?? 0,
-      hasMore: false,
-    })),
+    listTaskList: vi.fn(async (query: ZCodeTaskListQuery) => {
+      const items = query.search
+        ? query.kind === "pinned"
+          ? []
+          : (params.search ?? [])
+        : query.kind === "pinned"
+          ? (params.pinned ?? [])
+          : query.kind === "archived"
+            ? (params.archived ?? [])
+            : (params.active ?? []);
+      return { items, total: items.length, hasMore: false };
+    }),
     setTaskPinned: vi.fn(async ({ pinned }: { pinned: boolean }) =>
       meta({ taskId: pinned ? "pinned" : "unpinned" }),
     ),
@@ -284,9 +292,6 @@ describe("WindowHostControllerService", () => {
       liveStatus: "completed",
       activity: { phase: "completedSuccess", lastActivityAt: 30 },
     });
-    expect(local.listTasks).toHaveBeenCalledTimes(1);
-    expect(local.listPinnedTasks).toHaveBeenCalledTimes(1);
-    expect(local.listArchivedTasks).toHaveBeenCalledTimes(1);
     runtime.dispose();
   });
 

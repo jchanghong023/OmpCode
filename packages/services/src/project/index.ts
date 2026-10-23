@@ -87,6 +87,8 @@ export function createProjectService(options: {
   /** 装配层只提供当前各 workspace 的真实原生域；不包含曾打开过的旧 profile。 */
   repositories?(): Promise<ProjectRepositoryContract[]>;
   filterTree?(repository: ProjectRepositoryContract, tree: ProjectTree): Promise<ProjectTree>;
+  /** 既有 existing-only observer 的实时证据；不为列表启动 Agent。 */
+  activeTaskRefs?(): Array<{ workspacePath: string; workspaceIdentity?: string; taskId: string }>;
   organizationScope?(target: {
     workspacePath: string;
     workspaceIdentity?: string;
@@ -127,6 +129,10 @@ export function createProjectService(options: {
       includeDeleted?: boolean;
       includeDeletedTasks?: boolean;
       includeTasks?: boolean;
+      updatedSince?: number;
+      includeTaskIds?: Array<{ workspacePath: string; workspaceIdentity?: string; taskId: string }>;
+      taskLimit?: number;
+      taskCursor?: ProjectTree["nextTaskCursor"];
     },
   ) => {
     const tree = repository.readTree(query);
@@ -204,25 +210,70 @@ export function createProjectService(options: {
     },
     async readTree(params) {
       const remote = await route(params?.hostId);
-      if (remote)
-        return remote.readTree({
-          includeDeleted: params?.includeDeleted,
-          includeDeletedTasks: params?.includeDeletedTasks,
-        });
-      // 只读：自动归档由 autoArchiveScheduler 定时执行，读取与点击都不改变 archived。
+      if (remote) return remote.readTree(params);
+      // 只读：窗口缺席不是删除/归档，既有 tombstone 查询不裁剪。
+      const query = {
+        ...params,
+        includeTaskIds: [...(params?.includeTaskIds ?? []), ...(options.activeTaskRefs?.() ?? [])],
+      };
+      const owners = await repositories();
+      const rawTrees = owners.map((repository) => repository.readTree(query));
+      const limit =
+        params?.taskLimit === undefined
+          ? undefined
+          : Math.max(1, Math.min(250, Math.trunc(params.taskLimit)));
+      const rawTasks = rawTrees
+        .flatMap((tree) => tree.tasks)
+        .sort(
+          (a, b) =>
+            b.updatedAt - a.updatedAt ||
+            (a.taskId < b.taskId ? 1 : a.taskId > b.taskId ? -1 : 0) ||
+            ((a.workspaceIdentity?.trim() || a.workspacePath) <
+            (b.workspaceIdentity?.trim() || b.workspacePath)
+              ? 1
+              : (a.workspaceIdentity?.trim() || a.workspacePath) >
+                  (b.workspaceIdentity?.trim() || b.workspacePath)
+                ? -1
+                : 0),
+        );
+      let selected = limit === undefined ? rawTasks : rawTasks.slice(0, limit);
+      const boundary = selected.at(-1);
+      if (limit !== undefined && boundary) {
+        // 同一 identity 的旧 profile 影子行与当前 owner 可能具有相同游标。
+        // 在 owner 过滤前不能切开这个等价组，否则下一页会跳过当前 profile 的真实行。
+        selected = rawTasks.filter(
+          (task, index) =>
+            index < limit ||
+            (task.updatedAt === boundary.updatedAt &&
+              task.taskId === boundary.taskId &&
+              (task.workspaceIdentity?.trim() || task.workspacePath) ===
+                (boundary.workspaceIdentity?.trim() || boundary.workspacePath)),
+        );
+      }
+      const selectedSet = new Set(selected);
       const trees = await Promise.all(
-        (await repositories()).map((repository) =>
-          readTree(repository, {
-            includeDeleted: params?.includeDeleted,
-            includeDeletedTasks: params?.includeDeletedTasks,
-          }),
-        ),
+        rawTrees.map((tree, index) => {
+          const page = { ...tree, tasks: tree.tasks.filter((task) => selectedSet.has(task)) };
+          return options.filterTree ? options.filterTree(owners[index]!, page) : page;
+        }),
       );
+      const last = selected.at(-1);
       return {
         projects: await projectPrimaryRootStatuses(trees.flatMap((tree) => tree.projects)),
         tasks: trees.flatMap((tree) => tree.tasks),
         ...(params?.includeDeletedTasks
           ? { deletedTasks: trees.flatMap((tree) => tree.deletedTasks ?? []) }
+          : {}),
+        ...(last &&
+        limit !== undefined &&
+        (rawTasks.length > limit || rawTrees.some((tree) => tree.nextTaskCursor))
+          ? {
+              nextTaskCursor: {
+                updatedAt: last.updatedAt,
+                taskId: last.taskId,
+                workspaceKey: last.workspaceIdentity?.trim() || last.workspacePath,
+              },
+            }
           : {}),
       };
     },
@@ -408,7 +459,22 @@ export function bindRemoteProjectIdentities(
     getOrganizationScope: (target, hostId) => service.getOrganizationScope(target, hostId),
     readProjects: (params) => service.readProjects(params),
     async readTree(params) {
-      const tree = await service.readTree(params);
+      const included = params?.includeTaskIds
+        ? (
+            await Promise.all(
+              params.includeTaskIds.map(async (task) => {
+                const identity = await resolveIdentity(task.workspacePath);
+                if (task.workspaceIdentity?.trim() !== identity) return [];
+                // 控制端稳定身份须先经所属 attachment 验证；只补充该 Host 的原生本地 key，
+                // 不能把其它 remote identity 按相同路径认领。
+                return [task, { workspacePath: task.workspacePath, taskId: task.taskId }];
+              }),
+            )
+          ).flat()
+        : undefined;
+      const tree = await service.readTree(
+        included ? { ...params, includeTaskIds: included } : params,
+      );
       // 空项目也会立即订阅侧栏状态。若只准备 task cwd，首次订阅会固定到未映射的
       // emitter，稍后打开目录才建立映射也无法重绑；必须先准备所有订阅目录再发布树。
       const paths = [

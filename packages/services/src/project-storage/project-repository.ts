@@ -111,13 +111,46 @@ function resolveDirectories(
   };
 }
 
-function readTasks(db: DatabaseSync): ProjectTask[] {
-  // 迁移后的旧后端行也有 CLI 时间；沿用列表的 provider 边界，避免展示 Controller 无法操作的会话。
+function readTasks(
+  db: DatabaseSync,
+  ownerHostId: string,
+  options: Parameters<ProjectRepositoryContract["readTree"]>[0],
+): ProjectTask[] {
+  const where = [
+    "provider=?",
+    "host_id=?",
+    "deleted=0",
+    "coalesce(cli_deleted,0)=0",
+    "cli_created_at IS NOT NULL",
+  ];
+  const args: Array<string | number> = [ZCODE_AGENT_PROVIDER, ownerHostId];
+  if (options?.updatedSince !== undefined) {
+    // Bug 根因：组织 updated_at 与 membership.active 都不是业务活动；只采信 CLI 时间及显式例外。
+    const included = options.includeTaskIds ?? [];
+    where.push(
+      `(cli_updated_at>=? OR pinned=1${included.map(() => " OR (workspace_key=? AND task_id=?)").join("")})`,
+    );
+    args.push(options.updatedSince);
+    for (const task of included) args.push(resolveWorkspaceKey(task), task.taskId);
+  }
+  if (options?.taskCursor) {
+    where.push("(cli_updated_at,task_id,workspace_key)<(?,?,?)");
+    args.push(
+      options.taskCursor.updatedAt,
+      options.taskCursor.taskId,
+      options.taskCursor.workspaceKey,
+    );
+  }
+  const limit =
+    options?.taskLimit === undefined
+      ? undefined
+      : Math.max(1, Math.min(250, Math.trunc(options.taskLimit)));
+  if (limit !== undefined) args.push(limit + 1);
   return db
     .prepare(
-      "SELECT * FROM tasks WHERE provider=? AND deleted=0 AND coalesce(cli_deleted,0)=0 AND cli_created_at IS NOT NULL ORDER BY cli_updated_at DESC,task_id",
+      `SELECT * FROM tasks WHERE ${where.join(" AND ")} ORDER BY cli_updated_at DESC,task_id DESC,workspace_key DESC${limit === undefined ? "" : " LIMIT ?"}`,
     )
-    .all(ZCODE_AGENT_PROVIDER)
+    .all(...args)
     .map((row) => {
       const meta = typeof row.meta_json === "string" ? JSON.parse(row.meta_json) : {};
       return {
@@ -191,37 +224,51 @@ export class ProjectRepository implements ProjectRepositoryContract {
     });
   }
 
-  readTree(options?: {
-    includeDeleted?: boolean;
-    includeDeletedTasks?: boolean;
-    includeTasks?: boolean;
-  }): ProjectTree {
-    const read = () => ({
-      projects: readProjects(this.db, options?.includeDeleted ?? false).filter(
-        (project) => project.hostId === (this.ownerHostId ?? "local"),
-      ),
-      ...(options?.includeDeletedTasks
-        ? {
-            deletedTasks: this.db
-              .prepare(`
-        SELECT task_id AS taskId,workspace_path AS workspacePath,workspace_identity AS workspaceIdentity,host_id AS hostId
-        FROM tasks WHERE host_id=? AND (deleted=1 OR coalesce(cli_deleted,0)=1)`)
-              .all(this.ownerHostId ?? "local")
-              .map((row) => ({
-                taskId: String(row.taskId),
-                workspacePath: String(row.workspacePath),
-                hostId: String(row.hostId),
-                ...(typeof row.workspaceIdentity === "string"
-                  ? { workspaceIdentity: row.workspaceIdentity }
-                  : {}),
-              })),
-          }
-        : {}),
-      tasks:
+  readTree(options?: Parameters<ProjectRepositoryContract["readTree"]>[0]): ProjectTree {
+    const read = () => {
+      const tasks =
         options?.includeTasks === false
           ? []
-          : readTasks(this.db).filter((task) => task.hostId === (this.ownerHostId ?? "local")),
-    });
+          : readTasks(this.db, this.ownerHostId ?? "local", options);
+      const limit =
+        options?.taskLimit === undefined
+          ? undefined
+          : Math.max(1, Math.min(250, Math.trunc(options.taskLimit)));
+      const visible = limit === undefined ? tasks : tasks.slice(0, limit);
+      const last = visible.at(-1);
+      return {
+        projects: readProjects(this.db, options?.includeDeleted ?? false).filter(
+          (project) => project.hostId === (this.ownerHostId ?? "local"),
+        ),
+        ...(options?.includeDeletedTasks
+          ? {
+              deletedTasks: this.db
+                .prepare(`
+        SELECT task_id AS taskId,workspace_path AS workspacePath,workspace_identity AS workspaceIdentity,host_id AS hostId
+        FROM tasks WHERE host_id=? AND (deleted=1 OR coalesce(cli_deleted,0)=1)`)
+                .all(this.ownerHostId ?? "local")
+                .map((row) => ({
+                  taskId: String(row.taskId),
+                  workspacePath: String(row.workspacePath),
+                  hostId: String(row.hostId),
+                  ...(typeof row.workspaceIdentity === "string"
+                    ? { workspaceIdentity: row.workspaceIdentity }
+                    : {}),
+                })),
+            }
+          : {}),
+        tasks: visible,
+        ...(limit !== undefined && tasks.length > limit && last
+          ? {
+              nextTaskCursor: {
+                updatedAt: last.updatedAt,
+                taskId: last.taskId,
+                workspaceKey: resolveWorkspaceKey(last),
+              },
+            }
+          : {}),
+      };
+    };
     return this.db.isTransaction ? read() : transaction(this.db, read, false);
   }
 

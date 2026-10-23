@@ -29,6 +29,7 @@ it("clears unread through the first attachment after a Source-only sidebar query
     listTasks: async () => [task],
     listPinnedTasks: async () => [],
     listArchivedTasks: async () => [],
+    listTaskList: async () => ({ items: [task], total: 1, hasMore: false }),
     setTaskUnread: vi.fn(async () => ({ ...task, unreadAt: undefined })),
   } as unknown as IZCodeTaskService;
   const runtime = createWindowHostControllerRuntime({

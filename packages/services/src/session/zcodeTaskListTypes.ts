@@ -15,6 +15,10 @@ export interface ZCodeTaskListQuery {
   sortBy: ZCodeTaskListSortBy;
   search?: string;
   limit?: number;
+  /** Host 内部列表策略；缺席保持全历史，搜索不裁剪。 */
+  updatedSince?: number;
+  includeTaskIds?: Array<{ workspacePath: string; workspaceIdentity?: string; taskId: string }>;
+  cursor?: { updatedAt: number; createdAt: number; taskId: string; workspaceKey: string };
 }
 
 export type ZCodeTaskListItem = ZCodeTaskMeta & {
@@ -26,6 +30,7 @@ export interface ZCodeTaskListResult {
   items: ZCodeTaskListItem[];
   total: number;
   hasMore: boolean;
+  nextCursor?: ZCodeTaskListQuery["cursor"];
 }
 
 export interface ZCodeWorkspaceEventSubscriptionParams {

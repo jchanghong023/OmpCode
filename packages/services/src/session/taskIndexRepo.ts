@@ -1538,6 +1538,29 @@ export class TaskIndexRepo {
   async queryTaskList(
     params: ZCodeTaskListQuery & { provider?: ZCodeProvider },
   ): Promise<ZCodeTaskListResult> {
+    const readDatabase = async (
+      repository: TaskIndexRepo,
+      workspaceScopes: ZCodeTaskListQuery["workspaceScopes"],
+    ): Promise<ZCodeTaskListResult> => {
+      const items: ZCodeTaskListResult["items"] = [];
+      let cursor = params.cursor;
+      let total = 0;
+      let hasMore = false;
+      const requested = normalizeLimit(params.limit);
+      do {
+        const page = await repository.queryTaskListInDatabase({
+          ...params,
+          workspaceScopes,
+          cursor,
+          limit: requested === null ? 250 : Math.min(250, requested - items.length),
+        });
+        if (cursor === params.cursor) total = page.total;
+        items.push(...page.items);
+        cursor = page.nextCursor;
+        hasMore = page.hasMore;
+      } while (hasMore && cursor && (requested === null || items.length < requested));
+      return { items, total, hasMore, ...(cursor ? { nextCursor: cursor } : {}) };
+    };
     if (this.ompScopeResolver) {
       const groups = new Map<TaskIndexRepo, ZCodeTaskListQuery["workspaceScopes"]>();
       for (const target of params.workspaceScopes) {
@@ -1548,7 +1571,7 @@ export class TaskIndexRepo {
       }
       const results = await Promise.all(
         [...groups].map(([repository, workspaceScopes]) =>
-          repository.queryTaskListInDatabase({ ...params, workspaceScopes, limit: undefined }),
+          readDatabase(repository, workspaceScopes),
         ),
       );
       const items = results.flatMap((result) => result.items);
@@ -1556,20 +1579,42 @@ export class TaskIndexRepo {
         params.sortBy === "created"
           ? right.createdAt - left.createdAt ||
             right.updatedAt - left.updatedAt ||
-            right.taskId.localeCompare(left.taskId)
+            (left.taskId < right.taskId ? 1 : left.taskId > right.taskId ? -1 : 0) ||
+            (workspaceKey(left) < workspaceKey(right)
+              ? 1
+              : workspaceKey(left) > workspaceKey(right)
+                ? -1
+                : 0)
           : right.updatedAt - left.updatedAt ||
             right.createdAt - left.createdAt ||
-            right.taskId.localeCompare(left.taskId),
+            (left.taskId < right.taskId ? 1 : left.taskId > right.taskId ? -1 : 0) ||
+            (workspaceKey(left) < workspaceKey(right)
+              ? 1
+              : workspaceKey(left) > workspaceKey(right)
+                ? -1
+                : 0),
       );
       const total = results.reduce((sum, result) => sum + result.total, 0);
       const limit = normalizeLimit(params.limit);
+      const visible = limit === null ? items : items.slice(0, limit);
+      const last = visible.at(-1);
       return {
-        items: limit === null ? items : items.slice(0, limit),
+        items: visible,
         total,
-        hasMore: limit !== null && total > limit,
+        hasMore: results.some((result) => result.hasMore) || items.length > visible.length,
+        ...(last
+          ? {
+              nextCursor: {
+                updatedAt: last.updatedAt,
+                createdAt: last.createdAt,
+                taskId: last.taskId,
+                workspaceKey: workspaceKey(last),
+              },
+            }
+          : {}),
       };
     }
-    return this.queryTaskListInDatabase(params);
+    return readDatabase(this, params.workspaceScopes);
   }
 
   private async queryTaskListInDatabase(
@@ -1601,6 +1646,26 @@ export class TaskIndexRepo {
     } else {
       where.push("pinned = 0", "archived = 0");
     }
+    if (!normalizedSearchLike && params.updatedSince !== undefined && params.kind !== "pinned") {
+      // 组织 updated_at 会被 pin/rename 改写；窗口必须只读 CLI 的业务活动时间。
+      const included = params.includeTaskIds ?? [];
+      where.push(
+        `(cli_updated_at >= ? OR pinned = 1${included.map(() => " OR (workspace_key = ? AND task_id = ?)").join("")})`,
+      );
+      args.push(params.updatedSince);
+      for (const task of included) args.push(workspaceKey(task), task.taskId);
+    }
+    if (params.cursor) {
+      const first = params.sortBy === "created" ? "cli_created_at" : "cli_updated_at";
+      const second = params.sortBy === "created" ? "cli_updated_at" : "cli_created_at";
+      where.push(`(${first}, ${second}, task_id, workspace_key) < (?, ?, ?, ?)`);
+      args.push(
+        params.sortBy === "created" ? params.cursor.createdAt : params.cursor.updatedAt,
+        params.sortBy === "created" ? params.cursor.updatedAt : params.cursor.createdAt,
+        params.cursor.taskId,
+        params.cursor.workspaceKey,
+      );
+    }
     if (normalizedSearchLike) {
       // 之前只按 title 模糊匹配，没有命中聊天正文；TaskSearchDialog 长期搜不到内容。
       // 现在 title 或 searchable_text 任一命中即视为匹配，正文摘要在结果阶段构建。
@@ -1625,8 +1690,8 @@ export class TaskIndexRepo {
     }
     const orderBy =
       params.sortBy === "created"
-        ? "cli_created_at DESC, cli_updated_at DESC, task_id DESC"
-        : "cli_updated_at DESC, cli_created_at DESC, task_id DESC";
+        ? "cli_created_at DESC, cli_updated_at DESC, task_id DESC, workspace_key DESC"
+        : "cli_updated_at DESC, cli_created_at DESC, task_id DESC, workspace_key DESC";
     const rows = this.getDatabase()
       .prepare(
         `SELECT
@@ -1671,6 +1736,16 @@ export class TaskIndexRepo {
       }),
       total,
       hasMore: total > rows.length,
+      ...(rows.at(-1)
+        ? {
+            nextCursor: {
+              updatedAt: Number(rows.at(-1)!.cli_updated_at),
+              createdAt: Number(rows.at(-1)!.cli_created_at),
+              taskId: rows.at(-1)!.task_id,
+              workspaceKey: rows.at(-1)!.workspace_key,
+            },
+          }
+        : {}),
     };
   }
 

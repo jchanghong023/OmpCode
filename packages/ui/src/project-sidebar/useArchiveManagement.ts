@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
 import type { ProjectTask } from "@/project-sidebar/contract.js";
-import { useProjectDirectory } from "@/project-sidebar/ProjectDirectoryProvider.js";
+import { useProjectTree } from "@/project-sidebar/useProjectTree.js";
 import { mutateProjectTask } from "@/project-sidebar/task-mutation.js";
 import { archiveTaskKey } from "@/project-sidebar/archive-view.js";
 import { useBaseWorkspaceServices } from "@/hooks/useWorkspaceServices.js";
@@ -13,7 +13,8 @@ import { logger } from "@/logger.js";
 
 export type ArchiveOperation = "unarchive" | "delete";
 export function useArchiveManagement() {
-  const directory = useProjectDirectory();
+  // 普通侧栏的七天窗口不能裁剪归档管理及其历史搜索；仍复用同一 Host 查询链的有界页。
+  const directory = useProjectTree(false, true);
   const { zcodeTaskService: service, windowControllerService: controller } =
     useBaseWorkspaceServices();
   const removeTaskState = useZCodeSessionStore((s) => s.removeTaskState);

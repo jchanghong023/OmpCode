@@ -2496,6 +2496,21 @@ export function createZCodeTaskServiceAdapter(
     },
 
     async listTasks(params): Promise<ZCodeTaskMeta[]> {
+      if (
+        params.limit !== undefined ||
+        params.updatedSince !== undefined ||
+        params.cursor ||
+        params.includeTaskIds
+      ) {
+        const page = await taskIndexRepo.queryTaskList({
+          ...params,
+          kind: "active",
+          workspaceScopes: [params],
+          sortBy: "updated",
+          provider: GLM_PROVIDER,
+        });
+        return page.items.map(rememberIndexedTaskMeta);
+      }
       const tasks = await taskIndexRepo.listTaskMetas({
         workspacePath: params.workspacePath,
         workspaceIdentity: params.workspaceIdentity,
@@ -2516,6 +2531,21 @@ export function createZCodeTaskServiceAdapter(
     },
 
     async listPinnedTasks(params): Promise<ZCodeTaskMeta[]> {
+      if (
+        params.limit !== undefined ||
+        params.updatedSince !== undefined ||
+        params.cursor ||
+        params.includeTaskIds
+      ) {
+        const page = await taskIndexRepo.queryTaskList({
+          ...params,
+          kind: "pinned",
+          workspaceScopes: [params],
+          sortBy: "updated",
+          provider: GLM_PROVIDER,
+        });
+        return page.items.map(rememberIndexedTaskMeta);
+      }
       const tasks = await taskIndexRepo.listTaskMetas({
         workspacePath: params.workspacePath,
         workspaceIdentity: params.workspaceIdentity,
@@ -2555,6 +2585,21 @@ export function createZCodeTaskServiceAdapter(
     },
 
     async listArchivedTasks(params): Promise<ZCodeTaskMeta[]> {
+      if (
+        params.limit !== undefined ||
+        params.updatedSince !== undefined ||
+        params.cursor ||
+        params.includeTaskIds
+      ) {
+        const page = await taskIndexRepo.queryTaskList({
+          ...params,
+          kind: "archived",
+          workspaceScopes: [params],
+          sortBy: "updated",
+          provider: GLM_PROVIDER,
+        });
+        return page.items.map(rememberIndexedTaskMeta);
+      }
       const tasks = await taskIndexRepo.listTaskMetas({
         workspacePath: params.workspacePath,
         workspaceIdentity: params.workspaceIdentity,

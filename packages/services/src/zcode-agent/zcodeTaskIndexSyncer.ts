@@ -167,7 +167,9 @@ export interface ZCodeTaskIndexSyncer {
    */
   onSessionReadyEvent: Event<ZCodeTaskIndexReadyEvent>;
   /** 仅观察已经存在的订阅，不为自动归档创建 runtime 或第二份 phase 状态。 */
-  activeTaskRefs(): Array<{ workspacePath: string; workspaceIdentity?: string; taskId: string }>;
+  activeTaskRefs(
+    runtimeActivityOnly?: boolean,
+  ): Array<{ workspacePath: string; workspaceIdentity?: string; taskId: string }>;
   /** 释放所有 v4 订阅和 workspace emitter；不关闭注入的 taskIndexRepo。 */
   disposeAll(): void;
 }
@@ -1797,10 +1799,20 @@ export function createZCodeTaskIndexSyncer(
   }
 
   return {
-    activeTaskRefs() {
+    activeTaskRefs(runtimeActivityOnly = false) {
       return [...workspaceIngests.values()].flatMap((state) =>
         [...state.summaries.values()]
-          .filter((summary) => !isTerminalPhase(summary.phase))
+          .filter((summary) =>
+            runtimeActivityOnly
+              ? summary.phase === "running" ||
+                summary.phase === "prewarming" ||
+                summary.hasBackgroundWork ||
+                Boolean(summary.pendingInteraction) ||
+                (summary.pendingInteractionSummary?.permissionCount ?? 0) +
+                  (summary.pendingInteractionSummary?.userInputCount ?? 0) >
+                  0
+              : !isTerminalPhase(summary.phase),
+          )
           .map((summary) => ({ ...state.target, taskId: summary.sessionId })),
       );
     },

@@ -19,16 +19,8 @@ import {
 import { useArchiveManagement } from "@/project-sidebar/useArchiveManagement.js";
 import { remoteHostLabel } from "@/project-sidebar/RemoteHostSection.js";
 import { ArchiveGroupCard } from "@/project-sidebar/ArchiveGroupCard.js";
-import { ProjectDirectoryProvider } from "@/project-sidebar/ProjectDirectoryProvider.js";
 
 export function ArchiveManagement() {
-  return (
-    <ProjectDirectoryProvider>
-      <ArchiveManagementContent />
-    </ProjectDirectoryProvider>
-  );
-}
-function ArchiveManagementContent() {
   const { intl } = useZCodeIntl();
   const msg = (id: string) => intl.formatMessage({ id: `archives.${id}` });
   const state = useArchiveManagement();
