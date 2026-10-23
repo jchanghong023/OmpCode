@@ -122,58 +122,19 @@ function parameters(sql: string): { sql: string; slots: (string | number)[] } {
 }
 
 const sqlitePrimaryCodes: Readonly<Record<string, number>> = {
-  ERROR: 1,
-  INTERNAL: 2,
   PERM: 3,
-  ABORT: 4,
   BUSY: 5,
   LOCKED: 6,
   NOMEM: 7,
   READONLY: 8,
-  INTERRUPT: 9,
   IOERR: 10,
   CORRUPT: 11,
-  NOTFOUND: 12,
   FULL: 13,
   CANTOPEN: 14,
-  PROTOCOL: 15,
-  EMPTY: 16,
-  SCHEMA: 17,
-  TOOBIG: 18,
-  CONSTRAINT: 19,
-  MISMATCH: 20,
-  MISUSE: 21,
-  NOLFS: 22,
-  AUTH: 23,
-  FORMAT: 24,
-  RANGE: 25,
   NOTADB: 26,
-  NOTICE: 27,
-  WARNING: 28,
-  ROW: 100,
-  DONE: 101,
-};
-const sqliteExtendedCodes: Readonly<Record<string, number>> = {
-  SQLITE_BUSY_RECOVERY: 261,
-  SQLITE_BUSY_SNAPSHOT: 517,
-  SQLITE_BUSY_TIMEOUT: 773,
-  SQLITE_LOCKED_SHAREDCACHE: 262,
-  SQLITE_LOCKED_VTAB: 518,
-  SQLITE_CONSTRAINT_CHECK: 275,
-  SQLITE_CONSTRAINT_COMMITHOOK: 531,
-  SQLITE_CONSTRAINT_FOREIGNKEY: 787,
-  SQLITE_CONSTRAINT_FUNCTION: 1043,
-  SQLITE_CONSTRAINT_NOTNULL: 1299,
-  SQLITE_CONSTRAINT_PRIMARYKEY: 1555,
-  SQLITE_CONSTRAINT_TRIGGER: 1811,
-  SQLITE_CONSTRAINT_UNIQUE: 2067,
-  SQLITE_CONSTRAINT_VTAB: 2323,
-  SQLITE_CONSTRAINT_ROWID: 2579,
-  SQLITE_CONSTRAINT_PINNED: 2835,
-  SQLITE_CONSTRAINT_DATATYPE: 3091,
 };
 function throwSqliteError(error: unknown): never {
-  // 启动 admission 依赖原生 errcode 的低八位识别锁竞争；只补 SQLite 错误本身，不替换 cause/stack 或吞错。
+  // admission 与启动故障分类只消费 primary code；保留原始扩展 code 和错误对象。
   if (
     error instanceof Error &&
     error.name === "SqliteError" &&
@@ -181,7 +142,7 @@ function throwSqliteError(error: unknown): never {
     typeof error.code === "string" &&
     !("errcode" in error)
   ) {
-    const code = sqliteExtendedCodes[error.code] ?? sqlitePrimaryCodes[error.code.split("_")[1]!];
+    const code = sqlitePrimaryCodes[error.code.split("_")[1]!];
     if (code !== undefined)
       Object.defineProperty(error, "errcode", {
         value: code,

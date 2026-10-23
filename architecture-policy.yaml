@@ -55,15 +55,6 @@ modules:
   - id: desktop
     roots: [packages/desktop/src]
     managed: false
-  - id: desktop-runtime-compat-preload
-    roots: [packages/desktop/src/preload/runtime-compat]
-    managed: true
-    requires: []
-    publicEntrypoints:
-      - packages/desktop/src/preload/runtime-compat/mainWorld.ts
-      - packages/desktop/src/preload/runtime-compat/contract.ts
-    layers: { adapters: "." }
-    owner: desktop-runtime
   - id: formal-proof
     roots: [packages/formal-proof/src]
     managed: false

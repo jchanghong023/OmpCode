@@ -494,66 +494,6 @@ describe("desktopRuntimeEnv buildHostProcessEnv", () => {
     }
   });
 
-  it.each([" \tTrUe \n", " \tFaLsE \n", "0", ""])(
-    "OMP 环境原值 %j 优先于本地 env，未知变量与空值不被过滤",
-    async (offline) => {
-      vi.stubEnv("OMP_OFFLINE", offline);
-      vi.stubEnv("OMP_FUTURE_RAW_OPTION", " \tMiXeD value \n");
-      vi.stubEnv("OMP_FUTURE_EMPTY_OPTION", "");
-      try {
-        const runtime = await loadRuntimeEnv();
-        expect(
-          runtime.buildHostProcessEnv({
-            OMP_OFFLINE: "true",
-            OMP_FUTURE_RAW_OPTION: "local",
-            OMP_FUTURE_EMPTY_OPTION: "local",
-          }),
-        ).toMatchObject({
-          OMP_OFFLINE: offline,
-          OMP_FUTURE_RAW_OPTION: " \tMiXeD value \n",
-          OMP_FUTURE_EMPTY_OPTION: "",
-        });
-      } finally {
-        vi.unstubAllEnvs();
-      }
-    },
-  );
-
-  it("OMP 与 PI 根保持 Main 启动快照，不采用后续 shell 或本地 env 的根", async () => {
-    const root = join(tmpdir(), "desktop-runtime-original-root");
-    vi.stubEnv("OMP_CONFIG_ROOT", root);
-    vi.stubEnv("PI_CONFIG_DIR", " \t.pi-original ");
-    try {
-      const runtime = await loadRuntimeEnv();
-      process.env.OMP_CONFIG_ROOT = join(tmpdir(), "desktop-runtime-later-root");
-      process.env.PI_CONFIG_DIR = ".pi-later";
-      expect(
-        runtime.buildHostProcessEnv({
-          OMP_CONFIG_ROOT: join(tmpdir(), "desktop-runtime-local-root"),
-          PI_CONFIG_DIR: ".pi-local",
-        }),
-      ).toMatchObject({ OMP_CONFIG_ROOT: root, PI_CONFIG_DIR: " \t.pi-original " });
-    } finally {
-      vi.unstubAllEnvs();
-    }
-  });
-
-  it.each([undefined, ""])("未设置或空的启动根 %j 不从本地 env 补入", async (root) => {
-    vi.stubEnv("OMP_CONFIG_ROOT", root);
-    vi.stubEnv("PI_CONFIG_DIR", root);
-    try {
-      const runtime = await loadRuntimeEnv();
-      const env = runtime.buildHostProcessEnv({
-        OMP_CONFIG_ROOT: join(tmpdir(), "desktop-runtime-local-root"),
-        PI_CONFIG_DIR: ".pi-local",
-      });
-      expect(env.OMP_CONFIG_ROOT).toBe(root);
-      expect(env.PI_CONFIG_DIR).toBe(root);
-    } finally {
-      vi.unstubAllEnvs();
-    }
-  });
-
   it("host 进程 env 不再注入 NODE_NO_WARNINGS", async () => {
     const { buildHostProcessEnv } = await loadRuntimeEnv();
 

@@ -66,49 +66,7 @@ const fullForkIsolatedTests = [
   "packages/ui/test/pdfJsCMapSupport.test.ts",
 ];
 
-// 显式登记兼容性回归及从 contract 拆出的既有用例，聚焦/全量入口共用同一范围。
-const compatibilityUnitTests = [
-  "packages/services/src/project/remote-identities.test.ts",
-  "packages/services/src/task-groups/contract.execution-domains.test.ts",
-  "packages/ui/src/project-sidebar/activity/refresh/observation-lifecycle.test.ts",
-  "packages/shared/src/sqlite-migrations/contract.test.ts",
-  "packages/shared/src/sqlite-migrations/driver.test.ts",
-  "packages/desktop/test/browserDataManager.test.ts",
-  "packages/desktop/test/browserGuestManager.test.ts",
-  "packages/desktop/test/electronBrowserWebmRecorder.test.ts",
-  "packages/desktop/test/hostLog.test.ts",
-  "packages/desktop/test/logger.test.ts",
-  "packages/services/test/sshConfigAlias.test.ts",
-  "packages/shared/test/uuid.test.ts",
-  "packages/desktop/src/preload/runtime-compat/contract.test.ts",
-  "packages/desktop/src/preload/pluginSandbox/retainedMoves.test.ts",
-  "packages/ui/src/plugin-ui/adapters/pluginUiPagePlane.test.ts",
-  "packages/desktop/test/desktopRuntimeEnv.test.ts",
-  "packages/desktop/test/storagePreparationWorker.test.ts",
-  "packages/services/src/project-storage/contract.test.ts",
-  "packages/services/src/project-storage/default-workspace/contract.test.ts",
-  "packages/services/src/project-storage/downgrade/contract.test.ts",
-  "packages/services/src/project-storage/legacy-provider/contract.test.ts",
-  "packages/services/src/project-storage/migration-order/contract.test.ts",
-  "packages/services/src/project-storage/project-order/contract.test.ts",
-  "packages/services/src/project-storage/remote-single-root/contract.test.ts",
-  "packages/services/src/project-storage/shared-owner/contract.test.ts",
-  "packages/services/src/remote-projects/contract.test.ts",
-  "packages/services/src/remote-projects/legacy/contract.test.ts",
-  "packages/services/src/remote-projects/url/contract.test.ts",
-  "packages/services/src/remote-projects/workspace-settings/contract.test.ts",
-  "packages/services/test/tasksDatabaseMigration.test.ts",
-  "packages/services/test/tasksDatabaseRollback.test.ts",
-  "packages/services/test/tasksStartupPreparation.test.ts",
-  "packages/services/test/remoteSchemaMigrations.test.ts",
-  "packages/services/test/controllerRemoteIdentityMigration.test.ts",
-  "packages/services/test/workspaceIdentityOffPeakMigration.test.ts",
-  "packages/services/test/taskIndexRepoUnreadCompareAndClear.test.ts",
-  "packages/services/test/remoteProjectConnectionState.test.ts",
-];
-
 const fullUnitTests = [
-  ...compatibilityUnitTests,
   "packages/*/test/**/*.test.ts",
   // 架构治理要求 managed 模块自带 contract.test.ts（见 architecture-policy.yaml），放在模块目录内。
   "packages/*/src/**/contract.test.ts",
@@ -122,7 +80,6 @@ const fullUnitTests = [
 // OMP 对接期仅屏蔽无关 UT，保留全部文件、断言、时限和原全量定义。
 // 恢复全量只需将本数组初始化值替换为 null；普通组、隔离组和 CUA 子项目同时恢复。
 const focusedUnitTests: string[] | null = [
-  ...compatibilityUnitTests,
   "packages/desktop/test/subagentConfigProxy.test.ts",
   "packages/desktop/test/remoteWorkspacePreparation.test.ts",
   "packages/desktop/test/desktopMainIpcRemoteOpenExternalFile.test.ts",

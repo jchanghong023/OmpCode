@@ -2,8 +2,8 @@
 import { act, renderHook, waitFor, cleanup } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
-  CONTROLLER_WORKSPACES_TOPIC,
   CONTROLLER_TASKS_INDEX_TOPIC,
+  CONTROLLER_WORKSPACES_TOPIC,
   type WindowHostControllerTaskRow,
 } from "@zcode/shared/zcode-protocol-v4";
 import type {
@@ -245,6 +245,37 @@ it.each([
   };
   await f.send(next);
   await waitFor(() => expect(result.current.tree.tasks[0]).toMatchObject(patch));
+});
+
+it("观察注册失败后，显式刷新会重试，owner 重挂载仍建立观察", async () => {
+  const f = activityFixture();
+  f.list.mockRejectedValueOnce(new Error("source unavailable"));
+  const first = renderHook(() => useProjectTree());
+  await waitFor(() => expect(f.list).toHaveBeenCalledTimes(1));
+  await act(async () => first.result.current.refresh());
+  expect(f.list).toHaveBeenCalledTimes(2);
+  first.unmount();
+  renderHook(() => useProjectTree());
+  await waitFor(() => expect(f.list).toHaveBeenCalledTimes(3));
+});
+
+it("同 scope 来源重连恢复观察，离线撤销活动；恢复快照仍刷新事实", async () => {
+  const f = activityFixture();
+  const { result } = renderHook(() => useProjectTree());
+  await waitFor(() => expect(f.list).toHaveBeenCalled());
+  await f.send(f.row(), true);
+  f.list.mockClear();
+  mocks.readTree.mockClear();
+  await f.reconnect();
+  expect(f.list).toHaveBeenCalledOnce();
+  expect(mocks.readTree).toHaveBeenCalled();
+  f.list.mockClear();
+  await f.send({ ...f.row(), sourceAvailability: "offline" });
+  expect(getTaskListRowActivity(result.current.tree.tasks[0]!)).toBeNull();
+  expect(f.list).toHaveBeenCalledOnce();
+  f.setTree({ projects: [], tasks: [{ ...f.task, title: "recovered" }] });
+  await f.send({ ...f.row(), meta: { ...f.row().meta, title: "recovered" } }, true);
+  await waitFor(() => expect(result.current.tree.tasks[0]?.title).toBe("recovered"));
 });
 
 it("新增与明确删除仍刷新权威行集合，活动自身不补行", async () => {

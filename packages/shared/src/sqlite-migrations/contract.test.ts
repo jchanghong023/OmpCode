@@ -214,6 +214,40 @@ describe("sqlite-migrations contract with real SQLite", () => {
     expect(["session", "message", "part"].map((table) => content(db, table))).toEqual(before);
   });
 
+  it("retains lock admission errors and reuses the connection after releasing the lock", async () => {
+    const { directory } = await fixture();
+    const path = join(directory, "locked.sqlite");
+    const owner = new DatabaseSync(path, { timeout: 0 });
+    const contender = new DatabaseSync(path, { timeout: 0 });
+    databases.push(owner, contender);
+    owner.exec("create table locked(id integer primary key); insert into locked values(1)");
+    const write = contender.prepare("insert into locked values(?)");
+    owner.exec("begin immediate");
+    try {
+      for (const command of [() => contender.exec("begin immediate"), () => write.run(2)]) {
+        let caught: unknown;
+        try {
+          command();
+        } catch (error) {
+          caught = error;
+        }
+        if (
+          !(caught instanceof Error) ||
+          !("errcode" in caught) ||
+          typeof caught.errcode !== "number"
+        ) {
+          throw new Error("SQLite failure must retain Error and numeric errcode", {
+            cause: caught,
+          });
+        }
+        expect(caught.errcode & 0xff).toBe(5);
+      }
+    } finally {
+      owner.exec("rollback");
+    }
+    expect(write.run(2).changes).toBe(1);
+  });
+
   it("serializes concurrent connections before the async backup without blocking the event loop", async () => {
     const { directory, options } = await fixture();
     const path = join(directory, "concurrent.sqlite");
