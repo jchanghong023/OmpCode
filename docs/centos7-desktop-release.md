@@ -105,7 +105,7 @@ flowchart LR
 
 ## 8. 双平台 workflow 与本轮验收
 
-保留 `.github/workflows/release-windows.yml` 和 `release-centos7.yml` 两个手动入口，仅接受 `dev-centos7`，构建和发布使用触发 SHA。正常编译／打包／发布，不运行 UT、E2E、typecheck、lint、architecture、SSH 回环握手、许可处理或包审计；不要由 bundle hook 间接恢复取消的检查。不装配 OMP，不把 GitHub 发布成功冒充本轮启动结果。2026-10-23 用户已明确要求发布 CentOS 7 直到成功：将当前已合并源码快进到既有发行分支，执行 CentOS workflow 并公开 Release，下载同一 ZIP 在隔离 CentOS 7 环境实际启动。
+保留 `.github/workflows/release-windows.yml` 和 `release-centos7.yml` 两个手动入口，仅接受 `dev-centos7`，构建和发布使用触发 SHA。正常编译／打包／发布，不运行 UT、E2E、typecheck、lint、architecture、SSH 回环握手、许可处理或包审计；不要由 bundle hook 间接恢复取消的检查。不装配 OMP，不把 GitHub 发布成功冒充本轮启动结果。2026-10-23 用户已明确要求发布 CentOS 7 直到成功，并追加先在 WSL Ubuntu 本地测试成功后再触发流水线：先用当前源码、Electron 28 和真实外部 OMP 完成本地完整桌面构建与实际启动，再执行 CentOS workflow 并公开 Release，最后下载同一 ZIP 在隔离 CentOS 7 环境实际启动；本地失败时仅修复和重试本地，不触发流水线试错。
 
 Windows 正常构建 NSIS EXE；CentOS 正常在隔离副本构建 desktop、在兼容构建器构建 native，tar artifact 装配 ZIP。沿用既有 tag、draft、权限与产物链；SHA256 可选供用户使用，不在装配、下载或公开草稿前复验，也不下载已上传资产进行完整性检查。CentOS 发布固定 `release-centos7` 并发组、`cancel-in-progress: false`、`queue: max`，保留每个请求触发 SHA 和 GitHub 100 pending 上限，不另建队列。可选 `CENTOS7_NATIVE_IMAGE` 沿用现有不可变镜像配置，未设时使用现有 Dockerfile，不要求额外私有构建输入。
 
@@ -120,3 +120,7 @@ Windows 正常构建 NSIS EXE；CentOS 正常在隔离副本构建 desktop、在
 2026-10-23 审查后的六项最小兼容修复：两个既有定向测试文件共 135 项通过；遮罩命中修正后重跑受影响的 2 项通过。最终 typecheck、architecture 检查通过，Lint 为 96 warnings／0 errors。默认根测试入口的聚焦列表未选中这两个文件，验证使用仓库外临时配置复用原有 alias／setup，不修改永久测试入口。
 
 WSL CentOS-7 下以真实 Electron 28.3.3／Chromium 120.0.6099.291 执行生产历史适配器与页面承载层：工具栏原生 webview IPC 与适配器混合前进／后退、连续历史项、replace／分支截断、同 guest 未保存内容保留、宿主操作按钮及输入区几何命中验证通过。PDF 旧／现代 profile 均实际构建；旧运行时现代对照复现 `URL.parse` 注释丢失，legacy 实际 worker 保留外部链接和正文。临时夹具的父窗口 `sendInputEvent` 不路由 guest，改用 host CDP 输入路由后通过；未改产品输入逻辑。运行保留了 WSL 系统 D-Bus 与未打包夹具的安全警告，不声称原始 stderr 为空。这些结果是隔离组件烟测，不是完整桌面、最终 ZIP、外部 OMP 或内网实机验收。
+
+2026-10-23 Ubuntu 本地发行入口验证：当前源码在 WSL Ubuntu 24.04 使用 Node 24.14.0／pnpm 10.33.2 隔离构建，复用 run `39935588755` 的 glibc 2.17 native stage（本轮 native 源码未变），经既有 build-zip 装配后由非 root 用户实际解压、运行 Electron 28.3.3。Main 窗口与设置可操作，Host channels、数据库准备及真实外部 OMP app-server stdio warmup ready；打包终端真实执行 `printf` 输出 `UBUNTU-CENTOS7-PTY-OK` 并返回 shell 提示符，Renderer errors 查询为空，原 `fast-glob` dynamic require 崩溃不再出现。此后才允许恢复发布流水线。
+
+本地证据边界：隔离 OMP 无凭据／用户模型配置；以同一配置根运行真实 `models ls --json` 返回 0 个可用模型，GUI 保持等待／空目录，不声称完成模型请求。使用独立 Bun 运行当前外部 OMP 源码及真实 Linux native addon，不将 OMP 打入应用 ZIP。原始日志保留 WSL D-Bus／IBus／XDG 工具缺失、Ubuntu 加载 CentOS GUI 库的诊断、Chromium NOTREACHED、离线远端请求及 task-index 空 metadata 警告；不声称 stderr 为空，也未通过过滤、降级日志或修改会话数据规避。此前独立 OMP 336／337 的启动观察不冒充当前源码的模型与任务契约验收。
