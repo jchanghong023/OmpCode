@@ -44,6 +44,8 @@ OMP 是用户预先独立安装、适配目标宿主及当前协议的真实外�
 
 `node scripts/prepare-centos7-build.mjs create <destination>` 在源码树外的新目录复制当前源码／lockfile，临时覆盖 Electron 28.3.3、运行闭包 undici 6.23.0、better-sqlite3 9.6.0，实际存在 Sharp 时覆盖 0.32.6；不污染源码或其他平台依赖。源码 better-sqlite3 保持 devDependency，仅隔离副本转 production dependency；已有 fast-glob 3.3.3 生产依赖是 Node 18 SSH glob 回退的明确例外。其他 overrides（含 React 19.2.7）保留。不为这些输入新增验真门禁。
 
+原生构建 job 的 pnpm hoisted 安装在 GitHub runner 连续两次出现嵌套 esbuild `_tmp_*` rename ENOENT；固定该安装进程到 CPU 0，避免并发导入时替换父目录与写入子目录的竞态。仅限制依赖安装，不改变 pnpm 版本、依赖布局或 native 编译并行度；上游同类问题见 [pnpm/pnpm#12880](https://github.com/pnpm/pnpm/issues/12880)。
+
 - SQLite 继续使用单一共享门面：Node 22.x ≥22.16 或 Node ≥24 的完整 API 使用原生驱动，Node 23 及 CentOS Node 18 使用 better-sqlite3；不能只因存在 `node:sqlite` 就假定 backup／isTransaction／timeout 可用。不双写或迁移用户数据，不静态导入缺失 builtin，不泛 catch 静默换驱动。
 - 保留 Electron 文件附件路径、导航、frame 和可信 main-world 脚本执行的真实能力分支。旧 runtime 保留原生历史条目和进程内完整 URL／title／index 栈，不宣称支持 Chromium 不透明 POST／表单／子框架 pageState 导入导出或持久化恢复。
 - 保留 Node glob、import.meta 路径及 Promise 等实际等价回退，不以空数组或 no-op 代替。CSS 保留 field-sizing、retained planes、Pierre 样式及 GenUI 主题能力分支；PDF 使用实际 legacy alias／worker。不删除已实现兼容以取消审计。

@@ -133,7 +133,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          pnpm install --frozen-lockfile --ignore-scripts
+          # 两次真实安装均在 hoisted esbuild 导入时发生 rename ENOENT；单 CPU 避免父子目录并发替换。
+          taskset --cpu-list 0 pnpm install --frozen-lockfile --ignore-scripts
           # 与桌面构建使用同一解析规则，不能假定依赖位于 Desktop 的 node_modules。
           node -e "require(require.resolve('electron/install.js', { paths: ['./packages/desktop'] }))"
       - name: Prepare verified Node 20 glibc 2.17 native host
