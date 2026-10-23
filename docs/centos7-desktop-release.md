@@ -124,3 +124,9 @@ WSL CentOS-7 下以真实 Electron 28.3.3／Chromium 120.0.6099.291 执行生产
 2026-10-23 Ubuntu 本地发行入口验证：当前源码在 WSL Ubuntu 24.04 使用 Node 24.14.0／pnpm 10.33.2 隔离构建，复用 run `39935588755` 的 glibc 2.17 native stage（本轮 native 源码未变），经既有 build-zip 装配后由非 root 用户实际解压、运行 Electron 28.3.3。Main 窗口与设置可操作，Host channels、数据库准备及真实外部 OMP app-server stdio warmup ready；打包终端真实执行 `printf` 输出 `UBUNTU-CENTOS7-PTY-OK` 并返回 shell 提示符，Renderer errors 查询为空，原 `fast-glob` dynamic require 崩溃不再出现。此后才允许恢复发布流水线。
 
 本地证据边界：隔离 OMP 无凭据／用户模型配置；以同一配置根运行真实 `models ls --json` 返回 0 个可用模型，GUI 保持等待／空目录，不声称完成模型请求。使用独立 Bun 运行当前外部 OMP 源码及真实 Linux native addon，不将 OMP 打入应用 ZIP。原始日志保留 WSL D-Bus／IBus／XDG 工具缺失、Ubuntu 加载 CentOS GUI 库的诊断、Chromium NOTREACHED、离线远端请求及 task-index 空 metadata 警告；不声称 stderr 为空，也未通过过滤、降级日志或修改会话数据规避。此前独立 OMP 336／337 的启动观察不冒充当前源码的模型与任务契约验收。
+
+最终公开发行：[v20261023-101449-39937696157-1](https://github.com/jchanghong023/OmpCode/releases/tag/v20261023-101449-39937696157-1)，[workflow run 39937696157](https://github.com/jchanghong023/OmpCode/actions/runs/39937696157) 全部成功，源码 `bff188e543954a37bf829a85d242aa22cceea327`。`OmpCode-3.16.2-centos7-x64.zip` 为 226,472,076 字节；保持正常单 ZIP，不运行包完整性审计。
+
+从公开 Release 下载的同一 ZIP 已在 WSL CentOS-7 7.9.2009 下隔离解压、非 root 实际启动：引导页与主界面加载，Host all channels registered、database startup ready、真实独立外部 OMP stdio warmup ready。包内终端执行命令实际输出 `CENTOS7-PUBLISHED-PTY-OK` 并返回 Bash 4.2 提示符；此前 Main 的 dynamic require 崩溃未再出现。外部 OMP 使用当前源码、宿主已安装的 Bun musl 运行环境与真实匹配 musl addon，不随应用分发。安装、HOME、XDG、应用数据和 OMP 配置均隔离，既有应用与用户数据未覆盖。
+
+最终限制仍如实保留：不读取 login shell 环境的同配置原生模型目录为 0，GUI 等待目录；未执行真实模型请求。原始日志有 WSL system D-Bus／IBus／XDG 工具缺失、Chromium NOTREACHED、空 task metadata 及未确认原生 profile 时的标题同步诊断，未过滤或降级，也不宣称会话／模型端到端验收或 stderr 为空。上述证据证明公开 ZIP 的实际启动和终端原生路径，不证明 Linux 3.10、内网宿主、Exceed 或 IBus 中文输入。
