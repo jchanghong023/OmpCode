@@ -13,6 +13,7 @@ import {
 import { respondOmpSubagentRequest } from "./omp-subagents-fixture.js";
 import { respondOmpWorkflowRequest } from "./omp-workflows-fixture.js";
 import { respondOmpTeamRequest } from "./omp-team-fixture.js";
+import { respondOmpSpecDrivenRequest } from "./omp-spec-driven-fixture.js";
 
 // Explicit selection keeps the original Agent's default formal suite unchanged.
 export const OMP_INTEGRATION_SPEC = "omp-app-server.e2e.ts";
@@ -26,6 +27,7 @@ export const OMP_CORE_INTEGRATION_SPECS = [
   "omp-profiles.e2e.ts",
   "omp-tan.e2e.ts",
   "omp-commands.e2e.ts",
+  "omp-spec-driven.e2e.ts",
   "model-switch-restore-repro.test.ts",
   "v4-mention.test.ts",
 ];
@@ -425,6 +427,7 @@ export async function prepareOmpIntegrationFixture(options: {
         (latestText.includes("E2E_MODEL_SWITCH_RESTORE_REPRO_SUCCESS")
           ? { text: "E2E_MODEL_SWITCH_RESTORE_REPRO_ASSISTANT_VISIBLE" }
           : undefined) ??
+        respondOmpSpecDrivenRequest(body) ??
         respondOmpTanRequest(body) ??
         (options.specs.some((spec) => spec.endsWith("omp-team.e2e.ts")) &&
         latestText.includes("OMP_E2E_TEAM_SECOND_SESSION_READY")

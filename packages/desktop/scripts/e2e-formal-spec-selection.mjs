@@ -17,6 +17,7 @@ export const OMP_DEFAULT_E2E_SPECS = [
   "./test/e2e/omp-profiles.e2e.ts",
   "./test/e2e/omp-tan.e2e.ts",
   "./test/e2e/omp-commands.e2e.ts",
+  "./test/e2e/omp-spec-driven.e2e.ts",
 ];
 
 // 临时缩小 fork E2E 执行范围；保留用例实现，不将排除项记为通过。
