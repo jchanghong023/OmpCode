@@ -161,10 +161,13 @@ function WorkflowAskModelLine({
           : `${choices.sessionModelName} · ${choices.sessionBadge}`;
       return { text, tooltip: undefined };
     }
-    const label = describeWorkflowSubagentModel(canonical, {
-      formatMessage: format,
-      providerName: choices.providerName,
-    });
+    const label = {
+      ...describeWorkflowSubagentModel(canonical, {
+        formatMessage: format,
+        providerName: choices.providerName,
+      }),
+      name: choices.describe(choice).triggerLabel,
+    };
     return {
       text: workflowSubagentModelText(format, label),
       tooltip: workflowSubagentModelTooltip(format, label),

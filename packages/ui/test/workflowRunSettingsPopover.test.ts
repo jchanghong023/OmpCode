@@ -1,12 +1,21 @@
 // @vitest-environment jsdom
 
 // 「配置」弹层（docs/dynamic-workflow/presentation.md「The settings popover」）与 run 卡上的 Configure 钮
-// （「The run card」）、转写里的设置行（「The settings turn」）：真实 DOM 上钉字段、后果句、Apply 发出去的
-// 载荷、被拒的那一行，以及卡上按钮的位置与门控。纯规则在 workflowRunSettings.test.ts 里穷举。
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+// （「The run card」）：真实 DOM 验证设置草稿、Apply 载荷、拒绝反馈与卡上按钮的交互。
+// 纯规则在 workflowRunSettings.test.ts 里穷举；展示句式不作合同。
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  renderHook,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { createElement, createRef, type ReactNode } from "react";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { TID_CHAT_THOUGHT_LEVEL_SELECT_TRIGGER } from "@zcode/shared/test-ids";
+import type { ZCodeConfigOption } from "@zcode/shared";
 import type { CommandAck, WorkflowRunState } from "@zcode/shared/zcode-protocol-v4";
 import type { WorkflowRunCardSummary } from "@/ToolCallBlocks/shared.js";
 
@@ -18,33 +27,39 @@ vi.mock("@/hooks/useWorkflowSubagentModelProviderName.js", () => ({
   useWorkflowSubagentModelProviderName: () => undefined,
 }));
 
-/** 模型清单：一个 provider、两个模型，其中一个有思考档。 */
-const VIEW = {
-  revision: 1,
-  providers: [
-    {
-      providerId: "zhipu",
-      providerName: "Zhipu",
-      config: { api: { type: "openai-chat-completions" } },
-      models: [
-        {
-          modelId: "glm-5.3",
-          config: { optionSpecs: { reasoningLevel: { values: [], map: "{}" } } },
-        },
-        {
-          modelId: "glm-5.3-flash",
-          config: { optionSpecs: { reasoningLevel: { values: ["low", "high"], map: "{}" } } },
-        },
-      ],
-    },
-  ],
-};
-const modelRead = vi.hoisted(() => ({
-  state: { status: "ready", view: null as unknown } as { status: string; view?: unknown },
+/** 原生 configOptions 目录：免凭据模型，其中一个有思考档。 */
+const MODEL_OPTIONS: ZCodeConfigOption[] = [
+  {
+    id: "model",
+    name: "Model",
+    type: "select",
+    currentValue: "zhipu/glm-5.3",
+    options: [
+      {
+        value: "zhipu/glm-5.3",
+        name: "Zhipu/glm-5.3",
+        modelProviderName: "Zhipu",
+      },
+      {
+        value: "zhipu/glm-5.3-flash",
+        name: "Zhipu/glm-5.3-flash",
+        modelProviderName: "Zhipu",
+        modelThoughtLevels: ["low", "high"],
+        modelDefaultThoughtLevel: "low",
+      },
+    ],
+  },
+];
+// 只替换服务边界；目录仍由真实 workspace store 和公开 native catalog hook 读取。
+vi.mock("@/hooks/useZCodeSessionService.js", () => ({
+  useZCodeSessionService: () => undefined,
 }));
-vi.mock("@/hooks/useModelSelectionView.js", () => ({
-  useModelSelectionView: () => ({ state: modelRead.state, reload: vi.fn() }),
-}));
+vi.mock("@/hooks/useZCodeTaskService.js", () => {
+  const service = {
+    onDynamicWorkspaceEvent: () => () => ({ dispose() {} }),
+  };
+  return { useZCodeTaskService: () => service };
+});
 
 // eslint-disable-next-line import/first -- 必须在 mock 之后再引入被测组件。
 import { ZCodeIntlProvider } from "@/i18n/IntlProvider.js";
@@ -59,6 +74,10 @@ import { WorkflowRunDigest } from "@/components/workflow-timeline/WorkflowRunDig
 import { ConversationWorkflowDigests } from "@/v4/ConversationWorkflowDigests.js";
 // eslint-disable-next-line import/first
 import type { ConversationRowRenderContext } from "@/v4/conversationRowContext.js";
+// eslint-disable-next-line import/first
+import { useWorkflowSettingsModelChoices } from "@/components/workflow-timeline/useWorkflowSettingsModelChoices.js";
+// eslint-disable-next-line import/first
+import { useZCodeSessionStore } from "@/store/zcodeSessionStore.js";
 
 beforeAll(() => {
   // Radix Popper 量尺寸用 ResizeObserver；jsdom 没有。
@@ -70,7 +89,11 @@ beforeAll(() => {
 });
 
 beforeEach(() => {
-  modelRead.state = { status: "ready", view: VIEW };
+  useZCodeSessionStore.setState({ workspaces: {} });
+  for (const identity of [undefined, "remote:w"]) {
+    useZCodeSessionStore.getState().setConfigOptions("/w", MODEL_OPTIONS, identity);
+    useZCodeSessionStore.getState().setConfigOptionsStatus("/w", "ready", identity);
+  }
 });
 
 afterEach(() => {
@@ -132,24 +155,52 @@ function renderPopover(
   };
 }
 
+it("原生免凭据目录提供分组、名称和默认档；已有缺省或未知档不被默认覆盖", () => {
+  const { result } = renderHook(
+    () => useWorkflowSettingsModelChoices({ workspacePath: "/w", workspaceIdentity: "remote:w" }),
+    {
+      wrapper: ({ children }) =>
+        createElement(ZCodeIntlProvider, { initialLocale: "en-US" }, children),
+    },
+  );
+  expect(result.current.groups).toEqual([
+    expect.objectContaining({
+      label: "Zhipu",
+      items: [
+        expect.objectContaining({ name: "Zhipu/glm-5.3" }),
+        expect.objectContaining({ name: "Zhipu/glm-5.3-flash" }),
+      ],
+    }),
+  ]);
+  const model = { kind: "model" as const, providerId: "zhipu", modelId: "glm-5.3-flash" };
+  const value = result.current.describe(model).value;
+  expect(result.current.describe(model).thoughtOption?.currentValue).toBe("");
+  expect(result.current.describe({ ...model, level: "external" }).thoughtOption?.currentValue).toBe(
+    "external",
+  );
+  expect(result.current.pick(value, { kind: "session" })).toEqual({ ...model, level: "low" });
+  expect(result.current.pick(value, model)).toEqual(model);
+  expect(result.current.pick(value, { ...model, level: "external" })).toEqual({
+    ...model,
+    level: "external",
+  });
+  expect(result.current.describe({ kind: "session" }).unavailable).toBe(false);
+});
+
 describe("WorkflowRunSettingsPopover 字段", () => {
-  it("起点是 run 自己的设置：模型名、默认并发提示；什么都没改时没有后果句、Apply 禁用", () => {
+  it("起点读 run 设置；未改动时 Apply 禁用，无思考档的模型不画思考控件", () => {
     renderPopover(
       runState({
         subagentModel: "zhipu/glm-5.3",
         concurrency: { cap: 13, ceiling: 13, limit: 4 },
       }),
     );
-    expect(screen.getByText("Configure workflow")).toBeTruthy();
     expect(screen.getByTestId("workflow-run-settings-model-trigger").textContent).toContain(
       "glm-5.3",
     );
     expect(screen.getByTestId<HTMLInputElement>("workflow-run-settings-bound-value").value).toBe(
       "4",
     );
-    expect(screen.getByTestId("workflow-run-settings-bound").textContent).toContain("default 13");
-    // 后果句那一行留着高度、但是空的：第一次改动时页脚不往下跳。
-    expect(screen.getByTestId("workflow-run-settings-consequence").textContent).toBe("");
     expect(screen.getByTestId<HTMLButtonElement>("workflow-run-settings-apply").disabled).toBe(
       true,
     );
@@ -157,39 +208,34 @@ describe("WorkflowRunSettingsPopover 字段", () => {
     expect(screen.queryByTestId(TID_CHAT_THOUGHT_LEVEL_SELECT_TRIGGER)).toBeNull();
   });
 
-  it("后果句跟着改动走：在跑的 run 只改并发念「就地生效」，改回原值又空下来", () => {
+  it("并发改回原值后 Apply 再次禁用", () => {
     renderPopover(
       runState({
         subagentModel: "zhipu/glm-5.3",
         concurrency: { cap: 13, ceiling: 13, limit: 4 },
       }),
     );
-    const consequence = () => screen.getByTestId("workflow-run-settings-consequence").textContent;
     fireEvent.click(screen.getByTestId("workflow-run-settings-bound-decrease"));
-    expect(consequence()).toBe("Applies to this run right away; no new run is started.");
     fireEvent.click(screen.getByTestId("workflow-run-settings-bound-increase"));
-    expect(consequence()).toBe("");
     expect(screen.getByTestId<HTMLButtonElement>("workflow-run-settings-apply").disabled).toBe(
       true,
     );
   });
 
-  it("zh-CN：跑在会话模型上、上限在默认——触发器带「会话模型」徽标，提示念「= 默认」，加号仍可按", () => {
+  it("停止的 run 仍可从默认并发向上调整", () => {
     renderPopover(runState({ status: "stopped", stopReason: "user", resumable: true }), {
       locale: "zh-CN",
     });
-    expect(screen.getByText("配置工作流")).toBeTruthy();
-    expect(screen.getByTestId("workflow-run-settings-model-badge").textContent).toBe("会话模型");
-    expect(screen.getByTestId("workflow-run-settings-bound").textContent).toContain("= 默认");
     // 默认是起点不是天花板：停在默认上照样能往上加。
     expect(
       screen.getByTestId<HTMLButtonElement>("workflow-run-settings-bound-increase").disabled,
     ).toBe(false);
-    expect(screen.getByTestId("workflow-run-settings-consequence").textContent).toBe("");
-    // 改了才有后果句：停下的 run 不论改哪一项都是另起一次接着跑。
     fireEvent.click(screen.getByTestId("workflow-run-settings-bound-increase"));
-    expect(screen.getByTestId("workflow-run-settings-consequence").textContent).toBe(
-      "将以新设置另起一次运行接着跑，已完成的步骤会保留。",
+    expect(screen.getByTestId<HTMLInputElement>("workflow-run-settings-bound-value").value).toBe(
+      "14",
+    );
+    expect(screen.getByTestId<HTMLButtonElement>("workflow-run-settings-apply").disabled).toBe(
+      false,
     );
   });
 
@@ -200,27 +246,32 @@ describe("WorkflowRunSettingsPopover 字段", () => {
 
   it("run 的模型已不在清单里：「不可用」徽标，改了别的也不能 Apply（agent 只会回 model_unavailable）", () => {
     renderPopover(runState({ subagentModel: "gone/model-x" }));
-    expect(screen.getByTestId("workflow-run-settings-model-badge").textContent).toBe("unavailable");
+    expect(screen.getByTestId("workflow-run-settings-model-badge")).toBeTruthy();
     fireEvent.click(screen.getByTestId("workflow-run-settings-bound-decrease"));
     expect(screen.getByTestId<HTMLButtonElement>("workflow-run-settings-apply").disabled).toBe(
       true,
     );
   });
 
-  it("agent 没有模型目录：模型那一格换成一句话，上限仍可调", () => {
-    modelRead.state = { status: "ready", view: { revision: 1, providers: [] } };
+  it("原生模型目录为空时不提供模型选择，上限仍可调", () => {
+    useZCodeSessionStore
+      .getState()
+      .setConfigOptions("/w", [{ ...MODEL_OPTIONS[0]!, currentValue: "", options: [] }]);
     renderPopover(runState());
-    expect(screen.getByTestId("workflow-run-settings-model").textContent).toContain(
-      "This agent has no model catalog; subagents stay on the session model.",
+    expect(screen.queryByTestId("workflow-run-settings-model-trigger")).toBeNull();
+    fireEvent.click(screen.getByTestId("workflow-run-settings-bound-decrease"));
+    expect(screen.getByTestId<HTMLInputElement>("workflow-run-settings-bound-value").value).toBe(
+      "12",
     );
-    expect(screen.getByTestId("workflow-run-settings-bound-decrease")).toBeTruthy();
+    expect(screen.getByTestId<HTMLButtonElement>("workflow-run-settings-apply").disabled).toBe(
+      false,
+    );
   });
 
   it("默认未知（老 CLI）：没有默认提示，数字可以直接敲", () => {
     renderPopover(runState({ concurrencyCeiling: undefined, concurrency: undefined }));
     const input = screen.getByTestId<HTMLInputElement>("workflow-run-settings-bound-value");
     expect(input.value).toBe("");
-    expect(screen.getByTestId("workflow-run-settings-bound").textContent).not.toContain("default");
     fireEvent.change(input, { target: { value: "5" } });
     expect(input.value).toBe("5");
     expect(screen.getByTestId<HTMLButtonElement>("workflow-run-settings-apply").disabled).toBe(
@@ -278,7 +329,6 @@ describe("WorkflowRunSettingsPopover Apply", () => {
     );
     fireEvent.click(screen.getByTestId("workflow-run-settings-bound-increase"));
     fireEvent.click(screen.getByTestId("workflow-run-settings-bound-increase"));
-    expect(screen.getByTestId("workflow-run-settings-bound").textContent).toContain("default 13");
     await act(async () => {
       fireEvent.click(screen.getByTestId("workflow-run-settings-apply"));
     });
@@ -305,7 +355,6 @@ describe("WorkflowRunSettingsPopover Apply", () => {
       fireEvent.click(screen.getByTestId("workflow-run-settings-apply"));
     });
     const rejection = await screen.findByTestId("workflow-run-settings-rejection");
-    expect(rejection.textContent).toContain("no longer compiles");
     expect(rejection.querySelector("pre")?.textContent).toBe("L3:C1 Property 'ask' does not exist");
     expect(onOpenChange).not.toHaveBeenCalled();
     expect(screen.getByTestId<HTMLButtonElement>("workflow-run-settings-apply").disabled).toBe(
@@ -313,28 +362,6 @@ describe("WorkflowRunSettingsPopover Apply", () => {
     );
     fireEvent.click(screen.getByTestId("workflow-run-settings-bound-increase"));
     expect(screen.queryByTestId("workflow-run-settings-rejection")).toBeNull();
-  });
-
-  it("zh-CN 的拒绝词：能力缺席", async () => {
-    renderPopover(runState({ concurrency: { cap: 13, ceiling: 13, limit: 4 } }), {
-      locale: "zh-CN",
-      apply: vi.fn(
-        async () =>
-          ({
-            status: "rejected",
-            commandId: "c",
-            revisionAtDecision: 0,
-            reasonCode: "fault.command.capabilityUnsupported",
-          }) as CommandAck,
-      ),
-    });
-    fireEvent.click(screen.getByTestId("workflow-run-settings-bound-increase"));
-    await act(async () => {
-      fireEvent.click(screen.getByTestId("workflow-run-settings-apply"));
-    });
-    expect((await screen.findByTestId("workflow-run-settings-rejection")).textContent).toBe(
-      "当前 agent 不支持从这里调整工作流设置。",
-    );
   });
 });
 

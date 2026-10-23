@@ -4,7 +4,6 @@ import {
   zcodeProtocolMethods,
   type SubagentRuntimeConfig,
 } from "@zcode/shared";
-import { offPeakSelectionView } from "./fixtures/offPeakSelection.js";
 
 afterEach(() => {
   vi.doUnmock("../src/zcode-agent/zcodeAgentProcessManager.js");
@@ -67,7 +66,6 @@ describe("subagent runtime config reverse RPC", () => {
     const { createZCodeAgentService } = await import("../src/zcode-agent/zcodeAgentService.js");
     const service = createZCodeAgentService({
       readSubagentRuntimeConfig: read,
-      modelSelectionReadinessSource: { getView: async () => offPeakSelectionView() },
     });
     const workspace = { workspacePath: "/workspace/a", workspaceIdentity: "test:a" };
     try {

@@ -1611,10 +1611,6 @@ export function createZCodeTaskServiceAdapter(
       return;
     }
 
-    if (event.type === "providerRuntimeHeaders.request") {
-      return;
-    }
-
     if (event.type === "session.event") {
       recordAgentModelNetworkTelemetry(event.event);
       if (event.event.type === "turn.started") {

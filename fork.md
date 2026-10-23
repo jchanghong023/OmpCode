@@ -154,7 +154,7 @@ OMP 是用户必须预先独立安装的外部运行依赖，不随 OmpCode 分�
 - 外部协议及既有产品合同以本仓库的 [ZCode Protocol](docs/zcode-protocol.md)、对应 spec 和固定兼容提交中的公开 schema 为准，不通过大改协议迁就 OMP，也不把 OMP 当作原 Agent 的 Model provider。
 - OMP 入口、独立协议目录、与 AgentSession 同进程的业务 API 调用、存储准备生产端及功能／权限合同由 `F:/code2026/oh-my-pi/docs-zh-CN/requirements/rpc-ui-protocol.md` 维护；本节只维护 ZCode 侧启动消费、发行装配、宿主边界和源码保留。下文时序图是引用，不在本仓库另立一份 OMP 合同。
 - 本仓库的接入逻辑集中在启动、初始化、打包、远端分发和必要的能力展示；协议适配由 OMP 负责，不散落到 UI、Host 或原 Agent 核心中。不得为迁就 OMP 改变既有问答字段、命令准入及 CAS 刷新路径，也不在 ZCode 回放夹具中建立第二套协议翻译层或改写原有行为断言。
-- 在 OMP 全力适配后仍无法实现的功能，ZCode 原有 UI 页面、入口和控件也不能删除或隐藏；保留可见并明确显示真实不可用原因，可禁用或在点击时返回明确不支持，不伪造可用性，不自动回退旧 Agent。
+- 除本次明确取消的模型 Provider 认证界面与操作外，在 OMP 全力适配后仍无法实现的功能，其 ZCode 原有 UI 页面、入口和控件也不能删除或隐藏；保留可见并明确显示真实不可用原因，可禁用或在点击时返回明确不支持，不伪造可用性，不自动回退旧 Agent。此例外不扩大到 Skill、MCP、Team、Wiki、Repo 或其他管理面，ZCode 产品账号继续保留。
 - [OMP 需求在线入口（浮动 main）](https://github.com/jchanghong023/oh-my-pi/blob/main/docs-zh-CN/requirements/rpc-ui-protocol.md) 仅用于发布导航，不能证明已包含本地确认的合同。未取得双方真实需求发布提交前，以各仓本地需求文件为准；发布时分别记录实际提交并更新引用，不虚构 SHA，也不把固定协议源码提交当作新需求已发布的证据。
 
 ### 启动选择与发行装配
@@ -220,6 +220,41 @@ sequenceDiagram
 
 ### OMP 模型配置 GUI 与可选协议扩展
 
+#### 原生模型与认证唯一来源（v2，未验收）
+
+模型与命令领域行为详见从历史真实路径恢复并按 v2 改写的 [模型与命令需求](docs/requirements/models-and-commands.md)；复用当前配置组件，不恢复旧核实现。
+
+- 同一 OMP 配置根、运行 profile、cwd 与有效环境下，GUI 模型必须严格等于原生 TUI 可用目录。原生 registry／Settings／auth 链拥有模型、认证、role 和档位事实；app-server 只投影发布 `workspace-config`，Host 只路由并保留已接受投影，GUI 只消费并提交既有模型操作。
+- OMP 原生 `getAvailable()` 包含源码内置、无需登录或用户配置的模型，GUI 必须直接展示并允许按原生事实使用。无 key 不等于未就绪；Host 与 Renderer 移除基于旧 `providerRuntime.modelSelection`、登录或配置存在的额外启动／执行门控，不能要求这些模型先添加供应商或登录。需凭据模型的认证可用性仍由原生链裁决，不伪造 ready。
+- fork 桌面启动不注入 Host provider 配置环境源，不调用账户配置同步及其触发的 provider registry 刷新；不能只隐藏 UI 而保留激活的注入层。OMP 侧 `provider-config` 老 Host 兼容实现仍保留，本 fork 桌面不调用；不修改独立 RPC、vendor schema 或新增 key 写协议。
+- 隐藏／取消所有模型 Provider 登录、OAuth、API key 录入、登出及登录提示入口，包括设置、欢迎页、侧栏、命令入口和会话内提示；这不取消 ZCode 产品账号。保留 OMP 原生模型目录、真实 ready 标志、完整 role 配置、当前会话临时选择与原生凭据连接测试，不以旧 ZCode Provider Registry 或登录状态阻断 OMP。
+- 目录来源固定为 `workspace-config.configOptions` 中 `id:"model"` 且选项非空的原生配置，完整消费 provider 身份与名称、可用思考档位及默认思考档位；`currentValue` 等于 OMP `default` role 实际解析模型，不取目录首项或旧 Host 默认。未手选的新任务使用该默认；恢复会话保留真实临时模型／档位。presentation 的 mode／命令信息不得清空模型投影。
+- 非空原生模型来源具有绝对优先级；来源缺失或选项为空时，仅沿当前已有机制显示真实空态或等待态，不回落 Host 注入目录，不调用账户同步或注入 provider 源，不添加目录查询协议，不伪造目录或 ready。
+- registry、原生认证及 role 有效事实改变后，由原生 owner 重新解析，app-server 热发布 `workspace-config`；GUI 更新模型、档位及 default 初值，已手选草稿／既有会话保持各自所有者语义。旧 workspace、profile 或连接代际结果不得覆盖当前目标。桌面和手机投递到同一个原生 owner，分别遵守 desktop-continuous／web-remote-replayable。
+- `provider/testModelConnectivity` 使用目标 workspace/profile 的原生模型及已有原生认证链发起最小真实请求；内置免凭据模型无需补 key，确实需要凭据而缺失时才报告该原生错误。保留成功、认证失败及不可达的结构化结果，不写凭据、不改变 role 默认或已有会话。GUI 复用现有 `omp-configuration` role controller 与角色行，不恢复旧核组件、文件直写或 RPC/YAML 回落。
+- 验收包含同 profile 的 TUI/GUI 目录、provider 名、档位与默认值一致，非空原生源绝对优先、无源真实空态／等待态且不回落 Host 注入目录、role 保存热更新、全部模型登录入口消失且产品账号保留、无注入／账户刷新、ready 不伪造、连接测试不改凭据及桌面／手机同 owner。需求更新不表示实现或 smoke 已通过；证据统一记入现有联调记录。
+
+```mermaid
+sequenceDiagram
+    participant U as Desktop / Mobile GUI
+    participant H as Window Host / attachment
+    participant B as OMP app-server
+    participant O as OMP registry / Settings / native auth
+    U->>H: 既有模型选择 / role 保存 / 连接测试
+    H->>B: 按 workspace、profile、代际路由
+    B->>O: 原生操作（无账户同步、无凭据注入）
+    O->>O: 更新并解析真实有效事实
+    O-->>B: 结果 / 有效事实变化
+    B-->>H: workspace-config 投影发布
+    H-->>U: 同 owner，按各 delivery profile 投递
+```
+
+#### C 部署前提
+
+- Windows 部署前由用户在用户级环境设置 `OMP_OFFLINE=1`；需要独立配置根时可选设置绝对路径 `OMP_CONFIG_ROOT`。完全退出并重启终端与应用后，TUI 和 GUI 必须继承相同有效环境及 profile。
+- 部署使用用户级环境，不修改系统级环境、PATH、shell 配置或用户模型配置，不自动迁移数据；部署前提本身不构成已执行或验收证据。
+
+
 - `session/configure` 是向后兼容的可选公开方法；仅支持显式 `sessionId` 与 `operation`：`get_model_roles`、`set_model_role`、`get_team_config`、`get_team_models`、`set_team_config`。参数由对应严格 schema 校验，成功返回 `{operation,data}`，失败使用数值协议错误及结构化 `data`（保留保存回执）。不封装或调用内部 RPC；服务器直接调用所属会话的共享配置服务。
 - 服务能力通过 `get_team_config` 的明确方法发现读取；旧 Agent 的 `-32601` 禁用此专用入口并说明原因，不回读文件、不假称支持。OMP 必须实现全部操作，不能以能力发现缩小交付。
 - GUI 复用公开 `IZCodeAgentService` 与 hook，不使用 `window.zcode`。主模型临时切换使用既有会话模型命令，不持久化默认值；role 编辑展示完整目录、未配置及自定义 role、用户值／项目值／有效来源，使用对应 role revision 保存。
@@ -236,7 +271,7 @@ sequenceDiagram
 
 - 子代理创建配置、模型／思考隔离、真实 child 派生、转父问答、过程／历史、消息、停止恢复和失败结算，以及完整工作流定义管理、真实 actor 过程／交互、产物／历史、恢复／失败／取消，均为本次替换的核心范围；行为与协议事实的唯一权威为 OMP 需求的「子代理核心能力」「既有界面的工作流与记忆消费」。本节仅规定既有 GUI 的消费和验收边界，不另立执行状态或参数合同。
 - 不用 `/workflowz` 或脚本编排替代 GUI actor 过程／历史，不用旧 `zcode-cli`、旧工具别名或平行 runtime 迁就 fixture。Host 仍只路由和持有组织态，UI 仍只持有草稿和展示；子代理／工作流执行事实不能迁入 Host。desktop-continuous 与 web-remote-replayable 隔离不变。
-- v4 permission 工具审批纳入完整替换范围，复用既有权限面板、`resolveInteraction` 和双 delivery profile，具体授权／取消／隔离合同以 OMP 需求「权限与提问」为唯一权威。Host／UI 不记录另一份授权规则，不把一次批准扩大为全访问。Skill、Provider 管理在 OMP 已有原生能力范围内尽力完整桥接，仅修改适配与消费侧，不改变核心执行语义；原生没有等价能力的操作明确反馈限制。`plugin_reference`／插件目录、MCP 及其他管理面不因此扩大。
+- v4 permission 工具审批纳入完整替换范围，复用既有权限面板、`resolveInteraction` 和双 delivery profile，具体授权／取消／隔离合同以 OMP 需求「权限与提问」为唯一权威。Host／UI 不记录另一份授权规则，不把一次批准扩大为全访问。Skill 管理与 Provider 原生目录／role／连接测试在 OMP 已有能力范围内桥接；Provider 认证 GUI 与 Host 源注入按本节 v2 明确退役，不能用泛化的管理桥接条款恢复账户同步。`plugin_reference`／插件目录、MCP 及其他管理面不因此扩大。
 - 新增验收 ID `OMP-SA01`–`OMP-SA06`、`OMP-WF01`–`OMP-WF05` 的动作／证据见 [case catalog](docs/conversation-session-case-catalog.md#omp-native-子代理与工作流核心验收)，执行范围与状态见 [coverage matrix](docs/testing/conversation-session-e2e-coverage-matrix.md#omp-native-子代理与工作流核心验收)。全部当前为新增规划／未验证，需求更新不证明真实适配完成。
 
 ```mermaid

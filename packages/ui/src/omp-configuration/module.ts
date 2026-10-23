@@ -19,3 +19,14 @@ export { RepoPage } from "./RepoPage.js";
 export { useTeamRuns } from "./useTeamRuns.js";
 export { TeamChatCard, TeamRunView } from "./TeamRunView.js";
 export { OmpTeamRunSidePane } from "./OmpTeamRunSidePane.js";
+export {
+  useOmpModelCatalog,
+  readOmpModelCatalog,
+  buildOmpModelSelectGroups,
+  findOmpCatalogEntry,
+  selectionForOmpEntry,
+  ompThoughtOptionForEntry,
+  type OmpModelCatalog,
+  type OmpModelCatalogEntry,
+} from "./ompModelCatalog.js";
+export { OmpModelManagementPage } from "./OmpModelManagementPage.js";

@@ -3,7 +3,7 @@ import {
   fuzzyMatch,
   handleEndpointSuggestionPopoverOpenAutoFocus,
   resolveEndpointSuggestionOpenRequest,
-} from "@/settings/ModelProviderSection.js";
+} from "@/settings/model-provider-section/utils.js";
 
 describe("handleEndpointSuggestionPopoverOpenAutoFocus", () => {
   it("打开建议列表时会阻止焦点跳到下拉层，并保持输入框可继续输入", () => {

@@ -55,13 +55,11 @@ import {
   consumePendingSettingsPluginOrigin,
   consumePendingSettingsPluginScopeKey,
   consumePendingSettingsPluginTab,
-  consumePendingSettingsModelProviderTarget,
   consumePendingSettingsUsageTab,
   resolveSettingsSection,
   setPendingSettingsSectionIntent,
   shouldFallbackSettingsUsageTabToApp,
   writeLastSettingsSectionPreference,
-  type SettingsModelProviderTarget,
 } from "@/lib/settingsNavigation.js";
 import { readSidebarUsageCodingPlanSourcePreference } from "@/lib/sidebarUsageCodingPlanProviderPreference.js";
 import {
@@ -113,7 +111,6 @@ import type { AppToolSearchMode } from "@zcode/shared";
 import { useSettings } from "@/hooks/useSettingService.js";
 import type { CreateTaskRequest, RemoteConnectionOpenPreference } from "@/app-shell/types.js";
 import { useBaseWorkspaceServices } from "@/hooks/useWorkspaceServices.js";
-import { resolveModelProviderConnectivityWorkspacePath } from "@/lib/modelProviderConnectivityTarget.js";
 import { useZCodeAgentService } from "@/hooks/useZCodeAgentService.js";
 import { OmpWorkspaceProfiles } from "@/omp-configuration/module.js";
 import {
@@ -647,11 +644,7 @@ export function SettingsPage({
     checkingUsageBigmodelCodingPlanTab ||
     usageBigmodelEnterpriseProducts.loading ||
     usageZaiEnterpriseProducts.loading;
-  const [initialModelProviderTarget] = useState(() => consumePendingSettingsModelProviderTarget());
   const { openCodingPlanUpgrade } = useCodingPlanUpgradeDialog();
-  const [pendingModelProviderTarget, setPendingModelProviderTarget] = useState<
-    SettingsModelProviderTarget | undefined
-  >(() => initialModelProviderTarget);
   const handleUsageTabSelect = useCallback((tab: UsageStatsSectionTab) => {
     setUsageActiveTab(tab);
   }, []);
@@ -749,21 +742,6 @@ export function SettingsPage({
       null
     );
   });
-  const localModelProviderConnectivityWorkspacePath = useMemo(
-    () =>
-      resolveModelProviderConnectivityWorkspacePath({
-        activeWorkspacePath,
-        activeWorkspaceIdentity,
-        activeWorkspaceTab,
-        workspaceTabs,
-      }),
-    [activeWorkspaceIdentity, activeWorkspacePath, activeWorkspaceTab, workspaceTabs],
-  );
-  const isRemoteModelProviderWorkspace = Boolean(
-    activeWorkspaceIdentity?.trim() ||
-    activeWorkspaceTab?.remoteSessionId?.trim() ||
-    activeWorkspaceTab?.remoteTarget,
-  );
   const services = useServices();
   const onboardingRecordService = services.onboardingRecordService;
   const localHostServices = useBaseWorkspaceServices();
@@ -884,11 +862,6 @@ export function SettingsPage({
           setPluginScopeKey(detail.pluginScopeKey);
         } else if (resolveSettingsSection(section) !== "plugin") {
           setPluginNavigationOrigin(undefined);
-        }
-        if (section === "modelProvider" && detail?.modelProviderId) {
-          setPendingModelProviderTarget({
-            providerId: detail.modelProviderId,
-          });
         }
       }),
     [activeSection, setActiveSettingsSection],
@@ -2100,20 +2073,11 @@ export function SettingsPage({
                                   {intl.formatMessage({ id: "omp.profiles.noTarget" })}
                                 </p>
                               )}
-                              <ServiceProvider services={localHostServices}>
-                                {/* 模型配置属于本机全局事实源；激活远端 workspace 时也不能注入远端 Host。 */}
-                                <ModelProviderSection
-                                  workspacePath={activeWorkspacePath ?? captionWorkspacePath ?? ""}
-                                  connectivityWorkspacePath={
-                                    localModelProviderConnectivityWorkspacePath
-                                  }
-                                  connectivityWorkspaceRequired={isRemoteModelProviderWorkspace}
-                                  pendingModelProviderTarget={pendingModelProviderTarget}
-                                  onConsumePendingModelProviderTarget={() =>
-                                    setPendingModelProviderTarget(undefined)
-                                  }
-                                />
-                              </ServiceProvider>
+                              <ModelProviderSection
+                                workspacePath={activeWorkspacePath ?? captionWorkspacePath ?? ""}
+                                workspaceIdentity={activeWorkspaceIdentity}
+                                remoteSessionId={activeWorkspaceTab?.remoteSessionId}
+                              />
                             </>
                           ) : activeSection === "memory" ? (
                             <ServiceProvider services={localHostServices}>

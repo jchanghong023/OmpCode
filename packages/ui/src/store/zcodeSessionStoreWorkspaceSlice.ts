@@ -63,13 +63,6 @@ function normalizeConfigOptions(options: ZCodeConfigOption[]): ZCodeConfigOption
   return options.map(normalizeThoughtLevelConfigOption);
 }
 
-function cloneConfigOptions(options: readonly ZCodeConfigOption[]): ZCodeConfigOption[] {
-  return options.map((option) => ({
-    ...option,
-    options: option.options?.map((entry) => ({ ...entry })),
-  }));
-}
-
 function isModeConfigOption(option: ZCodeConfigOption): boolean {
   return option.category === "mode" && option.type === "select";
 }
@@ -464,32 +457,6 @@ export function createWorkspaceSlice(set: SetFn) {
               current.activeTaskId !== null ||
               shouldResetSupplierForDraftProvider ||
               storageScopeChanged;
-            const shouldInheritActiveTaskConfig =
-              current.activeTaskId !== null &&
-              !shouldResetSupplierForDraftProvider &&
-              !storageScopeChanged;
-            const activeTaskIdForInheritance = shouldInheritActiveTaskConfig
-              ? current.activeTaskId
-              : null;
-            const cachedActiveTaskConfigOptions = activeTaskIdForInheritance
-              ? current.taskConfigOptionsByTaskId[activeTaskIdForInheritance]
-              : null;
-            const inheritedConfigOptions = activeTaskIdForInheritance
-              ? cachedActiveTaskConfigOptions && cachedActiveTaskConfigOptions.length > 0
-                ? cachedActiveTaskConfigOptions
-                : // Bug 原因：protocol-v4 当前任务的配置可能只完成了 workspace 投影，
-                  // legacy task 缓存尚未写入或仍是首帧空数组。此时工具条已经显示
-                  // current.configOptions，新草稿必须从当前投影继承，不能无种子预热。
-                  current.configOptions
-              : null;
-            const inheritedDraftConfigOptions =
-              inheritedConfigOptions && inheritedConfigOptions.length > 0
-                ? cloneConfigOptions(inheritedConfigOptions)
-                : null;
-            const inheritedConfigOptionsStatus =
-              current.activeTaskId && inheritedDraftConfigOptions
-                ? (current.taskConfigOptionsStatusByTaskId[current.activeTaskId] ?? "ready")
-                : current.configOptionsStatus;
             return {
               ...current,
               activeTaskId: null,
@@ -506,16 +473,12 @@ export function createWorkspaceSlice(set: SetFn) {
                 ),
               draftCreateSource: options?.createSource ?? "session",
               draftRuntime: { status: "idle", error: null },
-              // 从已有 task 点 New Task 时，草稿输入框必须继承当前 task 的完整配置。
-              // 否则后续 workspace prepare 会按 Team Plan / 默认模型重建草稿，把已选的其他模型回弹成 GLM。
-              ...(inheritedDraftConfigOptions
-                ? {
-                    configOptions: inheritedDraftConfigOptions,
-                    configOptionsStatus: inheritedConfigOptionsStatus,
-                  }
-                : storageScopeChanged
-                  ? { configOptions: [], configOptionsStatus: "idle" as const }
-                  : {}),
+              // Bug 原因：task 缓存是会话局部配置，可能只有 mode 或临时模型；
+              // 继承它会覆盖已就绪的原生 workspace 目录，导致新草稿的模型入口整体消失。
+              // 同 profile 保留唯一目录及 default role，只有切换 profile 才清空等待原生水合。
+              ...(storageScopeChanged
+                ? { configOptions: [], configOptionsStatus: "idle" as const }
+                : {}),
               draftError: null,
               modelSwitchRequestId: null,
               modelSwitchPending: false,
@@ -754,7 +717,18 @@ export function createWorkspaceSlice(set: SetFn) {
     ) => {
       set((state) => {
         const current = getWorkspaceState(state, workspacePath, workspaceIdentity);
-        const normalizedOptions = normalizeConfigOptions(options);
+        // readPresentation 只有 mode 元数据，不是原生模型目录的替换事实。
+        // 原生目录显式携带 model（包括空 options）时仍完整替换，不能保留已失效模型。
+        const presentationOnly =
+          options.length > 0 && options.every((option) => option.category === "mode");
+        const normalizedOptions = normalizeConfigOptions(
+          presentationOnly
+            ? [
+                ...(current.configOptions ?? []).filter((option) => option.category !== "mode"),
+                ...options,
+              ]
+            : options,
+        );
         const skipped = areConfigOptionsEquivalent(current.configOptions, normalizedOptions);
         if (skipped) {
           // 无 API key / 旧模型不可用时，工具栏 recovery effect 会多次提交同一份空模型配置。
@@ -767,8 +741,6 @@ export function createWorkspaceSlice(set: SetFn) {
           workspacePath,
           (current) => ({
             ...current,
-            // startDraft 先保存 active task 的预热种子，随后异步目录水合会走到这里。
-            // 目录刷新不是草稿生命周期终点，不能清掉种子，否则 createSession 会回退全局默认模型。
             configOptions: normalizedOptions,
           }),
           workspaceIdentity,

@@ -15,11 +15,6 @@ import {
   TID_MODEL_PROVIDER_MODEL_DELETE_BUTTON,
 } from "@zcode/shared/test-ids";
 import {
-  resolveCodingPlanProviderSyncAttemptKey,
-  shouldRetryUnchangedCodingPlanProviderSync,
-  resolveModelProviderSideSelectionKey,
-} from "@/settings/ModelProviderSection.js";
-import {
   beginCodingPlanUpgradeLogin,
   isCodingPlanPurchaseAuthPending,
   closeAndRefreshCodingPlanUpgradeFromWebview,
@@ -655,51 +650,6 @@ describe("model provider coding plan", () => {
       });
     },
   );
-
-  it("uses a stable provider/auth identity for Z.ai and BigModel plan transitions", () => {
-    expect(
-      resolveCodingPlanProviderSyncAttemptKey({
-        activeOAuthProvider: ZAI_PROVIDER_ID,
-        oauthProviderId: ZAI_PROVIDER_ID,
-        providerId: BUILTIN_MODEL_PROVIDER_IDS.zaiIndividualCodingPlan,
-      }),
-    ).toBe(`${BUILTIN_MODEL_PROVIDER_IDS.zaiIndividualCodingPlan}:${ZAI_PROVIDER_ID}`);
-    expect(
-      resolveCodingPlanProviderSyncAttemptKey({
-        activeOAuthProvider: BIGMODEL_PROVIDER_ID,
-        oauthProviderId: BIGMODEL_PROVIDER_ID,
-        providerId: BUILTIN_MODEL_PROVIDER_IDS.bigmodelIndividualCodingPlan,
-      }),
-    ).toBe(`${BUILTIN_MODEL_PROVIDER_IDS.bigmodelIndividualCodingPlan}:${BIGMODEL_PROVIDER_ID}`);
-    expect(
-      resolveCodingPlanProviderSyncAttemptKey({
-        activeOAuthProvider: ZAI_PROVIDER_ID,
-        oauthProviderId: BIGMODEL_PROVIDER_ID,
-        providerId: BUILTIN_MODEL_PROVIDER_IDS.bigmodelIndividualCodingPlan,
-      }),
-    ).toBeNull();
-  });
-
-  it("连接项未变化但上次同步未完成时允许再次刷新 Plan", () => {
-    const attemptKey = `${BUILTIN_MODEL_PROVIDER_IDS.bigmodelIndividualCodingPlan}:${BIGMODEL_PROVIDER_ID}`;
-
-    expect(
-      shouldRetryUnchangedCodingPlanProviderSync({
-        attemptKey,
-        attemptStatus: "failed",
-        modeUnchanged: true,
-        selectedKeyUnchanged: true,
-      }),
-    ).toBe(true);
-    expect(
-      shouldRetryUnchangedCodingPlanProviderSync({
-        attemptKey,
-        attemptStatus: "succeeded",
-        modeUnchanged: true,
-        selectedKeyUnchanged: true,
-      }),
-    ).toBe(false);
-  });
 
   it("失效 Start 连接回到可操作的同 Family 页面，不改保存的连接", () => {
     let captured: ReturnType<typeof useModelProviderNavigation> | undefined;
@@ -1373,32 +1323,6 @@ describe("model provider coding plan", () => {
       "coding-plan:account:zai-start-plan",
       "coding-plan:account:bigmodel-start-plan",
     ]);
-  });
-
-  it("套餐连接入口点击时仍映射回 provider family side key", () => {
-    expect(
-      resolveModelProviderSideSelectionKey({
-        key: "coding-plan:account:zai-individual-coding-plan",
-        type: "codingPlan",
-        presetId: BUILTIN_MODEL_PROVIDER_IDS.zaiIndividualCodingPlan,
-        oauthProviderId: ZAI_PROVIDER_ID,
-        label: "Z.ai - Coding Plan",
-        providerName: "Z.ai",
-        provider: createProvider({
-          id: BUILTIN_MODEL_PROVIDER_IDS.zaiIndividualCodingPlan,
-          name: "Z.ai - Coding Plan",
-        }),
-        status: "purchased",
-        planLevel: "Coding Pro",
-        currentProductId: "product-zai-pro",
-        subscriptionBillingCycle: null,
-        subscriptionRenewTime: null,
-        subscriptionExpireTime: null,
-        quotaLimits: [],
-        purchaseUrl: "https://z.ai/manage-apikey/subscription",
-        statusActive: true,
-      }),
-    ).toBe("preset:account:zai-start-plan");
   });
 
   it("Z.ai family 导航保持品牌图标，不借用 Start 图标", () => {

@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { createServer, type ServerResponse } from "node:http";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
@@ -288,7 +289,20 @@ export async function prepareOmpIntegrationFixture(options: {
   );
   const restoreRequests: Array<{ body: ModelRequest; status: number }> = [];
   const managementFixture = options.specs.some((spec) => spec.endsWith("omp-management.e2e.ts"));
-  const managementRequests: Array<{ path: string; body: ModelRequest; status: number }> = [];
+  const managementLane = options.environment.OMP_E2E_MANAGEMENT_LANE || "company";
+  if (managementFixture && !["company", "codeagent"].includes(managementLane)) {
+    throw new Error("OMP_E2E_MANAGEMENT_LANE must be company or codeagent");
+  }
+  if (managementFixture) options.environment.OMP_E2E_MANAGEMENT_LANE = managementLane;
+  const managementRequests: Array<{
+    path: string;
+    body: ModelRequest;
+    status: number;
+    authMatchesExpected: boolean;
+    authPresent: boolean;
+  }> = [];
+  const nativeAuthKey = randomBytes(24).toString("hex");
+  if (managementFixture) options.environment.OMP_E2E_NATIVE_AUTH_KEY = nativeAuthKey;
   const activeResponses = new Set<ServerResponse>();
   const server = createServer(async (request, response) => {
     if (request.url === "/__requests") {
@@ -325,8 +339,18 @@ export async function prepareOmpIntegrationFixture(options: {
         body.messages[0]?.role === "user" &&
         body.messages[0].content === "Reply OK."
       ) {
-        const status = body.model === "omp-alternate" ? 401 : 200;
-        managementRequests.push({ path: request.url!, body, status });
+        const authMatchesExpected = request.headers.authorization === `Bearer ${nativeAuthKey}`;
+        const status =
+          body.model === "omp-alternate" || (body.model === "omp-auth-chat" && !authMatchesExpected)
+            ? 401
+            : 200;
+        managementRequests.push({
+          path: request.url!,
+          body,
+          status,
+          authMatchesExpected,
+          authPresent: Boolean(request.headers.authorization),
+        });
         if (status === 401) {
           response.writeHead(401, { "content-type": "application/json" });
           response.end(
@@ -574,9 +598,23 @@ export async function prepareOmpIntegrationFixture(options: {
   server.listen(0, "127.0.0.1", listening.resolve);
   await listening.promise;
   const baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  if (managementFixture) {
+    // company内置目录走真实启动配置，只指向本地fixture，绝不继承开发者公司凭据。
+    const claudeDir = resolve(options.homeDir, "omp-company-fixture");
+    await mkdir(claudeDir, { recursive: true });
+    await writeFile(
+      resolve(claudeDir, "settings.json"),
+      JSON.stringify({
+        env: { ANTHROPIC_BASE_URL: baseUrl, ANTHROPIC_AUTH_TOKEN: "omp-company-fixture-only" },
+      }),
+    );
+    options.environment.CLAUDE_CONFIG_DIR = claudeDir;
+  }
   const subagentReasoning = options.specs.some(
     (spec) =>
-      spec.endsWith("omp-subagents.e2e.ts") || spec.endsWith("model-switch-restore-repro.test.ts"),
+      spec.endsWith("omp-subagents.e2e.ts") ||
+      spec.endsWith("model-switch-restore-repro.test.ts") ||
+      spec.endsWith("omp-management.e2e.ts"),
   );
   await writeFile(
     resolve(agentDir, "models.yml"),
@@ -584,6 +622,7 @@ export async function prepareOmpIntegrationFixture(options: {
   );
   await updateFixtureConfig(agentDir, (document) => {
     const model = `${OMP_PROVIDER_ID}/${OMP_MODEL_ID}`;
+    if (managementFixture) document.set("disabledProviders", ["anthropic", "openai"]);
     document.set("enabledModels", [
       model,
       `${OMP_PROVIDER_ID}/omp-alternate`,
@@ -667,13 +706,17 @@ export async function prepareOmpIntegrationFixture(options: {
   Object.assign(options.environment, {
     OMP_CONFIG_ROOT: configRoot,
     PI_CODING_AGENT_DIR: agentDir,
-    OMP_OFFLINE: "0",
+    OMP_OFFLINE: managementFixture && managementLane === "company" ? "1" : "0",
     OMP_PROFILE: profile,
     PI_PROFILE: profile,
     PI_CONFIG_FILES: "",
     OMP_E2E_PROVIDER_URL: baseUrl,
-    ANTHROPIC_API_KEY: "omp-fixture-only",
-    OPENAI_API_KEY: "omp-fixture-only",
+    ...(managementFixture
+      ? {}
+      : {
+          ANTHROPIC_API_KEY: "omp-fixture-only",
+          OPENAI_API_KEY: "omp-fixture-only",
+        }),
     HTTP_PROXY: "",
     HTTPS_PROXY: "",
     ALL_PROXY: "",
@@ -708,6 +751,18 @@ export async function prepareOmpIntegrationFixture(options: {
     enabled: true,
     models: [{ id: "omp-anthropic-chat", contextWindow: 128000 }],
   });
+  if (managementFixture) {
+    // 旧Host配置哨兵与原生storage key故意不同；不得激活、混入目录或覆盖原生认证。
+    await seedPersonalProviderConfig(providerFile, {
+      id: "omp-auth-storage",
+      label: "OMP Host account must not enter native catalog",
+      apiFormat: "openai-chat-completions",
+      baseURL: `${baseUrl}/v1`,
+      apiKey: "omp-host-key-must-not-be-used",
+      enabled: true,
+      models: [{ id: "omp-auth-chat", contextWindow: 128000 }],
+    });
+  }
   await seedPersonalDefaultModelSelection(providerFile, {
     providerId: OMP_PROVIDER_ID,
     modelId: OMP_MODEL_ID,

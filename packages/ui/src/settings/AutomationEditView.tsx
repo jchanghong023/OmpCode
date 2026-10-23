@@ -1,7 +1,5 @@
 /* eslint-disable max-lines -- 定时任务编辑整页集中维护 Settings/History 两个 tab、cron builder、项目/模型选择器与运行历史，集中更利于交互一致。 */
-import { useStartPlanRecommendation } from "@/hooks/useStartPlanRecommendation.js";
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
-import { completeNewModelSelection } from "@zcode/provider";
 import {
   ArrowLeft,
   ArrowRight,
@@ -66,7 +64,6 @@ import {
 } from "@/settings/AutomationInstructionsComposer.js";
 import { SettingsBreadcrumbReporter } from "@/settings/SettingsHeaderBreadcrumb.js";
 import { Button } from "@/components/ui/button.js";
-import { toast } from "@/components/ui/toast.js";
 import { Input } from "@/components/ui/input.js";
 import {
   Select,
@@ -127,9 +124,12 @@ import {
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
 import { useConfirmDialog } from "@/hooks/useConfirmDialog.js";
 import { useAutomationProjectOptions } from "@/hooks/useAutomationProjectOptions.js";
-import { useWorkspaceServicesResolution } from "@/hooks/useWorkspaceServices.js";
-import { useModelSelectionServiceView } from "@/hooks/useModelSelectionView.js";
-import { resolveModelThoughtOption } from "@/lib/modelThoughtOption.js";
+import {
+  useOmpModelCatalog,
+  findOmpCatalogEntry,
+  selectionForOmpEntry,
+  ompThoughtOptionForEntry,
+} from "@/omp-configuration/module.js";
 import { decodeCustomModelValue, encodeCustomModelValue } from "@/lib/zcodeCustomModelValue.js";
 import { parseModelPickerValue } from "@/lib/zcodeSessionProjection.js";
 import { startUserAction } from "@/lib/userActionTelemetry.js";
@@ -1447,58 +1447,18 @@ export function AutomationEditView({
       ? { ...identity, ...(thoughtLevel ? { options: { reasoningLevel: thoughtLevel } } : {}) }
       : null;
   }, [model, thoughtLevel]);
-  // 模型候选属于当前表单目标 Host。项目切换时立即切换订阅；远程目标未连接时
-  // 等待远端时保持 unavailable；本地空项目直接读取同 Host 模型目录，不创建假 cwd。
-  const selectionOwner = useWorkspaceServicesResolution(
-    selectedWorkspacePath || null,
-    selectedWorkspace?.remoteSessionId,
+  // 候选只来自表单执行目标的原生目录；空目标不借用当前 tab 或 Host 账户配置。
+  const nativeModels = useOmpModelCatalog(
+    selectedWorkspacePath,
     selectedWorkspaceIdentity,
-    selectedWorkspace?.remoteTarget,
+    selectedWorkspace?.remoteSessionId,
+    Boolean(selectedWorkspacePath),
   );
-  const modelSelectionRead = useModelSelectionServiceView(
-    selectionOwner.services.modelSelectionService,
-    Boolean(selectedWorkspace) && selectionOwner.connectionKind !== "remote-waiting",
-    selectedWorkspace ? "remote-waiting" : "missing-target",
-    { selection: originalSelection },
-  );
-  const modelSelectionView =
-    modelSelectionRead.state.status === "ready" ? modelSelectionRead.state.view : null;
-  const effectiveSelection = modelSelectionView?.effectiveSelection;
-  const effectiveModelValue = effectiveSelection
-    ? encodeCustomModelValue(effectiveSelection.providerId, effectiveSelection.modelId)
-    : "";
-  const effectiveReasoningLevel = effectiveSelection?.options?.reasoningLevel ?? "";
-  const modelSelectGroups = useMemo(() => {
-    if (!modelSelectionView) return [];
-    return buildAutomationModelSelectGroups({
-      selectedProvider: ZCODE_AGENT_PROVIDER,
-      labels: {
-        apiKeyLabel: intl.formatMessage({ id: "settings.modelProvider.apiKey" }),
-        apiKeyBadgeLabel: intl.formatMessage({
-          id: "settings.modelProvider.connectionMode.apiKeyBadge",
-        }),
-        codingPlanLabel: intl.formatMessage({
-          id: "settings.modelProvider.connectionMode.codingPlan",
-        }),
-        codingPlanBadgeLabel: intl.formatMessage({
-          id: "settings.modelProvider.connectionMode.codingPlanBadge",
-        }),
-        startPlanLabel: intl.formatMessage({
-          id: "settings.modelProvider.connectionMode.startPlan",
-        }),
-        startPlanBadgeLabel: intl.formatMessage({
-          id: "settings.modelProvider.connectionMode.startPlanBadge",
-        }),
-        teamPlanBadgeLabel: intl.formatMessage({
-          id: "settings.modelProvider.connectionMode.teamPlanBadge",
-        }),
-        teamPlanFallbackLabel: intl.formatMessage({
-          id: "settings.modelProvider.connectionMode.teamPlan",
-        }),
-      },
-      registrySelectionView: modelSelectionView,
-    });
-  }, [intl, modelSelectionView]);
+  const catalog = selectedWorkspace ? nativeModels.catalog : null;
+  const effectiveSelection = originalSelection;
+  const effectiveModelValue = model;
+  const effectiveReasoningLevel = thoughtLevel;
+  const modelSelectGroups = useMemo(() => buildAutomationModelSelectGroups(catalog), [catalog]);
   const isSelectedConversationWorkspace =
     selectedWorkspace?.projectId === null || selectedWorkspace?.workspacePurpose === "conversation";
   // Bug 原因：automation 数据只持久化 workspaceKey/path，编辑态曾直接把 conversation
@@ -1517,27 +1477,26 @@ export function AutomationEditView({
   };
   const modelTriggerLabel = resolveAutomationModelTriggerLabel({
     modelGroups: modelSelectGroups,
-    modelSelectionView,
+    catalog,
     modelValue: effectiveModelValue,
     fallbackLabel: intl.formatMessage({ id: "chat.toolbar.model.label" }),
   });
-  // 主动选模型才初始化最高档；历史恢复和 View 刷新仍保留缺失档位。
+  // 仅显式选择模型时初始化该原生模型的默认档位；恢复草稿不补写。
   const handleModelValueChange = useCallback(
     (value: string) => {
       modelManuallyChangedRef.current = true;
       thoughtManuallyChangedRef.current = false;
       modelSelection.current = value;
       setModel(value);
-      const selection =
-        value && modelSelectionView
-          ? completeNewModelSelection(modelSelectionView, parseModelPickerValue(value))
-          : undefined;
+      const identity = value ? parseModelPickerValue(value) : undefined;
+      const entry = findOmpCatalogEntry(catalog, identity?.providerId, identity?.modelId);
+      const selection = entry ? selectionForOmpEntry(entry) : undefined;
       const level = selection?.options?.reasoningLevel ?? "";
       thoughtLevelRef.current = level;
       setThoughtLevel(level);
       markFieldTouched("model");
     },
-    [markFieldTouched, modelSelectionView],
+    [markFieldTouched, catalog],
   );
   // 定时任务编辑页只维护表单草稿，不能为了读取选项调用 workspace 默认配置接口；
   // 否则用户仅打开后取消，也会改掉当前项目或 draft session 的模型、模式和思考强度。
@@ -1547,24 +1506,10 @@ export function AutomationEditView({
     [effectiveModelValue, modelSelectGroups],
   );
   const preferredModelValue = useMemo(
-    () => (modelSelectionView ? resolveAutomationPreferredModelValue(modelSelectionView) : null),
-    [modelSelectionView],
+    () => resolveAutomationPreferredModelValue(catalog),
+    [catalog],
   );
-  const persistedSelectionInvalid = Boolean(
-    originalSelection && modelSelectionView && modelSelectionView.selectionIssue,
-  );
-  const invalidSelectionNoticeKeyRef = useRef<string | null>(null);
-  useEffect(() => {
-    if (!persistedSelectionInvalid || !editing || !modelSelectionView) return;
-    const noticeKey = `${editing.automationId}:${modelSelectionView.revision}`;
-    if (invalidSelectionNoticeKeyRef.current === noticeKey) return;
-    invalidSelectionNoticeKeyRef.current = noticeKey;
-    toast(intl.formatMessage({ id: "modelSelection.invalidated.reselect" }), {
-      variant: "warning",
-      position: "bottom-center",
-      dedupeKey: `automation-model-selection-invalidated:${editing.automationId}`,
-    });
-  }, [editing, intl, modelSelectionView, persistedSelectionInvalid]);
+  const persistedSelectionInvalid = Boolean(originalSelection && catalog && !selectedModelItem);
   useEffect(() => {
     if (
       editing ||
@@ -1574,31 +1519,22 @@ export function AutomationEditView({
     )
       return;
     if (model) return;
-    // 旧表单把“默认模型”保存为空值，却又要求提交前必须存在具体候选，
-    // 导致初次创建按钮永远禁用。目标 Host ready 后直接选中并固化 preferredSelection。
+    // 目标原生目录到达后仅初始化尚未手选的新建草稿。
     modelSelection.current = preferredModelValue;
     setModel(preferredModelValue);
     thoughtManuallyChangedRef.current = false;
-    const preferredReasoning =
-      modelSelectionView?.preferredSelection?.options?.reasoningLevel ?? "";
+    const preferredReasoning = catalog?.preferredSelection?.options?.reasoningLevel ?? "";
     thoughtLevelRef.current = preferredReasoning;
     setThoughtLevel(preferredReasoning);
-  }, [editing, model, modelSelectionView, persistedSelectionInvalid, preferredModelValue]);
+  }, [editing, model, catalog, persistedSelectionInvalid, preferredModelValue]);
   const selectedModelMetadataThoughtOption = useMemo(() => {
     if (!selectedModelItem) return null;
     const decodedModel = decodeCustomModelValue(selectedModelItem.value);
-    if (!decodedModel?.modelName) return null;
-    // 与会话 composer 复用同一模型静态事实，避免 workspace runtime catalog 暂未投影
-    // thought_level 时，定时任务把支持推理的模型误显示成无思考档位。
-    return modelSelectionView
-      ? resolveModelThoughtOption({
-          modelSelectionView,
-          providerId: decodedModel.providerId,
-          modelId: decodedModel.modelName,
-        })
-      : null;
-  }, [modelSelectionView, selectedModelItem]);
-  // 所选模型的 Option Specs 只来自目标 Host View；不能为预览再创建 deferred Session。
+    return ompThoughtOptionForEntry(
+      findOmpCatalogEntry(catalog, decodedModel?.providerId, decodedModel?.modelName),
+    );
+  }, [catalog, selectedModelItem]);
+  // 思考档位与模型候选来自同一执行端原生事实，不创建预览会话。
   const activeThoughtOption = selectedModelMetadataThoughtOption ?? undefined;
   const thoughtLevelOption = useMemo(
     () => buildAutomationThoughtLevelOption(activeThoughtOption, effectiveReasoningLevel),
@@ -1618,10 +1554,10 @@ export function AutomationEditView({
   const submissionContextReady =
     hasValidWorkspace &&
     (Boolean(editing) || selectedWorkspace !== null) &&
-    modelSelectionRead.state.status === "ready" &&
+    nativeModels.status === "ready" &&
     selectedModelItem !== null &&
-    Boolean(effectiveReasoningLevel) &&
-    !modelSelectionView?.selectionIssue;
+    (!activeThoughtOption || Boolean(effectiveReasoningLevel)) &&
+    !persistedSelectionInvalid;
   const canSubmit = submissionContextReady && requiredFieldErrors.length === 0;
 
   const requestRequiredFieldValidation = useCallback(
@@ -1739,7 +1675,6 @@ export function AutomationEditView({
   // 字段才能触发未保存提示，否则仅打开已有任务再返回也会被误判为修改。
   const hasUnsavedChanges = Boolean(editing) && changedFields.length > 0;
 
-  const recommendStartPlan = useStartPlanRecommendation(modelSelectionView);
   const submitAutomation = useCallback(
     async (options: { validationSource: "save" | "run-now"; returnToList?: boolean }) => {
       if (saving) return false;
@@ -1774,11 +1709,6 @@ export function AutomationEditView({
           : null;
       // 只禁用按钮无法覆盖快捷键或异步回调；提交边界也必须拒绝无有效项目的新建。
       if (!target) return false;
-      if (input.modelSelection && (!editing || changedFields.includes("model"))) {
-        const chosen = await recommendStartPlan(input.modelSelection);
-        if (!chosen) return false;
-        input.modelSelection = chosen;
-      }
       const trace = startUserAction({
         featureId: "automation.lifecycle",
         action: editing ? "update" : "create",
@@ -1802,8 +1732,6 @@ export function AutomationEditView({
     },
     [
       buildSubmitInput,
-      changedFields,
-      recommendStartPlan,
       canSubmit,
       editing,
       onBack,
@@ -2664,18 +2592,8 @@ export function AutomationEditView({
                         "w-fit max-w-72 min-w-0 shrink @max-sm/composer:size-7 @max-sm/composer:justify-center @max-sm/composer:gap-0 @max-sm/composer:p-0",
                       )}
                       triggerIconClassName="inline-flex @sm/composer:hidden"
-                      disabled={modelSelectionRead.state.status !== "ready"}
+                      disabled={!catalog}
                     />
-                    {modelSelectionRead.state.status === "error" ? (
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="xs"
-                        onClick={modelSelectionRead.reload}
-                      >
-                        {intl.formatMessage({ id: "common.retry" })}
-                      </Button>
-                    ) : null}
                     {thoughtLevelOption ? (
                       <ThoughtLevelCycleControl
                         intl={intl}

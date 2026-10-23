@@ -63,7 +63,6 @@ async function setup(
     return { enabled: configState === "enabled", modelSelectionView: offPeakSelectionView() };
   });
   const service = createZCodeAgentService({
-    modelSelectionReadinessSource: { getView: async () => offPeakSelectionView() },
     resolveOffPeakClientConfig: resolveConfig,
     resolveOffPeakTaskService: () => ({
       getCodingPlanSupport: async () =>

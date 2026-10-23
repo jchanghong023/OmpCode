@@ -12,6 +12,21 @@ import {
   resolveAutomationThoughtLevelUpdate,
 } from "@/settings/automationAgentConfigOptions.js";
 import { encodeCustomModelValue } from "@/lib/zcodeCustomModelValue.js";
+import { readOmpModelCatalog } from "@/omp-configuration/module.js";
+
+const nativeCatalog = readOmpModelCatalog([
+  {
+    id: "model",
+    name: "Model",
+    category: "model",
+    type: "select",
+    currentValue: "demo/model-b",
+    options: [
+      { value: "demo/model-a", name: "model-a", modelProviderName: "Demo Provider" },
+      { value: "demo/model-b", name: "model-b", modelProviderName: "Demo Provider" },
+    ],
+  },
+]);
 
 const groups: ModelSelectGroup[] = [
   {
@@ -33,58 +48,23 @@ const groups: ModelSelectGroup[] = [
 ];
 
 describe("automation model/thought linkage", () => {
-  it("新建任务把 Host preferredSelection 初始化为具体模型身份", () => {
+  it("新建任务固化原生 default role 模型身份", () => {
+    expect(resolveAutomationPreferredModelValue(nativeCatalog)).toBe(
+      encodeCustomModelValue("demo", "model-b"),
+    );
+  });
+
+  it("缺少原生目录时不伪造默认模型或候选", () => {
+    expect(resolveAutomationPreferredModelValue(null)).toBeNull();
+    expect(buildAutomationModelSelectGroups(null)).toEqual([]);
+  });
+
+  it("不需要 Host key 或账号配置即可展示原生可用模型", () => {
     expect(
-      resolveAutomationPreferredModelValue({
-        revision: 2,
-        preferredSelection: { providerId: "demo", modelId: "model-b" },
-        providers: [],
-      }),
-    ).toBe(encodeCustomModelValue("demo", "model-b"));
-  });
-
-  it("Host 没有 preferredSelection 时不伪造默认模型", () => {
-    expect(resolveAutomationPreferredModelValue({ revision: 2, providers: [] })).toBeNull();
-  });
-  it("Registry View 已发布时不再用旧 Provider 重做 entitlement 过滤", () => {
-    expect(
-      buildAutomationModelSelectGroups({
-        selectedProvider: "glm",
-        labels: {},
-        registrySelectionView: { revision: 1, providers: [] },
-      }),
-    ).toEqual([]);
-  });
-
-  it("新建任务模型列表直接使用 Registry 已裁决的模型集合", () => {
-    const groups = buildAutomationModelSelectGroups({
-      selectedProvider: "glm",
-      labels: {},
-      registrySelectionView: {
-        revision: 1,
-        providers: [
-          {
-            providerId: BUILTIN_MODEL_PROVIDER_IDS.bigmodelIndividualCodingPlan,
-            providerName: "BigModel Coding",
-            config: {
-              access: {
-                type: "zhipu-account",
-              },
-              api: {
-                type: "anthropic-messages",
-                baseUrl: "https://open.bigmodel.cn/api/anthropic",
-              },
-              models: ["coding-only-model"],
-            },
-            models: [{ modelId: "coding-only-model", config: {} }],
-          },
-        ],
-      },
-    });
-
-    expect(groups.flatMap((group) => group.items.map((item) => item.name))).toEqual([
-      "coding-only-model",
-    ]);
+      buildAutomationModelSelectGroups(nativeCatalog).flatMap((group) =>
+        group.items.map((item) => item.name),
+      ),
+    ).toEqual(["model-a", "model-b"]);
   });
 
   it("使用当前候选档位，但非法旧值留空，不采用 preview 默认值", () => {
@@ -111,21 +91,11 @@ describe("automation model/thought linkage", () => {
     expect(resolveAutomationModelItem(groups, "demo/model-a")?.name).toBe("model-a");
   });
 
-  it("模型触发器从 Registry View 显示 providerName/modelName", () => {
+  it("模型触发器从原生目录显示 providerName/modelName", () => {
     expect(
       resolveAutomationModelTriggerLabel({
         modelGroups: groups,
-        modelSelectionView: {
-          revision: 1,
-          providers: [
-            {
-              providerId: "demo",
-              providerName: "Demo Provider",
-              config: {},
-              models: [{ modelId: "model-a", config: {} }],
-            },
-          ],
-        },
+        catalog: nativeCatalog,
         modelValue: "demo/model-a",
         fallbackLabel: "选择模型",
       }),

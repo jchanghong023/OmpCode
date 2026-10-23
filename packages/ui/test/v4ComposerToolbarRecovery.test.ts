@@ -1,13 +1,13 @@
 import { act, createElement, type ComponentProps } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { renderToStaticMarkup } from "react-dom/server";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { BUILTIN_MODEL_PROVIDER_IDS } from "@zcode/shared";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { IServiceAccessor, ProviderSettingsView } from "@zcode/services";
 import { TooltipProvider } from "@/components/ui/tooltip.js";
 import { ServiceProvider } from "@/hooks/useServices.js";
 import { V4ComposerModelControls } from "@/v4/composer/V4ComposerToolbar.js";
 import type { ModelConfigSelect } from "@/ModelConfigSelect.js";
+import { useZCodeSessionStore } from "@/store/zcodeSessionStore.js";
+import type { ZCodeConfigOption, ZCodeWorkspaceEvent } from "@zcode/shared";
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -28,67 +28,48 @@ const captured = vi.hoisted(() => ({
   usageProps: [] as Array<Record<string, unknown>>,
 }));
 
+const workspaceEvents = vi.hoisted(
+  () => new Map<string, Set<(event: ZCodeWorkspaceEvent) => void>>(),
+);
+
 const mocks = vi.hoisted(() => ({
   services: {
-    zcodeAgentService: {},
+    zcodeAgentService: {
+      getOmpProfiles: async () => ({ storageScope: "native-toolbar-scope" }),
+      onAgentRuntimeRestarted: () => ({ dispose() {} }),
+    },
+    zcodeSessionService: {
+      readWorkspacePresentation: async () => ({ mode: "build", slashCommands: [] }),
+    },
+    zcodeTaskService: {
+      onDynamicWorkspaceEvent:
+        (target: string | { workspacePath: string; workspaceIdentity?: string }) =>
+        (listener: (event: ZCodeWorkspaceEvent) => void) => {
+          const key =
+            typeof target === "string"
+              ? target
+              : target.workspaceIdentity?.trim() || target.workspacePath;
+          const listeners = workspaceEvents.get(key) ?? new Set();
+          workspaceEvents.set(key, listeners);
+          listeners.add(listener);
+          return { dispose: () => listeners.delete(listener) };
+        },
+    },
   },
   auth: { user: { id: "account-a" } as { id: string } | null, authSessionSeq: 1 },
-  connectionSwitchError: null as string | null,
-  selectConnection: vi.fn(),
   codingPlanEntitlements: {} as Record<string, unknown>,
   codingPlanEntitlementsRefresh: vi.fn(async () => undefined),
-  // 修复原因：context hover 的 start plan onAccess 按 enabledStartPlanProviderIds 挂载；
-  // 默认空数组模拟 Start Plan 尚无独立 Account Access，需要入口的用例显式提供 provider id。
   codingPlanEntitlementsEnabledStartPlanIds: [] as string[],
-  configOptions: [] as Array<Record<string, unknown>>,
-  configOptionsError: true,
   enterpriseProducts: { snapshot: { productList: [] }, loading: false, error: null } as Record<
     string,
     unknown
   >,
-  modelSelectionView: {
-    revision: 1,
-    providers: [
-      {
-        providerId: "custom-openai",
-        providerName: "Custom OpenAI",
-        config: {
-          access: { type: "api-key", apiKey: "test-key" },
-          api: {
-            type: "openai-chat-completions",
-            baseUrl: "https://api.example.com/v1",
-          },
-          models: ["gpt-4o"],
-        },
-        models: [
-          {
-            modelId: "gpt-4o",
-            config: {
-              optionSpecs: {
-                reasoningLevel: { values: ["disabled"], map: "{}" },
-                maxOutputTokens: { max: 32_000, map: "{}" },
-              },
-            },
-          },
-        ],
-      },
-    ],
-  } as null | {
-    revision: number;
-    providers: Array<{
-      providerId: string;
-      providerName?: string;
-      config: Record<string, unknown>;
-      models: Array<{ modelId: string; config: Record<string, unknown> }>;
-    }>;
-  },
   providerSettingsView: {
     revision: 1,
     addableProviders: [],
     providerOrder: [],
     providers: [],
   } as ProviderSettingsView,
-  recoverCustomModelSelection: vi.fn(async () => {}),
   selectModel: vi.fn(),
   settings: {
     providerFamilyConnectionSelections: {},
@@ -97,15 +78,6 @@ const mocks = vi.hoisted(() => ({
   usageEntitlement: { snapshot: null, loading: false, error: null } as Record<string, unknown>,
   usageEntitlementRefresh: vi.fn(async () => undefined),
 }));
-
-function completeDisabledModelConfig() {
-  return {
-    optionSpecs: {
-      reasoningLevel: { values: ["disabled"], map: "{}" },
-      maxOutputTokens: { max: 32_000, map: "{}" },
-    },
-  };
-}
 
 vi.mock("@/store/StoreProvider.js", () => ({
   useZCodeStoreWithDefault: (selector: (state: typeof mocks.auth) => unknown) =>
@@ -118,13 +90,6 @@ vi.mock("@/hooks/useWorkspaceServices.js", () => {
     useWorkspaceServices: () => services,
   };
 });
-vi.mock("@/hooks/useComposerConnectionSwitch.js", () => ({
-  useComposerConnectionSwitch: () => ({
-    pending: false,
-    error: mocks.connectionSwitchError,
-    select: mocks.selectConnection,
-  }),
-}));
 vi.mock("@/ModelConfigSelect.js", async () => {
   const React = await import("react");
   return {
@@ -202,14 +167,6 @@ vi.mock("@/hooks/useUsageEntitlement.js", () => ({
   })),
 }));
 
-vi.mock("@/hooks/useZCodeConfig.js", () => ({
-  useToolbarConfigOptions: () => ({
-    configOptions: mocks.configOptions,
-    loading: false,
-    error: mocks.configOptionsError,
-  }),
-}));
-
 vi.mock("@/i18n/IntlProvider.js", () => ({
   useZCodeIntl: () => ({
     intl: {
@@ -250,7 +207,7 @@ vi.mock("@/lib/codingPlanUsageSources.js", async () => {
 
 vi.mock("@/lib/settingsNavigation.js", () => ({
   setPendingSettingsSectionIntent: vi.fn(),
-  setPendingSettingsUsageIntent: vi.fn(),
+  setPendingSettingsUsageCodingPlanIntent: vi.fn(),
 }));
 
 function createMinimalElement(ownerDocument: Document, tagName = "div") {
@@ -324,76 +281,48 @@ async function flushMicrotasks(): Promise<void> {
   await Promise.resolve();
 }
 
-function addAccountProviderAccess(
-  providerId: string,
-  access:
-    | {
-        accountType: "zai" | "bigmodel";
-        mode: "individual-coding-plan";
-      }
-    | {
-        accountType: "zai" | "bigmodel";
-        mode: "team-coding-plan";
-      },
-  label = providerId,
+function nativeModel(
+  provider: string,
+  model: string,
+  levels: string[] = ["disabled"],
+  defaultLevel = levels[0],
 ) {
-  mocks.providerSettingsView = {
-    revision: mocks.providerSettingsView.revision + 1,
-    addableProviders: mocks.providerSettingsView.addableProviders,
-    providerOrder: mocks.providerSettingsView.providerOrder,
-    providers: [
-      ...mocks.providerSettingsView.providers.filter(
-        (provider) => provider.providerId !== providerId,
-      ),
-      {
-        providerId,
-        enabled: true,
-        executable: true,
-        effectiveConfig: {
-          access: {
-            type: "zhipu-account",
-            entitled: true,
-            ...access,
-          },
-          api: {
-            type: "anthropic-messages",
-            baseUrl: "https://example.com",
-          },
-          label,
-          builtinModelIds: [],
-        },
-        issues: [],
-        models: [],
-      },
-    ],
+  return {
+    value: `${provider}/${model}`,
+    name: model,
+    modelProviderId: provider,
+    modelProviderName: provider,
+    modelThoughtLevels: levels,
+    modelDefaultThoughtLevel: defaultLevel,
   };
 }
 
-function createActiveEntitlement(providerId: string, extra: Record<string, unknown> = {}) {
-  return {
-    generatedAt: 1,
-    authenticated: true,
-    provider: {
-      id: providerId,
-      name: providerId,
+function seedNativeCatalog(
+  models = [nativeModel("custom-openai", "gpt-4o")],
+  workspaceIdentity?: string,
+) {
+  const options: ZCodeConfigOption[] = [
+    {
+      id: "model",
+      name: "Model",
+      category: "model",
+      type: "select",
+      currentValue: models[0]?.value ?? "",
+      options: models,
     },
-    remaining: null,
-    subscription: null,
-    quota: {
-      level: "pro",
-      limits: [
-        {
-          type: "TOKENS_LIMIT",
-          unit: 3,
-          number: 5,
-          percentage: 35,
-          usageDetails: [],
-        },
-      ],
-    },
-    ...extra,
-  };
+  ];
+  const store = useZCodeSessionStore.getState();
+  store.setConfigOptions("/workspace", options, workspaceIdentity);
+  store.setConfigOptionsStatus("/workspace", "ready", workspaceIdentity);
 }
+
+let toolbarRoot: Root;
+
+beforeEach(() => {
+  useZCodeSessionStore.setState({ workspaces: {} });
+  seedNativeCatalog();
+  toolbarRoot = createRoot(installMinimalDom());
+});
 
 // 已有会话会挂载真实 OMP 入口；补服务上下文，不 mock scope hook 或用待选 profile 代替运行事实。
 function createToolbarElement(props: V4ComposerModelControlsProps) {
@@ -403,72 +332,69 @@ function createToolbarElement(props: V4ComposerModelControlsProps) {
   });
 }
 
-function renderToolbarMarkup(overrides: Partial<V4ComposerModelControlsProps> = {}): string {
-  // 纯工具条测试显式提供已初始化的 Composer；生产初始化由 scope owner 负责。
+async function renderToolbar(overrides: Partial<V4ComposerModelControlsProps> = {}): Promise<void> {
+  // Zustand SSR 只读 initial state；必须提交客户端 render 才能观察已接受的原生目录与订阅。
   const seed = overrides.config ?? {
     provider: "custom-openai",
     model: "gpt-4o",
     thought: "disabled",
     mode: "build",
   };
-  return renderToStaticMarkup(
-    // HighspeedModelIndicator 走 ControlHintTooltip，缺少 TooltipProvider 会直接抛错，
-    // 所以工具条快照统一包一层 Provider。
-    createElement(
-      TooltipProvider,
-      null,
-      createToolbarElement({
-        workspacePath: "/workspace",
-        modelSelectionView: mocks.modelSelectionView,
-        sessionId: null,
-        phase: null,
-        config: {
-          provider: "custom-openai",
-          model: "gpt-4o",
-          thought: "medium",
-          thoughtLevels: ["medium", "high"],
-          followupMode: "queue",
-          mode: "build",
-        },
-        usage: {
-          contextWindow: {
-            usedTokens: 1024,
-            maxTokens: 2048,
-            autoCompactThresholdTokens: null,
+  await act(async () => {
+    toolbarRoot.render(
+      // 原生目录与 OMP 入口共用真实 hooks；仅叶子控件捕获已渲染 props。
+      createElement(
+        TooltipProvider,
+        null,
+        createToolbarElement({
+          workspacePath: "/workspace",
+          sessionId: null,
+          phase: null,
+          config: {
+            provider: "custom-openai",
+            model: "gpt-4o",
+            thought: "medium",
+            thoughtLevels: ["medium", "high"],
+            followupMode: "queue",
+            mode: "build",
           },
-          cumulative: {
-            inputTokens: 1024,
-            outputTokens: 0,
-            cacheReadTokens: 0,
-            cacheWriteTokens: 0,
+          usage: {
+            contextWindow: {
+              usedTokens: 1024,
+              maxTokens: 2048,
+              autoCompactThresholdTokens: null,
+            },
+            cumulative: {
+              inputTokens: 1024,
+              outputTokens: 0,
+              cacheReadTokens: 0,
+              cacheWriteTokens: 0,
+            },
           },
-        },
-        disabled: false,
-        onSelectModel: mocks.selectModel,
-        onSelectThought: vi.fn(),
-        onSwitchMode: vi.fn(),
-        draftConfig: {
-          mode: seed.mode,
-          modelSelection: {
-            providerId: seed.provider,
-            modelId: seed.model,
-            ...(seed.thought ? { options: { reasoningLevel: seed.thought } } : {}),
+          disabled: false,
+          onSelectModel: mocks.selectModel,
+          onSelectThought: vi.fn(),
+          onSwitchMode: vi.fn(),
+          draftConfig: {
+            mode: seed.mode,
+            modelSelection: {
+              providerId: seed.provider,
+              modelId: seed.model,
+              ...(seed.thought ? { options: { reasoningLevel: seed.thought } } : {}),
+            },
           },
-        },
-        ...overrides,
-      }),
-    ),
-  );
+          ...overrides,
+        }),
+      ),
+    );
+    await flushMicrotasks();
+  });
 }
 
-function latestUsageProps(): Record<string, unknown> {
-  return captured.usageProps[captured.usageProps.length - 1] ?? {};
-}
-
-afterEach(() => {
+afterEach(async () => {
+  await act(async () => toolbarRoot.unmount());
+  workspaceEvents.clear();
   mocks.auth = { user: { id: "account-a" }, authSessionSeq: 1 };
-  mocks.connectionSwitchError = null;
-  mocks.selectConnection.mockClear();
   captured.modelSelectProps = null;
   captured.thoughtControlProps = null;
   captured.usageProps = [];
@@ -476,27 +402,7 @@ afterEach(() => {
   mocks.usageEntitlementRefresh.mockClear();
   mocks.codingPlanEntitlements = {};
   mocks.codingPlanEntitlementsEnabledStartPlanIds = [];
-  mocks.configOptions = [];
-  mocks.configOptionsError = true;
   mocks.enterpriseProducts = { snapshot: { productList: [] }, loading: false, error: null };
-  mocks.modelSelectionView = {
-    revision: 1,
-    providers: [
-      {
-        providerId: "custom-openai",
-        providerName: "Custom OpenAI",
-        config: {
-          access: { type: "api-key", apiKey: "test-key" },
-          api: {
-            type: "openai-chat-completions",
-            baseUrl: "https://api.example.com/v1",
-          },
-          models: ["gpt-4o"],
-        },
-        models: [{ modelId: "gpt-4o", config: completeDisabledModelConfig() }],
-      },
-    ],
-  };
   mocks.providerSettingsView = {
     revision: 1,
     addableProviders: [],
@@ -512,256 +418,135 @@ afterEach(() => {
 });
 
 describe("V4ComposerModelControls recovery", () => {
-  it("同 Host 重读保留目录时入口不切成禁用态，首次加载仍禁用", () => {
-    renderToolbarMarkup({
-      modelSelectionState: { status: "loading", catalog: mocks.modelSelectionView },
-    });
-    expect(captured.modelSelectProps?.disabled).toBe(false);
-    renderToolbarMarkup({ modelSelectionState: { status: "loading" } });
-    expect(captured.modelSelectProps?.disabled).toBe(true);
-  });
-  it("Highspeed 卡生效期间隐藏 context token usage 圈圈", () => {
-    const normalHtml = renderToolbarMarkup();
-    const highspeedHtml = renderToolbarMarkup({ modelLocked: true });
+  it("原生 workspace 事件更新目录，不把目录默认值写成 Composer 选择", async () => {
+    seedNativeCatalog([]);
+    await renderToolbar({ draftConfig: { mode: "build" } });
+    expect(captured.modelSelectProps).toBeNull();
 
-    expect(normalHtml).toContain('data-testid="mock-usage"');
-    expect(highspeedHtml).not.toContain('data-testid="mock-usage"');
-  });
-
-  it("把倒计时放在模型和 Think 之间并显示剩余时间", () => {
-    vi.spyOn(Date, "now").mockReturnValue(1_000);
-
-    const html = renderToolbarMarkup({
-      highspeedExpiresAt: 60_000,
-      highspeedModel: "GLM-5.3",
-      highspeedPresented: true,
-    });
-    const modelIndex = html.indexOf('data-highspeed-model-indicator="true"');
-    const countdownIndex = html.indexOf('data-highspeed-countdown="true"');
-    const thoughtIndex = html.indexOf('data-testid="mock-thought"');
-
-    expect(modelIndex).toBeGreaterThanOrEqual(0);
-    expect(countdownIndex).toBeGreaterThan(modelIndex);
-    expect(thoughtIndex).toBeGreaterThan(countdownIndex);
-    expect(html).toContain("00:00:59");
-    expect(html).toMatch(
-      /title="chat.highspeed.remainingTime"[^>]*data-highspeed-countdown="true"/,
-    );
-  });
-
-  it("已有会话的 Composer 模型留空时仍能打开模型菜单重选", () => {
-    renderToolbarMarkup({
-      sessionId: "existing-session",
-      draftMode: false,
-      draftConfig: { mode: "build" },
-      // 此场景目录已加载完成；只留空 Composer 选择，不能把目录 loading 当作可交互状态。
-      modelSelectionState: { status: "ready", view: mocks.modelSelectionView! },
-    });
-    expect(captured.modelSelectProps).not.toBeNull();
-    expect(captured.modelSelectProps?.normalizedValue).toBe("");
-    expect(captured.modelSelectProps?.disabled).toBe(false);
-    captured.modelSelectProps?.onValueChange(customValue);
-    expect(mocks.selectModel).toHaveBeenCalledWith("custom-openai", "gpt-4o", null);
-    expect(captured.thoughtControlProps).toBeNull();
-  });
-
-  it("renders an explicit retry action when the target Host model view fails", () => {
-    const html = renderToolbarMarkup({
-      modelSelectionView: null,
-      modelSelectionState: { status: "error", error: new Error("read failed") },
-      modelSelectionReload: vi.fn(),
-    });
-
-    expect(html).toContain("chat.toolbar.model.loadFailedRetry");
-    expect(html).not.toContain('data-testid="mock-model-select"');
-  });
-
-  it("Start 权益目录更新不自动改输入框模型或显示旧领取引导", async () => {
-    const providerId = BUILTIN_MODEL_PROVIDER_IDS.bigmodelStartPlan;
-    mocks.settings = {
-      providerFamilyConnectionSelections: { bigmodel: { kind: "start-plan" } },
-      providerFamilyDomain: {},
-    };
-    mocks.modelSelectionView = {
-      revision: 2,
-      providers: [
-        {
-          providerId,
-          providerName: "BigModel Start Plan",
-          config: {
-            access: { type: "zhipu-account", accountType: "bigmodel", mode: "start-plan" },
-            api: {
-              type: "anthropic-messages",
-              baseUrl: "https://open.bigmodel.cn/api/anthropic",
-            },
-            models: ["GLM-5.3-Flash"],
-          },
-          models: [{ modelId: "GLM-5.3-Flash", config: completeDisabledModelConfig() }],
-        },
-      ],
-    };
-
-    const root: Root = createRoot(installMinimalDom());
-    const props = {
-      workspacePath: "/workspace",
-      modelSelectionView: mocks.modelSelectionView,
-      sessionId: null,
-      phase: null,
-      draftConfig: {
-        mode: "build",
-        modelSelection: {
-          providerId: "custom-openai",
-          modelId: "gpt-4o",
-          options: { reasoningLevel: "medium" },
-        },
-      },
-      config: {
-        provider: "custom-openai",
-        model: "gpt-4o",
-        thought: "medium",
-        thoughtLevels: ["medium"],
-        followupMode: "queue" as const,
-        mode: "build" as const,
-      },
-      usage: null,
-      disabled: false,
-      onSelectModel: mocks.selectModel,
-      onSelectThought: vi.fn(),
-      onSwitchMode: vi.fn(),
-    };
-
-    await act(async () => {
-      root.render(createElement(V4ComposerModelControls, props));
-      await flushMicrotasks();
-    });
-
-    expect(mocks.selectModel).not.toHaveBeenCalled();
-    expect(captured.modelSelectProps?.guideTooltipOpen).toBeUndefined();
-
-    await act(async () => {
-      root.render(createElement(V4ComposerModelControls, props));
-      await flushMicrotasks();
-    });
-    expect(mocks.selectModel).not.toHaveBeenCalled();
-
-    await act(async () => root.unmount());
-  });
-
-  it("合并入口只显示模型名，供应商保留在提示与菜单", () => {
-    renderToolbarMarkup();
-
-    expect(captured.modelSelectProps?.triggerLabel).toBe("gpt-4o");
-    expect(captured.modelSelectProps?.tooltipTitle).toBe("Custom OpenAI/gpt-4o");
-    expect(captured.modelSelectProps?.triggerLabelPrefix).toBeUndefined();
-  });
-
-  it("Registry 已发布时只使用 Registry providerName", () => {
-    mocks.modelSelectionView = {
-      revision: 1,
-      providers: [
-        {
-          providerId: "custom-openai",
-          providerName: "Registry OpenAI",
-          config: {
-            access: { type: "api-key", apiKey: "test-key" },
-            api: {
-              type: "openai-chat-completions",
-              baseUrl: "https://registry.example.com/v1",
-            },
-            models: ["gpt-4o"],
-          },
-          models: [{ modelId: "gpt-4o", config: completeDisabledModelConfig() }],
-        },
-      ],
-    };
-
-    renderToolbarMarkup();
-
-    expect(captured.modelSelectProps?.triggerLabel).toBe("gpt-4o");
-    expect(captured.modelSelectProps?.tooltipTitle).toBe("Registry OpenAI/gpt-4o");
-  });
-
-  it("prewarm 未就绪时不把旧 configOptions 模型当作 Selection 来源", async () => {
-    mocks.configOptions = [
+    const configOptions: ZCodeConfigOption[] = [
       {
         id: "model",
         name: "Model",
         category: "model",
         type: "select",
-        currentValue: customValue,
-        options: [{ value: customValue, name: "GPT-4o" }],
+        currentValue: "native-provider/native-model",
+        options: [nativeModel("native-provider", "native-model", ["disabled"], "disabled")],
       },
     ];
-    mocks.modelSelectionView = {
-      revision: 2,
-      providers: [
-        ...mocks.modelSelectionView!.providers,
-        {
-          providerId: "alternate-provider",
-          providerName: "Alternate API",
-          config: {
-            access: { type: "api-key", apiKey: "alternate-key" },
-            api: {
-              type: "openai-chat-completions",
-              baseUrl: "https://alt.example.com/v1",
-            },
-            models: ["deepseek-v4-pro"],
-          },
-          models: [{ modelId: "deepseek-v4-pro", config: completeDisabledModelConfig() }],
-        },
-      ],
-    };
-
-    const root: Root = createRoot(installMinimalDom());
     await act(async () => {
-      root.render(
-        createElement(V4ComposerModelControls, {
+      const listeners = workspaceEvents.get("/workspace");
+      expect(listeners?.size).toBeGreaterThan(0);
+      for (const listener of listeners ?? []) {
+        listener({
+          type: "workspace_config_options_update",
           workspacePath: "/workspace",
-          modelSelectionView: mocks.modelSelectionView,
-          sessionId: null,
-          phase: null,
-          config: null,
-          draftMode: true,
-          usage: null,
-          disabled: false,
-          onSelectModel: mocks.selectModel,
-          onSelectThought: vi.fn(),
-          onSwitchMode: vi.fn(),
-        }),
-      );
-      await flushMicrotasks();
+          configOptions,
+        });
+      }
     });
 
-    await act(async () => {
-      captured.modelSelectProps?.onValueChange("custom:alternate-provider:deepseek-v4-pro");
-      await flushMicrotasks();
+    expect(useZCodeSessionStore.getState().getWorkspaceState("/workspace")).toMatchObject({
+      configOptions,
+      configOptionsStatus: "ready",
     });
-
-    expect(mocks.selectModel).toHaveBeenCalledWith("alternate-provider", "deepseek-v4-pro", null);
-
-    await act(async () => {
-      root.unmount();
-    });
+    expect(captured.modelSelectProps?.normalizedValue).toBe("");
+    expect(
+      captured.modelSelectProps?.modelGroups?.flatMap((group) =>
+        group.items.map((item) => item.value),
+      ),
+    ).toEqual(["custom:native-provider:native-model"]);
+    expect(mocks.selectModel).not.toHaveBeenCalled();
+    captured.modelSelectProps?.onValueChange("custom:native-provider:native-model");
+    expect(mocks.selectModel).toHaveBeenCalledWith(
+      "native-provider",
+      "native-model",
+      null,
+      "disabled",
+    );
   });
 
-  it("忽略模型切换期间受控 Select 产生的空 thought 事件", () => {
-    mocks.configOptions = [
-      {
-        id: "thought_level",
-        name: "Thought Level",
-        category: "thought_level",
-        type: "select",
-        currentValue: "medium",
-        options: [
-          { label: "Medium", value: "medium" },
-          { label: "High", value: "high" },
+  it("首次原生空目录不借旧 Host 目录生成可选项", async () => {
+    seedNativeCatalog([]);
+    await renderToolbar({
+      modelSelectionView: {
+        revision: 9,
+        providers: [
+          {
+            providerId: "host-only",
+            config: {},
+            models: [{ modelId: "host-model", config: {} }],
+          },
         ],
       },
-    ];
-    mocks.configOptionsError = false;
+    });
+    expect(captured.modelSelectProps).toBeNull();
+    expect(mocks.selectModel).not.toHaveBeenCalled();
+  });
+
+  it.each(["loading", "error"] as const)("连接处于 %s 时保留已接受的原生目录", async (status) => {
+    await renderToolbar();
+    await act(async () => {
+      useZCodeSessionStore.getState().setConfigOptionsStatus("/workspace", status);
+    });
+    expect(captured.modelSelectProps?.disabled).toBe(false);
+    captured.modelSelectProps?.onValueChange(customValue);
+    expect(mocks.selectModel).toHaveBeenCalledWith(
+      "custom-openai",
+      "gpt-4o",
+      { provider: "custom-openai", model: "gpt-4o" },
+      "disabled",
+    );
+  });
+
+  it("免登录可选择原生目录并使用模型默认 thinking", async () => {
+    mocks.auth.user = null;
+    seedNativeCatalog([nativeModel("native-provider", "native-model", ["low", "high"], "low")]);
+    await renderToolbar({ draftConfig: { mode: "build" } });
+    captured.modelSelectProps?.onValueChange("custom:native-provider:native-model");
+    expect(mocks.selectModel).toHaveBeenCalledWith("native-provider", "native-model", null, "low");
+  });
+
+  it("原生目录按目标身份隔离同路径本地目录", async () => {
+    seedNativeCatalog([nativeModel("remote", "remote-model")], "remote-identity");
+    await renderToolbar();
+    expect(
+      captured.modelSelectProps?.modelGroups?.flatMap((group) =>
+        group.items.map((item) => item.value),
+      ),
+    ).toEqual([customValue]);
+    await renderToolbar({ workspaceIdentity: "remote-identity", draftConfig: { mode: "build" } });
+    const values = captured.modelSelectProps?.modelGroups?.flatMap((group) =>
+      group.items.map((item) => item.value),
+    );
+    expect(values).toEqual(["custom:remote:remote-model"]);
+  });
+  it("Highspeed 卡生效期间隐藏 context token usage 圈圈", async () => {
+    await renderToolbar();
+    expect(captured.usageProps.length).toBeGreaterThan(0);
+    captured.usageProps = [];
+    await renderToolbar({ modelLocked: true });
+    expect(captured.usageProps).toEqual([]);
+  });
+
+  it("已有会话的 Composer 模型留空时仍能打开模型菜单重选", async () => {
+    await renderToolbar({
+      sessionId: "existing-session",
+      draftMode: false,
+      draftConfig: { mode: "build" },
+    });
+    expect(captured.modelSelectProps).not.toBeNull();
+    expect(captured.modelSelectProps?.normalizedValue).toBe("");
+    expect(captured.modelSelectProps?.disabled).toBe(false);
+    captured.modelSelectProps?.onValueChange(customValue);
+    expect(mocks.selectModel).toHaveBeenCalledWith("custom-openai", "gpt-4o", null, "disabled");
+    expect(captured.thoughtControlProps).toBeNull();
+  });
+
+  it("忽略模型切换期间受控 Select 产生的空 thought 事件", async () => {
+    seedNativeCatalog([nativeModel("custom-openai", "gpt-4o", ["medium", "high"], "medium")]);
     const onSelectThought = vi.fn();
 
-    renderToolbarMarkup({ onSelectThought });
+    await renderToolbar({ onSelectThought });
     expect(captured.thoughtControlProps).toBeNull();
     expect(captured.modelSelectProps?.composerOptions).toBeDefined();
     captured.modelSelectProps?.composerOptions?.onValueChange("");
@@ -774,27 +559,9 @@ describe("V4ComposerModelControls recovery", () => {
     });
   });
 
-  it("会话态候选档位只取目标 Host View，不取旧 Session 或 workspace 目录", () => {
-    mocks.configOptions = [
-      {
-        id: "thought_level",
-        name: "Thought Level",
-        category: "thought_level",
-        type: "select",
-        currentValue: "off",
-        options: ["off", "low", "medium", "high", "max"].map((value) => ({ value })),
-      },
-    ];
-
-    mocks.modelSelectionView!.providers[0]!.models.push({
-      modelId: "GLM-5.2",
-      config: {
-        optionSpecs: {
-          reasoningLevel: { values: ["low", "high", "max"], map: "{}" },
-        },
-      },
-    });
-    renderToolbarMarkup({
+  it("会话候选档位只取当前原生目录，不取旧 Session 档位", async () => {
+    seedNativeCatalog([nativeModel("custom-openai", "GLM-5.2", ["low", "high", "max"], "low")]);
+    await renderToolbar({
       config: {
         provider: "custom-openai",
         model: "GLM-5.2",
@@ -814,8 +581,8 @@ describe("V4ComposerModelControls recovery", () => {
 
   it.each([{ thoughtLevels: [] }, { thoughtLevels: ["disabled"] }])(
     "恢复的空档位不被目录补齐：$thoughtLevels",
-    ({ thoughtLevels }) => {
-      renderToolbarMarkup({
+    async ({ thoughtLevels }) => {
+      await renderToolbar({
         config: {
           provider: "custom-openai",
           model: "gpt-4o",
@@ -829,8 +596,8 @@ describe("V4ComposerModelControls recovery", () => {
     },
   );
 
-  it("草稿预热完成后仍展示 Composer 选择与 Host 候选，不消费旧投影档位", () => {
-    renderToolbarMarkup({
+  it("草稿预热完成后仍展示 Composer 选择与原生候选，不消费旧投影档位", async () => {
+    await renderToolbar({
       draftMode: true,
       draftConfig: {
         mode: "build",
@@ -856,8 +623,8 @@ describe("V4ComposerModelControls recovery", () => {
     });
   });
 
-  it("草稿切换目标模型时不复用旧预热投影的 thought 档位", () => {
-    renderToolbarMarkup({
+  it("草稿切换目标模型时不复用旧预热投影的 thought 档位", async () => {
+    await renderToolbar({
       draftMode: true,
       config: {
         provider: "custom-openai",
@@ -872,577 +639,34 @@ describe("V4ComposerModelControls recovery", () => {
       },
     });
 
+    expect(captured.modelSelectProps?.composerOptions?.levels).toEqual([]);
+    expect(captured.modelSelectProps?.composerOptions?.value).toBe("");
     expect(captured.thoughtControlProps).toBeNull();
   });
 
-  it("does not pass derived capacity or plan props for a non-plan model with no usage", () => {
-    renderToolbarMarkup({
-      usage: null,
-    });
-
-    const props = latestUsageProps();
-    expect(props).not.toHaveProperty("contextCapacityTokens");
-    expect(props.codingPlanUsageRemaining).toBeUndefined();
-    expect(props.startPlanBalance).toBeUndefined();
-  });
-
-  it("Registry 尚未发布时不从旧 Provider Snapshot 构造模型菜单", () => {
-    mocks.modelSelectionView = null;
-    renderToolbarMarkup();
-
-    expect(captured.modelSelectProps).toBeNull();
-  });
-
-  it("passes Coding Plan usage only when the current connection is the selected OAuth Coding Plan", () => {
-    addAccountProviderAccess(
-      BUILTIN_MODEL_PROVIDER_IDS.zaiIndividualCodingPlan,
-      { accountType: "zai", mode: "individual-coding-plan" },
-      "Z.ai - Coding Plan",
-    );
-    mocks.codingPlanEntitlements = {
-      [BUILTIN_MODEL_PROVIDER_IDS.zaiIndividualCodingPlan]: {
-        snapshot: createActiveEntitlement(BUILTIN_MODEL_PROVIDER_IDS.zaiIndividualCodingPlan),
-        loading: false,
-        error: null,
-      },
-    };
-
-    renderToolbarMarkup({
-      config: {
-        provider: BUILTIN_MODEL_PROVIDER_IDS.zaiIndividualCodingPlan,
-        model: "glm-5",
-        thought: "medium",
-        thoughtLevels: ["medium"],
-        followupMode: "queue",
-        mode: "build",
-      },
-      usage: null,
-    });
-    expect(latestUsageProps().codingPlanUsageRemaining).toBeUndefined();
-
-    captured.usageProps = [];
-    mocks.settings = {
-      providerFamilyConnectionSelections: {
-        zai: { kind: "individual-coding-plan" },
-      },
-      providerFamilyDomain: {},
-    };
-    renderToolbarMarkup({
-      config: {
-        provider: BUILTIN_MODEL_PROVIDER_IDS.zaiIndividualCodingPlan,
-        model: "glm-5",
-        thought: "medium",
-        thoughtLevels: ["medium"],
-        followupMode: "queue",
-        mode: "build",
-      },
-      usage: null,
-    });
-
-    const props = latestUsageProps();
-    expect(props.codingPlanUsageRemaining).toMatchObject({
-      selectedProviderId: BUILTIN_MODEL_PROVIDER_IDS.zaiIndividualCodingPlan,
-    });
-    expect(props.startPlanBalance).toBeUndefined();
-  });
-
-  it("does not derive Coding Plan usage from a legacy provider without Account Access", () => {
-    mocks.codingPlanEntitlements = {
-      [BUILTIN_MODEL_PROVIDER_IDS.zaiIndividualCodingPlan]: {
-        snapshot: createActiveEntitlement(BUILTIN_MODEL_PROVIDER_IDS.zaiIndividualCodingPlan),
-        loading: false,
-        error: null,
-      },
-    };
-    mocks.settings = {
-      providerFamilyConnectionSelections: {
-        zai: { kind: "individual-coding-plan" },
-      },
-      providerFamilyDomain: {},
-    };
-
-    renderToolbarMarkup({
-      config: {
-        provider: BUILTIN_MODEL_PROVIDER_IDS.zaiIndividualCodingPlan,
-        model: "glm-5",
-        thought: "medium",
-        thoughtLevels: ["medium"],
-        followupMode: "queue",
-        mode: "build",
-      },
-      usage: null,
-    });
-
-    expect(latestUsageProps().codingPlanUsageRemaining).toBeUndefined();
-  });
-
-  it.each([
-    undefined,
-    { kind: "start-plan" },
-    { kind: "individual-coding-plan" },
-    { kind: "team-coding-plan", organizationId: "org", projectId: "project", productId: "plan" },
-  ] as const)(
-    "Start balance follows composer selection independent of saved connection %j",
-    (selection) => {
-      mocks.codingPlanEntitlements = {
-        [BUILTIN_MODEL_PROVIDER_IDS.zaiStartPlan]: {
-          snapshot: createActiveEntitlement(BUILTIN_MODEL_PROVIDER_IDS.zaiStartPlan),
-          loading: false,
-          error: null,
-        },
-      };
-      mocks.settings = {
-        providerFamilyConnectionSelections: {
-          zai: selection,
-        },
-        providerFamilyDomain: {},
-      };
-
-      renderToolbarMarkup({
-        config: {
-          provider: BUILTIN_MODEL_PROVIDER_IDS.zaiStartPlan,
-          model: "glm-5",
-          thought: "medium",
-          thoughtLevels: ["medium"],
-          followupMode: "queue",
-          mode: "build",
-        },
-        usage: null,
-      });
-
-      const props = latestUsageProps();
-      expect(props.codingPlanUsageRemaining).toBeUndefined();
-      expect(props.startPlanBalance).toMatchObject({
-        loading: false,
-        snapshot: {
-          provider: {
-            id: BUILTIN_MODEL_PROVIDER_IDS.zaiStartPlan,
-          },
-        },
-      });
-    },
-  );
-
-  it("does not pass Start Plan balance when the entitlement hook hides fallback balance", () => {
-    mocks.codingPlanEntitlements = {
-      [BUILTIN_MODEL_PROVIDER_IDS.zaiIndividualCodingPlan]: {
-        snapshot: createActiveEntitlement(BUILTIN_MODEL_PROVIDER_IDS.zaiIndividualCodingPlan),
-        loading: false,
-        error: null,
-      },
-      [BUILTIN_MODEL_PROVIDER_IDS.zaiStartPlan]: {
-        snapshot: null,
-        loading: false,
-        error: null,
-      },
-    };
-    mocks.settings = {
-      providerFamilyConnectionSelections: {
-        zai: { kind: "start-plan" },
-      },
-      providerFamilyDomain: {},
-    };
-
-    renderToolbarMarkup({
-      config: {
-        provider: BUILTIN_MODEL_PROVIDER_IDS.zaiStartPlan,
-        model: "glm-5",
-        thought: "medium",
-        thoughtLevels: ["medium"],
-        followupMode: "queue",
-        mode: "build",
-      },
-      usage: null,
-    });
-
-    expect(latestUsageProps().startPlanBalance).toBeUndefined();
-  });
-
-  it("attaches the hover access refresh entry when the Start Plan entitlement is enabled", () => {
-    mocks.codingPlanEntitlements = {
-      [BUILTIN_MODEL_PROVIDER_IDS.zaiStartPlan]: {
-        snapshot: null,
-        loading: false,
-        error: null,
-      },
-    };
-    mocks.codingPlanEntitlementsEnabledStartPlanIds = [BUILTIN_MODEL_PROVIDER_IDS.zaiStartPlan];
-    mocks.settings = {
-      providerFamilyConnectionSelections: {
-        zai: { kind: "start-plan" },
-      },
-      providerFamilyDomain: {},
-    };
-
-    renderToolbarMarkup({
-      config: {
-        provider: BUILTIN_MODEL_PROVIDER_IDS.zaiStartPlan,
-        model: "glm-5",
-        thought: "medium",
-        thoughtLevels: ["medium"],
-        followupMode: "queue",
-        mode: "build",
-      },
-      usage: null,
-    });
-
-    const startPlanBalance = latestUsageProps().startPlanBalance as {
-      onAccess?: () => unknown;
-    };
-    // 修复原因：start plan 用户原先没有 hover onAccess 入口，context 面板从不主动刷新今日余额。
-    expect(typeof startPlanBalance?.onAccess).toBe("function");
-    expect(startPlanBalance.onAccess).not.toBeNull();
-  });
-
-  it("recovers a Team Plan usage source from entitlement snapshot when products are not hydrated", () => {
-    const teamSourceId = "team:bigmodel:team-pro:org-1:project-1";
-    addAccountProviderAccess(BUILTIN_MODEL_PROVIDER_IDS.bigmodelTeamCodingPlan, {
-      accountType: "bigmodel",
-      mode: "team-coding-plan",
-    });
-    mocks.settings = {
-      providerFamilyConnectionSelections: {
-        bigmodel: {
-          kind: "team-coding-plan",
-          productId: "team-pro",
-          organizationId: "org-1",
-          projectId: "project-1",
-        },
-      },
-      providerFamilyDomain: {},
-    };
-    mocks.codingPlanEntitlements = {
-      [BUILTIN_MODEL_PROVIDER_IDS.bigmodelTeamCodingPlan]: {
-        snapshot: createActiveEntitlement(BUILTIN_MODEL_PROVIDER_IDS.bigmodelTeamCodingPlan, {
-          context: {
-            scope: "team",
-            organizationId: "org-1",
-            projectId: "project-1",
-            productId: "team-pro",
-            displayName: "Platform",
-          },
-          subscription: {
-            details: [
-              {
-                beginTime: "2026-01-01T00:00:00Z",
-                expireTime: "2026-12-31T00:00:00Z",
-                productId: "team-pro",
-                productName: "Platform",
-                purchaseTime: "2026-01-01T00:00:00Z",
-              },
-            ],
-          },
-        }),
-        loading: false,
-        error: null,
-      },
-    };
-    mocks.usageEntitlement = {
-      snapshot: createActiveEntitlement(BUILTIN_MODEL_PROVIDER_IDS.bigmodelTeamCodingPlan, {
-        context: {
-          scope: "team",
-          organizationId: "org-1",
-          projectId: "project-1",
-          productId: "team-pro",
-          displayName: "Platform",
-        },
-      }),
-      loading: false,
-      error: null,
-    };
-
-    renderToolbarMarkup({
-      config: {
-        provider: BUILTIN_MODEL_PROVIDER_IDS.bigmodelTeamCodingPlan,
-        model: "glm-5",
-        thought: "medium",
-        thoughtLevels: ["medium"],
-        followupMode: "queue",
-        mode: "build",
-      },
-      usage: null,
-    });
-
-    expect(latestUsageProps().codingPlanUsageRemaining).toMatchObject({
-      selectedProviderId: teamSourceId,
-    });
-  });
-
-  it("routes custom model selection to the recovery callback when configOptions failed", async () => {
-    const root: Root = createRoot(installMinimalDom());
-    await act(async () => {
-      root.render(
-        createElement(V4ComposerModelControls, {
-          workspacePath: "/workspace",
-          modelSelectionView: mocks.modelSelectionView,
-          sessionId: null,
-          phase: null,
-          draftConfig: {
-            mode: "build",
-            modelSelection: {
-              providerId: "primary-provider",
-              modelId: "source-model",
-              options: { reasoningLevel: "high" },
-            },
-          },
-          config: {
-            provider: "primary-provider",
-            model: "source-model",
-            thought: "high",
-            thoughtLevels: ["high"],
-            followupMode: "queue",
-            mode: "build",
-          },
-          draftMode: true,
-          usage: null,
-          disabled: false,
-          onSelectModel: mocks.selectModel,
-          onSelectThought: vi.fn(),
-          onSwitchMode: vi.fn(),
-          onRecoverCustomModelSelection: mocks.recoverCustomModelSelection,
-        }),
-      );
-      await flushMicrotasks();
-    });
-
-    await act(async () => {
-      captured.modelSelectProps?.onValueChange(customValue);
-      await flushMicrotasks();
-    });
-
-    expect(mocks.recoverCustomModelSelection).toHaveBeenCalledWith(customValue, {
-      provider: "primary-provider",
-      model: "source-model",
-    });
-    expect(mocks.selectModel).not.toHaveBeenCalled();
-
-    await act(async () => {
-      root.unmount();
-    });
-  });
-
-  it("does not expose a legacy-only provider after an empty Registry view is published", async () => {
-    mocks.modelSelectionView = { revision: 1, providers: [] };
-    const root: Root = createRoot(installMinimalDom());
-    await act(async () => {
-      root.render(
-        createElement(V4ComposerModelControls, {
-          workspacePath: "/workspace",
-          modelSelectionView: mocks.modelSelectionView,
-          sessionId: null,
-          phase: null,
-          config: {
-            provider: "primary-provider",
-            model: "source-model",
-            thought: "high",
-            thoughtLevels: ["high"],
-            followupMode: "queue",
-            mode: "build",
-          },
-          draftMode: true,
-          usage: null,
-          disabled: false,
-          onSelectModel: mocks.selectModel,
-          onSelectThought: vi.fn(),
-          onSwitchMode: vi.fn(),
-          onRecoverCustomModelSelection: mocks.recoverCustomModelSelection,
-        }),
-      );
-      await flushMicrotasks();
-    });
-
-    expect(captured.modelSelectProps).toBeNull();
-    expect(mocks.recoverCustomModelSelection).not.toHaveBeenCalled();
-    expect(mocks.selectModel).not.toHaveBeenCalled();
-
-    await act(async () => {
-      root.unmount();
-    });
-  });
-
-  it("does not route builtin model selection through custom recovery when configOptions failed", async () => {
-    const providerId = BUILTIN_MODEL_PROVIDER_IDS.bigmodelIndividualCodingPlan;
-    mocks.modelSelectionView = {
-      revision: 2,
-      providers: [
-        {
-          providerId,
-          providerName: "BigModel Coding",
-          config: {
-            access: {
-              type: "zhipu-account",
-            },
-            api: {
-              type: "anthropic-messages",
-              baseUrl: "https://open.bigmodel.cn/api/anthropic",
-            },
-            models: ["glm-5"],
-          },
-          models: [{ modelId: "glm-5", config: completeDisabledModelConfig() }],
-        },
-      ],
-    };
-    const value = `custom:${encodeURIComponent(providerId)}:glm-5`;
-    const root: Root = createRoot(installMinimalDom());
-    await act(async () => {
-      root.render(
-        createElement(V4ComposerModelControls, {
-          workspacePath: "/workspace",
-          modelSelectionView: mocks.modelSelectionView,
-          sessionId: null,
-          phase: null,
-          config: null,
-          draftMode: true,
-          usage: null,
-          disabled: false,
-          onSelectModel: mocks.selectModel,
-          onSelectThought: vi.fn(),
-          onSwitchMode: vi.fn(),
-          onRecoverCustomModelSelection: mocks.recoverCustomModelSelection,
-        }),
-      );
-      await flushMicrotasks();
-    });
-
-    await act(async () => {
-      captured.modelSelectProps?.onValueChange(value);
-      await flushMicrotasks();
-    });
-
-    expect(mocks.recoverCustomModelSelection).not.toHaveBeenCalled();
-    expect(mocks.selectModel).toHaveBeenCalledWith(providerId, "glm-5", null);
-
-    await act(async () => {
-      root.unmount();
-    });
-  });
-
   it("does not write a menu-first fallback when a session model is absent from the visible catalog", async () => {
-    const root: Root = createRoot(installMinimalDom());
-    await act(async () => {
-      root.render(
-        createToolbarElement({
-          workspacePath: "/workspace",
-          modelSelectionView: mocks.modelSelectionView,
-          sessionId: "session-removed-model",
-          phase: "completedSuccess",
-          config: {
-            provider: "removed-provider",
-            model: "removed-model",
-            thought: "high",
-            thoughtLevels: ["high"],
-            followupMode: "queue",
-            mode: "build",
-          },
-          usage: null,
-          disabled: false,
-          onSelectModel: mocks.selectModel,
-          onSelectThought: vi.fn(),
-          onSwitchMode: vi.fn(),
-        }),
-      );
-      await flushMicrotasks();
+    await renderToolbar({
+      sessionId: "session-removed-model",
+      phase: "completedSuccess",
+      draftConfig: {
+        mode: "build",
+        modelSelection: {
+          providerId: "removed-provider",
+          modelId: "removed-model",
+          options: { reasoningLevel: "high" },
+        },
+      },
+      config: {
+        provider: "removed-provider",
+        model: "removed-model",
+        thought: "high",
+        thoughtLevels: ["high"],
+        followupMode: "queue",
+        mode: "build",
+      },
+      usage: null,
     });
 
     expect(mocks.selectModel).not.toHaveBeenCalled();
-
-    await act(async () => {
-      root.unmount();
-    });
   });
-});
-
-it("展示失败后允许重试当前连接，不再被已选 key 提前返回", () => {
-  mocks.connectionSwitchError = "retry";
-  renderToolbarMarkup();
-  const menu = captured.modelSelectProps?.composerOptions?.providerMenu;
-  expect(menu).toBeDefined();
-  const selected = menu!.groups.find((group) => group.key === menu!.selectedKey)!;
-  expect(selected).toBeDefined();
-  menu!.onSelect(selected);
-  expect(mocks.selectConnection).toHaveBeenCalledTimes(1);
-});
-
-it("团队用量已缓存后只清空 user，Provider 仍旧 ready 时立即隐藏旧来源并禁用请求", async () => {
-  const { useUsageEntitlement } = await import("@/hooks/useUsageEntitlement.js");
-  const provider = BUILTIN_MODEL_PROVIDER_IDS.bigmodelTeamCodingPlan;
-  addAccountProviderAccess(provider, { accountType: "bigmodel", mode: "team-coding-plan" });
-  mocks.settings = {
-    providerFamilyDomain: "bigmodel",
-    providerFamilyConnectionSelections: {
-      bigmodel: {
-        kind: "team-coding-plan",
-        productId: "team-pro",
-        organizationId: "org-1",
-        projectId: "project-1",
-      },
-    },
-  };
-  mocks.codingPlanEntitlements = {
-    [provider]: {
-      snapshot: createActiveEntitlement(provider, {
-        context: {
-          scope: "team",
-          productId: "team-pro",
-          organizationId: "org-1",
-          projectId: "project-1",
-          displayName: "Private Team",
-        },
-      }),
-      loading: false,
-      error: null,
-    },
-  };
-  mocks.usageEntitlement = {
-    snapshot: createActiveEntitlement(provider, {
-      context: {
-        scope: "team",
-        productId: "team-pro",
-        organizationId: "org-1",
-        projectId: "project-1",
-        displayName: "Private Team",
-      },
-    }),
-    loading: false,
-    error: null,
-  };
-  const root = createRoot(installMinimalDom());
-  const props = {
-    draftConfig: {
-      mode: "build" as const,
-      modelSelection: { providerId: provider, modelId: "glm-5" },
-    },
-    workspacePath: "/workspace",
-    sessionId: null,
-    phase: null,
-    config: {
-      provider,
-      model: "glm-5",
-      thought: "medium",
-      thoughtLevels: ["medium"],
-      followupMode: "queue" as const,
-      mode: "build" as const,
-    },
-    usage: null,
-    disabled: false,
-    onSelectModel: mocks.selectModel,
-    onSelectThought: vi.fn(),
-    onSwitchMode: vi.fn(),
-  };
-  try {
-    await act(async () => root.render(createElement(V4ComposerModelControls, props)));
-    expect(latestUsageProps().codingPlanUsageRemaining).toBeDefined();
-    mocks.auth.user = null;
-    await act(async () =>
-      root.render(
-        createElement(V4ComposerModelControls, { ...props, config: { ...props.config } }),
-      ),
-    );
-    expect(latestUsageProps().codingPlanUsageRemaining).toBeUndefined();
-    expect(useUsageEntitlement).toHaveBeenLastCalledWith(
-      expect.objectContaining({ enabled: false, accountAccess: undefined }),
-    );
-  } finally {
-    await act(async () => root.unmount());
-  }
 });

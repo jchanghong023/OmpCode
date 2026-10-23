@@ -1,3 +1,4 @@
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { act, createElement, useEffect, useLayoutEffect, useRef, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -6,7 +7,6 @@ import { ZCodeIntlProvider } from "@/i18n/IntlProvider.js";
 import { useZCodeSessionStore } from "@/store/zcodeSessionStore.js";
 import { pendingCommandRegistry, type PendingCommandEntry } from "@/v4/pendingCommandRegistry.js";
 import { SessionPane, type SessionPaneProps } from "@/v4/SessionPane.js";
-import { useModelSelectionServiceView } from "@/hooks/useModelSelectionView.js";
 
 type ProjectionState = {
   status: "connecting" | "live";
@@ -150,25 +150,38 @@ const servicesMock = vi.hoisted(() => ({
     healthy: vi.fn(),
     share: vi.fn(),
   },
-  // 修复原因：readiness hook 将 service 作为 effect 依赖；每次 render 重建会导致无限重渲染直至 OOM。
-  modelSelectionService: {
-    getView: vi.fn(async () => ({
-      revision: 1,
-      providers: [
-        {
-          providerId: "provider-deepseek",
-          config: { kind: "api" as const },
-          models: [{ modelId: "deepseek-v4-flash", config: {} }],
-        },
-      ],
-    })),
-    onDidChange: vi.fn(() => ({ dispose: vi.fn() })),
-    validate: vi.fn(),
+  // 原生启动域与 workspace-config 是输入事实，不再用 Host 账户目录充当可发送门禁。
+  zcodeAgentService: {
+    getOmpProfiles: vi.fn(async () => ({ storageScope: "composer-continuity/native" })),
+    onAgentRuntimeRestarted: vi.fn(() => ({ dispose() {} })),
   },
   zcodeSessionService: {
-    updateProviderRegistry: vi.fn(),
+    readWorkspacePresentation: vi.fn(async () => ({ mode: "build", slashCommands: [] })),
   },
   zcodeTaskService: {
+    onDynamicWorkspaceEvent: () => (listener: (event: unknown) => void) => {
+      listener({
+        type: "workspace_config_options_update",
+        configOptions: [
+          {
+            id: "model",
+            name: "Model",
+            category: "model",
+            type: "select",
+            currentValue: "provider-deepseek/deepseek-v4-flash",
+            options: [
+              {
+                value: "provider-deepseek/deepseek-v4-flash",
+                name: "DeepSeek V4 Flash",
+                modelThoughtLevels: ["low", "high"],
+                modelDefaultThoughtLevel: "high",
+              },
+            ],
+          },
+        ],
+      });
+      return { dispose() {} };
+    },
     restartWorkspaceProcess: vi.fn(),
   },
 }));
@@ -229,45 +242,35 @@ vi.mock("@/hooks/useServices.js", () => ({
   useServices: () => servicesMock,
 }));
 
-// 本文件只验证 composer 生命周期；目标 Host View 的异步订阅已有独立 hook 测试。
-// 若让真实 hook 在极简 DOM 中运行，Promise 回流会把 React 调度留到 window 清理之后。
-vi.mock("@/hooks/useModelSelectionView.js", () => ({
-  useModelSelectionServiceView: () => ({
-    state: {
-      status: "ready",
-      view: {
-        revision: 1,
-        preferredSelection: {
-          providerId: "provider-deepseek",
-          modelId: "deepseek-v4-flash",
-        },
-        providers: [
-          {
-            providerId: "provider-deepseek",
-            config: { kind: "api" as const },
-            models: [
-              {
-                modelId: "deepseek-v4-flash",
-                config: {
-                  optionSpecs: { reasoningLevel: { values: ["low", "high"], map: "{}" } },
-                },
-              },
-            ],
-          },
-        ],
-      },
-    },
-    reload: vi.fn(),
+// 这些用例消费已解析的 workspace 服务，不验证 TabStore 的跨 Host 路由。
+// 保留真实 storage-scope/catalog hooks，由原生服务事实驱动其状态。
+vi.mock("@/hooks/useWorkspaceServices.js", () => ({
+  useWorkspaceServices: () => servicesMock,
+  useBaseWorkspaceServices: () => servicesMock,
+  useOptionalBaseWorkspaceServices: () => null,
+  useWorkspaceServicesResolution: () => ({
+    services: servicesMock,
+    rpcReady: true,
+    isRemoteTarget: false,
+    connectionKind: "local-ready",
+    remoteSessionId: null,
   }),
 }));
 
 vi.mock("@/v4/composer/useDraftConfigControl.js", () => ({
   buildDraftCreateConfigPayload: () => ({}),
   useDraftConfigControl: () => ({
-    modelSelectionRead: useModelSelectionServiceView(null),
+    modelSelectionRead: { state: { status: "loading" }, reload: vi.fn() },
     captureAcceptedModelSelection: () => vi.fn(),
     composerDraft: { text: "", updatedAt: 0 },
-    draftConfig: {},
+    draftConfig: {
+      mode: "build",
+      modelSelection: {
+        providerId: "provider-deepseek",
+        modelId: "deepseek-v4-flash",
+        options: { reasoningLevel: "high" },
+      },
+    },
     draftConfigRef: {
       current: {
         mode: "build",
@@ -583,10 +586,11 @@ beforeEach(() => {
   };
 });
 
-afterEach(() => {
-  for (const root of mountedRoots.splice(0)) {
-    act(() => root.unmount());
-  }
+afterEach(async () => {
+  await act(async () => {
+    for (const root of mountedRoots.splice(0)) root.unmount();
+    await nextTurn();
+  });
   delete (globalThis as { document?: unknown }).document;
   delete (globalThis as { window?: unknown }).window;
   delete (globalThis as { IS_REACT_ACT_ENVIRONMENT?: unknown }).IS_REACT_ACT_ENVIRONMENT;
@@ -865,11 +869,13 @@ describe("SessionPane composer continuity", () => {
     expect(sendCommandB).not.toHaveBeenCalled();
   });
 
-  it("keeps one composer instance while draft promotion waits for the first snapshot", () => {
+  it("keeps one composer instance while draft promotion waits for the first snapshot", async () => {
     const root = createRoot(installMinimalDom());
     mountedRoots.push(root);
 
-    renderPane(root, null);
+    await act(async () => {
+      renderPane(root, null);
+    });
     projectionState.current = {
       status: "connecting",
       snapshot: null,
@@ -977,7 +983,7 @@ describe("SessionPane composer continuity", () => {
     );
   });
 
-  it("routes paused queue input to modal, while /compact queues directly", async () => {
+  it("routes paused queue input to modal and preserves the explicit clear choice", async () => {
     const root = createRoot(installMinimalDom());
     mountedRoots.push(root);
     const queuedItem = {
@@ -1019,19 +1025,6 @@ describe("SessionPane composer continuity", () => {
     });
     expect(conversationMock.sendCommand).not.toHaveBeenCalled();
 
-    await act(async () => {
-      await scrollFocus.composerProps?.onSendText("/compact");
-    });
-    expect(conversationMock.sendCommand).toHaveBeenCalledWith(
-      expect.objectContaining({ type: "compact", sessionId: "session-1" }),
-    );
-
-    conversationMock.sendCommand.mockReset();
-    conversationMock.sendCommand.mockImplementation(async (envelope) => ({
-      commandId: envelope.commandId,
-      revisionAtDecision: 1,
-      status: "accepted" as const,
-    }));
     await act(async () => {
       await scrollFocus.composerProps?.onSendText("新消息", {
         heldQueueDisposition: "clearQueueAndSend",

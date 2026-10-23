@@ -1222,9 +1222,7 @@ export async function switchV4Model(provider: string, model: string, thought: st
     TID_CHAT_MODEL_SELECT_ITEM,
     encodeCustomModelValue(provider, model),
   );
-  const providerGroupTestIds = [
-    testId(TID_CHAT_MODEL_SELECT_GROUP, `registry-provider:${provider}`),
-  ];
+  const providerGroupTestIds = [testId(TID_CHAT_MODEL_SELECT_GROUP, `omp-provider:${provider}`)];
   // 模型菜单是受控 DropdownMenu（pointerdown 打开），element.click() 不触发；
   // 与旧 upstream helper 同口径用 WebDriver 真实点击。
   const modelTrigger = $(sel(TID_CHAT_MODEL_SELECT_TRIGGER));

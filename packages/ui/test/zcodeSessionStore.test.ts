@@ -552,7 +552,7 @@ describe("useZCodeSessionStore provider preference", () => {
     );
   });
 
-  it("startDraft 从 active task 新建且透传同 provider 时会继承输入框完整配置", () => {
+  it("startDraft 同 profile 保留 workspace 原生目录，不继承 active task 临时配置", () => {
     const workspacePath = "/tmp/workspace-new-task-inherit-active-config";
     const taskId = "task-provider-a";
     const taskModel = "provider-a/model-a";
@@ -579,12 +579,11 @@ describe("useZCodeSessionStore provider preference", () => {
 
     const workspaceState = useZCodeSessionStore.getState().getWorkspaceState(workspacePath);
     expect(workspaceState.activeTaskId).toBeNull();
-    expect(readModelConfigValue(workspaceState.configOptions)).toBe(taskModel);
-    expect(readModeConfigOption(workspaceState.configOptions)?.currentValue).toBe("yolo");
+    expect(readModelConfigValue(workspaceState.configOptions)).toBe(workspaceModel);
+    expect(readModeConfigOption(workspaceState.configOptions)).toBeUndefined();
     expect(
-      workspaceState.configOptions?.find((option) => option.category === "thought_level")
-        ?.currentValue,
-    ).toBe("max");
+      workspaceState.configOptions?.find((option) => option.category === "thought_level"),
+    ).toBeUndefined();
   });
 
   it.each(["scope-a", null])("实际域从 %s 进入新域时不认领旧临时模型种子", (previousScope) => {

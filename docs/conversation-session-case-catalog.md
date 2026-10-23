@@ -6,7 +6,7 @@
 
 - Wiki／Repo：`desktop-e2e-20261022224641003-p64788-9616faedaa677057`，bg229 PASS、exit 0，170.04s；Wiki 新增／完整正文／grep 边界空白／原生纯空白错误／字面 `[ ]`／删除，Repo 文本／真实 Python 符号与路径／更新／重建／删除均过；原始 `test-results.ndjson` 与 `omp-indexes-evidence.json` 记录 `modelRequests=0`、`sourcePreserved=true`，有明亮及 900px 窄屏截图。
 - mention：`desktop-e2e-20261022224640810-p85936-69d818d634ab7f89`，bg230 PASS、exit 0，246.40s；同一个 `it` 覆盖原 `@`／`#`／`$`／`¥`／`￥`、session catalog 生命周期和真实 SharedSkill 提交后的 assistant 执行结果，localhost 响应不冒充真实模型。
-- 以上为本机 Electron 与当前源码的局部通过；不代表手机、其他平台、安装版或全产品完成。profile 四阶段真实 GUI 与全局 Team 聊天完整 GUI 均已通过，见下述当前证据及范围。
+- 以上为本机 Electron 与当前源码的通过结果；不代表手机、其他平台、安装版或全产品完成。全局 Team 聊天完整 GUI 及当前 v2 五阶段 profile 完整 GUI 均已通过，见下述证据及各自范围。
 
 ## OMP-native Team 聊天命令验收（已通过）
 
@@ -23,14 +23,20 @@ CAS、配置作用域、相同模型槽隔离及断线不可取消等已有有�
 
 ## OMP profile 与外部运行时验证（2026-10-23）
 
-`omp-profiles.e2e.ts` 的四个真实 Electron 生命周期场景均通过，`retryIndex=0`，run `desktop-e2e-20261022231440976-p75200-2d94462b9ef5c7c9`：无 session 选择、待重启角色禁写、原生 role 持久化、仅当前会话的临时模型，以及切回 profile 后任务／分组／草稿／Recent／role 恢复；上游 `.zcode` sentinel 未变化。浅色及窄屏截图位于同一 run。
+`omp-profiles.e2e.ts` 的四阶段历史通过 run `desktop-e2e-20261022231440976-p75200-2d94462b9ef5c7c9` 及其浅色／窄屏截图、上游 `.zcode` sentinel 未变化证据保留原范围。v2 扩充后的五个生命周期场景现已在最终当前源码重建后完整 **5／5 PASS，无重试**，run `desktop-e2e-20261023052242715-p168964-7768c7bc4f0477c1`；覆盖双 profile 重启后的草稿／角色／模型／default 恢复、CAS、新草稿目录及临时模型不持久化与隔离。原始结果、历史失败与最终时长统一见 [当前证据快照](testing/omp-integration-blockers.md#v2-模型认证与-profile-当前快照)，不再将已收口的 trigger／Recent 断言障碍记为当前失败。v2 及原 17 项工作已在 Windows 当前源码授权范围完成，不扩称其他平台或正式发行验收。
+
+| ID | v2 GUI 动作 | 必须观察的结果（执行状态见当前证据快照） |
+| --- | --- | --- |
+| OMP-MODEL-04 | GUI 保存原生 role／custom role；独立源码 `Settings.loadReadOnly` 读取；编辑 smol 草稿后从外部写原生 config.yml，再点 Save／Refresh／采用最新基线／Save | 原生 Settings 的 `getGlobalModelRole`／`getModelRole`／`getModelRoleSource` 证明持久化、有效值与来源；过期 Save 可见 `revision_conflict` 且外部文件字节不变；刷新保留草稿，显式 rebase 后保存成功，未编辑 custom role 保留 |
+
+`omp-app-server.e2e.ts` 的临时模型场景仍检查真实 HTTP 目标模型与 session 隔离，另比较 config.yml／models.yml 原字节及原生 agent.db 凭据行的 SHA256（不输出凭据），不以 YAML 静态扫描代替运行证明。profile 证据继续使用 `omp-profile-evidence.json`、原生配置读回与 localhost ledger。完整执行两个 spec，勿 grep 掉 profile 生命周期前置阶段。
 
 当前终端 PATH 的已安装 OMP 18.12.5 已通过真实启动界面验证为不支持所需存储准备协议；必须显式报告 `unsupported_runtime`，不能自动换源、下载或覆盖安装。独立编译的当前源码 exe 不等于已安装版本；两者的启动证据分别记录，不混用。Windows NSIS、ZIP 与 app.asar 已实际生成并检查，没有随包 OMP；正式签名发行、双产品实际同时安装和其他平台未验证。
 
 
 ## OMP-native Skill／Provider 管理验收（2026-10-23）
 
-Dedicated `omp-management.e2e.ts` 的 M01、M02 已经真实 GUI 验证通过，运行证据与边界集中在 [coverage matrix](testing/conversation-session-e2e-coverage-matrix.md#omp-native-skillprovider-管理验收2026-10-23)。只消费 OMP 已有原生能力，不改 core，不扩展 MCP；权威见 [OMP 协议需求](../../oh-my-pi/docs-zh-CN/requirements/rpc-ui-protocol.md)。测试输入为隔离 workspace 中合法 Skill 与 localhost 模型响应，不伪造运行状态。
+Dedicated `omp-management.e2e.ts` 的 M01、M02 历史真实 GUI 结果见 [coverage matrix](testing/conversation-session-e2e-coverage-matrix.md#omp-native-skillprovider-管理验收2026-10-23)。v2 M02／M03／M04 已在 company 与 codeagent 两 lane 各 3／3 PASS，无重试；当前 run、原始结果路径及 M01 独立通过范围统一见 [当前证据快照](testing/omp-integration-blockers.md#v2-模型认证与-profile-当前快照)。两 lane 的隔离 localhost 结果不等于真实供应商认证；M05 已有真实 TUI 显式 Luna 请求与同一原生 default profile 的 GUI 临时 Luna 请求的独立助手响应，配置 hashes 未变，同 profile／cwd／env 的完整真实目录及全部原生档位也已逐项比对一致。证据与平台边界统一见当前快照，不以显式 Luna 选择证明全局 default role；v2 在 Windows 当前源码授权范围完成，不扩称其他平台或正式发行。权威见 [OMP 协议需求](../../oh-my-pi/docs-zh-CN/requirements/rpc-ui-protocol.md) 与 FORK-003。隔离测试输入仅合法 workspace Skill、原生配置／认证与 localhost 模型响应，不伪造 Renderer 业务状态、不注入 Host provider 源。
 
 ```text
 Settings Skill GUI → Host → skills/manage → 原生 profile config.yml（唯一开关 owner）
@@ -41,9 +47,27 @@ Settings 模型连接按钮 → Host → provider/testModelConnectivity → loca
 | ID | Setup／GUI 动作 | 必须观察的结果 |
 | --- | --- | --- |
 | OMP-M01 | 临时 workspace `.agents/skills/omp-management-e2e/SKILL.md`；Settings Skill 页面选工作区、禁用、刷新、启用 | 原生列表显示真实文件；profile 用户层且影响同 profile 工作区的提示可见；禁用写 `disabledExtensions`，刷新后仍禁用，启用移除禁用项；旧 workspace／user `.zcode` Skill 配置无持久变更 |
-| OMP-M02 | Settings 选择已有隔离 provider 模型行并点击连接测试；本地 provider 分别返回最小有效 SSE 与明确 401 | UI 分别成功／失败，服务端确有原生 `Reply OK.` probe、目标 model 和 stream 请求；不直接调用服务，不发真实模型请求 |
+| OMP-M02 | 原生目录页直接点击既有模型行的连接测试，无旧 provider 账户详情导航；localhost 分别返回有效 SSE 和明确 401 | UI 最终分别成功／认证失败；HTTP ledger 包含原生 `Reply OK.`、目标 model、stream=true 和实际状态，不直接调用业务服务替代 GUI |
+| OMP-M03 | 同一隔离 profile／cwd／env 启动真实绝对源码 `omp models ls --json`，与 GUI 全目录逐模型比较；打开真实 composer selector 并选择源码内置免 key 模型 | provider 身份／名称、model id／可见名称和全部思考档位一致；CLI 未输出的 auto／unverified 元数据通过同原生 registry 与 `getSupportedEfforts` 独立查询补证，不伪称 CLI 自带；管理页无模型登录／key 表单或登录按钮；旧 Host 账户哨兵不混入；company 与 Windows codeagent 分两个互斥 lane 验证并选择，不向其真实服务发送模型请求 |
+| OMP-M04 | 保持目录页打开，外部写 models.yml 新增 localhost `auth:none` provider；再声明需认证 provider，用真实 `AuthStorage.credentials.storeLoginApiKey` 外部写隔离 agent.db | 不刷新／重连即可显示新增免 key 模型；未认证模型先不在原生可用目录，原生凭据写后自动出现；GUI 连接测试 HTTP 确认命中随机本地 storage key 而非 models.yml、环境或 Host 哨兵 key（只记布尔）；probe 不改 config／models 或原生凭据摘要；真实 composer 可选择热新增模型 |
+| OMP-M05 | 明确授权后打开真实 GUI 与 OMP TUI，沿用同一原生用户配置／profile／凭据，比对全目录后分别选择 `openai-codex/gpt-6-luna` 发送独立验收标记 | 可见目录及原生档位一致；确认实际会话模型和独立助手响应，不把用户输入回显当作响应；GUI 可隔离应用数据但不得替换原生凭据。此项不进入默认本地模型 E2E 或 CI，真实服务结果单独记录 |
 
-精确单 spec 命令、实际运行 ID 与截图／ledger 名见上述 coverage matrix；单项通过不代表整批次或真实模型能力通过。
+精确执行入口（仓库根，隔离本地模型；真实模型验收单独授权，不进入这些命令）：
+
+```powershell
+$env:ZCODE_AGENT_SERVER_COMMAND = (Get-Command bun -ErrorAction Stop).Source
+$env:ZCODE_AGENT_SERVER_ARGS_JSON = '["run","F:/code2026/oh-my-pi/packages/coding-agent/src/cli.ts","app-server","--stdio","--surface","desktop"]'
+Remove-Item Env:ZCODE_AGENT_SERVER_CWD -ErrorAction SilentlyContinue
+$env:OMP_E2E_MANAGEMENT_LANE = "company"
+pnpm --config.use-node-version=24.14.0 --filter @zcode/desktop test:e2e --spec test/e2e/omp-management.e2e.ts
+$env:OMP_E2E_MANAGEMENT_LANE = "codeagent"
+pnpm --config.use-node-version=24.14.0 --filter @zcode/desktop test:e2e --spec test/e2e/omp-management.e2e.ts --mochaOpts.grep "OMP-M0[234]:"
+Remove-Item Env:OMP_E2E_MANAGEMENT_LANE
+```
+
+company lane 使用 `OMP_OFFLINE=1` 和隔离 `CLAUDE_CONFIG_DIR/settings.json`（localhost URL／测试 token）；codeagent lane 为 `OMP_OFFLINE=0`，真实 Windows 原生启动只读 HKCU token 路径，不修改、复制、展示或落盘该 token，也不调用 codeagent 连接测试。codeagent 源码保留 ID 不接受 models.yml URL／key 覆盖，不能伪造成本地 provider。两 lane 都移除 fixture 的 OpenAI／Anthropic 环境 key，并在同一原生 profile 禁用这两个远端 provider；目录读取不等同真实模型调用。完整 profile／临时模型回归另运行 `--spec test/e2e/omp-app-server.e2e.ts`、`--spec test/e2e/omp-profiles.e2e.ts`。
+
+产物位于每轮独立 `packages/desktop/.e2e-artifacts/<run>/`：既有 skill 截图／持久化证据、`omp-management-provider-{success,auth-error}.png`／`omp-management-provider-requests.json`；新增 `omp-management-catalog-{initial,external-models,external-auth}.json`（公开 CLI 原值、原生档位补证、GUI 逐行读数）、`omp-management-builtin-coverage.json`、`omp-management-native-directory.png`、`omp-management-builtin-selected.png`、`omp-management-native-auth-hot-update.png`、`omp-management-auth-persistence.json`、`omp-management-external-model-selected.png`。两 lane 当前 M02／M03／M04 结果按各自 run 记录，不以早期 codeagent 仅 M03 的范围替代。外部 auth 写是本地原生登录凭据写入模拟，**不等于**真实 provider OAuth 登录、公司服务、codeagent 推理或 token 刷新验收；手机 replayable、非 Windows、安装版及真实外网服务不由这些本地源码用例覆盖。不得把目录／本地 SSE 通过扩称这些边界通过。
 
 ## OMP-native 工具权限闭环验收（2026-10-23）
 
@@ -3796,7 +3820,6 @@ Todo109 扩展同一待验用例：首个冷启动在旧进程退出后播种本
 | W99-E01 | 隔离账号 fixture：个人/Team 有同模型同档位，显式 Subagent 原选择个人；当前已切 Team | 真实启动显式 child；对照运行中父 Model 的隐式 child          | 显式 child 请求使用 Team 同模型/档位；profile 未改；隐式 child 保持父执行 Model，不因后台变化 remap。缺模型/档位失败由对应集成 case 补充                                | accepted |
 | W99-E02 | 同一目标任务、同一已固定 Selection；分别无附件/有附件                               | 沿 task adapter 真实发送并捕获命令/请求                      | 两条链的 Selection、modelExecution 等价；附件有序；不能回退 Session 旧选择；Ticket 上下文用隔离协议 fixture 补充                                                        | accepted |
 | W99-E03 | Bot 有已完成上一轮的任务，原意图指个人，当前 Team 有同模型/档位                     | 通过 Bot 输入入口发下一条消息                                | 新轮请求使用公共解析后的 Team 选择；Bot 原配置不被读取改写；已接纳 busy/queue 的固定输入语义不变，由 admission 集成测试补充                                             | accepted |
-| W99-E04 | 已建立会话；Host 已有完整 B，Worker 被受控保持完整 A；B 的所选 Provider 在 A 不可用 | 沿原普通发送路径提交新输入，再释放同步并再次显式提交         | 不新增等待同步追平，明确不可用而不偷偷换模型；原意图不被清空；完整 B 应用后新提交可执行。此项不要求删除创建/恢复等入口已有 ensure；协议/Registry/请求证据区分接收与应用 | accepted |
 | W99-E05 | SSH 目标 workspace 与手机 shared-host attachment，使用隔离配置                      | Worker 重启后，从桌面/手机观察选择并提交                     | workspaceIdentity/remoteSessionId 指向同一目标；手机不另建 runtime；两类 delivery 守原恢复边界；真实目标进程/协议/请求证明，不以桌面截图替代手机验证                    | accepted |
 | W99-E06 | Bot 绑定已有 Session，目标模型支持 low/high                                         | `/model` 改模型，单独改档位；读取桌面/Bot 状态并冷恢复后发送 | 同一 Session 完整选择立即持久化、请求档位一致；Bot 无第二份绑定选型；非法完整选择不先改模型；Composer 未提交草稿行为不变                                                | accepted |
 

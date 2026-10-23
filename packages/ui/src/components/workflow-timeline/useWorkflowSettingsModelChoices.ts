@@ -8,15 +8,17 @@
 // 各写一份的话，总有一天确认窗里能选的模型与弹层里能选的不一样。
 
 import { useCallback, useMemo } from "react";
-import { completeNewModelSelection } from "@zcode/provider";
-import { ZCODE_AGENT_PROVIDER, type ZCodeConfigOption } from "@zcode/shared";
-import { useModelSelectionView } from "@/hooks/useModelSelectionView.js";
+import type { ZCodeConfigOption } from "@zcode/shared";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
-import { buildRegistryModelSelectGroups } from "@/lib/modelSelectionGroups.js";
-import { resolveModelThoughtOption } from "@/lib/modelThoughtOption.js";
+import {
+  findOmpCatalogEntry,
+  ompThoughtOptionForEntry,
+  selectionForOmpEntry,
+  useOmpModelCatalog,
+} from "@/omp-configuration/module.js";
 import { encodeCustomModelValue } from "@/lib/zcodeCustomModelValue.js";
 import { parseModelPickerValue } from "@/lib/zcodeSessionProjection.js";
-import type { ModelSelectGroup, ModelSelectGroupItem } from "@/ModelConfigSelect.js";
+import type { ModelSelectGroupItem } from "@/ModelConfigSelect.js";
 import { formatProviderModelLabel } from "@/v4/composer/modelTriggerDisplay.js";
 import { describeWorkflowSubagentModel } from "./subagent-model-label.js";
 import {
@@ -54,44 +56,28 @@ export function useWorkflowSettingsModelChoices(scope: WorkflowSettingsModelScop
     (id: string, values?: Record<string, string | number>) => intl.formatMessage({ id }, values),
     [intl],
   );
-  const modelRead = useModelSelectionView(
+  const modelRead = useOmpModelCatalog(
     scope.workspacePath,
-    scope.remoteSessionId,
     scope.workspaceIdentity,
+    scope.remoteSessionId,
   );
-  const view = modelRead.state.status === "ready" ? modelRead.state.view : null;
-  const groups: ModelSelectGroup[] = useMemo(
-    () =>
-      view === null
-        ? []
-        : buildRegistryModelSelectGroups(ZCODE_AGENT_PROVIDER, view, {
-            apiKeyLabel: format("settings.modelProvider.apiKey"),
-            apiKeyBadgeLabel: format("settings.modelProvider.connectionMode.apiKeyBadge"),
-            codingPlanLabel: format("settings.modelProvider.connectionMode.codingPlan"),
-            codingPlanBadgeLabel: format("settings.modelProvider.connectionMode.codingPlanBadge"),
-            startPlanLabel: format("settings.modelProvider.connectionMode.startPlan"),
-            startPlanBadgeLabel: format("settings.modelProvider.connectionMode.startPlanBadge"),
-            teamPlanBadgeLabel: format("settings.modelProvider.connectionMode.teamPlanBadge"),
-            teamPlanFallbackLabel: format("settings.modelProvider.connectionMode.teamPlan"),
-          }),
-    [format, view],
-  );
+  const { catalog, modelGroups: groups } = modelRead;
   const providerName = useCallback(
     (providerId: string) =>
-      view?.providers.find((provider) => provider.providerId === providerId)?.providerName ??
-      undefined,
-    [view],
+      catalog?.entries.find((entry) => entry.providerId === providerId)?.providerName,
+    [catalog],
   );
 
   const sessionModel = scope.sessionModel;
   const sessionModelName =
     sessionModel === undefined
       ? format("chat.toolCall.workflow.run.settings.model.sessionFallback")
-      : formatProviderModelLabel(
+      : (findOmpCatalogEntry(catalog, sessionModel.providerId, sessionModel.modelId)?.modelName ??
+        formatProviderModelLabel(
           sessionModel.providerId,
           providerName(sessionModel.providerId),
           sessionModel.modelId,
-        );
+        ));
   const sessionBadge = format("chat.toolCall.workflow.run.settings.model.session");
   // 两个字段都是字符串，所以这一项只在文案真变了时换引用；下游的模型选择器是 memo 组件。
   const sessionModelItem: ModelSelectGroupItem = useMemo(
@@ -110,30 +96,30 @@ export function useWorkflowSettingsModelChoices(scope: WorkflowSettingsModelScop
         model.kind === "session"
           ? SESSION_MODEL_VALUE
           : encodeCustomModelValue(model.providerId, model.modelId);
-      const listed = groups.some((group) => group.items.some((item) => item.value === value));
-      // 清单读好了、却找不到这个模型：它已被删或停用。下游等用户换一个——沿用它只会让 agent 回
-      // model_unavailable（同工具「沿用的模型已不可用」那条失败，在点下去之前就说出来）。
-      const unavailable = model.kind === "model" && view !== null && groups.length > 0 && !listed;
+      const entry =
+        model.kind === "model"
+          ? findOmpCatalogEntry(catalog, model.providerId, model.modelId)
+          : undefined;
+      // 可用性只取目标 workspace 的原生目录，不再把 Host 账户清单当作模型事实。
+      const unavailable = model.kind === "model" && catalog !== null && groups.length > 0 && !entry;
       const canonical = workflowRunSettingsModelCanonical(model);
       const triggerLabel =
         model.kind === "session" || canonical === undefined
           ? sessionModelName
-          : describeWorkflowSubagentModel(canonical, {
+          : (entry?.modelName ??
+            describeWorkflowSubagentModel(canonical, {
               formatMessage: intl.formatMessage.bind(intl),
               providerName,
-            }).name;
+            }).name);
+      const nativeThoughtOption = ompThoughtOptionForEntry(entry);
+      // 已存配置的缺省/未知档位必须原样保留；原生默认档仅用于用户显式换模型。
       const thoughtOption =
-        model.kind === "model" && view !== null && !unavailable
-          ? resolveModelThoughtOption({
-              modelSelectionView: view,
-              providerId: model.providerId,
-              modelId: model.modelId,
-              ...(model.level === undefined ? {} : { currentValue: model.level }),
-            })
+        nativeThoughtOption !== null && model.kind === "model"
+          ? { ...nativeThoughtOption, currentValue: model.level ?? "" }
           : null;
       return { value, triggerLabel, unavailable, thoughtOption };
     },
-    [groups, intl, providerName, sessionModelName, view],
+    [catalog, groups, intl, providerName, sessionModelName],
   );
 
   /** 菜单选中一项 → 新的模型选择。换模型即取它在注册表里的默认思考档；同一个模型保留当前档。 */
@@ -145,11 +131,12 @@ export function useWorkflowSettingsModelChoices(scope: WorkflowSettingsModelScop
         current.kind === "model" &&
         current.providerId === picked.providerId &&
         current.modelId === picked.modelId;
+      const entry = findOmpCatalogEntry(catalog, picked.providerId, picked.modelId);
       const level = same
         ? current.level
-        : view === null
-          ? undefined
-          : completeNewModelSelection(view, picked)?.options?.reasoningLevel;
+        : entry
+          ? selectionForOmpEntry(entry).options?.reasoningLevel
+          : undefined;
       return {
         kind: "model",
         providerId: picked.providerId,
@@ -157,14 +144,14 @@ export function useWorkflowSettingsModelChoices(scope: WorkflowSettingsModelScop
         ...(level === undefined ? {} : { level }),
       };
     },
-    [view],
+    [catalog],
   );
 
   return {
     /** 清单还没读好（读好之前字段禁用）。 */
-    loading: view === null,
-    /** 清单读好了却一个模型都没有：模型那一格退成一句话。 */
-    noCatalog: view !== null && groups.length === 0,
+    loading: modelRead.loading || modelRead.status === "idle",
+    /** 原生配置已到达但无可用目录：不回退 Host 账户模型。 */
+    noCatalog: !modelRead.loading && modelRead.status !== "idle" && groups.length === 0,
     groups,
     providerName,
     sessionBadge,

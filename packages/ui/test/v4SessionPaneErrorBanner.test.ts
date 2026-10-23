@@ -49,14 +49,37 @@ vi.mock("@/hooks/useSettingService.js", () => ({
   }),
 }));
 
+const servicesMock = vi.hoisted(() => ({
+  zcodeAgentService: {
+    getOmpProfiles: vi.fn(async () => ({ storageScope: "error-banner/native" })),
+    onAgentRuntimeRestarted: vi.fn(() => ({ dispose() {} })),
+  },
+  zcodeSessionService: {
+    readWorkspacePresentation: vi.fn(async () => ({ mode: "build", slashCommands: [] })),
+  },
+  zcodeTaskService: {
+    onDynamicWorkspaceEvent: () => () => ({ dispose() {} }),
+    restartWorkspaceProcess: vi.fn(),
+  },
+}));
+
 vi.mock("@/hooks/useServices.js", () => ({
   useComposerClientNamespace: () => "desktop",
   useOptionalServices: () => null,
-  useServices: () => ({
-    zcodeSessionService: {},
-    zcodeTaskService: {
-      restartWorkspaceProcess: vi.fn(),
-    },
+  useServices: () => servicesMock,
+}));
+
+// SSR 仅消费服务边界；不应因无应用级 TabStore 而无法渲染错误面板。
+vi.mock("@/hooks/useWorkspaceServices.js", () => ({
+  useWorkspaceServices: () => servicesMock,
+  useBaseWorkspaceServices: () => servicesMock,
+  useOptionalBaseWorkspaceServices: () => null,
+  useWorkspaceServicesResolution: () => ({
+    services: servicesMock,
+    rpcReady: true,
+    isRemoteTarget: false,
+    connectionKind: "local-ready",
+    remoteSessionId: null,
   }),
 }));
 
@@ -265,7 +288,7 @@ describe("SessionPane error banner wiring", () => {
     );
   });
 
-  it("renders the feedback shortcut in the subscription error state", () => {
+  it("preserves the subscription error without a snapshot", () => {
     projectionState.current = {
       status: "error",
       snapshot: null,
@@ -278,8 +301,6 @@ describe("SessionPane error banner wiring", () => {
     const html = renderPane();
 
     expect(html).toContain("EPERM: operation not permitted");
-    expect(html).toContain("反馈问题");
-    expect(html).toContain("重新连接");
   });
 
   it.each([

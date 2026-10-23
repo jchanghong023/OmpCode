@@ -1,6 +1,6 @@
 import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   CommandAck,
   CommandEnvelope,
@@ -15,6 +15,36 @@ import {
   requestSelectionSideChatOpen,
   setSelectionSideChatBlocked,
 } from "@/lib/selectionSideChatRuntime.js";
+import { useZCodeSessionStore } from "@/store/zcodeSessionStore.js";
+
+// 只补原生启动事实与工作区服务边界，保持真实 StorageScope hook，不依赖全应用 TabStore。
+vi.mock("@/hooks/useWorkspaceServices.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/hooks/useWorkspaceServices.js")>();
+  const { useServices } = await import("@/hooks/useServices.js");
+  const zcodeAgentService = {
+    getOmpProfiles: async () => ({ storageScope: "native-followup-scope" }),
+    onAgentRuntimeRestarted: () => ({ dispose() {} }),
+  };
+  return {
+    ...actual,
+    useWorkspaceServices: () => ({ ...useServices(), zcodeAgentService }),
+  };
+});
+
+beforeEach(() => {
+  const store = useZCodeSessionStore.getState();
+  store.setConfigOptions("/workspace", [
+    {
+      id: "model",
+      name: "Model",
+      category: "model",
+      type: "select",
+      currentValue: "",
+      options: [],
+    },
+  ]);
+  store.setConfigOptionsStatus("/workspace", "ready");
+});
 
 vi.mock("@/lib/conversationSelectionReference.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/conversationSelectionReference.js")>()),
@@ -78,6 +108,7 @@ const servicesMock = vi.hoisted(() => ({
     readSession: vi.fn(async () => ({})),
   },
   zcodeTaskService: {
+    onDynamicWorkspaceEvent: () => () => ({ dispose() {} }),
     restartWorkspaceProcess: vi.fn(),
   },
 }));
@@ -182,14 +213,6 @@ vi.mock("@/v4/V4InteractionDialogs.js", async () => {
   const React = await import("react");
   return {
     V4InteractionDialogs: () => React.createElement("div", { "data-testid": "mock-interactions" }),
-  };
-});
-
-vi.mock("@/request-security-edition/V4ProviderRuntimeHeadersController.js", async () => {
-  const React = await import("react");
-  return {
-    V4ProviderRuntimeHeadersController: () =>
-      React.createElement("div", { "data-testid": "mock-runtime-headers" }),
   };
 });
 

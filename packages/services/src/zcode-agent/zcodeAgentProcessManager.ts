@@ -1154,6 +1154,9 @@ export class ZCodeAgentProcessManager {
       { ...spawnEnv, ...effectiveCommand.env },
       params.workspaceIdentity,
     );
+    // Host 的旧 provider 路径会覆盖 OMP 原生目录；继承环境和 command.env 都不能重新激活它们。
+    delete commandEnv.ZCODE_BUILTIN_PROVIDER_CONFIG_FILE;
+    delete commandEnv.ZCODE_PERSONAL_PROVIDER_CONFIG_FILE;
     const profilePinned = (resolvedCommand?.args ?? []).some(
       (arg) => arg === "--profile" || arg === "-P" || arg.startsWith("--profile="),
     );

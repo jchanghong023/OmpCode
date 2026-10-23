@@ -500,11 +500,6 @@ export interface ConversationComposerProps {
    */
   backgroundWorkOpenTarget?: "panel" | "workflow-run";
   runningSubagentCount?: number;
-  /** prepare/configOptions 失败时，custom provider 选择走 workspace recovery 链。 */
-  onRecoverCustomModelSelection?: (
-    value: string,
-    sourceModel: ModelSelectionSource | null,
-  ) => Promise<void> | void;
   /** context usage 面板的 /compact 入口（宿主走 v4 compact 命令）。 */
   onSendCompressionCommand?: (command: string) => void;
   /** v4 会话级错误（snapshot.control.lastError），展示在输入框上方。 */
@@ -597,7 +592,6 @@ function ConversationComposerImpl({
   onOpenRunningBackgroundWorks,
   backgroundWorkOpenTarget = "panel",
   runningSubagentCount = 0,
-  onRecoverCustomModelSelection,
   onSendCompressionCommand,
   error,
   onDismissError,
@@ -2406,7 +2400,6 @@ function ConversationComposerImpl({
               onSelectModel={handleSelectModelTrace}
               onSelectThought={onSelectThought}
               onSwitchMode={onSwitchMode}
-              onRecoverCustomModelSelection={onRecoverCustomModelSelection}
               onSendCompressionCommand={onSendCompressionCommand}
             />
           </span>
@@ -2472,7 +2465,6 @@ function ConversationComposerImpl({
       modelSelectionState,
       modelSelectionView,
       onSelectThought,
-      onRecoverCustomModelSelection,
       onSendCompressionCommand,
       onSwitchMode,
       pending,
