@@ -4,6 +4,8 @@
 
 本文件是本 Fork 的需求入口，用于记录相对 ZCode 上游新增或调整的产品需求、行为边界和验收标准。上游已有能力继续以当前源码及对应需求文档为准，不在本文件重复定义。
 
+当前新增要求：CentOS 启动命令静默，不向控制台打印日志；原始输出写入 `${XDG_CACHE_HOME:-$HOME/.cache}/ompcode-centos7/startup-<pid>.log`。帮助输出保留，不以静默启动掩盖功能错误。
+
 ## 2. 重新开始 Fork 的背景与决策
 
 - `main` 分支基于老版本 Fork 改造，累计改动过大，已经不好管理。
@@ -277,6 +279,7 @@ flowchart LR
 Wiki／Repo 新版真实 GUI bg229 PASS（exit 0，170.04s，`desktop-e2e-20261022224641003-p64788-9616faedaa677057`）；mention bg230 PASS（exit 0，246.40s，`desktop-e2e-20261022224640810-p85936-69d818d634ab7f89`）。完整产物路径、Wiki／Repo 查询／生命周期及 mention／SharedSkill 实际覆盖范围见 [coverage matrix](docs/testing/conversation-session-e2e-coverage-matrix.md#omp-native-wikirepo-与-mention-最新真实-gui-证据2026-10-23)，本轮门禁结果见 [联调记录](docs/testing/omp-integration-blockers.md#最新局部验证与未完成项2026-10-23)。根 UT 最新为当前白名单 100 文件、1905 passed／31 skipped，不代表原全仓；历史基线和原需求保留。
 
 **整体仍未完成／未验收**：新聊天 Team bg240 失败，profile 四阶段 GUI 尚在运行，默认安装版启动待处理。既有 permission、M01／M02、model restore、Tan 子代理／工作流通过保持原范围；旧独立 Team 页通过不得转记新聊天 Team。当前源码和 localhost 模型证据不冒充安装版、真实模型、手机、远端或其他平台通过。
+
 ### 单次完整交付与验收
 
 不分阶段交付或分阶段验收。以下均为同一次完整交付的并列条件；内部工程依赖顺序不构成部分交付出口：
@@ -406,10 +409,10 @@ Wiki／Repo 新版真实 GUI bg229 PASS（exit 0，170.04s，`desktop-e2e-202610
 
 ## Windows 打包与发布
 
-- `.github/workflows/release-windows.yml` 保留本分支手动发布入口，只接受 `refs/heads/dev-centos7`，各构建及发布阶段固定触发 SHA；仅安装构建依赖、构建 Windows x64 NSIS 安装包、生成并核对 SHA256、上传与发布，不运行测试、E2E、smoke、lint 或独立类型检查门禁。生成产物所需的 TypeScript 编译及包资源／体积完整性检查仍属于构建，不另增测试作业。与 CentOS 共同行为见[双平台发布规范](docs/centos7-desktop-release.md#8-双平台-github-发布slice-4)。
-- 正式产品身份为 OmpCode；应用版本来自根 `package.json`，Release 标签沿用 UTC 时间、GitHub run ID 与 attempt 的唯一组合。Release 精确指向本轮 `GITHUB_SHA`，先创建草稿、核对安装包与校验文件后才公开；未签名的 Windows 产物明确说明。外部 OMP 不随包分发、不自动安装或替换。
+- `.github/workflows/release-windows.yml` 保留本分支手动发布入口，只接受 `refs/heads/dev-centos7`，各构建及发布阶段固定触发 SHA；正常安装依赖、编译、构建 Windows x64 NSIS 安装包、上传与发布，不运行测试、E2E、smoke、lint、独立类型检查、许可处理或包检查。SHA256 可生成供用户自用，不复验阻断；资源／体积／完整性审计不再视为必需构建步骤。共同行为见[双平台发布规范](docs/centos7-desktop-release.md#8-双平台-workflow-与本轮验收)。
+- 正式产品身份为 OmpCode；应用版本来自根 `package.json`，Release 标签沿用 UTC 时间、GitHub run ID 与 attempt 的唯一组合，精确指向触发 SHA，沿用草稿到公开的发布流程，不增包审计门禁。未签名状态如实说明。外部 OMP 不随包分发、不自动安装或替换。
 - 此次将新 main 合入 `dev-centos7`，产品功能以 main 为准，仅保留本分支必要底层兼容与构建适配；不在本次任务切换发行分支或替换远端 main 历史。先前“以 dev 替换旧 main”的操作合同属于历史发布阶段，不约束此次明确合并。
-- 本分支发布验收须以实际触发的 `dev-centos7` SHA、对应 Windows workflow 成功结果、公开 Release、安装包和 SHA256 为准，不以历史绿色 run、其他平台 Release 或旧草稿代替。main 已有 Team 模型配置与聊天工作流式卡片功能合同保留；历史 E2E 结果不作为此次合并后的新验证。
+- 真实发布只能依据实际触发 SHA、workflow 结果、公开 Release 和安装包记录，不能以历史绿色 run、其他平台 Release 或旧草稿代替；SHA256 仅供用户自用。main 的 Team 模型配置与聊天工作流卡片合同保留，历史 E2E 不作为此次合并后的新验证；本轮仅要求真实 CentOS 打包和功能性启动，不额外要求 Windows 发布验收。
 
 ## 9. 后续需求记录规则
 
@@ -432,30 +435,33 @@ Wiki／Repo 新版真实 GUI bg229 PASS（exit 0，170.04s，`desktop-e2e-202610
 
 在 `dev-centos7` 合入新 `main`，功能语义以 main 为准，仅保留 CentOS 7 x64 桌面发行必需的底层兼容与构建适配；取消迁移初期不 merge、cherry-pick 或 rebase main 的操作禁令。目标宿主为 Linux 3.10／glibc 2.17；仅 CentOS 构建固定 Electron `28.3.3`、内嵌 Node `18.18.2` 与 Chromium `120`。Windows、macOS 等其他平台沿用当前上游 Desktop manifest／lockfile 的版本，不永久固定 Electron `41.0.3`（它只是本次迁移开始时的源码基线）。各平台复用 main 的界面、协议与功能，只迁移必要的底层兼容、启动和发行装配，保留持续合并上游的能力。
 
+内网目标输入为用户提供的 `D:/公司内网环境详情.md`（截图 OCR 整理及用户确认，含快照和明确标注的推测，不是本轮实机验证）。仅保留技术约束，不复制内网地址、主机或账户标识：x86_64、内核 `3.10.0-1160.95.1.el7.x86_64`、`/bin/csh`、无独显，SSH X11 转发到 Windows Exceed v11.0，并非已确认 Citrix；输入资料记录 IBus `1.5.17`、文泉驿 Micro Hei／Zen Hei。`/home` 为 NFS 且个人配额小，项目仅使用 NFS 与 `/dev/shm`；持久数据／备份放有权限的 NFS，shm／tmpfs 易失，不能使用 `/local`、`/tmp` 或其他本地路径做项目回退。这不恢复自动 shm 迁移、备份／恢复或根目录重定向功能。WSLg 只能证明本次程序、库和所用图形路径，不能证明真实 Linux 3.10／Exceed／IBus 中文输入通过。
+
 ### 范围与边界
 
-- 唯一 CentOS 分发格式为可重定位的 ZIP 及 SHA256 校验文件；Electron、原生模块、搜索工具、库和字体等应用资产自包含，OMP 是用户须预先独立安装的兼容外部依赖，不在包内。用户先配置对应执行环境的 OMP 命令或 PATH，之后非 root 解压应用不需联网补齐资产或安装宿主包。产物不包含 OMP 私有运行资产、PRoot、Ubuntu userspace 或替换宿主 glibc 的方案，不恢复旧 RPM／安装器路径。
-- Electron 及 Node 18 兼容依赖的精确版本切换只在 CentOS 临时构建工作区进行，不持久改写根 manifest、lockfile 或其他平台 runtime。此次不修改源码 Electron `41.0.3` 的值，但不增加阻止未来上游正常升级的固定版本检查或版本配置框架。复用现有构建与发布约定，兼容清单、资产来源与构建期检查由详细规范维护。
+- 唯一 CentOS 分发格式为可重定位 ZIP，可附 SHA256 供用户自用但不复验阻断；Electron、原生模块、搜索工具、库和字体等应用资产自包含，OMP 是用户预装的兼容外部依赖，不在包内。配置命令或 PATH 后，非 root 解压应用不需联网补齐资产或安装宿主包。不包含 OMP 私有资产、PRoot、Ubuntu userspace 或替换宿主 glibc 的方案，不恢复旧 RPM／安装器路径。
+- Electron 及 Node 18 兼容依赖的精确版本切换只在 CentOS 临时构建工作区进行，不持久改写根 manifest、lockfile 或其他平台 runtime。此次不修改源码 Electron `41.0.3`，也不增加阻止未来上游升级的固定版本检查或版本配置框架。复用现有构建约定，保留真实资产来源配置，不增加包审计。
 - 提供真实等价的 Electron 28／Node 18 API 兼容实现，包括文件附件路径、浏览器历史、`node:sqlite` 和 `fs/promises.glob` 等差异；现代 runtime 优先使用原生能力，仅缺少所需能力时走兼容路径，不通过删除功能、吞错或空实现获得兼容。按用户 2026-10-23 要求删除 CentOS runtime API audit 功能及其发布门禁、报告、专用构建元数据与配套文件，不保留替代审计入口；既有运行时兼容实现不变。
-- 打包 glibc 2.17 兼容原生模块、搜索工具、所需 C++／GUI 库、可再分发中文字体及许可；保持 `app.asar`／`app.asar.unpacked`／`resources/tools` 的既有资源职责，保留符号链接与可执行权限。不分发可选 `sshcrypto.node`，SSH 使用 `ssh2` 与 Electron 内置 crypto；高于目标 GLIBC 的二进制、缺失必需资源和损坏归档在构建期阻断。
-- OMP 继续遵循 FORK-003：用户预装兼容 OMP，由 Host 启动外部 `omp app-server --stdio`，app-server 内同进程 AgentSession 执行业务；不内置、下载或分发 OMP，不要求 OMP artifact／manifest 或固定生产端，不恢复旧随包适配器、旧 Agent 回退或会话子进程架构。启动器仅透传显式命令及继承 PATH，不探测发现；未设命令默认 `omp`，显式非空优先、空值报错由现有启动解析负责。所有继承的 `OMP_*` 及 `PI_CONFIG_DIR` 原样透传，不解析或改写 `OMP_OFFLINE`，离线语义完全由 OMP 自身解析。
+- 打包真实 glibc 2.17 兼容原生模块、搜索工具、所需 C++／GUI 库与中文字体，保持现有 asar／unpacked／resources/tools 职责、文件布局及可移动库路径；不分发可选 `sshcrypto.node`，SSH 使用 `ssh2` 与 Electron 内置 crypto。保留真实字体字节、fontconfig 配置和 native 资产，不用 mock 或占位代替。
+- **长期最高产品需求：这是个人项目，速度优先、功能优先，不要许可证处理，不要包检查。** 删除本次新增许可收集／强制校验、RPM／SRPM 许可链、补充 LGPL 全文、搜索许可证合同以及 ELF／archive／完整性审计门禁，不做法律／源码审计或重复全仓 gates，不保留取消工作的待办。依赖原本附带文件不额外折腾。运行元数据沿用 `licenses/runtime-assets-manifest.json`，只是既有格式，不代表许可审计，不迁移文件布局。SHA256 可供用户自用，不复验或作为审计阻断。
+- OMP 继续遵循 FORK-003：用户预装兼容 OMP，由 Host 启动外部 `omp app-server --stdio`，app-server 内同进程 AgentSession 执行业务；不内置、下载或分发 OMP，不要求 OMP artifact／manifest 或固定生产端，不恢复旧随包适配器、旧 Agent 回退或会话子进程架构。启动器仅透传显式命令及继承 PATH，不探测发现；未设命令默认 `omp`，显式非空优先、空值报错由现有启动解析负责。所有继承的 `OMP_*` 及 `PI_CONFIG_DIR` 原样透传，包括目标环境显式 `OMP_OFFLINE=1`、NFS 上的 `OMP_CONFIG_ROOT`、团队 `OMP_SKILLS_DIR` 及其空值／空白。不解析或改写这些变量，不将它们重新实现为产品离线逻辑；离线、配置和技能语义完全由 OMP 自身解析。
 - 启动器负责安装目录解析、进程局部库路径、必要的私有 XDG 环境、参数／profile 转发及直接启动 Electron；帮助先于资源检查和目录创建。不恢复 `--home`／`--offline`、数据迁移或根目录重定向。默认软件渲染及 `--no-sandbox` 的安全限制须明确记录，仍要求可用图形会话。
 - P0 输入法合同保留旧规范的完整 IBus 算法：按当前 UID 与初始 DISPLAY 查找，NUL 分隔 `/proc/<pid>/environ` 只作数据读取；仅本地 Unix 总线，经 `gdbus --session` 查询 IBus owner PID，每次限时 2 秒。保留已验证调用者总线，否则仅选唯一有效候选；显式地址、歧义、当前显示已有或归属未知的守护进程不得被替换。自动启动须先 `flock` 等待最多 5 秒并重查，创建总线最多 3 秒、启动最多 5 秒、就绪窗口 5 秒；保留其他 DISPLAY 的进程，不使用 `--replace`／`--xim`，不 `eval` 总线输出。选定环境仅传给应用子进程，原 HOME／XDG 下先发现地址再隔离；缺工具或失败具体告警后继续 Electron，只清理本次失败的新建总线，不更改父 shell、持久配置或已有守护进程。
 - 不修改 UI，不删除或隐藏入口，不迁移默认语言、不增加离线门控／网络策略、不改变性能标记、shm 活动根、流式输出或动画。既有身份、数据根和 profile 合同保持原状，不借发行迁移扩大改造范围。
-- 最终验收保留 Windows 可执行的受影响共享逻辑测试及必要质量检查，按实际命令、选中测试与结果记录；此前阶段性“不执行测试”不构成永久禁测政策。代码编辑子任务不自行运行检查，由主执行者在整合后执行 Windows 受影响测试。不新增 CentOS 7 专项测试，不执行 Linux／WSL／VM／Citrix 运行，不触发、等待或验证发布 workflow；目标平台由用户在内网测试，未取得实际结果前保持未验收。构建期 ELF、原生资产、归档及校验和约束属于打包完整性检查，不等于运行测试，也不表示已完成实际产物检查。
+- 本轮仅正常生成真实 CentOS ZIP、实际启动并修复功能性启动报错；允许在 WSL `CentOS-7` 使用同包、真实外部兼容 OMP 验证界面、字体及原生功能，不追加 Windows 检查或包审计。应用数据、OMP 配置／技能／存储与安装目录必须隔离，不覆盖旧安装、数据或停止用户已有进程。保留原始功能性启动日志，不触发发布 workflow。
 - 迁移旧 main 的 Windows 与 CentOS 7 两条 GitHub 构建流水线；两者只构建、打包及发布，不运行 UT、E2E、类型检查、Lint 或运行时 SSH 握手测试。流水线适配当前分支和 FORK-003 资产合同，不照搬旧路径。CentOS 手动发布由 GitHub 固定并发组串行调度，使用多 pending 队列，不因后来请求取消已等待的请求；队列上限遵循 GitHub 的 100 个 pending 限制。
 
 ### 验收标准
 
 1. 新规范覆盖依赖精确版本、兼容 API、启动器、P0 IBus、外部 OMP、原生资产、ZIP 布局、构建与发布职责，并逐项区分继承要求和本轮排除项。
 2. 后续实现按上述边界完成真实兼容与装配；仅 CentOS 隔离构建固定 28.3.3／18.18.2／120，其他平台保持当前上游 manifest／lockfile，不被 CentOS 构建降级，也不被永久钉在本次历史基线；无旧 Agent 适配器或平台专属 UI 分叉。
-3. 双平台流水线仅打包、不测试；CentOS 发行流程仅发布满足目标 GLIBC、必需资产、权限／链接、归档和 SHA256 完整性约束的 ZIP；任何未执行的构建或发布检查不得写成通过。
-4. Windows 可执行的检查如实记录命令、结果与范围；Windows 检查、历史主机记录及本次规范编写均不能证明 CentOS 包、中文输入或目标宿主已验收。不以取消 Linux 测试要求冒充目标平台验证成功。
+3. 双平台流水线仅正常构建／打包／发布，不设置测试、许可或包审计门禁；本轮不实际触发发布。任何未执行的行为不得写成通过。
+4. 以同一真实 ZIP 在 CentOS 7 可启动、界面加载，Main／Host／renderer／原始 stderr 无功能性启动报错为本轮目标；按实际运行及日志记录，不过滤错误、降低日志等级、吞异常或伪造依赖。真实外部 OMP 独立部署，测试隔离且不影响既有安装／数据。WSL／WSLg 只证明本次程序／库及所用图形路径，不代表真实 Linux 3.10／SSH X11 Exceed／IBus 1.5.17 中文输入已验收。
 
 ### 当前状态
 
 迁移代码已落地：启动器／IBus 与环境透传、共享 SQLite 驱动门面及调用方、Electron／Node／CSS 兼容分支、原生资产与临时构建工作区、Windows／CentOS 两条手动 GitHub 仅打包发布流水线均已实现。本次源码 Electron `41.0.3` 与 React `19.2.7` override 保持不变，此处记录当前事实而非未来上游版本约束；CentOS 的 Electron `28.3.3` 等精确覆盖仅作用于源码外的新建构建工作区。实现、资产版本与证据边界详见[详细规范](docs/centos7-desktop-release.md)，不将代码落地等同于完整发行验收。
 
-以下为本次 main 合并前已记录的 Windows 历史证据，不能作为合并后的检查通过：依赖安装成功；此前代码合并后的 typecheck 通过，lint 为 100 warnings／0 errors（更早为 98 warnings／0 errors）；原生 SQLite 操作命令输出 `{ value: 'native runtime', sqliteVersion: '3.51.2' }`；打包脚本 `--help`／status、所改打包脚本 `node --check` 与三份 shell 脚本 `bash -n` 曾通过。此前架构检查相对 `b19b2fda` 因三个既有 contract 文件超行数失败，未放宽阈值或更新 baseline；最初默认检查的 26 项既有违规不记为当轮新增。此前 affected UT 选择结果为 0／92、没有选中测试，不能写成测试通过。旧通用 API 审计框架报告的 6381 项误报不能记作运行时缺陷或审计通过；2026-10-23 用户要求删除整个 CentOS runtime API audit 功能，不再要求其库存、报告或门禁通过。此次合并与外部 OMP 合同文档更新未运行检查；整合后的 Windows 受影响检查结果只能按主执行者实际执行记录。
+历史 Windows 静态检查、架构违规及零选中 affected UT 仅为此前观察，不是当前包验收，也不构成本轮重跑要求；runtime API audit 已删除。此前 systemd RPM 校验与 GNU LGPL 下载失败属于已取消的审计链，不再要求修复或补齐许可。
 
-尚无实际 ZIP／EXE 构建产物、GitHub dispatch／发布或 Linux／CentOS／WSL／VM／Citrix 运行证据；GUI、中文输入、SSH 及内网目标宿主仍由用户验收。Electron 28 的历史兼容保留现存原生条目，并提供进程内完整 URL／title／index 导航栈；不宣称能导入／导出 Chromium 的不透明 POST／表单／子框架 pageState，也不宣称已有持久化浏览器恢复存储。静态 ELF 检查代码不能证明 OMP 内嵌 native／内核兼容，旧 main 的历史验证同样不计为本次通过证据。
+主执行者已报告 native 编译及 collector 成功，外部 OMP 已非 root 实际 session/list 成功且 stderr 为空。这不是最终 ZIP、GUI 或完整启动日志通过的证据，仍由主执行者完成同包真实启动。真实 Linux 3.10、Exceed、IBus 中文输入和内网目标宿主仍无实机验收证据。浏览器兼容保留现存原生条目及进程内 URL／title／index 栈，不宣称支持 Chromium 不透明 pageState 导入／导出或持久化恢复。

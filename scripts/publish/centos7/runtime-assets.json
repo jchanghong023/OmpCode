@@ -61,7 +61,6 @@
     "url": "https://vault.centos.org/7.9.2009/os/x86_64/Packages/wqy-zenhei-fonts-0.9.46-11.el7.noarch.rpm",
     "sha256": "0080850a69ad1d73c684e539cf8b0d64f41c51e3d4682a38507bbb368242c787",
     "checksumSource": "https://vault.centos.org/7.9.2009/os/x86_64/repodata/repomd.xml",
-    "license": "GPLv2 with exceptions",
     "file": "/usr/share/fonts/wqy-zenhei/wqy-zenhei.ttc"
   },
   "evidenceLimitations": [

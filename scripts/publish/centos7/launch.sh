@@ -22,6 +22,12 @@ HELP
   esac
 done
 
+# 普通启动保持控制台安静；原始输出仍落文件，避免隐藏真实启动错误。
+exec 2>/dev/null
+startup_log_dir="${XDG_CACHE_HOME:-${HOME:-}/.cache}/ompcode-centos7"
+mkdir -p -- "$startup_log_dir" || exit 1
+exec >"$startup_log_dir/startup-$$.log" 2>&1 || exit 1
+
 warn() { printf 'OmpCode: %s\n' "$*" >&2; }
 incomplete() { warn "CentOS 7 package is incomplete: $*"; exit 1; }
 launcher=$(readlink -f -- "$0") || incomplete 'cannot resolve launcher path'

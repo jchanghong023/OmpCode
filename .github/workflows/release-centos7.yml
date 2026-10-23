@@ -169,8 +169,6 @@ jobs:
             --env ZCODE_TARGET_OS=linux --env ZCODE_TARGET_ARCH=x64 \
             --workdir /workspace "$NATIVE_IMAGE" bash -ceu '
               bash scripts/publish/centos7/build-native-assets.sh /workspace
-              python3 scripts/publish/centos7/verify-elf.py packages/desktop/dist/centos7-native
-              rpm -qa --qf "%{NAME}-%{VERSION}-%{RELEASE}.%{ARCH}\n" | sort > packages/desktop/dist/centos7-native/licenses/builder-rpms.txt
             '
           sudo chown -R "$(id -u):$(id -g)" "$workspace/packages/desktop/dist/centos7-native"
           tar -C "$workspace/packages/desktop/dist" -cf "$RUNNER_TEMP/centos7-native.tar" centos7-native

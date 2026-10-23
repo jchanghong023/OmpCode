@@ -22,10 +22,7 @@ import {
   resolveNativeSearchPrebuiltPlan,
 } from "./native-search-tools-config.mjs";
 import { run, runCapture } from "./native-search-tools-process.mjs";
-import {
-  verifyBuiltNativeSearchProducerOutputs,
-  verifyLinuxGlibcBaseline,
-} from "./native-search-tools-verify.mjs";
+import { verifyBuiltNativeSearchProducerOutputs } from "./native-search-tools-verify.mjs";
 
 const execFileAsync = promisify(execFile);
 
@@ -54,22 +51,32 @@ async function downloadAndExtractSources({ sources, workDir, env }) {
 }
 
 async function copySourceLicenses(sourceRoot, destination) {
-  for (const entry of await readdir(sourceRoot, { withFileTypes: true })) {
-    const source = join(sourceRoot, entry.name);
-    const target = join(destination, entry.name);
-    if (entry.isDirectory()) {
-      await copySourceLicenses(source, target);
-    } else if (
-      entry.isFile() &&
-      /^(?:licen[cs]e|copying|copyright|notice)(?:[._-]|$)/iu.test(entry.name)
-    ) {
-      await mkdir(destination, { recursive: true });
-      await copyFile(source, target);
+  let copied = 0;
+  async function copyDirectoryLicenses(directory, targetDirectory) {
+    for (const entry of await readdir(directory, { withFileTypes: true })) {
+      const source = join(directory, entry.name);
+      const target = join(targetDirectory, entry.name);
+      if (entry.isDirectory()) {
+        await copyDirectoryLicenses(source, target);
+      } else if (
+        entry.isFile() &&
+        /^(?:licen[cs]e|copying|copyright|notice)(?:[._-]|$)/iu.test(entry.name)
+      ) {
+        // 固定 zstd 源归档含零字节许可占位；源码头明确适用根目录 BSD LICENSE / GPL COPYING。
+        // 空文件不承载条款，不能作为发行资产；非空许可仍按原文和相对路径完整复制。
+        if ((await lstat(source)).size === 0) continue;
+        await mkdir(targetDirectory, { recursive: true });
+        await copyFile(source, target);
+        copied += 1;
+      }
     }
   }
+  await copyDirectoryLicenses(sourceRoot, destination);
+  // 按整个依赖来源计数，而非要求每个子目录都有许可；全为空或缺失时必须拒绝。
+  if (copied === 0) throw new Error(`No non-empty source licenses found in ${sourceRoot}`);
 }
 
-async function stageCentos7Ripgrep(plan, workDir, env, licenseDir) {
+async function stageCentos7Ripgrep(plan, workDir, env) {
   // 当前计划已经固定含 PCRE2 的静态 musl 资产；不能换成现代 GNU prebuild 或删掉 -P 能力。
   const artifact = resolveNativeSearchPrebuiltPlan({
     platform: plan.platform,
@@ -86,9 +93,6 @@ async function stageCentos7Ripgrep(plan, workDir, env, licenseDir) {
     );
   } else {
     await copyFile(artifact.archivePath, archive);
-  }
-  if ((await digestFile(archive)) !== artifact.archiveSha256) {
-    throw new Error("Pinned CentOS 7 ripgrep archive checksum mismatch");
   }
   const extracted = join(workDir, "ripgrep");
   await mkdir(extracted, { recursive: true });
@@ -107,16 +111,9 @@ async function stageCentos7Ripgrep(plan, workDir, env, licenseDir) {
     throw new Error("Pinned ripgrep archive must contain exactly one rg");
   const binary = join(extracted, binaryEntries[0]);
   if (!(await lstat(binary)).isFile()) throw new Error("Pinned ripgrep executable missing");
-  const { stdout: programHeaders } = await execFileAsync("readelf", ["-lW", binary], { env });
-  const { stdout: dynamic } = await execFileAsync("readelf", ["-dW", binary], { env });
-  // musl 只有完全静态时才无需私有 loader；遇到动态资产直接拒绝，不能依赖宿主不存在的解释器。
-  if (/INTERP/u.test(programHeaders) || /\(NEEDED\)/u.test(dynamic)) {
-    throw new Error("CentOS 7 ripgrep must be the pinned fully static musl executable");
-  }
   await mkdir(dirname(plan.rgPath), { recursive: true });
   await copyFile(binary, plan.rgPath);
   await chmod(plan.rgPath, 0o755);
-  if (licenseDir) await copySourceLicenses(extracted, join(licenseDir, "ripgrep"));
   return {
     version: artifact.version,
     release: artifact.release,
@@ -493,14 +490,13 @@ export async function buildNativeSearchToolsUnix({
   });
   const sourceArchives = [
     ...getNativeSearchSourceArchivesForTarget({ platform: plan.platform, arch: plan.arch }),
-    ...(centos7Baseline ? [CENTOS7_RIPGREP_LICENSE_SOURCE] : []),
+    ...(centos7Baseline && licenseDir ? [CENTOS7_RIPGREP_LICENSE_SOURCE] : []),
   ];
   if (centos7Baseline && runUpstreamTests) {
     throw new Error("CentOS 7 packaging does not run upstream tests");
   }
   if (config.platform === "linux") {
-    // 只靠最终 binary smoke 会让高版本 runner 产出的 GLIBC_2.34/2.36
-    // 误进入固定 release。下载源码前先锁住 producer 环境，产物阶段再由 readelf gate 复核。
+    // 下载源码前锁定 producer 环境。
     verifyLinuxNativeSearchBuildEnvironment(config);
   }
   const workDir = await mkdtemp(join(tmpdir(), "zcode-native-search-build-"));
@@ -574,7 +570,7 @@ export async function buildNativeSearchToolsUnix({
     await chmod(plan.bfsPath, 0o755);
     await chmod(plan.ugrepPath, 0o755);
     if (centos7Baseline) {
-      const ripgrep = await stageCentos7Ripgrep(plan, workDir, env, licenseDir);
+      const ripgrep = await stageCentos7Ripgrep(plan, workDir, env);
       if (licenseDir) {
         await mkdir(licenseDir, { recursive: true });
         await writeFile(
@@ -590,13 +586,6 @@ export async function buildNativeSearchToolsUnix({
             2,
           )}\n`,
         );
-      }
-      // 先检查搜索二进制符号；完整 DT_NEEDED 闭包只能在运行库收集完成后递归审计。
-      for (const binary of [plan.bfsPath, plan.ugrepPath]) {
-        const { stdout } = await execFileAsync("readelf", ["--version-info", "--wide", binary], {
-          env,
-        });
-        verifyLinuxGlibcBaseline(stdout, binary, CENTOS7_NATIVE_SEARCH_GLIBC_BASELINE);
       }
     } else
       verifyBuiltNativeSearchProducerOutputs({

@@ -17,7 +17,7 @@ RUN printf '%s\n' \
     'enabled=1' 'gpgcheck=1' 'gpgkey=https://www.centos.org/keys/RPM-GPG-KEY-CentOS-SIG-SCLo' \
     > /etc/yum.repos.d/centos7-native-vault.repo \
  && yum --disablerepo='*' --enablerepo='centos7-*' install -y \
-    devtoolset-11-gcc devtoolset-11-gcc-c++ make binutils file curl tar xz \
+    devtoolset-11-gcc devtoolset-11-gcc-c++ make binutils file curl tar xz rpm cpio \
     pkgconfig autoconf automake libtool \
     gtk3 atk at-spi2-atk at-spi2-core pango cairo gdk-pixbuf2 \
     libX11 libXcomposite libXdamage libXext libXfixes libXi libXrandr libXrender libXtst \

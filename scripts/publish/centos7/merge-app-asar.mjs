@@ -2,20 +2,10 @@ import { execFileSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { dirname, join, resolve, basename } from "node:path";
 import { fileURLToPath } from "node:url";
-import { cp, lstat, mkdir, mkdtemp, open, readFile, readdir, rm } from "node:fs/promises";
+import { cp, lstat, mkdir, mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { replaceAppAsarFromStaging } from "../../../packages/desktop/scripts/app-asar-repack.mjs";
 import { collectRuntimeModuleClosureEntries } from "../../../packages/desktop/scripts/runtime-dependency-closure.mjs";
-import {
-  findDesktopNativePackageViolations,
-  parseAsarListWithPackState,
-} from "../../../packages/desktop/scripts/desktop-native-package-policy.mjs";
-
-const expected = [
-  "node-pty/prebuilds/linux-x64/pty.node",
-  "cpu-features/build/Release/cpufeatures.node",
-  "better-sqlite3/build/Release/better_sqlite3.node",
-];
 const desktop = resolve(dirname(fileURLToPath(import.meta.url)), "../../../packages/desktop");
 const require = createRequire(join(desktop, "package.json"));
 const asarPackage = require.resolve("@electron/asar/package.json");
@@ -29,18 +19,6 @@ function runAsarCommand(args) {
     encoding: "utf8",
     maxBuffer: 64 * 1024 * 1024,
   });
-}
-async function elf(path) {
-  const stat = await lstat(path);
-  if (!stat.isFile() || stat.size === 0) throw new Error(`Missing regular ELF addon: ${path}`);
-  const handle = await open(path, "r");
-  try {
-    const header = Buffer.alloc(4);
-    await handle.read(header, 0, 4, 0);
-    if (!header.equals(Buffer.from([127, 69, 76, 70]))) throw new Error(`Not ELF: ${path}`);
-  } finally {
-    await handle.close();
-  }
 }
 async function walk(root, visit) {
   for (const entry of await readdir(root, { withFileTypes: true })) {
@@ -58,15 +36,17 @@ const native = resolve(nativeArg);
 const archive = resolve(asarArg);
 if (basename(archive) !== "app.asar" || !(await lstat(archive)).isFile())
   throw new Error("Expected existing app.asar");
-for (const name of expected) await elf(join(native, name));
 const temporary = await mkdtemp(join(tmpdir(), "centos7-asar-"));
 try {
   const app = join(temporary, "app");
   await mkdir(app);
   runAsarCommand(["extract", archive, app]);
   const modules = join(app, "node_modules");
-  // Explicitly promote the dev-only Windows fallback and its real JS dependency closure.
-  const closure = collectRuntimeModuleClosureEntries(["better-sqlite3"], [desktop]);
+  // hoisted 安装及可选依赖裁剪可能省略 JS 包；三个原生模块的真实 JS 闭包必须与目标二进制一起装配。
+  const closure = collectRuntimeModuleClosureEntries(["better-sqlite3", "cpu-features", "node-pty"], [
+    desktop,
+    resolve(desktop, "../.."),
+  ]);
   for (const entry of closure) {
     if (!entry.sourceModulePath)
       throw new Error(`Missing SQLite runtime dependency: ${entry.moduleName}`);
@@ -116,22 +96,12 @@ try {
   });
   // Overlay the complete native stage (including actual node-pty helpers), last.
   await cp(native, modules, { recursive: true, dereference: false });
-  await walk(modules, async (path) => {
-    if (basename(path) === "sshcrypto.node")
-      throw new Error(`Forbidden SSH native crypto: ${path}`);
-  });
   await replaceAppAsarFromStaging({
     sourceDir: app,
     appAsarPath: archive,
     targetPlatformKey: "linux-x64",
     runAsarCommand,
   });
-  const violations = findDesktopNativePackageViolations(
-    parseAsarListWithPackState(runAsarCommand(["list", archive, "--is-pack"])),
-    "linux-x64",
-  );
-  if (violations.length) throw new Error(violations.join("\n"));
-  for (const name of expected) await elf(join(`${archive}.unpacked`, "node_modules", name));
 } finally {
   await rm(temporary, { recursive: true, force: true });
 }

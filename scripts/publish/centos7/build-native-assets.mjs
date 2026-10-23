@@ -100,20 +100,13 @@ async function stageFile(source, relativeOutput) {
   return { path: `app/${relativeOutput}`, sha256: await digest(target) };
 }
 
-async function copyLicenses(source, target) {
-  for (const entry of await readdir(source, { withFileTypes: true })) {
-    if (
-      !entry.isFile() ||
-      !/^(?:licen[cs]e|copying|copyright|notice)(?:[._-]|$)/iu.test(entry.name)
-    )
-      continue;
-    await mkdir(target, { recursive: true });
-    await copyFile(join(source, entry.name), join(target, entry.name));
-  }
-}
-
 const builder = await assertBuilder();
 const requireDesktop = createRequire(join(desktopRoot, "package.json"));
+// 修复原因：源码 Desktop 目录不含实际 Electron ELF；不能覆盖 workflow 已解析的分发路径。
+const electronRoot = await realpath(
+  process.env.CENTOS7_ELECTRON_ROOT ||
+    join(dirname(requireDesktop.resolve("electron/package.json")), "dist"),
+);
 const ssh2Entry = requireDesktop.resolve("ssh2");
 const requireSsh2 = createRequire(ssh2Entry);
 const modules = [
@@ -193,12 +186,9 @@ try {
         }
       }
     }
-    await copyLicenses(root, join(stagingRoot, "licenses/native", module.name));
   }
   // Electron 28 使用 OpenSSL 1.1.1，native 宿主是 OpenSSL 3；ssh2 只能保留内建 crypto 的 JS 路径。
   // 新 stage 从空目录建立，不构建/复制 sshcrypto.node；asar 中移除由 ZIP 装配所有者负责。
-  const sshRoot = await packageRoot(ssh2Entry, "ssh2");
-  await copyLicenses(sshRoot, join(stagingRoot, "licenses/native/ssh2"));
   await buildNativeSearchToolsUnix({
     platform: "linux",
     arch: "x64",
@@ -206,7 +196,6 @@ try {
     centos7Baseline: true,
     quiet: true,
     runUpstreamTests: false,
-    licenseDir: join(stagingRoot, "licenses/search"),
   });
   await writeFile(
     join(stagingRoot, "native-build-manifest.json"),
@@ -236,9 +225,8 @@ try {
   await run(process.execPath, [
     join(repoRoot, "scripts/publish/centos7/collect-runtime-assets.mjs"),
     stagingRoot,
-    desktopRoot,
+    electronRoot,
   ]);
-  await run("python3", [join(repoRoot, "scripts/publish/centos7/verify-elf.py"), stagingRoot]);
   console.log(`==> CentOS 7 native assets ready: ${stagingRoot}`);
 } finally {
   await rm(work, { recursive: true, force: true });

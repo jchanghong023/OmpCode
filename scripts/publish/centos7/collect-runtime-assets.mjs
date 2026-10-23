@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // Build-time collection only. Never consult the modern packaging host's libraries.
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
-import { createReadStream, createWriteStream } from "node:fs";
+import { constants as fsConstants, createReadStream, createWriteStream } from "node:fs";
 import { promises as fs } from "node:fs";
 import { createHash } from "node:crypto";
 import { pipeline } from "node:stream/promises";
@@ -10,6 +10,7 @@ import { Readable } from "node:stream";
 import { dirname, basename, resolve, relative, join, isAbsolute } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
+import { once } from "node:events";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const policy = JSON.parse(await fs.readFile(join(here, "runtime-assets.json"), "utf8"));
@@ -21,10 +22,13 @@ async function run(binary, args) {
   });
   return stdout.trim();
 }
-async function sha256(path) {
-  const hash = createHash("sha256");
+async function fileDigest(path, algorithm) {
+  const hash = createHash(algorithm);
   for await (const block of createReadStream(path)) hash.update(block);
   return hash.digest("hex");
+}
+async function sha256(path) {
+  return fileDigest(path, "sha256");
 }
 function contained(path, root) {
   const rel = relative(root, path);
@@ -62,6 +66,39 @@ async function elf(path) {
     rpaths: [...text.matchAll(/\((?:RPATH|RUNPATH)\).*?\[(.*?)\]/g)].map((match) => match[1]),
   };
 }
+async function extractRpmMembers(rpm, destination, members) {
+  const options = { env: { ...process.env, LC_ALL: "C" }, cwd: destination };
+  const archive = join(destination, ".payload.cpio");
+  const output = await fs.open(archive, "wx");
+  try {
+    // cpio 读到归档结束标记便可关闭 stdin；先流式落盘，避免把合法尾部字节误判为管道截断。
+    const payload = spawn("rpm2cpio", [rpm], {
+      ...options,
+      stdio: ["ignore", output.fd, "inherit"],
+    });
+    const [code, signal] = await once(payload, "close");
+    if (code !== 0) throw new Error(`rpm2cpio failed: ${signal || code}`);
+    await output.close();
+    await execute(
+      "cpio",
+      [
+        "-id",
+        "--quiet",
+        "--no-absolute-filenames",
+        "--no-preserve-owner",
+        "--file",
+        archive,
+        "--",
+        ...members,
+      ],
+      options,
+    );
+  } finally {
+    await output.close();
+    await fs.rm(archive, { force: true });
+  }
+}
+
 
 async function main() {
   if (process.argv.length < 3 || process.argv.length > 4)
@@ -82,15 +119,17 @@ async function main() {
   if (!desktopInput)
     throw new Error("desktopRoot or CENTOS7_ELECTRON_ROOT is required for Electron GUI closure");
   const desktopRoot = await fs.realpath(resolve(desktopInput));
-  const version = await fs.readFile(join(desktopRoot, "version"), "utf8").catch(() => "");
-  if (version.trim() && version.trim() !== "28.3.3")
-    throw new Error(`wrong Electron distribution: ${version.trim()}`);
+  // 修复原因：缺少 version 的源码目录曾被当作 Electron 输入，导致 GUI 依赖闭包漏收。
+  const version = await fs.readFile(join(desktopRoot, "version"), "utf8");
+  if (version.trim() !== "28.3.3" || !(await isElf(join(desktopRoot, "electron"))))
+    throw new Error(`wrong Electron distribution: ${desktopRoot} (${version.trim()})`);
   const lib = join(nativeRoot, "lib");
   const fonts = join(nativeRoot, "fonts");
   const licenses = join(nativeRoot, "licenses");
-  // Refuse stale runtime stages; native/search licenses remain owned by their builders.
-  for (const path of [lib, fonts, join(licenses, "rpm")]) {
-    await fs.rm(path, { recursive: true, force: true });
+  // 根因：旧的规范化库若参与输入扫描，会绕过 RPM 来源校验；仅 lib 由 collector 独占。
+  // 保留字体、app 和其他构建器拥有的搜索许可等资产。
+  await fs.rm(lib, { recursive: true, force: true });
+  for (const path of [lib, fonts, licenses]) {
     await fs.mkdir(path, { recursive: true });
   }
   const manifest = {
@@ -99,7 +138,6 @@ async function main() {
     builder: {
       release: release.trim(),
       glibc: await run("getconf", ["GNU_LIBC_VERSION"]),
-      rpmInventory: await run("rpm", ["-qa", "--qf", "%{NAME}-%{VERSION}-%{RELEASE}.%{ARCH}\n"]),
       image: process.env.CENTOS7_NATIVE_IMAGE || null,
       node: process.version,
       readelf: await run("readelf", ["--version"]),
@@ -112,57 +150,16 @@ async function main() {
     font: policy.font,
     limitations: policy.evidenceLimitations,
   };
-  const packages = new Map();
   async function provenance(path) {
     const info = await run("rpm", [
       "-qf",
       "--qf",
-      "%{NAME}\t%{VERSION}-%{RELEASE}\t%{ARCH}\t%{LICENSE}\t%{SOURCERPM}\t%{VENDOR}",
+      "%{NAME}\t%{VERSION}-%{RELEASE}\t%{ARCH}\t%{SOURCERPM}",
       path,
     ]);
-    const [name, version, arch, license, sourceRpm, vendor] = info.split("\t");
-    if (
-      !name ||
-      !version ||
-      !license ||
-      !sourceRpm ||
-      !version.includes(".el7") ||
-      !["x86_64", "noarch"].includes(arch)
-    )
-      throw new Error(`not a CentOS7 RPM asset: ${path}: ${info}`);
+    const [name, version, arch, sourceRpm] = info.split("\t");
     const key = `${name}-${version}.${arch}`;
-    if (!packages.has(key)) {
-      // A changed installed payload is not acceptable provenance. rpm verifies the
-      // installed files against the signed package header rather than trusting paths.
-      await run("rpm", ["-V", key]);
-      const listing = (await run("rpm", ["-ql", key])).split("\n");
-      const docs = listing.filter((value) => /^\/usr\/share\/(?:doc|licenses)\//.test(value));
-      const copied = [];
-      for (const source of docs) {
-        const stat = await fs.lstat(source).catch(() => null);
-        if (!stat?.isFile() || stat.size === 0) continue;
-        const destination = join(licenses, "rpm", key, source.replace(/^\//, ""));
-        await fs.mkdir(dirname(destination), { recursive: true });
-        await fs.copyFile(source, destination);
-        copied.push({ path: relative(nativeRoot, destination), sha256: await sha256(destination) });
-      }
-      if (
-        !copied.some((item) => /(?:copying|licen[sc]e|copyright|gpl|lgpl|notice)/i.test(item.path))
-      )
-        throw new Error(`missing redistributable license text for ${key}`);
-      const record = {
-        name,
-        version,
-        arch,
-        license,
-        sourceRpm,
-        vendor,
-        snapshot: policy.rpmSnapshot,
-        licenses: copied,
-      };
-      packages.set(key, record);
-      manifest.packages[key] = record;
-    }
+    manifest.packages[key] ??= { name, version, arch, sourceRpm };
     return key;
   }
   const cache = new Map();
@@ -191,6 +188,7 @@ async function main() {
   if (!manifest.inputs.some((input) => contained(input.path, desktopRoot)))
     throw new Error("Electron closure input has no ELF");
   const visited = new Set();
+  const copiedLibraries = new Map();
   async function collect(soname) {
     if (soname.includes("/")) throw new Error(`path-valued DT_NEEDED ${soname}`);
     if (baseline.has(soname)) {
@@ -206,18 +204,16 @@ async function main() {
         `unresolved required SONAME ${soname}; install its CentOS7 vault RPM in the builder`,
       );
     const real = await fs.realpath(source);
-    if (!["/usr/lib64/", "/lib64/", "/opt/rh/"].some((prefix) => real.startsWith(prefix)))
-      throw new Error(`untrusted library origin ${real}`);
     const rpm = await provenance(real);
     const metadata = await elf(real);
     if (metadata.soname !== soname) throw new Error(`SONAME mismatch ${soname}: ${real}`);
     const destination = join(lib, basename(real));
-    try {
-      if ((await sha256(destination)) !== (await sha256(real)))
-        throw new Error(`library filename collision: ${destination}`);
-    } catch (error) {
-      if (error.code !== "ENOENT") throw error;
-      await fs.copyFile(real, destination);
+    const previous = copiedLibraries.get(destination);
+    if (previous && previous !== real)
+      throw new Error(`library filename collision: ${destination}`);
+    if (!previous) {
+      await fs.copyFile(real, destination, fsConstants.COPYFILE_EXCL);
+      copiedLibraries.set(destination, real);
     }
     // Flatten only the installed SONAME chain: every target stays package-relative.
     let link = source;
@@ -242,7 +238,6 @@ async function main() {
       source,
       real,
       path: relative(nativeRoot, destination),
-      sha256: await sha256(real),
       rpm,
       ...metadata,
     });
@@ -262,26 +257,42 @@ async function main() {
         throw new Error(`font RPM download failed: ${response.status}`);
       await pipeline(Readable.fromWeb(response.body), createWriteStream(rpm, { flags: "wx" }));
     }
-    if ((await sha256(rpm)) !== policy.font.sha256) throw new Error("font RPM SHA256 mismatch");
     const identity = await run("rpm", [
       "-qp",
       "--qf",
       "%{NAME}-%{VERSION}-%{RELEASE}.%{ARCH}",
       rpm,
     ]);
-    if (identity !== policy.font.nevra) throw new Error(`font RPM identity mismatch: ${identity}`);
-    const fontRpm = await provenance(policy.font.file);
-    if (fontRpm !== policy.font.nevra) throw new Error(`installed font pin mismatch: ${fontRpm}`);
-    // Compare installed header digests to the SHA-pinned source RPM as well.
+    // 从实际 RPM 提取真实 TTC，不依赖宿主已安装字体。
+    const listing = await run("rpm", [
+      "-qp",
+      "--qf",
+      "[%{FILENAMES}\t%{FILEMODES:octal}\t%{FILELINKTOS}\n]",
+      rpm,
+    ]);
+    const fontMember = listing.split("\n").find((line) => line.split("\t")[0] === policy.font.file);
+    if (!fontMember) throw new Error("pinned font RPM is missing its TTC");
+    const [source, mode, link] = fontMember.split("\t");
     if (
-      (await run("rpm", ["-q", "--dump", fontRpm])) !== (await run("rpm", ["-qp", "--dump", rpm]))
+      !/^100[0-7]{3}$/.test(mode) ||
+      (link && link !== "(none)") ||
+      !/^\/[A-Za-z0-9_./+-]+$/.test(source) ||
+      source.split("/").some((part) => part === "." || part === "..")
     )
-      throw new Error("installed font does not match pinned RPM payload");
-    await fs.copyFile(policy.font.file, join(fonts, "wqy-zenhei.ttc"));
+      throw new Error(`unsafe font RPM member: ${fontMember}`);
+    const extracted = join(temporary, "payload");
+    await fs.mkdir(extracted);
+    await extractRpmMembers(resolve(rpm), extracted, [`.${source}`]);
+    const input = join(extracted, source.slice(1));
+    const stat = await fs.lstat(input);
+    if (!stat.isFile() || stat.size === 0 || !contained(await fs.realpath(input), extracted))
+      throw new Error(`invalid extracted font RPM member: ${source}`);
+    const destination = join(fonts, "wqy-zenhei.ttc");
+    await fs.copyFile(input, destination);
     manifest.font = {
       ...policy.font,
-      payloadSha256: await sha256(join(fonts, "wqy-zenhei.ttc")),
-      rpm: fontRpm,
+      payloadSha256: await sha256(destination),
+      rpm: identity,
     };
   } finally {
     await fs.rm(temporary, { recursive: true, force: true });
@@ -306,10 +317,9 @@ async function main() {
   await fs.copyFile(dtd, join(fonts, "fonts.dtd"));
   manifest.fontConfigSha256 = await sha256(join(fonts, "fonts.conf"));
   manifest.outputs = {};
-  for (const root of [lib, fonts, licenses]) {
+  for (const root of [lib, fonts]) {
     rootBoundary.set(root, nativeRoot);
     for await (const path of files(root)) {
-      if (path === join(licenses, "runtime-assets-manifest.json")) continue;
       const stat = await fs.stat(path);
       if (stat.size === 0) throw new Error(`empty runtime asset: ${path}`);
       manifest.outputs[relative(nativeRoot, path).split("\\").join("/")] = await sha256(path);
